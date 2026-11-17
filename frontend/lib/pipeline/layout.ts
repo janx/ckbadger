@@ -44,6 +44,13 @@ export const GUT = 2;
 export const U = CELL + GUT;
 
 /**
+ * The canvas's small text, in px: every word the layout measures ("uncle", every "+N", the
+ * window's label) is drawn in the `text-meta` step of the type scale (components/pipeline/
+ * svg-text.ts), 11 px of JetBrains Mono, whose every glyph advances 0.6 em. `labelWidth` reads it.
+ */
+export const SMALL_TEXT_PX = 11;
+
+/**
  * `n` cells side by side, in px: n pitches less the one gutter after the last. The side of an n×n
  * square (15, 32, 49, 66) and the width of an n-cell field; the gutter is said here only.
  */
@@ -319,7 +326,7 @@ export const COL = {
    * An uncle, no box: "uncle", then up to four of its dots with "+N" for the rest in their slots,
    * or, when those slots cannot hold that "+N", "+N" for all its proposals after the word.
    */
-  uncle: { labelW: 30, chips: 4 },
+  uncle: { labelW: labelWidth('uncle'), chips: 4 },
   /** The left edges of a link's two bands, and of the pool's flow band. */
   linkX: [27, 75],
   flowX: 28,
@@ -391,8 +398,8 @@ export function unclesH(counts: readonly number[]): number {
 
 /**
  * How many of `total` dots to draw in `cap` slots. When they do not fit, the last row gives up one
- * slot per glyph of the "+N" label drawn at its end (a 10 px mono glyph is 6 px, under one 9 px
- * pitch), so the label never covers a dot.
+ * slot per glyph of the "+N" label drawn at its end (a glyph of the canvas's small text is 6.6 px,
+ * under one 9 px pitch), so the label never covers a dot.
  */
 export function chipSlots(total: number, cap: number): { shown: number; overflow: number } {
   const slots = slotsFor(total, cap);
@@ -731,9 +738,12 @@ export function rulerPath(r: RulerGeom): string {
   return `${ticks}M${f(xn)} ${y}H${f(r.label.x0)}M${f(r.label.x1)} ${y}H${f(xf)}`;
 }
 
-/** Width of a 10 px JetBrains Mono label: every glyph advances 0.6 em. */
+/**
+ * Width of a label in the canvas's small text (`SMALL_TEXT_PX`): every glyph advances 0.6 em,
+ * 6.6 px (written as 3/5 so a whole number of glyphs comes out as the nearest double: 49 → 323.4).
+ */
 export function labelWidth(text: string): number {
-  return text.length * 6;
+  return (text.length * SMALL_TEXT_PX * 3) / 5;
 }
 
 /**

@@ -44,6 +44,14 @@ function Key({ children, tight = false }: { children: ReactNode; tight?: boolean
   );
 }
 
+/**
+ * The bar between two groups of keys: only from `xl` up, where the legend is one line. Below it the
+ * legend wraps and a bar would dangle at the end of a line; the wrap and the gap part the groups.
+ */
+function GroupBar() {
+  return <span className="bg-base-border hidden h-2.5 w-px xl:block" aria-hidden />;
+}
+
 const solid = (fill: string) => ({ fill, fillOpacity: null, stroke: null });
 
 /**
@@ -70,7 +78,7 @@ export function PipelineLegend() {
         </svg>
         proposal
       </Key>
-      <span className="bg-base-border h-2.5 w-px" aria-hidden />
+      <GroupBar />
       <Key>
         <Sq paint={paintSquare('pending', 'solid', 0)} />
         pending
@@ -91,7 +99,7 @@ export function PipelineLegend() {
         <Sq paint={solid(chipPaint('expired').fill)} />
         expired
       </Key>
-      <span className="bg-base-border h-2.5 w-px" aria-hidden />
+      <GroupBar />
       <Key>
         <svg
           width={SIDE + 2}

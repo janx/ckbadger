@@ -34,6 +34,34 @@ describe('PipelineLegend', () => {
     expect(first).toHaveClass('whitespace-nowrap');
   });
 
+  // Measured in Chrome (lane F): below about 1,100 px of canvas the legend wraps, and a bar between
+  // two groups was left dangling at the end of a line. The wrap and the gap part them there.
+  it('parts its three groups of keys with a bar only from xl up, where the legend is one line', () => {
+    render(<PipelineLegend />);
+    const legend = screen.getByTestId('pipeline-legend');
+    const items = [...legend.children] as HTMLElement[];
+    expect(items.map((el) => el.textContent || '|')).toEqual([
+      'tx, area ∝ bytes',
+      'proposal',
+      '|',
+      'pending',
+      'proposed',
+      'too early',
+      'committed',
+      'expired',
+      '|',
+      'cellbase',
+      'cycles',
+      'unknown',
+    ]);
+    const bars = items.filter((el) => !el.textContent);
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      expect(bar).toHaveAttribute('aria-hidden');
+      expect(bar).toHaveClass('hidden', 'xl:block', 'h-2.5', 'w-px', 'bg-base-border');
+    }
+  });
+
   it('draws every square key at 9 px, the canvas’s squares at the legend’s size', () => {
     render(<PipelineLegend />);
     const legend = screen.getByTestId('pipeline-legend');

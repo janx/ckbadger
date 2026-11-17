@@ -423,6 +423,8 @@ function expectLabelClear(svg: Element, width: number) {
   const label = svg.querySelector('[data-window-label]') as SVGTextElement;
   expect(label).not.toBeNull();
   expect(label).toHaveAttribute('text-anchor', 'middle');
+  // drawn in the small text its width is measured at (labelWidth, SMALL_TEXT_PX)
+  expect(label).toHaveClass('text-meta');
   const half = labelWidth(label.textContent ?? '') / 2;
   const x = Number(label.getAttribute('x'));
   const [l, r] = [x - half, x + half];
@@ -2676,6 +2678,10 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
         // it measured every word, and the four plates that span the canvas edge to edge
         const words = [...svg.querySelectorAll('text')].filter((t) => !t.closest('[data-stone]'));
         expect(drawn.filter((d) => Number.isNaN(d.y0))).toHaveLength(words.length);
+        // every "+N" and "uncle" in the small text the layout measures it at (SMALL_TEXT_PX)
+        const measured = words.filter((t) => /^(\+\d|uncle$)/.test(t.textContent ?? ''));
+        expect(measured.length).toBeGreaterThan(0);
+        for (const t of measured) expect(t).toHaveClass('text-meta');
         expect(drawn.filter((d) => d.x0 === 0 && d.x1 === width)).toHaveLength(COL.blocks);
         expect(drawn.filter((d) => d.x0 < 0 || d.x1 > width).map((d) => d.what)).toEqual([]);
         expect(
@@ -2931,24 +2937,26 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     const svg = await renderPanel(quiet);
     const host = rowOf(T - 1);
     const u = host.uncles[0];
-    expect(u).toMatchObject({ line: 'tx', x: 282, y: 16, w: 68, h: 12 });
+    expect(u).toMatchObject({ line: 'tx', x: 279, y: 16, w: 71, h: 12 });
     const uncle = card(svg, T - 1).querySelector('[data-uncle="0"]') as SVGGElement;
     expect(uncle.closest('[data-words]')).not.toBeNull();
     expect(uncle).toHaveAttribute('pointer-events', 'visiblePainted');
     expect([...uncle.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
     const word = uncle.querySelector('text') as SVGTextElement;
     expect(word).toHaveClass('fill-text');
+    // drawn in the small text its width is measured at (labelWidth, SMALL_TEXT_PX)
+    expect(word).toHaveClass('text-meta');
     // its word on the line, beside the number
     expect([word.getAttribute('x'), word.getAttribute('y')].map(Number)).toEqual([
-      282,
+      279,
       columnHeadAt(host).y,
     ]);
     expect(uncle.querySelectorAll('rect, path, circle, [data-stone], [data-sq]')).toHaveLength(0);
     // its two dots after the word, centred on the line
     const dots = [...card(svg, T - 1).querySelectorAll('[data-chip][data-uncle-index="0"]')];
     expect(dots.map((d) => Number(d.getAttribute('cx')) - G.chip / 2)).toEqual([
-      u.x + 34,
-      u.x + 43,
+      u.x + 37,
+      u.x + 46,
     ]);
     for (const d of dots) expect(Number(d.getAttribute('cy'))).toBe(host.h / 2);
     expect(card(svg, T - 1).querySelectorAll('[data-stone]')).toHaveLength(1);
@@ -2969,7 +2977,7 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     // both uncles under the line, from x 126, their words and dots on their own line's middle
     expect(host.uncles.map((u) => [u.line, u.x, u.y])).toEqual([
       ['own', 126, 42],
-      ['own', 198, 42],
+      ['own', 201, 42],
     ]);
     for (const u of host.uncles) {
       const word = el.querySelector(`[data-uncle="${u.index}"] text`) as SVGTextElement;
