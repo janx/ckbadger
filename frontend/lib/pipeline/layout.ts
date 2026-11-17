@@ -235,8 +235,8 @@ export type Orientation = 'row' | 'column';
  * number at `nameX`); a well's pool total ending at `countX`; proposal dots from `chipX` (5 per
  * row, two rows `chipRowP` apart, then "+N"); the tx line from `lineX` — the cellbase first, then
  * squares at 17 px per cell, each centred vertically and set in its cut — ending at the row's
- * right padding, its "+N" and then its uncles (each its word, then its dots) at its end, `endGap`
- * apart. A row is two cells and 6 px padding tall (44 px) and grows only for a 3×3 or 4×4 square.
+ * right padding, its "+N" and then its uncles (each its word, then its dots or its "+N") at its
+ * end, `endGap` apart. A row is two cells and 6 px padding tall (44 px) and grows only for a 3×3 or 4×4 square.
  * A link is two bands of ticks running down the gap between two rows, at `linkX`; the pool's flow
  * one band at `flowX`.
  */
@@ -266,15 +266,12 @@ export const COL = {
   padR: 8,
   /** Between the tx line and what ends it: its "+N", an uncle, its dots, the next uncle. */
   endGap: 4,
-  /**
-   * What a block line keeps before its uncles' dots, in cells: the cellbase and a 4×4 square. While
-   * the dots would leave the line less than that and its "+N", they give way and an uncle is its
-   * word alone.
-   */
-  keepCells: 5,
   /** The tip and three older blocks. */
   blocks: 4,
-  /** An uncle at the end of a block's tx line: "uncle", then up to four of its dots; no box. */
+  /**
+   * An uncle at the end of a block's tx line, no box: "uncle", then up to four of its dots with
+   * "+N" for the rest in their slots, or, when the dots do not fit, "+N" for all its proposals.
+   */
   uncle: { labelW: 30, chips: 4 },
   /** The left edges of a link's two bands, and of the pool's flow band. */
   linkX: [27, 75],
@@ -284,8 +281,10 @@ export const COL = {
   /** The chain's tail below the last row. */
   tail: 30,
   /**
-   * The narrowest column (a 320 px viewport): the line still holds the cellbase, a 4×4 square, a
-   * "+N" and an uncle's word (its dots give way first).
+   * The narrowest column (a 320 px viewport): a line still holds the cellbase and its "+N", and an
+   * uncle's word with its dots or its "+N" (a 4×4 square too in a block without an uncle), at the
+   * widest labels ("+2999" txs, "+1500" proposals). Two uncles fit only while the line's "+N" and
+   * theirs take 59 px or less.
    */
   minViewW: 288,
 } as const;
@@ -295,13 +294,30 @@ export function columnRowH(cells: number): number {
   return side(Math.max(COL.minCells, cells)) + 2 * COL.pad;
 }
 
+/** How a column uncle is drawn: its width, its dots drawn, and its proposals counted as "+N". */
+interface ColumnUncle {
+  w: number;
+  shown: number;
+  overflow: number;
+}
+
 /**
- * Width of a column uncle: its word, then room for its dots when it carries proposals and its dots
- * have not given way (`dots`).
+ * A column uncle with `proposals`: its word, then (`dots`) its four dot slots with "+N" for the
+ * rest in their place; without `dots`, or when the slots cannot hold that "+N" (more than "+999"),
+ * its word, `endGap` and "+N" for all of them. Never its word alone while it has proposals: what
+ * is not drawn is counted.
  */
-export function columnUncleW(proposals: number, dots: boolean): number {
+function columnUncle(proposals: number, dots: boolean): ColumnUncle {
   const u = COL.uncle;
-  return u.labelW + (dots && proposals ? COL.endGap + dotsW(u.chips) : 0);
+  if (!proposals) return { w: u.labelW, shown: 0, overflow: 0 };
+  const slots = dots ? slotsFor(proposals, u.chips) : null;
+  if (slots) return { w: u.labelW + COL.endGap + dotsW(u.chips), ...slots };
+  return { w: u.labelW + COL.endGap + labelWidth(`+${proposals}`), shown: 0, overflow: proposals };
+}
+
+/** Width of a column uncle with `proposals`, with its dots if they fit (`dots`) or its "+N". */
+export function columnUncleW(proposals: number, dots: boolean): number {
+  return columnUncle(proposals, dots).w;
 }
 
 /** `n` dots side by side, in px: n pitches less the space after the last. */
@@ -341,12 +357,19 @@ export function unclesH(counts: readonly number[]): number {
  * pitch), so the label never covers a dot.
  */
 export function chipSlots(total: number, cap: number): { shown: number; overflow: number } {
+  const slots = slotsFor(total, cap);
+  if (!slots) throw new Error(`pipeline: no room for a +N label in ${cap} chip slots`);
+  return slots;
+}
+
+/** `chipSlots`, or null when `cap` slots cannot hold the "+N" of what does not fit. */
+function slotsFor(total: number, cap: number): { shown: number; overflow: number } | null {
   if (total <= cap) return { shown: total, overflow: 0 };
   for (let r = 1; r <= cap; r++) {
     const overflow = total - (cap - r);
     if (r >= String(overflow).length + 1) return { shown: cap - r, overflow };
   }
-  throw new Error(`pipeline: no room for a +N label in ${cap} chip slots`);
+  return null;
 }
 
 /**
@@ -1032,8 +1055,8 @@ export interface SceneChip {
 }
 
 /**
- * An uncle carried by a block: its extent, local to the card (nothing is drawn for it but its word,
- * its dots and its "+N"; no box). Its "+N" ends at `x + w`, on its word's line.
+ * An uncle carried by a block: its extent, local to the card. Nothing is drawn for it but its word
+ * at `x`, its dots (the card's chips of its index) and its "+N"; no box.
  */
 export interface SceneUncle {
   index: number;
@@ -1043,13 +1066,11 @@ export interface SceneUncle {
   w: number;
   h: number;
   label: string;
-  /** Its proposals not drawn as dots. */
-  overflow: number;
   /**
-   * false where its dots gave way to the tx line (a column at its narrowest): the word alone is
-   * drawn, no dot and no "+N"; its proposals are in its hover.
+   * Its proposals not drawn as dots, counted as "+N" ending at `x + w` on its word's line: its
+   * dots drawn (the chips of its index) and `overflow` make up all its proposals.
    */
-  dots: boolean;
+  overflow: number;
 }
 
 /**
@@ -1299,7 +1320,6 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
       h,
       label: 'uncle',
       overflow: Math.max(0, list.length - cap2),
-      dots: true,
     });
     list.slice(0, cap2).forEach((p, i) => {
       chips.push({
@@ -1587,29 +1607,33 @@ const squareTop = (h: number, s: number) => Math.floor((h - s) / 2);
 const tallest = (pos: readonly LinePos[]) => Math.max(1, ...pos.map((p) => p.n));
 
 /**
- * What a block's tx line keeps before its uncles' dots: `COL.keepCells` (the cellbase and a 4×4
- * square), then the "+N" of every tx of the block, the widest "+N" it can need.
+ * The least a block's tx line keeps: the cellbase, and the "+N" of every tx of the block after it
+ * (the widest "+N" the line can need). Its uncles take their room first; the squares take what is
+ * left.
  */
-const lineKeeps = (b: PipelineBlock) =>
-  side(COL.keepCells) + COL.endGap + labelWidth(`+${b.txCount - 1}`);
+const lineMin = (b: PipelineBlock) =>
+  side(1) + (b.txCount > 1 ? COL.endGap + labelWidth(`+${b.txCount - 1}`) : 0);
 
 /**
  * A block as a column row: its own proposal dots, then its tx line — the cellbase and the txs that
- * fit — and at the end of the line its uncles ("uncle" and the uncle's dots), which take their
- * width out of the line as an uncle takes rows out of a plate's field. The uncles' dots give way
- * first: while they would leave the line less than `lineKeeps`, every uncle is its word alone.
+ * fit — and at the end of the line its uncles. The uncles and the line's "+N" are reserved first:
+ * each uncle is its word and its dots ("+N" for the rest in their slots), or, when the dots leave
+ * the line less than `lineMin`, its word and "+N" for all its proposals; the squares take what is
+ * left, and a square that does not fit is counted in the line's "+N".
  */
 function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCard {
   const b = f.block;
   const u = COL.uncle;
   const lineX = COL.lineX - COL.x0;
   const lineEnd = w - COL.padR;
-  const txEndOf = (widths: readonly number[]) =>
-    lineEnd - widths.reduce((sum, bw) => sum + bw + COL.endGap, 0);
-  const withDots = f.byUncle.map((list) => columnUncleW(list.length, true));
-  const dots = txEndOf(withDots) - lineX >= lineKeeps(b);
-  const widths = dots ? withDots : f.byUncle.map((list) => columnUncleW(list.length, false));
-  const txEnd = txEndOf(widths);
+  const txEndOf = (list: readonly ColumnUncle[]) =>
+    lineEnd - list.reduce((sum, un) => sum + un.w + COL.endGap, 0);
+  const withDots = f.byUncle.map((list) => columnUncle(list.length, true));
+  const drawn =
+    txEndOf(withDots) - lineX >= lineMin(b)
+      ? withDots
+      : f.byUncle.map((list) => columnUncle(list.length, false));
+  const txEnd = txEndOf(drawn);
   const fit = fitLine(
     f.order.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
     txEnd - lineX,
@@ -1652,19 +1676,18 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
   const uncles: SceneUncle[] = [];
   let x = txEnd + COL.endGap;
   f.byUncle.forEach((list, ui) => {
-    const slots = dots ? chipSlots(list.length, u.chips) : { shown: 0, overflow: list.length };
+    const un = drawn[ui];
     uncles.push({
       index: ui,
       ref: b.uncles[ui],
       x,
       y: mid - UNC.head / 2,
-      w: widths[ui],
+      w: un.w,
       h: UNC.head,
       label: 'uncle',
-      overflow: slots.overflow,
-      dots,
+      overflow: un.overflow,
     });
-    list.slice(0, slots.shown).forEach((p, i) => {
+    list.slice(0, un.shown).forEach((p, i) => {
       chips.push({
         key: `${p.shortId}|${ui}`,
         proposal: p,
@@ -1672,7 +1695,7 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
         y: mid - G.chip / 2,
       });
     });
-    x += widths[ui] + COL.endGap;
+    x += un.w + COL.endGap;
   });
   return {
     id: b.hash,
