@@ -7,50 +7,33 @@ import {
   diamondPath,
   paintSquare,
   tok,
-  type ShadeStep,
-  type SquareStage,
-  type SquareStyle,
+  type SquarePaint,
 } from '@/lib/pipeline/encoding';
 
+/** A key's square: 9 px, the canvas's own shape, in the canvas's own paint. */
+const SIDE = 9;
+
 function Sq({
-  stage,
-  step = 1,
-  style = 'solid',
-  size = 8,
+  paint,
 }: {
-  stage: SquareStage;
-  step?: ShadeStep;
-  style?: SquareStyle;
-  size?: number;
+  paint: Pick<SquarePaint, 'fill' | 'fillOpacity' | 'stroke'> & {
+    strokeDasharray?: string | null;
+  };
 }) {
-  const p = paintSquare(stage, style, step);
   return (
-    <svg width={size + 2} height={size + 2} viewBox={`-1 -1 ${size + 2} ${size + 2}`} aria-hidden>
+    <svg width={SIDE + 2} height={SIDE + 2} viewBox={`-1 -1 ${SIDE + 2} ${SIDE + 2}`} aria-hidden>
       <rect
-        width={size}
-        height={size}
-        fillOpacity={p.fillOpacity ?? undefined}
-        strokeDasharray={p.strokeDasharray ?? undefined}
-        style={{ fill: p.fill, stroke: p.stroke ?? 'none' }}
+        width={SIDE}
+        height={SIDE}
+        fillOpacity={paint.fillOpacity ?? undefined}
+        strokeDasharray={paint.strokeDasharray ?? undefined}
+        style={{ fill: paint.fill, stroke: paint.stroke ?? 'none' }}
       />
     </svg>
   );
 }
 
-/** A colour key, shape-neutral: a stage paints both tx squares and proposal dots. */
-function Swatch({ fill, stroke = null }: { fill: string; stroke?: string | null }) {
-  return (
-    <svg width={12} height={6} viewBox="-1 -1 12 6" aria-hidden>
-      <rect
-        width={10}
-        height={4}
-        fillOpacity={stroke ? 0.14 : 1}
-        style={{ fill, stroke: stroke ?? 'none' }}
-      />
-    </svg>
-  );
-}
-
+/** A key: its swatch and its words, never parted when the line wraps. */
 function Key({ children, tight = false }: { children: ReactNode; tight?: boolean }) {
   return (
     <span
@@ -61,11 +44,14 @@ function Key({ children, tight = false }: { children: ReactNode; tight?: boolean
   );
 }
 
+const solid = (fill: string) => ({ fill, fillOpacity: null, stroke: null });
+
 /**
- * One quiet line: the two shapes (tx square, proposal dot), the stage colours they share (as
- * shape-neutral swatches), the cellbase, the cycles shades and the dashed "cycles unknown" square.
- * Everything labelled on the canvas itself (the pool wells, uncles), explained in a hover or in the
- * "?" title (area = bytes, how to use it) is left out.
+ * One plain dim line under the canvas (Plate.dc.html `.lg`): the tx square with its scale (the
+ * unit is said here only, as on /blocks), the proposal dot, the stage colours as squares in the
+ * canvas's own paints (the expired one is a dot's colour), then the cellbase, the cycles shades
+ * and the dashed "cycles unknown" square. Everything labelled on the canvas itself (the pool
+ * wells, uncles) or explained in a hover or in the "?" title (how to use it) is left out.
  */
 export function PipelineLegend() {
   const cellbase = paintSquare('cellbase', 'solid', 0);
@@ -75,53 +61,56 @@ export function PipelineLegend() {
       className={`${FOOTER_ROW} text-text-dim text-meta gap-x-3.5`}
     >
       <Key>
-        <svg width={9} height={9} viewBox="0 0 9 9" aria-hidden>
-          <rect x={0.5} y={0.5} width={8} height={8} style={{ fill: tok('ink') }} />
-        </svg>
-        tx
+        <Sq paint={solid(tok('ink-dim'))} />
+        tx, area ∝ bytes
       </Key>
       <Key>
         <svg width={8} height={8} viewBox="0 0 8 8" aria-hidden>
-          <circle cx={4} cy={4} r={3} style={{ fill: tok('ink') }} />
+          <circle cx={4} cy={4} r={3} style={{ fill: tok('ink-dim') }} />
         </svg>
         proposal
       </Key>
       <span className="bg-base-border h-2.5 w-px" aria-hidden />
       <Key>
-        <Swatch fill={paintSquare('pending', 'solid', 0).fill} />
+        <Sq paint={paintSquare('pending', 'solid', 0)} />
         pending
       </Key>
       <Key>
-        <Swatch fill={paintSquare('proposed', 'solid', 0).fill} />
+        <Sq paint={paintSquare('proposed', 'solid', 0)} />
         proposed
       </Key>
       <Key>
-        <Swatch fill={tok('proposed')} stroke={tok('gold')} />
+        <Sq paint={paintSquare('proposed', 'hollow', 0)} />
         too early
       </Key>
       <Key>
-        <Swatch fill={paintSquare('committed', 'solid', 0).fill} />
+        <Sq paint={paintSquare('committed', 'solid', 0)} />
         committed
       </Key>
       <Key>
-        <Swatch fill={chipPaint('expired').fill} />
+        <Sq paint={solid(chipPaint('expired').fill)} />
         expired
       </Key>
       <span className="bg-base-border h-2.5 w-px" aria-hidden />
       <Key>
-        <svg width={10} height={10} viewBox="0 0 10 10" aria-hidden>
-          <path d={diamondPath(1.5, 1.5, 7)} style={{ fill: cellbase.fill }} />
+        <svg
+          width={SIDE + 2}
+          height={SIDE + 2}
+          viewBox={`-1 -1 ${SIDE + 2} ${SIDE + 2}`}
+          aria-hidden
+        >
+          <path d={diamondPath(0, 0, SIDE)} style={{ fill: cellbase.fill }} />
         </svg>
         cellbase
       </Key>
       <Key tight>
         {([0, 1, 2, 3] as const).map((s) => (
-          <Sq key={s} stage="committed" step={s} size={6} />
+          <Sq key={s} paint={paintSquare('committed', 'solid', s)} />
         ))}
         <span className="ml-1">cycles</span>
       </Key>
       <Key>
-        <Sq stage="committed" style="dashed" />
+        <Sq paint={paintSquare('committed', 'dashed', 0)} />
         unknown
       </Key>
     </div>

@@ -1,4 +1,5 @@
 import type { PipelineProposalState } from '@/lib/api';
+import { color } from '@/lib/palette';
 
 /**
  * Visual encodings of the transaction pipeline (ported from the approved prototype,
@@ -209,8 +210,47 @@ export function chipPaint(state: PipelineProposalState): ChipPaint {
   return paint;
 }
 
-/** Predicted (NEXT) marks: dashed jade squares and hollow gold dots, never solid. */
+/**
+ * The paint of a square or the cellbase on a block `age` places behind the tip: its fill and its
+ * outline (a hollow or a dashed square's) mixed toward the cut it sits in (`agedFill`); `null` for
+ * a square loose in a pool well, which does not age. The static render and the motion layer both
+ * paint a mark through this.
+ */
+export function agedPaint(
+  p: SquarePaint,
+  mark: Exclude<AgedMark, 'dot'>,
+  age: number | null
+): SquarePaint {
+  if (age === null) return p;
+  return {
+    ...p,
+    fill: agedFill(mark, p.fill, age),
+    stroke: p.stroke === null ? null : agedFill(mark, p.stroke, age),
+  };
+}
+
+/** The paint of a proposal dot on a block `age` places behind the tip: mixed toward the plate. */
+export function agedChip(state: PipelineProposalState, age: number): ChipPaint {
+  const p = chipPaint(state);
+  return {
+    ...p,
+    fill: agedFill('dot', p.fill, age),
+    stroke: p.stroke === null ? null : agedFill('dot', p.stroke, age),
+  };
+}
+
+/**
+ * A hovered plate's edge: 1 px of the dim ink (4.1 : 1 on the plate, a line, not a word). The plate
+ * has no stroke at rest.
+ */
+export const PLATE_EDGE = color('text-dim');
+
+/**
+ * Predicted (NEXT) marks: dashed jade squares and hollow gold dots, never solid; NEXT itself (and a
+ * landing block until its commits land) a dashed outline with no fill, the only one.
+ */
 export const GHOST = {
+  outline: { stroke: tok('jade'), strokeOpacity: 0.6, dash: '2 2' },
   square: {
     fill: tok('jade'),
     fillOpacity: 0.05,
@@ -227,6 +267,24 @@ export const GHOST = {
   },
   chip: { stroke: tok('gold'), strokeOpacity: 0.5 },
 } as const;
+
+/**
+ * The chain's links, two bands of filled ticks each (never stroked): the muted ink between two
+ * blocks, the same at 0.7 from NEXT (and from a block still landing), gold inside the drawn
+ * proposal window, at full strength. The pool's flows: one faint band of the muted ink at 0.8.
+ */
+export const LINK_PAINT = {
+  solid: { fill: tok('ink-dim'), fillOpacity: null },
+  pend: { fill: tok('ink-dim'), fillOpacity: 0.7 },
+  win: { fill: tok('gold'), fillOpacity: null },
+  flow: { fill: tok('ink-dim'), fillOpacity: 0.8 },
+} as const;
+
+/**
+ * The chain's tail past the last plate (its two bands fading to nothing): gold while the drawn
+ * window runs on past that plate, else the muted ink of a link.
+ */
+export const tailFill = (windowRunsOn: boolean) => tok(windowRunsOn ? 'gold' : 'ink-dim');
 
 /** The cellbase diamond inside an s×s cell at (x, y). */
 export function diamondPath(x: number, y: number, s: number): string {

@@ -26,7 +26,9 @@ import {
   UNC,
   UNCLE_CHIPS_PER_ROW,
   axisOf,
+  boxRect,
   buildScene,
+  cardBox,
   chainLayout,
   chainPaths,
   chainTail,
@@ -57,8 +59,9 @@ import {
   side,
   uncleRowH,
   unclesH,
+  wellRect,
+  wellShade,
   windowLabel,
-  windowMarksPath,
   windowRange,
   windowRuler,
   labelWidth,
@@ -284,6 +287,53 @@ describe('grid capacities', () => {
     expect(G.wellTop + G.wellH).toBe(G.cardTop + CARD_H);
     expect(G.poolInset).toBe(1 + 7);
     expect(G.poolTop).toBe(G.wellTop + G.poolInset);
+  });
+
+  // Lane R (Plate.dc.html `.wl`, `.tl`): the well's 1 px edge falls on its own outer pixels, its
+  // inset a 3 px shade under that edge; the pool's name and total stand 1 px inside its edges.
+  it('draws a well as its exact 99 × 94 px with the edge on its outer pixels, the inset under it', () => {
+    expect(wellRect(G.proposedX)).toEqual({
+      x: G.proposedX + 0.5,
+      y: G.wellTop + 0.5,
+      width: CARD_W - 1,
+      height: G.wellH - 1,
+    });
+    expect(wellShade(G.proposedX)).toEqual({
+      x: G.proposedX + 1,
+      y: G.wellTop + 1,
+      width: CARD_W - 2,
+      height: 3,
+    });
+    expect(G.poolHeadPad).toBe(1);
+  });
+});
+
+describe('a box and its 1 px line', () => {
+  it('fills exactly its px, or insets by half a line so the line lies on its own outer pixels', () => {
+    expect(boxRect(10, 20, 99, 122, false)).toEqual({ x: 10, y: 20, width: 99, height: 122 });
+    expect(boxRect(10, 20, 99, 122, true)).toEqual({ x: 10.5, y: 20.5, width: 98, height: 121 });
+  });
+
+  it('sets a row card under the lane and a column row at its own top', () => {
+    expect(cardBox('row', CARD_W, CARD_H, false)).toEqual({
+      x: 0,
+      y: G.cardTop,
+      width: CARD_W,
+      height: CARD_H,
+    });
+    // NEXT's dashed outline (and a hovered plate's edge): Plate.dc.html's `rect x=.5 y=.5 98 × 121`
+    expect(cardBox('row', CARD_W, CARD_H, true)).toEqual({
+      x: 0.5,
+      y: G.cardTop + 0.5,
+      width: 98,
+      height: 121,
+    });
+    expect(cardBox('column', 358, 44, false)).toEqual({ x: 0, y: 0, width: 358, height: 44 });
+  });
+
+  it('refuses a box with no extent', () => {
+    expect(() => boxRect(0, 0, 0, 10, false)).toThrow(/box of 0 × 10 px has no extent/);
+    expect(() => boxRect(0, 0, 10, 1, true)).toThrow(/box of 10 × 1 px has no extent/);
   });
 
   it('draws 20 of the 56 pool txs the backend lists in a well, and counts the rest', () => {
@@ -749,13 +799,9 @@ describe('proposal window', () => {
     expect(ruler.ticks).toEqual([]);
     expect(ruler.label).toBeNull();
     expect(ruler.hit).toBeNull();
-    expect(windowMarksPath(ruler)).toBe('');
-  });
-
-  it('marks the window at rest with a short gold mark across the head line at each tick', () => {
-    const ruler = { ticks: [480, 1461], label: null, hit: null, tailOpen: false };
-    // The head line's middle is 36: each mark runs from 4.5 px above it to 5.5 px below it.
-    expect(windowMarksPath(ruler)).toBe('M480.0 31.5V41.5M1461.0 31.5V41.5');
+    // re-pinned with lane R: the window at rest has no marks (its gold bands say it); hovered,
+    // such a window draws nothing either
+    expect(rulerPath(ruler)).toBe('');
   });
 
   it('raises the ticks to the dimension line when hovered and breaks the line around the label', () => {

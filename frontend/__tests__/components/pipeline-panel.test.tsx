@@ -26,11 +26,17 @@ import {
 import type { PipelineSnapshot } from '@/lib/api';
 import { PipelineCanvas, PipelinePanel } from '@/components/pipeline/pipeline-panel';
 import {
+  CUT_FILL,
   PLATE_FILL,
+  STAGE_BASE,
   WELL_FILL,
   ageOpacity,
+  agedChip,
+  agedPaint,
   chipPaint,
   diamondPath,
+  mixColor,
+  paintSquare,
   tok,
 } from '@/lib/pipeline/encoding';
 import {
@@ -38,27 +44,38 @@ import {
   CARD_H,
   COL,
   G,
+  GUT,
+  UNC,
   buildScene,
+  cardBox,
+  chainPaths,
+  chainTail,
   columnChainPaths,
   columnChainTail,
   columnRewardLink,
   columnRulerPath,
   columnWindowMarksPath,
   columnWindowRuler,
+  flowPaths,
   inWindow,
   labelWidth,
   rulerPath,
+  side,
   tail4,
+  wellRect,
+  wellShade,
   windowLabel,
-  windowMarksPath,
   windowRuler,
+  type ChainSlotState,
   type RulerSlot,
   type Scene,
 } from '@/lib/pipeline/layout';
 import { FRESH_MS } from '@/lib/pipeline/motion';
+import { drawSeal } from '@/lib/seal/stones';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
 import {
+  color,
   contrastRatio,
   hexToRgb,
   overGround,
@@ -184,8 +201,32 @@ const strengthInCard = (el: Element, cardEl: Element) => {
   return strength;
 };
 /**
- * Lane E2 (ruling R4): "set back" is never an opacity on words. Every card's words (its number,
- * "uncle", the "+N" counts) are drawn at full strength; its tile keeps the age fade.
+ * Direction F (lane R): a plate is never faded, and nothing on it is set back by an opacity: not
+ * the plate, its stone, its cuts, its marks or its words (R4). An older block's marks step back by
+ * their fill alone (`agedPaint` / `agedChip` toward the cut or the plate), its words never. The
+ * words let the pointer through to the plate and the marks beneath them.
+ */
+const expectPlatesAtFullStrength = (svg: Element) => {
+  const cards = [...svg.querySelectorAll('[data-card]')];
+  // the tip and at least three blocks behind it, each a step further back
+  expect(cards.length).toBeGreaterThan(3);
+  const words = cards.flatMap((c, i) => [...c.querySelectorAll('text')].map((t) => ({ c, i, t })));
+  expect(words.length).toBeGreaterThanOrEqual(cards.length);
+  const faded = cards.flatMap((c, i) =>
+    [...c.querySelectorAll('*')]
+      .filter((el) => strengthInCard(el, c) !== 1)
+      .map((el) => `card ${i} <${el.tagName}> "${el.textContent}" at ${strengthInCard(el, c)}`)
+  );
+  expect(faded).toEqual([]);
+  for (const c of cards) {
+    expect(c.querySelector('[data-words]')).toHaveAttribute('pointer-events', 'none');
+  }
+};
+
+/**
+ * The column's rows keep the age fade on their shapes until lane P sets them as plates (the
+ * rule above): there, every card's words (its number, "uncle", the "+N" counts) are drawn at full
+ * strength and its tile keeps the age fade.
  */
 const expectWordsAtFullStrength = (svg: Element) => {
   const cards = [...svg.querySelectorAll('[data-card]')];
@@ -264,10 +305,11 @@ function wordInk(word: Element, svg: Element): PaletteKey {
 
 /**
  * Every word the canvas writes, its ink (its fill class), and the composite it stands on, over
- * each page ground the glass panel can show through: a block's tile or an uncle box on it, at the
- * tip's strength and at the age fade's floor (a block passes through every age, and the contrast
- * is least at one end), NEXT's half-strength box, a pool's well, or the page itself. One line per
- * ground, ink and theme under 4.5:1, with its worst ratio.
+ * each page ground the canvas can show: in a row, a block's plate (opaque, never faded: the words
+ * on it, an uncle's too, stand on the plate alone), NEXT's outline (no fill: the page), a pool's
+ * well, or the page itself; in a column (until lane P sets its rows as plates), a block's tile or
+ * an uncle box on it at the tip's strength and at the age fade's floor, NEXT's half-strength box,
+ * a well, or the page. One line per ground, ink and theme under 4.5:1, with its worst ratio.
  */
 function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
   const styleFill = (el: Element) => (el as SVGElement).style.getPropertyValue('fill');
@@ -276,6 +318,16 @@ function wordInkFailures(svg: Element, form: 'row' | 'column'): string[] {
     word: Element
   ): { kind: string; hexes: (theme: ThemeName, page: PaletteKey) => string[] } => {
     const card = word.closest('[data-card]');
+    if (card && form === 'row') {
+      const plate = card.querySelector('[data-box]') as Element;
+      expect(alphaOf(plate)).toBe(1);
+      return { kind: 'a plate', hexes: (t) => [fillHex(t, styleFill(plate))] };
+    }
+    if (word.closest('[data-next]') && form === 'row') {
+      const box = word.closest('[data-next]')?.querySelector('[data-box]') as Element;
+      expect(styleFill(box)).toBe('none');
+      return { kind: 'the page (NEXT is an outline)', hexes: (t, p) => [PALETTE[t][p]] };
+    }
     if (card) {
       const label = word.closest('[data-uncle-label]');
       if (label) {
@@ -340,10 +392,61 @@ const rulerSlots = (scene: Scene): RulerSlot[] => [
   ...scene.cards.map((c) => ({ number: c.block.number, x: c.x, w: c.w, mined: true })),
 ];
 
-/** A path made only of horizontal segments on the chain line (or the empty placeholder). */
-const CHAIN_Y = String(G.headY + 0.5);
-const isPlainLine = (d: string | null) =>
-  d === 'M0 0' || new RegExp(`^(M[\\d.]+ ${CHAIN_Y}L[\\d.]+ ${CHAIN_Y})+$`).test(d ?? '');
+/** The chain slots of a settled scene, as the panel hands them to `chainPaths`. */
+const chainSlots = (scene: Scene): ChainSlotState[] =>
+  scene.cards.map((c) => ({
+    number: c.block.number,
+    x: c.x,
+    w: c.w,
+    mined: true,
+    hash: c.block.hash,
+    parentHash: c.block.parentHash,
+    solid: 1,
+  }));
+/** The links of a settled row scene with the window of `H` drawn, from the library. */
+const rowChain = (scene: Scene, H: number) =>
+  chainPaths(
+    chainSlots(scene),
+    scene.next ? { x: scene.next.x, w: scene.next.w } : null,
+    H,
+    scene.snapshot.consensus,
+    scene.viewW
+  );
+/** The filled ticks of a link path: each a 2 × 10 rectangle, as `x y` of its top-left corner. */
+const TICK = /M([\d.]+) ([\d.]+)h2v10h-2Z/g;
+const ticksOf = (d: string | null) =>
+  [...(d ?? '').matchAll(TICK)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }));
+/** Whether `d` is nothing but filled rectangles (or the empty placeholder): no stroked segment. */
+const onlyFilledRects = (d: string | null) =>
+  d === 'M0 0' || /^(M[\d.]+ [\d.]+h\d+v\d+h-\d+Z)+$/.test(d ?? '');
+/**
+ * The rounded rects of `svg` outside its stones: a stone is a seal (lib/seal), whose corners are
+ * its own drawing; every plate, cut, well, square and ring is square (U-02, R1).
+ */
+const roundedOutsideStones = (svg: Element) => {
+  const bare = svg.cloneNode(true) as Element;
+  bare.querySelectorAll('[data-stone]').forEach((s) => s.remove());
+  return roundedRects(bare);
+};
+/** A block's seal as the plate presses it: its row stone, 14 px, on the plate. */
+const stoneOf = (hash: string, txs: number) =>
+  drawSeal(
+    { kind: 'block', hash, txs },
+    {
+      form: 'row',
+      height: G.stone,
+      state: 'pressed',
+      ink: color('mark'),
+      ground: color('pipeline-plate'),
+      dead: color('text-dim'),
+    }
+  ).svg;
+/** `markup` as the DOM serialises it inside an SVG group (the stone's own group). */
+const asInSvg = (markup: string) => {
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  g.innerHTML = markup;
+  return g.innerHTML;
+};
 
 /**
  * The drawn window label is fully inside [0, viewW], clear of every tick, and the dimension line
@@ -395,58 +498,156 @@ describe('PipelinePanel static render', () => {
     const dots = [...svg.querySelectorAll('[data-chip]')];
     expect(dots.length).toBeGreaterThan(0);
     expect(new Set(dots.map((d) => d.tagName))).toEqual(new Set(['circle']));
-    // T−7 proposed all 299 txs of T−5. The fixed card holds two rows of 10 dots (8 columns of
-    // 10 px at an 8 px pitch); "+283" at the end of the last row gives up one slot per glyph.
-    expect(states(T - 7)).toHaveLength(20 - 4);
-    expect(card(svg, T - 7).querySelector('[data-chip-overflow]')).toHaveTextContent('+283');
+    // T−7 proposed all 299 txs of T−5. The plate holds two rows of 9 dots (7 px on a 9 px pitch);
+    // "+285" at the end of the last row gives up one slot per glyph.
+    expect(states(T - 7)).toHaveLength(18 - 4);
+    expect(card(svg, T - 7).querySelector('[data-chip-overflow]')).toHaveTextContent(
+      `+${299 - (18 - 4)}`
+    );
   });
 
-  it('draws an uncle as an inset mini-card labelled "uncle", without an outline', async () => {
+  // Direction F (lane L's UNC, lane R): an uncle is its word and its dots, no box and no stone (a
+  // block's stone says its tx count, which the pipeline does not know of an uncle).
+  it('draws an uncle as its word and its dots on the plate: no box, no stone', async () => {
     const svg = await renderPanel();
     const host = card(svg, T - 1);
+    const u = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled').cards.find(
+      (c) => c.block.number === T - 1
+    )?.uncles[0];
+    if (!u) throw new Error('T−1 carries no uncle');
     const uncle = host.querySelector('[data-uncle="0"]') as SVGGElement;
     expect(uncle).not.toBeNull();
-    // Just the word: the uncle's number is in its tooltip. Re-pinned with lane E2 (R4): the word
-    // sits in the card's words group, at full strength, over the box the age fade steps back.
-    const label = host.querySelector('[data-words] [data-uncle-label="0"]') as SVGGElement;
-    expect([...label.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
-    expect(uncle.querySelectorAll('text')).toHaveLength(0);
-    const box = uncle.querySelector('rect') as SVGRectElement;
-    expect(box).not.toHaveAttribute('stroke-dasharray');
-    expect(box.style.getPropertyValue('stroke')).toBe('');
-    expect(box.style.getPropertyValue('fill')).toBe(tok('surface'));
-    const hostW = Number(host.querySelector('[data-box]')?.getAttribute('width')) + 1;
-    expect(hostW).toBe(89);
-    expect(Number(box.getAttribute('x'))).toBe(G.padX);
-    expect(Number(box.getAttribute('x')) + Number(box.getAttribute('width'))).toBe(hostW - G.padX);
-    expect(host.querySelectorAll('[data-chip][data-uncle-index="0"]')).toHaveLength(2);
-    // An uncle carries a header and proposals, never transactions.
+    // Just the word: the uncle's number is in its tooltip. It sits in the card's words group, at
+    // full strength, in the text ink (the dim ink is 4.1:1 on the plate).
+    expect(uncle.closest('[data-words]')).not.toBeNull();
+    expect([...uncle.querySelectorAll('text')].map((t) => t.textContent)).toEqual(['uncle']);
+    const word = uncle.querySelector('text') as SVGTextElement;
+    expect(word).toHaveClass('fill-text');
+    expect(Number(word.getAttribute('x'))).toBe(u.x);
+    expect(uncle.querySelectorAll('rect, path, circle, [data-stone]')).toHaveLength(0);
+    // The word is what a pointer reads the uncle by, though the card's words let it through.
+    expect(uncle).toHaveAttribute('pointer-events', 'visiblePainted');
+    // Its two dots under its word, at its own row.
+    const dots = [...host.querySelectorAll('[data-chip][data-uncle-index="0"]')];
+    expect(dots).toHaveLength(2);
+    for (const d of dots) expect(Number(d.getAttribute('cy')) - G.chip / 2).toBe(u.y + UNC.head);
+    // An uncle carries a header and proposals, never transactions; the plate has one stone, its own.
     expect(uncle.querySelectorAll('[data-sq]')).toHaveLength(0);
+    expect(host.querySelectorAll('[data-stone]')).toHaveLength(1);
   });
 
-  it('draws its cards, uncles, NEXT, ghost txs and tx squares square-cornered (U-02, R1)', async () => {
+  it('draws its plates, cuts, wells, NEXT, ghost txs and tx squares square-cornered (U-02, R1)', async () => {
     const svg = await renderPanel();
     expect(svg.querySelectorAll('[data-box]').length).toBeGreaterThan(1);
-    expect(svg.querySelectorAll('[data-uncle] rect').length).toBeGreaterThan(0);
+    expect(svg.querySelectorAll('rect[data-cut]').length).toBeGreaterThan(0);
+    expect(svg.querySelectorAll('rect[data-tray]')).toHaveLength(2);
     expect(svg.querySelectorAll('[data-ghost="tx"]').length).toBeGreaterThan(0);
     expect(svg.querySelectorAll('rect[data-sq]').length).toBeGreaterThan(0);
-    expect(roundedRects(svg)).toEqual([]);
+    // a stone is a seal: its corners are its own drawing (lib/seal), outside the rule
+    expect(svg.querySelectorAll('[data-stone]').length).toBeGreaterThan(0);
+    expect(roundedOutsideStones(svg)).toEqual([]);
   });
 
   it('draws committed txs as squares after the cellbase and counts the rest as +N', async () => {
     const svg = await renderPanel();
     const full = card(svg, T - 5);
     const squares = full.querySelectorAll('[data-sq]');
-    // 8 × 5 cells hold the cellbase and all 39 listed txs; the other 260 were omitted by the
-    // backend, which never lists more than a card can draw.
+    // 5 × 4 cells hold the cellbase and 19 of the 39 listed txs (all 1 × 1); the other 20 listed
+    // and the 260 the backend omitted are counted.
     expect(squares).toHaveLength(BLOCK_FIELD_CAPACITY);
     expect(squares[0]).toHaveAttribute('data-stage', 'cellbase');
     const count = full.querySelector('[data-count]') as SVGTextElement;
-    expect(count.textContent).toBe('+260');
-    // Right-aligned on the header row.
+    expect(count.textContent).toBe('+280');
+    // Right-aligned on the head line, in the text ink.
     expect(count).toHaveAttribute('text-anchor', 'end');
+    expect(count).toHaveClass('fill-text');
     expect(Number(count.getAttribute('x'))).toBe(G.cardW - G.padX);
     expect(Number(count.getAttribute('y'))).toBe(G.headY + 3.5);
+  });
+
+  // Direction F, §2.1 (lane L's A6, lane R): a plate is cut only where a transaction is.
+  it('cuts a plate only where a mark is: as many cuts as marks, each its square grown by the gutter', async () => {
+    const svg = await renderPanel();
+    const scene = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled');
+    for (const c of scene.cards) {
+      const el = card(svg, c.block.number);
+      const cuts = el.querySelector('[data-cuts]') as SVGGElement;
+      const field = el.querySelector('[data-field]') as SVGGElement;
+      // the field holds marks only, its cuts group cuts only: no empty cell, no bed, no grid
+      expect([...cuts.children].every((x) => x.matches('rect[data-cut]'))).toBe(true);
+      expect([...field.children].every((x) => x.hasAttribute('data-sq'))).toBe(true);
+      expect(cuts.children).toHaveLength(field.children.length);
+      expect(cuts.children).toHaveLength(c.squares.length);
+      // drawn first: the cuts lie under the marks
+      expect(cuts.compareDocumentPosition(field)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      for (const q of c.squares) {
+        const cut = cuts.querySelector(`[data-cut="${q.id}"]`) as SVGRectElement;
+        expect(cut, `the cut of ${q.id}`).not.toBeNull();
+        expect(['x', 'y', 'width', 'height'].map((a) => Number(cut.getAttribute(a)))).toEqual([
+          q.x - GUT,
+          q.y - GUT,
+          q.s + 2 * GUT,
+          q.s + 2 * GUT,
+        ]);
+        expect(cut.style.getPropertyValue('fill')).toBe(CUT_FILL);
+      }
+    }
+  });
+
+  it('draws nothing on a plate without a quantity: the plate, its stone, cuts, marks, dots and words', async () => {
+    const svg = await renderPanel();
+    const cards = [...svg.querySelectorAll('[data-card]')];
+    expect(cards.length).toBeGreaterThan(8);
+    const what = (el: Element) =>
+      el.closest('[data-stone]')
+        ? 'stone'
+        : el.matches('[data-box]')
+          ? 'plate'
+          : el.matches('[data-cut]')
+            ? 'cut'
+            : el.matches('[data-sq]')
+              ? 'mark'
+              : el.matches('[data-chip]')
+                ? 'dot'
+                : el.matches('text, tspan')
+                  ? 'word'
+                  : el.matches('g')
+                    ? 'group'
+                    : null;
+    for (const c of cards) {
+      const stray = [...c.querySelectorAll('*')].filter((el) => what(el) === null);
+      expect(stray.map((el) => el.outerHTML.slice(0, 80))).toEqual([]);
+      // a group draws nothing of its own
+      for (const g of c.querySelectorAll('g')) {
+        if (g.closest('[data-stone]')) continue;
+        expect(g.getAttribute('fill')).toBeNull();
+        expect(g.getAttribute('stroke')).toBeNull();
+      }
+      expect(c.querySelectorAll('[data-box]')).toHaveLength(1);
+      expect(c.querySelectorAll(':scope [data-stone]')).toHaveLength(1);
+    }
+  });
+
+  it('presses the block’s own seal into the head of its plate: its row stone, 14 px', async () => {
+    const svg = await renderPanel();
+    const scene = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled');
+    for (const c of scene.cards) {
+      const stone = card(svg, c.block.number).querySelector('[data-stone]') as SVGGElement;
+      expect(stone.getAttribute('transform')).toBe(`translate(${G.stoneX},${G.stoneY})`);
+      // the same markup as the block's seal: its hash and its transaction count
+      expect(stone.innerHTML).toBe(asInSvg(stoneOf(c.block.hash, c.block.txCount)));
+      const seal = stone.querySelector('svg') as SVGSVGElement;
+      expect([seal.getAttribute('width'), seal.getAttribute('height')]).toEqual(['14', '14']);
+      // it lets the pointer through to the plate
+      expect(stone).toHaveAttribute('pointer-events', 'none');
+    }
+    // two blocks, two stones
+    const [a, b] = scene.cards;
+    expect(stoneOf(a.block.hash, a.block.txCount)).not.toBe(stoneOf(b.block.hash, b.block.txCount));
+    // the number stands after the stone
+    const number = card(svg, T).querySelector('[data-block-number]') as SVGTextElement;
+    expect(Number(number.getAttribute('x'))).toBe(G.numberX);
+    expect(number).toHaveClass('fill-text-bright');
   });
 
   it('shows only the number in a block header, and "+N" only when txs are hidden', async () => {
@@ -492,45 +693,68 @@ describe('PipelinePanel static render', () => {
   });
 
   it('draws a tx whose cycles are still pending as a dashed square', async () => {
-    const svg = await renderPanel();
+    // The tip's 2 × 2 whose cycles are pending: at full size its 4 × 4 leaves the field no room
+    // for it, so the txs are kept at most 2 × 2 here.
+    const svg = await renderPanel(withSmallTxs(buildPipelineSnapshot()));
     const sq = card(svg, T).querySelector(`[data-sq="${committedTxHash(T, 0)}"]`);
     expect(sq).toHaveAttribute('data-style', 'dashed');
     expect(sq).toHaveAttribute('stroke-dasharray', '2 1.5');
   });
 
-  it('draws a mined block as a solid tile, without an outline at rest', async () => {
+  it('draws a mined block as a solid plate: its own tone, its exact 99 × 122 px, no stroke at rest', async () => {
     const svg = await renderPanel();
-    for (const n of [T, T - 5, T - 10]) {
+    // the tip, a full block, and the last plate in a 1600 px view (T−9)
+    for (const n of [T, T - 5, T - 9]) {
       const box = tile(svg, n);
+      expect(box.tagName).toBe('rect');
       expect(box.style.getPropertyValue('fill')).toBe(PLATE_FILL);
-      expect(box).toHaveAttribute('stroke-opacity', '0');
       expect(box).toHaveAttribute('fill-opacity', '1');
+      expect(box.style.getPropertyValue('stroke')).toBe('none');
       expect(box).not.toHaveAttribute('stroke-dasharray');
+      expect(['x', 'y', 'width', 'height'].map((a) => Number(box.getAttribute(a)))).toEqual([
+        0,
+        G.cardTop,
+        G.cardW,
+        CARD_H,
+      ]);
     }
   });
 
-  it('fades older blocks on an inner group: 1 at the tip, 0.4 from tip − 7 on', async () => {
+  // Direction F, §2.5: a faded mark is mixed, not made transparent; the plate and the words never
+  // fade (re-pinned from the age group's opacity, lane E2's "1 at the tip, 0.4 from tip − 7 on").
+  it('steps an older block’s marks back by their fill, toward the cut or the plate: 1 at the tip, 0.4 from tip − 7 on', async () => {
     const svg = await renderPanel();
-    const cards = [...svg.querySelectorAll('[data-card]')] as SVGGElement[];
-    expect(cards.length).toBeGreaterThan(8);
-    cards.forEach((c, i) => {
-      // re-pinned with lane E2 (R4): the age group holds the card's shapes, inside the hover's
-      // step-back group; the words are its sibling (see the next test)
-      const age = c.querySelector(':scope > [data-dim] > [data-age]') as SVGGElement;
-      expect(age).toHaveAttribute('data-age', String(i));
-      expect(Number(age.style.opacity)).toBeCloseTo(ageOpacity(i), 6);
+    const scene = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled');
+    expect(scene.cards.length).toBeGreaterThan(8);
+    scene.cards.forEach((c, i) => {
+      const el = card(svg, c.block.number);
+      expect(el).toHaveAttribute('data-age', String(i));
       // The outer group's opacity attribute belongs to the motion layer (fade in / retire).
-      expect(c.getAttribute('opacity')).toBe('1.000');
+      expect(el.getAttribute('opacity')).toBe('1.000');
+      for (const q of c.squares) {
+        const sq = el.querySelector(`[data-sq="${q.id}"]`) as SVGElement;
+        const own = paintSquare(q.stage, q.style, q.step);
+        expect(sq.style.getPropertyValue('fill')).toBe(
+          agedPaint(own, q.kind === 'cellbase' ? 'cellbase' : 'square', i).fill
+        );
+      }
+      for (const k of c.chips) {
+        const dot = el.querySelector(`[data-chip="${k.key}"]`) as SVGElement;
+        expect(dot.style.getPropertyValue('fill')).toBe(agedChip(k.proposal.state, i).fill);
+      }
     });
-    expect(Number((cards[0].querySelector('[data-age]') as SVGGElement).style.opacity)).toBe(1);
-    expect(Number((cards[7].querySelector('[data-age]') as SVGGElement).style.opacity)).toBeCloseTo(
-      0.4,
-      6
+    // the tip's marks are their own colours; from tip − 7 on a mark keeps 40 % of itself
+    const tipCellbase = card(svg, T).querySelector('[data-stage="cellbase"]') as SVGElement;
+    expect(tipCellbase.style.getPropertyValue('fill')).toBe(STAGE_BASE.cellbase);
+    expect(ageOpacity(7)).toBeCloseTo(0.4, 6);
+    const old = card(svg, T - 7).querySelector('[data-stage="cellbase"]') as SVGElement;
+    expect(old.style.getPropertyValue('fill')).toBe(
+      `color-mix(in srgb, ${STAGE_BASE.cellbase} 40%, ${CUT_FILL})`
     );
   });
 
-  it('keeps an older block’s words at full strength while its shapes step back (R4, lane E2)', async () => {
-    expectWordsAtFullStrength(await renderPanel());
+  it('never fades a plate or anything on it, its words least of all (R4, lane E2)', async () => {
+    expectPlatesAtFullStrength(await renderPanel());
   });
 
   // Lane E2 follow-up, ruling 2: a tile is a ground of its own, so its words are chosen for it.
@@ -545,9 +769,10 @@ describe('PipelinePanel static render', () => {
   });
 
   // Lane E2 round 3 (the lead's correction): the in-window number keeps the plain gold by night,
-  // the home page's approved look (6.11:1 on the tile, already fine); only by day, where the plain
-  // gold is 4.15:1 on the tile, it takes the gold's bright step, so it reads at 4.5:1 there.
-  it('keeps an in-window number the plain gold by night, and at 4.5:1 on its tile by day', async () => {
+  // the home page's approved look; only by day it takes the gold's bright step, so it reads at
+  // 4.5:1 there. Re-pinned with lane R: it stands on the plate, which is never faded (6.19 : 1 by
+  // night, 5.32 by day).
+  it('keeps an in-window number the plain gold by night, and at 4.5:1 on its plate by day', async () => {
     const svg = await renderPanel();
     act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T }));
     const consensus = buildPipelineSnapshot().consensus;
@@ -560,12 +785,11 @@ describe('PipelinePanel static render', () => {
       const number = c.querySelector('[data-block-number]') as Element;
       const ink = wordInk(number, svg);
       expect(PALETTE.dark[ink], `night ink of ${number.textContent}`).toBe(PALETTE.dark.gold);
-      const tile = fillHex('light', (c.querySelector('[data-box]') as SVGElement).style.fill);
-      for (const page of PAGE_GROUNDS)
-        for (const a of AGES) {
-          const ratio = contrastRatio(PALETTE.light[ink], mixHex(PALETTE.light[page], tile, a));
-          if (ratio < 4.5) short.push(`${number.textContent} at ${a} on ${page}: ${ratio}`);
-        }
+      const box = c.querySelector('[data-box]') as SVGElement;
+      expect(strengthInCard(box, c)).toBe(1);
+      const plate = fillHex('light', box.style.fill);
+      const ratio = contrastRatio(PALETTE.light[ink], plate);
+      if (ratio < 4.5) short.push(`${number.textContent} on the plate: ${ratio}`);
     }
     act(() => usePipelineHoverStore.getState().clearHover());
     expect(short).toEqual([]);
@@ -584,22 +808,78 @@ describe('PipelinePanel static render', () => {
     expect(wordInkFailures(svg, 'row')).toEqual([]);
   });
 
-  it('draws the pool as two wells: no stroke, the stage name in its colour and its total', async () => {
+  // Direction F (Plate.dc.html `.wl`, `.tl`, `.lk.f`): a well is square, its 1 px edge in the
+  // line ink and the theme's inset under it (its six round corners were a path the radius gate
+  // never saw); the pool's name and total stand on the head line above it.
+  it('draws the pool as two square wells: a 1 px edge, the inset, the stage name and its total above', async () => {
     const svg = await renderPanel();
     const wells = [
-      { id: 'pending', title: 'mempool', tone: 'fill-aqua', total: '5' },
-      { id: 'proposed', title: 'proposed', tone: 'fill-gold', total: '9' },
+      { id: 'pending', title: 'mempool', tone: 'fill-aqua', total: '5', x: G.mempoolX },
+      { id: 'proposed', title: 'proposed', tone: 'fill-gold', total: '9', x: G.proposedX },
     ];
     for (const w of wells) {
       const well = svg.querySelector(`[data-pool-card="${w.id}"]`) as SVGGElement;
-      const tray = well.querySelector('[data-tray]') as SVGPathElement;
-      expect(tray).toHaveAttribute('stroke', 'none');
+      const tray = well.querySelector('[data-tray]') as SVGRectElement;
+      expect(tray.tagName).toBe('rect');
+      expect(tray).not.toHaveAttribute('rx');
+      expect(tray).not.toHaveAttribute('ry');
       expect(tray.style.getPropertyValue('fill')).toBe(WELL_FILL);
-      expect(within(well as unknown as HTMLElement).getByText(w.title)).toHaveClass(w.tone);
-      expect(well.querySelector('[data-count]')?.textContent).toBe(w.total);
+      expect(tray.style.getPropertyValue('stroke')).toBe(color('base-border'));
+      expect(tray).toHaveAttribute('stroke-width', '1');
+      const r = wellRect(w.x);
+      expect(['x', 'y', 'width', 'height'].map((a) => Number(tray.getAttribute(a)))).toEqual([
+        r.x,
+        r.y,
+        r.width,
+        r.height,
+      ]);
+      // the inset: a 3 px shade under the top edge, the theme's well inset fading to nothing
+      const inset = well.querySelector('[data-inset]') as SVGRectElement;
+      const s = wellShade(w.x);
+      expect(['x', 'y', 'width', 'height'].map((a) => Number(inset.getAttribute(a)))).toEqual([
+        s.x,
+        s.y,
+        s.width,
+        s.height,
+      ]);
+      const ref = /^url\(#(.+)\)$/.exec(inset.getAttribute('fill') ?? '')?.[1];
+      const shade = svg.querySelector(`linearGradient[id="${ref}"]`) as SVGLinearGradientElement;
+      expect(shade).not.toBeNull();
+      expect(
+        [shade.getAttribute('x1'), shade.getAttribute('y1')].concat([
+          shade.getAttribute('x2'),
+          shade.getAttribute('y2'),
+        ])
+      ).toEqual(['0', '0', '0', '1']);
+      const stops = [...shade.querySelectorAll('stop')] as SVGStopElement[];
+      expect(stops.map((x) => x.style.getPropertyValue('stop-color'))).toEqual([
+        'var(--m-well-inset)',
+        'var(--m-well-inset)',
+      ]);
+      expect(stops.map((x) => x.getAttribute('stop-opacity'))).toEqual(['1', '0']);
+      // the name in the stage's colour and the total, on the head line above the well
+      const name = within(well as unknown as HTMLElement).getByText(w.title);
+      expect(name).toHaveClass(w.tone);
+      const nameText = name.closest('text') as SVGTextElement;
+      expect(Number(nameText.getAttribute('x'))).toBe(w.x + G.poolHeadPad);
+      expect(Number(nameText.getAttribute('y'))).toBe(G.headY + 3.5);
+      const count = well.querySelector('[data-count]') as SVGTextElement;
+      expect(count.textContent).toBe(w.total);
+      expect(Number(count.getAttribute('x'))).toBe(w.x + G.cardW - G.poolHeadPad);
+      expect(count).toHaveAttribute('text-anchor', 'end');
     }
-    // mempool ⇢ proposed ⇢ NEXT: dashed links through the header row.
-    expect(svg.querySelectorAll('[data-flow]')).toHaveLength(2);
+    // mempool ⇢ proposed ⇢ NEXT: one faint band of ticks in each gap, filled in the muted ink.
+    const flows = [...svg.querySelectorAll('[data-flow]')] as SVGPathElement[];
+    expect(flows.map((f) => f.getAttribute('d'))).toEqual([
+      flowPaths().toProposed,
+      flowPaths().toNext,
+    ]);
+    for (const f of flows) {
+      expect(f.style.getPropertyValue('fill')).toBe(tok('ink-dim'));
+      expect(f).toHaveAttribute('fill-opacity', '0.8');
+      expect(f).not.toHaveAttribute('stroke-dasharray');
+      expect(f.style.getPropertyValue('stroke')).toBe('');
+    }
   });
 
   it('splits the pool into pending and proposed, hollow while too early to commit', async () => {
@@ -626,19 +906,32 @@ describe('PipelinePanel static render', () => {
     expect(total('proposed')).toBe('5,678');
   });
 
-  it('draws NEXT as the only dashed outline, with dashed squares and hollow dots', async () => {
+  it('draws NEXT as the only dashed outline, at the plate’s size, with dashed squares and hollow dots', async () => {
     const svg = await renderPanel();
     const next = svg.querySelector('[data-next]') as SVGGElement;
     const nextBox = next.querySelector('[data-box]') as SVGRectElement;
-    expect(nextBox).toHaveAttribute('stroke-dasharray', '3 2');
+    // No plate yet: an outline only (Plate.dc.html `.nx rect`: 2 2), its line on the plate's own
+    // outer pixels.
+    expect(nextBox).toHaveAttribute('stroke-dasharray', '2 2');
     expect(nextBox.style.getPropertyValue('stroke')).toBe(tok('jade'));
-    // One look whatever is hovered: half-filled, its dashed outline at 0.6.
-    expect(nextBox).toHaveAttribute('fill-opacity', '0.5');
+    expect(nextBox.style.getPropertyValue('fill')).toBe('none');
+    const r = cardBox('row', G.cardW, CARD_H, true);
+    expect(['x', 'y', 'width', 'height'].map((a) => Number(nextBox.getAttribute(a)))).toEqual([
+      r.x,
+      r.y,
+      r.width,
+      r.height,
+    ]);
+    // One look whatever is hovered: its dashed outline at 0.6.
     expect(nextBox).toHaveAttribute('stroke-opacity', '0.6');
     hoverStoreSet({ block: T + 1, tx: null, window: T + 1 });
-    expect(nextBox).toHaveAttribute('fill-opacity', '0.5');
     expect(nextBox).toHaveAttribute('stroke-opacity', '0.6');
     hoverStoreSet({ block: null, tx: null, window: null });
+    // its number in the dim ink, at the plate's padding (no stone: nothing is pressed yet)
+    const number = within(next as unknown as HTMLElement).getByText(tail4(T + 1));
+    expect(number).toHaveClass('fill-text-dim');
+    expect(Number(number.getAttribute('x'))).toBe(G.padX);
+    expect(next.querySelector('[data-stone]')).toBeNull();
     expect(next.querySelectorAll('[data-ghost="tx"]')).toHaveLength(6);
     for (const g of next.querySelectorAll('[data-ghost="tx"]')) {
       expect(g.tagName).toBe('rect');
@@ -655,8 +948,8 @@ describe('PipelinePanel static render', () => {
     // Nothing is hidden, so the header shows only the number.
     expect(next.querySelector('[data-count]')).toBeNull();
     expect(next.querySelectorAll('[data-sq]')).toHaveLength(0);
-    // Tiles, wells and uncle mini-cards have no dashed outline.
-    const outlines = [...svg.querySelectorAll('[data-box], [data-tray], [data-uncle] > rect')];
+    // Plates and wells have no dashed outline.
+    const outlines = [...svg.querySelectorAll('[data-box], [data-tray]')];
     expect(outlines.length).toBeGreaterThan(10);
     expect(outlines.filter((el) => el.hasAttribute('stroke-dasharray'))).toEqual([nextBox]);
   });
@@ -674,36 +967,30 @@ describe('PipelinePanel static render', () => {
     expect(screen.getByTestId('pipeline-tip')).not.toHaveTextContent('Next');
   });
 
-  it('draws the window at rest as gold links and marks only: no label, ticks or gold numbers', async () => {
+  // Direction F (lane R): the gold bands say the window at rest; the short gold marks across the
+  // head line that also said it are gone.
+  it('draws the window at rest as its gold bands only: no marks, label, ticks or gold numbers', async () => {
     const s = buildPipelineSnapshot();
     const svg = await renderPanel(s);
     expect(svg.querySelector('[data-window-label]')).toBeNull();
     expect(svg.querySelector('[data-ruler-ticks]')).toBeNull();
-    const scene = buildScene(s, VIEW_W, 'settled');
-    const ruler = windowRuler(
-      rulerSlots(scene),
-      T + 1,
-      s.consensus,
-      VIEW_W,
-      windowLabel(T + 1, T, s.consensus)
-    );
-    expect(ruler.ticks).toHaveLength(2);
-    const marks = svg.querySelector('[data-window-marks]') as SVGPathElement;
-    expect(marks).toHaveAttribute('d', windowMarksPath(ruler));
-    expect(marks.style.getPropertyValue('stroke')).toBe(tok('gold'));
-    // The window of NEXT is T−9 … T−1: the eight links between them are gold, 1.5 px.
+    expect(svg.querySelector('[data-window-marks]')).toBeNull();
+    // The window of NEXT is T−9 … T−1: the eight links between them are gold, each two bands of
+    // four ticks, at full strength.
     const win = path(svg, 'win');
-    expect(win.getAttribute('d')?.match(/M/g)).toHaveLength(8);
-    expect(win.style.getPropertyValue('stroke')).toBe(tok('gold'));
-    expect(win).toHaveAttribute('stroke-width', '1.5');
-    // re-pinned with lane E2 round 3: an in-window number is the pipeline's word gold on its tile
+    expect(ticksOf(win.getAttribute('d'))).toHaveLength(8 * 8);
+    expect(win.getAttribute('d')).toBe(rowChain(buildScene(s, VIEW_W, 'settled'), T + 1).win);
+    expect(win.style.getPropertyValue('fill')).toBe(tok('gold'));
+    expect(win).not.toHaveAttribute('fill-opacity');
+    // re-pinned with lane E2 round 3: an in-window number is the pipeline's word gold on its plate
     for (const el of svg.querySelectorAll('[data-block-number]')) {
       expect(el).not.toHaveClass('fill-[var(--pipeline-word-gold)]');
     }
   });
 
-  it('draws the chain as a plain line, no arrowheads: dashed before the tip, solid after', async () => {
-    const svg = await renderPanel();
+  it('draws each link as two bands of filled ticks: muted between blocks, muted at 0.7 from NEXT, no strokes', async () => {
+    const s = buildPipelineSnapshot();
+    const svg = await renderPanel(s);
     const chain = svg.querySelector('[data-chain]') as SVGGElement;
     expect([...chain.querySelectorAll('path')].map((p) => p.getAttribute('data-path'))).toEqual([
       'solid',
@@ -711,18 +998,95 @@ describe('PipelinePanel static render', () => {
       'win',
       'tail',
     ]);
-    for (const p of [...chain.querySelectorAll('path'), ...svg.querySelectorAll('[data-flow]')]) {
-      expect(isPlainLine(p.getAttribute('d'))).toBe(true);
+    const paths = rowChain(buildScene(s, VIEW_W, 'settled'), T + 1);
+    for (const name of ['solid', 'pend', 'win', 'tail'] as const) {
+      expect(path(svg, name)).toHaveAttribute('d', paths[name] || 'M0 0');
     }
-    // mempool ⇢ proposed ⇢ NEXT ⇢ tip is dashed; the mined chain is solid.
-    for (const el of [...svg.querySelectorAll('[data-flow]'), path(svg, 'pend')]) {
-      expect(el).toHaveAttribute('stroke-dasharray', '3 3');
+    // filled rectangles only, no arrowheads, nothing stroked, the pool's flows too
+    const drawn = [
+      ...chain.querySelectorAll('path'),
+      ...svg.querySelectorAll<SVGPathElement>('[data-flow]'),
+    ];
+    for (const p of drawn) {
+      expect(onlyFilledRects(p.getAttribute('d'))).toBe(true);
+      expect(p.style.getPropertyValue('stroke')).toBe('');
+      expect(p).not.toHaveAttribute('stroke-width');
+      expect(p).not.toHaveAttribute('stroke-dasharray');
     }
-    expect(path(svg, 'pend').getAttribute('d')).not.toBe('M0 0');
-    expect(path(svg, 'solid')).not.toHaveAttribute('stroke-dasharray');
-    // The window of NEXT ends on screen, so the dotted tail is quiet jade.
-    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('jade'));
-    expect(path(svg, 'tail')).toHaveAttribute('stroke-opacity', '0.25');
+    // NEXT ⇢ the tip: the muted ink at 0.7; between settled blocks: the muted ink.
+    expect(ticksOf(path(svg, 'pend').getAttribute('d'))).toHaveLength(8);
+    expect(path(svg, 'pend').style.getPropertyValue('fill')).toBe(tok('ink-dim'));
+    expect(path(svg, 'pend')).toHaveAttribute('fill-opacity', '0.7');
+    expect(ticksOf(path(svg, 'solid').getAttribute('d')).length).toBeGreaterThan(0);
+    expect(path(svg, 'solid').style.getPropertyValue('fill')).toBe(tok('ink-dim'));
+    expect(path(svg, 'solid')).not.toHaveAttribute('fill-opacity');
+    // The window of NEXT ends on screen, so the tail is muted; it fades to nothing along its length.
+    const tail = path(svg, 'tail');
+    expect(tail.style.getPropertyValue('fill')).toBe(tok('ink-dim'));
+    expect(tail).not.toHaveAttribute('fill-opacity');
+    const maskId = /^url\(#(.+)\)$/.exec(tail.getAttribute('mask') ?? '')?.[1];
+    const mask = svg.querySelector(`mask[id="${maskId}"]`) as SVGMaskElement;
+    expect(mask).not.toBeNull();
+    expect(mask).toHaveAttribute('maskContentUnits', 'objectBoundingBox');
+    // an alpha mask: no colour in it, only how much of the tail is kept
+    expect(mask.style.getPropertyValue('mask-type')).toBe('alpha');
+    const fadeId = /^url\(#(.+)\)$/.exec(
+      mask.querySelector('rect')?.getAttribute('fill') ?? ''
+    )?.[1];
+    const fade = svg.querySelector(`linearGradient[id="${fadeId}"]`) as SVGLinearGradientElement;
+    // along the row: from the last plate on, to nothing
+    expect(['x1', 'y1', 'x2', 'y2'].map((a) => fade.getAttribute(a))).toEqual(['0', '0', '1', '0']);
+    expect([...fade.querySelectorAll('stop')].map((x) => x.getAttribute('stop-opacity'))).toEqual([
+      '1',
+      '0',
+    ]);
+  });
+
+  // Direction F (lane L's chainPaths): a link is two bands of four 2 × 10 ticks across an 18 px
+  // gap, at 32 and 80 px down the plates, and only where the newer block names the older one.
+  it('draws two bands, eight ticks, across the gap of every parent link and none across a break', async () => {
+    const s = buildPipelineSnapshot();
+    // T−4 names another parent: the chain breaks between T−4 and T−5 (a reorg, an orphan)
+    const broken: PipelineSnapshot = {
+      ...s,
+      blocks: s.blocks.map((b) =>
+        b.number === T - 4 ? { ...b, parentHash: blockHash(T - 100) } : b
+      ),
+    };
+    const svg = await renderPanel(broken);
+    const scene = buildScene(broken, VIEW_W, 'settled');
+    const ticks = (['solid', 'pend', 'win'] as const).flatMap((n) =>
+      ticksOf(path(svg, n).getAttribute('d'))
+    );
+    const next = scene.next as NonNullable<Scene['next']>;
+    const gaps = [
+      { a: next.x + next.w, b: scene.cards[0].x, linked: true, name: 'NEXT ⇢ the tip' },
+      ...scene.cards.slice(1).map((c, i) => ({
+        a: scene.cards[i].x + scene.cards[i].w,
+        b: c.x,
+        linked: scene.cards[i].block.parentHash === c.block.hash,
+        name: `#${scene.cards[i].block.number} → #${c.block.number}`,
+      })),
+    ];
+    expect(gaps.filter((g) => !g.linked).map((g) => g.name)).toEqual([`#${T - 4} → #${T - 5}`]);
+    for (const g of gaps) {
+      const inGap = ticks.filter((t) => t.x > g.a && t.x < g.b);
+      if (!g.linked) {
+        expect(inGap, g.name).toEqual([]);
+        continue;
+      }
+      expect(inGap, g.name).toHaveLength(8);
+      for (const y of G.linkY)
+        expect(
+          inGap.filter((t) => t.y === y),
+          g.name
+        ).toHaveLength(4);
+      // 2 px inside the gap on each side: 2, 6, 10, 14 of an 18 px gap
+      expect([...new Set(inGap.map((t) => t.x - g.a))].sort((p, q) => p - q)).toEqual([
+        2, 6, 10, 14,
+      ]);
+    }
+    expect(ticks).toHaveLength(8 * gaps.filter((g) => g.linked).length);
   });
 
   it('writes no zone titles, subtitles or window text on the canvas at rest', async () => {
@@ -747,13 +1111,13 @@ describe('PipelinePanel static render', () => {
     expect(svg.querySelector('[data-next-column]')).toBeNull();
   });
 
-  it('keys the canvas in one legend line: the shapes, the stages, then cellbase, cycles, unknown', async () => {
+  it('keys the canvas in one legend line: the scale, the shapes, the stages, then cellbase, cycles, unknown', async () => {
     await renderPanel();
     const legend = screen.getByTestId('pipeline-legend');
     const keys = [...legend.children];
     // The empty entries are the dividers between the shapes, the stage colours and the rest.
     expect(keys.map((el) => el.textContent)).toEqual([
-      'tx',
+      'tx, area ∝ bytes',
       'proposal',
       '',
       'pending',
@@ -766,18 +1130,28 @@ describe('PipelinePanel static render', () => {
       'cycles',
       'unknown',
     ]);
-    // ■ tx, ● proposal; the stage swatches are shape-neutral bars (both shapes use them).
+    // ■ tx, area ∝ bytes: the unit is said here only; ● proposal.
     expect(keys[0].querySelector('rect')).not.toBeNull();
     expect(keys[0].querySelector('circle')).toBeNull();
     expect(keys[1].querySelector('circle')).not.toBeNull();
-    for (const k of keys.slice(3, 8)) {
-      const bar = k.querySelector('rect') as SVGRectElement;
-      expect([bar.getAttribute('width'), bar.getAttribute('height')]).toEqual(['10', '4']);
-    }
-    // "too early" is the hollow one.
-    expect((keys[5].querySelector('rect') as SVGRectElement).style.getPropertyValue('stroke')).toBe(
-      tok('gold')
-    );
+    // The stage keys are 9 px squares in the canvas's own paints (Plate.dc.html `.lg i`).
+    const paints = [
+      paintSquare('pending', 'solid', 0),
+      paintSquare('proposed', 'solid', 0),
+      paintSquare('proposed', 'hollow', 0),
+      paintSquare('committed', 'solid', 0),
+      { ...chipPaint('expired'), strokeDasharray: null },
+    ];
+    keys.slice(3, 8).forEach((k, i) => {
+      const sq = k.querySelector('rect') as SVGRectElement;
+      expect([sq.getAttribute('width'), sq.getAttribute('height')]).toEqual(['9', '9']);
+      expect(sq.style.getPropertyValue('fill')).toBe(paints[i].fill);
+      expect(sq.style.getPropertyValue('stroke')).toBe(paints[i].stroke ?? 'none');
+    });
+    // "too early" is the hollow one, as the proposed well draws it.
+    expect(keys[5].querySelector('rect')).toHaveAttribute('fill-opacity', '0.14');
+    // No key breaks from its swatch when the line wraps.
+    for (const k of keys.filter((x) => x.textContent)) expect(k).toHaveClass('whitespace-nowrap');
     // No usage hint under the canvas while nothing is pinned.
     expect(screen.queryByTestId('pipeline-selection')).toBeNull();
     expect(screen.getByTestId('pipeline-panel')).not.toHaveTextContent(/hover a/i);
@@ -791,9 +1165,11 @@ describe('PipelinePanel static render', () => {
     expect(title).toMatch(/Tap or hover a tx or a proposal.*a tap on a tx pins it/);
   });
 
-  // Rubbing × Song print, phase 5 (H1, the Main board): the frame head is the command line
+  // Rubbing × Song print, phase 5 (H1, the Main board): the head is the command line
   // `■ pipeline --tip #20,969,560`, the "?" beside the command, "all blocks →" at the right.
-  it('heads the frame as a command: pipeline, the "?" beside it, then --tip and the tip', async () => {
+  // Re-pinned with lane R (PlateHome.dc.html `.ph`): the section's own 17 px heading, an h2 whose
+  // square is its own `::before`, as on every other home section; no frame's head.
+  it('heads the section as a command: pipeline, the "?" beside it, then --tip and the tip', async () => {
     await renderPanel();
     const command = screen.getByText('pipeline');
     expect(command.closest('.lowercase')).not.toBeNull();
@@ -801,7 +1177,9 @@ describe('PipelinePanel static render', () => {
     const help = screen.getByText('?');
     expect(command).toContainElement(help);
     const head = command.closest('.prompt') as HTMLElement;
-    expect(head).toContainElement(screen.getByTestId('terminal-panel-mark'));
+    expect(head.tagName).toBe('H2');
+    expect(head).toHaveClass('text-section');
+    expect(screen.queryByTestId('terminal-panel-mark')).toBeNull();
     expect(head).toHaveTextContent(new RegExp(`^pipeline\\?--tip #${fmt(T)}$`));
     expect(head).not.toHaveTextContent(/Transaction/i);
     // the args: dim and regular, in the head after the command; the tip only — the pool counts
@@ -841,6 +1219,27 @@ describe('PipelinePanel static render', () => {
     const actions = link.parentElement as HTMLElement;
     expect(actions.children).toHaveLength(1);
     expect(actions.parentElement).toBe(head.parentElement);
+  });
+
+  // Direction F (PlateHome.dc.html): the pipeline is an unframed section like the others on the
+  // home page; the legend a plain dim line under the canvas, with no rule over it.
+  it('stands unframed like the other home sections: no frame, no ruled footer', async () => {
+    await renderPanel();
+    const section = screen.getByTestId('pipeline-panel');
+    expect(section.tagName).toBe('SECTION');
+    expect(section).toHaveAttribute('aria-label', 'Transaction pipeline');
+    expect(section).not.toHaveAttribute('data-instrument-frame');
+    expect(section.querySelector('[data-instrument-frame]')).toBeNull();
+    const ruled = [section, ...section.querySelectorAll('*')].filter((el) =>
+      [...el.classList].some((c) => /^border(-[tblrxy])?$/.test(c))
+    );
+    // the "?" mark is the one bordered thing: a 14 px box round its glyph
+    expect(ruled.map((el) => el.textContent)).toEqual(['?']);
+    const legend = screen.getByTestId('pipeline-legend');
+    expect(legend).toHaveClass('text-text-dim');
+    expect(screen.getByTestId('pipeline-canvas').compareDocumentPosition(legend)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING
+    );
   });
 
   it('keeps drawing the chain when the pool tip differs from the synced tip', async () => {
@@ -954,8 +1353,8 @@ describe('PipelineCanvas motion', () => {
     expect(landing).toHaveAttribute('data-slot', 'landing');
     expect(landing.getAttribute('transform')).toBe(`translate(${G.nextX.toFixed(2)},0.00)`);
     expect(svg.querySelector('[data-next]')).toBeNull();
-    // Dashed until its commits land.
-    expect(landing.querySelector('[data-box]')).toHaveAttribute('stroke-dasharray', '3 2');
+    // Dashed like NEXT until its commits land.
+    expect(landing.querySelector('[data-box]')).toHaveAttribute('stroke-dasharray', '2 2');
     // The commit starts where it sat in the pool, expressed in the landing card's coordinates.
     const sq = landing.querySelector(`[data-sq="${w0}"]`) as SVGRectElement;
     expect(Number(sq.getAttribute('x'))).toBeCloseTo(poolX - G.nextX, 1);
@@ -977,32 +1376,123 @@ describe('PipelineCanvas motion', () => {
     );
   });
 
-  it('turns the dashed outline into a solid tile, then lets a fresh outline decay over 2.4 s', () => {
+  /** A box's rect, as its four attributes. */
+  const rectOf = (el: Element) =>
+    ['x', 'y', 'width', 'height'].map((a) => Number(el.getAttribute(a)));
+  const asRect = (r: { x: number; y: number; width: number; height: number }) => [
+    r.x,
+    r.y,
+    r.width,
+    r.height,
+  ];
+
+  // Direction F (Plate.dc.html, "a block lands"): until its commits land the block is NEXT's
+  // dashed outline; at contact its plate is set, with its cuts and its stone (re-pinned from the
+  // dashed tile that solidified and the 2.4 s fresh outline, which are gone).
+  it('keeps a landing block NEXT’s dashed outline until contact, then sets its plate, cuts and stone', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
-    // Settled tiles, as the motion layer paints them: no outline, a full fill.
-    expect(tile(svg, T)).toHaveAttribute('stroke-opacity', '0');
-    expect(tile(svg, T)).toHaveAttribute('fill-opacity', '1');
+    // Settled plates, as the motion layer paints them: their own tone, no stroke, exact.
+    expect(tile(svg, T).style.getPropertyValue('fill')).toBe(PLATE_FILL);
+    expect(tile(svg, T).style.getPropertyValue('stroke')).toBe('none');
+    expect(rectOf(tile(svg, T))).toEqual(asRect(cardBox('row', G.cardW, CARD_H, false)));
     rerender(<PipelineCanvas snapshot={s2} />);
+    const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
     const box = landingBox(svg);
-    // Not solid yet: stroke 0.6 · (1 − solid), fill 0.35 + 0.65 · solid, dashed.
-    expect(box).toHaveAttribute('stroke-opacity', '0.6');
-    expect(box).toHaveAttribute('fill-opacity', '0.35');
-    expect(box).toHaveAttribute('stroke-dasharray', '3 2');
-    // Contact: the fresh outline comes on while the block solidifies; the sum is capped at 1.
-    at(t.contact + 20);
-    expect(box).toHaveAttribute('stroke-opacity', '1');
-    // Solid (contact + 340): the outline is the fresh one alone, fading.
-    at(400);
+    const hidden = () =>
+      ['[data-stone]', '[data-cuts]'].map((sel) =>
+        landing.querySelector(sel)?.getAttribute('opacity')
+      );
+    const dashed = () => {
+      expect(box.style.getPropertyValue('fill')).toBe('none');
+      expect(box.style.getPropertyValue('stroke')).toBe(tok('jade'));
+      expect(box).toHaveAttribute('stroke-opacity', '0.6');
+      expect(box).toHaveAttribute('stroke-dasharray', '2 2');
+      expect(rectOf(box)).toEqual(asRect(cardBox('row', G.cardW, CARD_H, true)));
+      expect(hidden()).toEqual(['0', '0']);
+    };
+    dashed();
+    at(t.contact - 20);
+    dashed();
+    // Contact: the plate is set, its cuts and its stone with it.
+    at(40);
+    expect(box.style.getPropertyValue('fill')).toBe(PLATE_FILL);
+    expect(box.style.getPropertyValue('stroke')).toBe('none');
     expect(box).not.toHaveAttribute('stroke-dasharray');
     expect(box).toHaveAttribute('fill-opacity', '1');
-    const fading = Number(box.getAttribute('stroke-opacity'));
-    expect(fading).toBeGreaterThan(0);
-    expect(fading).toBeLessThan(0.6);
-    expect(FRESH_MS).toBe(2400);
-    at(FRESH_MS);
-    expect(box).toHaveAttribute('stroke-opacity', '0');
-    expect(box).toHaveAttribute('fill-opacity', '1');
+    expect(rectOf(box)).toEqual(asRect(cardBox('row', G.cardW, CARD_H, false)));
+    expect(hidden()).toEqual([null, null]);
+    // and stays set while it settles and slides into the chain
+    at(t.settleAt - t.contact + 900);
+    expect(box.style.getPropertyValue('fill')).toBe(PLATE_FILL);
+    expect(box).not.toHaveAttribute('stroke-dasharray');
+  });
+
+  // Direction F (Plate.dc.html, "found" → "400 ms"): the landed block's marks light in the
+  // phosphor white at contact and settle to their own fill over 400 ms (re-pinned from the fresh
+  // outline's 2.4 s decay).
+  it('flares the landing block’s marks neon-white at contact and settles them to their own fill in 400 ms', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    const landed = buildScene(s2, VIEW_W, 'landing').cards[0];
+    const marks = landed.squares.map((q) => ({
+      el: svg.querySelector(`[data-card="${newHash}"] [data-sq="${q.id}"]`) as SVGElement,
+      own: agedPaint(
+        paintSquare(q.stage, q.style, q.step),
+        q.kind === 'cellbase' ? 'cellbase' : 'square',
+        0
+      ).fill,
+    }));
+    expect(marks.map((m) => m.el.getAttribute('data-sq'))).toContain(w0);
+    const fills = () => marks.map((m) => m.el.style.getPropertyValue('fill'));
+    const NEON = color('neon-white');
+    // The commit is in flight and the cellbase unborn: nothing is lit before contact.
+    at(t.contact - 20);
+    expect(fills().filter((f) => f === NEON)).toEqual([]);
+    // Frame by frame to the first frame at contact: every mark, the cellbase too, is the neon white.
+    let ms = t.contact - 20;
+    while (!fills().includes(NEON)) {
+      at(16);
+      ms += 16;
+      expect(ms).toBeLessThan(t.contact + 40);
+    }
+    expect(fills()).toEqual(marks.map(() => NEON));
+    // On the way back: lit, toward its own fill.
+    at(FRESH_MS / 2);
+    for (const [i, f] of fills().entries()) {
+      expect(f).not.toBe(NEON);
+      expect(f).toMatch(new RegExp(`^color-mix\\(in srgb, ${NEON.replace(/[()]/g, '\\$&')} `));
+      expect(f).toContain(marks[i].own);
+    }
+    // 400 ms after contact: every mark its own fill.
+    expect(FRESH_MS).toBe(400);
+    at(FRESH_MS / 2 + 16);
+    expect(fills()).toEqual(marks.map((m) => m.own));
+  });
+
+  // Direction F (lane L's cuts, lane R): a moving square carries its cut, so no cut ever stands
+  // empty and no square stands on bare plate.
+  it('carries every square’s cut with it while it moves into the landing block', () => {
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={s2} />);
+    const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    const sq = landing.querySelector(`[data-sq="${w0}"]`) as SVGRectElement;
+    const cut = landing.querySelector(`[data-cut="${w0}"]`) as SVGRectElement;
+    const around = () => {
+      const [x, y, w, h] = rectOf(sq);
+      const want = [x - GUT, y - GUT, w + 2 * GUT, h + 2 * GUT];
+      rectOf(cut).forEach((v, i) => expect(v).toBeCloseTo(want[i], 1));
+      expect(cut.getAttribute('opacity')).toBe(sq.getAttribute('opacity'));
+    };
+    for (let ms = 0; ms < t.contact + 100; ms += 16) {
+      at(16);
+      around();
+    }
+    // landed: the cut is where the scene puts it
+    const q = buildScene(s2, VIEW_W, 'landing').cards[0].cuts.find((c) => c.id === w0);
+    expect(rectOf(cut)).toEqual([q?.x, q?.y, q?.s, q?.s]);
   });
 
   // Lane E2 follow-up, item 3: the chips' "+N" left `data-chips` for the card's words; an entrance
@@ -1046,19 +1536,26 @@ describe('PipelineCanvas motion', () => {
     expect(label).not.toHaveAttribute('opacity');
   });
 
-  it('outlines a highlighted tile while the motion layer is painting it', () => {
+  // Re-pinned with lane R: the hover's jade outline on the tile became a 1 px text-dim edge on the
+  // plate, on the plate's own outer pixels.
+  it('edges a highlighted plate in the dim ink while the motion layer is painting it', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
     rerender(<PipelineCanvas snapshot={s2} />);
     at(t.contact + 100);
-    // Hovered (here from the Latest Blocks row) while it is still landing and fresh.
+    // Hovered (here from the Latest Blocks row) while it is still landing and its marks still lit.
     act(() => usePipelineHoverStore.getState().setHover({ block: T + 1, tx: null, window: null }));
     at(40);
-    expect(landingBox(svg)).toHaveAttribute('stroke-opacity', '0.7');
-    expect(landingBox(svg)).toHaveAttribute('fill-opacity', '1');
+    const box = landingBox(svg);
+    expect(box.style.getPropertyValue('stroke')).toBe(color('text-dim'));
+    expect(box).toHaveAttribute('stroke-width', '1');
+    expect(box).not.toHaveAttribute('stroke-dasharray');
+    expect(box.style.getPropertyValue('fill')).toBe(PLATE_FILL);
+    expect(rectOf(box)).toEqual(asRect(cardBox('row', G.cardW, CARD_H, true)));
     act(() => usePipelineHoverStore.getState().clearHover());
     at(FRESH_MS + 800);
-    expect(landingBox(svg)).toHaveAttribute('stroke-opacity', '0');
+    expect(box.style.getPropertyValue('stroke')).toBe('none');
+    expect(rectOf(box)).toEqual(asRect(cardBox('row', G.cardW, CARD_H, false)));
   });
 
   it('retires the block that leaves the screen through the exit layer', () => {
@@ -1090,7 +1587,7 @@ describe('PipelineCanvas motion', () => {
       Number(/translate\(([\d.]+),/.exec(el.getAttribute('transform') ?? '')?.[1]);
     // NEXT's window is drawn (hovered from outside the canvas) the whole time.
     act(() => usePipelineHoverStore.getState().setHover({ block: null, tx: null, window: T + 1 }));
-    /** At rest at `width`: only whole blocks, and the chain, marks and label drawn for them. */
+    /** At rest at `width`: only whole blocks, and the chain and label drawn for them. */
     const expectRow = (width: number) => {
       const scene = buildScene(s1, width, 'settled');
       expect(svg.getAttribute('viewBox')).toBe(`0 0 ${width} ${G.H}`);
@@ -1099,17 +1596,14 @@ describe('PipelineCanvas motion', () => {
         expect(cardX(el) + G.cardW).toBeLessThanOrEqual(width - G.marginR);
       }
       expect(exitLayer.childElementCount).toBe(0);
+      // the tail: the two bands run on from the last plate for at most 66 px
       const last = scene.cards[scene.cards.length - 1];
-      const y = G.headY + 0.5;
-      expect(path(svg, 'tail')).toHaveAttribute(
-        'd',
-        `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
-      );
-      const text = windowLabel(T + 1, T, s1.consensus);
-      const ruler = windowRuler(rulerSlots(scene), T + 1, s1.consensus, width, text);
-      expect(svg.querySelector('[data-window-marks]')).toHaveAttribute('d', windowMarksPath(ruler));
+      const tail = chainTail(scene.cards, width);
+      expect(tail?.x0).toBe(last.x + last.w + 2);
+      expect(path(svg, 'tail')).toHaveAttribute('d', rowChain(scene, T + 1).tail);
+      expect(svg.querySelector('[data-window-marks]')).toBeNull();
       // The window of NEXT runs past the last block at every one of these widths: gold tail.
-      expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('gold'));
+      expect(path(svg, 'tail').style.getPropertyValue('fill')).toBe(tok('gold'));
       expectLabelClear(svg, width);
     };
     expectRow(1000);
@@ -1125,9 +1619,9 @@ describe('PipelineCanvas motion', () => {
     }
     expectRow(760);
 
-    // Wider again: the blocks that fit now fade in from nothing.
+    // Wider again: the blocks that fit now fade in from nothing (seven whole plates at 1246 px).
     resizeTo(CONTAINER_VIEW_W);
-    expect(shown()).toHaveLength(8);
+    expect(shown()).toHaveLength(7);
     expect(card(svg, T - 5)).toHaveAttribute('opacity', '0.000');
     for (let ms = 0; ms < 400; ms += 16) {
       at(16);
@@ -1137,16 +1631,25 @@ describe('PipelineCanvas motion', () => {
     expectRow(CONTAINER_VIEW_W);
   });
 
-  it('keeps the landing cellbase invisible until it is born at contact', () => {
+  it('keeps the landing cellbase and its cut invisible until it is born at contact', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
     rerender(<PipelineCanvas snapshot={s2} />);
     const cb = svg.querySelector(`[data-sq="${cellbaseHash(T + 1)}"]`) as SVGPathElement;
+    const cut = svg.querySelector(`[data-cut="${cellbaseHash(T + 1)}"]`) as SVGRectElement;
     expect(cb).toHaveAttribute('opacity', '0.000');
+    expect(cut).toHaveAttribute('opacity', '0.000');
     at(t.contact - 20);
     expect(cb).toHaveAttribute('opacity', '0.000');
+    expect(cut).toHaveAttribute('opacity', '0.000');
     at(20 + 540);
     expect(cb).toHaveAttribute('opacity', '1.000');
+    expect(cut).toHaveAttribute('opacity', '1.000');
+    // born to its cell: the cut round it is the cell grown by the gutter
+    expect(['x', 'width'].map((a) => Number(cut.getAttribute(a)))).toEqual([
+      G.padX - GUT,
+      side(1) + 2 * GUT,
+    ]);
   });
 
   it('completes the landing beat at the NEXT position before the block joins the chain', () => {
@@ -1157,9 +1660,10 @@ describe('PipelineCanvas motion', () => {
     const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
     expect(landing).toHaveAttribute('data-slot', 'landing');
     expect(landing.getAttribute('transform')).toBe(`translate(${G.nextX.toFixed(2)},0.00)`);
-    // Solid, its cellbase at full size, the ripples of the landing gone.
+    // Its plate set, its cellbase at full size, the ripples of the landing gone.
     expect(landingBox(svg)).not.toHaveAttribute('stroke-dasharray');
     expect(landingBox(svg)).toHaveAttribute('fill-opacity', '1');
+    expect(landingBox(svg).style.getPropertyValue('fill')).toBe(PLATE_FILL);
     const q = buildScene(s2, VIEW_W, 'landing').cards[0].squares[0];
     expect(q.kind).toBe('cellbase');
     expect(landing.querySelector(`[data-sq="${q.id}"]`)).toHaveAttribute(
@@ -1172,25 +1676,23 @@ describe('PipelineCanvas motion', () => {
   });
 
   it.each([
-    { width: CONTAINER_VIEW_W, colour: 'gold', opacity: '0.7' },
-    { width: VIEW_W, colour: 'jade', opacity: '0.25' },
+    { width: CONTAINER_VIEW_W, colour: 'gold' },
+    { width: VIEW_W, colour: 'ink-dim' },
   ] as const)(
-    'repaints the dotted tail $colour from the moving cards at a $width px view',
-    ({ width, colour, opacity }) => {
+    'repaints the tail $colour from the moving cards at a $width px view',
+    ({ width, colour }) => {
       // At 1246 px the window of NEXT runs past the last block on screen; at 1600 it ends on it.
       viewW = width;
       const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
       const svg = getByTestId('pipeline-svg');
       const tail = path(svg, 'tail');
-      expect(tail.style.getPropertyValue('stroke')).toBe(tok(colour));
-      expect(tail).toHaveAttribute('stroke-opacity', opacity);
+      expect(tail.style.getPropertyValue('fill')).toBe(tok(colour));
       // Spoil what React drew: only the motion layer can repaint it now (React sees no change).
-      tail.style.setProperty('stroke', 'red');
-      tail.setAttribute('stroke-opacity', '0');
+      tail.style.setProperty('fill', 'red');
       rerender(<PipelineCanvas snapshot={s2} />);
       at(100);
-      expect(tail.style.getPropertyValue('stroke')).toBe(tok(colour));
-      expect(tail).toHaveAttribute('stroke-opacity', opacity);
+      expect(tail.style.getPropertyValue('fill')).toBe(tok(colour));
+      expect(tail.style.getPropertyValue('stroke')).toBe('');
     }
   );
 
@@ -1198,8 +1700,9 @@ describe('PipelineCanvas motion', () => {
     viewW = CONTAINER_VIEW_W;
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
-    // Hovered from the Latest Blocks row: the window of T−4 starts near the right edge.
-    act(() => usePipelineHoverStore.getState().setHover({ block: T - 4, tx: null, window: T - 4 }));
+    // Hovered from the Latest Blocks row: the window of T−3 starts near the right edge (seven
+    // whole plates at 1246 px: its near end, between T−4 and T−5, is the second gap from it).
+    act(() => usePipelineHoverStore.getState().setHover({ block: T - 3, tx: null, window: T - 3 }));
     expectLabelClear(svg, CONTAINER_VIEW_W);
     rerender(<PipelineCanvas snapshot={s2} />);
     // Through the landing and the 700 ms move one slot to the right, frame by frame.
@@ -1235,11 +1738,13 @@ describe('PipelineCanvas motion', () => {
       );
       expect(svg.querySelector('[data-hover="reward"]')).toBeNull();
       ripples += fx.querySelectorAll('circle').length;
-      // And none of them on the paid cellbase.
+      // And none of them on the paid cellbase (its cell's centre on the plate).
       if (payee?.isConnected) {
         const x = Number(/translate\(([\d.]+),/.exec(payee.getAttribute('transform') ?? '')?.[1]);
         for (const r of fx.querySelectorAll('circle')) {
-          expect(Math.abs(Number(r.getAttribute('cx')) - (x + G.padX + 4.5))).toBeGreaterThan(1);
+          expect(
+            Math.abs(Number(r.getAttribute('cx')) - (x + G.padX + side(1) / 2))
+          ).toBeGreaterThan(1);
         }
       }
     }
@@ -1257,12 +1762,16 @@ describe('PipelineCanvas motion', () => {
     ) as SVGCircleElement;
     expect(chip.tagName).toBe('circle');
     expect(chip).toHaveAttribute('data-state', 'committed');
-    expect(chip.style.getPropertyValue('fill')).toBe(chipPaint('waiting').fill);
+    // T−1 stands two places behind the landing block: its dots step back by their fill
+    const age = buildScene(s2, VIEW_W, 'landing').cards.findIndex((c) => c.block.number === T - 1);
+    expect(age).toBe(2);
+    expect(card(svg, T - 1)).toHaveAttribute('data-age', '2');
+    expect(chip.style.getPropertyValue('fill')).toBe(agedChip('waiting', age).fill);
     at(t.contact + 20);
-    expect(chip.style.getPropertyValue('fill')).toBe(chipPaint('committed').fill);
+    expect(chip.style.getPropertyValue('fill')).toBe(agedChip('committed', age).fill);
   });
 
-  it('shows the final state at once with reduced motion', () => {
+  it('shows the final state at once with reduced motion: no landing, no flare', () => {
     stubMatchMedia(true);
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
     const svg = getByTestId('pipeline-svg');
@@ -1276,6 +1785,23 @@ describe('PipelineCanvas motion', () => {
     const target = buildScene(s2, VIEW_W, 'settled').cards[0].squares.find((q) => q.id === w0);
     const sq = card.querySelector(`[data-sq="${w0}"]`) as SVGRectElement;
     expect(Number(sq.getAttribute('x'))).toBeCloseTo(target?.x as number, 1);
+    // its plate set and its stone pressed at once, and no mark ever lit
+    const box = card.querySelector('[data-box]') as SVGRectElement;
+    expect(box.style.getPropertyValue('fill')).toBe(PLATE_FILL);
+    expect(box).not.toHaveAttribute('stroke-dasharray');
+    expect(card.querySelector('[data-stone]')).not.toHaveAttribute('opacity');
+    expect(card.querySelector('[data-cuts]')).not.toHaveAttribute('opacity');
+    for (const q of buildScene(s2, VIEW_W, 'settled').cards[0].squares) {
+      const el = card.querySelector(`[data-sq="${q.id}"]`) as SVGElement;
+      expect(el.style.getPropertyValue('fill')).toBe(
+        agedPaint(
+          paintSquare(q.stage, q.style, q.step),
+          q.kind === 'cellbase' ? 'cellbase' : 'square',
+          0
+        ).fill
+      );
+    }
+    expect(svg.innerHTML).not.toContain(color('neon-white'));
     expect(vi.getTimerCount()).toBe(0);
   });
 });
@@ -1355,6 +1881,12 @@ describe('PipelinePanel interactions', () => {
     expect(Number(ring.getAttribute('cx'))).toBeCloseTo(chip.clientX, 1);
     expect(Number(ring.getAttribute('cy'))).toBeCloseTo(chip.clientY, 1);
     expect(svg.querySelector('[data-hover="link"]')).toHaveAttribute('stroke-dasharray', '2 2');
+    // Its halo: its stage colour toward the theme's step-to ink (lighter by night, inkier by
+    // day), never toward a literal white.
+    const halo = svg.querySelector('[data-hover="halo"]') as SVGRectElement;
+    expect(halo.style.getPropertyValue('stroke')).toBe(
+      mixColor(STAGE_BASE.committed, tok('step-to'), 0.4)
+    );
     // The window now belongs to the block that committed it.
     expect(dimOfCard(svg, T)).toBe('false');
     expect(dimOfCard(svg, T - 5)).toBe('false');
@@ -1374,14 +1906,16 @@ describe('PipelinePanel interactions', () => {
     expect(tooltip()).toHaveTextContent('in the pool, proposed');
   });
 
-  it('explains an uncle box without moving the window', async () => {
+  // Re-pinned with lane R: an uncle has no box; its word is what the pointer reads it by.
+  it('explains an uncle by its word without moving the window', async () => {
     const svg = await renderPanel(snapshot);
     const c = cardOf(T - 1);
     const u = c.uncles[0];
-    const box = card(svg, T - 1).querySelector('[data-uncle="0"] rect') as SVGRectElement;
-    fireEvent.pointerMove(box, { clientX: c.x + G.padX + 30, clientY: u.y + 4 });
+    const word = card(svg, T - 1).querySelector('[data-uncle="0"] text') as SVGTextElement;
+    expect(word.textContent).toBe('uncle');
+    fireEvent.pointerMove(word, { clientX: c.x + u.x + 10, clientY: u.y + 6 });
     expect(tooltip()).toHaveTextContent('not on the chain');
-    // The mini-card only says "uncle"; its number is here.
+    // The plate only says "uncle"; its number is here.
     expect(tooltip()).toHaveTextContent(`height#${fmt(T - 2)}`);
     expect(tooltip()).toHaveTextContent(`included by#${fmt(T - 1)}`);
     expect(usePipelineHoverStore.getState()).toMatchObject({
@@ -1413,9 +1947,12 @@ describe('PipelinePanel interactions', () => {
     expect(dimOf('w0')).toBe('false');
     expect(dimOf('e0')).toBe('true');
     expect(dimOf('q0')).toBe('true');
-    // The hovered lane draws the window in full and thickens its gold links.
+    // The hovered lane draws the window in full; its gold bands are at full strength at rest
+    // already, and stay as they are (re-pinned with lane R: there is no line to thicken).
     expect(svg.querySelector('[data-ruler-ticks]')).not.toBeNull();
-    expect(path(svg, 'win')).toHaveAttribute('stroke-width', '2');
+    expect(path(svg, 'win').style.getPropertyValue('fill')).toBe(tok('gold'));
+    expect(path(svg, 'win')).not.toHaveAttribute('fill-opacity');
+    expect(path(svg, 'win')).not.toHaveAttribute('stroke-width');
   });
 
   it('draws the window of NEXT in full while NEXT is hovered: ticks, line, label, gold numbers', async () => {
@@ -1474,8 +2011,14 @@ describe('PipelinePanel interactions', () => {
     const box = card(svg, T - 3).querySelector('[data-box]') as SVGRectElement;
     fireEvent.pointerMove(box, { clientX: c.x + c.w / 2, clientY: G.cardTop + 5 });
     expect(tooltip()).toHaveTextContent(`Block #${fmt(T - 3)}`);
-    // The hovered tile gets its outline.
-    expect(box).toHaveAttribute('stroke-opacity', '0.7');
+    // The hovered plate gets its edge: 1 px of the dim ink on its own outer pixels.
+    expect(box.style.getPropertyValue('stroke')).toBe(color('text-dim'));
+    expect(['x', 'y', 'width', 'height'].map((a) => Number(box.getAttribute(a)))).toEqual([
+      0.5,
+      G.cardTop + 0.5,
+      G.cardW - 1,
+      CARD_H - 1,
+    ]);
     expect(dimOfCard(svg, T - 3)).toBe('false');
     expect(dimOfCard(svg, T - 5)).toBe('false');
     expect(dimOfCard(svg, T)).toBe('true');
@@ -1489,7 +2032,9 @@ describe('PipelinePanel interactions', () => {
     );
   });
 
-  it.each([T - 3, T - 4, T - 5])(
+  // The blocks whose windows start nearest the right edge of the 1280 px container: seven whole
+  // plates (T … T−6) put the near end of T−4's window in the last gap on screen.
+  it.each([T - 2, T - 3, T - 4])(
     'keeps the window label of #%i inside the 1280 px container and off the ticks',
     async (n) => {
       viewW = CONTAINER_VIEW_W;
@@ -1524,7 +2069,7 @@ describe('PipelinePanel interactions', () => {
     { width: 606, blocks: 2 },
     { width: 760, blocks: 3 },
     { width: 1000, blocks: 5 },
-    { width: CONTAINER_VIEW_W, blocks: 8 },
+    { width: CONTAINER_VIEW_W, blocks: 7 },
   ])(
     'shows $blocks whole blocks at $width px, its tail after the last one, every window label in view',
     async ({ width, blocks }) => {
@@ -1555,11 +2100,11 @@ describe('PipelinePanel interactions', () => {
         expect(c.x + c.w).toBeLessThanOrEqual(width - G.marginR);
       }
       const last = fit.cards[blocks - 1];
-      const y = G.headY + 0.5;
-      expect(path(svg, 'tail')).toHaveAttribute(
-        'd',
-        `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
-      );
+      // the tail's two bands, from 2 px past the last plate, inside the view
+      const tail = chainTail(fit.cards, width);
+      expect(tail?.x0).toBe(last.x + last.w + 2);
+      expect(tail?.x1).toBeLessThanOrEqual(width);
+      expect(path(svg, 'tail')).toHaveAttribute('d', rowChain(fit, T + 1).tail);
       // NEXT, then every block: its window's label stays in view and off its ticks, or, when its
       // near end is past the last block, no window is drawn at all.
       hoverNext(svg);
@@ -1581,20 +2126,20 @@ describe('PipelinePanel interactions', () => {
     }
   );
 
-  it('turns the dotted tail gold while the drawn window runs off the screen', async () => {
+  it('turns the tail gold while the drawn window runs off the screen', async () => {
     const svg = await renderPanel(snapshot);
-    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('jade'));
-    // The window of T−3 is T−13 … T−5; the screen ends at T−10, inside it.
+    expect(path(svg, 'tail').style.getPropertyValue('fill')).toBe(tok('ink-dim'));
+    // The window of T−3 is T−13 … T−5; the screen ends at T−9, inside it.
+    expect(scene.cards[scene.cards.length - 1].block.number).toBe(T - 9);
     const c = cardOf(T - 3);
     fireEvent.pointerMove(card(svg, T - 3).querySelector('[data-box]') as Element, {
       clientX: c.x + c.w / 2,
       clientY: G.cardTop + 5,
     });
-    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('gold'));
-    expect(path(svg, 'tail')).toHaveAttribute('stroke-opacity', '0.7');
+    expect(path(svg, 'tail').style.getPropertyValue('fill')).toBe(tok('gold'));
+    expect(path(svg, 'tail')).not.toHaveAttribute('fill-opacity');
     fireEvent.pointerLeave(svg);
-    expect(path(svg, 'tail').style.getPropertyValue('stroke')).toBe(tok('jade'));
-    expect(path(svg, 'tail')).toHaveAttribute('stroke-opacity', '0.25');
+    expect(path(svg, 'tail').style.getPropertyValue('fill')).toBe(tok('ink-dim'));
   });
 
   it('draws the reward link of a hovered cellbase and says what it pays in the tooltip', async () => {
@@ -1642,7 +2187,7 @@ describe('PipelinePanel interactions', () => {
   });
 
   it('runs the reward link off the right edge in an open dotted tail when the paid block is not on screen', async () => {
-    // The 1280 px container shows tip … tip − 7: the block the tip's cellbase pays (tip − 11) is
+    // The 1280 px container shows tip … tip − 6: the block the tip's cellbase pays (tip − 11) is
     // past the right edge.
     viewW = CONTAINER_VIEW_W;
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
@@ -1658,7 +2203,7 @@ describe('PipelinePanel interactions', () => {
     } as DOMRect);
     const svg = await renderPanel(snapshot);
     const fit = buildScene(snapshot, CONTAINER_VIEW_W, 'settled');
-    expect(fit.cards).toHaveLength(8);
+    expect(fit.cards).toHaveLength(7);
     const c = fit.cards[0];
     const last = fit.cards[fit.cards.length - 1];
     const cb = c.squares[0];
@@ -1676,16 +2221,17 @@ describe('PipelinePanel interactions', () => {
       'd',
       `M${f(ax)} ${f(cb.y + cb.s / 2)}V${G.winY + 5}Q${f(ax)} ${G.winY} ${f(ax + 5)} ${G.winY}H${f(tailX0)}`
     );
-    // The open end: dotted like the chain's tail and over the same span, one lane up.
+    // The open end: dotted, over the span of the chain's own tail (its two bands, 66 px at most),
+    // one lane up.
+    const span = chainTail(fit.cards, CONTAINER_VIEW_W);
+    expect(span).toEqual({ x0: tailX0, x1: tailX0 + G.tail });
     const tail = svg.querySelector('[data-hover="reward-tail"]') as SVGPathElement;
-    expect(tail).toHaveAttribute('d', `M${f(tailX0)} ${G.winY}H${f(CONTAINER_VIEW_W - 4)}`);
-    expect(tail).toHaveAttribute(
-      'stroke-dasharray',
-      path(svg, 'tail').getAttribute('stroke-dasharray')
-    );
-    expect(path(svg, 'tail').getAttribute('d')).toBe(
-      `M${f(tailX0)} ${G.headY + 0.5}L${CONTAINER_VIEW_W - 4} ${G.headY + 0.5}`
-    );
+    expect(tail).toHaveAttribute('d', `M${f(tailX0)} ${G.winY}H${f(tailX0 + G.tail)}`);
+    expect(tail).toHaveAttribute('stroke-dasharray', '1 3');
+    expect(path(svg, 'tail').getAttribute('d')).toBe(rowChain(fit, T + 1).tail);
+    const bands = ticksOf(path(svg, 'tail').getAttribute('d'));
+    expect(Math.min(...bands.map((b) => b.x))).toBe(tailX0);
+    expect(Math.max(...bands.map((b) => b.x + 2))).toBeLessThanOrEqual(tailX0 + G.tail);
     // Both leave with the hover.
     fireEvent.pointerLeave(svg);
     expect(svg.querySelector('[data-hover="reward"]')).toBeNull();
@@ -1711,6 +2257,9 @@ describe('PipelinePanel interactions', () => {
     const fit = buildScene(snapshot, G.minViewW, 'settled');
     expect(fit.cards).toHaveLength(G.minBlocks);
     const last = fit.cards[G.minBlocks - 1];
+    // the chain's tail has the 8 px to the view's edge left (589 − 581): the link's open end too
+    const span = chainTail(fit.cards, G.minViewW) as NonNullable<ReturnType<typeof chainTail>>;
+    expect(span).toEqual({ x0: last.x + last.w + 2, x1: G.minViewW });
     for (const c of fit.cards) {
       const cb = c.squares[0];
       fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
@@ -1723,7 +2272,7 @@ describe('PipelinePanel interactions', () => {
       );
       expect(svg.querySelector('[data-hover="reward-tail"]')).toHaveAttribute(
         'd',
-        `M${x0} ${G.winY}H${(G.minViewW - 4).toFixed(1)}`
+        `M${x0} ${G.winY}H${span.x1.toFixed(1)}`
       );
     }
   });
@@ -1795,7 +2344,7 @@ describe('PipelinePanel interactions', () => {
     fireEvent.pointerMove(svg, squareCentre(T, committedTxHash(T, 2)));
     const rings = ['halo', 'ring', 'pin-ring'].map((h) => svg.querySelector(`[data-hover="${h}"]`));
     expect(rings.map((r) => r?.tagName)).toEqual(['rect', 'rect', 'rect']);
-    expect(roundedRects(svg)).toEqual([]);
+    expect(roundedOutsideStones(svg)).toEqual([]);
   });
 
   it('pins a tx on click and lets Escape unpin it', async () => {
@@ -1850,7 +2399,8 @@ describe('PipelinePanel interactions', () => {
   it('follows hovers coming from the Latest Blocks and Latest Transactions rows', async () => {
     const svg = await renderPanel(snapshot);
     act(() => usePipelineHoverStore.getState().setHover({ block: T - 3, tx: null, window: T - 3 }));
-    expect(card(svg, T - 3).querySelector('[data-box]')).toHaveAttribute('stroke-opacity', '0.7');
+    const box = card(svg, T - 3).querySelector('[data-box]') as SVGElement;
+    expect(box.style.getPropertyValue('stroke')).toBe(color('text-dim'));
     expect(dimOfCard(svg, T)).toBe('true');
     const id = committedTxHash(T, 1);
     act(() => usePipelineHoverStore.getState().setHover({ block: T, tx: id, window: T }));
@@ -1858,7 +2408,7 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-hover="ring"]')).not.toBeNull();
     act(() => usePipelineHoverStore.getState().clearHover());
     expect(svg).not.toHaveClass('is-focus');
-    expect(card(svg, T - 3).querySelector('[data-box]')).toHaveAttribute('stroke-opacity', '0');
+    expect(box.style.getPropertyValue('stroke')).toBe('none');
   });
 
   const ghostCentre = (hash: string) => {

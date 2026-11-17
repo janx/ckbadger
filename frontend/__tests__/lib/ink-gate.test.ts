@@ -135,19 +135,17 @@ const OPACITY_ALLOWLIST: Allowlist = {
   ],
   'components/ui/composition-set.tsx': [noWords('<CompositionMark')],
   'components/ui/hex-display.tsx': [hover('copyable && ')],
-  'components/ui/terminal-panel.tsx': [noWords('section-mark')],
 };
 
 /**
  * Elements that hold words, faded by an `opacity` / `fillOpacity` / `strokeOpacity` attribute or a
  * style `opacity` (the JSX scan), that the gate tolerates. Every one is a pointer's state but the
- * pipeline's age fade, whose group holds shapes only: the scan counts the self-closing `TxSquare`
+ * column's age fade, whose group holds shapes only: the scan counts the self-closing `TxSquare`
  * and `Dots` in it as words, and they draw a square and dots (pipeline-panel.test.tsx proves no
- * word of a card is faded).
+ * word of a card is faded). A row's plate has no age fade (lane R): its marks step back by their
+ * fill.
  */
 const FADE_ALLOWLIST: Allowlist = {
-  // the age fade on a block card's shapes: the tile, the uncle boxes, the dots, the TxSquares
-  'components/pipeline/block-card.tsx': [noWords('ageOpacity(age)')],
   // the age fade on a block row's shapes: the tile, the uncle boxes, the Dots, the TxSquares
   'components/pipeline/column-rows.tsx': [noWords('ageOpacity(age)')],
   // a party node and its label while another party or pair is pointed at or pinned

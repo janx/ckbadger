@@ -6,17 +6,22 @@ import {
   CHIP_PAINT,
   CUT_FILL,
   GHOST,
+  LINK_PAINT,
+  PLATE_EDGE,
   PLATE_FILL,
   STAGE_BASE,
   STEP_W,
   WELL_FILL,
   ageOpacity,
+  agedChip,
   agedFill,
+  agedPaint,
   chipPaint,
   cyclesGlow,
   paintSquare,
   shadeStep,
   squareSide,
+  tailFill,
   tok,
   txLook,
 } from '@/lib/pipeline/encoding';
@@ -185,6 +190,29 @@ describe('materials: well, plate, cut and the predicted NEXT', () => {
     expect(GHOST.square.dash).toBe('2 1.5');
     expect(GHOST.chip.stroke).toBe('var(--pipeline-gold)');
   });
+
+  // Lane R (Plate.dc.html `.nx rect`): NEXT has no plate yet, only its dashed outline; a hovered
+  // plate gets a 1 px edge in the dim ink, never the old jade outline of a tile.
+  it('draws NEXT as a 2 2 dashed outline and a hovered plate’s edge in the dim ink', () => {
+    expect(GHOST.outline).toEqual({
+      stroke: 'var(--pipeline-jade)',
+      strokeOpacity: 0.6,
+      dash: '2 2',
+    });
+    expect(PLATE_EDGE).toBe('var(--c-text-dim)');
+  });
+
+  // Lane R (Plate.dc.html `.lk`): a link is filled ticks in the muted ink, gold in the window.
+  it('fills the links in the muted ink, at 0.7 from NEXT, gold in the window, the flows at 0.8', () => {
+    expect(LINK_PAINT).toEqual({
+      solid: { fill: 'var(--pipeline-ink-dim)', fillOpacity: null },
+      pend: { fill: 'var(--pipeline-ink-dim)', fillOpacity: 0.7 },
+      win: { fill: 'var(--pipeline-gold)', fillOpacity: null },
+      flow: { fill: 'var(--pipeline-ink-dim)', fillOpacity: 0.8 },
+    });
+    expect(tailFill(true)).toBe('var(--pipeline-gold)');
+    expect(tailFill(false)).toBe('var(--pipeline-ink-dim)');
+  });
 });
 
 describe('ageOpacity: older blocks step back', () => {
@@ -243,6 +271,53 @@ describe('agedFill: a mark steps back by mixing toward its ground', () => {
   it('rejects an age that is not a count of blocks and a mark it has no ground for', () => {
     expect(() => agedFill('square', fill, -1)).toThrow(/age/);
     expect(() => agedFill('plate' as never, fill, 1)).toThrow(/no ground/);
+  });
+});
+
+// Lane R: the static render and the motion layer paint an aged mark through these, one path each.
+describe('agedPaint and agedChip: a whole paint of a mark on a block, aged', () => {
+  it('leaves a square loose in a pool well as it is: a well does not age', () => {
+    const p = paintSquare('pending', 'solid', 2);
+    expect(agedPaint(p, 'square', null)).toBe(p);
+  });
+
+  it('keeps a mark on the tip its own paint, and mixes fill and outline toward the cut behind it', () => {
+    const solid = paintSquare('committed', 'solid', 1);
+    expect(agedPaint(solid, 'square', 0)).toEqual(solid);
+    expect(agedPaint(solid, 'square', 7)).toEqual({
+      ...solid,
+      fill: agedFill('square', solid.fill, 7),
+    });
+    // a square whose cycles are unknown keeps its dash; its fill and its outline step back alike
+    const dashed = paintSquare('committed', 'dashed', 0);
+    expect(agedPaint(dashed, 'square', 3)).toEqual({
+      fill: agedFill('square', dashed.fill, 3),
+      fillOpacity: dashed.fillOpacity,
+      stroke: agedFill('square', dashed.stroke as string, 3),
+      strokeDasharray: dashed.strokeDasharray,
+    });
+    const cellbase = paintSquare('cellbase', 'solid', 0);
+    expect(agedPaint(cellbase, 'cellbase', 5).fill).toBe(agedFill('cellbase', cellbase.fill, 5));
+  });
+
+  it('mixes a dot toward the plate, its gold ring with it', () => {
+    expect(agedChip('waiting', 0)).toEqual(chipPaint('waiting'));
+    expect(agedChip('committed', 4)).toEqual({
+      ...chipPaint('committed'),
+      fill: agedFill('dot', chipPaint('committed').fill, 4),
+    });
+    expect(agedChip('early', 2)).toEqual({
+      fill: agedFill('dot', chipPaint('early').fill, 2),
+      fillOpacity: chipPaint('early').fillOpacity,
+      stroke: agedFill('dot', chipPaint('early').stroke as string, 2),
+    });
+  });
+
+  it('refuses an age that is not a count of blocks', () => {
+    expect(() => agedPaint(paintSquare('committed', 'solid', 0), 'square', 1.5)).toThrow(
+      /block age is a count of blocks/
+    );
+    expect(() => agedChip('expired', -1)).toThrow(/block age is a count of blocks/);
   });
 });
 

@@ -607,13 +607,10 @@ svg a:hover {
 .pipeline-svg [data-dim='soft'] {
   opacity: 0.5;
 }
-/* The age fade: a block steps back as newer ones land (opacity is set inline per card). */
-.pipeline-svg [data-age] {
-  transition: opacity 600ms ease-out;
-}
+/* An older block steps back by its marks' fill (lib/pipeline/encoding.ts agedPaint, agedChip), not
+   by an opacity: no age transition here (a card's own opacity is the motion layer's). */
 @media (prefers-reduced-motion: reduce) {
-  .pipeline-svg [data-dim],
-  .pipeline-svg [data-age] {
+  .pipeline-svg [data-dim] {
     transition: none;
   }
 }

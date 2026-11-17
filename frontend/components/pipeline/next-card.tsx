@@ -1,9 +1,9 @@
 'use client';
 
-import { GHOST, diamondPath, tok } from '@/lib/pipeline/encoding';
-import { G, tail4, type SceneNext } from '@/lib/pipeline/layout';
+import { GHOST, diamondPath } from '@/lib/pipeline/encoding';
+import { G, cardBox, tail4, type SceneNext } from '@/lib/pipeline/layout';
 import type { DimLevel } from '@/components/pipeline/block-card';
-import { T10, T11C } from '@/components/pipeline/svg-text';
+import { T10 } from '@/components/pipeline/svg-text';
 
 interface NextColumnProps {
   available: boolean;
@@ -30,25 +30,27 @@ interface NextCardProps {
   dim: DimLevel;
 }
 
-/** The predicted next block: dashed, because none of it is real yet. */
+/**
+ * The predicted next block: no plate yet, so no stone, only its dashed outline at a plate's size
+ * (the canvas's only dashed outline), its number in the dim ink, and in it what the node expects
+ * to commit, as dashed ghosts at the plate's unit.
+ */
 export function NextCard({ next, dim }: NextCardProps) {
   return (
     <g data-next transform={`translate(${next.x},0)`} className="cursor-pointer">
       <g data-dim={dim}>
         <rect
           data-box
-          x={0.5}
-          y={G.cardTop + 0.5}
-          width={Math.max(1, next.w - 1)}
-          height={Math.max(1, next.h - 1)}
+          {...cardBox('row', next.w, next.h, true)}
           strokeWidth={1}
-          strokeDasharray="3 2"
+          strokeDasharray={GHOST.outline.dash}
           vectorEffect="non-scaling-stroke"
-          fillOpacity={0.5}
-          strokeOpacity={0.6}
-          style={{ fill: tok('elevated'), stroke: tok('jade') }}
+          strokeOpacity={GHOST.outline.strokeOpacity}
+          // no fill, yet the whole card is what a pointer reads NEXT by
+          pointerEvents="all"
+          style={{ fill: 'none', stroke: GHOST.outline.stroke }}
         />
-        <text x={G.padX} y={G.headY + 3.5} className={T11C}>
+        <text x={G.padX} y={G.headY + 3.5} className={T10}>
           {tail4(next.number)}
         </text>
         <g data-ghost-chips>

@@ -1,57 +1,55 @@
 'use client';
 
-import { tok } from '@/lib/pipeline/encoding';
-import type { ChainPaths } from '@/lib/pipeline/layout';
+import { useId } from 'react';
+import { LINK_PAINT, tailFill } from '@/lib/pipeline/encoding';
+import type { ChainPaths, Orientation } from '@/lib/pipeline/layout';
 
 interface ChainLineProps {
   paths: ChainPaths;
-  /** The window runs past the last card on screen: the dotted tail turns gold. */
+  /** The drawn window runs on past the last plate on screen: the tail is gold. */
   tailOpen: boolean;
-  /** The window lane is hovered: its line thickens. */
-  windowEmphasis: boolean;
+  /** The chain's direction: the tail fades to nothing along it (right in a row, down a column). */
+  along: Orientation;
 }
 
 const d = (p: string) => p || 'M0 0';
 
 /**
- * The chain through the card headers: a plain line, no arrowheads (the age fade gives it its
- * direction). Dashed before the tip, solid after it; inside the proposal window the links are gold,
- * so the window reads at rest without a label.
+ * The chain: each link two bands of filled ticks across the gap between a block and its parent
+ * (lib/pipeline/layout.ts `chainPaths`), no arrowheads and no strokes. The muted ink between two
+ * blocks, at 0.7 from NEXT and from a block still landing; inside the proposal window the bands are
+ * gold at full strength, so the window reads at rest with no mark of its own. Past the last plate
+ * the two bands run on as the tail and fade to nothing along their length.
  */
-export function ChainLine({ paths, tailOpen, windowEmphasis }: ChainLineProps) {
-  const common = { fill: 'none', vectorEffect: 'non-scaling-stroke' as const, strokeWidth: 1 };
+export function ChainLine({ paths, tailOpen, along }: ChainLineProps) {
+  // one id per canvas, safe in a url(#…) reference whatever form React gives it
+  const id = `pipeline-tail${useId().replace(/[^\w-]/g, '')}`;
+  const row = along === 'row';
   return (
     <g data-chain pointerEvents="none">
-      <path
-        data-path="solid"
-        d={d(paths.solid)}
-        {...common}
-        strokeOpacity={0.55}
-        style={{ stroke: tok('jade') }}
-      />
+      <defs>
+        {/* opaque at the last plate, nothing at the tail's end: an alpha mask, no colour */}
+        <linearGradient id={`${id}-fade`} x1="0" y1="0" x2={row ? '1' : '0'} y2={row ? '0' : '1'}>
+          <stop offset="0" stopOpacity={1} />
+          <stop offset="1" stopOpacity={0} />
+        </linearGradient>
+        <mask id={`${id}-mask`} maskContentUnits="objectBoundingBox" style={{ maskType: 'alpha' }}>
+          <rect width="1" height="1" fill={`url(#${id}-fade)`} />
+        </mask>
+      </defs>
+      <path data-path="solid" d={d(paths.solid)} style={{ fill: LINK_PAINT.solid.fill }} />
       <path
         data-path="pend"
         d={d(paths.pend)}
-        {...common}
-        strokeOpacity={0.55}
-        strokeDasharray="3 3"
-        style={{ stroke: tok('jade') }}
+        fillOpacity={LINK_PAINT.pend.fillOpacity}
+        style={{ fill: LINK_PAINT.pend.fill }}
       />
-      <path
-        data-path="win"
-        d={d(paths.win)}
-        {...common}
-        strokeOpacity={0.85}
-        strokeWidth={windowEmphasis ? 2 : 1.5}
-        style={{ stroke: tok('gold') }}
-      />
+      <path data-path="win" d={d(paths.win)} style={{ fill: LINK_PAINT.win.fill }} />
       <path
         data-path="tail"
         d={d(paths.tail)}
-        {...common}
-        strokeDasharray="1 3"
-        strokeOpacity={tailOpen ? 0.7 : 0.25}
-        style={{ stroke: tok(tailOpen ? 'gold' : 'jade') }}
+        mask={`url(#${id}-mask)`}
+        style={{ fill: tailFill(tailOpen) }}
       />
     </g>
   );

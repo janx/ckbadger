@@ -1,17 +1,27 @@
 'use client';
 
-import { diamondPath, paintSquare } from '@/lib/pipeline/encoding';
+import { agedPaint, diamondPath, paintSquare } from '@/lib/pipeline/encoding';
 import type { SceneSquare } from '@/lib/pipeline/layout';
 
 interface TxSquareProps {
   sq: SceneSquare;
+  /**
+   * Blocks behind the tip of the plate it is set on: an older block's mark steps back by its fill,
+   * mixed toward its cut (`agedPaint`), never by opacity. `null` loose in a pool well, which does
+   * not age.
+   */
+  age: number | null;
   /** Hovered or pinned: kept bright while the rest steps back. */
   on?: boolean;
 }
 
 /** One transaction: an n×n square (area = bytes); the cellbase is a diamond. */
-export function TxSquare({ sq, on = false }: TxSquareProps) {
-  const paint = paintSquare(sq.stage, sq.style, sq.step);
+export function TxSquare({ sq, age, on = false }: TxSquareProps) {
+  const paint = agedPaint(
+    paintSquare(sq.stage, sq.style, sq.step),
+    sq.kind === 'cellbase' ? 'cellbase' : 'square',
+    age
+  );
   if (sq.kind === 'cellbase') {
     return (
       <path

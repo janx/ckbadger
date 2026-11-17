@@ -164,6 +164,10 @@ const CHAIN_BASE = {
   poolInset: 1 + 7,
   poolTop: LANE + DOWN.well + 1 + 7,
   poolRows: ROWS,
+  /** A pool's name and its total stand on the head line 1 px inside its well's edges. */
+  poolHeadPad: 1,
+  /** The theme's inset under a well's top edge: a shade this many px deep, fading to nothing. */
+  wellShade: 3,
   /** The tops of a link's two bands, and of a pool's flow band. */
   linkY: [LANE + DOWN.links[0], LANE + DOWN.links[1]],
   flowY: LANE + DOWN.flow,
@@ -213,6 +217,46 @@ export const G = {
   /** The fewest chain blocks ever shown in a row: the ones that fit the narrowest canvas (2). */
   minBlocks: wholeCards(MIN_VIEW_W),
 } as const;
+
+/** An SVG rect's place and size. */
+export interface BoxRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A box of `w` × `h` px whose top-left pixel is at (x, y), as an SVG rect: exactly its px, or,
+ * drawn with a 1 px line round it (`line`), inset by half the line, so the line falls on the box's
+ * own outer pixels and the box stays exactly `w` × `h` on screen, crisp at 1×.
+ */
+export function boxRect(x: number, y: number, w: number, h: number, line: boolean): BoxRect {
+  const inset = line ? 0.5 : 0;
+  if (!(w - 2 * inset > 0 && h - 2 * inset > 0)) {
+    throw new Error(`pipeline: a box of ${w} × ${h} px has no extent`);
+  }
+  return { x: x + inset, y: y + inset, width: w - 2 * inset, height: h - 2 * inset };
+}
+
+/**
+ * A card's box (a plate, NEXT's dashed outline, a landing block's) in the card's own coordinates:
+ * a row card's starts under the lane, a column row's at its own top. `line`: drawn with a 1 px line
+ * (a dashed outline, a hovered plate's edge).
+ */
+export function cardBox(o: Orientation, w: number, h: number, line: boolean): BoxRect {
+  return boxRect(0, o === 'row' ? G.cardTop : 0, w, h, line);
+}
+
+/** A row's pool well from `x`: 99 × 94 under the head line, its 1 px edge on its outer pixels. */
+export function wellRect(x: number): BoxRect {
+  return boxRect(x, G.wellTop, G.cardW, G.wellH, true);
+}
+
+/** The theme's inset under a well's top edge: a `wellShade` px band inside its 1 px edge. */
+export function wellShade(x: number): BoxRect {
+  return boxRect(x + 1, G.wellTop + 1, G.cardW - 2, G.wellShade, false);
+}
 
 /**
  * An uncle travels inside the block that carries it: its header and proposals, never its txs. On a
@@ -701,14 +745,6 @@ export function rulerPath(r: RulerGeom): string {
   const y = G.winY;
   if (r.label?.at !== 'between') return `${ticks}M${f(xn)} ${y}H${f(xf)}`;
   return `${ticks}M${f(xn)} ${y}H${f(r.label.x0)}M${f(r.label.x1)} ${y}H${f(xf)}`;
-}
-
-/**
- * The window at rest: a short gold mark in the gap at each end in view, across the plates' head
- * line. Hovered, the same ticks rise to the dimension line (`rulerPath`).
- */
-export function windowMarksPath(r: RulerGeom): string {
-  return r.ticks.map((x) => `M${x.toFixed(1)} ${G.headY - 4.5}V${G.headY + 5.5}`).join('');
 }
 
 /** Width of a 10 px JetBrains Mono label: every glyph advances 0.6 em. */
@@ -1910,9 +1946,10 @@ export interface SceneAxis {
     w: WindowParams
   ): ChainPaths;
   ruler(slots: readonly RulerSlot[], H: number, w: WindowParams, text: string): RulerGeom;
-  /** The window at rest: a mark at each tick (across the head line in a row, the first band in a column). */
-  marks(r: RulerGeom): string;
-  /** The hovered window: its ticks (and, in a row, the dimension line). */
+  /**
+   * The hovered window: its ticks (and, in a row, the dimension line). At rest the window has no
+   * mark of its own: its gold bands say it.
+   */
   ticks(r: RulerGeom): string;
   tail(cards: readonly { x: number; w: number }[]): ChainTail | null;
   rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink;
@@ -1925,7 +1962,6 @@ export function axisOf(scene: Pick<Scene, 'orientation' | 'viewW' | 'H'>): Scene
       along: (c) => ({ x: c.x, w: c.w }),
       chainPaths: (cards, next, H, w) => chainPaths(cards, next, H, w, viewW),
       ruler: (slots, H, w, text) => windowRuler(slots, H, w, viewW, text),
-      marks: windowMarksPath,
       ticks: rulerPath,
       tail: (cards) => chainTail(cards, viewW),
       rewardLink,
@@ -1935,7 +1971,6 @@ export function axisOf(scene: Pick<Scene, 'orientation' | 'viewW' | 'H'>): Scene
     along: (c) => ({ x: c.y, w: c.h }),
     chainPaths: (cards, next, H, w) => columnChainPaths(cards, next, H, w, viewH),
     ruler: (slots, H, w) => columnWindowRuler(slots, H, w, viewH),
-    marks: columnWindowMarksPath,
     ticks: (r) => columnRulerPath(r, viewW),
     tail: (cards) => columnChainTail(cards, viewH),
     rewardLink: columnRewardLink,

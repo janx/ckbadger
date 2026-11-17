@@ -1,8 +1,16 @@
 'use client';
 
-import type { ReactNode } from 'react';
-import { WELL_FILL, tok } from '@/lib/pipeline/encoding';
-import { CARD_H, G, type Scene, type ScenePoolGrid } from '@/lib/pipeline/layout';
+import { useId, type ReactNode } from 'react';
+import { color } from '@/lib/palette';
+import { LINK_PAINT, WELL_FILL } from '@/lib/pipeline/encoding';
+import {
+  G,
+  flowPaths,
+  wellRect,
+  wellShade,
+  type Scene,
+  type ScenePoolGrid,
+} from '@/lib/pipeline/layout';
 import type { DimLevel } from '@/components/pipeline/block-card';
 import { T10, T10B, T11C, fmtInt } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
@@ -25,7 +33,8 @@ function Grid({
     <g data-pool-grid={testId}>
       {grid.squares.map((sq) => (
         <g key={sq.id} data-dim={dimOf ? dimOf(sq.id) : 'false'}>
-          <TxSquare sq={sq} on={onIds?.has(sq.id)} />
+          {/* loose in the well: a well does not age and cuts nothing */}
+          <TxSquare sq={sq} age={null} on={onIds?.has(sq.id)} />
         </g>
       ))}
     </g>
@@ -33,9 +42,10 @@ function Grid({
 }
 
 /**
- * A pool: a labelled well, never a block. It sits below the canvas surface (no stroke) where a
- * block stands above it as a tile. The label sits on the header row like a block's number, in the
- * stage's colour, with the stage's pool total right-aligned; under it the well holds its txs.
+ * A pool: a well, never a block. Square, recessed below the page under a 1 px edge in the line
+ * ink, the theme's inset a 3 px shade under that edge, fading to nothing (Plate.dc.html `.wl`).
+ * Its name in the stage's colour and its pool total stand on the head line above it, where a
+ * block has its number; in it, what waits lies loose, drawn at the scale it has in a block.
  */
 function PoolWell({
   x,
@@ -52,22 +62,30 @@ function PoolWell({
   testId: string;
   children?: ReactNode;
 }) {
-  const l = x + 0.5;
-  const r = x + G.cardW - 0.5;
-  const t = G.cardTop + G.headH + 0.5;
-  const b = G.cardTop + CARD_H - 0.5;
-  const q = 6;
-  const walls = `M${l} ${t}V${b - q}Q${l} ${b} ${l + q} ${b}H${r - q}Q${r} ${b} ${r} ${b - q}V${t}`;
+  const shade = `pipeline-inset${useId().replace(/[^\w-]/g, '')}`;
   const fill = tone === 'aqua' ? 'fill-aqua' : 'fill-gold';
   return (
     <g data-pool-card={testId}>
-      <path data-tray d={`${walls}Z`} stroke="none" style={{ fill: WELL_FILL }} />
-      <text x={x + G.padX} y={G.headY + 3.5} className={T11C} pointerEvents="none">
+      <rect
+        data-tray
+        {...wellRect(x)}
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+        style={{ fill: WELL_FILL, stroke: color('base-border') }}
+      />
+      <defs>
+        <linearGradient id={shade} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopOpacity={1} style={{ stopColor: 'var(--m-well-inset)' }} />
+          <stop offset="1" stopOpacity={0} style={{ stopColor: 'var(--m-well-inset)' }} />
+        </linearGradient>
+      </defs>
+      <rect data-inset {...wellShade(x)} fill={`url(#${shade})`} pointerEvents="none" />
+      <text x={x + G.poolHeadPad} y={G.headY + 3.5} className={T11C} pointerEvents="none">
         <tspan className={fill}>{title}</tspan>
       </text>
       <text
         data-count
-        x={x + G.cardW - G.padX}
+        x={x + G.cardW - G.poolHeadPad}
         y={G.headY + 3.5}
         textAnchor="end"
         className={T10}
@@ -80,20 +98,15 @@ function PoolWell({
   );
 }
 
-/** The dashed line through the header row (no arrowhead): the tx moves on to the next stage. */
-function FlowLink({ x0, x1 }: { x0: number; x1: number }) {
-  const y = G.headY + 0.5;
+/** A faint band of ticks across a gap (no arrowhead): the tx moves on to the next stage. */
+function FlowLink({ d }: { d: string }) {
   return (
     <path
       data-flow
-      d={`M${x0 + 2} ${y}L${x1 - 2} ${y}`}
-      fill="none"
-      strokeWidth={1}
-      strokeDasharray="3 3"
-      strokeOpacity={0.55}
-      vectorEffect="non-scaling-stroke"
+      d={d}
+      fillOpacity={LINK_PAINT.flow.fillOpacity}
       pointerEvents="none"
-      style={{ stroke: tok('jade') }}
+      style={{ fill: LINK_PAINT.flow.fill }}
     />
   );
 }
@@ -105,6 +118,7 @@ function FlowLink({ x0, x1 }: { x0: number; x1: number }) {
  */
 export function PoolZone({ scene, dimOf, onIds }: PoolZoneProps) {
   const { snapshot, pool } = scene;
+  const flows = flowPaths();
   return (
     <g data-pool>
       <PoolWell
@@ -125,7 +139,7 @@ export function PoolZone({ scene, dimOf, onIds }: PoolZoneProps) {
           </text>
         )}
       </PoolWell>
-      <FlowLink x0={G.mempoolX + G.cardW} x1={G.proposedX} />
+      <FlowLink d={flows.toProposed} />
       <PoolWell
         x={G.proposedX}
         title="proposed"
@@ -135,7 +149,7 @@ export function PoolZone({ scene, dimOf, onIds }: PoolZoneProps) {
       >
         {pool && <Grid grid={pool.proposed} dimOf={dimOf} onIds={onIds} testId="proposed" />}
       </PoolWell>
-      <FlowLink x0={G.proposedX + G.cardW} x1={G.nextX} />
+      <FlowLink d={flows.toNext} />
     </g>
   );
 }

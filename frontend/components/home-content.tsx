@@ -9,9 +9,9 @@ import { useNetworkStats } from '@/hooks/useNetworkStats';
 import { useRealtimeData } from '@/hooks/useRealtimeStore';
 
 /**
- * The homepage, top to bottom: the sync banner (while bulk syncing), the transaction pipeline
- * (the only framed panel), then the unframed Network, CKBytes and Activity sections. The chain
- * vitals live in the header's strip.
+ * The homepage, top to bottom: the sync banner (while bulk syncing), then the transaction
+ * pipeline, the Network, CKBytes and Activity sections, all four unframed under their prompt
+ * headings. The chain vitals live in the header's strip.
  */
 export function HomeContent() {
   // The homepage holds the realtime socket: new blocks, transactions and reorgs.

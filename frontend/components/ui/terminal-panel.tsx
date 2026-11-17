@@ -1,10 +1,8 @@
 'use client';
 
 import { type HTMLAttributes, type ReactNode } from 'react';
-import { PromptHeading } from '@/components/ui/prompt-heading';
 import { cn } from '@/lib/utils';
 
-type IndicatorStatus = 'active' | 'warning' | 'inactive' | 'none';
 interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
   children: ReactNode;
   variant?: 'default' | 'elevated' | 'inset';
@@ -15,9 +13,9 @@ interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
  * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"),
  * a flat tile since rubbing × Song print: the surface under its own 1 px border in the line ink,
  * square corners, `.glass` (its materials now the opaque surface with no sheen, no edges, no ring;
- * see globals.css) and inset scanlines — no lit edge along the top. The transaction pipeline, the
- * tx page's two sheets of cells (one frame each, the seam between), the cell page's byte dump, the
- * DNA gel and the network map sit in it; prose, tables and charts stay unframed.
+ * see globals.css) and inset scanlines — no lit edge along the top. The tx page's two sheets of
+ * cells (one frame each, the seam between), the cell page's byte dump, the DNA gel and the network
+ * map sit in it; prose, tables, charts and the home page's pipeline stay unframed.
  */
 export function TerminalPanel({
   children,
@@ -60,67 +58,6 @@ export function TerminalPanel({
   );
 }
 
-interface TerminalPanelHeaderProps {
-  children: ReactNode;
-  className?: string;
-  indicator?: IndicatorStatus;
-  /** What the command runs on (`--tip #20,969,560`): dim, regular, its own case, after the name. */
-  args?: ReactNode;
-  actions?: ReactNode;
-}
-
-/**
- * The frame's head is a command line (rubbing × Song print, phase 2): the prompt square — which
- * is also the frame's indicator — then the instrument's name as the command, lowercase, in the
- * moon ink at 13 px / 500, and its args in the dim ink (phase 5).
- */
-const MARK_CLASS: Record<IndicatorStatus, string> = {
-  // the mark as it is on a tier-1 h2
-  none: 'section-mark',
-  // a realtime feed: the mark breathes
-  active: 'section-mark section-mark-live',
-  warning: 'section-mark section-mark-gold',
-  inactive: 'section-mark opacity-30',
-};
-
-export function TerminalPanelHeader({
-  children,
-  className,
-  indicator = 'none',
-  args,
-  actions,
-}: TerminalPanelHeaderProps) {
-  return (
-    <div
-      className={cn(
-        'flex flex-wrap items-start justify-between gap-3 px-3 py-2 sm:items-center',
-        'border-base-border border-b',
-        'from-base-elevated/60 bg-gradient-to-r to-transparent',
-        className
-      )}
-    >
-      <PromptHeading
-        as="div"
-        mark={
-          <span
-            aria-hidden="true"
-            data-indicator={indicator}
-            data-testid="terminal-panel-mark"
-            className={cn(MARK_CLASS[indicator], 'mr-2.5')}
-          />
-        }
-        command={children}
-        args={args}
-        className="text-body break-words font-mono font-medium"
-      />
-
-      {actions && (
-        <div className="flex max-w-full flex-wrap items-center justify-end gap-2">{actions}</div>
-      )}
-    </div>
-  );
-}
-
 interface TerminalPanelContentProps {
   children: ReactNode;
   className?: string;
@@ -140,25 +77,6 @@ export function TerminalPanelContent({
   };
 
   return <div className={cn(paddingClasses[padding], className)}>{children}</div>;
-}
-
-interface TerminalPanelFooterProps {
-  children: ReactNode;
-  className?: string;
-}
-
-export function TerminalPanelFooter({ children, className }: TerminalPanelFooterProps) {
-  return (
-    <div
-      className={cn(
-        'border-base-border border-t px-3 py-2',
-        'to-base-elevated/30 bg-gradient-to-r from-transparent',
-        className
-      )}
-    >
-      {children}
-    </div>
-  );
 }
 
 interface TerminalRowProps extends HTMLAttributes<HTMLDivElement> {

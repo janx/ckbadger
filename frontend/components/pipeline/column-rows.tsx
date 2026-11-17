@@ -132,7 +132,7 @@ export function ColumnBlock({
           </g>
           <g data-field>
             {card.squares.map((sq) => (
-              <TxSquare key={sq.id} sq={sq} on={onIds?.has(sq.id)} />
+              <TxSquare key={sq.id} sq={sq} age={null} on={onIds?.has(sq.id)} />
             ))}
           </g>
         </g>
@@ -345,7 +345,7 @@ function ColumnWell({
         <g data-pool-grid={testId}>
           {grid.squares.map((sq) => (
             <g key={sq.id} data-dim={dimOf ? dimOf(sq.id) : 'false'}>
-              <TxSquare sq={sq} on={onIds?.has(sq.id)} />
+              <TxSquare sq={sq} age={null} on={onIds?.has(sq.id)} />
             </g>
           ))}
         </g>

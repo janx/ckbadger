@@ -22,7 +22,7 @@ interface MotionSvgProps {
   children: ReactNode;
 }
 
-const NO_DEPARTURES: Departing = { cards: new Map(), squares: new Map() };
+const NO_DEPARTURES: Departing = { cards: new Map(), squares: new Map(), cuts: new Map() };
 
 /**
  * The pipeline SVG with its animator. React renders the target geometry as children; after each

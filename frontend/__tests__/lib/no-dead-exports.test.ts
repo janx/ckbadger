@@ -80,6 +80,18 @@ const ALLOWLIST: Record<string, { why: string; anchor?: { file: string; text: st
     why: "the frontend side of the pipeline truncation contract: a block card's field, the API serving one fewer (the cellbase)",
     anchor: { file: '../crates/api/src/routes/pipeline.rs', text: '`BLOCK_FIELD_CAPACITY`' },
   },
+  // Direction F (docs/superpowers/plans/2026-11-17-pipeline-finish-plan.md §9): lane L laid out
+  // the column for lane P, whose column rows (components/pipeline/column-rows.tsx) are rebuilt
+  // after lane R on this branch. Each entry goes when lane P reads the export or removes it.
+  'lib/pipeline/layout.ts#columnUncleW': {
+    why: "a column uncle's width, laid out by lane L for lane P's column rows (not rebuilt yet)",
+  },
+  'lib/pipeline/layout.ts#columnFlowPaths': {
+    why: "the column pool's flow bands, laid out by lane L for lane P's column rows (not rebuilt yet)",
+  },
+  'lib/pipeline/layout.ts#columnWindowMarksPath': {
+    why: "the column window's mark at rest: the row's went with lane R (the gold bands say the window) and the phone board draws none; lane P removes it with COL.markHalf, or draws it",
+  },
   'lib/theme.ts#resetThemeForTests': {
     why: 'a test seam, by its name: the theme store keeps module state (the snapshot, its listeners, the window watchers) that each test must drop; the app never resets it',
     anchor: { file: 'lib/theme.ts', text: 'Test seam:' },
