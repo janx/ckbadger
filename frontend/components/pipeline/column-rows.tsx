@@ -1,20 +1,28 @@
 'use client';
 
+import { useId } from 'react';
+import { color } from '@/lib/palette';
 import {
+  CUT_FILL,
   GHOST,
+  PLATE_EDGE,
   PLATE_FILL,
   WELL_FILL,
-  ageOpacity,
-  chipPaint,
+  agedChip,
   diamondPath,
-  tok,
 } from '@/lib/pipeline/encoding';
 import {
   COL,
   G,
+  cardBox,
   columnChipCountAt,
   columnCountAt,
+  columnFlowPaths,
+  columnHeadAt,
   columnWellCountAt,
+  columnWellHeadAt,
+  columnWellRect,
+  columnWellShade,
   tail4,
   type Band,
   type Scene,
@@ -22,48 +30,23 @@ import {
   type SceneNext,
   type ScenePoolGrid,
 } from '@/lib/pipeline/layout';
-import type { DimLevel } from '@/components/pipeline/block-card';
-import { T10, T10B, T11C, T11G, fmtInt } from '@/components/pipeline/svg-text';
+import { PlateStone, type DimLevel } from '@/components/pipeline/block-card';
+import { FlowLink } from '@/components/pipeline/pool-zone';
+import { T10, T10B, T11C, T12C, T12D, T12G, fmtInt } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
 import { formatBlockNumber } from '@/lib/format-block';
 
 /**
- * The rows of the column orientation (the pipeline stood on end, `COL` in lib/pipeline/layout.ts).
- * Every row carries the same data attributes as its card in a row, so the motion layer, the hover
- * and the pin treat both orientations alike; only the arrangement differs. The materials are the
- * row's: recessed wells, NEXT the one dashed outline, blocks as tiles fading with age.
+ * The rows of the column orientation (the pipeline stood on end, `COL` in lib/pipeline/layout.ts;
+ * PlatePhone.dc.html). The same pieces as the row, from the same library, at the same 17 px pitch:
+ * a pool a square well, NEXT the one dashed outline, a block a solid plate with its stone, its
+ * dots and its tx line cut into it. Every row carries the same data attributes as its card in a
+ * row, so the motion layer, the hover and the pin treat both orientations alike; only the
+ * arrangement differs. Every number is the scene's or the library's.
  */
 
-/** Baselines on a row's centre line: 11 px names and numbers, 10 px counts. */
-const nameY = (h: number) => h / 2 + 4;
-const countY = (h: number) => h / 2 + 3.5;
-/** The name or number of a row, local to a row card. */
-const NAME_X = COL.nameX - COL.x0;
-
-function Dots({ chips }: { chips: SceneCard['chips'] }) {
-  return (
-    <>
-      {chips.map((k) => {
-        const paint = chipPaint(k.proposal.state);
-        return (
-          <circle
-            key={k.key}
-            data-chip={k.key}
-            data-state={k.proposal.state}
-            data-uncle-index={k.proposal.uncleIndex ?? undefined}
-            cx={k.x + G.chip / 2}
-            cy={k.y + G.chip / 2}
-            r={paint.stroke ? G.chip / 2 - 0.5 : G.chip / 2}
-            fillOpacity={paint.fillOpacity}
-            strokeWidth={paint.stroke ? 1 : undefined}
-            vectorEffect="non-scaling-stroke"
-            style={{ fill: paint.fill, stroke: paint.stroke ?? 'none' }}
-          />
-        );
-      })}
-    </>
-  );
-}
+/** A word on the middle of an uncle's own line (its word and its "+N"): the line's baseline. */
+const wordY = (u: { y: number; h: number }) => u.y + u.h / 2 + 3.5;
 
 interface ColumnBlockProps {
   card: SceneCard;
@@ -72,14 +55,24 @@ interface ColumnBlockProps {
   highlighted: boolean;
   dim: DimLevel;
   onIds?: ReadonlySet<string>;
-  /** Blocks behind the tip (0 = the tip). */
+  /** Blocks behind the tip (0 = the tip): an older block's marks step back by their fill. */
   age: number;
 }
 
 /**
- * A mined block as a row: its number, its own proposal dots, then its tx line from the cellbase,
- * with "+N" and its uncle boxes at the end of the line. As in `BlockCard`, the age fade steps the
- * row's shapes back and its words stay at full strength, letting the pointer through (R4).
+ * A mined block as a row: a solid plate across the canvas, of its own tone, no stroke at rest (a
+ * 1 px edge in the dim ink while it is highlighted), never faded, as `BlockCard`. On the middle of
+ * its tx line (`columnHeadAt`, never of a row grown by its uncles' own line) its stone and its
+ * number, its own proposal dots, then the line: the cellbase and its txs, each set in its cut —
+ * one cut per mark, drawn first, and none where there is no transaction — then its "+N" and its
+ * uncles (each its word and its dots or its "+N"; no box, no stone), on the line or on a line of
+ * their own under it.
+ *
+ * An older block steps back by its marks' fill alone (`agedPaint` toward the cut, `agedChip`
+ * toward the plate); the plate, the stone and the words keep full strength, the number in
+ * `text-bright`, "uncle" and every "+N" in `text`. The words let the pointer through to the plate
+ * and the marks beneath them, but an uncle's word, which is what the pointer reads the uncle by.
+ * The motion layer owns the outer group's `opacity` and, while a block lands, its box.
  */
 export function ColumnBlock({
   card,
@@ -90,6 +83,7 @@ export function ColumnBlock({
   age,
 }: ColumnBlockProps) {
   const { block } = card;
+  const head = columnHeadAt(card);
   const chipCount = columnChipCountAt(card);
   const count = columnCountAt(card);
   return (
@@ -97,66 +91,81 @@ export function ColumnBlock({
       data-card={card.id}
       data-number={block.number}
       data-slot={card.slot}
+      data-age={age}
       transform={`translate(${card.x},${card.y})`}
       className="cursor-pointer"
     >
       <g data-dim={dim}>
-        <g data-age={age} style={{ opacity: ageOpacity(age) }}>
-          <rect
-            data-box
-            x={0.5}
-            y={0.5}
-            width={Math.max(1, card.w - 1)}
-            height={Math.max(1, card.h - 1)}
-            strokeWidth={1}
-            vectorEffect="non-scaling-stroke"
-            fillOpacity={1}
-            strokeOpacity={highlighted ? 0.7 : 0}
-            style={{ fill: PLATE_FILL, stroke: tok('jade') }}
-          />
-          <g data-uncles>
-            {card.uncles.map((un) => (
-              <g key={un.ref.hash} data-uncle={un.index}>
-                <rect
-                  x={un.x}
-                  y={un.y}
-                  width={un.w}
-                  height={un.h}
-                  style={{ fill: tok('surface') }}
-                />
-              </g>
-            ))}
-          </g>
-          <g data-chips>
-            <Dots chips={card.chips} />
-          </g>
-          <g data-field>
-            {card.squares.map((sq) => (
-              <TxSquare key={sq.id} sq={sq} age={null} on={onIds?.has(sq.id)} />
-            ))}
-          </g>
+        <rect
+          data-box
+          {...cardBox('column', card.w, card.h, highlighted)}
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+          fillOpacity={1}
+          // the whole plate is what a pointer reads the block by, even while it is an outline
+          pointerEvents="all"
+          style={{ fill: PLATE_FILL, stroke: highlighted ? PLATE_EDGE : 'none' }}
+        />
+        <PlateStone hash={block.hash} txs={block.txCount} x={head.stoneX} y={head.stoneY} />
+        <g data-cuts>
+          {card.cuts.map((c) => (
+            <rect
+              key={c.id}
+              data-cut={c.id}
+              x={c.x}
+              y={c.y}
+              width={c.s}
+              height={c.s}
+              style={{ fill: CUT_FILL }}
+            />
+          ))}
+        </g>
+        <g data-field>
+          {card.squares.map((sq) => (
+            <TxSquare key={sq.id} sq={sq} age={age} on={onIds?.has(sq.id)} />
+          ))}
+        </g>
+        <g data-chips>
+          {card.chips.map((k) => {
+            const paint = agedChip(k.proposal.state, age);
+            return (
+              <circle
+                key={k.key}
+                data-chip={k.key}
+                data-state={k.proposal.state}
+                data-uncle-index={k.proposal.uncleIndex ?? undefined}
+                cx={k.x + G.chip / 2}
+                cy={k.y + G.chip / 2}
+                r={paint.stroke ? G.chip / 2 - 0.5 : G.chip / 2}
+                fillOpacity={paint.fillOpacity}
+                strokeWidth={paint.stroke ? 1 : undefined}
+                vectorEffect="non-scaling-stroke"
+                style={{ fill: paint.fill, stroke: paint.stroke ?? 'none' }}
+              />
+            );
+          })}
         </g>
         <g data-words pointerEvents="none">
           <text
             data-block-number
-            x={NAME_X}
-            y={nameY(card.h)}
-            className={numberInWindow ? T11G : T11C}
+            x={COL.numberX - COL.x0}
+            y={head.y}
+            className={numberInWindow ? T12G : T12C}
           >
             {tail4(block.number)}
           </text>
-          {card.uncles.map((un) => (
-            <g key={un.ref.hash} data-uncle-label={un.index}>
-              <text x={un.x} y={un.y + countY(un.h)} className={T10}>
-                {un.label}
+          {card.uncles.map((u) => (
+            <g key={u.ref.hash} data-uncle={u.index} pointerEvents="visiblePainted">
+              <text x={u.x} y={wordY(u)} className={T10B}>
+                {u.label}
               </text>
-              {un.overflow > 0 && (
+              {u.overflow > 0 && (
                 <text
-                  x={un.x + un.w}
-                  y={un.y + countY(un.h)}
+                  x={u.x + u.w}
+                  y={wordY(u)}
                   textAnchor="end"
-                  className={T10}
-                >{`+${un.overflow}`}</text>
+                  className={T10B}
+                >{`+${u.overflow}`}</text>
               )}
             </g>
           ))}
@@ -182,27 +191,31 @@ export function ColumnBlock({
   );
 }
 
-/** The predicted next block as a row: dashed, because none of it is real yet. */
+/**
+ * The predicted next block as a row: no plate yet, so no stone, only its dashed outline at the
+ * row's size (the canvas's only dashed outline), its number in the dim ink, and on its line what
+ * the node expects to commit, as dashed ghosts at the plate's unit.
+ */
 export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
-  const chipCount = columnChipCountAt({ h: next.h, uncles: [] });
-  const count = columnCountAt({ w: next.w, h: next.h, uncles: [] });
+  const shape = { w: next.w, h: next.h, uncles: [] };
+  const head = columnHeadAt(shape);
+  const chipCount = columnChipCountAt(shape);
+  const count = columnCountAt(shape);
   return (
     <g data-next transform={`translate(${next.x},${next.y})`} className="cursor-pointer">
       <g data-dim={dim}>
         <rect
           data-box
-          x={0.5}
-          y={0.5}
-          width={Math.max(1, next.w - 1)}
-          height={Math.max(1, next.h - 1)}
+          {...cardBox('column', next.w, next.h, true)}
           strokeWidth={1}
-          strokeDasharray="3 2"
+          strokeDasharray={GHOST.outline.dash}
           vectorEffect="non-scaling-stroke"
-          fillOpacity={0.5}
-          strokeOpacity={0.6}
-          style={{ fill: tok('elevated'), stroke: tok('jade') }}
+          strokeOpacity={GHOST.outline.strokeOpacity}
+          // no fill, yet the whole row is what a pointer reads NEXT by
+          pointerEvents="all"
+          style={{ fill: 'none', stroke: GHOST.outline.stroke }}
         />
-        <text x={NAME_X} y={nameY(next.h)} className={T11C}>
+        <text x={COL.nameX - COL.x0} y={head.y} className={T12D}>
           {tail4(next.number)}
         </text>
         <g data-ghost-chips>
@@ -275,14 +288,9 @@ export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
 /** Nothing labels NEXT's row (its dashed outline says "predicted"); only a missing one is said. */
 export function ColumnNextUnavailable({ available, band }: { available: boolean; band: Band }) {
   if (available) return null;
+  const at = columnWellHeadAt(band);
   return (
-    <text
-      data-next-column
-      x={COL.nameX}
-      y={band.y + countY(band.h)}
-      className={T10}
-      pointerEvents="none"
-    >
+    <text data-next-column x={at.nameX} y={at.y} className={T10} pointerEvents="none">
       unavailable
     </text>
   );
@@ -295,8 +303,11 @@ interface ColumnPoolProps {
 }
 
 /**
- * A pool stage as a recessed row, never a tile: its name in the stage's colour, its pool total
- * ending at `countX`, its txs on the line and a "+N" for those the line cannot hold.
+ * A pool stage as a row: a well, never a block (PlatePhone.dc.html `.rw.wl`). Square, recessed
+ * below the page under a 1 px edge in the line ink, the theme's inset a 3 px shade under that
+ * edge, fading to nothing, as the row's well. In it its name in the stage's colour, its pool total
+ * ending at `countX`, its txs loose on the line (a well does not age and cuts nothing) and a "+N"
+ * for those the line cannot hold.
  */
 function ColumnWell({
   scene,
@@ -315,26 +326,38 @@ function ColumnWell({
   grid: ScenePoolGrid | null;
   testId: 'pending' | 'proposed';
 } & Omit<ColumnPoolProps, 'scene'>) {
+  const shade = `pipeline-inset${useId().replace(/[^\w-]/g, '')}`;
+  const head = columnWellHeadAt(band);
   const more = columnWellCountAt(scene.viewW, band);
   const { snapshot } = scene;
   return (
     <g data-pool-card={testId}>
       <rect
         data-tray
-        x={COL.x0}
-        y={band.y}
-        width={scene.viewW - 2 * COL.x0}
-        height={band.h}
-        stroke="none"
-        style={{ fill: WELL_FILL }}
+        {...columnWellRect(scene.viewW, band)}
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+        style={{ fill: WELL_FILL, stroke: color('base-border') }}
       />
-      <text x={COL.nameX} y={band.y + nameY(band.h)} className={T11C} pointerEvents="none">
+      <defs>
+        <linearGradient id={shade} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopOpacity={1} style={{ stopColor: 'var(--m-well-inset)' }} />
+          <stop offset="1" stopOpacity={0} style={{ stopColor: 'var(--m-well-inset)' }} />
+        </linearGradient>
+      </defs>
+      <rect
+        data-inset
+        {...columnWellShade(scene.viewW, band)}
+        fill={`url(#${shade})`}
+        pointerEvents="none"
+      />
+      <text x={head.nameX} y={head.y} className={T11C} pointerEvents="none">
         <tspan className={tone === 'aqua' ? 'fill-aqua' : 'fill-gold'}>{title}</tspan>
       </text>
       <text
         data-count
-        x={COL.countX}
-        y={band.y + countY(band.h)}
+        x={head.countX}
+        y={head.y}
         textAnchor="end"
         className={T10}
         pointerEvents="none"
@@ -351,7 +374,7 @@ function ColumnWell({
         </g>
       ) : (
         testId === 'pending' && (
-          <text data-pool-status x={COL.lineX} y={band.y + countY(band.h)} className={T10B}>
+          <text data-pool-status x={COL.lineX} y={head.y} className={T10B}>
             <title>
               {`The node's tx pool is at ${formatBlockNumber(snapshot.poolTip.number)} (${snapshot.poolTip.hash}) but ckbadger has synced ${formatBlockNumber(snapshot.tip.number)} (${snapshot.tip.hash}). The pool view returns once both are at the same block.`}
             </title>
@@ -373,27 +396,14 @@ function ColumnWell({
   );
 }
 
-/** The dashed link down a gap (no arrowhead): the tx moves on to the next stage. */
-function ColumnFlow({ y0, y1 }: { y0: number; y1: number }) {
-  return (
-    <path
-      data-flow
-      d={`M${COL.flowX} ${y0}V${y1}`}
-      fill="none"
-      strokeWidth={1}
-      strokeDasharray="3 3"
-      strokeOpacity={0.55}
-      vectorEffect="non-scaling-stroke"
-      pointerEvents="none"
-      style={{ stroke: tok('jade') }}
-    />
-  );
-}
-
-/** The tx lifetime starts at the top: the mempool row, then the proposed row, then NEXT's. */
+/**
+ * The tx lifetime starts at the top: the mempool row, then the proposed row, then NEXT's; a faint
+ * band of ticks runs down each gap between them (`columnFlowPaths`), as the row's flows.
+ */
 export function ColumnPool({ scene, dimOf, onIds }: ColumnPoolProps) {
   const { bands, pool } = scene;
   if (!bands) throw new Error('pipeline: a column scene has no bands');
+  const flows = columnFlowPaths(bands);
   return (
     <g data-pool>
       <ColumnWell
@@ -406,7 +416,7 @@ export function ColumnPool({ scene, dimOf, onIds }: ColumnPoolProps) {
         dimOf={dimOf}
         onIds={onIds}
       />
-      <ColumnFlow y0={bands.pending.y + bands.pending.h} y1={bands.proposed.y} />
+      <FlowLink d={flows.toProposed} />
       <ColumnWell
         scene={scene}
         band={bands.proposed}
@@ -417,7 +427,7 @@ export function ColumnPool({ scene, dimOf, onIds }: ColumnPoolProps) {
         dimOf={dimOf}
         onIds={onIds}
       />
-      <ColumnFlow y0={bands.proposed.y + bands.proposed.h} y1={bands.next.y} />
+      <FlowLink d={flows.toNext} />
     </g>
   );
 }

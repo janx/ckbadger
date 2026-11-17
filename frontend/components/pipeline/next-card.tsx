@@ -3,7 +3,7 @@
 import { GHOST, diamondPath } from '@/lib/pipeline/encoding';
 import { G, cardBox, tail4, type SceneNext } from '@/lib/pipeline/layout';
 import type { DimLevel } from '@/components/pipeline/block-card';
-import { T10 } from '@/components/pipeline/svg-text';
+import { T10, T12D } from '@/components/pipeline/svg-text';
 
 interface NextColumnProps {
   available: boolean;
@@ -50,7 +50,7 @@ export function NextCard({ next, dim }: NextCardProps) {
           pointerEvents="all"
           style={{ fill: 'none', stroke: GHOST.outline.stroke }}
         />
-        <text x={G.padX} y={G.headY + 3.5} className={T10}>
+        <text x={G.padX} y={G.headY + 3.5} className={T12D}>
           {tail4(next.number)}
         </text>
         <g data-ghost-chips>

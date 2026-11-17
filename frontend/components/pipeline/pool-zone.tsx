@@ -98,8 +98,11 @@ function PoolWell({
   );
 }
 
-/** A faint band of ticks across a gap (no arrowhead): the tx moves on to the next stage. */
-function FlowLink({ d }: { d: string }) {
+/**
+ * A faint band of ticks across a gap (no arrowhead): the tx moves on to the next stage. The row's
+ * (`flowPaths`) and the column's (`columnFlowPaths`) alike.
+ */
+export function FlowLink({ d }: { d: string }) {
   return (
     <path
       data-flow

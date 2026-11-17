@@ -73,7 +73,7 @@ import { ShortId } from '@/components/ui/short-id';
 const SVG_LABEL = {
   row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and its committed transactions set in cuts, starting with the cellbase',
   column:
-    'A transaction lifetime read top to bottom: the mempool and proposed pool rows, the predicted next block, then the tip and three older blocks as tiles linked to their parents down one chain line, each row with its proposal dots and a line of transactions starting with the cellbase',
+    'A transaction lifetime read top to bottom: the mempool and proposed pool wells, the predicted next block, then the tip and three older blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and a line of transactions set in cuts, starting with the cellbase',
 } as const;
 
 /**

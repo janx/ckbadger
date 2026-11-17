@@ -5,7 +5,7 @@ import { color } from '@/lib/palette';
 import { CUT_FILL, PLATE_EDGE, PLATE_FILL, agedChip } from '@/lib/pipeline/encoding';
 import { G, cardBox, tail4, type SceneCard } from '@/lib/pipeline/layout';
 import { drawSeal } from '@/lib/seal/stones';
-import { T10B, T11C, T11G } from '@/components/pipeline/svg-text';
+import { T10B, T12C, T12G } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
 
 export type DimLevel = 'false' | 'true' | 'soft';
@@ -152,7 +152,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
             data-block-number
             x={G.numberX}
             y={G.headY + 3.5}
-            className={numberInWindow ? T11G : T11C}
+            className={numberInWindow ? T12G : T12C}
           >
             {tail4(block.number)}
           </text>

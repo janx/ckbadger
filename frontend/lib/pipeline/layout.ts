@@ -323,8 +323,6 @@ export const COL = {
   /** The left edges of a link's two bands, and of the pool's flow band. */
   linkX: [27, 75],
   flowX: 28,
-  /** The window mark at rest runs this far either side of the first band's middle. */
-  markHalf: 6,
   /** The chain's tail below the last row. */
   tail: 30,
   /**
@@ -358,11 +356,6 @@ function columnUncle(proposals: number): ColumnUncle {
   const slots = slotsFor(proposals, u.chips);
   if (slots) return { w: u.labelW + COL.endGap + dotsW(u.chips), ...slots };
   return { w: u.labelW + COL.endGap + labelWidth(`+${proposals}`), shown: 0, overflow: proposals };
-}
-
-/** Width of a column uncle with `proposals`: its word and its dots, or its word and "+N". */
-export function columnUncleW(proposals: number): number {
-  return columnUncle(proposals).w;
 }
 
 /** `n` dots side by side, in px: n pitches less the space after the last. */
@@ -715,15 +708,6 @@ export function columnWindowRuler(
         : { x0: hc ? hc.x : xn, x1: q ? q.x + q.w : (xf ?? viewH), xn, xf: xf ?? viewH },
     tailOpen,
   };
-}
-
-/** The column window at rest: a short gold mark across the first link band at each tick. */
-export function columnWindowMarksPath(r: RulerGeom): string {
-  const f = (v: number) => v.toFixed(1);
-  const mid = COL.linkX[0] + BAND.link.depth / 2;
-  const a = f(mid - COL.markHalf);
-  const b = f(mid + COL.markHalf);
-  return r.ticks.map((y) => `M${a} ${f(y)}H${b}`).join('');
 }
 
 /** The hovered column window: each tick runs across the full width of the gap it sits in. */
@@ -1634,6 +1618,21 @@ export function columnLineH(row: Pick<ColumnRowShape, 'h' | 'uncles'>): number {
   return row.uncles.some((u) => u.line === 'own') ? row.h - COL.uncleGap - UNC.head : row.h;
 }
 
+/**
+ * Where a column row's head is drawn (local to the row), on the middle of its tx line
+ * (`columnLineH`), never of a row grown by its uncles' own line: a block's stone, `G.stone` px at
+ * `COL.stoneX`, set on the whole pixel as a square is, and the baseline of the words on that line
+ * (a block's number at `COL.numberX`, NEXT's at `COL.nameX`), as `columnCountAt`'s.
+ */
+export function columnHeadAt(row: Pick<ColumnRowShape, 'h' | 'uncles'>): {
+  stoneX: number;
+  stoneY: number;
+  y: number;
+} {
+  const lineH = columnLineH(row);
+  return { stoneX: COL.stoneX - COL.x0, stoneY: squareTop(lineH, G.stone), y: lineH / 2 + 3.5 };
+}
+
 /** Where a column row's proposal "+N" is drawn (end-anchored, local): after the second dot row. */
 export function columnChipCountAt(row: Pick<ColumnRowShape, 'h' | 'uncles'>): {
   x: number;
@@ -1661,6 +1660,27 @@ export function columnCountAt(card: ColumnRowShape): { x: number; y: number } {
 /** Where a column well's "+N" is drawn (end-anchored, absolute). */
 export function columnWellCountAt(viewW: number, band: Band): { x: number; y: number } {
   return { x: viewW - COL.x0 - COL.padR, y: band.y + band.h / 2 + 3.5 };
+}
+
+/**
+ * Where a column well's words are drawn (absolute), on the middle of its band: its name from
+ * `COL.nameX`, its pool total ending at `COL.countX`; and NEXT's "unavailable" in NEXT's band.
+ */
+export function columnWellHeadAt(band: Band): { nameX: number; countX: number; y: number } {
+  return { nameX: COL.nameX, countX: COL.countX, y: band.y + band.h / 2 + 3.5 };
+}
+
+/**
+ * A column well (PlatePhone.dc.html `.rw.wl`): its band across the canvas, square, its 1 px edge
+ * on its own outer pixels, as a row's well (`wellRect`).
+ */
+export function columnWellRect(viewW: number, band: Band): BoxRect {
+  return boxRect(COL.x0, band.y, viewW - 2 * COL.x0, band.h, true);
+}
+
+/** The theme's inset under a column well's top edge: a `G.wellShade` px band inside its 1 px edge. */
+export function columnWellShade(viewW: number, band: Band): BoxRect {
+  return boxRect(COL.x0 + 1, band.y + 1, viewW - 2 * COL.x0 - 2, G.wellShade, false);
 }
 
 const squareTop = (h: number, s: number) => Math.floor((h - s) / 2);

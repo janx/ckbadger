@@ -38,13 +38,15 @@ import {
   columnChipCountAt,
   columnCountAt,
   columnFlowPaths,
+  columnHeadAt,
   columnLineH,
   columnRewardLink,
   columnRowH,
   columnRulerPath,
-  columnUncleW,
   columnWellCountAt,
-  columnWindowMarksPath,
+  columnWellHeadAt,
+  columnWellRect,
+  columnWellShade,
   columnWindowRuler,
   fitLine,
   flowPaths,
@@ -1367,6 +1369,54 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
     expect([COL.stoneX, COL.numberX, COL.nameX, COL.countX]).toEqual([8, 27, 8, 108]);
   });
 
+  // Lane P (PlatePhone.dc.html `.st`, `.no`: centred on the row): the head from the library.
+  it('centres a row’s stone and words on its tx line, never on a row grown by its uncles’ line', () => {
+    // a 44 px row: the 14 px stone at (8, 15), its words on the middle, 22, + 3.5
+    expect(columnHeadAt(cardOf(scene, T))).toEqual({ stoneX: 8, stoneY: 15, y: 25.5 });
+    // a 3 × 3 or 4 × 4 line: the stone on the whole pixel, as a square is
+    expect(columnHeadAt({ h: 61, uncles: [] })).toEqual({ stoneX: 8, stoneY: 23, y: 34 });
+    expect(columnHeadAt({ h: 78, uncles: [] })).toEqual({ stoneX: 8, stoneY: 32, y: 42.5 });
+    // Two uncles on a line of their own: the row is 60 px, its head stays on the 44 px tx line,
+    // beside the cellbase (within half a pixel: a 15 px mark on a 44 px line sits on 14).
+    const two = cardOf(
+      buildScene(withSecondUncle(hostWith(smallTxs(T - 1, 2), 0, 10), 3), PHONE_W, 'settled'),
+      T - 1
+    );
+    expect(two.h).toBe(60);
+    const head = columnHeadAt(two);
+    expect(head).toEqual(columnHeadAt({ h: 44, uncles: [] }));
+    const cb = two.squares[0];
+    expect(Math.abs(head.stoneY + G.stone / 2 - (cb.y + cb.s / 2))).toBeLessThanOrEqual(0.5);
+    expect(head.y).toBe(columnCountAt(two).y);
+  });
+
+  it('sets a well across the canvas: square, its 1 px edge on its outer pixels, the inset under it', () => {
+    expect(columnWellRect(PHONE_W, bands.pending)).toEqual({
+      x: 0.5,
+      y: 0.5,
+      width: 357,
+      height: 43,
+    });
+    expect(columnWellRect(PHONE_W, bands.proposed)).toEqual({
+      x: 0.5,
+      y: 62.5,
+      width: 357,
+      height: 43,
+    });
+    // the theme's inset: 3 px inside the edge, under its top
+    expect(columnWellShade(PHONE_W, bands.proposed)).toEqual({
+      x: 1,
+      y: 63,
+      width: 356,
+      height: G.wellShade,
+    });
+    expect(G.wellShade).toBe(3);
+    // its name from x 8 and its total ending at 108, on the middle of its band
+    expect(columnWellHeadAt(bands.proposed)).toEqual({ nameX: 8, countX: 108, y: 62 + 22 + 3.5 });
+    // at the narrowest column too
+    expect(columnWellRect(COL.minViewW, bands.pending).width).toBe(COL.minViewW - 1);
+  });
+
   it('puts the proposal dots at 74, 83, 92 … on the row centre, five a row, two rows, then +N', () => {
     const tip = cardOf(scene, T);
     expect(tip.chips.map((k) => tip.x + k.x)).toEqual([74, 83, 92]);
@@ -1400,10 +1450,9 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
     // T−1 carries the uncle T−2 and two of its proposals.
     const host = cardOf(scene, T - 1);
     expect(COL.uncle).toEqual({ labelW: 30, chips: 4 });
-    // The word, 4 px, then four dot slots (34 px).
-    expect(columnUncleW(2)).toBe(30 + 4 + 34);
-    // Room is left after the line's reservation (224 − (83 + 4 + 12) = 125 ≥ 4 + 68): it follows
-    // the tx line, as on the phone board.
+    // The word, 4 px, then four dot slots (34 px): 68 px (`w` below). Room is left after the
+    // line's reservation (224 − (83 + 4 + 12) = 125 ≥ 4 + 68): it follows the tx line, as on the
+    // phone board.
     expect(host.uncles).toEqual([
       expect.objectContaining({
         index: 0,
@@ -1528,10 +1577,23 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
   it('draws an uncle as its word and its dots, or its word and "+N" when four slots cannot hold the label', () => {
     // The word, 4 px, then four dot slots (34 px); "+999" still fits the slots, "+1500" needs five,
     // so it follows the word, 4 px after it. Never the word alone while it has proposals.
-    expect(columnUncleW(2)).toBe(30 + 4 + 34);
-    expect(columnUncleW(0)).toBe(30);
-    expect(columnUncleW(999)).toBe(30 + 4 + 34);
-    expect(columnUncleW(1500)).toBe(30 + 4 + labelWidth('+1500'));
+    const uncleOf = (s: PipelineSnapshot, n: number) =>
+      cardOf(buildScene(s, PHONE_W, 'settled'), n);
+    // two proposals: both dots in the four slots
+    expect(uncleOf(quiet, T - 1).uncles[0]).toMatchObject({ w: 30 + 4 + 34, overflow: 0 });
+    // no proposals: the word alone (an uncle T−2 carries, which proposed nothing)
+    const bare: PipelineSnapshot = {
+      ...quiet,
+      blocks: quiet.blocks.map((b) =>
+        b.number === T - 2 ? { ...b, uncles: [{ number: T - 3, hash: uncleHash(T - 3) }] } : b
+      ),
+    };
+    expect(uncleOf(bare, T - 2).uncles[0]).toMatchObject({ w: 30, overflow: 0 });
+    // 999 proposals: "+999" in the four slots, no dot
+    const nines = uncleOf(hostWith(smallTxs(T - 1, 2), 0, 997), T - 1);
+    expect(nines.uncles[0]).toMatchObject({ w: 30 + 4 + 34, overflow: 999 });
+    expect(nines.chips.filter((k) => k.proposal.uncleIndex === 0)).toEqual([]);
+    expect(labelWidth('+1500')).toBe(30);
     const crowd = cardOf(
       buildScene(hostWith(smallTxs(T - 1, 2), 0, 1498), PHONE_W, 'settled'),
       T - 1
@@ -1596,7 +1658,8 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
   it('holds at 288 px with the widest block: the cellbase, a 4 × 4 and "+N" on the line, two uncles under it', () => {
     // "+2999" and "+1500" are 30 px; an uncle of 1,500 proposals is its word and "+1500": 64 px.
     expect(COL.minViewW).toBe(288);
-    expect([labelWidth('+2999'), labelWidth('+1500'), columnUncleW(1500)]).toEqual([30, 30, 64]);
+    // (its 64 px: `w` below)
+    expect([labelWidth('+2999'), labelWidth('+1500')]).toEqual([30, 30]);
     const card = cardOf(buildScene(widest, COL.minViewW, 'settled'), T - 1);
     expect(card.squares[0].kind).toBe('cellbase');
     expect(card.squares.map((q) => q.s)).toEqual([15, 66, 15, 15]);
@@ -1751,17 +1814,18 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
     ]);
   });
 
-  it("marks NEXT's window with a short horizontal tick across the first band between tip and tip − 1", () => {
+  // Re-pinned with lane P: the short gold mark across the first band at rest is gone, as the row's
+  // window marks went with lane R (the phone board draws none): the gold bands say the window.
+  it("ticks NEXT's window in the middle of the gap between tip and tip − 1, across it when hovered", () => {
     const ruler = columnWindowRuler([nextSlot(scene), ...slotsOf(scene)], T + 1, MAINNET, scene.H);
     // In the middle of the gap between the tip (198 + 44) and tip − 1 (260).
     expect(ruler.ticks).toEqual([251]);
     expect(ruler.label).toBeNull();
     // The far end (tip − 9) is below the last row: the window runs on in the gold tail.
     expect(ruler.tailOpen).toBe(true);
-    // Centred on the first band (27…37), 6 px either side.
-    expect(columnWindowMarksPath(ruler)).toBe('M26.0 251.0H38.0');
     // Hovered, the tick runs across the whole gap.
     expect(columnRulerPath(ruler, PHONE_W)).toBe('M0.0 251.0H358.0');
+    expect(COL).not.toHaveProperty('markHalf');
   });
 
   it("lands a mined block in NEXT's row, beside the four older rows, then steps them down", () => {
