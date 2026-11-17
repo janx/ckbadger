@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AMOUNT_INK } from '@/components/activity-event-row';
+import { STEP_W } from '@/lib/pipeline/encoding';
 import {
   alpha,
   color,
@@ -333,6 +334,97 @@ describe('the pipeline word gold', () => {
   it('is the gold by night and the gold’s bright step by day', () => {
     expect(PALETTE.dark['pipeline-word-gold']).toBe(PALETTE.dark.gold);
     expect(PALETTE.light['pipeline-word-gold']).toBe(PALETTE.light['gold-bright']);
+  });
+});
+
+// Direction F (2026-11-17): a block is a solid plate of its own tone, every transaction set in a
+// cut of a second tone (2 px round each square and the cellbase), the proposal dots on the plate.
+// The values are the boards' (docs/superpowers/design/2026-11-17-pipeline-finish/project/Plate*);
+// the day dots are re-derived against the day plate, where the old mixes fell to 2.9 and 2.6 : 1.
+describe('the pipeline plate, its cut and its dots (direction F)', () => {
+  /** `a` moved toward `b` by `t` in sRGB, channel by channel: what `color-mix(in srgb)` paints. */
+  const mixHex = (a: string, b: string, t: number) => {
+    const x = hexToRgb(a);
+    const y = hexToRgb(b);
+    const ch = (k: 'r' | 'g' | 'b') =>
+      Math.round(x[k] * (1 - t) + y[k] * t)
+        .toString(16)
+        .padStart(2, '0');
+    return `#${ch('r')}${ch('g')}${ch('b')}`;
+  };
+
+  it('takes the values the boards set, by night and by day', () => {
+    const pairs: [string, string, string][] = [
+      ['pipeline-plate', '#2f2821', '#ddd4c3'],
+      ['pipeline-cut', '#13100d', '#f8f4ec'],
+      ['pipeline-dot-waiting', '#ba9a5a', '#866619'],
+      ['pipeline-dot-committed', '#63897f', '#3d7870'],
+      ['pipeline-dot-expired', '#48413a', '#b9b3a8'],
+    ];
+    for (const [key, night, day] of pairs) {
+      expect(ink('dark', key), `night ${key}`).toBe(night);
+      expect(ink('light', key), `day ${key}`).toBe(day);
+    }
+  });
+
+  it('reads the number and the counts on the plate at body contrast, in both themes', () => {
+    for (const theme of THEMES)
+      for (const key of ['text-bright', 'text'] as const) {
+        const ratio = contrastRatio(PALETTE[theme][key], ink(theme, 'pipeline-plate'));
+        expect(ratio, `${theme} ${key} on the plate`).toBeGreaterThanOrEqual(4.5);
+      }
+  });
+
+  // A step is the stage colour mixed toward the theme's step-to ink by STEP_W
+  // (lib/pipeline/encoding.ts paintFromBase), the cellbase the committed colour a quarter of the
+  // way there: lighter by night, inkier by day, so every step reads on the cut in both themes.
+  it('sets every stage fill at every cycles step, and the cellbase, at 3:1 on the cut, in both themes', () => {
+    const short: string[] = [];
+    for (const theme of THEMES) {
+      const cut = ink(theme, 'pipeline-cut');
+      const to = PALETTE[theme]['pipeline-step-to'];
+      for (const stage of ['pipeline-pending', 'pipeline-proposed', 'pipeline-committed'] as const)
+        STEP_W.forEach((w, step) => {
+          const fill = mixHex(PALETTE[theme][stage], to, w);
+          const ratio = contrastRatio(fill, cut);
+          if (ratio < 3) short.push(`${theme} ${stage} step ${step} ${fill}: ${ratio.toFixed(2)}`);
+        });
+      const cellbase = mixHex(PALETTE[theme]['pipeline-committed'], to, 0.25);
+      const ratio = contrastRatio(cellbase, cut);
+      if (ratio < 3) short.push(`${theme} cellbase ${cellbase}: ${ratio.toFixed(2)}`);
+    }
+    expect(short).toEqual([]);
+    // the step-to is the light ink by night and the dark ink by day
+    expect(PALETTE.dark['pipeline-step-to']).toBe('#f6f2ea');
+    expect(PALETTE.light['pipeline-step-to']).toBe(PALETTE.light['text-bright']);
+  });
+
+  it('reads the waiting and the committed dot on the plate at 3:1; the expired one stays quiet', () => {
+    for (const theme of THEMES) {
+      const plate = ink(theme, 'pipeline-plate');
+      for (const key of ['pipeline-dot-waiting', 'pipeline-dot-committed'])
+        expect(contrastRatio(ink(theme, key), plate), `${theme} ${key}`).toBeGreaterThanOrEqual(3);
+      expect(contrastRatio(ink(theme, 'pipeline-dot-expired'), plate), theme).toBeLessThan(
+        contrastRatio(ink(theme, 'pipeline-dot-committed'), plate)
+      );
+    }
+  });
+
+  it('keeps the gold of the window and the muted tick of a link at 3:1 on the page ground', () => {
+    for (const theme of THEMES)
+      for (const key of ['gold', 'ink-muted'] as const)
+        expect(
+          contrastRatio(PALETTE[theme][key], PALETTE[theme]['base-bg']),
+          `${theme} ${key}`
+        ).toBeGreaterThanOrEqual(3);
+  });
+
+  it('stands the plate off the page ground by 1.25:1, in both themes', () => {
+    for (const theme of THEMES)
+      expect(
+        contrastRatio(ink(theme, 'pipeline-plate'), PALETTE[theme]['base-bg']),
+        theme
+      ).toBeGreaterThanOrEqual(1.25);
   });
 });
 

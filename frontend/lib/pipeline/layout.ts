@@ -1,18 +1,20 @@
 /**
  * Geometry of the transaction pipeline. It started as a port of the approved prototype
  * (docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html) and now deliberately
- * differs from it: the panel sits in the page container like the other homepage rows, so the canvas
- * is one 132 px row holding one tx lifetime, left to right (mempool well ⇢ proposed well ⇢ NEXT ⇢
- * the tip → older blocks), and every card is one fixed size (8 columns × 98 px) instead of growing
- * with its content. All functions are pure.
+ * differs from it: the canvas is one 146 px row holding one tx lifetime, left to right (mempool well
+ * ⇢ proposed well ⇢ NEXT ⇢ the tip → older blocks), and every block is one fixed solid plate
+ * (99 × 122) instead of growing with its content. All functions are pure.
  *
- * A 10 px grid: a tx is an n×n square of cells (area ∝ bytes), a proposal is a 6 px dot on an 8 px
- * pitch. Cards are top-aligned; the chain runs through the card headers.
+ * Direction F (docs/superpowers/plans/2026-11-17-pipeline-finish-plan.md): one unit, a 15 px cell
+ * on a 17 px pitch. A tx is an n×n square of cells (area ∝ bytes, `side(n)` px), set in a cut of
+ * the gutter's width; a proposal is a 7 px dot on a 9 px pitch. A plate is cut only where a
+ * transaction is: the scene carries one cut per drawn square and nothing for an empty cell. A link
+ * from a block to its parent is two bands of filled ticks across the gap between their plates.
  *
  * Below `G.minViewW` (two whole blocks after NEXT) the same lifetime stands on end: the column
- * orientation (`COL`, docs/superpowers/plans/2026-11-01-narrow-widths/SPEC.md) reads it top to bottom
- * as rows that span the canvas, with the same squares, dots, materials and window rules. The
- * measured width picks the orientation; nothing is ever scaled.
+ * orientation (`COL`) reads it top to bottom as rows that span the canvas, with the same unit,
+ * squares, dots, materials and window rules. The measured width picks the orientation; nothing is
+ * ever scaled.
  */
 
 import type {
@@ -34,62 +36,194 @@ import {
   type TxLook,
 } from '@/lib/pipeline/encoding';
 
-export const U = 10;
+/** A cell: the side of a 1×1 transaction. */
+export const CELL = 15;
+/** The gutter between two cells, and the width of the cut round every mark set in a plate. */
+export const GUT = 2;
+/** The pipeline's one unit, in both orientations: a cell and its gutter. */
+export const U = CELL + GUT;
 
-const CHAIN_BASE = {
-  H: 132,
-  /**
-   * One lane above the cards, empty until hovered: the proposal window's bracket and the reward
-   * link both run here.
-   */
-  winY: 16,
-  cardTop: 28,
-  headH: 18,
-  chainY: 37,
-  padX: 5,
-  propTop: 50,
-  /** Two rows of proposal dots: `chip` px dots on a `chipP` px pitch. */
-  propRows: 2,
-  chip: 6,
-  chipP: 8,
-  /** The bottom of the proposal rows: the baseline of their "+N". */
-  sepY: 68,
-  fieldTop: 72,
-  /**
-   * Every card (the two pool wells, NEXT, a block) is this many columns wide whatever it holds;
-   * what does not fit is counted as "+N" (dots at the end of their rows, txs in the header).
-   */
-  cardCols: 8,
-  fieldRows: 5,
-  padB: 5,
-  /** A pool well's body: tx squares from under its header row to its bottom. */
-  poolTop: 50,
-  poolRows: 7,
-  x0: 6,
-  gap: 20,
-  /** NEXT stands alone between the pool and the chain: the gaps on both of its sides are wider. */
-  frontierGap: 44,
-  /** Kept free between the last chain card and the right edge of the view. */
-  marginR: 10,
-  maxBlocks: 24,
+/**
+ * The canvas's small text, in px: every word the layout measures ("uncle", every "+N", the
+ * window's label) is drawn in the `text-meta` step of the type scale (components/pipeline/
+ * svg-text.ts), 11 px of JetBrains Mono, whose every glyph advances 0.6 em. `labelWidth` reads it.
+ */
+export const SMALL_TEXT_PX = 11;
+
+/**
+ * A block's number on its plate, in px: the `text-small` step (svg-text.ts T12C, T12G, T12D),
+ * 12 px of JetBrains Mono at 500, every glyph advancing 0.6 em as at every weight.
+ */
+export const NUMBER_TEXT_PX = 12;
+
+/**
+ * The width of `text` set at `px` in JetBrains Mono: every glyph advances 0.6 em (written as 3/5 so
+ * a whole number of glyphs comes out as the nearest double: 49 at 11 px → 323.4).
+ */
+function monoWidth(text: string, px: number): number {
+  return (text.length * px * 3) / 5;
+}
+
+/**
+ * `n` cells side by side, in px: n pitches less the one gutter after the last. The side of an n×n
+ * square (15, 32, 49, 66) and the width of an n-cell field; the gutter is said here only.
+ */
+export function side(n: number): number {
+  if (!Number.isInteger(n) || n < 1) {
+    throw new Error(`pipeline: a span is a whole number of cells (at least one), got ${n}`);
+  }
+  return n * U - GUT;
+}
+
+/**
+ * The bands of ticks that link a block to its parent, and a pool stage to the next: filled
+ * rectangles, starting `inset` px inside the gap they cross. A link's band is 2 px ticks on a
+ * 4 px pitch, 10 px deep (4 ticks in an 18 px gap); a flow's is 1 px ticks on a 3 px pitch, 8 deep.
+ */
+export const BAND = {
+  inset: 2,
+  link: { tick: 2, pitch: 4, depth: 10 },
+  flow: { tick: 1, pitch: 3, depth: 8 },
 } as const;
 
-/** Card width in px: `cardCols` cells and the padding on both sides. */
-const CARD_W = CHAIN_BASE.cardCols * U - 1 + 2 * CHAIN_BASE.padX;
+interface Ticks {
+  tick: number;
+  pitch: number;
+  depth: number;
+}
+
+/**
+ * A band of whole ticks along [from, to] in the chain's direction (`x` in a row, `y` in a column),
+ * its side `across` px from the canvas edge: one filled rectangle per tick, from `from` on, as path
+ * data. A stretch shorter than one tick has none.
+ */
+function tickBand(along: 'x' | 'y', from: number, to: number, across: number, t: Ticks): string {
+  const f = (v: number) => v.toFixed(1);
+  const n = to - from >= t.tick ? Math.floor((to - from - t.tick) / t.pitch) + 1 : 0;
+  let d = '';
+  for (let k = 0; k < n; k++) {
+    const a = from + k * t.pitch;
+    d +=
+      along === 'x'
+        ? `M${f(a)} ${f(across)}h${t.tick}v${t.depth}h-${t.tick}Z`
+        : `M${f(across)} ${f(a)}h${t.depth}v${t.tick}h-${t.depth}Z`;
+  }
+  return d;
+}
+
+/**
+ * The lane above the plates, empty until hovered: the proposal window's bracket and its label and
+ * the reward link run in it.
+ */
+const LANE = 18;
+/** Columns and rows of a plate's tx field and of a pool well (5 × 4 = 20 cells). */
+const COLS = 5;
+const ROWS = 4;
+/** Inside a plate, on its left and right and below its field. */
+const PAD = 8;
+
+/**
+ * Down a plate, from its top edge (the board's numbers, Plate.dc.html): the head line 8…28 (the
+ * 14 px stone at 11, the number beside it), two rows of dots at 30 and 38, the field from 48 with
+ * 8 px below it; a pool's well from 28, under its head line; a link's two bands at 32 and 80; a
+ * pool's flow band at 14.
+ */
+const DOWN = {
+  head: 8,
+  headLine: 20,
+  stone: 11,
+  dots: 30,
+  field: 48,
+  well: 28,
+  links: [32, 80],
+  flow: 14,
+} as const;
+
+/** A proposal dot: `size` px on a `pitch` px pitch along its row; a plate's rows `rowPitch` apart. */
+const DOT = { size: 7, pitch: 9, rowPitch: 8 } as const;
+
+/** A plate: 99 × 122. */
+const CARD_W = side(COLS) + 2 * PAD;
+const PLATE_H = DOWN.field + side(ROWS) + PAD;
+
+const CHAIN_BASE = {
+  /** The lane, a plate, and 6 px below it. */
+  H: LANE + PLATE_H + 6,
+  /** The window's dimension line and the reward link: along the middle of the lane. */
+  winY: LANE / 2,
+  cardTop: LANE,
+  /** The plate's head, from its top edge to the bottom of its head line. */
+  headH: DOWN.head + DOWN.headLine,
+  /** The middle of the head line: the number, a pool's name and total, NEXT's "+N". */
+  headY: LANE + DOWN.head + DOWN.headLine / 2,
+  /**
+   * The block's stone: `stone` px square at (`stoneX`, `stoneY`); its number from `numberX`, or
+   * from `padX` on a plate whose stone gives way to its "+N" (`rowHead`).
+   */
+  stone: 14,
+  stoneX: 8,
+  stoneY: LANE + DOWN.stone,
+  numberX: 27,
+  /** The tx "+N" on the head line ends here (end-anchored), at the plate's right padding. */
+  countX: CARD_W - PAD,
+  /** The least room between a block's number and its "+N" on the head line (`rowHead`). */
+  headGap: 4,
+  padX: PAD,
+  propTop: LANE + DOWN.dots,
+  /** Two rows of proposal dots: `chip` px dots on a `chipP` px pitch, the rows `chipRowP` apart. */
+  propRows: 2,
+  chip: DOT.size,
+  chipP: DOT.pitch,
+  chipRowP: DOT.rowPitch,
+  /** One below the bottom of the second dot row, whose "+N" stands on that bottom (`sepY − 1`). */
+  sepY: LANE + DOWN.dots + DOT.rowPitch + DOT.size + 1,
+  fieldTop: LANE + DOWN.field,
+  /**
+   * Every plate (and each pool well and NEXT) is this many columns wide whatever it holds; what
+   * does not fit is counted as "+N" (dots at the end of their rows, txs on the head line).
+   */
+  cardCols: COLS,
+  fieldRows: ROWS,
+  padB: PAD,
+  /** A pool's well: from under its head line to the plates' bottom, `wellH` px tall. */
+  wellTop: LANE + DOWN.well,
+  wellH: PLATE_H - DOWN.well,
+  /** A well's marks start 7 px inside its 1 px border, on its left and its top. */
+  poolInset: 1 + 7,
+  poolTop: LANE + DOWN.well + 1 + 7,
+  poolRows: ROWS,
+  /** A pool's name and its total stand on the head line 1 px inside its well's edges. */
+  poolHeadPad: 1,
+  /** The theme's inset under a well's top edge: a shade this many px deep, fading to nothing. */
+  wellShade: 3,
+  /** The tops of a link's two bands, and of a pool's flow band. */
+  linkY: [LANE + DOWN.links[0], LANE + DOWN.links[1]],
+  flowY: LANE + DOWN.flow,
+  x0: 0,
+  gap: 18,
+  /** The pool stands apart from NEXT: the one wider gap of the row, on the pool side only. */
+  frontierGap: 30,
+  /** Kept free between the last chain plate and the right edge of the view. */
+  marginR: 10,
+  maxBlocks: 24,
+  /** The chain's tail past the last plate on screen: at most this long. */
+  tail: 66,
+} as const;
+
 const PITCH = CARD_W + CHAIN_BASE.gap;
 
 const NEXT_X = CHAIN_BASE.x0 + PITCH + CARD_W + CHAIN_BASE.frontierGap;
-const CHAIN_X0 = NEXT_X + CARD_W + CHAIN_BASE.frontierGap;
+const CHAIN_X0 = NEXT_X + CARD_W + CHAIN_BASE.gap;
 
 /**
- * The narrowest one-row canvas: the chain start (381), two whole cards one pitch apart (109 + 89)
+ * The narrowest one-row canvas: the chain start (363), two whole plates one pitch apart (117 + 99)
  * and the right margin (10) = 589 px, so a row always shows the tip and the block before it.
  */
 const MIN_VIEW_W = CHAIN_X0 + PITCH + CARD_W + CHAIN_BASE.marginR;
 
 /**
- * How many whole chain cards fit a view `viewW` px wide: card k ends at chainX0 + k·pitch + cardW,
- * which must stay `marginR` clear of the right edge.
+ * How many whole chain plates fit a view `viewW` px wide: plate k ends at chainX0 + k·pitch +
+ * cardW, which must stay `marginR` clear of the right edge.
  */
 function wholeCards(viewW: number): number {
   return Math.floor((viewW - CHAIN_BASE.marginR - CHAIN_X0 + CHAIN_BASE.gap) / PITCH);
@@ -97,9 +231,8 @@ function wholeCards(viewW: number): number {
 
 /**
  * One row, one tx lifetime, left to right: mempool (pending) ⇢ proposed ⇢ NEXT ⇢ the tip → older
- * blocks. Every card is the same size. NEXT stands alone between the pool and the chain: the
- * `frontierGap` on both of its sides and the change of material mark that boundary, so there is no
- * band or background behind it.
+ * blocks, plates and wells one size. NEXT is a plate's gap from the tip; the pool stands a wider
+ * `frontierGap` from NEXT, and the change of material marks that boundary.
  */
 export const G = {
   ...CHAIN_BASE,
@@ -113,117 +246,204 @@ export const G = {
   minBlocks: wholeCards(MIN_VIEW_W),
 } as const;
 
-/** An uncle travels inside the block that includes it: its header and proposals, never its txs. */
-export const UNC = { top: 4, head: 11, gap: 3, padB: 3, chipRows: 1 } as const;
+/** An SVG rect's place and size. */
+export interface BoxRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A box of `w` × `h` px whose top-left pixel is at (x, y), as an SVG rect: exactly its px, or,
+ * drawn with a 1 px line round it (`line`), inset by half the line, so the line falls on the box's
+ * own outer pixels and the box stays exactly `w` × `h` on screen, crisp at 1×.
+ */
+export function boxRect(x: number, y: number, w: number, h: number, line: boolean): BoxRect {
+  const inset = line ? 0.5 : 0;
+  if (!(w - 2 * inset > 0 && h - 2 * inset > 0)) {
+    throw new Error(`pipeline: a box of ${w} × ${h} px has no extent`);
+  }
+  return { x: x + inset, y: y + inset, width: w - 2 * inset, height: h - 2 * inset };
+}
+
+/**
+ * A card's box (a plate, NEXT's dashed outline, a landing block's) in the card's own coordinates:
+ * a row card's starts under the lane, a column row's at its own top. `line`: drawn with a 1 px line
+ * (a dashed outline, a hovered plate's edge).
+ */
+export function cardBox(o: Orientation, w: number, h: number, line: boolean): BoxRect {
+  return boxRect(0, o === 'row' ? G.cardTop : 0, w, h, line);
+}
+
+/** A row's pool well from `x`: 99 × 94 under the head line, its 1 px edge on its outer pixels. */
+export function wellRect(x: number): BoxRect {
+  return boxRect(x, G.wellTop, G.cardW, G.wellH, true);
+}
+
+/** The theme's inset under a well's top edge: a `wellShade` px band inside its 1 px edge. */
+export function wellShade(x: number): BoxRect {
+  return boxRect(x + 1, G.wellTop + 1, G.cardW - 2, G.wellShade, false);
+}
+
+/**
+ * An uncle travels inside the block that carries it: its header and proposals, never its txs. On a
+ * plate it is a row of its own after the dot rows, taken out of the field: its word on a `head` px
+ * line, then one row of its dots, then `gap` px before what follows. No box and no stone (a block's
+ * stone says its tx count, which the pipeline does not know of an uncle).
+ */
+export const UNC = { head: 12, gap: 5, chipRows: 1 } as const;
 
 /** One tx lifetime left to right (`G`), or stood on end, top to bottom (`COL`). */
 export type Orientation = 'row' | 'column';
 
 /**
- * The column orientation: mempool, proposed, NEXT, the tip and three older blocks, each one row
- * spanning the canvas from `x0` to `viewW − x0`. x values are absolute canvas coordinates; a row is
- * drawn as a card translated to (`x0`, its top), so its contents use `x − x0`.
+ * The column orientation (PlatePhone.dc.html): mempool, proposed, NEXT, the tip and three older
+ * blocks, each one row spanning the canvas from `x0` to `viewW − x0`. x values are absolute canvas
+ * coordinates; a row is drawn as a card translated to (`x0`, its top), so its contents use
+ * `x − x0`.
  *
- * Row anatomy: the name or number at `nameX`; a well's pool total ending at `countX`; proposal dots
- * from `chipX` (5 per row, two rows, then "+N"); the tx line from `lineX` — the cellbase diamond
- * first, then squares at 10 px per cell, each centred vertically — ending at the row's right
- * padding, with any uncle boxes and the line's "+N" at its end. A row is two cells and 5 px
- * padding tall (30 px) and grows only for a 3×3 or 4×4 square. The chain line runs at `chainX`,
- * visible only in the gaps between the rows.
+ * Row anatomy: a block's stone at `stoneX` and its number at `numberX` (a pool's name and NEXT's
+ * number at `nameX`); a well's pool total ending at `countX`; proposal dots from `chipX` (5 per
+ * row, two rows `chipRowP` apart, then "+N"); the tx line from `lineX` — the cellbase first, then
+ * squares at 17 px per cell, each centred vertically and set in its cut — ending at the row's
+ * right padding, its "+N" and then its uncles (each its word, then its dots or its "+N"), `endGap`
+ * apart — or, when they do not all fit after what the line keeps, the uncles on a line of their
+ * own under it, from `lineX`, the row growing by `uncleGap` and the word's line. A row is two cells and 6 px padding tall (44 px) and grows only for a 3×3 or 4×4 square.
+ * A link is two bands of ticks running down the gap between two rows, at `linkX`; the pool's flow
+ * one band at `flowX`.
  */
 export const COL = {
-  x0: 6,
+  x0: 0,
   /** Above the mempool row. */
-  top: 8,
-  /** Below the last row: room for the dotted tail, which stops `tailGap` short of the edge. */
-  bottom: 20,
-  tailGap: 4,
-  pad: 5,
+  top: 0,
+  /** Below the last row: 2 px, the tail's 30 px bands, 2 px. */
+  bottom: 34,
+  pad: 6,
   minCells: 2,
-  wellGap: 12,
-  blockGap: 14,
-  /** NEXT stands alone: both of its gaps are wider, as the frontier gaps of a row are. */
-  frontierGap: 24,
-  chainX: 28,
-  /** The window mark runs this far either side of the chain line. */
-  markHalf: 6,
-  nameX: 12,
-  countX: 100,
-  /** Left edge of the first proposal dot (its centre is at 60). */
-  chipX: 57,
+  wellGap: 18,
+  /** The pool stands apart from NEXT, as in a row: the one wider gap, on the pool side only. */
+  frontierGap: 30,
+  /** NEXT ⇢ the tip, and block to block. */
+  blockGap: 18,
+  stoneX: 8,
+  nameX: 8,
+  numberX: 27,
+  countX: 108,
+  /** Left edge of the first proposal dot. */
+  chipX: 74,
   chipsPerRow: 5,
   chipRows: 2,
-  lineX: 108,
-  padR: 6,
-  /** Between the tx line and what ends it: its "+N", an uncle box, the next uncle box. */
+  chipRowP: 9,
+  lineX: 126,
+  padR: 8,
+  /** Between the tx line and what ends it: its "+N", an uncle, its dots, the next uncle. */
   endGap: 4,
+  /** Between the tx line's marks and the uncles' own line under it, when they have one. */
+  uncleGap: 4,
   /** The tip and three older blocks. */
   blocks: 4,
-  /** An uncle box at the end of a block's tx line: "uncle", then up to four of its dots. */
-  uncle: { h: 18, pad: 4, labelW: 30, chips: 4 },
   /**
-   * The narrowest column (a 320 px viewport): the line still holds the cellbase, a 4×4 square, a
-   * "+N" and an uncle box. A block with two uncle boxes fits from 310 px.
+   * An uncle, no box: "uncle", then up to four of its dots with "+N" for the rest in their slots,
+   * or, when those slots cannot hold that "+N", "+N" for all its proposals after the word.
+   */
+  uncle: { labelW: labelWidth('uncle'), chips: 4 },
+  /** The left edges of a link's two bands, and of the pool's flow band. */
+  linkX: [27, 75],
+  flowX: 28,
+  /** The chain's tail below the last row. */
+  tail: 30,
+  /**
+   * The narrowest column (a 320 px viewport): a line still holds the cellbase, a 4×4 square and
+   * the widest "+N" ("+2999"), and two uncles of the widest kind ("+1500") fit a line of their own
+   * under it.
    */
   minViewW: 288,
 } as const;
 
-/** Height of a column row whose tallest square is `side` cells: 30 px for 1×1 and 2×2. */
-export function columnRowH(side: number): number {
-  return Math.max(COL.minCells, side) * U + 2 * COL.pad;
+/** Height of a column row whose tallest square is `cells` cells: 44 px for 1×1 and 2×2. */
+export function columnRowH(cells: number): number {
+  return side(Math.max(COL.minCells, cells)) + 2 * COL.pad;
 }
 
-/** Width of a column uncle box: the word, then room for its dots when it carries proposals. */
-export function columnUncleW(proposals: number): number {
-  const u = COL.uncle;
-  return u.pad + u.labelW + u.pad + (proposals ? u.chips * G.chipP - 2 + u.pad : 0);
+/** How a column uncle is drawn: its width, its dots drawn, and its proposals counted as "+N". */
+interface ColumnUncle {
+  w: number;
+  shown: number;
+  overflow: number;
 }
 
 /**
- * Grid capacities in 1×1 cells. The backend truncates the pool lists and a block's tx list to these
- * (crates/api/src/routes/pipeline.rs cross-references them): each pool well's body is 8 × 7 = 56,
- * a block field 8 × 5 = 40, of which the cellbase takes the first cell (so 39 listed txs).
+ * A column uncle with `proposals`: its word, then its four dot slots with "+N" for the rest in
+ * their place; or, when the slots cannot hold that "+N" (past "+999"), its word, `endGap` and "+N"
+ * for all of them. Never its word alone while it has proposals: what is not drawn is counted.
+ */
+function columnUncle(proposals: number): ColumnUncle {
+  const u = COL.uncle;
+  if (!proposals) return { w: u.labelW, shown: 0, overflow: 0 };
+  const slots = slotsFor(proposals, u.chips);
+  if (slots) return { w: u.labelW + COL.endGap + dotsW(u.chips), ...slots };
+  return { w: u.labelW + COL.endGap + labelWidth(`+${proposals}`), shown: 0, overflow: proposals };
+}
+
+/** `n` dots side by side, in px: n pitches less the space after the last. */
+function dotsW(n: number): number {
+  return n * DOT.pitch - (DOT.pitch - DOT.size);
+}
+
+/**
+ * Cells a plate's field and a pool well draw (5 × 4 = 20 each; the cellbase takes a block's first
+ * cell). The backend lists more than this (39 txs a block, 56 a pool stage:
+ * crates/api/src/routes/pipeline.rs); what is not drawn is counted as "+N", so drawn and hidden
+ * always make up the total.
  */
 export const POOL_PENDING_CAPACITY = G.cardCols * G.poolRows;
 export const POOL_PROPOSED_CAPACITY = G.cardCols * G.poolRows;
 export const BLOCK_FIELD_CAPACITY = G.cardCols * G.fieldRows;
 
-/** Proposal dots per row of a card's proposal area. */
-export const CHIPS_PER_ROW = Math.floor((G.cardCols * U) / G.chipP);
-/** Proposal dots per row inside an uncle mini-card, inset 3 px on both sides. */
-export const UNCLE_CHIPS_PER_ROW = Math.floor((G.cardCols * U - 1 - 6) / G.chipP);
+/** Proposal dots per row of a plate's dot rows: as many as fit inside its padding (9). */
+export const CHIPS_PER_ROW = Math.floor((side(G.cardCols) + DOT.pitch - DOT.size) / DOT.pitch);
+/** An uncle's dot row is a plate's dot row: no box, no inset. */
+export const UNCLE_CHIPS_PER_ROW = CHIPS_PER_ROW;
 
-export function uncleBoxH(nProposals: number): number {
+/** Height of an uncle's row on a plate: its word line, then its dots (one row at most). */
+export function uncleRowH(nProposals: number): number {
   const rows = nProposals ? Math.min(UNC.chipRows, Math.ceil(nProposals / UNCLE_CHIPS_PER_ROW)) : 0;
-  return UNC.head + rows * G.chipP + UNC.padB;
+  return UNC.head + (rows ? (rows - 1) * G.chipRowP + G.chip : 0);
 }
 
-/** Height of the uncle area of a card (0 without uncles); `counts` = proposals per uncle. */
+/** Height a plate's uncles take out of its field (0 without uncles); `counts` = proposals per uncle. */
 export function unclesH(counts: readonly number[]): number {
-  if (!counts.length) return 0;
-  return UNC.top + counts.reduce((h, n) => h + uncleBoxH(n) + UNC.gap, 0);
+  return counts.reduce((h, n) => h + uncleRowH(n) + UNC.gap, 0);
 }
 
 /**
  * How many of `total` dots to draw in `cap` slots. When they do not fit, the last row gives up one
- * slot per glyph of the "+N" label drawn at its end (a 10 px mono glyph is 6 px, under one 8 px
- * pitch), so the label never covers a dot.
+ * slot per glyph of the "+N" label drawn at its end (a glyph of the canvas's small text is 6.6 px,
+ * under one 9 px pitch), so the label never covers a dot.
  */
 export function chipSlots(total: number, cap: number): { shown: number; overflow: number } {
+  const slots = slotsFor(total, cap);
+  if (!slots) throw new Error(`pipeline: no room for a +N label in ${cap} chip slots`);
+  return slots;
+}
+
+/** `chipSlots`, or null when `cap` slots cannot hold the "+N" of what does not fit. */
+function slotsFor(total: number, cap: number): { shown: number; overflow: number } | null {
   if (total <= cap) return { shown: total, overflow: 0 };
   for (let r = 1; r <= cap; r++) {
     const overflow = total - (cap - r);
     if (r >= String(overflow).length + 1) return { shown: cap - r, overflow };
   }
-  throw new Error(`pipeline: no room for a +N label in ${cap} chip slots`);
+  return null;
 }
 
 /**
- * Every card is one fixed height: the header, the proposal rows and a `fieldRows`-tall tx field. An
- * uncle mini-card takes its rows out of the field, so a card never grows; txs that do not fit are
- * counted as "+N".
+ * Every plate is one fixed height: the head, the dot rows and a `fieldRows`-tall tx field. An
+ * uncle takes its rows out of the field, so a plate never grows; txs that do not fit are counted
+ * as "+N".
  */
-export const CARD_H = G.fieldTop + G.fieldRows * U - 1 + G.padB - G.cardTop;
+export const CARD_H = PLATE_H;
 
 export interface PackItem {
   id: string;
@@ -324,14 +544,14 @@ export function fitLine(
   extra: number,
   what: string
 ): { pos: LinePos[]; hidden: number } {
-  const all = Math.floor((room + 1) / U);
+  const all = Math.floor((room + GUT) / U);
   for (let cells = all; cells >= (reserveFirst ? 1 : 0); cells--) {
     const p = packLine(items, cells, reserveFirst);
     const hidden = p.hidden + extra;
     if (!hidden) return { pos: p.pos, hidden };
-    if (cells * U - 1 + COL.endGap + labelWidth(`+${hidden}`) <= room) {
-      return { pos: p.pos, hidden };
-    }
+    // the "+N" follows the line `endGap` after its last cell, or stands alone on an empty line
+    const before = cells ? side(cells) + COL.endGap : 0;
+    if (before + labelWidth(`+${hidden}`) <= room) return { pos: p.pos, hidden };
   }
   throw new Error(`pipeline: ${what} has no room for its tx line in ${room} px`);
 }
@@ -392,7 +612,7 @@ export interface RulerSlot {
 }
 
 export interface WindowHit {
-  /** The label lane spans x0 … x1; the header row spans xn … xf. */
+  /** The label lane spans x0 … x1; the plates' head line spans xn … xf. */
   x0: number;
   x1: number;
   xn: number;
@@ -415,7 +635,7 @@ export interface RulerGeom {
   /** null when the label fits nowhere in view (the near tick itself is outside the view). */
   label: WindowLabelGeom | null;
   hit: WindowHit | null;
-  /** The window runs past the last card on screen; the dotted tail carries it on. */
+  /** The window runs past the last plate on screen; the chain's tail carries it on. */
   tailOpen: boolean;
 }
 
@@ -497,7 +717,7 @@ function windowEdges(slots: readonly RulerSlot[], H: number, w: WindowParams, ga
 /**
  * The window of H in a column, along the rows (slot `x`/`w` are a row's top and height): the same
  * ticks, in the middle of the gaps, and the same gold links and tail. There is no lane beside the
- * rows for a dimension line or its label: the gold chain line between the ticks is the dimension
+ * rows for a dimension line or its label: the gold links between the ticks are the dimension
  * line, and the words are in the hover's tooltip (window, NEXT and block tips all name the range).
  */
 export function columnWindowRuler(
@@ -518,14 +738,6 @@ export function columnWindowRuler(
   };
 }
 
-/** The column window at rest: a short gold mark across the chain line at each tick. */
-export function columnWindowMarksPath(r: RulerGeom): string {
-  const f = (v: number) => v.toFixed(1);
-  const a = f(COL.chainX - COL.markHalf);
-  const b = f(COL.chainX + COL.markHalf);
-  return r.ticks.map((y) => `M${a} ${f(y)}H${b}`).join('');
-}
-
 /** The hovered column window: each tick runs across the full width of the gap it sits in. */
 export function columnRulerPath(r: RulerGeom, viewW: number): string {
   const f = (v: number) => v.toFixed(1);
@@ -533,8 +745,8 @@ export function columnRulerPath(r: RulerGeom, viewW: number): string {
 }
 
 /**
- * The hovered window: the ticks rise from above the dimension line at `winY` onto the header row,
- * and the line joins them, broken around a label that sits between them. One path, shared by the
+ * The hovered window: the ticks rise from above the dimension line at `winY` (the lane above the
+ * plates) to the bottom of the head line, and the line joins them, broken around a label that sits between them. One path, shared by the
  * static render and the motion layer.
  */
 export function rulerPath(r: RulerGeom): string {
@@ -547,17 +759,29 @@ export function rulerPath(r: RulerGeom): string {
   return `${ticks}M${f(xn)} ${y}H${f(r.label.x0)}M${f(r.label.x1)} ${y}H${f(xf)}`;
 }
 
-/**
- * The window at rest: a short gold mark across the chain line at each end in view. Hovered, the
- * same ticks rise to the dimension line (`rulerPath`).
- */
-export function windowMarksPath(r: RulerGeom): string {
-  return r.ticks.map((x) => `M${x.toFixed(1)} ${G.chainY - 4.5}V${G.chainY + 5.5}`).join('');
+/** Width of a label in the canvas's small text (`SMALL_TEXT_PX`): 6.6 px a glyph. */
+export function labelWidth(text: string): number {
+  return monoWidth(text, SMALL_TEXT_PX);
 }
 
-/** Width of a 10 px JetBrains Mono label: every glyph advances 0.6 em. */
-export function labelWidth(text: string): number {
-  return text.length * 6;
+/**
+ * A row plate's head line: its stone (`G.stone` px at `stoneX`), its number from `numberX` and its
+ * tx "+N" ending at `countX`. The stone is an accent and gives way, never a datum: a plate keeps it
+ * while the number and the "+N" of the `hidden` txs stand `headGap` px apart after it (up to
+ * "+99"); otherwise it has none and its number starts at the plate's padding, where the widest
+ * count a block can hide still stands clear ("+2980": 14 px). Closer than `headGap` the two read
+ * as one token ("…4755+280").
+ */
+export function rowHead(number: number, hidden: number): { stone: boolean; numberX: number } {
+  const room = (numberX: number) =>
+    G.countX -
+    (hidden ? labelWidth(`+${hidden}`) : 0) -
+    (numberX + monoWidth(tail4(number), NUMBER_TEXT_PX));
+  if (room(G.numberX) >= G.headGap) return { stone: true, numberX: G.numberX };
+  if (room(G.padX) >= G.headGap) return { stone: false, numberX: G.padX };
+  throw new Error(
+    `pipeline: block #${number} has no room on its head line for its number and "+${hidden}"`
+  );
 }
 
 /**
@@ -575,15 +799,17 @@ export interface Point {
   Y: number;
 }
 
-/** The chain's off-screen tail: dotted from `x0` to `x1`. */
+/** The chain's tail past the last plate on screen: from `x0` to `x1` along the chain. */
 export interface ChainTail {
   x0: number;
   x1: number;
 }
 
 /**
- * Where the chain runs on past the last card on screen: from just after that card to 4 px before
- * the view edge. The chain line and an off-screen reward link both end in this one span.
+ * Where the chain runs on past the last plate on screen: from `BAND.inset` past that plate for
+ * `G.tail` px, or to the view edge when that is nearer (a plate sliding out past the edge leaves
+ * no room: the span is then empty, x1 ≤ x0). The chain's tail bands and an off-screen reward link
+ * both end in this one span.
  */
 export function chainTail(
   cards: readonly { x: number; w: number }[],
@@ -591,22 +817,23 @@ export function chainTail(
 ): ChainTail | null {
   if (!cards.length) return null;
   const last = cards.reduce((a, b) => (b.x > a.x ? b : a));
-  return { x0: last.x + last.w + 2, x1: viewW - 4 };
+  const x0 = last.x + last.w + BAND.inset;
+  return { x0, x1: x0 + Math.min(G.tail, viewW - x0) };
 }
 
 export interface RewardLink {
   /** From the paying cellbase up into the lane, along it, and down into the paid one if shown. */
   d: string;
-  /** The open dotted end when the paid cellbase is off screen; '' when the link drops into it. */
+  /** The open end when the paid cellbase is off screen; '' when the link drops into it. */
   tail: string;
 }
 
 /**
- * The reward link of a hovered cellbase at `a`. It rises into the lane above the cards (the
+ * The reward link of a hovered cellbase at `a`. It rises into the lane above the plates (the
  * window's lane: the ruler steps back while a link is shown) and runs right. With the paid block's
  * cellbase on screen at `b` it drops into it. Without (`b` null: the paid block is past the right
- * edge) it runs on to where the chain's own tail starts and ends there in the same open dotted
- * tail, one lane up; it never drops anywhere.
+ * edge) it runs on to where the chain's own tail starts and ends there in an open tail over the
+ * same span, one lane up; it never drops anywhere.
  */
 export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink {
   const top = G.winY;
@@ -634,7 +861,7 @@ export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLi
  * The reward link of a hovered cellbase in a column. It steps left out of the cellbase into a lane
  * just before the tx line (between the dots and the line) and runs down it, past the rows below;
  * with the paid cellbase on screen at `b` it turns back into it, else it ends where the chain's own
- * tail starts and goes on in the same open dotted tail. `tail` is the column tail (`x0`/`x1` along
+ * tail starts and goes on in an open tail over the same span. `tail` is the column tail (`x0`/`x1` along
  * the rows).
  */
 export function columnRewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink {
@@ -665,25 +892,30 @@ export function columnRewardLink(a: Point, b: Point | null, tail: ChainTail): Re
 export interface ChainSlotState extends RulerSlot {
   hash: string;
   parentHash: string;
-  /** 0 = predicted/dashed … 1 = mined and settled. */
+  /** 0 = predicted … 1 = mined and settled. */
   solid: number;
 }
 
+/**
+ * The chain's links as path data of filled tick rectangles (to be filled, never stroked): each
+ * link two bands of ticks across the gap between two plates.
+ */
 export interface ChainPaths {
   /** Links between settled blocks. */
   solid: string;
-  /** Dashed: NEXT ⇢ the tip, and links from a block that is still landing. */
+  /** NEXT ⇢ the tip, and links from a block that is still landing. */
   pend: string;
   /** Links between two blocks inside the window of H: gold. */
   win: string;
-  /** Dotted, from the last card to the view edge. */
+  /** The two bands continued past the last plate on screen (`chainTail`). */
   tail: string;
 }
 
 /**
- * The chain through the card headers, newest (left) to older (right): plain segments, no
- * arrowheads. A link is drawn only where the newer card's parentHash is the older card's hash, so
- * uncles and reorgs break the line honestly. Inside the window of H the line is gold.
+ * The chain from newest (left) to older (right): each link two bands of ticks across the gap
+ * between two plates, at 32 and 80 px down them, no arrowheads. A link is drawn only where the
+ * newer plate's parentHash is the older plate's hash, so uncles and reorgs break the chain
+ * honestly. Inside the window of H the links are gold.
  */
 export function chainPaths(
   cards: readonly ChainSlotState[],
@@ -692,26 +924,53 @@ export function chainPaths(
   w: WindowParams,
   viewW: number
 ): ChainPaths {
-  const y = G.chainY + 0.5;
-  const f = (v: number) => v.toFixed(1);
-  const seg = ([x0, x1]: Span) => `M${f(x0)} ${y}L${f(x1)} ${y}`;
-  const s = chainSpans(cards, next, H, w, 2);
+  const link = ([x0, x1]: Span) => G.linkY.map((y) => tickBand('x', x0, x1, y, BAND.link)).join('');
+  const s = chainSpans(cards, next, H, w, BAND.inset);
   const tail = chainTail(cards, viewW);
   return {
-    solid: s.solid.map(seg).join(''),
-    pend: s.pend.map(seg).join(''),
-    win: s.win.map(seg).join(''),
-    tail: tail ? `M${f(tail.x0)} ${y}L${tail.x1} ${y}` : '',
+    solid: s.solid.map(link).join(''),
+    pend: s.pend.map(link).join(''),
+    win: s.win.map(link).join(''),
+    tail: tail ? link([tail.x0, tail.x1]) : '',
   };
 }
 
-/** A stretch of the chain line along its direction: from, to. */
+/** The pool's two flow links: from the mempool to the proposed stage, and from it to NEXT. */
+export interface FlowPaths {
+  toProposed: string;
+  toNext: string;
+}
+
+/**
+ * The pool's flow links in a row: one faint band of ticks in each gap before NEXT, `BAND.inset`
+ * inside it, 14 px down the plates.
+ */
+export function flowPaths(): FlowPaths {
+  const band = (x0: number, x1: number) =>
+    tickBand('x', x0 + BAND.inset, x1 - BAND.inset, G.flowY, BAND.flow);
+  return {
+    toProposed: band(G.mempoolX + G.cardW, G.proposedX),
+    toNext: band(G.proposedX + G.cardW, G.nextX),
+  };
+}
+
+/** The pool's flow links in a column: one faint band at `COL.flowX` down each gap below a well. */
+export function columnFlowPaths(bands: { pending: Band; proposed: Band; next: Band }): FlowPaths {
+  const band = (above: Band, below: Band) =>
+    tickBand('y', above.y + above.h + BAND.inset, below.y - BAND.inset, COL.flowX, BAND.flow);
+  return {
+    toProposed: band(bands.pending, bands.proposed),
+    toNext: band(bands.proposed, bands.next),
+  };
+}
+
+/** A stretch of the chain along its direction: from, to. */
 type Span = [number, number];
 
 /**
  * The chain's links along its direction (slot `x`/`w` are positions along it), `inset` px clear of
- * the cards: NEXT ⇢ the first card dashed, then a link wherever the newer card names the older one
- * as its parent — gold between two blocks inside the window of H, dashed from a block still
+ * the plates: NEXT ⇢ the first plate pending, then a link wherever the newer plate names the older
+ * one as its parent — gold between two blocks inside the window of H, pending from a block still
  * landing, solid otherwise.
  */
 function chainSpans(
@@ -742,9 +1001,9 @@ function chainSpans(
 }
 
 /**
- * The chain of a column at `COL.chainX`, top to bottom (slot `x`/`w` are a row's top and height):
- * the links fill the gaps between the rows exactly, so the rows, drawn over the line, leave it
- * visible only between them. The tail runs from the last row to `tailGap` above the bottom edge.
+ * The chain of a column, top to bottom (slot `x`/`w` are a row's top and height): each link the
+ * two bands of ticks turned to run down the gap between two rows, at `COL.linkX`, `BAND.inset` px
+ * clear of both rows. The tail is the two bands continued below the last row.
  */
 export function columnChainPaths(
   cards: readonly ChainSlotState[],
@@ -753,26 +1012,30 @@ export function columnChainPaths(
   w: WindowParams,
   viewH: number
 ): ChainPaths {
-  const f = (v: number) => v.toFixed(1);
-  const seg = ([y0, y1]: Span) => `M${COL.chainX} ${f(y0)}V${f(y1)}`;
-  const s = chainSpans(cards, next, H, w, 0);
+  const link = ([y0, y1]: Span) =>
+    COL.linkX.map((x) => tickBand('y', y0, y1, x, BAND.link)).join('');
+  const s = chainSpans(cards, next, H, w, BAND.inset);
   const tail = columnChainTail(cards, viewH);
   return {
-    solid: s.solid.map(seg).join(''),
-    pend: s.pend.map(seg).join(''),
-    win: s.win.map(seg).join(''),
-    tail: tail ? seg([tail.x0, tail.x1]) : '',
+    solid: s.solid.map(link).join(''),
+    pend: s.pend.map(link).join(''),
+    win: s.win.map(link).join(''),
+    tail: tail ? link([tail.x0, tail.x1]) : '',
   };
 }
 
-/** Where a column's chain runs on below its last row: from that row to `tailGap` above the edge. */
+/**
+ * Where a column's chain runs on below its last row: from `BAND.inset` below that row for
+ * `COL.tail` px, or to the bottom edge when that is nearer.
+ */
 export function columnChainTail(
   cards: readonly { x: number; w: number }[],
   viewH: number
 ): ChainTail | null {
   if (!cards.length) return null;
   const last = cards.reduce((a, b) => (b.x > a.x ? b : a));
-  return { x0: last.x + last.w, x1: viewH - COL.tailGap };
+  const x0 = last.x + last.w + BAND.inset;
+  return { x0, x1: x0 + Math.min(COL.tail, viewH - x0) };
 }
 
 export interface PickSquare {
@@ -804,7 +1067,7 @@ export type PickHit =
   | { kind: 'chip'; card: string; key: string }
   | null;
 
-/** Magnetic picking: inside a square (2 px margin) wins, else the nearest within 8 px; chips 4 px. */
+/** Magnetic picking: inside a square (2 px margin) wins, else the nearest within 8 px; dots 4 px. */
 export function pick(targets: PickTargets, x: number, y: number): PickHit {
   let inside: PickSquare | null = null;
   let near: PickSquare | null = null;
@@ -860,16 +1123,42 @@ export interface SceneChip {
   y: number;
 }
 
+/**
+ * Where an uncle is drawn: at the end of the tx line (`tx`, a column), or on a line of its own
+ * (`own`: under the tx line in a column, its own row after the dot rows on a plate).
+ */
+export type UncleLine = 'tx' | 'own';
+
+/**
+ * An uncle carried by a block: its extent, local to the card. Nothing is drawn for it but its word
+ * at `x`, its dots (the card's chips of its index) and its "+N"; no box.
+ */
 export interface SceneUncle {
   index: number;
   ref: PipelineBlockRef;
-  /** The uncle box, local to the card. */
+  line: UncleLine;
   x: number;
   y: number;
   w: number;
   h: number;
   label: string;
+  /**
+   * Its proposals not drawn as dots, counted as "+N" ending at `x + w` on its word's line: its
+   * dots drawn (the chips of its index) and `overflow` make up all its proposals.
+   */
   overflow: number;
+}
+
+/**
+ * The cut a mark is set in: its square grown by the gutter on every side. One per drawn square, the
+ * cellbase included, and none anywhere else: a plate is cut only where a transaction is.
+ */
+export interface SceneCut {
+  /** The square's id. */
+  id: string;
+  x: number;
+  y: number;
+  s: number;
 }
 
 export interface SceneCard {
@@ -882,11 +1171,20 @@ export interface SceneCard {
   y: number;
   w: number;
   h: number;
+  /**
+   * Its stone is pressed into its head: always in a column; on a row plate only while its head
+   * line has room for it (`rowHead`).
+   */
+  stone: boolean;
+  /** Where its number starts, local to the card. */
+  numberX: number;
   chips: SceneChip[];
   /** Own proposals that do not fit the two rows of dots. */
   chipOverflow: number;
   uncles: SceneUncle[];
   squares: SceneSquare[];
+  /** One per square, in the same order: drawn under the squares, on the plate. */
+  cuts: SceneCut[];
   /** Txs not drawn: the field's overflow plus the ones the backend omitted. */
   hidden: number;
 }
@@ -917,7 +1215,7 @@ export interface SceneNext {
 
 export interface ScenePoolGrid {
   squares: SceneSquare[];
-  /** The stage's total in the node's pool (listed or not): the well shows it on its header row. */
+  /** The stage's total in the node's pool (listed or not): the well shows it on its head line. */
   total: number;
   /** Txs of the stage not drawn (listed or not): a column well's line counts them as "+N". */
   hidden: number;
@@ -932,7 +1230,7 @@ export interface Band {
 export interface Scene {
   orientation: Orientation;
   viewW: number;
-  /** Canvas height: one 132 px row, or the stacked rows of a column. */
+  /** Canvas height: one 146 px row, or the stacked rows of a column. */
   H: number;
   phase: ScenePhase;
   snapshot: PipelineSnapshot;
@@ -1005,6 +1303,11 @@ function poolStage(
 
 const lookIn = (stage: PoolStage, hash: string): TxLook => stage.look.get(hash) as TxLook;
 
+/** The cuts of a plate's squares: each square grown by the gutter on every side. */
+const cutsOf = (squares: readonly SceneSquare[]): SceneCut[] =>
+  squares.map((q) => ({ id: q.id, x: q.x - GUT, y: q.y - GUT, s: q.s + 2 * GUT }));
+
+/** A pool well's marks, from `x0` (inside its border) down from `G.poolTop`. */
 function poolGrid(stage: PoolStage, x0: number, cols: number): ScenePoolGrid {
   const { txs, total } = stage;
   const p = pack2D(
@@ -1015,15 +1318,7 @@ function poolGrid(stage: PoolStage, x0: number, cols: number): ScenePoolGrid {
   );
   return {
     squares: p.pos.map((q) =>
-      square(
-        q.id,
-        'tx',
-        lookIn(stage, q.id),
-        x0 + q.c * U,
-        G.poolTop + q.r * U,
-        q.n * U - 1,
-        'pool'
-      )
+      square(q.id, 'tx', lookIn(stage, q.id), x0 + q.c * U, G.poolTop + q.r * U, side(q.n), 'pool')
     ),
     total,
     hidden: total - p.pos.length,
@@ -1040,6 +1335,7 @@ interface BlockFacts {
 }
 
 interface CardGeom extends BlockFacts {
+  /** Height the uncles take out of the field. */
   uExtra: number;
   pack: PackResult;
 }
@@ -1066,10 +1362,16 @@ function blockFacts(b: PipelineBlock): BlockFacts {
 
 function cardGeom(f: BlockFacts): CardGeom {
   const uExtra = unclesH(f.byUncle.map((u) => u.length));
+  const rows = G.fieldRows - Math.ceil(uExtra / U);
+  if (rows < 1) {
+    throw new Error(
+      `pipeline: block #${f.block.number} carries ${f.byUncle.length} uncles: its plate keeps no field row for the cellbase`
+    );
+  }
   const pack = pack2D(
     f.order.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
     G.cardCols,
-    G.fieldRows - Math.ceil(uExtra / U),
+    rows,
     true
   );
   return { ...f, uExtra, pack };
@@ -1083,18 +1385,19 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
     key: `${p.shortId}|`,
     proposal: p,
     x: G.padX + (i % per) * G.chipP,
-    y: G.propTop + Math.floor(i / per) * G.chipP,
+    y: G.propTop + Math.floor(i / per) * G.chipRowP,
   }));
+  // The uncles' rows, after the dot rows, where the field would start; the field moves down.
   const uncles: SceneUncle[] = [];
-  let top: number = G.fieldTop - 1;
+  let top: number = G.fieldTop;
   const per2 = UNCLE_CHIPS_PER_ROW;
   const cap2 = per2 * UNC.chipRows;
   g.byUncle.forEach((list, ui) => {
-    const h = uncleBoxH(list.length);
-    const ref = b.uncles[ui];
+    const h = uncleRowH(list.length);
     uncles.push({
       index: ui,
-      ref,
+      ref: b.uncles[ui],
+      line: 'own',
       x: G.padX,
       y: top,
       w: G.cardW - 2 * G.padX,
@@ -1106,8 +1409,8 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
       chips.push({
         key: `${p.shortId}|${ui}`,
         proposal: p,
-        x: G.padX + 3 + (i % per2) * G.chipP,
-        y: top + UNC.head + Math.floor(i / per2) * G.chipP,
+        x: G.padX + (i % per2) * G.chipP,
+        y: top + UNC.head + Math.floor(i / per2) * G.chipRowP,
       });
     });
     top += h + UNC.gap;
@@ -1121,7 +1424,7 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
       txLook({ stage: 'cellbase', cycles: null, tooEarly: false }),
       G.padX,
       ft,
-      U - 1,
+      side(1),
       b.hash
     ),
     ...g.pack.pos.map((q) => {
@@ -1132,11 +1435,12 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
         txLook({ stage: 'committed', cycles: t.cycles, tooEarly: false }),
         G.padX + q.c * U,
         ft + q.r * U,
-        q.n * U - 1,
+        side(q.n),
         b.hash
       );
     }),
   ];
+  const hidden = g.pack.hidden + b.omittedTxs;
   return {
     id: b.hash,
     block: b,
@@ -1145,11 +1449,13 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
     y: 0,
     w: G.cardW,
     h: CARD_H,
+    ...rowHead(b.number, hidden),
     chips,
     chipOverflow: own.overflow,
     uncles,
     squares,
-    hidden: g.pack.hidden + b.omittedTxs,
+    cuts: cutsOf(squares),
+    hidden,
   };
 }
 
@@ -1172,7 +1478,7 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
   const slots = chipSlots(next.proposals, per * G.propRows);
   const ghostChips = Array.from({ length: slots.shown }, (_, i) => ({
     x: G.padX + (i % per) * G.chipP,
-    y: G.propTop + Math.floor(i / per) * G.chipP,
+    y: G.propTop + Math.floor(i / per) * G.chipRowP,
   }));
   return {
     number: s.tip.number + 1,
@@ -1182,12 +1488,12 @@ function sceneNext(s: PipelineSnapshot, next: PipelineNext): SceneNext {
     h: CARD_H,
     next,
     ghosts: [
-      { id: null, x: G.padX, y: G.fieldTop, s: U - 1, cellbase: true },
+      { id: null, x: G.padX, y: G.fieldTop, s: side(1), cellbase: true },
       ...fp.pos.map((q) => ({
         id: q.id,
         x: G.padX + q.c * U,
         y: G.fieldTop + q.r * U,
-        s: q.n * U - 1,
+        s: side(q.n),
         cellbase: false,
       })),
     ],
@@ -1328,8 +1634,8 @@ function rowScene(
   // Two pool wells before NEXT: pending, then proposed.
   const pool = stages
     ? {
-        proposed: poolGrid(stages.proposed, G.proposedX + G.padX, G.cardCols),
-        pending: poolGrid(stages.pending, G.mempoolX + G.padX, G.cardCols),
+        proposed: poolGrid(stages.proposed, G.proposedX + G.poolInset, G.cardCols),
+        pending: poolGrid(stages.pending, G.mempoolX + G.poolInset, G.cardCols),
       }
     : null;
   const geoms = facts.map(cardGeom);
@@ -1344,36 +1650,67 @@ function columnDots(total: number, h: number) {
   const per = COL.chipsPerRow;
   const slots = chipSlots(total, per * COL.chipRows);
   const rows = slots.overflow > 0 ? COL.chipRows : Math.max(1, Math.ceil(slots.shown / per));
-  const top = h / 2 - (G.chip + G.chipP * (rows - 1)) / 2;
+  const top = h / 2 - (G.chip + COL.chipRowP * (rows - 1)) / 2;
   return {
     ...slots,
     pos: Array.from({ length: slots.shown }, (_, i) => ({
       x: COL.chipX - COL.x0 + (i % per) * G.chipP,
-      y: top + Math.floor(i / per) * G.chipP,
+      y: top + Math.floor(i / per) * COL.chipRowP,
     })),
   };
 }
 
+/** A column row as its helpers read it: its height and where its uncles are. */
+interface ColumnRowShape {
+  w: number;
+  h: number;
+  uncles: readonly { x: number; line: UncleLine }[];
+}
+
+/**
+ * Height of a column row's tx line: the whole row, less the uncles' own line under it when they
+ * have one. The head (stone, number, dots) and the tx line are centred on it.
+ */
+export function columnLineH(row: Pick<ColumnRowShape, 'h' | 'uncles'>): number {
+  return row.uncles.some((u) => u.line === 'own') ? row.h - COL.uncleGap - UNC.head : row.h;
+}
+
+/**
+ * Where a column row's head is drawn (local to the row), on the middle of its tx line
+ * (`columnLineH`), never of a row grown by its uncles' own line: a block's stone, `G.stone` px at
+ * `COL.stoneX`, set on the whole pixel as a square is, and the baseline of the words on that line
+ * (a block's number at `COL.numberX`, NEXT's at `COL.nameX`), as `columnCountAt`'s.
+ */
+export function columnHeadAt(row: Pick<ColumnRowShape, 'h' | 'uncles'>): {
+  stoneX: number;
+  stoneY: number;
+  y: number;
+} {
+  const lineH = columnLineH(row);
+  return { stoneX: COL.stoneX - COL.x0, stoneY: squareTop(lineH, G.stone), y: lineH / 2 + 3.5 };
+}
+
 /** Where a column row's proposal "+N" is drawn (end-anchored, local): after the second dot row. */
-export function columnChipCountAt(h: number): { x: number; y: number } {
-  const top = h / 2 - (G.chip + G.chipP) / 2;
+export function columnChipCountAt(row: Pick<ColumnRowShape, 'h' | 'uncles'>): {
+  x: number;
+  y: number;
+} {
+  const top = columnLineH(row) / 2 - (G.chip + COL.chipRowP) / 2;
   return {
-    x: COL.chipX - COL.x0 + COL.chipsPerRow * G.chipP - 2,
-    y: top + G.chipP + G.chip / 2 + 3.5,
+    x: COL.chipX - COL.x0 + dotsW(COL.chipsPerRow),
+    y: top + COL.chipRowP + G.chip / 2 + 3.5,
   };
 }
 
 /**
  * Where a column row's tx "+N" is drawn (end-anchored, local): at the end of its tx line, before
- * its uncle boxes.
+ * its uncles when they follow it.
  */
-export function columnCountAt(card: { w: number; h: number; uncles: readonly { x: number }[] }): {
-  x: number;
-  y: number;
-} {
+export function columnCountAt(card: ColumnRowShape): { x: number; y: number } {
+  const first = card.uncles[0];
   return {
-    x: card.uncles.length ? card.uncles[0].x - COL.endGap : card.w - COL.padR,
-    y: card.h / 2 + 3.5,
+    x: first && first.line === 'tx' ? first.x - COL.endGap : card.w - COL.padR,
+    y: columnLineH(card) / 2 + 3.5,
   };
 }
 
@@ -1382,20 +1719,62 @@ export function columnWellCountAt(viewW: number, band: Band): { x: number; y: nu
   return { x: viewW - COL.x0 - COL.padR, y: band.y + band.h / 2 + 3.5 };
 }
 
+/**
+ * Where a column well's words are drawn (absolute), on the middle of its band: its name from
+ * `COL.nameX`, its pool total ending at `COL.countX`; and NEXT's "unavailable" in NEXT's band.
+ */
+export function columnWellHeadAt(band: Band): { nameX: number; countX: number; y: number } {
+  return { nameX: COL.nameX, countX: COL.countX, y: band.y + band.h / 2 + 3.5 };
+}
+
+/**
+ * A column well (PlatePhone.dc.html `.rw.wl`): its band across the canvas, square, its 1 px edge
+ * on its own outer pixels, as a row's well (`wellRect`).
+ */
+export function columnWellRect(viewW: number, band: Band): BoxRect {
+  return boxRect(COL.x0, band.y, viewW - 2 * COL.x0, band.h, true);
+}
+
+/** The theme's inset under a column well's top edge: a `G.wellShade` px band inside its 1 px edge. */
+export function columnWellShade(viewW: number, band: Band): BoxRect {
+  return boxRect(COL.x0 + 1, band.y + 1, viewW - 2 * COL.x0 - 2, G.wellShade, false);
+}
+
 const squareTop = (h: number, s: number) => Math.floor((h - s) / 2);
-const sideOf = (pos: readonly LinePos[]) => Math.max(1, ...pos.map((p) => p.n));
+/** The tallest square on a line, in cells. */
+const tallest = (pos: readonly LinePos[]) => Math.max(1, ...pos.map((p) => p.n));
+
+/**
+ * What a block's tx line always keeps, whatever uncles it carries: the cellbase, room for the
+ * largest square (a 4×4) and the widest "+N" the block can need (`+(txCount − 1)`). It depends on
+ * the block's count alone, never on which txs are listed, so an uncle's place does not jump as
+ * they change.
+ */
+const lineKeeps = (b: PipelineBlock) =>
+  side(1 + 4) + (b.txCount > 1 ? COL.endGap + labelWidth(`+${b.txCount - 1}`) : 0);
 
 /**
  * A block as a column row: its own proposal dots, then its tx line — the cellbase and the txs that
- * fit — and at the end of the line its uncle boxes ("uncle" and the uncle's dots), which take their
- * width out of the line as an uncle mini-card takes rows out of a card's field.
+ * fit, then its "+N" — and its uncles. The uncles follow the tx line, `endGap` apart, when all of
+ * them fit in what is left after `lineKeeps`; otherwise all of them take a line of their own under
+ * the tx line, from `lineX`, and the row grows by `uncleGap` and the word's line. Nothing is left
+ * uncounted: a square that does not fit is in the line's "+N", an uncle's proposals are its dots
+ * and its "+N".
  */
 function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCard {
   const b = f.block;
   const u = COL.uncle;
   const lineX = COL.lineX - COL.x0;
-  const widths = f.byUncle.map((list) => columnUncleW(list.length));
-  const txEnd = w - COL.padR - widths.reduce((sum, bw) => sum + bw + COL.endGap, 0);
+  const lineEnd = w - COL.padR;
+  const forms = f.byUncle.map((list) => columnUncle(list.length));
+  const unclesW = forms.reduce((sum, un) => sum + COL.endGap + un.w, 0);
+  const line: UncleLine = lineEnd - lineX - lineKeeps(b) >= unclesW ? 'tx' : 'own';
+  if (line === 'own' && unclesW - COL.endGap > lineEnd - lineX) {
+    throw new Error(
+      `pipeline: the ${forms.length} uncles of block #${b.number} need ${unclesW - COL.endGap} px, more than a ${lineEnd - lineX} px line of their own`
+    );
+  }
+  const txEnd = line === 'tx' ? lineEnd - unclesW : lineEnd;
   const fit = fitLine(
     f.order.map((t) => ({ id: t.hash, n: squareSide(t.size) })),
     txEnd - lineX,
@@ -1403,8 +1782,11 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
     b.omittedTxs,
     `block #${b.number}`
   );
-  const h = columnRowH(sideOf(fit.pos));
-  const mid = h / 2;
+  const lineH = columnRowH(tallest(fit.pos));
+  const wrapped = line === 'own' && forms.length > 0;
+  const h = lineH + (wrapped ? COL.uncleGap + UNC.head : 0);
+  // An uncle's word line: centred on the tx line, or under it.
+  const uncleY = wrapped ? lineH - COL.pad + COL.uncleGap : lineH / 2 - UNC.head / 2;
   const txByHash = new Map(b.txs.map((t) => [t.hash, t]));
   const squares: SceneSquare[] = [
     square(
@@ -1412,8 +1794,8 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
       'cellbase',
       txLook({ stage: 'cellbase', cycles: null, tooEarly: false }),
       lineX,
-      squareTop(h, U - 1),
-      U - 1,
+      squareTop(lineH, side(1)),
+      side(1),
       b.hash
     ),
     ...fit.pos.map((q) => {
@@ -1423,41 +1805,42 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
         'tx',
         txLook({ stage: 'committed', cycles: t.cycles, tooEarly: false }),
         lineX + q.c * U,
-        squareTop(h, q.n * U - 1),
-        q.n * U - 1,
+        squareTop(lineH, side(q.n)),
+        side(q.n),
         b.hash
       );
     }),
   ];
-  const own = columnDots(f.own.length, h);
+  const own = columnDots(f.own.length, lineH);
   const chips: SceneChip[] = f.own.slice(0, own.shown).map((p, i) => ({
     key: `${p.shortId}|`,
     proposal: p,
     ...own.pos[i],
   }));
   const uncles: SceneUncle[] = [];
-  let x = txEnd + COL.endGap;
+  let x = line === 'tx' ? txEnd + COL.endGap : lineX;
   f.byUncle.forEach((list, ui) => {
-    const slots = chipSlots(list.length, u.chips);
+    const un = forms[ui];
     uncles.push({
       index: ui,
       ref: b.uncles[ui],
+      line,
       x,
-      y: mid - u.h / 2,
-      w: widths[ui],
-      h: u.h,
+      y: uncleY,
+      w: un.w,
+      h: UNC.head,
       label: 'uncle',
-      overflow: slots.overflow,
+      overflow: un.overflow,
     });
-    list.slice(0, slots.shown).forEach((p, i) => {
+    list.slice(0, un.shown).forEach((p, i) => {
       chips.push({
         key: `${p.shortId}|${ui}`,
         proposal: p,
-        x: x + u.pad + u.labelW + u.pad + i * G.chipP,
-        y: mid - G.chip / 2,
+        x: x + u.labelW + COL.endGap + i * G.chipP,
+        y: uncleY + (UNC.head - G.chip) / 2,
       });
     });
-    x += widths[ui] + COL.endGap;
+    x += un.w + COL.endGap;
   });
   return {
     id: b.hash,
@@ -1467,10 +1850,14 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
     y: 0,
     w,
     h,
+    // the column's tx "+N" ends the line, not the head: the stone always has its room
+    stone: true,
+    numberX: COL.numberX - COL.x0,
     chips,
     chipOverflow: own.overflow,
     uncles,
     squares,
+    cuts: cutsOf(squares),
     hidden: fit.hidden,
   };
 }
@@ -1487,7 +1874,7 @@ function columnNext(s: PipelineSnapshot, next: PipelineNext, w: number): SceneNe
     next.omittedTxs,
     `next block #${s.tip.number + 1}`
   );
-  const h = columnRowH(sideOf(fit.pos));
+  const h = columnRowH(tallest(fit.pos));
   const dots = columnDots(next.proposals, h);
   return {
     number: s.tip.number + 1,
@@ -1497,12 +1884,12 @@ function columnNext(s: PipelineSnapshot, next: PipelineNext, w: number): SceneNe
     h,
     next,
     ghosts: [
-      { id: null, x: lineX, y: squareTop(h, U - 1), s: U - 1, cellbase: true },
+      { id: null, x: lineX, y: squareTop(h, side(1)), s: side(1), cellbase: true },
       ...fit.pos.map((q) => ({
         id: q.id,
         x: lineX + q.c * U,
-        y: squareTop(h, q.n * U - 1),
-        s: q.n * U - 1,
+        y: squareTop(h, side(q.n)),
+        s: side(q.n),
         cellbase: false,
       })),
     ],
@@ -1514,9 +1901,9 @@ function columnNext(s: PipelineSnapshot, next: PipelineNext, w: number): SceneNe
 
 /**
  * The pipeline stood on end: mempool, proposed, NEXT, the tip and three older blocks, top to
- * bottom, each a row as wide as the canvas. Rows are 30 px unless a 3×3 or 4×4 square makes one
- * taller; the gaps are 12 between the wells, 14 between blocks and 24 on both sides of NEXT. The
- * canvas is as tall as its rows plus the room for the tail.
+ * bottom, each a row as wide as the canvas. Rows are 44 px unless a 3×3 or 4×4 square makes one
+ * taller; the gaps are 18 between the wells, 30 between the pool and NEXT, and 18 from NEXT on.
+ * The canvas is as tall as its rows plus the room for the tail.
  */
 function columnScene(
   s: PipelineSnapshot,
@@ -1539,7 +1926,7 @@ function columnScene(
       stage.total - stage.txs.length,
       what
     );
-    return { ...fit, h: columnRowH(sideOf(fit.pos)) };
+    return { ...fit, h: columnRowH(tallest(fit.pos)) };
   };
   const lines = stages
     ? {
@@ -1563,7 +1950,7 @@ function columnScene(
   };
   const pending = band(lines ? lines.pending.h : base, COL.wellGap);
   const proposed = band(lines ? lines.proposed.h : base, COL.frontierGap);
-  const nextBand = band(landing ? rows[0].h : next ? next.h : base, COL.frontierGap);
+  const nextBand = band(landing ? rows[0].h : next ? next.h : base, COL.blockGap);
   const cards = rows.map((c, i) => {
     if (c.slot === 'landing') return { ...c, y: nextBand.y };
     const at = { ...c, y };
@@ -1579,8 +1966,8 @@ function columnScene(
         'tx',
         lookIn(stage, q.id),
         COL.lineX + q.c * U,
-        at.y + squareTop(at.h, q.n * U - 1),
-        q.n * U - 1,
+        at.y + squareTop(at.h, side(q.n)),
+        side(q.n),
         'pool'
       )
     ),
@@ -1639,9 +2026,10 @@ export interface SceneAxis {
     w: WindowParams
   ): ChainPaths;
   ruler(slots: readonly RulerSlot[], H: number, w: WindowParams, text: string): RulerGeom;
-  /** The window at rest: marks across the chain line. */
-  marks(r: RulerGeom): string;
-  /** The hovered window: its ticks (and, in a row, the dimension line). */
+  /**
+   * The hovered window: its ticks (and, in a row, the dimension line). At rest the window has no
+   * mark of its own: its gold bands say it.
+   */
   ticks(r: RulerGeom): string;
   tail(cards: readonly { x: number; w: number }[]): ChainTail | null;
   rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink;
@@ -1654,7 +2042,6 @@ export function axisOf(scene: Pick<Scene, 'orientation' | 'viewW' | 'H'>): Scene
       along: (c) => ({ x: c.x, w: c.w }),
       chainPaths: (cards, next, H, w) => chainPaths(cards, next, H, w, viewW),
       ruler: (slots, H, w, text) => windowRuler(slots, H, w, viewW, text),
-      marks: windowMarksPath,
       ticks: rulerPath,
       tail: (cards) => chainTail(cards, viewW),
       rewardLink,
@@ -1664,7 +2051,6 @@ export function axisOf(scene: Pick<Scene, 'orientation' | 'viewW' | 'H'>): Scene
     along: (c) => ({ x: c.y, w: c.h }),
     chainPaths: (cards, next, H, w) => columnChainPaths(cards, next, H, w, viewH),
     ruler: (slots, H, w) => columnWindowRuler(slots, H, w, viewH),
-    marks: columnWindowMarksPath,
     ticks: (r) => columnRulerPath(r, viewW),
     tail: (cards) => columnChainTail(cards, viewH),
     rewardLink: columnRewardLink,

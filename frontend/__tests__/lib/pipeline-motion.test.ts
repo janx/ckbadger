@@ -6,10 +6,14 @@ import {
   bezier,
   birthEase,
   browserClock,
+  lookPaint,
   paintSquareNode,
+  type Look,
   type MotionNode,
 } from '@/lib/pipeline/motion';
-import { STAGE_BASE } from '@/lib/pipeline/encoding';
+import { STAGE_BASE, agedPaint, mixColor, paintSquare } from '@/lib/pipeline/encoding';
+import { GUT } from '@/lib/pipeline/layout';
+import { color } from '@/lib/palette';
 
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -27,8 +31,8 @@ function square(animator: Animator, layer: SVGGElement, X = 0, Y = 0): MotionNod
   return animator.node(
     'tx',
     el,
-    { X, Y, s: 6, op: 1 },
-    { base: STAGE_BASE.pending, style: 'solid', step: 1, cellbase: false },
+    { X, Y, s: 6, op: 1, flare: 0 },
+    { base: STAGE_BASE.pending, style: 'solid', step: 1, cellbase: false, age: null },
     paintSquareNode
   );
 }
@@ -55,22 +59,34 @@ describe('easing curves', () => {
 });
 
 describe('paintSquareNode', () => {
-  const paint = (s: number, cellbase: boolean) => {
+  const node = (
+    s: number,
+    cellbase: boolean,
+    o: { age?: number | null; flare?: number; cut?: SVGElement | null } = {}
+  ) => {
     const el = document.createElementNS(NS, cellbase ? 'path' : 'rect');
     const n: MotionNode = {
       id: 'q',
       el,
-      v: { X: 10, Y: 20, s, op: 1 },
-      target: { X: 10, Y: 20, s, op: 1 },
-      look: { base: STAGE_BASE.committed, style: 'solid', step: 0, cellbase },
+      cut: o.cut ?? null,
+      v: { X: 10, Y: 20, s, op: 1, flare: o.flare ?? 0 },
+      target: { X: 10, Y: 20, s, op: 1, flare: o.flare ?? 0 },
+      look: {
+        base: cellbase ? STAGE_BASE.cellbase : STAGE_BASE.committed,
+        style: 'solid',
+        step: 0,
+        cellbase,
+        age: o.age === undefined ? 0 : o.age,
+      },
       paint: paintSquareNode,
       tws: new Map(),
       exiting: false,
       painted: '',
     };
     paintSquareNode(n);
-    return el;
+    return n;
   };
+  const paint = (s: number, cellbase: boolean) => node(s, cellbase).el;
 
   it('keeps a square that has no size yet (a cellbase before its birth) invisible', () => {
     expect(paint(0, true).getAttribute('opacity')).toBe('0.000');
@@ -87,11 +103,74 @@ describe('paintSquareNode', () => {
   it('paints a tx square with square corners, as the static square is drawn (U-02, R1)', () => {
     for (const s of [0.5, 3, 9]) expect(paint(s, false).getAttribute('rx')).toBeNull();
   });
+
+  // Lane R: a mark on an older block steps back by its fill, as the static render paints it.
+  it('paints a square on a block `age` places back as the static square: mixed toward its cut', () => {
+    for (const age of [0, 1, 7]) {
+      const n = node(15, false, { age });
+      const own = agedPaint(paintSquare('committed', 'solid', 0), 'square', age);
+      expect(n.el.style.getPropertyValue('fill')).toBe(own.fill);
+    }
+    const cb = node(15, true, { age: 3 });
+    expect(cb.el.style.getPropertyValue('fill')).toBe(
+      agedPaint(paintSquare('cellbase', 'solid', 0), 'cellbase', 3).fill
+    );
+    // a pool square does not age
+    const pool = node(15, false, { age: null });
+    expect(pool.el.style.getPropertyValue('fill')).toBe(paintSquare('committed', 'solid', 0).fill);
+  });
+
+  it('lights a square the neon white at a full flare and gives it back its own fill at none', () => {
+    const own = paintSquare('committed', 'solid', 0).fill;
+    expect(node(15, false, { flare: 1 }).el.style.getPropertyValue('fill')).toBe(
+      color('neon-white')
+    );
+    expect(node(15, false, { flare: 0 }).el.style.getPropertyValue('fill')).toBe(own);
+    expect(node(15, false, { flare: 0.5 }).el.style.getPropertyValue('fill')).toBe(
+      mixColor(own, color('neon-white'), 0.5)
+    );
+    const look: Look = {
+      base: STAGE_BASE.cellbase,
+      style: 'solid',
+      step: 0,
+      cellbase: true,
+      age: 2,
+    };
+    expect(lookPaint(look, 1).fill).toBe(color('neon-white'));
+    expect(lookPaint(look, 0).fill).toBe(
+      agedPaint(paintSquare('cellbase', 'solid', 0), 'cellbase', 2).fill
+    );
+  });
+
+  it('carries its cut with it: the square grown by the gutter, never seen without its square', () => {
+    const cut = document.createElementNS(NS, 'rect');
+    const n = node(15, false, { cut });
+    expect(['x', 'y', 'width', 'height', 'opacity'].map((a) => cut.getAttribute(a))).toEqual([
+      (10 - GUT).toFixed(2),
+      (20 - GUT).toFixed(2),
+      (15 + 2 * GUT).toFixed(2),
+      (15 + 2 * GUT).toFixed(2),
+      '1.000',
+    ]);
+    // moved and shrunk to nothing: the cut follows, and goes with the square
+    n.v.X = 40;
+    n.v.s = 0.3;
+    paintSquareNode(n);
+    expect(cut.getAttribute('x')).toBe((40 - GUT).toFixed(2));
+    expect(cut.getAttribute('opacity')).toBe('0.000');
+  });
+
+  it('refuses a square node without a flare value', () => {
+    const n = node(15, false);
+    delete n.v.flare;
+    n.painted = '';
+    expect(() => paintSquareNode(n)).toThrow(/flare/);
+  });
 });
 
-describe('fresh outline', () => {
-  it('decays over 2.4 s after a block lands', () => {
-    expect(FRESH_MS).toBe(2400);
+describe('the landing flare', () => {
+  it('settles a landed block\u2019s marks from the neon white over 400 ms', () => {
+    expect(FRESH_MS).toBe(400);
   });
 });
 
@@ -205,7 +284,7 @@ describe('Animator under fake timers and rAF', () => {
       {
         dur: 1000,
         colorLate: true,
-        look: { base: STAGE_BASE.committed, style: 'dashed', step: 0, cellbase: false },
+        look: { base: STAGE_BASE.committed, style: 'dashed', step: 0, cellbase: false, age: null },
       }
     );
     vi.advanceTimersByTime(500);

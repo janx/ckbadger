@@ -13,28 +13,9 @@ interface WindowRulerProps {
 }
 
 /**
- * The window at rest: a short gold mark across the chain line at each end in view (`d` from the
- * scene's axis: `windowMarksPath` in a row, `columnWindowMarksPath` in a column).
- */
-export function WindowMarks({ d }: { d: string }) {
-  return (
-    <path
-      data-window-marks
-      d={d || 'M0 0'}
-      fill="none"
-      strokeWidth={1.5}
-      strokeOpacity={0.9}
-      strokeLinecap="round"
-      vectorEffect="non-scaling-stroke"
-      pointerEvents="none"
-      style={{ stroke: tok('gold') }}
-    />
-  );
-}
-
-/**
  * The hovered window: two ticks and the dimension line between them (a row), or ticks across the
- * gaps (a column); the rest is in the hover. `d` comes from the scene's axis.
+ * gaps (a column); the rest is in the hover. `d` comes from the scene's axis. At rest the window
+ * draws nothing of its own: its gold bands say it (chain-line.tsx).
  */
 export function WindowTicks({ d, faded }: { d: string; faded: boolean }) {
   return (

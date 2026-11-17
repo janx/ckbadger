@@ -1,17 +1,27 @@
 import type { PipelineProposalState } from '@/lib/api';
+import { color } from '@/lib/palette';
 import {
+  GHOST,
+  PLATE_EDGE,
+  PLATE_FILL,
   STAGE_BASE,
-  chipPaint,
+  agedChip,
+  agedPaint,
   diamondPath,
   mixColor,
   paintFromBase,
+  tailFill,
   tok,
   type ShadeStep,
+  type SquarePaint,
   type SquareStyle,
 } from '@/lib/pipeline/encoding';
 import {
+  GUT,
   axisOf,
+  cardBox,
   windowLabel,
+  type BoxRect,
   type ChainSlotState,
   type Orientation,
   type RulerSlot,
@@ -90,6 +100,8 @@ export interface Look {
   style: SquareStyle;
   step: ShadeStep;
   cellbase: boolean;
+  /** Blocks behind the tip of the block it sits on (its fill steps back); null in a pool well. */
+  age: number | null;
 }
 
 interface Tween {
@@ -111,7 +123,12 @@ interface Tween {
 export interface MotionNode {
   id: string;
   el: SVGElement;
-  /** Current values: X, Y, s, op for squares; X, Y, w, h, op, solid, fresh for cards. */
+  /**
+   * A square's cut on its plate (null in a pool well, and for a card): it moves, grows and fades
+   * with the square, so a cut never stands empty and a square never stands on bare plate.
+   */
+  cut: SVGElement | null;
+  /** Current values: X, Y, s, op, flare for squares; X, Y, w, h, op, solid, plate for cards. */
   v: Values;
   /** Where the last go() was heading, per key: a repeated target does not restart a tween. */
   target: Values;
@@ -158,9 +175,37 @@ interface Fx {
 
 const NS = 'http://www.w3.org/2000/svg';
 
-/** Paints a square node (rect, or the cellbase diamond) from its values and look. */
+/** What a landed block's marks light to at contact: the phosphor white of a live figure. */
+export const FLARE_INK = color('neon-white');
+
+/**
+ * The paint of a square node: its look's own paint (the cellbase its base), aged on the block it
+ * sits on (`agedPaint`, as the static square is painted), then lit toward the flare ink by
+ * `flare` (1 = the neon white, 0 = its own fill).
+ */
+export function lookPaint(look: Look, flare: number): SquarePaint {
+  const own: SquarePaint = look.cellbase
+    ? { fill: look.base, fillOpacity: null, stroke: null, strokeDasharray: null }
+    : paintFromBase(look.base, look.style, look.step);
+  const aged = agedPaint(own, look.cellbase ? 'cellbase' : 'square', look.age);
+  return {
+    ...aged,
+    fill: mixColor(aged.fill, FLARE_INK, flare),
+    stroke: aged.stroke === null ? null : mixColor(aged.stroke, FLARE_INK, flare),
+  };
+}
+
+const setRect = (el: Element, r: BoxRect) => {
+  el.setAttribute('x', String(r.x));
+  el.setAttribute('y', String(r.y));
+  el.setAttribute('width', String(r.width));
+  el.setAttribute('height', String(r.height));
+};
+
+/** Paints a square node (rect, or the cellbase diamond) and its cut from its values and look. */
 export function paintSquareNode(n: MotionNode): void {
-  const { X, Y, op } = n.v;
+  const { X, Y, op, flare } = n.v;
+  if (flare === undefined) throw new Error(`motion: square ${n.id} has no flare value`);
   const s = Math.max(0.2, n.v.s);
   const tw = n.tws.get('main');
   const off = tw && tw.birth ? (tw.to.s - s) / 2 : 0;
@@ -176,16 +221,22 @@ export function paintSquareNode(n: MotionNode): void {
     el.setAttribute('height', s.toFixed(2));
   }
   // A square born from nothing stays unseen until it has a size (a 0-size diamond is still a dot).
-  el.setAttribute('opacity', (n.v.s < 0.5 ? 0 : op).toFixed(3));
-  const key = `${look.base}|${look.style}|${look.step}`;
+  const shown = (n.v.s < 0.5 ? 0 : op).toFixed(3);
+  el.setAttribute('opacity', shown);
+  // Its cut: the square's cell grown by the gutter, seen exactly while the square is.
+  if (n.cut) {
+    n.cut.setAttribute('x', (X + off - GUT).toFixed(2));
+    n.cut.setAttribute('y', (Y + off - GUT).toFixed(2));
+    n.cut.setAttribute('width', (s + 2 * GUT).toFixed(2));
+    n.cut.setAttribute('height', (s + 2 * GUT).toFixed(2));
+    n.cut.setAttribute('opacity', shown);
+  }
+  const key = `${look.base}|${look.style}|${look.step}|${look.age}|${flare}`;
   if (key === n.painted) return;
   n.painted = key;
-  if (look.cellbase) {
-    el.style.setProperty('fill', look.base);
-    return;
-  }
-  const p = paintFromBase(look.base, look.style, look.step);
+  const p = lookPaint(look, flare);
   el.style.setProperty('fill', p.fill);
+  if (look.cellbase) return;
   el.style.setProperty('stroke', p.stroke ?? 'none');
   if (p.fillOpacity === null) el.removeAttribute('fill-opacity');
   else el.setAttribute('fill-opacity', String(p.fillOpacity));
@@ -226,6 +277,7 @@ export class Animator {
     const n: MotionNode = {
       id,
       el,
+      cut: null,
       v: { ...v },
       target: { ...v },
       look,
@@ -304,6 +356,7 @@ export class Animator {
     n.tws.clear();
     const done = () => {
       n.el.remove();
+      n.cut?.remove();
       n.tws.clear();
       this.active.delete(n);
       onGone?.();
@@ -519,6 +572,8 @@ export interface MotionCtx {
 export interface Departing {
   cards: Map<string, SVGGElement>;
   squares: Map<string, SVGElement>;
+  /** The cut of a departing square on a plate that stays, by the square's id: it leaves with it. */
+  cuts: Map<string, SVGElement>;
 }
 
 export const NEXT_CARD_ID = '__next';
@@ -537,7 +592,15 @@ interface SquareRec {
   container: string;
 }
 
-const STRIP = ['data-card', 'data-next', 'data-sq', 'data-chip', 'data-number', 'data-slot'];
+const STRIP = [
+  'data-card',
+  'data-next',
+  'data-sq',
+  'data-cut',
+  'data-chip',
+  'data-number',
+  'data-slot',
+];
 
 function strip(el: Element): void {
   for (const a of STRIP) {
@@ -546,22 +609,28 @@ function strip(el: Element): void {
   }
 }
 
-const lookOf = (q: SceneSquare): Look => ({
+/** A scene square's look; `age` the blocks behind the tip of its plate, null in a pool well. */
+const lookOf = (q: SceneSquare, age: number | null): Look => ({
   base: STAGE_BASE[q.stage],
   style: q.style,
   step: q.step,
   cellbase: q.kind === 'cellbase',
+  age,
 });
 
 const sameLook = (a: Look | null, b: Look) =>
-  !!a && a.base === b.base && a.style === b.style && a.step === b.step;
+  !!a && a.base === b.base && a.style === b.style && a.step === b.step && a.age === b.age;
 
-/** Exponential decay with a 600 ms time constant, landing exactly on 0 after 2.4 s. */
-export const FRESH_MS = 2400;
+/**
+ * The landing flare: at contact a landed block's marks are the neon white and settle back to their
+ * own fill by exponential decay (a 100 ms time constant), landing exactly on it after 400 ms.
+ */
+export const FRESH_MS = 400;
 const freshEase = (u: number) => (1 - Math.exp(-4 * u)) / (1 - Math.exp(-4));
 
-function paintChip(el: Element, state: PipelineProposalState): void {
-  const p = chipPaint(state);
+/** Paints a proposal dot in `state` on a block `age` places behind the tip. */
+function paintChip(el: Element, state: PipelineProposalState, age: number): void {
+  const p = agedChip(state, age);
   (el as SVGElement).style.setProperty('fill', p.fill);
   (el as SVGElement).style.setProperty('stroke', p.stroke ?? 'none');
   el.setAttribute('fill-opacity', String(p.fillOpacity));
@@ -585,6 +654,8 @@ export class SceneMotion {
   private readonly squares = new Map<string, SquareRec>();
   private scene: Scene | null = null;
   private svg: SVGSVGElement | null = null;
+  /** The orientation of the scene the records were made for (a card's box is laid out by it). */
+  private orientation: Orientation = 'row';
   private seq = -1;
   private readonly unhook: () => void;
 
@@ -622,7 +693,7 @@ export class SceneMotion {
 
   /** Called before React commits `next`: clone what is about to disappear. */
   captureDeparting(svg: SVGSVGElement, prev: Scene, next: Scene): Departing {
-    const out: Departing = { cards: new Map(), squares: new Map() };
+    const out: Departing = { cards: new Map(), squares: new Map(), cuts: new Map() };
     if (prev.orientation !== next.orientation) return out;
     const keepCards = new Set(next.cards.map((c) => c.id));
     const cardsLayer = layer(svg, 'cards');
@@ -650,6 +721,8 @@ export class SceneMotion {
       if (keep.has(q.id)) continue;
       const el = svg.querySelector(`[data-sq="${q.id}"]`);
       if (el) out.squares.set(q.id, el.cloneNode(true) as SVGElement);
+      const cut = cardsLayer.querySelector(`[data-cut="${q.id}"]`);
+      if (cut) out.cuts.set(q.id, cut.cloneNode(true) as SVGElement);
     }
     return out;
   }
@@ -669,6 +742,7 @@ export class SceneMotion {
     const tr = ctx.transition;
     const turned = !!prev && prev.orientation !== scene.orientation;
     if (turned) this.reset();
+    this.orientation = scene.orientation;
     const boot = !prev || turned || (fresh && tr.mode === 'boot');
     const along = scene.orientation;
     const events: TransitionEvent[] = fresh ? tr.events : [];
@@ -740,7 +814,7 @@ export class SceneMotion {
           : cardsLayer.querySelector(`[data-card="${t.id}"]`)
       ) as SVGGElement | null;
       if (!el) throw new Error(`motion: card ${t.id} was laid out but is not in the DOM`);
-      const v: Values = { X: t.x, Y: t.y, w: t.w, h: t.h, op: 1, solid: 1, fresh: 0 };
+      const v: Values = { X: t.x, Y: t.y, w: t.w, h: t.h, op: 1, solid: 1, plate: 1 };
       const rec = this.cards.get(t.id);
       if (!rec) {
         const created: CardRec = {
@@ -751,8 +825,11 @@ export class SceneMotion {
         if (boot) continue;
         const n = created.node;
         if (mined && mined.block === t.id) {
-          // The landing block materializes: dashed until its commits land, then solid and fresh.
+          // The landing block is NEXT's dashed outline until its commits land; at contact its
+          // plate is set with its cuts and its stone, and its marks flare (below). Its dots enter
+          // around contact.
           n.v.solid = 0;
+          n.v.plate = 0;
           n.paint(n);
           this.animator.go(
             n,
@@ -765,8 +842,8 @@ export class SceneMotion {
             }
           );
           this.animator.after(tr.contact, () => {
-            n.v.fresh = 1;
-            this.animator.go(n, { fresh: 0 }, { channel: 'fresh', dur: FRESH_MS, ease: freshEase });
+            n.v.plate = 1;
+            n.paint(n);
           });
         } else if (t.id === NEXT_CARD_ID) {
           this.animator.go(n, { op: 1 }, { from: { op: 0 }, dur: 280, delay: 140 });
@@ -819,6 +896,19 @@ export class SceneMotion {
         ?.querySelectorAll('[data-sq]')
         .forEach((e) => els.set(e.getAttribute('data-sq') as string, e as SVGElement));
     }
+    // The cuts a plate draws under its squares, by square: a square in a pool well has none.
+    const cutEls = new Map<string, SVGElement>();
+    cardsLayer
+      .querySelectorAll('[data-cut]')
+      .forEach((e) => cutEls.set(e.getAttribute('data-cut') as string, e as SVGElement));
+    // A plate's marks step back by their fill, by the blocks it stands behind the tip.
+    const ageOf = new Map(scene.cards.map((c, i) => [c.id, i]));
+    const ageIn = (container: string): number | null => {
+      if (container === 'pool') return null;
+      const age = ageOf.get(container);
+      if (age === undefined) throw new Error(`motion: square container ${container} has no card`);
+      return age;
+    };
     const all: SceneSquare[] = [
       ...(scene.pool ? [...scene.pool.pending.squares, ...scene.pool.proposed.squares] : []),
       ...scene.cards.flatMap((c) => c.squares),
@@ -828,13 +918,15 @@ export class SceneMotion {
     for (const q of all) {
       const el = els.get(q.id);
       if (!el) throw new Error(`motion: square ${q.id} was laid out but is not in the DOM`);
-      const look = lookOf(q);
+      const look = lookOf(q, ageIn(q.container));
       const v: Values = { X: q.x, Y: q.y, s: q.s, op: 1 };
       const e = txEvents.get(q.id);
       let rec = this.squares.get(q.id);
       if (rec && rec.node.exiting) rec = undefined;
       if (!rec) {
-        const node = this.animator.node(q.id, el, v, look, paintSquareNode);
+        const node = this.animator.node(q.id, el, { ...v, flare: 0 }, look, paintSquareNode);
+        node.cut = cutEls.get(q.id) ?? null;
+        node.paint(node);
         this.squares.set(q.id, { node, container: q.container });
         if (boot) continue;
         const at = containerAt(q.container, 'now');
@@ -866,6 +958,8 @@ export class SceneMotion {
         n.el = el;
         n.painted = '';
       }
+      // its cut where it is now: none in a well, its plate's when it moved onto one
+      n.cut = cutEls.get(q.id) ?? null;
       // Re-express the current position in the new container's coordinates.
       const was = containerAt(rec.container, 'before');
       const now = containerAt(q.container, 'now');
@@ -902,17 +996,39 @@ export class SceneMotion {
       if (goneCards.has(rec.container)) continue;
       const clone = departing.squares.get(id);
       if (!clone || boot) continue;
+      // A square leaving a plate that stays takes its cut with it, under it.
+      const cut = departing.cuts.get(id) ?? null;
+      if (cut) {
+        strip(cut);
+        exitLayer.appendChild(cut);
+      }
       strip(clone);
       exitLayer.appendChild(clone);
       const was = containerAt(rec.container, 'before');
       rec.node.v.X += was.X;
       rec.node.v.Y += was.Y;
       rec.node.el = clone;
+      rec.node.cut = cut;
       rec.node.painted = '';
       rec.node.paint(rec.node);
       const e = txEvents.get(id);
       const delay = e && 'at' in e ? e.at : 0;
       this.animator.exit(rec.node, e?.kind === 'drop' ? 'drop' : 'hide', delay);
+    }
+
+    // ---- The landing flare: at contact the landed block's marks light, then settle ----
+    if (mined && !boot && !this.animator.isReduced) {
+      const block = mined.block;
+      this.animator.after(tr.contact, () => {
+        for (const r of this.squares.values()) {
+          if (r.container !== block || r.node.exiting) continue;
+          this.animator.go(
+            r.node,
+            { flare: 0 },
+            { from: { flare: 1 }, channel: 'flare', dur: FRESH_MS, ease: freshEase }
+          );
+        }
+      });
     }
 
     // ---- Proposal dots resolve when the commit lands, not before ----
@@ -921,9 +1037,11 @@ export class SceneMotion {
       const key = `${e.shortId}|${e.uncleIndex ?? ''}`;
       const el = cardsLayer.querySelector(`[data-card="${e.block}"] [data-chip="${key}"]`);
       if (!el) continue; // past the two rows of dots: drawn as +N
-      paintChip(el, e.from);
+      const age = ageOf.get(e.block);
+      if (age === undefined) throw new Error(`motion: dot ${key} of ${e.block} has no card`);
+      paintChip(el, e.from, age);
       this.animator.after(e.at, () => {
-        paintChip(el, e.to);
+        paintChip(el, e.to, age);
         const rec = this.cards.get(e.block);
         if (rec) {
           const x = rec.node.v.X + Number(el.getAttribute('cx'));
@@ -936,27 +1054,39 @@ export class SceneMotion {
     this.paintChain();
   }
 
+  /**
+   * Paints a card from its values: its place and entrance opacity, and its box. NEXT's box is its
+   * dashed outline (React paints it). A block's box is its plate once `plate` is set, its own tone
+   * with no stroke at rest (a 1 px dim edge while it is highlighted), and until then NEXT's dashed
+   * outline with neither its stone nor its cuts.
+   */
   private paintCard(n: MotionNode): void {
-    const { X, Y, op, w, h, solid, fresh } = n.v;
+    const { X, Y, op, w, h, solid, plate } = n.v;
     n.el.setAttribute('transform', `translate(${X.toFixed(2)},${Y.toFixed(2)})`);
     n.el.setAttribute('opacity', op.toFixed(3));
-    const box = n.el.querySelector('[data-box]');
+    const box = n.el.querySelector('[data-box]') as SVGElement | null;
     if (!box) throw new Error(`motion: card ${n.id} has no box`);
-    box.setAttribute('width', Math.max(1, w - 1).toFixed(2));
-    box.setAttribute('height', Math.max(1, h - 1).toFixed(2));
-    if (n.id === NEXT_CARD_ID) return;
-    const hl = this.view.highlighted(n.id);
-    // A settled tile has no outline: the dashed NEXT outline fades out as the block solidifies.
-    box.setAttribute(
-      'stroke-opacity',
-      String(hl ? 0.7 : Math.round(Math.min(1, 0.6 * (1 - solid) + 0.6 * fresh) * 1000) / 1000)
-    );
-    box.setAttribute(
-      'fill-opacity',
-      String(hl ? 1 : Math.round((0.35 + 0.65 * solid) * 1000) / 1000)
-    );
-    if (solid < 0.5) box.setAttribute('stroke-dasharray', '3 2');
-    else box.removeAttribute('stroke-dasharray');
+    if (n.id === NEXT_CARD_ID) {
+      setRect(box, cardBox(this.orientation, w, h, true));
+      return;
+    }
+    const set = plate >= 1;
+    const hl = set && this.view.highlighted(n.id);
+    setRect(box, cardBox(this.orientation, w, h, !set || hl));
+    box.style.setProperty('fill', set ? PLATE_FILL : 'none');
+    box.style.setProperty('stroke', set ? (hl ? PLATE_EDGE : 'none') : GHOST.outline.stroke);
+    if (set) {
+      box.removeAttribute('stroke-opacity');
+      box.removeAttribute('stroke-dasharray');
+    } else {
+      box.setAttribute('stroke-opacity', String(GHOST.outline.strokeOpacity));
+      box.setAttribute('stroke-dasharray', GHOST.outline.dash);
+    }
+    // The stone and the cuts are the plate's: none while the block is an outline.
+    for (const el of n.el.querySelectorAll('[data-stone], [data-cuts]')) {
+      if (set) el.removeAttribute('opacity');
+      else el.setAttribute('opacity', '0');
+    }
     // The dots enter as the block solidifies, and their "+N" (in the card's words group) with
     // them: an entrance, which ends at full strength (R4: no word is faded at rest).
     for (const el of n.el.querySelectorAll('[data-chips], [data-chips-label]')) {
@@ -1007,11 +1137,7 @@ export class SceneMotion {
     set('[data-path="win"]', paths.win);
     set('[data-path="tail"]', paths.tail);
     const tail = svg.querySelector('[data-path="tail"]') as SVGElement | null;
-    if (tail) {
-      tail.style.setProperty('stroke', tok(ruler.tailOpen ? 'gold' : 'jade'));
-      tail.setAttribute('stroke-opacity', ruler.tailOpen ? '0.7' : '0.25');
-    }
-    set('[data-window-marks]', axis.marks(ruler));
+    if (tail) tail.style.setProperty('fill', tailFill(ruler.tailOpen));
     set('[data-ruler-ticks]', axis.ticks(ruler));
     const label = svg.querySelector('[data-window-label]');
     if (label) {

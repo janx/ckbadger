@@ -7,8 +7,6 @@ import type {
   PipelineSnapshot,
   PipelineTx,
 } from '@/lib/api';
-import { BLOCK_FIELD_CAPACITY } from '@/lib/pipeline/layout';
-
 /**
  * A `GET /pipeline` snapshot that is internally consistent under mainnet consensus
  * (closest 2, farthest 10): every committed tx has its proposal in a visible-or-older block of
@@ -23,10 +21,11 @@ const T = FIXTURE_TIP;
 const BLOCKS = 24;
 const CELLBASE_SIZE = 336;
 /**
- * The backend lists at most this many txs per block (crates/api/src/routes/pipeline.rs): a block
- * field less the cell its cellbase takes. The rest are counted as `omittedTxs`.
+ * The backend lists at most this many txs per block (`PIPELINE_BLOCK_TXS`,
+ * crates/api/src/routes/pipeline.rs); the rest are counted as `omittedTxs`. A plate draws fewer
+ * (`BLOCK_FIELD_CAPACITY`, lib/pipeline/layout.ts) and counts the listed ones it cannot hold too.
  */
-const LISTED_TXS_PER_BLOCK = BLOCK_FIELD_CAPACITY - 1;
+const LISTED_TXS_PER_BLOCK = 39;
 
 // The counter sits in the first 10 bytes so proposal short ids never collide.
 const hex64 = (prefix: string, n: number) =>

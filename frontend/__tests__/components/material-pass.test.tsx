@@ -10,7 +10,7 @@ import { ParticipantRefView } from '@/components/participant-ref';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { LockKind } from '@/components/ui/lock-kind';
 import { rowTagClass } from '@/components/ui/row-tag';
-import { TerminalPanel, TerminalPanelHeader } from '@/components/ui/terminal-panel';
+import { TerminalPanel } from '@/components/ui/terminal-panel';
 import { TintedJson } from '@/components/ui/tinted-json';
 import { TopicHero } from '@/components/ui/topic-hero';
 import type { ParticipantInfo } from '@/lib/api';
@@ -340,21 +340,15 @@ describe('move 1 on the page root', () => {
 });
 
 describe('move 2 on the frame and the tier boundary', () => {
-  // Rubbing × Song print, phase 2: the frame's head is a command line, no longer an eyebrow.
-  it('sets the frame on glass, headed by its command at 500, untracked', () => {
-    render(
-      <TerminalPanel data-testid="frame">
-        <TerminalPanelHeader>Cells</TerminalPanelHeader>
-      </TerminalPanel>
-    );
+  // Rubbing × Song print, phase 2. The frame's command-line head went with its one user, the
+  // home page's pipeline, when that became an unframed section (direction F, lane R).
+  it('sets the frame on glass, a flat tile', () => {
+    render(<TerminalPanel data-testid="frame">Cells</TerminalPanel>);
     const frame = screen.getByTestId('frame');
     expect(frame).toHaveClass('glass', 'border-base-border');
     // a flat tile since rubbing × Song print: no lit top edge
     expect(frame).not.toHaveClass('neon-edge-top');
     expect(frame).not.toHaveClass('bg-base-surface');
-    const head = screen.getByText('Cells').parentElement!;
-    expect(head).toHaveClass('prompt', 'font-medium', 'text-body', 'text-text-bright');
-    expect(head).not.toHaveClass('eyebrow', 'uppercase', 'tracking-[0.08em]');
   });
 
   it('grounds tier 2 one step deeper, through the gutters, under its tube', () => {

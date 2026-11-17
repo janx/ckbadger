@@ -11,11 +11,7 @@ import {
   type RefObject,
   type SVGProps,
 } from 'react';
-import {
-  TerminalPanel,
-  TerminalPanelFooter,
-  TerminalPanelHeader,
-} from '@/components/ui/terminal-panel';
+import { SectionHeading } from '@/components/home/section';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { usePipelineSnapshot } from '@/hooks/usePipelineSnapshot';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
@@ -67,7 +63,7 @@ import {
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
 import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
-import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/window-ruler';
+import { WindowLabel, WindowTicks } from '@/components/pipeline/window-ruler';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
@@ -75,9 +71,9 @@ import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 
 const SVG_LABEL = {
-  row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase',
+  row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and its committed transactions set in cuts, starting with the cellbase',
   column:
-    'A transaction lifetime read top to bottom: the mempool and proposed pool rows, the predicted next block, then the tip and three older blocks as tiles linked to their parents down one chain line, each row with its proposal dots and a line of transactions starting with the cellbase',
+    'A transaction lifetime read top to bottom: the mempool and proposed pool wells, the predicted next block, then the tip and three older blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and a line of transactions set in cuts, starting with the cellbase',
 } as const;
 
 /**
@@ -101,7 +97,7 @@ function useMeasuredWidth(ref: RefObject<HTMLDivElement | null>): number | null 
 }
 
 /**
- * The frame head's args (rubbing × Song print, phase 5, H1): `--tip #20,969,560`. The pool and
+ * The heading's args (rubbing × Song print, phase 5, H1): `--tip #20,969,560`. The pool and
  * NEXT counts are on the canvas itself; the head names only the tip, a link to its block that
  * flares when a block lands (material pass v2, move 4), and a dash until the first snapshot.
  */
@@ -378,8 +374,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const windowText = windowLabel(anchor, scene.windowTip, consensus);
   const ruler = axis.ruler(rulerSlots, anchor, consensus, windowText);
   // The window is drawn in full only while something that has one is hovered: NEXT, a block, the
-  // proposed well or the lane itself. At rest only its gold links and the marks across the chain
-  // line show it.
+  // proposed well or the lane itself. At rest only its gold bands show it.
   const showWindow = lane || windowBlock !== null;
   // The lane above the cards holds the window in a row; a column has no lane (the rows span it).
   const laneGeom =
@@ -601,8 +596,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
         }
       >
         <g pointerEvents="none">
-          <ChainLine paths={paths} tailOpen={ruler.tailOpen} windowEmphasis={lane} />
-          <WindowMarks d={axis.marks(ruler)} />
+          <ChainLine paths={paths} tailOpen={ruler.tailOpen} along={scene.orientation} />
           {showWindow && <WindowTicks d={axis.ticks(ruler)} faded={arc !== null} />}
         </g>
         {column ? (
@@ -710,7 +704,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
                 strokeWidth={3}
                 strokeOpacity={0.45}
                 vectorEffect="non-scaling-stroke"
-                style={{ stroke: mixColor(STAGE_BASE[hovered.stage], 'white', 0.4) }}
+                style={{ stroke: mixColor(STAGE_BASE[hovered.stage], tok('step-to'), 0.4) }}
               />
               <Ring q={hovered} pad={2} testId="ring" />
             </>
@@ -779,7 +773,7 @@ function selectionText(
   return null;
 }
 
-/** The footer: the legend, or — while a tx is pinned — where that tx is now. */
+/** The line under the canvas: the legend, or — while a tx is pinned — where that tx is now. */
 function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
   const pinned = usePipelineHoverStore((s) => s.pinned);
   const clearPin = usePipelineHoverStore((s) => s.clearPin);
@@ -820,15 +814,34 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
   );
 }
 
-/** Homepage transaction pipeline: mempool → next block → chain, from one backend snapshot. */
+/**
+ * Homepage transaction pipeline: mempool → next block → chain, from one backend snapshot. An
+ * unframed section like the others on the home page (PlateHome.dc.html): the section's prompt
+ * heading, the canvas right under it (its own 18 px lane is the gap), and a plain dim line under
+ * the canvas for the legend, or for the pinned tx while one is pinned.
+ */
 export function PipelinePanel() {
   const { data, error } = usePipelineSnapshot();
   return (
-    <TerminalPanel aria-label="Transaction pipeline" data-testid="pipeline-panel">
-      <TerminalPanelHeader
-        indicator="active"
+    <section
+      aria-label="Transaction pipeline"
+      data-testid="pipeline-panel"
+      className="flex flex-col"
+    >
+      <SectionHeading
+        command={
+          <span className="flex items-center gap-2.5">
+            pipeline
+            <span
+              title={PIPELINE_HELP}
+              className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 border text-center font-mono font-normal normal-case leading-3 tracking-normal"
+            >
+              ?
+            </span>
+          </span>
+        }
         args={<PipelineTip snapshot={data} />}
-        actions={
+        note={
           <Link
             href="/blocks"
             className="text-interactive hover:text-jade text-small font-mono transition-colors"
@@ -836,17 +849,7 @@ export function PipelinePanel() {
             all blocks →
           </Link>
         }
-      >
-        <span className="flex items-center gap-2.5">
-          pipeline
-          <span
-            title={PIPELINE_HELP}
-            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 border text-center font-mono normal-case leading-3 tracking-normal"
-          >
-            ?
-          </span>
-        </span>
-      </TerminalPanelHeader>
+      />
       {error ? (
         <StatusRow testId="pipeline-error" tone="text-rouge">
           {`Failed to load the pipeline: ${error.message}`}
@@ -858,9 +861,9 @@ export function PipelinePanel() {
           Loading pipeline…
         </StatusRow>
       )}
-      <TerminalPanelFooter>
+      <div className="mt-3.5">
         <PipelineFooter snapshot={data} />
-      </TerminalPanelFooter>
-    </TerminalPanel>
+      </div>
+    </section>
   );
 }

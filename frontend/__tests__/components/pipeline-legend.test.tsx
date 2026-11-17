@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { PipelineLegend } from '@/components/pipeline/pipeline-legend';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import { tok } from '@/lib/pipeline/encoding';
 
 describe('PipelineLegend', () => {
   it('keeps every stage key reachable when the mobile footer wraps', () => {
@@ -18,5 +19,57 @@ describe('PipelineLegend', () => {
     const legend = screen.getByTestId('pipeline-legend');
     expect(rects(legend).length).toBeGreaterThanOrEqual(6);
     expect(roundedRects(legend)).toEqual([]);
+  });
+
+  // Direction F (Plate.dc.html `.lg`): the unit is said in the legend only, as on /blocks.
+  it('opens with the tx square and its scale: "tx, area ∝ bytes", in the muted ink', () => {
+    render(<PipelineLegend />);
+    const first = screen.getByTestId('pipeline-legend').firstElementChild as HTMLElement;
+    expect(first).toHaveTextContent(/^tx, area ∝ bytes$/);
+    const sq = first.querySelector('rect') as SVGRectElement;
+    expect([sq.getAttribute('width'), sq.getAttribute('height')]).toEqual(['9', '9']);
+    expect(sq.style.getPropertyValue('fill')).toBe(tok('ink-dim'));
+    expect(first.querySelector('circle')).toBeNull();
+    // the swatch and its words never part on a wrap
+    expect(first).toHaveClass('whitespace-nowrap');
+  });
+
+  // Measured in Chrome (lane F): below about 1,100 px of canvas the legend wraps, and a bar between
+  // two groups was left dangling at the end of a line. The wrap and the gap part them there.
+  it('parts its three groups of keys with a bar only from xl up, where the legend is one line', () => {
+    render(<PipelineLegend />);
+    const legend = screen.getByTestId('pipeline-legend');
+    const items = [...legend.children] as HTMLElement[];
+    expect(items.map((el) => el.textContent || '|')).toEqual([
+      'tx, area ∝ bytes',
+      'proposal',
+      '|',
+      'pending',
+      'proposed',
+      'too early',
+      'committed',
+      'expired',
+      '|',
+      'cellbase',
+      'cycles',
+      'unknown',
+    ]);
+    const bars = items.filter((el) => !el.textContent);
+    expect(bars).toHaveLength(2);
+    for (const bar of bars) {
+      expect(bar).toHaveAttribute('aria-hidden');
+      expect(bar).toHaveClass('hidden', 'xl:block', 'h-2.5', 'w-px', 'bg-base-border');
+    }
+  });
+
+  it('draws every square key at 9 px, the canvas’s squares at the legend’s size', () => {
+    render(<PipelineLegend />);
+    const legend = screen.getByTestId('pipeline-legend');
+    const squares = rects(legend);
+    // tx, five stages, four cycle steps, unknown
+    expect(squares).toHaveLength(11);
+    for (const r of squares) {
+      expect([r.getAttribute('width'), r.getAttribute('height')]).toEqual(['9', '9']);
+    }
   });
 });

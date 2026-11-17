@@ -1,10 +1,12 @@
 import type { PipelineProposalState } from '@/lib/api';
+import { color } from '@/lib/palette';
 
 /**
  * Visual encodings of the transaction pipeline (ported from the approved prototype,
  * docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html):
  * - a tx is a square, area = bytes (n×n cells, n ∈ 1…4); a proposal short id is a dot;
- * - lightness = cycles: four steps of the stage hue mixed toward white;
+ * - cycles: four steps of the stage hue mixed toward the theme's step-to ink (lighter by night,
+ *   inkier by day, so every step reads on the cut in both themes);
  * - hollow = proposed but too early to commit; dashed = cycles unknown; predicted = dashed.
  *
  * Colours are CSS custom properties (`--pipeline-*`, app/globals.css) mixed with `color-mix`, so
@@ -36,7 +38,10 @@ export function shadeStep(cycles: number): ShadeStep {
   return g < 0.15 ? 0 : g < 0.4 ? 1 : g < 0.7 ? 2 : 3;
 }
 
-/** Share of white mixed into the stage hue at each cycles step: more cycles, lighter. */
+/**
+ * Share of the step-to ink mixed into the stage hue at each cycles step: more cycles, further from
+ * the stage hue (lighter by night, inkier by day).
+ */
 export const STEP_W = [0, 0.18, 0.36, 0.54] as const;
 
 export interface TxLookInput {
@@ -81,7 +86,13 @@ export type PipelineToken =
   | 'committed'
   | 'ember'
   | 'drop'
-  | 'well';
+  | 'well'
+  | 'step-to'
+  | 'plate'
+  | 'cut'
+  | 'dot-waiting'
+  | 'dot-committed'
+  | 'dot-expired';
 
 export const tok = (name: PipelineToken) => `var(--pipeline-${name})`;
 
@@ -95,12 +106,14 @@ export function mixColor(a: string, b: string, t: number): string {
 }
 
 /**
- * The three materials of the canvas: a pool is a well (recessed below the surface, no stroke), a
- * mined block a tile (the elevated surface with a trace of jade, no outline at rest), and NEXT the
- * only dashed outline (`GHOST`, predicted).
+ * The materials of the canvas: a pool is a well (recessed below the surface), a mined block a solid
+ * plate of its own tone (no outline at rest, never faded), every transaction on it set in a cut of
+ * a second tone (2 px round each square and the cellbase, and only there), and NEXT the only dashed
+ * outline (`GHOST`, predicted).
  */
 export const WELL_FILL = tok('well');
-export const TILE_FILL = mixColor(tok('elevated'), tok('jade'), 0.07);
+export const PLATE_FILL = tok('plate');
+export const CUT_FILL = tok('cut');
 
 /** How many blocks behind the tip the age fade bottoms out. */
 const AGE_STEPS = 7;
@@ -113,11 +126,32 @@ export function ageOpacity(age: number): number {
   return 1 - (0.6 * Math.min(age, AGE_STEPS)) / AGE_STEPS;
 }
 
+/** A mark that steps back with its block's age: a square, the cellbase diamond, a proposal dot. */
+export type AgedMark = 'square' | 'cellbase' | 'dot';
+
+/** What an aged mark is mixed toward: the ground it is drawn on (a square sits in its cut). */
+const AGE_GROUND: Record<AgedMark, string> = {
+  square: CUT_FILL,
+  cellbase: CUT_FILL,
+  dot: PLATE_FILL,
+};
+
+/**
+ * The fill of a mark on a block `age` places behind the tip: its own colour mixed toward its
+ * ground, keeping `ageOpacity(age)` of itself. A mark is mixed, never made transparent (opacity
+ * would show the plate through a square and its cut); the plate itself and the words never fade.
+ */
+export function agedFill(mark: AgedMark, fill: string, age: number): string {
+  const ground = AGE_GROUND[mark];
+  if (!ground) throw new Error(`pipeline: an aged ${String(mark)} has no ground to fade toward`);
+  return mixColor(ground, fill, ageOpacity(age));
+}
+
 export const STAGE_BASE: Record<SquareStage, string> = {
   pending: tok('pending'),
   proposed: tok('proposed'),
   committed: tok('committed'),
-  cellbase: mixColor(tok('committed'), 'white', 0.25),
+  cellbase: mixColor(tok('committed'), tok('step-to'), 0.25),
 };
 
 export interface SquarePaint {
@@ -131,7 +165,7 @@ export interface SquarePaint {
 export function paintFromBase(base: string, style: SquareStyle, step: ShadeStep): SquarePaint {
   if (style === 'solid') {
     return {
-      fill: mixColor(base, 'white', STEP_W[step]),
+      fill: mixColor(base, tok('step-to'), STEP_W[step]),
       fillOpacity: null,
       stroke: null,
       strokeDasharray: null,
@@ -140,7 +174,7 @@ export function paintFromBase(base: string, style: SquareStyle, step: ShadeStep)
   return {
     fill: base,
     fillOpacity: style === 'hollow' ? 0.14 : 0.06,
-    stroke: mixColor(base, 'white', 0.25),
+    stroke: mixColor(base, tok('step-to'), 0.25),
     strokeDasharray: style === 'dashed' ? '2 1.5' : null,
   };
 }
@@ -158,16 +192,16 @@ export interface ChipPaint {
   stroke: string | null;
 }
 
-/** Proposal dot = the fate of one proposal short id, in the stage colours the tx squares use. */
+/**
+ * Proposal dot = the fate of one proposal short id, in the stage colours the tx squares use. The
+ * solid dots are tokens of their own, derived against the plate they stand on (≥ 3 : 1 for
+ * waiting and committed in both themes; the expired dot is the quiet one).
+ */
 export const CHIP_PAINT: Record<PipelineProposalState, ChipPaint> = {
   early: { fill: tok('proposed'), fillOpacity: 0.12, stroke: tok('gold') },
-  waiting: { fill: mixColor(tok('proposed'), 'white', 0.12), fillOpacity: 1, stroke: null },
-  committed: {
-    fill: mixColor(tok('surface'), tok('committed'), 0.85),
-    fillOpacity: 1,
-    stroke: null,
-  },
-  expired: { fill: mixColor(tok('surface'), tok('ink-dim'), 0.5), fillOpacity: 1, stroke: null },
+  waiting: { fill: tok('dot-waiting'), fillOpacity: 1, stroke: null },
+  committed: { fill: tok('dot-committed'), fillOpacity: 1, stroke: null },
+  expired: { fill: tok('dot-expired'), fillOpacity: 1, stroke: null },
 };
 
 export function chipPaint(state: PipelineProposalState): ChipPaint {
@@ -176,8 +210,47 @@ export function chipPaint(state: PipelineProposalState): ChipPaint {
   return paint;
 }
 
-/** Predicted (NEXT) marks: dashed jade squares and hollow gold dots, never solid. */
+/**
+ * The paint of a square or the cellbase on a block `age` places behind the tip: its fill and its
+ * outline (a hollow or a dashed square's) mixed toward the cut it sits in (`agedFill`); `null` for
+ * a square loose in a pool well, which does not age. The static render and the motion layer both
+ * paint a mark through this.
+ */
+export function agedPaint(
+  p: SquarePaint,
+  mark: Exclude<AgedMark, 'dot'>,
+  age: number | null
+): SquarePaint {
+  if (age === null) return p;
+  return {
+    ...p,
+    fill: agedFill(mark, p.fill, age),
+    stroke: p.stroke === null ? null : agedFill(mark, p.stroke, age),
+  };
+}
+
+/** The paint of a proposal dot on a block `age` places behind the tip: mixed toward the plate. */
+export function agedChip(state: PipelineProposalState, age: number): ChipPaint {
+  const p = chipPaint(state);
+  return {
+    ...p,
+    fill: agedFill('dot', p.fill, age),
+    stroke: p.stroke === null ? null : agedFill('dot', p.stroke, age),
+  };
+}
+
+/**
+ * A hovered plate's edge: 1 px of the dim ink (4.1 : 1 on the plate, a line, not a word). The plate
+ * has no stroke at rest.
+ */
+export const PLATE_EDGE = color('text-dim');
+
+/**
+ * Predicted (NEXT) marks: dashed jade squares and hollow gold dots, never solid; NEXT itself (and a
+ * landing block until its commits land) a dashed outline with no fill, the only one.
+ */
 export const GHOST = {
+  outline: { stroke: tok('jade'), strokeOpacity: 0.6, dash: '2 2' },
   square: {
     fill: tok('jade'),
     fillOpacity: 0.05,
@@ -194,6 +267,24 @@ export const GHOST = {
   },
   chip: { stroke: tok('gold'), strokeOpacity: 0.5 },
 } as const;
+
+/**
+ * The chain's links, two bands of filled ticks each (never stroked): the muted ink between two
+ * blocks, the same at 0.7 from NEXT (and from a block still landing), gold inside the drawn
+ * proposal window, at full strength. The pool's flows: one faint band of the muted ink at 0.8.
+ */
+export const LINK_PAINT = {
+  solid: { fill: tok('ink-dim'), fillOpacity: null },
+  pend: { fill: tok('ink-dim'), fillOpacity: 0.7 },
+  win: { fill: tok('gold'), fillOpacity: null },
+  flow: { fill: tok('ink-dim'), fillOpacity: 0.8 },
+} as const;
+
+/**
+ * The chain's tail past the last plate (its two bands fading to nothing): gold while the drawn
+ * window runs on past that plate, else the muted ink of a link.
+ */
+export const tailFill = (windowRunsOn: boolean) => tok(windowRunsOn ? 'gold' : 'ink-dim');
 
 /** The cellbase diamond inside an s×s cell at (x, y). */
 export function diamondPath(x: number, y: number, s: number): string {
