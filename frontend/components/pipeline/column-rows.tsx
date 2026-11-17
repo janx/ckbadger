@@ -106,7 +106,9 @@ export function ColumnBlock({
           pointerEvents="all"
           style={{ fill: PLATE_FILL, stroke: highlighted ? PLATE_EDGE : 'none' }}
         />
-        <PlateStone hash={block.hash} txs={block.txCount} x={head.stoneX} y={head.stoneY} />
+        {card.stone && (
+          <PlateStone hash={block.hash} txs={block.txCount} x={head.stoneX} y={head.stoneY} />
+        )}
         <g data-cuts>
           {card.cuts.map((c) => (
             <rect
@@ -148,7 +150,7 @@ export function ColumnBlock({
         <g data-words pointerEvents="none">
           <text
             data-block-number
-            x={COL.numberX - COL.x0}
+            x={card.numberX}
             y={head.y}
             className={numberInWindow ? T12G : T12C}
           >

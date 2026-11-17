@@ -565,6 +565,8 @@ describe('PipelinePanel static render', () => {
 
   it('draws nothing on a plate without a quantity: the plate, its stone, cuts, marks, dots and words', async () => {
     const svg = await renderPanel();
+    const scene = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled');
+    const stoneOn = new Map(scene.cards.map((c) => [c.id, c.stone]));
     const cards = [...svg.querySelectorAll('[data-card]')];
     expect(cards.length).toBeGreaterThan(8);
     const what = (el: Element) =>
@@ -593,14 +595,23 @@ describe('PipelinePanel static render', () => {
         expect(g.getAttribute('stroke')).toBeNull();
       }
       expect(c.querySelectorAll('[data-box]')).toHaveLength(1);
-      expect(c.querySelectorAll(':scope [data-stone]')).toHaveLength(1);
+      // a stone exactly where the scene presses one (lane F: it gives way to the head's data)
+      const id = c.getAttribute('data-card') as string;
+      expect(stoneOn.has(id)).toBe(true);
+      expect(c.querySelectorAll(':scope [data-stone]')).toHaveLength(stoneOn.get(id) ? 1 : 0);
     }
+    // the fixture's T−5 hides 280 txs: its head has no room for a stone
+    expect([...stoneOn].filter(([, s]) => !s).length).toBeGreaterThan(0);
   });
 
   it('presses the block’s own seal into the head of its plate: its row stone, 14 px', async () => {
     const svg = await renderPanel();
     const scene = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled');
     for (const c of scene.cards) {
+      if (!c.stone) {
+        expect(card(svg, c.block.number).querySelector('[data-stone]')).toBeNull();
+        continue;
+      }
       const stone = card(svg, c.block.number).querySelector('[data-stone]') as SVGGElement;
       expect(stone.getAttribute('transform')).toBe(`translate(${G.stoneX},${G.stoneY})`);
       // the same markup as the block's seal: its hash and its transaction count
@@ -617,6 +628,35 @@ describe('PipelinePanel static render', () => {
     const number = card(svg, T).querySelector('[data-block-number]') as SVGTextElement;
     expect(Number(number.getAttribute('x'))).toBe(G.numberX);
     expect(number).toHaveClass('fill-text-bright');
+  });
+
+  // Ruling on lane F: the stone is an accent and gives way to the head's data; a plate hiding 100
+  // txs or more has none, its number from the plate's padding, at least 4 px clear of its "+N".
+  it('presses no stone into a plate hiding 100 txs or more: its number from x 8, clear of its "+N"', async () => {
+    const svg = await renderPanel();
+    const scene = buildScene(buildPipelineSnapshot(), VIEW_W, 'settled');
+    const big = scene.cards.find((c) => c.block.number === T - 5) as Scene['cards'][number];
+    expect(big).toMatchObject({ hidden: 280, stone: false, numberX: G.padX });
+    const el = card(svg, T - 5);
+    expect(el.querySelector('[data-stone]')).toBeNull();
+    const number = el.querySelector('[data-block-number]') as SVGTextElement;
+    const count = el.querySelector('[data-count]') as SVGTextElement;
+    expect(count.textContent).toBe('+280');
+    expect(count).toHaveAttribute('text-anchor', 'end');
+    // measured at the sizes they are drawn in: the number text-small (12 px), the "+N" text-meta
+    expect(number).toHaveClass('text-small');
+    expect(count).toHaveClass('text-meta');
+    const x = (t: Element) => Number(t.getAttribute('x'));
+    const w = (t: Element, size: string) => (t.textContent ?? '').length * GLYPH[size];
+    expect(x(number)).toBe(8);
+    expect(
+      x(count) - w(count, 'text-meta') - (x(number) + w(number, 'text-small'))
+    ).toBeGreaterThanOrEqual(4);
+    // a plate hiding fewer keeps its stone and its number at 27
+    const tip = card(svg, T);
+    expect(scene.cards[0]).toMatchObject({ stone: true, numberX: G.numberX });
+    expect(tip.querySelector('[data-stone]')).not.toBeNull();
+    expect(x(tip.querySelector('[data-block-number]') as Element)).toBe(27);
   });
 
   it('shows only the number in a block header, and "+N" only when txs are hidden', async () => {
@@ -1398,6 +1438,41 @@ describe('PipelineCanvas motion', () => {
     at(t.settleAt - t.contact + 900);
     expect(box.style.getPropertyValue('fill')).toBe(PLATE_FILL);
     expect(box).not.toHaveAttribute('stroke-dasharray');
+  });
+
+  // Ruling on lane F: a landing block that hides 100 txs or more gets its plate without a stone.
+  it('sets a landing block hiding 100 txs or more as a plate with no stone, its number from x 8', () => {
+    const big: PipelineSnapshot = {
+      ...s2,
+      blocks: s2.blocks.map((b) =>
+        b.number === T + 1 ? { ...b, txCount: b.txCount + 980, omittedTxs: b.omittedTxs + 980 } : b
+      ),
+    };
+    expect(buildScene(big, VIEW_W, 'landing').cards[0]).toMatchObject({
+      id: newHash,
+      stone: false,
+    });
+    const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+    const svg = getByTestId('pipeline-svg');
+    rerender(<PipelineCanvas snapshot={big} />);
+    const landing = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    const head = () => [
+      landing.querySelector('[data-stone]'),
+      Number(landing.querySelector('[data-block-number]')?.getAttribute('x')),
+    ];
+    expect(head()).toEqual([null, 8]);
+    // contact: the plate is set, its cuts with it, and still no stone
+    at(t.contact + 20);
+    expect(landingBox(svg).style.getPropertyValue('fill')).toBe(PLATE_FILL);
+    expect(landing.querySelector('[data-cuts]')).not.toHaveAttribute('opacity');
+    expect(head()).toEqual([null, 8]);
+    // and none once it has joined the chain
+    at(t.settleAt - t.contact);
+    at(800);
+    const joined = svg.querySelector(`[data-card="${newHash}"]`) as SVGGElement;
+    expect(joined).toHaveAttribute('data-slot', 'chain');
+    expect(joined.querySelector('[data-stone]')).toBeNull();
+    expect(Number(joined.querySelector('[data-block-number]')?.getAttribute('x'))).toBe(8);
   });
 
   // Direction F (Plate.dc.html, "found" → "400 ms"): the landed block's marks light in the

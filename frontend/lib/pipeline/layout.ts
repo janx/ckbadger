@@ -51,6 +51,20 @@ export const U = CELL + GUT;
 export const SMALL_TEXT_PX = 11;
 
 /**
+ * A block's number on its plate, in px: the `text-small` step (svg-text.ts T12C, T12G, T12D),
+ * 12 px of JetBrains Mono at 500, every glyph advancing 0.6 em as at every weight.
+ */
+export const NUMBER_TEXT_PX = 12;
+
+/**
+ * The width of `text` set at `px` in JetBrains Mono: every glyph advances 0.6 em (written as 3/5 so
+ * a whole number of glyphs comes out as the nearest double: 49 at 11 px → 323.4).
+ */
+function monoWidth(text: string, px: number): number {
+  return (text.length * px * 3) / 5;
+}
+
+/**
  * `n` cells side by side, in px: n pitches less the one gutter after the last. The side of an n×n
  * square (15, 32, 49, 66) and the width of an n-cell field; the gutter is said here only.
  */
@@ -142,11 +156,18 @@ const CHAIN_BASE = {
   headH: DOWN.head + DOWN.headLine,
   /** The middle of the head line: the number, a pool's name and total, NEXT's "+N". */
   headY: LANE + DOWN.head + DOWN.headLine / 2,
-  /** The block's stone: `stone` px square at (`stoneX`, `stoneY`); its number from `numberX`. */
+  /**
+   * The block's stone: `stone` px square at (`stoneX`, `stoneY`); its number from `numberX`, or
+   * from `padX` on a plate whose stone gives way to its "+N" (`rowHead`).
+   */
   stone: 14,
   stoneX: 8,
   stoneY: LANE + DOWN.stone,
   numberX: 27,
+  /** The tx "+N" on the head line ends here (end-anchored), at the plate's right padding. */
+  countX: CARD_W - PAD,
+  /** The least room between a block's number and its "+N" on the head line (`rowHead`). */
+  headGap: 4,
   padX: PAD,
   propTop: LANE + DOWN.dots,
   /** Two rows of proposal dots: `chip` px dots on a `chipP` px pitch, the rows `chipRowP` apart. */
@@ -738,12 +759,29 @@ export function rulerPath(r: RulerGeom): string {
   return `${ticks}M${f(xn)} ${y}H${f(r.label.x0)}M${f(r.label.x1)} ${y}H${f(xf)}`;
 }
 
-/**
- * Width of a label in the canvas's small text (`SMALL_TEXT_PX`): every glyph advances 0.6 em,
- * 6.6 px (written as 3/5 so a whole number of glyphs comes out as the nearest double: 49 → 323.4).
- */
+/** Width of a label in the canvas's small text (`SMALL_TEXT_PX`): 6.6 px a glyph. */
 export function labelWidth(text: string): number {
-  return (text.length * SMALL_TEXT_PX * 3) / 5;
+  return monoWidth(text, SMALL_TEXT_PX);
+}
+
+/**
+ * A row plate's head line: its stone (`G.stone` px at `stoneX`), its number from `numberX` and its
+ * tx "+N" ending at `countX`. The stone is an accent and gives way, never a datum: a plate keeps it
+ * while the number and the "+N" of the `hidden` txs stand `headGap` px apart after it (up to
+ * "+99"); otherwise it has none and its number starts at the plate's padding, where the widest
+ * count a block can hide still stands clear ("+2980": 14 px). Closer than `headGap` the two read
+ * as one token ("…4755+280").
+ */
+export function rowHead(number: number, hidden: number): { stone: boolean; numberX: number } {
+  const room = (numberX: number) =>
+    G.countX -
+    (hidden ? labelWidth(`+${hidden}`) : 0) -
+    (numberX + monoWidth(tail4(number), NUMBER_TEXT_PX));
+  if (room(G.numberX) >= G.headGap) return { stone: true, numberX: G.numberX };
+  if (room(G.padX) >= G.headGap) return { stone: false, numberX: G.padX };
+  throw new Error(
+    `pipeline: block #${number} has no room on its head line for its number and "+${hidden}"`
+  );
 }
 
 /**
@@ -1133,6 +1171,13 @@ export interface SceneCard {
   y: number;
   w: number;
   h: number;
+  /**
+   * Its stone is pressed into its head: always in a column; on a row plate only while its head
+   * line has room for it (`rowHead`).
+   */
+  stone: boolean;
+  /** Where its number starts, local to the card. */
+  numberX: number;
   chips: SceneChip[];
   /** Own proposals that do not fit the two rows of dots. */
   chipOverflow: number;
@@ -1395,6 +1440,7 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
       );
     }),
   ];
+  const hidden = g.pack.hidden + b.omittedTxs;
   return {
     id: b.hash,
     block: b,
@@ -1403,12 +1449,13 @@ function sceneCard(g: CardGeom, x: number, slot: SceneCard['slot']): SceneCard {
     y: 0,
     w: G.cardW,
     h: CARD_H,
+    ...rowHead(b.number, hidden),
     chips,
     chipOverflow: own.overflow,
     uncles,
     squares,
     cuts: cutsOf(squares),
-    hidden: g.pack.hidden + b.omittedTxs,
+    hidden,
   };
 }
 
@@ -1803,6 +1850,9 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
     y: 0,
     w,
     h,
+    // the column's tx "+N" ends the line, not the head: the stone always has its room
+    stone: true,
+    numberX: COL.numberX - COL.x0,
     chips,
     chipOverflow: own.overflow,
     uncles,

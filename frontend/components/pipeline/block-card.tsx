@@ -72,7 +72,8 @@ interface BlockCardProps {
 
 /**
  * A mined block as a solid plate of its own tone (direction F): no stroke at rest (a 1 px edge in
- * the dim ink while it is highlighted), never faded. In its head the block's stone and its number;
+ * the dim ink while it is highlighted), never faded. In its head the block's stone (where the scene
+ * presses one: it gives way to the number and the "+N", `rowHead`) and its number;
  * under them its proposal dots, the uncles it carries (each its word and its dots: no box, no
  * stone), and its transactions, each square and the cellbase set in its cut — one cut per mark,
  * drawn first, and none where there is no transaction: nothing on a plate stands for what the
@@ -108,7 +109,9 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
           pointerEvents="all"
           style={{ fill: PLATE_FILL, stroke: highlighted ? PLATE_EDGE : 'none' }}
         />
-        <PlateStone hash={block.hash} txs={block.txCount} x={G.stoneX} y={G.stoneY} />
+        {card.stone && (
+          <PlateStone hash={block.hash} txs={block.txCount} x={G.stoneX} y={G.stoneY} />
+        )}
         <g data-cuts>
           {card.cuts.map((c) => (
             <rect
@@ -150,7 +153,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
         <g data-words pointerEvents="none">
           <text
             data-block-number
-            x={G.numberX}
+            x={card.numberX}
             y={G.headY + 3.5}
             className={numberInWindow ? T12G : T12C}
           >
@@ -185,7 +188,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
           {card.hidden > 0 && (
             <text
               data-count
-              x={card.w - G.padX}
+              x={G.countX}
               y={G.headY + 3.5}
               textAnchor="end"
               className={T10B}

@@ -22,6 +22,7 @@ import {
   G,
   GUT,
   POOL_PENDING_CAPACITY,
+  NUMBER_TEXT_PX,
   POOL_PROPOSED_CAPACITY,
   SMALL_TEXT_PX,
   U,
@@ -59,8 +60,10 @@ import {
   pick,
   rewardLink,
   rewardTarget,
+  rowHead,
   rulerPath,
   side,
+  tail4,
   uncleRowH,
   unclesH,
   wellRect,
@@ -462,6 +465,89 @@ describe('plate size', () => {
   });
 });
 
+// Ruling on lane F: the stone is an accent and gives way; the number and the tx "+N" on a row
+// plate's head line are data and stay whole, at least 4 px apart (closer, "…4755+280" reads as one
+// token).
+describe('a plate’s head line: the stone gives way, never the number or its "+N"', () => {
+  const n = T - 8; // no txs, proposals or uncles in the fixture
+  /** Block T−8 listing the backend's 39 txs (19 drawn) and omitting more: `hidden` counted. */
+  const hiding = (hidden: number) =>
+    withTxs(buildPipelineSnapshot(), n, smallTxs(n, BACKEND_BLOCK_TXS), hidden - 20);
+  const rowCard = (hidden: number) => cardOf(buildScene(hiding(hidden), 1600, 'settled'), n);
+  /** The px between the number's end and the "+N"'s start on the head line. */
+  const gap = (h: { numberX: number }, hidden: number) =>
+    G.countX - labelWidth(`+${hidden}`) - (h.numberX + (tail4(n).length * NUMBER_TEXT_PX * 3) / 5);
+
+  it('measures the number at the size it is drawn: text-small, 12 px, 0.6 em a glyph', () => {
+    expect(NUMBER_TEXT_PX).toBe(12);
+    expect(tailwindConfig.theme.fontSize.small[0]).toBe(`${NUMBER_TEXT_PX}px`);
+    // the stone at 8 (14 px), the number from 27, the "+N" ending at 91, at least 4 px apart
+    expect([G.stoneX, G.stone, G.numberX, G.countX, G.headGap]).toEqual([8, 14, 27, 91, 4]);
+    expect(tail4(n)).toHaveLength(5);
+  });
+
+  it('keeps the stone while the number (27 … 63) and the "+N" stand 4 px apart: up to "+99"', () => {
+    expect(rowHead(n, 0)).toEqual({ stone: true, numberX: 27 });
+    // "+99" is 19.8 px: 71.2 … 91, 8.2 px after the number
+    expect(rowHead(n, 99)).toEqual({ stone: true, numberX: 27 });
+    expect(gap({ numberX: 27 }, 99)).toBeCloseTo(8.2, 9);
+    const card = rowCard(99);
+    expect(card).toMatchObject({ hidden: 99, stone: true, numberX: 27 });
+    expect(card.squares.length + card.hidden).toBe(card.block.txCount);
+  });
+
+  it('presses no stone from "+100": the number starts at the padding, x 8', () => {
+    // "+100" … "+999" is 26.4 px: from 64.6, 1.6 px after a number at 27; at 8 the number ends at
+    // 44, 20.6 px clear.
+    expect(gap({ numberX: 27 }, 100)).toBeCloseTo(1.6, 9);
+    for (const hidden of [100, 280, 999, 1000]) {
+      expect(rowHead(n, hidden), `+${hidden}`).toEqual({ stone: false, numberX: G.padX });
+      const card = rowCard(hidden);
+      expect(card).toMatchObject({ hidden, stone: false, numberX: 8 });
+      expect(gap(card, hidden)).toBeGreaterThanOrEqual(G.headGap);
+      expect(card.squares.length + card.hidden).toBe(card.block.txCount);
+    }
+    // the boundary, exactly
+    expect(rowHead(n, 99).stone && !rowHead(n, 100).stone).toBe(true);
+  });
+
+  it('holds the widest block’s head at the padding: 3,000 txs, "+2980" 14 px clear of its number', () => {
+    const card = rowCard(2980);
+    expect(card.block.txCount).toBe(3000);
+    expect(card).toMatchObject({ hidden: 2980, stone: false, numberX: 8 });
+    expect(card.squares.length + card.hidden).toBe(3000);
+    expect(gap(card, 2980)).toBeCloseTo(14, 9);
+    // every count a block can hide keeps its number and its "+N" at least 4 px apart
+    for (let hidden = 0; hidden <= 2999; hidden++) {
+      const head = rowHead(n, hidden);
+      if (hidden) expect(gap(head, hidden), `+${hidden}`).toBeGreaterThanOrEqual(G.headGap);
+      expect(head.stone, `+${hidden}`).toBe(hidden < 100);
+    }
+  });
+
+  it('says it in the scene for a landing block too, and leaves the column’s head as it is', () => {
+    const s2 = mineNext(buildPipelineSnapshot(), {
+      commit: [poolTxHash('w0')],
+      propose: [poolTxHash('q0')],
+    });
+    expect(s2.blocks[0].number).toBe(T + 1);
+    const landing = withTxs(s2, T + 1, s2.blocks[0].txs, 980);
+    const card = buildScene(landing, 1600, 'landing').cards[0];
+    expect(card).toMatchObject({ slot: 'landing', hidden: 980, stone: false, numberX: 8 });
+    // and the same block as a chain plate once it has landed
+    expect(cardOf(buildScene(landing, 1600, 'settled'), T + 1)).toMatchObject({
+      slot: 'chain',
+      stone: false,
+      numberX: 8,
+    });
+    // In a column the tx "+N" ends the line, not the head: every row keeps its stone and its
+    // number at 27.
+    for (const c of buildScene(hiding(2980), 358, 'settled').cards) {
+      expect(c).toMatchObject({ stone: true, numberX: COL.numberX });
+    }
+  });
+});
+
 describe('a plate is cut only where a transaction is', () => {
   it.each([0, 1, 19, 60])(
     'cuts exactly one ring per drawn square for a block of %i txs, in a row and in a column',
@@ -513,8 +599,11 @@ describe('a plate is cut only where a transaction is', () => {
       'h',
       'hidden',
       'id',
+      // the head (lane F's ruling): whether a stone is pressed, where the number starts
+      'numberX',
       'slot',
       'squares',
+      'stone',
       'uncles',
       'w',
       'x',
