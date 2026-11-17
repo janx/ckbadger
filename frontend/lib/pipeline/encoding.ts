@@ -4,7 +4,8 @@ import type { PipelineProposalState } from '@/lib/api';
  * Visual encodings of the transaction pipeline (ported from the approved prototype,
  * docs/superpowers/specs/2026-10-23-transaction-pipeline-prototype.html):
  * - a tx is a square, area = bytes (n×n cells, n ∈ 1…4); a proposal short id is a dot;
- * - lightness = cycles: four steps of the stage hue mixed toward white;
+ * - cycles: four steps of the stage hue mixed toward the theme's step-to ink (lighter by night,
+ *   inkier by day, so every step reads on the cut in both themes);
  * - hollow = proposed but too early to commit; dashed = cycles unknown; predicted = dashed.
  *
  * Colours are CSS custom properties (`--pipeline-*`, app/globals.css) mixed with `color-mix`, so
@@ -36,7 +37,10 @@ export function shadeStep(cycles: number): ShadeStep {
   return g < 0.15 ? 0 : g < 0.4 ? 1 : g < 0.7 ? 2 : 3;
 }
 
-/** Share of white mixed into the stage hue at each cycles step: more cycles, lighter. */
+/**
+ * Share of the step-to ink mixed into the stage hue at each cycles step: more cycles, further from
+ * the stage hue (lighter by night, inkier by day).
+ */
 export const STEP_W = [0, 0.18, 0.36, 0.54] as const;
 
 export interface TxLookInput {
@@ -82,6 +86,7 @@ export type PipelineToken =
   | 'ember'
   | 'drop'
   | 'well'
+  | 'step-to'
   | 'plate'
   | 'cut'
   | 'dot-waiting'
@@ -145,7 +150,7 @@ export const STAGE_BASE: Record<SquareStage, string> = {
   pending: tok('pending'),
   proposed: tok('proposed'),
   committed: tok('committed'),
-  cellbase: mixColor(tok('committed'), 'white', 0.25),
+  cellbase: mixColor(tok('committed'), tok('step-to'), 0.25),
 };
 
 export interface SquarePaint {
@@ -159,7 +164,7 @@ export interface SquarePaint {
 export function paintFromBase(base: string, style: SquareStyle, step: ShadeStep): SquarePaint {
   if (style === 'solid') {
     return {
-      fill: mixColor(base, 'white', STEP_W[step]),
+      fill: mixColor(base, tok('step-to'), STEP_W[step]),
       fillOpacity: null,
       stroke: null,
       strokeDasharray: null,
@@ -168,7 +173,7 @@ export function paintFromBase(base: string, style: SquareStyle, step: ShadeStep)
   return {
     fill: base,
     fillOpacity: style === 'hollow' ? 0.14 : 0.06,
-    stroke: mixColor(base, 'white', 0.25),
+    stroke: mixColor(base, tok('step-to'), 0.25),
     strokeDasharray: style === 'dashed' ? '2 1.5' : null,
   };
 }

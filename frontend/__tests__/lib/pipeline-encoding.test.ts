@@ -7,6 +7,7 @@ import {
   CUT_FILL,
   GHOST,
   PLATE_FILL,
+  STAGE_BASE,
   STEP_W,
   WELL_FILL,
   ageOpacity,
@@ -16,6 +17,7 @@ import {
   paintSquare,
   shadeStep,
   squareSide,
+  tok,
   txLook,
 } from '@/lib/pipeline/encoding';
 
@@ -59,7 +61,7 @@ describe('cycles → four lightness steps', () => {
     expect(cyclesGlow(1e12)).toBe(1);
   });
 
-  it('mixes this much white into the stage hue at each step: more cycles, lighter', () => {
+  it('mixes this much of the step-to ink into the stage hue at each step: more cycles, further', () => {
     expect(STEP_W).toEqual([0, 0.18, 0.36, 0.54]);
   });
 });
@@ -74,6 +76,10 @@ describe('txLook: one encoding per concept', () => {
     const paint = paintSquare('committed', 'dashed', 0);
     expect(paint.strokeDasharray).toBe('2 1.5');
     expect(paint.fillOpacity).toBe(0.06);
+    // its outline is the stage colour a quarter of the way to the theme's step-to ink
+    expect(paint.stroke).toBe(
+      'color-mix(in srgb, var(--pipeline-step-to) 25%, var(--pipeline-committed))'
+    );
   });
 
   it('draws a proposed tx that is too early to commit as hollow', () => {
@@ -85,27 +91,49 @@ describe('txLook: one encoding per concept', () => {
     const paint = paintSquare('proposed', 'hollow', 1);
     expect(paint.fillOpacity).toBe(0.14);
     expect(paint.strokeDasharray).toBeNull();
-    expect(paint.stroke).toContain('var(--pipeline-proposed)');
-  });
-
-  it('fills a solid square with the stage colour, mixed toward white by its cycles step', () => {
-    // Step 0 is the stage colour itself.
-    expect(paintSquare('pending', 'solid', 0).fill).toBe('var(--pipeline-pending)');
-    const paint = paintSquare('pending', 'solid', 2);
-    expect(paint.fill).toBe('color-mix(in srgb, white 36%, var(--pipeline-pending))');
-    expect(paint.stroke).toBeNull();
-    expect(paint.fillOpacity).toBeNull();
-    expect(paintSquare('committed', 'solid', 3).fill).toBe(
-      'color-mix(in srgb, white 54%, var(--pipeline-committed))'
+    expect(paint.stroke).toBe(
+      'color-mix(in srgb, var(--pipeline-step-to) 25%, var(--pipeline-proposed))'
     );
   });
 
-  it('never uses cycles shade for the cellbase', () => {
+  // The theme's step-to: lighter by night, inkier by day (lib/palette.ts `pipeline-step-to`), so
+  // a step stays at 3:1 on the paper cut by day where a mix toward white fell to 1.74:1.
+  it('fills a solid square with the stage colour, mixed toward the step-to ink by its cycles step', () => {
+    // Step 0 is the stage colour itself.
+    expect(paintSquare('pending', 'solid', 0).fill).toBe('var(--pipeline-pending)');
+    const paint = paintSquare('pending', 'solid', 2);
+    expect(paint.fill).toBe(
+      'color-mix(in srgb, var(--pipeline-step-to) 36%, var(--pipeline-pending))'
+    );
+    expect(paint.stroke).toBeNull();
+    expect(paint.fillOpacity).toBeNull();
+    expect(paintSquare('committed', 'solid', 3).fill).toBe(
+      'color-mix(in srgb, var(--pipeline-step-to) 54%, var(--pipeline-committed))'
+    );
+  });
+
+  it('never uses cycles shade for the cellbase: the committed colour a quarter of the way to step-to', () => {
     expect(txLook({ stage: 'cellbase', cycles: 9e9, tooEarly: false })).toEqual({
       stage: 'cellbase',
       style: 'solid',
       step: 0,
     });
+    expect(STAGE_BASE.cellbase).toBe(
+      'color-mix(in srgb, var(--pipeline-step-to) 25%, var(--pipeline-committed))'
+    );
+    expect(paintSquare('cellbase', 'solid', 3).fill).toBe(STAGE_BASE.cellbase);
+  });
+
+  it('mixes no paint toward literal white: every step goes to the theme’s step-to', () => {
+    const paints: string[] = [...Object.values(STAGE_BASE)];
+    for (const stage of ['pending', 'proposed', 'committed', 'cellbase'] as const)
+      for (const style of ['solid', 'hollow', 'dashed'] as const)
+        for (const step of [0, 1, 2, 3] as const) {
+          const p = paintSquare(stage, style, step);
+          paints.push(p.fill, p.stroke ?? '');
+        }
+    expect(paints.filter((p) => /\bwhite\b/.test(p))).toEqual([]);
+    expect(tok('step-to')).toBe('var(--pipeline-step-to)');
   });
 
   it('only allows "too early" for proposed txs', () => {

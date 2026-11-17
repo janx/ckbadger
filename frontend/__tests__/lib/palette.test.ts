@@ -375,24 +375,28 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
       }
   });
 
-  // A step is the stage colour mixed toward white by STEP_W (lib/pipeline/encoding.ts
-  // paintFromBase), the cellbase the committed colour at 25 % white. By day the same mix falls
-  // under 3 : 1 on the paper-toned cut from step 2 on (2.40 / 2.41 / 2.34 at step 2, 1.77 / 1.77 /
-  // 1.74 at step 3) and for the cellbase (2.85): the day half is not pinned until the day steps
-  // are decided.
-  it('sets every stage fill at every cycles step, and the cellbase, at 3:1 on the cut by night', () => {
-    const cut = ink('dark', 'pipeline-cut');
-    const white = '#ffffff';
+  // A step is the stage colour mixed toward the theme's step-to ink by STEP_W
+  // (lib/pipeline/encoding.ts paintFromBase), the cellbase the committed colour a quarter of the
+  // way there: lighter by night, inkier by day, so every step reads on the cut in both themes.
+  it('sets every stage fill at every cycles step, and the cellbase, at 3:1 on the cut, in both themes', () => {
     const short: string[] = [];
-    for (const stage of ['pipeline-pending', 'pipeline-proposed', 'pipeline-committed'] as const)
-      STEP_W.forEach((w, step) => {
-        const fill = mixHex(PALETTE.dark[stage], white, w);
-        const ratio = contrastRatio(fill, cut);
-        if (ratio < 3) short.push(`${stage} step ${step} ${fill}: ${ratio.toFixed(2)}`);
-      });
-    const cellbase = mixHex(PALETTE.dark['pipeline-committed'], white, 0.25);
-    if (contrastRatio(cellbase, cut) < 3) short.push(`cellbase ${cellbase}`);
+    for (const theme of THEMES) {
+      const cut = ink(theme, 'pipeline-cut');
+      const to = PALETTE[theme]['pipeline-step-to'];
+      for (const stage of ['pipeline-pending', 'pipeline-proposed', 'pipeline-committed'] as const)
+        STEP_W.forEach((w, step) => {
+          const fill = mixHex(PALETTE[theme][stage], to, w);
+          const ratio = contrastRatio(fill, cut);
+          if (ratio < 3) short.push(`${theme} ${stage} step ${step} ${fill}: ${ratio.toFixed(2)}`);
+        });
+      const cellbase = mixHex(PALETTE[theme]['pipeline-committed'], to, 0.25);
+      const ratio = contrastRatio(cellbase, cut);
+      if (ratio < 3) short.push(`${theme} cellbase ${cellbase}: ${ratio.toFixed(2)}`);
+    }
     expect(short).toEqual([]);
+    // the step-to is the light ink by night and the dark ink by day
+    expect(PALETTE.dark['pipeline-step-to']).toBe('#f6f2ea');
+    expect(PALETTE.light['pipeline-step-to']).toBe(PALETTE.light['text-bright']);
   });
 
   it('reads the waiting and the committed dot on the plate at 3:1; the expired one stays quiet', () => {
