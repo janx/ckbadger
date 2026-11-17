@@ -122,6 +122,15 @@
   --pipeline-ember: var(--c-gold);
   /* The pools are wells, recessed below the surface. */
   --pipeline-well: var(--c-pipeline-well);
+  /* A block is a solid plate, never faded; each transaction on it is set in a cut (2 px of the
+     cut tone round every square and the cellbase, and nowhere else). An older block's marks step
+     back by mixing toward their ground (lib/pipeline/encoding.ts agedFill), not by opacity. */
+  --pipeline-plate: var(--c-pipeline-plate);
+  --pipeline-cut: var(--c-pipeline-cut);
+  /* The proposal dots on a plate: waiting, committed, and the quiet expired one. */
+  --pipeline-dot-waiting: var(--c-pipeline-dot-waiting);
+  --pipeline-dot-committed: var(--c-pipeline-dot-committed);
+  --pipeline-dot-expired: var(--c-pipeline-dot-expired);
   /* What a stage hue is mixed toward as cycles rise: white at night, the ink by day. */
   --pipeline-step-to: var(--c-pipeline-step-to);
   /* A dropped tx greys out toward ember: a neutral at the stage fills' luma, half ember. */

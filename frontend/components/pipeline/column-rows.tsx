@@ -2,7 +2,7 @@
 
 import {
   GHOST,
-  TILE_FILL,
+  PLATE_FILL,
   WELL_FILL,
   ageOpacity,
   chipPaint,
@@ -92,7 +92,6 @@ export function ColumnBlock({
   const { block } = card;
   const chipCount = columnChipCountAt(card.h);
   const count = columnCountAt(card);
-  const u = COL.uncle;
   return (
     <g
       data-card={card.id}
@@ -113,7 +112,7 @@ export function ColumnBlock({
             vectorEffect="non-scaling-stroke"
             fillOpacity={1}
             strokeOpacity={highlighted ? 0.7 : 0}
-            style={{ fill: TILE_FILL, stroke: tok('jade') }}
+            style={{ fill: PLATE_FILL, stroke: tok('jade') }}
           />
           <g data-uncles>
             {card.uncles.map((un) => (
@@ -148,12 +147,12 @@ export function ColumnBlock({
           </text>
           {card.uncles.map((un) => (
             <g key={un.ref.hash} data-uncle-label={un.index}>
-              <text x={un.x + u.pad} y={un.y + countY(un.h)} className={T10}>
+              <text x={un.x} y={un.y + countY(un.h)} className={T10}>
                 {un.label}
               </text>
               {un.overflow > 0 && (
                 <text
-                  x={un.x + un.w - u.pad}
+                  x={un.x + un.w}
                   y={un.y + countY(un.h)}
                   textAnchor="end"
                   className={T10}
@@ -379,7 +378,7 @@ function ColumnFlow({ y0, y1 }: { y0: number; y1: number }) {
   return (
     <path
       data-flow
-      d={`M${COL.chainX} ${y0}V${y1}`}
+      d={`M${COL.flowX} ${y0}V${y1}`}
       fill="none"
       strokeWidth={1}
       strokeDasharray="3 3"

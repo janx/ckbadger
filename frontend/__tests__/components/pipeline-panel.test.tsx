@@ -26,7 +26,7 @@ import {
 import type { PipelineSnapshot } from '@/lib/api';
 import { PipelineCanvas, PipelinePanel } from '@/components/pipeline/pipeline-panel';
 import {
-  TILE_FILL,
+  PLATE_FILL,
   WELL_FILL,
   ageOpacity,
   chipPaint,
@@ -341,7 +341,7 @@ const rulerSlots = (scene: Scene): RulerSlot[] => [
 ];
 
 /** A path made only of horizontal segments on the chain line (or the empty placeholder). */
-const CHAIN_Y = String(G.chainY + 0.5);
+const CHAIN_Y = String(G.headY + 0.5);
 const isPlainLine = (d: string | null) =>
   d === 'M0 0' || new RegExp(`^(M[\\d.]+ ${CHAIN_Y}L[\\d.]+ ${CHAIN_Y})+$`).test(d ?? '');
 
@@ -446,7 +446,7 @@ describe('PipelinePanel static render', () => {
     // Right-aligned on the header row.
     expect(count).toHaveAttribute('text-anchor', 'end');
     expect(Number(count.getAttribute('x'))).toBe(G.cardW - G.padX);
-    expect(Number(count.getAttribute('y'))).toBe(G.chainY + 3.5);
+    expect(Number(count.getAttribute('y'))).toBe(G.headY + 3.5);
   });
 
   it('shows only the number in a block header, and "+N" only when txs are hidden', async () => {
@@ -502,7 +502,7 @@ describe('PipelinePanel static render', () => {
     const svg = await renderPanel();
     for (const n of [T, T - 5, T - 10]) {
       const box = tile(svg, n);
-      expect(box.style.getPropertyValue('fill')).toBe(TILE_FILL);
+      expect(box.style.getPropertyValue('fill')).toBe(PLATE_FILL);
       expect(box).toHaveAttribute('stroke-opacity', '0');
       expect(box).toHaveAttribute('fill-opacity', '1');
       expect(box).not.toHaveAttribute('stroke-dasharray');
@@ -670,7 +670,7 @@ describe('PipelinePanel static render', () => {
     const count = card.querySelector('[data-count]') as SVGTextElement;
     expect(count.textContent).toBe('+40');
     expect(count).toHaveAttribute('text-anchor', 'end');
-    expect(Number(count.getAttribute('y'))).toBe(G.chainY + 3.5);
+    expect(Number(count.getAttribute('y'))).toBe(G.headY + 3.5);
     expect(screen.getByTestId('pipeline-tip')).not.toHaveTextContent('Next');
   });
 
@@ -1100,7 +1100,7 @@ describe('PipelineCanvas motion', () => {
       }
       expect(exitLayer.childElementCount).toBe(0);
       const last = scene.cards[scene.cards.length - 1];
-      const y = G.chainY + 0.5;
+      const y = G.headY + 0.5;
       expect(path(svg, 'tail')).toHaveAttribute(
         'd',
         `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
@@ -1555,7 +1555,7 @@ describe('PipelinePanel interactions', () => {
         expect(c.x + c.w).toBeLessThanOrEqual(width - G.marginR);
       }
       const last = fit.cards[blocks - 1];
-      const y = G.chainY + 0.5;
+      const y = G.headY + 0.5;
       expect(path(svg, 'tail')).toHaveAttribute(
         'd',
         `M${(last.x + last.w + 2).toFixed(1)} ${y}L${width - 4} ${y}`
@@ -1684,7 +1684,7 @@ describe('PipelinePanel interactions', () => {
       path(svg, 'tail').getAttribute('stroke-dasharray')
     );
     expect(path(svg, 'tail').getAttribute('d')).toBe(
-      `M${f(tailX0)} ${G.chainY + 0.5}L${CONTAINER_VIEW_W - 4} ${G.chainY + 0.5}`
+      `M${f(tailX0)} ${G.headY + 0.5}L${CONTAINER_VIEW_W - 4} ${G.headY + 0.5}`
     );
     // Both leave with the hover.
     fireEvent.pointerLeave(svg);
@@ -2069,7 +2069,7 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     scene.cards.forEach((c, i) => {
       const el = card(svg, c.block.number);
       const t = tile(svg, c.block.number);
-      expect(t.style.getPropertyValue('fill')).toBe(TILE_FILL);
+      expect(t.style.getPropertyValue('fill')).toBe(PLATE_FILL);
       // re-pinned with ruling R1 (U-02): the tile is square
       expect(t).not.toHaveAttribute('rx');
       expect(t).toHaveAttribute('stroke-opacity', '0');

@@ -1,13 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import * as encoding from '@/lib/pipeline/encoding';
 import {
   CHIP_PAINT,
+  CUT_FILL,
   GHOST,
+  PLATE_FILL,
   STEP_W,
-  TILE_FILL,
   WELL_FILL,
   ageOpacity,
+  agedFill,
   chipPaint,
   cyclesGlow,
   paintSquare,
@@ -111,29 +114,42 @@ describe('txLook: one encoding per concept', () => {
 });
 
 describe('proposal dot states', () => {
-  it('draws early as hollow gold, waiting as solid gold, committed as jade, expired grey', () => {
+  it('draws early as hollow gold, and waiting, committed and expired in the dot tokens of a plate', () => {
     expect(chipPaint('early')).toEqual({
       fill: 'var(--pipeline-proposed)',
       fillOpacity: 0.12,
       stroke: 'var(--pipeline-gold)',
     });
-    expect(chipPaint('waiting').fillOpacity).toBe(1);
-    expect(chipPaint('waiting').stroke).toBeNull();
-    expect(chipPaint('waiting').fill).toContain('var(--pipeline-proposed)');
-    // 85 % committed over the surface: a dot reads in the same colour as a committed square.
-    expect(chipPaint('committed').fill).toBe(
-      'color-mix(in srgb, var(--pipeline-committed) 85%, var(--pipeline-surface))'
-    );
-    expect(chipPaint('expired').fill).toContain('var(--pipeline-ink-dim)');
+    // Each solid dot is its own token, derived against the plate (lib/palette.ts), not a mix toward
+    // white or the surface (by day those fell to 2.9 and 2.6 : 1 on the plate).
+    expect(chipPaint('waiting')).toEqual({
+      fill: 'var(--pipeline-dot-waiting)',
+      fillOpacity: 1,
+      stroke: null,
+    });
+    expect(chipPaint('committed')).toEqual({
+      fill: 'var(--pipeline-dot-committed)',
+      fillOpacity: 1,
+      stroke: null,
+    });
+    expect(chipPaint('expired')).toEqual({
+      fill: 'var(--pipeline-dot-expired)',
+      fillOpacity: 1,
+      stroke: null,
+    });
     expect(Object.keys(CHIP_PAINT).sort()).toEqual(['committed', 'early', 'expired', 'waiting']);
   });
 });
 
-describe('materials: well, tile and the predicted NEXT', () => {
-  it('sinks a pool well below the surface and lifts a block tile above it with a trace of jade', () => {
+describe('materials: well, plate, cut and the predicted NEXT', () => {
+  it('sinks a pool well below the surface and stands a block as a solid plate, cut where a mark is', () => {
     // the well is the theme's own token (22 % black on the surface at night, a grey tint by day)
     expect(WELL_FILL).toBe('var(--pipeline-well)');
-    expect(TILE_FILL).toBe('color-mix(in srgb, var(--pipeline-jade) 7%, var(--pipeline-elevated))');
+    // a block is a plate of its own tone; every mark on it is set in the cut tone
+    expect(PLATE_FILL).toBe('var(--pipeline-plate)');
+    expect(CUT_FILL).toBe('var(--pipeline-cut)');
+    // the tile (elevated with a trace of jade) is gone
+    expect('TILE_FILL' in encoding).toBe(false);
   });
 
   it('marks predicted txs with dashed jade outlines and predicted proposals in gold', () => {
@@ -164,6 +180,44 @@ describe('ageOpacity: older blocks step back', () => {
   });
 });
 
+// Direction F: a plate never fades, and a mark on it fades by mixing, not by opacity (opacity would
+// show the plate through a square and the cut round it).
+describe('agedFill: a mark steps back by mixing toward its ground', () => {
+  const fill = 'var(--pipeline-committed)';
+
+  it('keeps the mark its own colour at the tip', () => {
+    expect(agedFill('square', fill, 0)).toBe(fill);
+    expect(agedFill('dot', fill, 0)).toBe(fill);
+  });
+
+  it('mixes a square and the cellbase toward the cut, the mark keeping ageOpacity of itself', () => {
+    expect(agedFill('square', fill, 7)).toBe(
+      'color-mix(in srgb, var(--pipeline-committed) 40%, var(--pipeline-cut))'
+    );
+    expect(agedFill('cellbase', fill, 7)).toBe(
+      'color-mix(in srgb, var(--pipeline-committed) 40%, var(--pipeline-cut))'
+    );
+    // one step back: 1 − 0.6 / 7 of itself
+    expect(agedFill('square', fill, 1)).toBe(
+      `color-mix(in srgb, ${fill} ${Math.round(ageOpacity(1) * 1000) / 10}%, var(--pipeline-cut))`
+    );
+    expect(agedFill('square', fill, 1)).toBe(
+      'color-mix(in srgb, var(--pipeline-committed) 91.4%, var(--pipeline-cut))'
+    );
+  });
+
+  it('mixes a dot toward the plate it stands on', () => {
+    expect(agedFill('dot', 'var(--pipeline-dot-waiting)', 23)).toBe(
+      'color-mix(in srgb, var(--pipeline-dot-waiting) 40%, var(--pipeline-plate))'
+    );
+  });
+
+  it('rejects an age that is not a count of blocks and a mark it has no ground for', () => {
+    expect(() => agedFill('square', fill, -1)).toThrow(/age/);
+    expect(() => agedFill('plate' as never, fill, 1)).toThrow(/no ground/);
+  });
+});
+
 // Rubbing × Song print, phase 2: phase 1 mapped amber to moss green one-to-one, which turned the
 // ember a dropped transaction greys toward into a green. The ember is gold now, the warning hue.
 describe('the drop ember', () => {
@@ -174,5 +228,15 @@ describe('the drop ember', () => {
     expect(css).toMatch(
       /--pipeline-drop: color-mix\(in srgb, var\(--c-pipeline-drop-neutral\), var\(--pipeline-ember\)\);/
     );
+  });
+});
+
+describe('the plate tokens', () => {
+  const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+  it('declares the plate, the cut and the three dots over their palette keys', () => {
+    for (const name of ['plate', 'cut', 'dot-waiting', 'dot-committed', 'dot-expired']) {
+      expect(css).toContain(`--pipeline-${name}: var(--c-pipeline-${name});`);
+      expect(encoding.tok(name as encoding.PipelineToken)).toBe(`var(--pipeline-${name})`);
+    }
   });
 });

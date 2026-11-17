@@ -62,13 +62,13 @@ function PoolWell({
   return (
     <g data-pool-card={testId}>
       <path data-tray d={`${walls}Z`} stroke="none" style={{ fill: WELL_FILL }} />
-      <text x={x + G.padX} y={G.chainY + 3.5} className={T11C} pointerEvents="none">
+      <text x={x + G.padX} y={G.headY + 3.5} className={T11C} pointerEvents="none">
         <tspan className={fill}>{title}</tspan>
       </text>
       <text
         data-count
         x={x + G.cardW - G.padX}
-        y={G.chainY + 3.5}
+        y={G.headY + 3.5}
         textAnchor="end"
         className={T10}
         pointerEvents="none"
@@ -82,7 +82,7 @@ function PoolWell({
 
 /** The dashed line through the header row (no arrowhead): the tx moves on to the next stage. */
 function FlowLink({ x0, x1 }: { x0: number; x1: number }) {
-  const y = G.chainY + 0.5;
+  const y = G.headY + 0.5;
   return (
     <path
       data-flow

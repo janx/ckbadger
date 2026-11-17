@@ -129,6 +129,24 @@ const dark = {
    * Equal to `gold` here and to `gold-bright` by day, pinned equal in palette.test.ts.
    */
   'pipeline-word-gold': '#c9a45c',
+  /**
+   * A block in the pipeline is a solid plate of its own tone (1.29 : 1 on the page ground by night,
+   * 1.27 by day), never faded; the number and the counts on it are text grade (palette.test).
+   */
+  'pipeline-plate': '#2f2821',
+  /**
+   * The cut a transaction is set in: 2 px of this tone round every square and the cellbase on a
+   * plate, and only there (no cut where there is no transaction).
+   */
+  'pipeline-cut': '#13100d',
+  /**
+   * The proposal dots on a plate, derived against it (≥ 3 : 1 for waiting and committed in both
+   * themes): a waiting proposal in the proposed gold, a committed one in the committed celadon,
+   * an expired one the quiet dot.
+   */
+  'pipeline-dot-waiting': '#ba9a5a',
+  'pipeline-dot-committed': '#63897f',
+  'pipeline-dot-expired': '#48413a',
   // chrome
   'search-panel': '#0c0a09',
   'search-selected': '#1a1b19',
@@ -258,6 +276,11 @@ const light: Palette = {
   'pipeline-well': '#eee8dc',
   'pipeline-step-to': '#1f1b17',
   'pipeline-word-gold': '#684e0d',
+  'pipeline-plate': '#ddd4c3',
+  'pipeline-cut': '#f8f4ec',
+  'pipeline-dot-waiting': '#866619',
+  'pipeline-dot-committed': '#3d7870',
+  'pipeline-dot-expired': '#b9b3a8',
   'search-panel': '#fffdf8',
   'search-selected': '#e6e9e2',
   'search-hover': '#f2f1ea',

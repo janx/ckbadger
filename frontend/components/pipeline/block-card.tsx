@@ -1,6 +1,6 @@
 'use client';
 
-import { TILE_FILL, ageOpacity, chipPaint, tok } from '@/lib/pipeline/encoding';
+import { PLATE_FILL, ageOpacity, chipPaint, tok } from '@/lib/pipeline/encoding';
 import { G, tail4, type SceneCard } from '@/lib/pipeline/layout';
 import { T10, T10B, T11C, T11G } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
@@ -50,7 +50,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
             vectorEffect="non-scaling-stroke"
             fillOpacity={1}
             strokeOpacity={highlighted ? 0.7 : 0}
-            style={{ fill: TILE_FILL, stroke: tok('jade') }}
+            style={{ fill: PLATE_FILL, stroke: tok('jade') }}
           />
           <g data-uncles>
             {card.uncles.map((u) => (
@@ -95,7 +95,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
           <text
             data-block-number
             x={G.padX}
-            y={G.chainY + 3.5}
+            y={G.headY + 3.5}
             className={numberInWindow ? T11G : T11C}
           >
             {tail4(block.number)}
@@ -130,7 +130,7 @@ export function BlockCard({ card, numberInWindow, highlighted, dim, onIds, age }
             <text
               data-count
               x={card.w - G.padX}
-              y={G.chainY + 3.5}
+              y={G.headY + 3.5}
               textAnchor="end"
               className={T10B}
             >{`+${card.hidden}`}</text>

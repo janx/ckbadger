@@ -48,7 +48,7 @@ export function NextCard({ next, dim }: NextCardProps) {
           strokeOpacity={0.6}
           style={{ fill: tok('elevated'), stroke: tok('jade') }}
         />
-        <text x={G.padX} y={G.chainY + 3.5} className={T11C}>
+        <text x={G.padX} y={G.headY + 3.5} className={T11C}>
           {tail4(next.number)}
         </text>
         <g data-ghost-chips>
@@ -112,7 +112,7 @@ export function NextCard({ next, dim }: NextCardProps) {
           <text
             data-count
             x={next.w - G.padX}
-            y={G.chainY + 3.5}
+            y={G.headY + 3.5}
             textAnchor="end"
             className={T10}
           >{`+${next.hidden}`}</text>

@@ -81,7 +81,12 @@ export type PipelineToken =
   | 'committed'
   | 'ember'
   | 'drop'
-  | 'well';
+  | 'well'
+  | 'plate'
+  | 'cut'
+  | 'dot-waiting'
+  | 'dot-committed'
+  | 'dot-expired';
 
 export const tok = (name: PipelineToken) => `var(--pipeline-${name})`;
 
@@ -95,12 +100,14 @@ export function mixColor(a: string, b: string, t: number): string {
 }
 
 /**
- * The three materials of the canvas: a pool is a well (recessed below the surface, no stroke), a
- * mined block a tile (the elevated surface with a trace of jade, no outline at rest), and NEXT the
- * only dashed outline (`GHOST`, predicted).
+ * The materials of the canvas: a pool is a well (recessed below the surface), a mined block a solid
+ * plate of its own tone (no outline at rest, never faded), every transaction on it set in a cut of
+ * a second tone (2 px round each square and the cellbase, and only there), and NEXT the only dashed
+ * outline (`GHOST`, predicted).
  */
 export const WELL_FILL = tok('well');
-export const TILE_FILL = mixColor(tok('elevated'), tok('jade'), 0.07);
+export const PLATE_FILL = tok('plate');
+export const CUT_FILL = tok('cut');
 
 /** How many blocks behind the tip the age fade bottoms out. */
 const AGE_STEPS = 7;
@@ -111,6 +118,27 @@ export function ageOpacity(age: number): number {
     throw new Error(`pipeline: a block age is a count of blocks behind the tip, got ${age}`);
   }
   return 1 - (0.6 * Math.min(age, AGE_STEPS)) / AGE_STEPS;
+}
+
+/** A mark that steps back with its block's age: a square, the cellbase diamond, a proposal dot. */
+export type AgedMark = 'square' | 'cellbase' | 'dot';
+
+/** What an aged mark is mixed toward: the ground it is drawn on (a square sits in its cut). */
+const AGE_GROUND: Record<AgedMark, string> = {
+  square: CUT_FILL,
+  cellbase: CUT_FILL,
+  dot: PLATE_FILL,
+};
+
+/**
+ * The fill of a mark on a block `age` places behind the tip: its own colour mixed toward its
+ * ground, keeping `ageOpacity(age)` of itself. A mark is mixed, never made transparent (opacity
+ * would show the plate through a square and its cut); the plate itself and the words never fade.
+ */
+export function agedFill(mark: AgedMark, fill: string, age: number): string {
+  const ground = AGE_GROUND[mark];
+  if (!ground) throw new Error(`pipeline: an aged ${String(mark)} has no ground to fade toward`);
+  return mixColor(ground, fill, ageOpacity(age));
 }
 
 export const STAGE_BASE: Record<SquareStage, string> = {
@@ -158,16 +186,16 @@ export interface ChipPaint {
   stroke: string | null;
 }
 
-/** Proposal dot = the fate of one proposal short id, in the stage colours the tx squares use. */
+/**
+ * Proposal dot = the fate of one proposal short id, in the stage colours the tx squares use. The
+ * solid dots are tokens of their own, derived against the plate they stand on (≥ 3 : 1 for
+ * waiting and committed in both themes; the expired dot is the quiet one).
+ */
 export const CHIP_PAINT: Record<PipelineProposalState, ChipPaint> = {
   early: { fill: tok('proposed'), fillOpacity: 0.12, stroke: tok('gold') },
-  waiting: { fill: mixColor(tok('proposed'), 'white', 0.12), fillOpacity: 1, stroke: null },
-  committed: {
-    fill: mixColor(tok('surface'), tok('committed'), 0.85),
-    fillOpacity: 1,
-    stroke: null,
-  },
-  expired: { fill: mixColor(tok('surface'), tok('ink-dim'), 0.5), fillOpacity: 1, stroke: null },
+  waiting: { fill: tok('dot-waiting'), fillOpacity: 1, stroke: null },
+  committed: { fill: tok('dot-committed'), fillOpacity: 1, stroke: null },
+  expired: { fill: tok('dot-expired'), fillOpacity: 1, stroke: null },
 };
 
 export function chipPaint(state: PipelineProposalState): ChipPaint {
