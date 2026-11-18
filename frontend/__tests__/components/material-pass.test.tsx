@@ -214,10 +214,14 @@ describe('the rules in globals.css', () => {
     expect(comment[1]).toContain('display: flex');
     expect(comment[1]).toContain('align-items: baseline');
     expect(comment[1]).toContain('font-family: var(--font-voice)');
-    expect(comment[1]).toContain('font-size: 14px');
+    // re-pinned (readability R4): the voice at the section step, 17 px (was 14), in the reading
+    // ink (was the dim ink), so its 0.45 em x-height stands as tall as the 14 px body's
+    expect(comment[1]).toContain('font-size: 17px');
     expect(comment[1]).toContain('line-height: 1.55');
-    expect(comment[1]).toContain('color: var(--c-text-dim)');
+    expect(comment[1]).toContain('color: var(--c-text)');
     const hash = css.match(/\n\.comment::before\s*\{([^}]*)\}/)!;
+    // its `#` at the body step, 14 px (was 13), the ghost as it was
+    expect(hash[1]).toContain('font-size: 14px');
     expect(hash[1]).toContain("content: '#' / '';");
     expect(hash[1]).toContain('font-family: var(--font-mono)');
     expect(hash[1]).toContain('color: var(--c-text-ghost)');

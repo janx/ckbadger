@@ -8,10 +8,10 @@
 
 import { clipLabel } from '@/lib/shorten';
 import { SVG_TEXT } from '@/lib/chart-type';
-import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
+import { advancePx } from '@/lib/type-metrics';
 
-/** A gene caption's glyph (set at the tick size) at the advance Chromium was observed at: 6.4 px. */
-const CHAR_WIDTH = SVG_TEXT.tick * OBSERVED_ADVANCE_EM;
+/** A gene caption's glyph, set at the tick size. */
+const CHAR_WIDTH = advancePx(SVG_TEXT.tick);
 /** Gene names longer than this are shortened on the gel. */
 const CAPTION_CHARS = 14;
 /** The margin a turned caption keeps inside its head. */

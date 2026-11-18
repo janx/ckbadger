@@ -47,11 +47,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 ## Rules for the shared pieces
 
-- **Header search field**: the long placeholder `search block / tx / address / cell` (265.2 px at
-  13 px) only when the field's measured text box holds it whole, `search` otherwise, chosen
-  before paint (principle 4; a field 331.2 px wide from `md`: the header gives about 169 px at
-  768–1023, 368.6 px at 1024 with one network but less beside the network switcher, 460.8 px at
-  1280). The `/` key is drawn from `md`.
+- **Header search field**: the long placeholder `search block / tx / address / cell` (285.6 px at
+  the 14 px body step, `lib/type-metrics.ts`) only when the field's measured text box holds it
+  whole, `search` otherwise, chosen before paint (principle 4; a field 351.6 px wide from `md`:
+  the header gives about 169 px at 768–1023, 368.6 px at 1024 with one network but less beside the
+  network switcher, 460.8 px at 1280). The `/` key is drawn from `md`.
 - **Vitals strip** (every page, under the header): one wrapping row from `md` up, the same on
   every page. Below `md` the home page keeps the whole strip in three groups on their own lines —
   block number with the live mark, the epoch with its bar, `index / length` and the time left, the
@@ -60,8 +60,9 @@ The 640–767 band has one content width to design for. Below 640 the container 
   reader, and the status line's mode block says it). The mining figures and the epoch's position
   and time left are the home page's below `md` — a ruled exception to principle 2 (UI review
   2026-11-14, PA-14): with the 52 px header and the 26 px status line the three lines took 212 of
-  an 844 px first screen on every page. At 360 the line is 280.6 of 328 px; page content starts at
-  about y = 111 at 390 (53 px header, 42 px strip, its 16 px margin).
+  an 844 px first screen on every page. At 360 the line was 280.6 of 328 px at the 11 / 13 px
+  steps (readability R4 moved them to 12 / 14 px: about 8 % wider, re-measured at the gate); page
+  content starts at about y = 111 at 390 (53 px header, 42 px strip, its 16 px margin).
 - **Status line** (every page; `components/layout/status-line.tsx`): the terminal session's last
   row, fixed at the foot of the window, 26 px on the elevated ground under a 1 px line; `body`
   keeps 26 px of bottom padding so no page ends under it. From `md` up it is one row — the mode
@@ -130,7 +131,8 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 Every page is checked at 1280, 640 and 390 px before it ships: no horizontal page scroll, no
 sideways-scrolling header strip, no scaled-down visualization, no item missing from the narrow
-form, no text under 10 px, the first data row of a list inside the first phone screen. The audit
+form, no text under 12 px (readability R4: the meta step, `lib/type-scale.ts`; SVG text held to it
+by `lib/chart-type.ts` and its gate), the first data row of a list inside the first phone screen. The audit
 tooling (a Playwright script that measures page overflow, inner scrollers, clipped elements and
 page height, and cuts full-page screenshots into readable segments) is kept with the audit under
 `docs/superpowers/reviews/`.

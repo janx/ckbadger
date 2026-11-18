@@ -253,16 +253,18 @@ describe('VmLaneTimeline', () => {
     );
     expect(name.querySelectorAll('tspan')).toHaveLength(0);
     expect(name.getAttribute('x')).toBe('0');
-    expect(name.getAttribute('font-size')).toBe('11');
+    // re-pinned (readability R4): the label role is 12 px (was 11)
+    expect(name.getAttribute('font-size')).toBe('12');
     expect(name.getAttribute('fill')).toBe('var(--c-text-dim)');
     const nameY = Number(name.getAttribute('y'));
-    // Edition names (12.5 px) and the edition rules start under the name band.
+    // Edition names (the title role, 13.5 px since R4, was 12.5) and the edition rules start under
+    // the name band.
     const y = (text: string) =>
       Number(
         [...svg.querySelectorAll('text')].find((t) => t.textContent === text)!.getAttribute('y')
       );
     for (const label of ['genesis', 'Mirana', 'Meepo'])
-      expect(y(label) - 12.5).toBeGreaterThanOrEqual(nameY + 8);
+      expect(y(label) - 13.5).toBeGreaterThanOrEqual(nameY + 8);
     for (const rule of Array.from(svg.querySelectorAll('line[data-edition]')))
       expect(Number(rule.getAttribute('y1'))).toBeGreaterThanOrEqual(nameY + 8);
   });
@@ -287,11 +289,12 @@ describe('VmLaneTimeline', () => {
       'which VM runs a script, over time',
       'dots: when each known script version was deployed',
     ]);
-    // 11 px mono advances ~0.64 em: each line fits the 358 px plot.
-    for (const line of lines) expect(line.textContent!.length * 11 * 0.64).toBeLessThanOrEqual(358);
+    // re-pinned (readability R4, the one advance model): 12 px at 0.6 em (was 11 px at an
+    // observed 0.64 em): each line fits the 358 px plot.
+    for (const line of lines) expect(line.textContent!.length * 12 * 0.6).toBeLessThanOrEqual(358);
     const lastY = Number(name.getAttribute('y')) + Number(lines[1].getAttribute('dy'));
     const genesis = [...svg.querySelectorAll('text')].find((t) => t.textContent === 'genesis')!;
-    expect(Number(genesis.getAttribute('y')) - 12.5).toBeGreaterThanOrEqual(lastY + 8);
+    expect(Number(genesis.getAttribute('y')) - 13.5).toBeGreaterThanOrEqual(lastY + 8);
   });
 
   it.each([358, 1200])(

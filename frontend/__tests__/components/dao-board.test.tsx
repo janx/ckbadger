@@ -1201,7 +1201,10 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
 
   it('writes the group names and shares inside a 28 px concentration bar, with no legend row (R15)', () => {
     stubCalculator();
-    stubChartWidth(1408);
+    // re-pinned (readability R4): the words are text-small, 13 px since R4 (7.8 px a glyph, was
+    // 7 px snapped at 12): "largest 8.3%"'s 13 characters and 20 px padding need 121.4 px, 8.3 %
+    // of a 1,463 px bar (was 1,338), so the bar is drawn 1,480 px wide here (was 1,408)
+    stubChartWidth(1480);
     const many = {
       ...evidence,
       phase0: { capacity: '10000', count: 20000 },

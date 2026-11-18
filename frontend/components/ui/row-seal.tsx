@@ -42,18 +42,21 @@ export const ROW_SEAL: Readonly<Record<SealKind, RowSealMeasure>> = {
   script: measure(28, 21),
 };
 
-/** The overhang of each stone as a class (each a literal, for Tailwind): 4, 3, 6, 5 px. */
+/**
+ * The overhang of each stone as a class (each a literal, for Tailwind): 3, 2, 5, 4 px on the 20 px
+ * row line (lib/type-metrics.ts ROW_LINE_PX; row-seal.test holds each to `measure`'s arithmetic).
+ */
 const OVERHANG: Record<SealKind, string> = {
-  block: '-my-[4px]',
-  tx: '-my-[3px]',
-  cell: '-my-[6px]',
-  script: '-my-[5px]',
+  block: '-my-[3px]',
+  tx: '-my-[2px]',
+  cell: '-my-[5px]',
+  script: '-my-[4px]',
 };
 
 /**
  * Which seal a row leads with: the stone of an id, in its `state` (pressed when not given; a
  * consumed cell in the dead ink, a pool transaction unpressed). `overhang`: the seal stands on the
- * row's one 18 px key line and overhangs it above and below, inside the cell's padding, so a
+ * row's one key line (the row line) and overhangs it above and below, inside the cell's padding, so a
  * one-line table row keeps its height; a row of two lines or more holds the seal without it.
  */
 export interface RowSealProps {

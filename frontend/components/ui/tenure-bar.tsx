@@ -4,7 +4,7 @@ import { CLASS_COLORS, EXPIRED_COLOR } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { SVG_TEXT } from '@/lib/chart-type';
-import { advancePx, withAllowance } from '@/lib/type-metrics';
+import { advancePx } from '@/lib/type-metrics';
 
 export interface TenurePeriod {
   label: string;
@@ -27,14 +27,12 @@ export interface TenureBarProps {
 const DEFAULT_W = 900;
 const PAD = 20;
 const DAY = 86_400_000;
-/** The margin a label's fit keeps: 0.1 px a glyph over the face's advance. */
-const FIT_ALLOWANCE = 0.1;
 /**
- * Advance of one monospace character at the label sizes (the label size, 11 px, for the period
- * names and the now mark; the note size, 10.5 px, for the dates), for fitting labels: 6.7 and 6.4.
+ * Advance of one character at the label sizes, for fitting labels: the label size for the period
+ * names and the now mark, the note size for the dates.
  */
-export const CHAR_11 = withAllowance(advancePx(SVG_TEXT.label), FIT_ALLOWANCE);
-export const CHAR_10 = withAllowance(advancePx(SVG_TEXT.note), FIT_ALLOWANCE);
+const CHAR_11 = advancePx(SVG_TEXT.label);
+const CHAR_10 = advancePx(SVG_TEXT.note);
 
 /**
  * F2 identities (round 2, visual pass): the bar draws in its own measured width, so 1 unit is

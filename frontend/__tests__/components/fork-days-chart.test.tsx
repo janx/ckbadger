@@ -81,7 +81,8 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     const name = svg.querySelector('[data-role="chart-name"]')!;
     expect(name).toHaveTextContent('uncles on chain, per daythis node’s branch switches');
     for (const text of Array.from(name.querySelectorAll('text'))) {
-      expect(text).toHaveAttribute('font-size', '11');
+      // re-pinned (readability R4): the label role is 12 px (was 11)
+      expect(text).toHaveAttribute('font-size', '12');
       expect(Number(text.getAttribute('y'))).toBeLessThanOrEqual(20);
     }
     expect(name.querySelectorAll('rect')).toHaveLength(2);
@@ -180,7 +181,7 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
   });
 
   describe('at phone width (visual pass, 390)', () => {
-    it('draws 1:1 in its box so the axis text stays 11 px, the key on two lines', () => {
+    it('draws 1:1 in its box so the axis text stays 12 px, the key on two lines', () => {
       stubChartWidth(358);
       const { container } = render(<Chart days={days} />);
       const svg = container.querySelector('svg')!;
@@ -189,9 +190,9 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
       expect(h).toBeGreaterThanOrEqual(280);
       for (const bar of container.querySelectorAll('[data-uncles]'))
         expect(Number(bar.getAttribute('width'))).toBeGreaterThan(50);
-      // each key's words end inside the column (6.6 px a character at 11 px)
+      // each key's words end inside the column (7.2 px a character at 12 px; re-pinned from 6.6)
       for (const text of Array.from(svg.querySelectorAll('[data-role="chart-name"] text')))
-        expect(Number(text.getAttribute('x')) + text.textContent!.length * 6.6).toBeLessThan(358);
+        expect(Number(text.getAttribute('x')) + text.textContent!.length * 7.2).toBeLessThan(358);
     });
   });
 });

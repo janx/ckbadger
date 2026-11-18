@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { hexRowBytes, hexRowWidth, mapSegmentMinWidth } from '@/lib/cell-byte-layout';
+import { charPx, fontPx, textPx } from '@/lib/type-metrics';
 
 describe('hexRowBytes', () => {
   // Responsive review A#11: at 390 the 24-byte rows (755 px) scrolled inside a 358 px box.
@@ -15,9 +16,11 @@ describe('hexRowBytes', () => {
         const n = hexRowBytes(box, digits);
         expect(hexRowWidth(n, digits) + 34).toBeLessThanOrEqual(box);
       }
-    // A five-digit offset is 12 px wider, so 24 bytes need more room.
-    expect(hexRowBytes(790, 4)).toBe(24);
-    expect(hexRowBytes(790, 5)).toBe(16);
+    // A five-digit offset is 8 px wider (65 and 73 px at the dump's 13 px: re-pinned, readability
+    // R4, from 62 and 74 written by hand at 12 px), so 24 bytes need more room: a 24-byte row is
+    // 799.6 px with four digits and 807.6 with five, and the box adds 34.
+    expect(hexRowBytes(836, 4)).toBe(24);
+    expect(hexRowBytes(836, 5)).toBe(16);
   });
 
   it('keeps 8 bytes, the smallest row, in a box too narrow even for that', () => {
@@ -28,14 +31,23 @@ describe('hexRowBytes', () => {
 describe('mapSegmentMinWidth', () => {
   // Responsive review A#10: "8 | lock 53 | type 34 | 2" drew its 2-byte data part as an 8 px
   // sliver round its "2", cut at the box edge.
+  // re-pinned (readability F3): the label's own advance, text-meta at 12 px (7.2), where it was
+  // the stale 6.3 of a 10.5 px label
   it('keeps a part wide enough for its label inside its 4 px padding', () => {
-    expect(mapSegmentMinWidth('2', 8)).toBeCloseTo(6.3 + 8, 6);
-    expect(mapSegmentMinWidth('lock 53', 8)).toBeCloseTo(7 * 6.3 + 8, 6);
+    expect(mapSegmentMinWidth('2', 8)).toBeCloseTo(7.2 + 8, 6);
+    expect(mapSegmentMinWidth('lock 53', 8)).toBeCloseTo(7 * 7.2 + 8, 6);
   });
 
   it('keeps the 28 px floor of a big cell, whose small parts read by count only', () => {
     expect(mapSegmentMinWidth('8', 28)).toBe(28);
-    expect(mapSegmentMinWidth('data 100,312', 28)).toBeCloseTo(12 * 6.3 + 8, 6);
+    expect(mapSegmentMinWidth('data 100,312', 28)).toBeCloseTo(12 * 7.2 + 8, 6);
+  });
+
+  // Readability F3 (the defect step 1 found): the budget counted 6.3 px a glyph, measured for the
+  // 10.5 px label the map had before the type scale, while the label is set at text-meta.
+  it('budgets a label at the advance of the step it is set in, text-meta', () => {
+    expect(mapSegmentMinWidth('lock 53', 8)).toBe(textPx(7, fontPx('meta')) + 8);
+    expect(mapSegmentMinWidth('data 100,312', 28)).toBe(12 * charPx('meta') + 8);
   });
 
   it('refuses a part with no label', () => {

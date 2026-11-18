@@ -16,7 +16,7 @@ import { usePinWord } from '@/hooks/usePinWord';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
 import { SVG_TEXT, centreShift } from '@/lib/chart-type';
-import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
+import { textPx } from '@/lib/type-metrics';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -38,10 +38,7 @@ const AXIS_H = 18;
 export const MULTIPLE_H = 72;
 const MULTIPLE_NAME_BAND = 18;
 const TICK_GAP_PX = 56;
-/**
- * The plots' names and time ticks at the label size, their end values at the reading size
- * (lib/chart-type.ts), measured at the advance Chromium was observed to draw them at (0.64 em).
- */
+/** The plots' names and time ticks at the label size, their end values at the reading size (lib/chart-type.ts). */
 const NAME_PX = SVG_TEXT.label;
 const END_PX = SVG_TEXT.reading;
 
@@ -141,7 +138,7 @@ function ReadingCkb({ shannons, signed = false }: { shannons: bigint; signed?: b
   );
 }
 
-const textWidth = (chars: number, px: number) => chars * px * OBSERVED_ADVANCE_EM;
+const textWidth = textPx;
 
 /** Ticks on the time axis, thinned so labels keep `TICK_GAP_PX` apart. */
 function timeTicks(days: readonly Day[], x: (i: number) => number) {

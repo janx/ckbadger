@@ -24,7 +24,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -159,8 +159,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
     `${scriptClassLabel(row.class)} ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`;
   const fits = (text: string, i: number) =>
     width !== null &&
-    (width * spans[i].width) / 100 >=
-      text.length * snappedAdvancePx(SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
+    (width * spans[i].width) / 100 >= textPx(text.length, SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
   return (
     <div
       ref={ref}

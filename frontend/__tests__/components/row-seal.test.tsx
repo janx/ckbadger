@@ -23,14 +23,15 @@ describe('RowSeal by kind (the seals by kind)', () => {
   });
 
   it('measures each stone: block 26 × 26, transaction 24 high and 48.5 wide, cell 30 × 30, script 28 high and 21 wide, the gap 8', () => {
-    expect(ROW_LINE_PX).toBe(18);
+    // re-pinned (readability R4, F3 step 2): the row line 18 → 20 px, so each overhang is 1 px less
+    expect(ROW_LINE_PX).toBe(20);
     expect(ROW_SEAL).toEqual({
-      block: { height: 26, width: 26, gap: 8, footprint: 34, overhang: 4 },
-      tx: { height: 24, width: 48.5, gap: 8, footprint: 56.5, overhang: 3 },
-      cell: { height: 30, width: 30, gap: 8, footprint: 38, overhang: 6 },
-      script: { height: 28, width: 21, gap: 8, footprint: 29, overhang: 5 },
+      block: { height: 26, width: 26, gap: 8, footprint: 34, overhang: 3 },
+      tx: { height: 24, width: 48.5, gap: 8, footprint: 56.5, overhang: 2 },
+      cell: { height: 30, width: 30, gap: 8, footprint: 38, overhang: 5 },
+      script: { height: 28, width: 21, gap: 8, footprint: 29, overhang: 4 },
     });
-    // the arithmetic: footprint = width + gap, overhang = (height − the 18 px line) / 2
+    // the arithmetic: footprint = width + gap, overhang = (height − the 20 px line) / 2
     for (const kind of KINDS) {
       const m = ROW_SEAL[kind];
       expect(m.footprint).toBe(m.width + m.gap);
@@ -67,12 +68,12 @@ describe('RowSeal by kind (the seals by kind)', () => {
     expect(container.firstElementChild).toHaveClass('mr-2');
   });
 
-  it('overhangs a one-line row by (height − 18) / 2 above and below only when asked', () => {
+  it('overhangs a one-line row by (height − the row line) / 2 above and below only when asked', () => {
     const classes: Record<SealKind, string> = {
-      block: '-my-[4px]',
-      tx: '-my-[3px]',
-      cell: '-my-[6px]',
-      script: '-my-[5px]',
+      block: '-my-[3px]',
+      tx: '-my-[2px]',
+      cell: '-my-[5px]',
+      script: '-my-[4px]',
     };
     for (const kind of KINDS) {
       expect(classes[kind]).toBe(`-my-[${ROW_SEAL[kind].overhang}px]`);

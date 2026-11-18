@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { SVG_TEXT, SVG_TEXT_FLOOR } from '@/lib/chart-type';
 
 /**
  * Gate for SVG text sizes (readability plan 2026-11-18, lane F3): the type gate
@@ -23,7 +24,7 @@ const SVG_TEXT_TAGS = new Set(['svg', 'g', 'text', 'tspan', 'textPath']);
 /** Sites that keep a size of their own, as `path#expression` → why. */
 const ALLOWLIST: Record<string, string> = {
   'components/home/mini-chart.tsx#fontSize={f1(size)}':
-    'the sparkline: eighth-block glyphs drawn as marks, sized so one glyph is one slot wide, not text set at a size',
+    'the sparkline: eighth-block glyphs (▁…█) drawn as bars, one glyph a slot wide, so under 12 px where the slots are narrow (a phone, a long range); they are marks, not words to read, and the bucket values are in the readout',
 };
 
 interface Offence {
@@ -154,6 +155,16 @@ describe('the SVG size gate finds what it must, and only that', () => {
       { line: 11, what: 'fontSize={SVG_TEXT.label + 1}' },
       { line: 11, what: 'fontSize: 9' },
     ]);
+  });
+});
+
+describe('the floor (readability R4): no SVG text under 12 px', () => {
+  it('holds every role of the table at or above the floor, the meta step', () => {
+    expect(SVG_TEXT_FLOOR).toBe(12);
+    expect(
+      Object.entries(SVG_TEXT).filter(([, px]) => px < SVG_TEXT_FLOOR),
+      'roles under the floor'
+    ).toEqual([]);
   });
 });
 

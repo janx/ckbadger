@@ -123,7 +123,10 @@ const DAO_GROUPS = [
 describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)', (theme) => {
   it('reads every group of the DAO concentration bar at 4.5:1 or more', () => {
     inTheme(theme);
-    stubChartWidth(1408);
+    // re-pinned (readability R4): the words are text-small, 13 px since R4 (7.8 px a glyph, was
+    // 7 px snapped at 12): "largest 8.3%"'s 13 characters and 20 px padding need 121.4 px, 8.3 %
+    // of a 1,463 px bar (was 1,338), so the bar is drawn 1,480 px wide here (was 1,408)
+    stubChartWidth(1480);
     render(
       <ConcentrationBar
         label="Share of deposits"

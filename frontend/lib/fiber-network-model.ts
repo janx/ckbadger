@@ -1,7 +1,7 @@
 import type { FiberNetwork, FiberPair, FiberParty } from '@/lib/api';
 import { connectedComponents, kamadaKawaiLayout, type LayoutPoint } from '@/lib/graph-layout';
 import { SVG_TEXT } from '@/lib/chart-type';
-import { snappedAdvancePx } from '@/lib/type-metrics';
+import { textPx } from '@/lib/type-metrics';
 
 /** A party's label: its last six characters, at the label size, under a 3 px halo. */
 const LABEL_CHARS = 6;
@@ -22,10 +22,10 @@ export const FIBER_GRAPH = {
   /** From this canvas width the islands keep the right strip; narrower, they sink under (R4). */
   sideFrom: 720,
   /**
-   * Half of a six-character label at the label size (7 px a character, as Chromium snaps 11 px)
-   * with its 3 px halo, rounded up: 23.
+   * Half of a six-character label at the label size (0.6 em a character) with its 3 px halo,
+   * rounded up: 24 at 12 px.
    */
-  labelHalf: Math.ceil((LABEL_CHARS * snappedAdvancePx(SVG_TEXT.label) + LABEL_HALO) / 2),
+  labelHalf: Math.ceil((textPx(LABEL_CHARS, SVG_TEXT.label) + LABEL_HALO) / 2),
   /** A label's baseline under its circle; its descenders reach 4 px further. */
   labelDrop: 14,
 } as const;

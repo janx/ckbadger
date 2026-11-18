@@ -15,10 +15,11 @@ import tailwindConfig from '@/tailwind.config';
  */
 
 /** R1, smallest first: name, font size, line height. */
+/** Readability R4 (2026-11-18, lane F3) moved the three reading sizes from 11 / 12 / 13 px. */
 const R1 = [
-  ['meta', '11px', '1.5'],
-  ['small', '12px', '1.5'],
-  ['body', '13px', '1.6'],
+  ['meta', '12px', '1.5'],
+  ['small', '13px', '1.5'],
+  ['body', '14px', '1.6'],
   ['section', '17px', '1.3'],
   ['hero', '22px', '1.15'],
   ['index', '26px', '1.2'],
@@ -50,7 +51,6 @@ const ALLOWLIST: Record<string, string> = {};
  * text (tier-2 prose was 14 px there, outside the scale and larger than tier 1's 13 px body).
  */
 const CSS_ALLOWLIST: Record<string, string> = {
-  '.comment 14px': 'the voice (Courier Prime): a comment line at 14 px',
   '.comment-lg 18px': 'the voice: the 404 verse at 18 px on a phone',
   '.comment-lg 21px': 'the voice: the 404 verse at 21 px from 640 px',
   '.comment-lg::before 16px': 'the 404 verse’s # at 16 px, sized with the verse it leads',
@@ -293,7 +293,7 @@ describe('the stylesheet and eyebrow gates find what they must, and only that (R
   it('flags a declared font size off the scale, never a step', () => {
     const css = [
       '.prose-tier2 p {',
-      '  font-size: 14px;',
+      '  font-size: 15px;',
       '  line-height: 1.7;',
       '}',
       'body { font-size: 13px; }',
@@ -306,7 +306,7 @@ describe('the stylesheet and eyebrow gates find what they must, and only that (R
       '}',
     ].join('\n');
     expect(offScaleCss(css)).toEqual([
-      { line: 2, what: '.prose-tier2 p 14px' },
+      { line: 2, what: '.prose-tier2 p 15px' },
       { line: 6, what: '.x 0.85em' },
       { line: 10, what: '.comment-lg 21px' },
     ]);
@@ -345,12 +345,12 @@ describe('no font size outside the scale in the stylesheet, one size for every e
     expect(cssOffences.filter((o) => !(o in CSS_ALLOWLIST))).toEqual([]);
   });
 
-  it('sets tier-2 prose at the body step, 13 px, on its 1.7 line and its measure', () => {
+  it('sets tier-2 prose at the body step, 14 px, on its 1.7 line and its measure', () => {
     const css = readFileSync(join(root, CSS_FILE), 'utf8');
     const p = css.match(/\.prose-tier2 p\s*\{([^}]*)\}/)![1];
-    expect(p).toContain('font-size: 13px;');
+    expect(p).toContain('font-size: 14px;');
     expect(p).toContain('line-height: 1.7;');
-    expect(p).toContain('max-width: 64ch;');
+    expect(p).toContain('max-width: 72ch;');
   });
 
   it('sets every eyebrow at text-meta', () => {

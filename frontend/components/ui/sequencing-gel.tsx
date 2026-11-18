@@ -22,29 +22,23 @@ import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
 import { SVG_TEXT } from '@/lib/chart-type';
-import { advancePx, withAllowance } from '@/lib/type-metrics';
+import { advancePx } from '@/lib/type-metrics';
 
 /** The side-by-side map: lanes from LX, brackets at GX, the gene columns from TX. */
 const WIDE = { LX: 38, LANE: 15, TOP: 44, STEP: 3.3, LABEL_GAP: 15 } as const;
 const GX = WIDE.LX + 16 * WIDE.LANE + 10;
 const TX = GX + 16;
-/**
- * The gene columns' allowances: their glyphs were measured at 0.636 em in Chromium, 0.44 px a glyph
- * over the face's 0.6 em at the head size (12 px) and 0.42 px at the value size (11.5 px).
- */
-const HEAD_MEASURED_ALLOWANCE = 0.44;
-const VALUE_MEASURED_ALLOWANCE = 0.42;
 /** One character of a gene's name, arrow and value (the head size) and of its bytes and raw (the value size). */
-export const CHAR_12 = withAllowance(advancePx(SVG_TEXT.head), HEAD_MEASURED_ALLOWANCE);
-export const CHAR_115 = withAllowance(advancePx(SVG_TEXT.value), VALUE_MEASURED_ALLOWANCE);
-// A value that is longer is a label cut to this budget. 27 is the most the wide gel holds at the
+const CHAR_12 = advancePx(SVG_TEXT.head);
+const CHAR_115 = advancePx(SVG_TEXT.value);
+// A value that is longer is a label cut to this budget. 26 is the most the wide gel holds at the
 // DNA plate at 1280 (896 px) for the flagship DNA (Nervape): its columns before the value end at
-// 684.28 px (the gene columns from 304; the longest name, "prev.type", 9 × 7.64 + 10; the longest
-// bytes · rule, "bytes 51–52 · nervapeNote", 25 × 7.32 + 12; the raw at the tight size, 11 × 7.32
-// + 8; the arrow's 16; the 2 px end), and 896 − 684.28 = 211.72 px holds 27 characters (206.28)
-// but not 28 (213.92). An inscription, "inscription a94617…79e0i0" (25, its txid at the tight size,
-// U-09), is never cut.
-const VALUE_MAX = 27;
+// 692.2 px (the gene columns from 304; the longest name, "prev.type", 9 × 7.8 + 10; the longest
+// bytes · rule, "bytes 51–52 · nervapeNote", 25 × 7.5 + 12; the raw at the tight size, 11 × 7.5
+// + 8; the arrow's 16; the 2 px end), and 896 − 692.2 = 203.8 px holds 26 characters (202.8) but
+// not 27 (210.6). It was 27 when the gene text was 12 and 11.5 px, measured at 0.636 em. An
+// inscription, "inscription a94617…79e0i0" (25, its txid at the tight size, U-09), is never cut.
+const VALUE_MAX = 26;
 const NAME_MAX = 11;
 /** The stacked map: a ruler column, then lanes of up to 20 px and never under 14. */
 const NARROW = { RULER: 34, MAX_LANE: 20, MIN_LANE: 14, TOP: 26, STEP: 7 } as const;

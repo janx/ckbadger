@@ -4,7 +4,7 @@
  * at full size; a narrower box shows fewer bytes a row, never smaller ones.
  */
 
-import { charPx, withAllowance } from '@/lib/type-metrics';
+import { charPx, fontPx, textPx } from '@/lib/type-metrics';
 
 /** The advance of one glyph of the dump, set at the small step (`text-small`). */
 const DUMP_CHAR_PX = charPx('small');
@@ -14,8 +14,15 @@ const HEX_CELL_PX = 2 * DUMP_CHAR_PX + 2;
 const HEX_GAP_PX = 4;
 /** The ASCII column's margin, rule and padding (`ml-[18px] border-l pl-3.5`). */
 const ASCII_INSET_PX = 18 + 1 + 14;
-/** The offset column: `w-[62px]` for 0x0000, `w-[74px]` for 0x00000. */
-const OFFSET_PX = { 4: 62, 5: 74 } as const;
+/**
+ * The offset column: its text ("0x0000", "0x00000") at the dump's size and an 18 px gap before the
+ * hex bytes, as the ASCII column keeps after them: 65 and 73 px at 13 px (62 and 74 when the dump
+ * was 12 px and the widths were written by hand).
+ */
+export const OFFSET_PX = {
+  4: Math.ceil(textPx(2 + 4, fontPx('small'))) + 18,
+  5: Math.ceil(textPx(2 + 5, fontPx('small'))) + 18,
+} as const;
 /** The dump box's padding and border (`px-4`, 1 px border) around its rows. */
 export const HEX_BOX_INSET_PX = 2 * 16 + 2;
 /** Row lengths the dump uses, widest first; each divides the 24-byte excerpt alignment. */
@@ -39,14 +46,7 @@ export function hexRowBytes(boxWidth: number, digits: 4 | 5): HexRowBytes {
   return ROW_BYTES.find((n) => hexRowWidth(n, digits) + HEX_BOX_INSET_PX <= boxWidth) ?? 8;
 }
 
-/**
- * The capacity map labels' allowance: the advance below was measured for the 10.5 px label the map
- * had before the type scale (6.3 px a glyph), and the label is `text-meta` (11 px, 6.6) since; the
- * budget kept its number, so it counts 0.3 px a glyph under the label it holds.
- */
-const MAP_LABEL_ALLOWANCE = -0.3;
-/** The advance a capacity-map label's minimum width is measured at, and the label's side padding. */
-export const MAP_CHAR_PX = withAllowance(charPx('meta'), MAP_LABEL_ALLOWANCE);
+/** A capacity-map label's side padding; the label is set at the meta step (`text-meta`). */
 export const MAP_PAD_PX = 4;
 
 /**
@@ -58,5 +58,5 @@ export const MAP_PAD_PX = 4;
  */
 export function mapSegmentMinWidth(label: string, floor: number): number {
   if (!label) throw new Error('capacity map part has no label');
-  return Math.max(floor, label.length * MAP_CHAR_PX + 2 * MAP_PAD_PX);
+  return Math.max(floor, textPx(label.length, fontPx('meta')) + 2 * MAP_PAD_PX);
 }

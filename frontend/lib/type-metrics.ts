@@ -12,23 +12,27 @@ import { TYPE_SCALE, type TypeStep } from './type-scale';
  * The face is JetBrains Mono at every weight and in italic (app/globals.css): monospaced, every
  * glyph 600 units wide on a 1000-unit em (hhea.advanceWidthMax and OS/2.xAvgCharWidth, with
  * post.isFixedPitch set). `__tests__/lib/type-metrics.test.ts` reads those from the five
- * `public/fonts/jetbrains-mono-*.woff2` files the site serves.
+ * `public/fonts/jetbrains-mono-*.woff2` files the site serves. One model of the advance: in the
+ * Chrome the owner reads with (DPR 1 and 2), a glyph advances exactly 0.6 em at every size from 10
+ * to 17 px, in HTML text and in SVG text, at 400 and 600 (the readability review's
+ * `lanes/checks/advance.cjs`): no snapping to whole pixels, so no budget counts a glyph wider.
  */
 
-/** JetBrains Mono's advance in font units, and its units per em. */
+/** JetBrains Mono's advance and descender in font units, and its units per em. */
 const ADVANCE_UNITS = 600;
+const DESCENT_UNITS = 300;
 const UNITS_PER_EM = 1000;
 
 /** JetBrains Mono's advance as a fraction of the size: every glyph 0.6 em wide. */
 export const MONO_ADVANCE_EM = ADVANCE_UNITS / UNITS_PER_EM;
 
-/**
- * The advance Chromium was observed to draw the figures' small SVG text at (lane D, 2026-10: 7 px
- * a glyph at 11 px, as its snapping to whole pixels gives), as an em: the face's 0.6 and 0.04 more.
- * The figures that keep their labels apart by an estimate (the DAO history's names, the VM lanes'
- * plot name, the fork tree's miner, the allele gel's tags) measure at it.
- */
-export const OBSERVED_ADVANCE_EM = MONO_ADVANCE_EM + 0.04;
+/** JetBrains Mono's descender as a fraction of the size: 0.3 em under the baseline (hhea). */
+export const MONO_DESCENT_EM = DESCENT_UNITS / UNITS_PER_EM;
+
+/** How far a line of text at `px` reaches under its baseline: its descent, 0.3 em (3.6 at 12 px). */
+export function descentPx(px: number): number {
+  return (px * DESCENT_UNITS) / UNITS_PER_EM;
+}
 
 /** The font size of a step of the type scale, px. */
 export function fontPx(step: TypeStep): number {
@@ -55,18 +59,11 @@ export function charPx(step: TypeStep): number {
 }
 
 /**
- * A glyph's advance where the browser may snap it to whole pixels: Chromium draws JetBrains Mono
- * at 11 and 12 px on a 7 px advance and at 13 px on 8; a browser that does not snap uses 0.6 em.
- * A label that must fit (a segment's words, an icicle box's) is measured at whichever is wider.
+ * The line of a step: its size times its line height (18 at meta, 19.5 at small, 22.4 at body), as
+ * one product over a hundred so it comes out as the nearest double (14 × 1.6 is 22.400000000000002).
  */
-export function snappedAdvancePx(px: number): number {
-  const advance = advancePx(px);
-  return Math.max(Math.round(advance), advance);
-}
-
-/** The line of a step: its size times its line height (16.5 at meta, 18 at small, 20.8 at body). */
 export function lineHeightPx(step: TypeStep): number {
-  return fontPx(step) * parseFloat(TYPE_SCALE[step][1]);
+  return (fontPx(step) * Math.round(parseFloat(TYPE_SCALE[step][1]) * 100)) / 100;
 }
 
 /**
@@ -92,12 +89,11 @@ export function tightLinePx(px: number): number {
 export const LABEL_LINE_PX = tightLinePx(fontPx('meta'));
 
 /**
- * A budget and the allowance a layout keeps on top of it (a measured advance wider than 0.6 em, a
- * margin that keeps labels apart, the spare of a column), kept to the hundredth of a pixel the
- * allowances are written in: in binary floating point 6.6 + 0.1 is 6.699999999999999.
+ * A sum of widths to the hundredth of a pixel the budgets are written in: in binary floating point
+ * 56.5 + 132.6 + 16 can land a hair over 205.1.
  */
-export function withAllowance(px: number, allowance: number): number {
-  return Math.round((px + allowance) * 100) / 100;
+function toHundredth(px: number): number {
+  return Math.round(px * 100) / 100;
 }
 
 /**
@@ -107,5 +103,5 @@ export function withAllowance(px: number, allowance: number): number {
  * column's comment records what it holds and why it keeps any spare.
  */
 export function columnPx(content: number, spare = 0): number {
-  return Math.ceil(withAllowance(content, 0)) + spare;
+  return Math.ceil(toHundredth(content)) + spare;
 }

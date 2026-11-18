@@ -197,7 +197,9 @@ describe('code cell page · visual pass', () => {
     view();
     const data = await screen.findByLabelText('CellData byte map');
     const offset = within(data).getByText('0x00000');
-    expect(offset).toHaveClass('w-[74px]');
+    // its text at the dump's 13 px and an 18 px gap, 73 px, where the 4-digit column is 65
+    // (re-pinned, readability R4: the widths were w-[74px] and w-[62px], written by hand at 12 px)
+    expect(offset).toHaveStyle({ width: '73px' });
   });
 
   it('shows the epoch the code cell was created in (SC-C9)', async () => {

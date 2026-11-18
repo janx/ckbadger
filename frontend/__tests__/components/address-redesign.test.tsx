@@ -260,11 +260,11 @@ describe('Address v3 components', () => {
           `Cell seal ${cell.txHash.slice(0, 10)}:${cell.outputIndex}, ${CLASSES[i]}, 1,000.00000000 CKB`
         );
         // first in the first column, before the out point (still the row's link), and 30 px over
-        // the 18 px line: 6 px above and below
+        // the 20 px line: 5 px above and below (re-pinned, readability R4: 6 px over 18)
         const first = row.querySelector('td')!;
         expect(first.firstElementChild).toHaveClass('flex', 'items-start');
         expect(first.firstElementChild?.firstElementChild).toBe(seal);
-        expect(seal).toHaveClass('-my-[6px]');
+        expect(seal).toHaveClass('-my-[5px]');
         const outPoint = within(first).getByRole('link');
         expect(outPoint).toHaveAttribute(
           'href',
@@ -290,7 +290,7 @@ describe('Address v3 components', () => {
           const seal = expectOneRowSeal(row, addressCellSealId(cell));
           expect(row.firstElementChild).toHaveAttribute('data-part', 'mark');
           expect(row.firstElementChild).toContainElement(seal);
-          expect(seal).not.toHaveClass('-my-[6px]');
+          expect(seal).not.toHaveClass('-my-[5px]');
           // the head line is the out point alone, the seal in its own column
           const lines = phoneLines(row);
           // U-09 (re-pinned): the phone row's out point at the tight size

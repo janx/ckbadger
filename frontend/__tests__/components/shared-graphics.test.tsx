@@ -288,15 +288,16 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     const label = (key: string) => container.querySelector(`[data-label="${key}"]`);
     expect(label('total')).toHaveTextContent('secondary issuance since genesis 100 CKB');
     expect(label('total')!.getAttribute('y')).toBe('29');
-    // 119 px holds "10.00%" but not "miners 10.00%" at 13 px
+    // 119 px holds "10.00%" but not "miners 10.00%" at 14 px (the reading role, the body step)
     expect(label('m')!.textContent).toBe('10.00%');
     expect(label('c')!.textContent).toBe('depositors 20.00%');
     expect(label('b')!.textContent).toBe('burnt 70.00% · no cell can ever claim it');
     // the note is in the box's one ink, no dim ink on a fill (re-pinned on purpose)
     expect(label('b')!.querySelector('[data-part="note"]')!.getAttribute('class')).toBeNull();
-    // the 32 px row reads at 11 px: "paid out 50.0%" fits 118 px, "still owed 50.0%" does not
+    // the 32 px row reads at the label role, 12 px since R4 (re-pinned, was 11): "paid out 50.0%"
+    // (14 × 7.2 + 16 = 116.8) fits 118 px, "still owed 50.0%" (131.2) does not
     expect(label('p')!.textContent).toBe('paid out 50.0%');
-    expect(label('p')).toHaveAttribute('font-size', '11');
+    expect(label('p')).toHaveAttribute('font-size', '12');
     expect(label('o')!.textContent).toBe('50.0%');
     // ink: the ink each fill calls for (inkOnFill, re-pinned on purpose: the dark ink was the page
     // ground picked by hand): by night the well on the light text fill, the bright ink on the slate
@@ -376,7 +377,10 @@ describe('ConcentrationBar with the group names inside its segments (hierarchy v
   };
 
   it('draws a 28 px bar with each name and share inside its segment, and no legend row', () => {
-    const { container } = bar(1408);
+    // re-pinned (readability R4): the words are text-small, 13 px since R4 (7.8 px a glyph, was
+    // 7 px snapped at 12): "largest 8.3%"'s 13 characters and 20 px padding need 121.4 px, 8.3 %
+    // of a 1,463 px bar (was 1,338), so the bar is drawn 1,480 px wide here (was 1,408)
+    const { container } = bar(1480);
     const img = screen.getByRole('img', { name: /^Share of deposits/ });
     expect(img).toHaveClass('h-[28px]');
     const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];

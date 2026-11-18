@@ -7,7 +7,7 @@ import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
 import { percentOf } from '@/lib/format-unit';
-import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 export interface ConcentrationGroup {
   label: string;
@@ -62,7 +62,7 @@ export function ConcentrationBar({
     i === 0 ? `${g.label} ${share(g)}` : `${g.label} · ${share(g)}`;
   const fits = (text: string, i: number) =>
     width !== null &&
-    (width * spans[i].width) / 100 >= text.length * snappedAdvancePx(LABEL_PX) + 2 * LABEL_PAD;
+    (width * spans[i].width) / 100 >= textPx(text.length, LABEL_PX) + 2 * LABEL_PAD;
   const inside = labelsInside
     ? groups.map((g, i) => (fits(words(g, i), i) ? words(g, i) : ''))
     : [];

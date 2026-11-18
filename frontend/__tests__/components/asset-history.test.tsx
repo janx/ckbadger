@@ -68,7 +68,8 @@ describe('Asset history', () => {
       const longest = Math.max(
         ...plots.flatMap((plot) => yTickLabels(plot).map((t) => t.textContent!.length))
       );
-      expect(left).toBe(Math.max(48, longest * 6 + 8));
+      // re-pinned (readability R4): a tick at 12 px is 7.2 px a glyph (was 6 at 10 px)
+      expect(left).toBe(Math.max(48, longest * 7.2 + 8));
       for (const tick of ticks) {
         expect(tick.getAttribute('text-anchor')).toBe('end');
         expect(Number(tick.getAttribute('x'))).toBe(left - 8);

@@ -14,7 +14,8 @@ import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { ShortId } from '@/components/ui/short-id';
-import { SVG_TEXT, labelAdvancePx } from '@/lib/chart-type';
+import { SVG_TEXT } from '@/lib/chart-type';
+import { textPx } from '@/lib/type-metrics';
 
 type Point = NetworkMap['points'][number];
 
@@ -89,9 +90,9 @@ export function layoutCountryClusters(
   const extent = (country: string) => {
     const r = radius(byCountry.get(country)!.length);
     if (!labelled(country)) return { r, half: r, below: r };
-    // a place's label, at the tick size, measured as a label kept clear of its neighbours
+    // a place's label, at the tick size
     const label = `${country} ${byCountry.get(country)!.length}`;
-    const half = Math.max(r, (label.length * labelAdvancePx(SVG_TEXT.tick)) / 2);
+    const half = Math.max(r, textPx(label.length, SVG_TEXT.tick) / 2);
     return { r, half, below: r + 14 };
   };
   for (let round = 0; round < 400; round++) {

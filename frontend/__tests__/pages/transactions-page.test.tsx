@@ -182,7 +182,8 @@ describe('Transactions pool view', () => {
     render(<TransactionsPage />);
     fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
-    expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(1248);
+    // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the table is drawn from 1,272 px (was within 1,248)
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1272);
     expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
     expect(table).toHaveTextContent('0.00012345 CKB');
     expect(table).toHaveTextContent('3,500,000,000');
@@ -197,21 +198,24 @@ describe('Transactions pool view', () => {
     const cols = Array.from(table.querySelectorAll('col')).map((c) =>
       Number.parseFloat((c as HTMLElement).style.width)
     );
-    expect(cols).toEqual([237, 180, 172, 64, 164, 128, 123, 68, 94]);
-    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1230);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
-    expect(1230).toBeLessThanOrEqual(1232);
+    // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the derived columns grow with their text, 1,272 px, more than the
+    // widest 1,232 px container holds
+    expect(cols).toEqual([247, 180, 184, 64, 164, 128, 131, 72, 102]);
+    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1272);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1272);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
-    // characters of JetBrains Mono at 13 px (7.8; it was 21, 12 + 6 with three dots)
+    // characters of JetBrains Mono at 14 px since R4 (8.4; 7.8 at 13 px; it was 21, 12 + 6 with
+    // three dots)
     const shown = within(table).getByTitle(`0x${'ab'.repeat(32)}`);
     expect(shown).toHaveTextContent(/^0xabababab…ababab$/);
     const chars = shown.textContent!.length;
     expect(chars).toBe(17);
-    // the stone, the hash and the 16 px gap fit the 237 px with 31.9 px to spare; the column keeps
-    // its 237 so both of the page's lists change form at the same width
-    const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
-    expect(used).toBeCloseTo(205.1, 6);
-    expect(237 - used).toBeCloseTo(31.9, 6);
+    // the stone, the hash and the 16 px gap fit the 247 px with 31.7 px to spare (the 31 px the
+    // column kept so both lists changed form at one width; re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8), the pool's table at
+    // 1,272 and the committed one at 1,286)
+    const used = ROW_SEAL.tx.footprint + chars * 8.4 + 16;
+    expect(used).toBeCloseTo(215.3, 6);
+    expect(247 - used).toBeCloseTo(31.7, 6);
   });
 
   // Old issue C, round 2: at 1,200 px the pool's columns lived on the 32 px the 1,232 px container
@@ -259,9 +263,10 @@ describe('Transactions pool view', () => {
     const heads = within(table).getAllByRole('columnheader');
     const at = heads.findIndex((th) => th.textContent === 'Status · waiting');
     const width = Number.parseFloat((table.querySelectorAll('col')[at] as HTMLElement).style.width);
-    expect(width).toBe(172);
-    // The cell: a 7 px dot, 6 px gaps (gap-1.5), the status word and "· <wait>", all at 12 px
-    // (JetBrains Mono, 7.2 px a character), then the column's 16 px gap.
+    // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): 184 px (was 172)
+    expect(width).toBe(184);
+    // The cell: a 7 px dot, 6 px gaps (gap-1.5), the status word and "· <wait>", all at 13 px
+    // (JetBrains Mono, 7.8 px a character), then the column's 16 px gap.
     const cells = Array.from(table.querySelectorAll('tbody tr')).map(
       (tr) => tr.querySelectorAll('td')[at].firstElementChild as HTMLElement
     );
@@ -287,30 +292,31 @@ describe('Transactions pool view', () => {
     expect(waits).toEqual(['59s ago', '59m ago', '23h ago', '99d ago']);
     const wait = Math.max(...waits.map((w) => `· ${w}`.length));
     expect(wait).toBe(9);
-    const widest = 7 + 6 + word * 7.2 + 6 + wait * 7.2 + 16;
-    expect(widest).toBeCloseTo(171.8, 6);
+    const widest = 7 + 6 + word * 7.8 + 6 + wait * 7.8 + 16;
+    expect(widest).toBeCloseTo(183.2, 6);
     expect(widest).toBeLessThanOrEqual(width);
-    // what broke at the old 150: "● Pending · 26s ago" needs 150.2
-    expect(7 + 6 + 'Pending'.length * 7.2 + 6 + '· 26s ago'.length * 7.2 + 16).toBeGreaterThan(150);
+    // what broke at the old 150: "● Pending · 26s ago" needs 159.8 at 13 px (150.2 at 12)
+    expect(7 + 6 + 'Pending'.length * 7.8 + 6 + '· 26s ago'.length * 7.8 + 16).toBeGreaterThan(150);
     // Size pays: its values are at most "597,000" (a transaction is no larger than a block),
-    // 7 characters at 12 px in 68 − 16 = 52 px; its head "Size, bytes" (11 px, 6.6 a character)
+    // 7 characters at 13 px in 72 − 16 = 56 px; its head "Size, bytes" (12 px, 7.2 a character)
     // takes two lines, as "Fee rate, shannon/KB" beside it already does, so the head row keeps
-    // its height.
+    // its height (re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8)).
     const size = heads.findIndex((th) => th.textContent === 'Size, bytes');
     const rate = heads.findIndex((th) => th.textContent === 'Fee rate, shannon/KB');
     const colWidth = (i: number) =>
       Number.parseFloat((table.querySelectorAll('col')[i] as HTMLElement).style.width);
-    expect(colWidth(size)).toBe(68);
+    expect(colWidth(size)).toBe(72);
     expect(within(table).getAllByText('597,000')).toHaveLength(3);
-    expect('597,000'.length * 7.2).toBeLessThanOrEqual(colWidth(size) - 16);
-    expect('Size, bytes'.length * 6.6).toBeGreaterThan(colWidth(size) - 16);
-    expect('bytes'.length * 6.6).toBeLessThanOrEqual(colWidth(size) - 16);
-    expect('Fee rate, shannon/KB'.length * 6.6).toBeGreaterThan(colWidth(rate) - 16);
+    expect('597,000'.length * 7.8).toBeLessThanOrEqual(colWidth(size) - 16);
+    expect('Size, bytes'.length * 7.2).toBeGreaterThan(colWidth(size) - 16);
+    expect('bytes'.length * 7.2).toBeLessThanOrEqual(colWidth(size) - 16);
+    expect('Fee rate, shannon/KB'.length * 7.2).toBeGreaterThan(colWidth(rate) - 16);
   });
 
-  // Old issue C: the pool's table changes form at 1,230 px, where the committed one does; the
-  // widest container (1,232 px from 1280) holds both, the next (976 px at 1024) neither.
-  it('lays the pool out as a table from 1,230 px, as the committed list, phone rows below', async () => {
+  // Old issue C: the pool's table changed form at 1,230 px, where the committed one did, and the
+  // widest container (1,232 px from 1280) held both. re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the pool's table is
+  // drawn from 1,272 px, the committed one from 1,286; the widest container holds neither.
+  it('lays the pool out as a table from 1,272 px, phone rows below', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -343,9 +349,10 @@ describe('Transactions pool view', () => {
       vi.restoreAllMocks();
     });
     for (const [width, form] of [
-      [1232, 'table'],
-      [1230, 'table'],
-      [1229, 'rows'],
+      [1274, 'table'],
+      [1272, 'table'],
+      [1271, 'rows'],
+      [1232, 'rows'],
       [976, 'rows'],
     ] as const) {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
@@ -425,7 +432,8 @@ describe('Transactions pool view', () => {
     rows.forEach((tr, i) => {
       const seal = expectOneRowSeal(tr, ids[i], 'unpressed');
       expect(tr.querySelector('td')).toContainElement(seal);
-      expect(seal).toHaveClass('-my-[3px]');
+      // (24 − the 20 px row line) / 2 (re-pinned, readability R4: 3 px on the 18 px line)
+      expect(seal).toHaveClass('-my-[2px]');
       expectBefore(seal, within(tr as HTMLElement).getByTitle(ids[i].hash));
     });
     expect(rows[1]).toHaveTextContent('0 → 1');
@@ -444,7 +452,7 @@ describe('Transactions pool view', () => {
       const phoneSeal = expectOneRowSeal(card, ids[i], 'unpressed');
       expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
       expect(card.firstElementChild).toContainElement(phoneSeal);
-      expect(phoneSeal).not.toHaveClass('-my-[3px]');
+      expect(phoneSeal).not.toHaveClass('-my-[2px]');
       expectBefore(phoneSeal, within(card).getByTitle(ids[i].hash));
     });
     expect(cards[1]).toHaveTextContent('0 → 1 cell');

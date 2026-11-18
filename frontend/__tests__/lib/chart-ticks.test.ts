@@ -265,9 +265,10 @@ describe('placeXTicks on a time axis', () => {
 
 describe('tickGutter', () => {
   it('sizes the y-axis gutter from the longest tick label, never narrower than 48 px', () => {
-    // Token page (responsive B#17): "10k transactions" needs 16 × 6 + 8 = 104 px; a 100 px gutter
-    // cut its first digit, printing ".0k transactions".
-    expect(tickGutter(['0 transactions', '5k transactions', '10k transactions'])).toBe(104);
+    // Token page (responsive B#17): "10k transactions" needs 16 × 7.2 + 8 = 123.2 px at the 12 px
+    // tick (re-pinned, readability R4: it was 16 × 6 + 8 = 104 at 10 px); a gutter short of it cut
+    // its first digit, printing ".0k transactions".
+    expect(tickGutter(['0 transactions', '5k transactions', '10k transactions'])).toBe(123.2);
     expect(tickGutter(['0', '500', '1k'])).toBe(48);
     expect(tickGutter([])).toBe(48);
   });

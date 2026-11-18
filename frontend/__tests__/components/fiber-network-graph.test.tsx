@@ -50,7 +50,8 @@ describe('FiberNetworkGraph', () => {
     const svg = container.querySelector('svg[data-fiber-graph]')!;
     const name = svg.querySelector('[data-role="chart-name"]')!;
     expect(name).toHaveTextContent('the network, as the chain sees it');
-    expect(name).toHaveAttribute('font-size', '11');
+    // re-pinned (readability R4): the label role is 12 px (was 11)
+    expect(name).toHaveAttribute('font-size', '12');
     expect(Number(name.getAttribute('x'))).toBeLessThanOrEqual(8);
     // the legend heads the column at the plot's right, before any party or pair is chosen
     const key = within(panel()).getByRole('list', { name: 'Graph key' });
@@ -186,8 +187,9 @@ describe('FiberNetworkGraph', () => {
         const r = Number(hit.getAttribute('r')) - 8;
         const cx = Number(hit.getAttribute('cx'));
         const cy = Number(hit.getAttribute('cy')) + shift;
-        // its ring (r + 4) and its label (half of six 11 px characters with the halo: 23 px)
-        const across = Math.max(r + 4, 23);
+        // its ring (r + 4) and its label (half of six 12 px characters with the halo, rounded up:
+        // 24 px; re-pinned from 23 at 11 px)
+        const across = Math.max(r + 4, 24);
         expect(cx - across).toBeGreaterThanOrEqual(0);
         expect(cx + across).toBeLessThanOrEqual(vw);
         expect(cy - r - 4).toBeGreaterThanOrEqual(0);
@@ -219,7 +221,7 @@ describe('FiberNetworkGraph', () => {
     });
   }
 
-  it('draws the graph 1:1 at its measured width, islands below, with 11 px labels (R4, FF-F8)', () => {
+  it('draws the graph 1:1 at its measured width, islands below, with 12 px labels (R4, FF-F8)', () => {
     stubChartWidth(358);
     const { container } = render(<Graph network={mainnet as FiberNetwork} />);
     const svg = container.querySelector('svg[data-fiber-graph]')!;
@@ -234,9 +236,10 @@ describe('FiberNetworkGraph', () => {
     const note = screen.getByText('not linked to the rest');
     expect(note).toHaveAttribute('text-anchor', 'start');
     expect(note).toHaveAttribute('x', '0');
-    expect(note).toHaveAttribute('font-size', '11');
-    // party labels are 11 px
-    expect(within(svg as HTMLElement).getByText('kdeakp')).toHaveAttribute('font-size', '11');
+    // re-pinned (readability R4): the label role is 12 px (was 11)
+    expect(note).toHaveAttribute('font-size', '12');
+    // party labels are 12 px
+    expect(within(svg as HTMLElement).getByText('kdeakp')).toHaveAttribute('font-size', '12');
     for (const n of Array.from(svg.querySelectorAll('[data-node] circle:last-of-type'))) {
       const cx = Number(n.getAttribute('cx'));
       expect(cx).toBeGreaterThan(0);
@@ -252,7 +255,8 @@ describe('FiberNetworkGraph', () => {
     const shift = Number(
       /translate\(0[ ,]+([\d.]+)\)/.exec(drawing.getAttribute('transform')!)![1]
     );
-    // the name's 11 px line sits in the top 18 px; no party's ring (r + 4) starts above it
+    // the name's 12 px line (baseline 14, descent to 17.6) sits in the top 18 px; no party's ring
+    // (r + 4) starts above it
     const tops = Array.from(svg.querySelectorAll('[data-node]')).map((g) => {
       const hit = g.querySelector('circle[fill="transparent"]')!;
       const r = Number(hit.getAttribute('r')) - 8;

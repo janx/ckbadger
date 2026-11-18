@@ -1,27 +1,35 @@
 import { describe, expect, it } from 'vitest';
-import { SVG_TEXT, centreShift, labelAdvancePx, lineStep } from '@/lib/chart-type';
-import { advancePx, fontPx } from '@/lib/type-metrics';
+import { SVG_TEXT, SVG_TEXT_FLOOR, centreShift, wrapWords } from '@/lib/chart-type';
+import { fontPx } from '@/lib/type-metrics';
 
 /**
  * SVG text by role (readability plan 2026-11-18, lane F3, step 1): the sizes the figures used as
  * literals, now read from the type scale, so the table moves with it.
  */
 describe('SVG text by role', () => {
-  it('gives the sizes the figures were drawn at, smallest first', () => {
+  // readability R4 (step 2 of lane F3): tick 10, note 10.5 and label 11 are the meta step, 12;
+  // value 11.5, head 12, title 12.5 and reading 13 moved with their steps to 12.5, 13, 13.5, 14
+  it('gives the sizes the figures are drawn at, smallest first', () => {
     expect(SVG_TEXT).toEqual({
-      tick: 10,
-      note: 10.5,
-      label: 11,
-      value: 11.5,
-      head: 12,
-      title: 12.5,
-      reading: 13,
+      tick: 12,
+      note: 12,
+      label: 12,
+      value: 12.5,
+      head: 13,
+      title: 13.5,
+      reading: 14,
     });
   });
 
+  it('sets no role under the 12 px floor, the meta step (R4)', () => {
+    expect(SVG_TEXT_FLOOR).toBe(fontPx('meta'));
+    expect(SVG_TEXT_FLOOR).toBe(12);
+    for (const px of Object.values(SVG_TEXT)) expect(px).toBeGreaterThanOrEqual(SVG_TEXT_FLOOR);
+  });
+
   it('writes every role as a step of the scale and the pixels it stands below it', () => {
-    expect(SVG_TEXT.tick).toBe(fontPx('meta') - 1);
-    expect(SVG_TEXT.note).toBe(fontPx('meta') - 0.5);
+    expect(SVG_TEXT.tick).toBe(fontPx('meta'));
+    expect(SVG_TEXT.note).toBe(fontPx('meta'));
     expect(SVG_TEXT.label).toBe(fontPx('meta'));
     expect(SVG_TEXT.value).toBe(fontPx('small') - 0.5);
     expect(SVG_TEXT.head).toBe(fontPx('small'));
@@ -29,27 +37,37 @@ describe('SVG text by role', () => {
     expect(SVG_TEXT.reading).toBe(fontPx('body'));
   });
 
-  it('keeps the roles in size order, a role apart from the next', () => {
+  // R4 set the three smallest roles at one size: in order, never smaller than the one before
+  it('keeps the roles in size order', () => {
     const sizes = Object.values(SVG_TEXT);
-    for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeGreaterThan(sizes[i - 1]);
+    for (let i = 1; i < sizes.length; i++) expect(sizes[i]).toBeGreaterThanOrEqual(sizes[i - 1]);
   });
 });
 
 describe('what follows from a size', () => {
   it('centres digits on a line 0.3 em under it', () => {
-    expect(centreShift(SVG_TEXT.tick)).toBe(3);
-    expect(centreShift(12)).toBe(3.6);
+    expect(centreShift(10)).toBe(3);
+    expect(centreShift(SVG_TEXT.tick)).toBe(3.6);
+  });
+});
+
+describe('wrapWords: an SVG text broken into lines that fit', () => {
+  it('keeps a text that fits on one line', () => {
+    expect(wrapWords('which VM runs a script', 12, 1000)).toEqual(['which VM runs a script']);
   });
 
-  it('stacks rows of labels 1.2 em apart', () => {
-    expect(lineStep(SVG_TEXT.tick)).toBe(12);
-    expect(lineStep(12)).toBe(14.4);
+  it('breaks between words, as many to a line as fit at 0.6 em', () => {
+    // 49 characters at 12 px are 352.8 px; a 328 px plot takes 45 characters a line
+    const hint = 'dots: when each known script version was deployed';
+    expect(wrapWords(hint, 12, 328)).toEqual([
+      'dots: when each known script version was',
+      'deployed',
+    ]);
+    for (const line of wrapWords(hint, 12, 328)) expect(line.length * 7.2).toBeLessThanOrEqual(328);
   });
 
-  it('measures a label kept clear of its neighbours a fifth of a pixel wider a glyph', () => {
-    expect(labelAdvancePx(SVG_TEXT.tick)).toBe(6.2);
-    expect(labelAdvancePx(12)).toBe(7.4);
-    for (const px of Object.values(SVG_TEXT))
-      expect(labelAdvancePx(px)).toBeCloseTo(advancePx(px) + 0.2, 10);
+  it('gives a word longer than the room a line of its own', () => {
+    expect(wrapWords('a verylongword b', 12, 50)).toEqual(['a', 'verylongword', 'b']);
+    expect(wrapWords('', 12, 50)).toEqual([]);
   });
 });

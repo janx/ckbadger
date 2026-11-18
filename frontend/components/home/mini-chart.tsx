@@ -25,25 +25,32 @@ import { usePhosphor } from '@/hooks/usePhosphor';
 import { sparkline } from '@/lib/blocks-text';
 import { cn } from '@/lib/utils';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
-import { MONO_ADVANCE_EM, textPx } from '@/lib/type-metrics';
+import { MONO_ADVANCE_EM, MONO_DESCENT_EM, descentPx, textPx } from '@/lib/type-metrics';
 import { SVG_TEXT, centreShift } from '@/lib/chart-type';
 
 /**
  * The homepage small multiples: one figure frame (caption + headline + chart) and four SVG chart
  * kinds — a line, bars from zero, a sparkline of eighth blocks, and signed bars around zero. They share one geometry, one
- * colour set (one data hue), draw 1:1 so their 10 px axis text never scales, and share one hover:
+ * colour set (one data hue), draw 1:1 so their axis text (the tick role, 12 px) never scales, and share one hover:
  * the pointer (or ←/→ on the focused chart) picks the nearest bucket, a thin guide marks it, the
  * other marks step back, and the caption's headline and sub-label read it out, as does the readout
  * line under the chart. A tap pins the nearest bucket there until a second tap on it or Escape (R6).
  */
 
-export const CHART_H = 104;
+/*
+ * The geometry, from the axis text (the tick role, lib/chart-type.ts): the plot from TOP to BOTTOM;
+ * the y ticks end at TICK_X, a 4 px margin and the widest tick the charts write (4 characters:
+ * "1.5k", "−10k") to their left, the plot 6 px after them; the x labels' baseline a tick line and
+ * 7 px under the plot, the chart ending under their descent (0.3 em). At the 10 px tick these were
+ * 28, 34, 101 and 104; at 12 px they are 33, 39, 103 and 107.
+ */
 const TOP = 10;
 const BOTTOM = 84;
-const LEFT = 34;
+const TICK_X = Math.ceil(textPx(4, SVG_TEXT.tick)) + 4;
+const LEFT = TICK_X + 6;
 const RIGHT_PAD = 8;
-const TICK_X = 28;
-const X_LABEL_Y = 101;
+const X_LABEL_Y = BOTTOM + 7 + SVG_TEXT.tick;
+export const CHART_H = X_LABEL_Y + Math.ceil(descentPx(SVG_TEXT.tick));
 const PLOT_H = BOTTOM - TOP;
 /** Marks other than the hovered one step back to this opacity. */
 const DIMMED = 0.35;
@@ -657,9 +664,9 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
 
 /**
  * JetBrains Mono's block elements are a glyph wide (MONO_ADVANCE_EM), stand on the descender, 0.3 em
- * under the baseline, and are 1.32 em tall.
+ * under the baseline (MONO_DESCENT_EM), and are 1.32 em tall.
  */
-const GLYPH_DESCENT = 0.3;
+const GLYPH_DESCENT = MONO_DESCENT_EM;
 const GLYPH_HEIGHT = 1.32;
 
 /** The ink of a spark glyph: the headline's bucket bright, an unfinished one faint. */

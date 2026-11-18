@@ -86,8 +86,8 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       {/* One mark column, one text edge (seals by kind, C11): a 30 px column of marks and the
           text, 10 px apart, in four rows — the cell's stone with its label and out point, the
           owner's stone with the owner, the class mark with the content, then the occupied bar.
-          Each mark stands alone, centred in the column, its top on its row's first 18 px line
-          (the round stone overhangs that line by 6 px, into the 12 px top padding; the owner's by
+          Each mark stands alone, centred in the column, its top on its row's first line (the row line, 20 px)
+          (the round stone overhangs that line by 5 px, into the 12 px top padding; the owner's by
           1 px; the 16 px class mark sits 1 px down); the 10 px row gap keeps the round stone's
           drawn 5 px overhang 4 px clear of the owner's stone. Every row's text starts on the same
           edge; the rows after the first end with their right-end item (lock kind, capacity, the

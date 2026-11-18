@@ -10,7 +10,7 @@ import { shortenHash } from '@/lib/shorten';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS } from '@/lib/design-tokens';
 import { unitNode } from '@/components/ui/units';
-import { LABEL_LINE_PX, fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { LABEL_LINE_PX, fontPx, textPx } from '@/lib/type-metrics';
 
 /**
  * "Who can change its code" as a picture (table-rows plan L1-3, rule T8; board ScriptDetail): one
@@ -116,9 +116,7 @@ function segmentLabel(holder: CodeHolder, current: boolean, px: number | null): 
     keyed ? shortenHash(holder.custody.lockArgs!, 'tight') : '',
   ];
   return (
-    candidates.find(
-      (text) => text && text.length * snappedAdvancePx(LABEL_PX) + 2 * LABEL_PAD <= px
-    ) ?? ''
+    candidates.find((text) => text && textPx(text.length, LABEL_PX) + 2 * LABEL_PAD <= px) ?? ''
   );
 }
 
@@ -158,7 +156,7 @@ function versionTicks(
     const text = `${versions.join(' · ')} ${date}`;
     if (width === null)
       return { key: date, versions: versions.join(' · '), date, at, row: 0, anchorRight: false };
-    const w = text.length * snappedAdvancePx(TICK_PX) + TICK_PAD;
+    const w = textPx(text.length, TICK_PX) + TICK_PAD;
     const x = (at / 100) * width;
     const anchorRight = x + w > width;
     const [start, end] = anchorRight ? [x - w, x] : [x, x + w];

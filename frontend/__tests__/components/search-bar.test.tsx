@@ -207,17 +207,18 @@ describe('SearchBar', () => {
   // holds about 105 px of text at 768–1023 (and less than the placeholder at 1024 beside the
   // network switcher), so it was cut mid-word there. The field measures its text box (the input's
   // content box, inside its borders and paddings) before paint and keeps it current, and draws the
-  // long placeholder only when the box holds all of it: 34 characters at 13 px, 0.6 em each, 265.2
-  // px; in the header's field from md (1 + 28 + 36 + 1 px of insets) that is 331.2 px wide.
+  // long placeholder only when the box holds all of it: 34 characters at 14 px (the body step since
+  // readability R4, re-pinned from 13 px and 265.2), 0.6 em each, 285.6 px; in the header's field
+  // from md (1 + 28 + 36 + 1 px of insets) that is 351.6 px wide.
   describe('chooses its placeholder by the measured text box, not a breakpoint', () => {
-    it('draws the short one just under 265.2 px of text box and the long one just over', () => {
+    it('draws the short one just under 285.6 px of text box and the long one just over', () => {
       vi.restoreAllMocks();
-      layOutField(330.5); // a 264.5 px text box
+      layOutField(351); // a 285 px text box
       const { unmount } = render(<SearchBar variant="compact" />);
       expect(screen.getByPlaceholderText(PHONE_PLACEHOLDER)).toBeInTheDocument();
       unmount();
       vi.restoreAllMocks();
-      layOutField(332); // 266 px
+      layOutField(352); // 286 px
       render(<SearchBar variant="compact" />);
       expect(screen.getByPlaceholderText(SHARED_PLACEHOLDER)).toBeInTheDocument();
     });

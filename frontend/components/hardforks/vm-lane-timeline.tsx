@@ -13,8 +13,8 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2, HardforkScriptDeployment } from '@/lib/api';
-import { SVG_TEXT } from '@/lib/chart-type';
-import { OBSERVED_ADVANCE_EM, advancePx, tightLinePx, withAllowance } from '@/lib/type-metrics';
+import { SVG_TEXT, wrapWords } from '@/lib/chart-type';
+import { advancePx, tightLinePx } from '@/lib/type-metrics';
 
 export interface EditionMark {
   shortName: string;
@@ -47,28 +47,23 @@ const VM_OPACITY = { VM0: 0.16, VM1: 0.32, VM2: 0.55 } as const;
 const UTC8_MS = 8 * 3_600_000;
 /** On a phone, the clear space kept above the first lane's header line for the rules. */
 const LANE_HEAD_CLEAR = 4;
-/**
- * The allowance of the edition blocks' sub-lines: their budget was set as an average glyph of the
- * 10–11 px labels around them, 0.2 px over the note size's own advance.
- */
-const SUB_LABEL_ALLOWANCE = 0.2;
-/** A glyph of an edition block's sub-line (the note size, 10.5 px), for keeping labels apart: 6.5 px. */
-export const CHAR_PX = withAllowance(advancePx(SVG_TEXT.note), SUB_LABEL_ALLOWANCE);
+/** A glyph of an edition block's sub-line (the note size), for keeping labels apart. */
+const CHAR_PX = advancePx(SVG_TEXT.note);
 /**
  * The plot's name, inside it at the top-left (hierarchy v3, R13): the page's former section title
  * and its hint line. It wraps after the title where one line does not fit (a phone).
  */
 const PLOT_TITLE = 'which VM runs a script, over time';
 const PLOT_HINT = 'dots: when each known script version was deployed';
-/** The plot's name at the label size, measured at the advance Chromium was observed at (0.64 em). */
+/** The plot's name at the label size. */
 const NAME_PX = SVG_TEXT.label;
-export const NAME_CHAR_PX = NAME_PX * OBSERVED_ADVANCE_EM;
+const NAME_CHAR_PX = advancePx(NAME_PX);
 const PLOT_NAME_Y = 13;
 /** The hint under the title, a tight label line below it (14 px). */
 const PLOT_NAME_LINE = tightLinePx(NAME_PX);
 /** Clear space between the name band and the edition labels under it. */
 const PLOT_NAME_GAP = 9;
-/** Glyph width of the edition names, set at the title size (12.5 px): 7.5 px. */
+/** Glyph width of the edition names, set at the title size. */
 const EDITION_CHAR_PX = advancePx(SVG_TEXT.title);
 /** Baselines of an edition block's name and epoch on the first row, and the clear space kept
  * between two blocks side by side. */
@@ -168,9 +163,14 @@ export function VmLaneTimeline({
     return [...placed, { edition, at, sub, turn, row, x0, x1: x0 + span }];
   }, []);
   const labelRows = 1 + Math.max(0, ...editionLabels.map((l) => l.row));
-  // The name takes one line where it fits, else the title over the hint; the labels start under it.
+  // The name takes one line where it fits; else the title over the hint, each broken between words
+  // where it does not fit the plot either (the hint at 12 px is 352.8 px: a 360 phone's 328 px
+  // plot takes it on two lines).
   const nameOneLine = `${PLOT_TITLE} · ${PLOT_HINT}`.length * NAME_CHAR_PX <= w;
-  const band = PLOT_NAME_Y + (nameOneLine ? 0 : PLOT_NAME_LINE) + PLOT_NAME_GAP;
+  const nameLines = nameOneLine
+    ? [`${PLOT_TITLE} · ${PLOT_HINT}`]
+    : [...wrapWords(PLOT_TITLE, NAME_PX, w), ...wrapWords(PLOT_HINT, NAME_PX, w)];
+  const band = PLOT_NAME_Y + (nameLines.length - 1) * PLOT_NAME_LINE + PLOT_NAME_GAP;
   const top = band + (narrow ? 62 : 64) + (labelRows - 1) * BLOCK_ROW;
   const laneH = narrow ? 64 : 46;
   /** Where a lane's bar and its dot rows sit, from the lane's top. */
@@ -258,16 +258,13 @@ export function VmLaneTimeline({
             fontSize={SVG_TEXT.label}
             fill="var(--c-text-dim)"
           >
-            {nameOneLine ? (
-              `${PLOT_TITLE} · ${PLOT_HINT}`
-            ) : (
-              <>
-                <tspan>{PLOT_TITLE}</tspan>
-                <tspan x="0" dy={PLOT_NAME_LINE}>
-                  {PLOT_HINT}
-                </tspan>
-              </>
-            )}
+            {nameOneLine
+              ? nameLines[0]
+              : nameLines.map((line, i) => (
+                  <tspan key={line} x={i ? '0' : undefined} dy={i ? PLOT_NAME_LINE : undefined}>
+                    {line}
+                  </tspan>
+                ))}
           </text>
           <text x={left} y={band + NAME_Y} fontSize={SVG_TEXT.title} fill="var(--c-text-bright)">
             genesis

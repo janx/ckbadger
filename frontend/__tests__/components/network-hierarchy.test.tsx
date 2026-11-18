@@ -305,7 +305,8 @@ describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', 
       const { svg, unmount } = await renderMap(width);
       const name = svg.querySelector('[data-role="chart-name"]')!;
       expect(name).toHaveTextContent(/^verified nodes · approximate GeoIP place$/);
-      expect(name).toHaveAttribute('font-size', '11');
+      // re-pinned (readability R4): the label role is 12 px (was 11)
+      expect(name).toHaveAttribute('font-size', '12');
       // The clusters are drawn below the name's band.
       const band = Number(name.getAttribute('y'));
       for (const dot of Array.from(svg.querySelectorAll('[data-dot]')))

@@ -176,8 +176,9 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
       'pressed',
       IN_MARK_COLUMN
     );
-    // it overhangs the 18 px line by 6 px above and below, so the first line keeps its height
-    expect(seal).toHaveClass('-my-[6px]');
+    // it overhangs the 20 px line by 5 px above and below, so the first line keeps its height
+    // (re-pinned, readability R4: 6 px over the 18 px line)
+    expect(seal).toHaveClass('-my-[5px]');
     const outPoint = within(tile).getByRole('link', { name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:1$/ });
     expect(outPoint).toHaveAttribute('href', `/mainnet/cell/${HASH}-1`);
     expectBefore(seal, outPoint);
@@ -423,7 +424,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     const tile = screen.getByTestId('tx-io-output-0');
     const [cell] = tileRows(tile);
     const seal = expectOneRowSeal(cell.mark, outputs[0].seal.id, 'pressed', IN_MARK_COLUMN);
-    expect(seal).toHaveClass('-my-[6px]');
+    // 5 px over the 20 px row line (re-pinned, readability R4: 6 over 18)
+    expect(seal).toHaveClass('-my-[5px]');
     // the out point with its index is one unit, never broken, and the cell's link
     const outPoint = within(cell.text).getByRole('link', {
       name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:0$/,

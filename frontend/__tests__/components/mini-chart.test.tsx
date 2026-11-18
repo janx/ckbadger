@@ -33,12 +33,14 @@ describe('mini charts', () => {
   it('draws a line with round ticks, first/middle/last date labels anchored inside the plot', () => {
     render(<LineChart points={blockTimes} ariaLabel="Block time" formatValue={(v) => `${v} s`} />);
     const svg = screen.getByRole('img', { name: 'Block time' });
-    expect(svg).toHaveAttribute('viewBox', '0 0 280 104');
+    // re-pinned (readability R4): the axis text is the 12 px tick (was 10), so the chart ends 3 px
+    // lower, under the x labels' descent (104 → 107)
+    expect(svg).toHaveAttribute('viewBox', '0 0 280 107');
     expect(texts(svg, 'y').map((t) => t.text)).toEqual(['8', '9', '10', '11']);
     expect(texts(svg, 'x')).toEqual([
-      { text: '10/19', anchor: 'start', size: '10' },
-      { text: '10/21', anchor: 'middle', size: '10' },
-      { text: '10/23', anchor: 'end', size: '10' },
+      { text: '10/19', anchor: 'start', size: '12' },
+      { text: '10/21', anchor: 'middle', size: '12' },
+      { text: '10/23', anchor: 'end', size: '12' },
     ]);
     const last = svg.querySelector('[data-role="last"]') as SVGCircleElement;
     expect(last.getAttribute('cx')).toBe('272.0');
@@ -274,7 +276,8 @@ describe('mini chart hover', () => {
     vi.restoreAllMocks();
   });
 
-  // Plot x runs 34..272; three bars have centres at about 73.7, 153 and 232.3.
+  // Plot x runs 39..272 (re-pinned, readability R4: the 12 px ticks widen the gutter from 34);
+  // three bars have centres at about 77.8, 155.5 and 233.2.
   const bars: Bar[] = [
     { label: '09:00', value: 610, state: 'complete' },
     { label: '10:00', value: 731, state: 'highlight' },
@@ -303,7 +306,7 @@ describe('mini chart hover', () => {
 
   it('snaps the pointer to the nearest bar, dims the rest and reads it out in the caption', () => {
     const svg = renderBars();
-    fireEvent.pointerMove(svg, { clientX: 100 }); // nearer 73.7 than 153
+    fireEvent.pointerMove(svg, { clientX: 100 }); // nearer 77.8 than 155.5
     expect(headline()).toHaveTextContent('610');
     expect(subtitle()).toHaveTextContent('09:00');
     const groups = svg.querySelectorAll('[data-bucket]');
@@ -312,10 +315,10 @@ describe('mini chart hover', () => {
     expect(groups[1]).toHaveAttribute('opacity', '0.35');
     expect(svg.querySelector('[data-bar="complete"]')).toHaveAttribute('fill-opacity', '1');
     const guide = svg.querySelector('[data-role="guide"]') as SVGLineElement;
-    expect(Number(guide.getAttribute('x1'))).toBeCloseTo(73.7, 0);
+    expect(Number(guide.getAttribute('x1'))).toBeCloseTo(77.8, 0);
     expect(guide).toHaveAttribute('stroke', 'var(--c-text-dim)');
 
-    fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 153
+    fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 155.5
     expect(headline()).toHaveTextContent('731');
     expect(subtitle()).toHaveTextContent('10:00');
   });
@@ -415,11 +418,11 @@ describe('mini chart hover', () => {
       />
     );
     const svg = screen.getByRole('img', { name: 'Block time' });
-    fireEvent.pointerMove(svg, { clientX: 215 }); // point 3 at x 212.5
+    fireEvent.pointerMove(svg, { clientX: 215 }); // point 3 at x 213.8 (re-pinned from 212.5: the plot starts at 39)
     expect(headline()).toHaveTextContent('10.90');
     expect(subtitle()).toHaveTextContent('10/22');
     const dot = svg.querySelector('[data-role="hover-dot"]') as SVGCircleElement;
-    expect(dot.getAttribute('cx')).toBe('212.5');
+    expect(dot.getAttribute('cx')).toBe('213.8');
     expect(Number(dot.getAttribute('r'))).toBeGreaterThan(2.6);
   });
 

@@ -186,11 +186,14 @@ describe('the bands no fill ink can label at 4.5:1', () => {
 // class ink an "other" gel is drawn in moved to Lc 70 (#a58ad6 → #d0b8fe) and the bright ink a step
 // up (#e8e2d6 → #ede7db), so by night the three bands at 0.68 on an "other" gel now clear 4.5:1 and
 // its two at 0.51 do not, and a pure-CKB gel's two bands at 0.51 on the page take the bright ink as
-// their best; 21 bands stopped, 23 before. The copper and pure gel inks did not move.
+// their best; 21 bands stopped, 23 before. The copper and pure gel inks did not move. Re-pinned
+// on purpose with readability R4 (lane F3, step 2): a band's label is set at 12 px (was 10) and
+// measured at 0.6 em (was an observed 0.64), so its run under the plate's gradient is another
+// stretch of it and nine best ratios moved by 0.01 to 0.05; the same 21 bands stop.
 const STOPPED: string[] = [
   'dark other on base-surface: "Lucky Lavender" at 0.51, best base-void 3.97',
   'dark other on base-surface: "Pure White" at 0.51, best base-void 3.97',
-  'dark btc_ckb on badge-inner-btc: "Blush Pink" at 0.68, best base-void 4.17',
+  'dark btc_ckb on badge-inner-btc: "Blush Pink" at 0.68, best base-void 4.16',
   'dark btc_ckb on badge-inner-btc: "Nature Green" at 0.68, best base-void 4.12',
   'dark btc_ckb on badge-inner-btc: "Thai Special" at 0.68, best base-void 4.12',
   'dark pure_ckb on badge-inner-pure: "Lucky Lavender" at 0.51, best base-void 4.07',
@@ -200,13 +203,13 @@ const STOPPED: string[] = [
   'dark btc_ckb on base-bg: "Blush Pink" at 0.68, best base-void 4.09',
   'dark btc_ckb on base-bg: "Nature Green" at 0.68, best base-void 4.05',
   'dark btc_ckb on base-bg: "Thai Special" at 0.68, best base-void 4.05',
-  'dark pure_ckb on base-bg: "Lucky Lavender" at 0.51, best text-bright 3.93',
+  'dark pure_ckb on base-bg: "Lucky Lavender" at 0.51, best text-bright 3.88',
   'dark pure_ckb on base-bg: "Pure White" at 0.51, best text-bright 3.94',
-  'light btc_ckb on badge-inner-btc: "Calm Blue" at 0.84, best base-void 4.32',
-  'light btc_ckb on badge-inner-btc: "Fortune Gold" at 0.84, best base-void 4.32',
-  'light pure_ckb on badge-inner-pure: "Fortune Gold" at 0.84, best base-void 4.46',
-  'light btc_ckb on base-bg: "Calm Blue" at 0.84, best base-void 4.27',
-  'light btc_ckb on base-bg: "Fortune Gold" at 0.84, best base-void 4.28',
-  'light pure_ckb on base-bg: "Calm Blue" at 0.84, best base-void 4.45',
-  'light pure_ckb on base-bg: "Fortune Gold" at 0.84, best base-void 4.39',
+  'light btc_ckb on badge-inner-btc: "Calm Blue" at 0.84, best base-void 4.30',
+  'light btc_ckb on badge-inner-btc: "Fortune Gold" at 0.84, best base-void 4.31',
+  'light pure_ckb on badge-inner-pure: "Fortune Gold" at 0.84, best base-void 4.45',
+  'light btc_ckb on base-bg: "Calm Blue" at 0.84, best base-void 4.30',
+  'light btc_ckb on base-bg: "Fortune Gold" at 0.84, best base-void 4.27',
+  'light pure_ckb on base-bg: "Calm Blue" at 0.84, best base-void 4.44',
+  'light pure_ckb on base-bg: "Fortune Gold" at 0.84, best base-void 4.38',
 ];

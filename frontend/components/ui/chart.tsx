@@ -17,7 +17,7 @@ import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
 import { unitAfter, withUnit } from '@/lib/format-unit';
-import { SVG_TEXT, centreShift, lineStep } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, wrapWords } from '@/lib/chart-type';
 import { textPx, tightLinePx } from '@/lib/type-metrics';
 
 export interface ChartPoint {
@@ -170,20 +170,25 @@ const JADE = 'var(--c-jade)';
  * the hover reading's figures at the reading size. The bands and baselines below are computed from
  * those sizes, so they move with the scale.
  */
-/** hierarchy v3: an in-plot name's baseline, one tight line of it under the svg's top (14 px). */
+/** hierarchy v3: an in-plot name's baseline, one tight line of it under the svg's top (15 px). */
 export const PLOT_NAME_Y = tightLinePx(SVG_TEXT.label);
-/** hierarchy v3: the band above the data that holds an in-plot name: its baseline and as much again. */
+/**
+ * hierarchy v3: the band above the data that holds an in-plot name of one line: its baseline and
+ * as much again (30 px). A name too long for its plot is broken between words (an SVG text does not
+ * wrap) and the band grows by a tight line for each line after the first.
+ */
 export const PLOT_NAME_BAND = 2 * PLOT_NAME_Y;
+const PLOT_NAME_LINE = tightLinePx(SVG_TEXT.label);
 /** How far a marker's label stands over the plot. */
 const MARKER_LABEL_GAP = 6;
-/** The top of a plot with no name: a marker's label at the tick size over it, its cap inside the svg (16 px). */
+/** The top of a plot with no name: a marker's label at the tick size over it, its cap inside the svg (18 px). */
 export const PLOT_TOP = SVG_TEXT.tick + MARKER_LABEL_GAP;
 /** The x labels' baseline over the svg's foot, room for their descent. */
 const X_AXIS_FOOT = 5;
-/** The band under the plot that holds the x labels: their foot, a tick line and 11 px clear of the plot (26 px). */
+/** The band under the plot that holds the x labels: their foot, a tick line and 11 px clear of the plot (28 px). */
 export const X_AXIS_BAND = X_AXIS_FOOT + SVG_TEXT.tick + 11;
-/** The height of each extra row of x labels a categorical axis stacks under the plot. */
-export const X_LABEL_ROW = lineStep(SVG_TEXT.tick);
+/** The height of each extra row of x labels a categorical axis stacks under the plot: a tight tick line (15 px). */
+export const X_LABEL_ROW = tightLinePx(SVG_TEXT.tick);
 /**
  * The band above the plot that keys its target lines: its label's baseline at the label's own
  * size (its cap at the band's top) and 4 px under it for the descent; the swatch's length.
@@ -486,11 +491,21 @@ export function Chart({
       `${title}: plotLeft ${plotLeft} cannot hold its longest tick: "${labels.reduce((a, b) => (b.length > a.length ? b : a), '')}" needs ${gutter}`
     );
   const left = plotLeft ?? gutter;
-  const right = width === null ? null : width - 10,
-    // A target line is keyed in its own band above the plot, never on the plot (C#16).
-    keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
-    // hierarchy v3: an in-plot name keeps its own band above the data.
-    top = (plotName === undefined ? PLOT_TOP : PLOT_NAME_BAND) + keyBand,
+  const right = width === null ? null : width - 10;
+  // hierarchy v3: an in-plot name keeps its own band above the data, a line more for each line
+  // its words take where the plot cannot hold them on one (from left + 8 to the plot's right).
+  const nameLines =
+    plotName === undefined
+      ? []
+      : right === null
+        ? [plotName]
+        : wrapWords(plotName, SVG_TEXT.label, right - left - 8);
+  // A target line is keyed in its own band above the plot, never on the plot (C#16).
+  const keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
+    top =
+      (plotName === undefined
+        ? PLOT_TOP
+        : PLOT_NAME_BAND + (nameLines.length - 1) * PLOT_NAME_LINE) + keyBand,
     bottom = height - X_AXIS_BAND + keyBand,
     axisY = height + keyBand - X_AXIS_FOOT;
   const lo = ticks?.values[0],
@@ -702,7 +717,17 @@ export function Chart({
                   fill="var(--c-text-dim)"
                   fontSize={SVG_TEXT.label}
                 >
-                  {plotName}
+                  {nameLines.length === 1
+                    ? plotName
+                    : nameLines.map((line, i) => (
+                        <tspan
+                          key={`${i}:${line}`}
+                          x={i ? left + 8 : undefined}
+                          dy={i ? PLOT_NAME_LINE : undefined}
+                        >
+                          {line}
+                        </tspan>
+                      ))}
                 </text>
               )}
               {gaps.map((gap) => {
@@ -973,11 +998,13 @@ export function Chart({
                     return `${series.length > 1 ? `${s.label} ` : ''}${withUnit(String(shown), unit)}`;
                   });
                   const head = formatLabel(data[activeIndex].label);
-                  // the widest line, measured at the head's size (the figures under it are set
-                  // at the reading size: a long figure overruns the box's 10 px padding)
+                  // the widest line, each measured at the size it is set in (the head at the label
+                  // size, the figures at the reading size), and 10 px of padding each side
                   const boxWidth =
-                    textPx(Math.max(head.length, ...rows.map((r) => r.length)), SVG_TEXT.label) +
-                    20;
+                    Math.max(
+                      textPx(head.length, SVG_TEXT.label),
+                      ...rows.map((r) => textPx(r.length, SVG_TEXT.reading))
+                    ) + 20;
                   const boxHeight = HOVER_HEAD_Y + 6 + rows.length * HOVER_LINE;
                   const px = x(activeIndex);
                   const bx = px + 14 + boxWidth > right ? px - 14 - boxWidth : px + 14;

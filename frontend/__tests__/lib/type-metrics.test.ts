@@ -7,17 +7,16 @@ import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
 import {
   LABEL_LINE_PX,
   MONO_ADVANCE_EM,
-  OBSERVED_ADVANCE_EM,
+  MONO_DESCENT_EM,
   ROW_LINE_PX,
   advancePx,
   charPx,
   columnPx,
+  descentPx,
   fontPx,
   lineHeightPx,
-  snappedAdvancePx,
   textPx,
   tightLinePx,
-  withAllowance,
 } from '@/lib/type-metrics';
 
 /**
@@ -129,13 +128,19 @@ describe('the face (JetBrains Mono, public/fonts)', () => {
     expect(isFixedPitch, 'post.isFixedPitch').not.toBe(0);
     expect(xAvgCharWidth, 'OS/2.xAvgCharWidth').toBe(advanceWidthMax);
     expect(advanceWidthMax / unitsPerEm).toBe(MONO_ADVANCE_EM);
+    // and reaches 0.3 em under its baseline: hhea.descender
+    expect(-t.get('hhea')!.readInt16BE(6) / unitsPerEm).toBe(MONO_DESCENT_EM);
+  });
+
+  it('gives a line’s descent at a size: 0.3 em', () => {
+    expect([10, 12, 14].map(descentPx)).toEqual([3, 3.6, 4.2]);
   });
 });
 
 describe('sizes and advances', () => {
   it('reads every step’s size from the type scale', () => {
     for (const step of TYPE_STEPS) expect(fontPx(step), step).toBe(parseFloat(TYPE_SCALE[step][0]));
-    expect([fontPx('meta'), fontPx('small'), fontPx('body')]).toEqual([11, 12, 13]);
+    expect([fontPx('meta'), fontPx('small'), fontPx('body')]).toEqual([12, 13, 14]);
   });
 
   it('gives a glyph’s advance at a size as the nearest double of 0.6 em', () => {
@@ -147,7 +152,7 @@ describe('sizes and advances', () => {
 
   it('gives a step’s advance as the advance at its size', () => {
     for (const step of TYPE_STEPS) expect(charPx(step), step).toBe(advancePx(fontPx(step)));
-    expect([charPx('meta'), charPx('small'), charPx('body')]).toEqual([6.6, 7.2, 7.8]);
+    expect([charPx('meta'), charPx('small'), charPx('body')]).toEqual([7.2, 7.8, 8.4]);
   });
 
   it('gives a run of glyphs as one product, exact for a whole count', () => {
@@ -155,42 +160,32 @@ describe('sizes and advances', () => {
     expect(textPx(11, 13)).toBe(85.8);
     expect(textPx(34, 13)).toBe(265.2);
     expect(textPx(0, 11)).toBe(0);
-    for (let n = 1; n <= 80; n++) expect(textPx(n, 11)).toBeCloseTo(n * charPx('meta'), 10);
-  });
-
-  it('keeps the advance Chromium was observed to draw at as the face’s and 0.04 em: 0.64', () => {
-    expect(OBSERVED_ADVANCE_EM).toBe(0.64);
-    expect(OBSERVED_ADVANCE_EM - MONO_ADVANCE_EM).toBeCloseTo(0.04, 12);
-    // 7.04 px at 11 px, against the 7 px Chromium draws there (snappedAdvancePx)
-    expect(11 * OBSERVED_ADVANCE_EM).toBe(7.04);
-  });
-
-  it('snaps an advance up to a whole pixel where Chromium does, never under 0.6 em', () => {
-    expect([10, 10.5, 11, 12, 13].map(snappedAdvancePx)).toEqual([6, 6.3, 7, 7.2, 8]);
-    for (const px of [9, 10, 10.5, 11, 11.5, 12, 12.5, 13, 14, 17])
-      expect(snappedAdvancePx(px)).toBeGreaterThanOrEqual(advancePx(px));
+    for (let n = 1; n <= 80; n++) expect(textPx(n, 12)).toBeCloseTo(n * charPx('meta'), 10);
   });
 });
 
 describe('lines', () => {
   it('reads every step’s line from the type scale', () => {
     for (const step of TYPE_STEPS)
-      expect(lineHeightPx(step), step).toBe(fontPx(step) * parseFloat(TYPE_SCALE[step][1]));
+      expect(lineHeightPx(step), step).toBeCloseTo(
+        fontPx(step) * parseFloat(TYPE_SCALE[step][1]),
+        10
+      );
     expect([lineHeightPx('meta'), lineHeightPx('small'), lineHeightPx('body')]).toEqual([
-      16.5, 18, 20.8,
+      18, 19.5, 22.4,
     ]);
   });
 
-  it('stands a list row on the small step’s line, in whole pixels: 18 px', () => {
+  it('stands a list row on the small step’s line, in whole pixels: 20 px', () => {
     expect(ROW_LINE_PX).toBe(Math.ceil(lineHeightPx('small')));
     expect(Number.isInteger(ROW_LINE_PX)).toBe(true);
-    expect(ROW_LINE_PX).toBe(18);
+    expect(ROW_LINE_PX).toBe(20); // 13 × 1.5 = 19.5, up to a whole pixel
   });
 
-  it('sets a line tight with 3 px of leading, and a label at the meta step so: 14 px', () => {
+  it('sets a line tight with 3 px of leading, and a label at the meta step so: 15 px', () => {
     expect([11, 12, 13].map(tightLinePx)).toEqual([14, 15, 16]);
     expect(LABEL_LINE_PX).toBe(tightLinePx(fontPx('meta')));
-    expect(LABEL_LINE_PX).toBe(14);
+    expect(LABEL_LINE_PX).toBe(15);
   });
 
   it('emits both lines as Tailwind line heights: leading-row and leading-label', () => {
@@ -208,16 +203,5 @@ describe('column budgets', () => {
     expect(columnPx(textPx(20, 12) + 16)).toBe(160); // exactly 160 stays 160
     expect(columnPx(56.5 + textPx(17, 13) + 16, 2)).toBe(208); // 205.1 → 206, and 2 spare
     expect(columnPx(160.00000000000003)).toBe(160); // a sum a hair over a whole pixel is that pixel
-  });
-});
-
-describe('allowances', () => {
-  it('adds an allowance to a budget and keeps the sum to the hundredth it was written in', () => {
-    expect(6.6 + 0.1).not.toBe(6.7); // why the hundredth: 6.699999999999999
-    expect(withAllowance(6.6, 0.1)).toBe(6.7);
-    expect(withAllowance(6.3, 0.1)).toBe(6.4);
-    expect(withAllowance(7.2, 0.44)).toBe(7.64);
-    expect(withAllowance(6.6, -0.3)).toBe(6.3);
-    expect(withAllowance(7.8, 0)).toBe(7.8);
   });
 });

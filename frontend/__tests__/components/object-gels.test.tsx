@@ -241,11 +241,13 @@ describe('SequencingGel at the measured width (V3)', () => {
   });
 
   // The review's item B: the wide gel holds at the 896 px plate (1280) for this DNA with a value
-  // at the full budget. Its columns before the value end at 684.28 px: the gene columns from 304
-  // (38 + 16 × 15 + 10 + 16), the longest name ("prev.type", 9 × 7.64 + 10), the longest bytes ·
-  // rule ("bytes 51–52 · nervapeNote", 25 × 7.32 + 12), the raw at the tight size (11 × 7.32 + 8),
-  // the arrow's 16 and the 2 px end. 896 − 684.28 = 211.72 px holds 27 characters of 7.64 (206.28)
-  // and not 28 (213.92): the budget is 27. A value of 40 characters is cut to it and still fits.
+  // at the full budget. Its columns before the value end at 692.2 px: the gene columns from 304
+  // (38 + 16 × 15 + 10 + 16), the longest name ("prev.type", 9 × 7.8 + 10), the longest bytes ·
+  // rule ("bytes 51–52 · nervapeNote", 25 × 7.5 + 12), the raw at the tight size (11 × 7.5 + 8),
+  // the arrow's 16 and the 2 px end. 896 − 692.2 = 203.8 px holds 26 characters of 7.8 (202.8)
+  // and not 27 (210.6): the budget is 26. A value of 40 characters is cut to it and still fits.
+  // Re-pinned (readability R4): the gene text is 13 and 12.5 px at 0.6 em (was 12 and 11.5 px at
+  // a measured 0.636 em), so the budget is 26 (was 27).
   it('draws the wide gel at the 896 px plate with a value cut to the full budget', () => {
     stubChartWidth(896);
     const long = 'N'.repeat(40);
@@ -261,8 +263,8 @@ describe('SequencingGel at the measured width (V3)', () => {
     const words = Array.from(container.querySelectorAll('[data-gene="Serial"] text')).map(
       (t) => t.textContent
     );
-    expect(words).toContain(`${'N'.repeat(26)}…`);
-    expect(words.some((w) => w!.includes('N'.repeat(27)))).toBe(false);
+    expect(words).toContain(`${'N'.repeat(25)}…`);
+    expect(words.some((w) => w!.includes('N'.repeat(26)))).toBe(false);
     expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
       'inscription a94617…79e0i0'
     );

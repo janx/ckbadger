@@ -15,16 +15,13 @@ import { formatUtc8DateTime } from '@/lib/utils';
 import { minerName } from '@/components/forks/miner-link';
 import { clipLabel, shortenHash } from '@/lib/shorten';
 import { SVG_TEXT } from '@/lib/chart-type';
-import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
+import { advancePx } from '@/lib/type-metrics';
 
 const MARK = ['', '①', '②', '③'] as const;
 /** A later mark on a block that already carries one is drawn this far beside it. */
 const MARK_STEP = { wide: 22, compact: 18 } as const;
-/**
- * One character of a miner name under a narrow tile (set at the tick size), at the advance
- * Chromium was observed to draw it at: 6.4 px at 10 px.
- */
-export const CHAR_10 = SVG_TEXT.tick * OBSERVED_ADVANCE_EM;
+/** One character of a miner name under a narrow tile, set at the tick size. */
+const CHAR_10 = advancePx(SVG_TEXT.tick);
 
 /**
  * "The two branches" (Fork board V67): today's chain on the main row, the branch that lost dashed

@@ -3,7 +3,7 @@
  * of a signed (daily-change) chart. One helper per job, so every chart reads the same numbers.
  */
 
-import { SVG_TEXT, labelAdvancePx } from '@/lib/chart-type';
+import { SVG_TEXT } from '@/lib/chart-type';
 import { advancePx } from '@/lib/type-metrics';
 
 /** The typographic minus, used for every negative number the charts print. */
@@ -210,10 +210,11 @@ export function formatCompactSigned(value: number): string {
 }
 
 /**
- * The advance an x label (set at the tick size) is measured at, for keeping axis labels apart: the
- * face's 0.6 em and a fifth of a pixel (lib/chart-type.ts `labelAdvancePx`), 6.2 px at 10 px.
+ * The advance an x label (set at the tick size) is measured at: the face's 0.6 em (7.2 px at
+ * 12 px). It was 0.2 px a glyph wider, a margin that kept labels apart; that margin is the gap
+ * below, in whole pixels between two labels, not a share of each glyph.
  */
-export const AXIS_CHAR_PX = labelAdvancePx(SVG_TEXT.tick);
+export const AXIS_CHAR_PX = advancePx(SVG_TEXT.tick);
 /** The clear space kept between two x labels on one row. */
 const X_LABEL_GAP = 6;
 /** A time-axis label this close to a plot edge anchors to that edge instead of centring. */

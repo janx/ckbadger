@@ -48,7 +48,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -707,7 +707,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
           // R9: a share is written inside its segment only where it fits (padding included).
           const segmentPx =
             width === null ? 0 : ((width - BAR_GAP_PX * (use.length - 1)) * Number(percent)) / 100;
-          const fits = segmentPx >= label.length * snappedAdvancePx(fontPx('meta')) + 16;
+          const fits = segmentPx >= textPx(label.length, fontPx('meta')) + 16;
           return (
             <div
               key={part.key}
@@ -806,8 +806,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     `claimable now ${formatCapacity(readyShannons)} · ${plural(ready.count, 'cell')}`.length;
   const claimableInside =
     barWidth !== null &&
-    ((barWidth - 2) * Number(readyPercent)) / 100 >=
-      claimableChars * snappedAdvancePx(fontPx('small')) + 24;
+    ((barWidth - 2) * Number(readyPercent)) / 100 >= textPx(claimableChars, fontPx('small')) + 24;
   return (
     <Section
       title="When deposits can leave"

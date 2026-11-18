@@ -27,6 +27,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import {
   hexRowBytes,
   MAP_PAD_PX,
+  OFFSET_PX,
   mapSegmentMinWidth,
   type HexRowBytes,
 } from '@/lib/cell-byte-layout';
@@ -198,12 +199,7 @@ const HexRows = memo(function HexRows({
     }
     rows.push(
       <div key={`${block}:${r}`} className="flex h-[21px] items-center">
-        <span
-          className={cn(
-            'text-text-dim shrink-0 select-none',
-            width === 5 ? 'w-[74px]' : 'w-[62px]'
-          )}
-        >
+        <span className="text-text-dim shrink-0 select-none" style={{ width: OFFSET_PX[width] }}>
           0x{r.toString(16).padStart(width, '0')}
         </span>
         <span className="flex shrink-0 gap-1">{hex}</span>
@@ -373,10 +369,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
       <div
         key={`gap:${from}`}
         data-gap={`${from}-${to}`}
-        className={cn(
-          'text-text-dim text-meta border-row-rule my-1 flex h-[30px] items-center gap-3 border-y border-dashed',
-          digits === 5 ? 'pl-[74px]' : 'pl-[62px]'
-        )}
+        className="text-text-dim text-meta border-row-rule my-1 flex h-[30px] items-center gap-3 border-y border-dashed"
+        style={{ paddingLeft: OFFSET_PX[digits] }}
       >
         <span>
           ⋯ {unitNode(formatCount(to - from, 'byte'))} [{fmt(from)}..{fmt(to)}): {listed}

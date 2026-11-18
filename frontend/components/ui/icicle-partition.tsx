@@ -3,7 +3,7 @@ import { CLASS_KEYS, type AssetClass } from '@/lib/design-tokens';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { color, inkOnFill, type FillInk, type PaletteKey } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
-import { snappedAdvancePx } from '@/lib/type-metrics';
+import { textPx } from '@/lib/type-metrics';
 import { SVG_TEXT } from '@/lib/chart-type';
 
 export interface IcicleNode {
@@ -106,7 +106,7 @@ function fittedLabel(
   px: number,
   pad: number
 ): { name: boolean; note: boolean } | 'share' | null {
-  const fits = (text: string) => text.length * snappedAdvancePx(px) + 2 * pad <= width;
+  const fits = (text: string) => textPx(text.length, px) + 2 * pad <= width;
   const share = `${label.share}${label.unit ? ` ${label.unit}` : ''}`;
   const core = `${label.name} ${share}`;
   if (label.note && fits(`${core} · ${label.note}`)) return { name: true, note: true };
