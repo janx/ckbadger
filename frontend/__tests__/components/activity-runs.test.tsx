@@ -8,6 +8,8 @@ import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { AssetFeed } from '@/components/asset/asset-feed';
+import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
+import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
@@ -206,5 +208,24 @@ describe('a token page’s feed folds within the page it shows (B4 item 5)', () 
     );
     const folded = await screen.findByRole('button', { name: '2 transactions ↓' });
     expect(folded.closest('[data-role="activity-run"]')).toHaveAttribute('data-run-count', '2');
+  });
+});
+
+describe('a run is set back as its rows are (R4)', () => {
+  it('takes the class its feed gives its rows: a neighbour’s run is quiet, every word dim', () => {
+    const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
+    render(
+      <ActivityRuns
+        rows={rows.map((a) => ({
+          key: a.txHash,
+          subject: runSubject(a, activityTitleText(a)),
+          activity: a,
+          title: <ActivityTitle activity={a} />,
+          className: 'quiet',
+          row: <ActivityRow activity={a} className="quiet" />,
+        }))}
+      />
+    );
+    expect(document.querySelector('[data-role="activity-run"]')).toHaveClass('quiet');
   });
 });

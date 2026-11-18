@@ -639,19 +639,21 @@ function feedActivityRow(
   const rowMark = mark ?? (item?.kind === 'identity' ? 'identities' : undefined);
   const headlineNode = headline && <FeedHeadlineText headline={headline} />;
   const quiet = headline?.neighbour === true;
+  // a neighbour's row is set back (R4): the quiet variant, every word dim, nothing faded; its run
+  // with it (B4)
+  const setBack = quiet ? 'quiet' : undefined;
   const words = headline && [headline.text, ...(headline.raw ?? [])].filter(Boolean).join(' · ');
   return {
     key: a.txHash,
     subject: runSubject(a, `${quiet ? 'neighbour: ' : ''}${activityTitleText(a, words, rowMark)}`),
     activity: a,
     title: <ActivityTitle activity={a} headline={headlineNode} mark={rowMark} />,
-    quiet,
+    className: setBack,
     row: (
       <ActivityRow
         activity={a}
         headline={headlineNode}
-        // a neighbour's row is set back (R4): the quiet variant, every word dim, nothing faded
-        className={quiet ? 'quiet' : undefined}
+        className={setBack}
         mark={rowMark}
         showScriptDetails={!plain}
         lockColumn={plain}

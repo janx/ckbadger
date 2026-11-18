@@ -954,11 +954,6 @@ function toleratedFailures(
  * a decision: a new one fails, and one that went leaves a count behind, as in TOLERATED.
  */
 const QUIET_SITES: Readonly<Record<string, { count: number; reason: string }>> = {
-  'components/activity/activity-row.tsx': {
-    count: 1,
-    reason:
-      "a folded run of a neighbour's activity rows (B4), set back as its rows are (R4): every word dim",
-  },
   'components/asset/asset-feed.tsx': {
     count: 1,
     reason: "a neighbour's activity row in an asset's feed, set back (R4): every word dim",

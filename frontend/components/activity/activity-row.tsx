@@ -1241,7 +1241,7 @@ export function FoldedActivityRow({
   showScriptDetails,
   age,
   focusLockHash,
-  quiet = false,
+  className,
   fresh = false,
   open,
   onToggle,
@@ -1255,8 +1255,11 @@ export function FoldedActivityRow({
   age: boolean;
   /** The party the page is about, written as text first (consistency C3). */
   focusLockHash?: string;
-  /** Set back, as its rows are (a neighbour's rows on an identity's feed). */
-  quiet?: boolean;
+  /**
+   * The class its feed gives its rows, given to the run too: a neighbour's rows on an identity's
+   * feed are set back, and so is their run (the feed's one decision, R4).
+   */
+  className?: string;
   fresh?: boolean;
   open: boolean;
   onToggle: () => void;
@@ -1281,7 +1284,7 @@ export function FoldedActivityRow({
     <article
       data-role="activity-run"
       data-run-count={rows.length}
-      className={cn(ROW_CLASS, fresh && 'bg-jade/5', quiet && 'quiet')}
+      className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
     >
       <ActivityRowHead
         layout="line"

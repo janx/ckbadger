@@ -16,8 +16,8 @@ export interface FeedRow {
   activity: ActivityRowData;
   /** Its title as its head draws it (`ActivityTitle`), for the folded run's head. */
   title: ReactNode;
-  /** Set back (a neighbour's row on an identity's feed). */
-  quiet?: boolean;
+  /** The class the feed gives the row (`ActivityRow`'s), given to its run too (a set-back row). */
+  className?: string;
   /** Just arrived (a live feed's highlight). */
   fresh?: boolean;
   /** The ordinary row. */
@@ -85,7 +85,7 @@ export function ActivityRuns({
               showScriptDetails={showScriptDetails}
               age={age}
               focusLockHash={focusLockHash}
-              quiet={lead.quiet}
+              className={lead.className}
               fresh={run.some((r) => r.fresh)}
               open={isOpen}
               onToggle={() => toggle(lead.key)}
