@@ -327,6 +327,21 @@ describe('ListTable row density and row title (table-rows plan T2, lane R1)', ()
     }
   });
 
+  // Regression (the lead's Chrome check of F3-e, 2026-11-18): a browser gives every table cell 1 px
+  // of padding on each side unless a class says otherwise. `py-*` and `pr-4` set three sides, so the
+  // left side kept that pixel and every column's content box was 1 px narrower than its budget
+  // (content + CELL_GAP_PX): in the 608 px blocks table the 92.4 px block number stood in 92 px and
+  // broke after its tenth glyph. A cell's only horizontal padding is its gap.
+  it('gives a cell and a head no left padding: the budget is the content and its gap', () => {
+    for (const density of ['default', 'row'] as const) {
+      stubChartWidth(608);
+      const { unmount } = render(table({ density }));
+      const t = screen.getByRole('table', { name: 'Holdings' });
+      for (const cell of [...headsOf(t), ...cellsOf(t)]) expect(cell).toHaveClass('pl-0');
+      unmount();
+    }
+  });
+
   it('draws one-line rows with density="row": 11 px padding, middle-aligned, heads unchanged', () => {
     stubChartWidth(608);
     render(table({ density: 'row' }));

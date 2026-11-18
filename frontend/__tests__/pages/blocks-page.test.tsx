@@ -1058,6 +1058,11 @@ describe('BlocksPage · Blocks v3 board', () => {
         'text-text-bright',
         'leading-row'
       );
+      // Regression (the lead's Chrome check, 2026-11-18): a block number is one figure and never
+      // breaks inside itself ("#21,045,84" over "5" in a Height cell 0.4 px short).
+      expect(within(first as HTMLElement).getByRole('link', { name: '#20,828,894' })).toHaveClass(
+        'whitespace-nowrap'
+      );
       expect(first).toHaveTextContent('0.05060000');
       expect(first).toHaveTextContent('3,917 B6,831,940');
       expect(screen.queryByTestId('block-row-mobile')).toBeNull();
