@@ -217,7 +217,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     const table = mount();
     const [, token, sealRow] = within(table).getAllByRole('row');
     const name = within(token).getByRole('link', { name: 'Token' });
-    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-row', 'truncate');
     expect(name).toHaveAttribute('href', `/mainnet/tokens/${asset.id}`);
     const tags = (row: HTMLElement) =>
       Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => t.textContent);
@@ -324,7 +324,7 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
     expect(thumb.querySelector('svg[data-class="objects"]')).not.toBeNull();
     expect(central.querySelector('[data-thumb-frame]')).toBeNull();
     const name = within(pure).getByRole('link', { name: 'Wyltek Founding Members' });
-    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-row', 'truncate');
     const tags = (row: HTMLElement) =>
       Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => [
         t.textContent,
@@ -438,7 +438,7 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     expect(within(first).getByRole('link', { name: '.bit' })).toHaveClass(
       'text-body',
       'text-text-bright',
-      'leading-[18px]',
+      'leading-row',
       'truncate'
     );
     expect(first.querySelector('[data-row-tag]')).toBeNull();

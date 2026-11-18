@@ -36,6 +36,8 @@ import {
 } from '@/lib/activity-stats';
 import { formatCount } from '@/lib/format-count';
 import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
+import { ROW_SEAL } from '@/components/ui/row-seal';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 type TransactionKind =
   | 'all'
@@ -289,8 +291,8 @@ export default function TransactionsPage() {
       // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
       // characters at 13 px (132.6 px; it was 21 with three dots, 163.8 px), and the 16 px gap:
       // 205.1 of its 237 px. The table is 1,230 px, the committed table's width, and both of the
-      // page's lists change form at the same width, so the column keeps its 237.
-      minWidth: 237,
+      // page's lists change form at the same width, so the column keeps its 237: 31 px spare.
+      minWidth: columnPx(ROW_SEAL.tx.footprint + textPx(17, fontPx('body')) + 16, 31),
       render: (tx) => (
         <div className="flex items-start">
           <RowSeal id={poolSealId(tx)} state="unpressed" overhang />
@@ -301,7 +303,7 @@ export default function TransactionsPage() {
                 hash={tx.hash}
                 size="row"
                 copyable={false}
-                className="text-body text-text-bright leading-[18px]"
+                className="text-body text-text-bright leading-row"
               />
             </Link>
             <PoolInterpretationNotice interpretation={tx.interpretation} />
@@ -330,7 +332,7 @@ export default function TransactionsPage() {
       // on the container's spread slack and "● Pending · 26s ago" (150.2) broke when that went to
       // the hash (old issue C). A wait of 100 days or more, or "this device's clock is behind",
       // wraps inside the cell.
-      minWidth: 172,
+      minWidth: columnPx(7 + 6 + textPx(10, fontPx('small')) + 6 + textPx(9, fontPx('small')) + 16),
       render: (tx) => (
         <span className="text-small flex items-center gap-1.5">
           <PoolDot status={tx.status} />
@@ -387,8 +389,12 @@ export default function TransactionsPage() {
       key: 'feeRate',
       label: 'Fee rate, shannon/KB',
       // The head on its two lines ("shannon/KB", 10 characters at 11 px, 66 px) or a rate of
-      // 1,000,000,000 (13 at 12 px, 93.6 px), and the 16 px gap; 7 px went to the row seal.
-      minWidth: 123,
+      // 1,000,000,000 (13 at 12 px, 93.6 px), and the 16 px gap; 7 px went to the row seal, and 13
+      // are spare.
+      minWidth: columnPx(
+        Math.max(textPx(10, fontPx('meta')), textPx(13, fontPx('small'))) + 16,
+        13
+      ),
       numeric: true,
       render: (tx) => BigInt(tx.feeRate).toLocaleString('en-US'),
     },
@@ -399,7 +405,7 @@ export default function TransactionsPage() {
       // the 16 px gap, with 1.6 px to spare. Its head takes two lines ("Size," / "bytes"), as
       // "Fee rate, shannon/KB" beside it already does, so the head row keeps its height; the 22 px
       // its one-line head held went to Status (old issue C).
-      minWidth: 68,
+      minWidth: columnPx(textPx(7, fontPx('small')) + 16, 1),
       numeric: true,
       render: (tx) => tx.txSize.toLocaleString('en-US'),
     },
@@ -408,7 +414,7 @@ export default function TransactionsPage() {
       label: 'Cycles',
       // The most a transaction may take, "3,500,000,000" (13 characters at 12 px, 93.6 px), and no
       // gap (the last column); 16 px went to the row seal.
-      minWidth: 94,
+      minWidth: columnPx(textPx(13, fontPx('small'))),
       numeric: true,
       render: (tx) => BigInt(tx.cycles).toLocaleString('en-US'),
     },

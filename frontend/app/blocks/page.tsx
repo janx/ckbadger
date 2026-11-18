@@ -33,6 +33,7 @@ import { formatCount } from '@/lib/format-count';
 import type { ShortSize } from '@/lib/shorten';
 import { useState } from 'react';
 import { unitNode } from '@/components/ui/units';
+import { charPx, columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 export default function BlocksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
@@ -62,8 +63,16 @@ export default function BlocksPage() {
       // 72.6 px, the tight size: the hash is the key cell's second token, beside the block
       // number, and the row size's 17 characters, 112.2 px, would need 256 here and a table of
       // 1,257 px, wider than 1,232 at 1280): 199.6 px and the 16 px gap, 215.6 (was 228.8 with
-      // "0xd161...8fef" at 13 characters, 200 without a seal, 222 with the old hash seal's 27).
-      minWidth: 195 + ROW_SEAL.block.footprint,
+      // "0xd161...8fef" at 13 characters, 200 without a seal, 222 with the old hash seal's 27),
+      // and 13 px spare.
+      minWidth: columnPx(
+        ROW_SEAL.block.footprint +
+          textPx(11, fontPx('body')) +
+          charPx('small') +
+          textPx(11, fontPx('meta')) +
+          16,
+        13
+      ),
       render: (block) => <BlockIdentity block={block} />,
     },
     {
@@ -102,8 +111,8 @@ export default function BlocksPage() {
       label: 'Reward, CKB',
       // A reward of four integer digits, "1,917.80821917" (14 characters at 12 px, 100.8 px), and
       // the 16 px gap: the column gave the row seal's 22 px from its 140 so the table keeps its
-      // 1,230 px minimum (the widest container is 1,232).
-      minWidth: 118,
+      // 1,230 px minimum (the widest container is 1,232): 1 px spare.
+      minWidth: columnPx(textPx(14, fontPx('small')) + 16, 1),
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
@@ -137,7 +146,7 @@ export default function BlocksPage() {
       // next is 14 ("1,000.00000000", 116.8 px), which 112 did not hold either: the column gave
       // the block stone's 7 px more than the old hash seal's from its 112 and keeps 2.6 to spare,
       // so the table keeps its 1,230 px minimum (the widest container is 1,232).
-      minWidth: 105,
+      minWidth: columnPx(textPx(12, fontPx('small')) + 16, 2),
       numeric: true,
       render: (block) => (
         <CkbAmount
@@ -319,7 +328,7 @@ function BlockIdentity({ block }: { block: Block }) {
 }
 
 /** The key cell of a block row (table-rows T5): 13 px, bright, on the row's 18 px line. */
-const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
+const KEY = 'text-body text-text-bright leading-row hover:text-jade';
 
 /**
  * Who mined the block, linked to its address (the full address its title): the pool `pools.toml`
@@ -500,7 +509,12 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     // px to spare (the number
     // may break between characters, and with the old hash seal at 0.2 px to spare the cell's
     // sub-pixel width broke it); it was 112 without a seal, 131 with the old hash seal's 27.
-    minWidth: 104 + ROW_SEAL.block.footprint,
+    minWidth: columnPx(
+      ROW_SEAL.block.footprint +
+        Math.max(textPx(11, fontPx('body')), textPx(11, fontPx('meta'))) +
+        16,
+      2
+    ),
     render: (block) => (
       <div className="flex items-start">
         <RowSeal id={blockSeal(block)} />
@@ -553,7 +567,7 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     // An unnamed miner, "ckb1…4s93hhsj" (13 characters at 12 px, 93.6 px; R9, it was
     // "ckb1qzda0c…93hhsj", 17 characters, 122.4 px, in a 154 px column), and the 16 px gap:
     // 109.6 px. A pool's name holds as many characters here as the address, 13 (94 px of text).
-    minWidth: 110,
+    minWidth: columnPx(textPx(13, fontPx('small')) + 16),
     className: 'whitespace-nowrap',
     render: (block) => miner(block, 'row'),
   },
@@ -571,7 +585,7 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     // failed" is as long), and no gap (the last column): 96 keeps 2.4 to spare. It gave the old
     // hash seal's 19 px from its 120, then 5 of the block stone's 7, so the table kept 608 px
     // (564 since the address's row form is 13 characters, R9: this column takes the rest).
-    minWidth: 96,
+    minWidth: columnPx(textPx(13, fontPx('small')), 2),
     // The column that takes the free width (the board's 1fr).
     width: 'auto',
     numeric: true,

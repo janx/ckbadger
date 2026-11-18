@@ -17,6 +17,8 @@ import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
 import { unitAfter, withUnit } from '@/lib/format-unit';
+import { SVG_TEXT, centreShift, lineStep } from '@/lib/chart-type';
+import { textPx, tightLinePx } from '@/lib/type-metrics';
 
 export interface ChartPoint {
   label: string;
@@ -162,14 +164,41 @@ export function lineHalo(
 }
 /** The theme's jade, the halo's own colour; `jadeRamp(1)[0]` is the chart default. */
 const JADE = 'var(--c-jade)';
-/** hierarchy v3: the band above the data that holds an in-plot name. */
-const PLOT_NAME_BAND = 28;
+/*
+ * The chart's text (lib/chart-type.ts): its ticks, x labels, gap notes, markers and target-line keys
+ * at the tick size, an in-plot name and the hover reading's head at the label size, an end label and
+ * the hover reading's figures at the reading size. The bands and baselines below are computed from
+ * those sizes, so they move with the scale.
+ */
+/** hierarchy v3: an in-plot name's baseline, one tight line of it under the svg's top (14 px). */
+export const PLOT_NAME_Y = tightLinePx(SVG_TEXT.label);
+/** hierarchy v3: the band above the data that holds an in-plot name: its baseline and as much again. */
+export const PLOT_NAME_BAND = 2 * PLOT_NAME_Y;
+/** How far a marker's label stands over the plot. */
+const MARKER_LABEL_GAP = 6;
+/** The top of a plot with no name: a marker's label at the tick size over it, its cap inside the svg (16 px). */
+export const PLOT_TOP = SVG_TEXT.tick + MARKER_LABEL_GAP;
+/** The x labels' baseline over the svg's foot, room for their descent. */
+const X_AXIS_FOOT = 5;
+/** The band under the plot that holds the x labels: their foot, a tick line and 11 px clear of the plot (26 px). */
+export const X_AXIS_BAND = X_AXIS_FOOT + SVG_TEXT.tick + 11;
 /** The height of each extra row of x labels a categorical axis stacks under the plot. */
-const X_LABEL_ROW = 12;
-/** The band above the plot that keys its target lines, its label baseline and swatch length. */
-const REFERENCE_KEY_BAND = 14;
-const REFERENCE_KEY_Y = 10;
+export const X_LABEL_ROW = lineStep(SVG_TEXT.tick);
+/**
+ * The band above the plot that keys its target lines: its label's baseline at the label's own
+ * size (its cap at the band's top) and 4 px under it for the descent; the swatch's length.
+ */
+export const REFERENCE_KEY_Y = SVG_TEXT.tick;
+export const REFERENCE_KEY_BAND = REFERENCE_KEY_Y + 4;
 const REFERENCE_SWATCH = 18;
+/** An in-plot tick is written where its line lies at least a label's size and a pixel under the band. */
+export const INSIDE_TICK_ROOM = SVG_TEXT.label + 1;
+/**
+ * The hover reading (F2 charts group, CH-22): its head's baseline (the label size and 5 px of
+ * padding over its cap) and the line of each figure under it, set tight at the reading size.
+ */
+export const HOVER_HEAD_Y = SVG_TEXT.label + 5;
+export const HOVER_LINE = tightLinePx(SVG_TEXT.reading);
 /**
  * A target line, drawn alike in the plot and as its key's sample (CH-21): a dash in the bright ink
  * over a knock-out of the same dash in the page's ground, drawn after the data, so it reads where
@@ -461,9 +490,9 @@ export function Chart({
     // A target line is keyed in its own band above the plot, never on the plot (C#16).
     keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
     // hierarchy v3: an in-plot name keeps its own band above the data.
-    top = (plotName === undefined ? 16 : PLOT_NAME_BAND) + keyBand,
-    bottom = height - 26 + keyBand,
-    axisY = height + keyBand - 5;
+    top = (plotName === undefined ? PLOT_TOP : PLOT_NAME_BAND) + keyBand,
+    bottom = height - X_AXIS_BAND + keyBand,
+    axisY = height + keyBand - X_AXIS_FOOT;
   const lo = ticks?.values[0],
     hi = ticks?.values[ticks.values.length - 1];
   const x = (i: number) =>
@@ -502,7 +531,7 @@ export function Chart({
         x={left + 8}
         y={yTick(v) - 5}
         fill="var(--c-text-dim)"
-        fontSize="11"
+        fontSize={SVG_TEXT.label}
       >
         {tickLabel(v, ticks.step)}
       </text>
@@ -631,7 +660,7 @@ export function Chart({
                 insideYTicks ? (
                   // hierarchy v3: the baseline and a value in the name's band are not written.
                   i > 0 &&
-                  yTick(v) >= top + 12 && (
+                  yTick(v) >= top + INSIDE_TICK_ROOM && (
                     <g key={v}>
                       {/* Visual finish V13: the grid is solid; a dash means a reference. */}
                       <line
@@ -655,10 +684,10 @@ export function Chart({
                     />
                     <text
                       x={left - 8}
-                      y={yTick(v) + 3}
+                      y={yTick(v) + centreShift(SVG_TEXT.tick)}
                       textAnchor="end"
                       fill="var(--c-text-dim)"
-                      fontSize="10"
+                      fontSize={SVG_TEXT.tick}
                     >
                       {tickLabel(v, ticks.step)}
                     </text>
@@ -669,9 +698,9 @@ export function Chart({
                 <text
                   data-role="chart-name"
                   x={left + 8}
-                  y={14 + keyBand}
+                  y={PLOT_NAME_Y + keyBand}
                   fill="var(--c-text-dim)"
-                  fontSize="11"
+                  fontSize={SVG_TEXT.label}
                 >
                   {plotName}
                 </text>
@@ -696,7 +725,7 @@ export function Chart({
                         y={(top + bottom) / 2}
                         textAnchor="middle"
                         fill="var(--c-text-dim)"
-                        fontSize="10"
+                        fontSize={SVG_TEXT.tick}
                       >
                         {gap.label}
                       </text>
@@ -853,15 +882,17 @@ export function Chart({
                 );
               })}
               {insideYTicks === 'over' &&
-                ticks.values.map((v, i) => i > 0 && yTick(v) >= top + 12 && insideTickLabel(v))}
+                ticks.values.map(
+                  (v, i) => i > 0 && yTick(v) >= top + INSIDE_TICK_ROOM && insideTickLabel(v)
+                )}
               {endLabel && (
                 <text
                   data-role="end-label"
                   x={right}
-                  y={Math.max(13, y(values[data.length - 1][0]) - 8)}
+                  y={Math.max(SVG_TEXT.reading, y(values[data.length - 1][0]) - 8)}
                   textAnchor="end"
                   fill="var(--c-text-bright)"
-                  fontSize="13"
+                  fontSize={SVG_TEXT.reading}
                   stroke="var(--c-base-bg)"
                   strokeWidth="4"
                   paintOrder="stroke"
@@ -879,14 +910,14 @@ export function Chart({
                   <ReferenceStroke
                     x1={swatch}
                     x2={swatch + REFERENCE_SWATCH}
-                    y={REFERENCE_KEY_Y - 3}
+                    y={REFERENCE_KEY_Y - centreShift(SVG_TEXT.tick)}
                   />
                   <text
                     x={textEnd}
                     y={REFERENCE_KEY_Y}
                     textAnchor="end"
                     fill="var(--c-text)"
-                    fontSize="10"
+                    fontSize={SVG_TEXT.tick}
                   >
                     {label}
                   </text>
@@ -905,10 +936,10 @@ export function Chart({
                   />
                   <text
                     x={x(m.index)}
-                    y={top - 6}
+                    y={top - MARKER_LABEL_GAP}
                     textAnchor="middle"
                     fill="var(--c-text-dim)"
-                    fontSize="10"
+                    fontSize={SVG_TEXT.tick}
                   >
                     {m.plotLabel ?? m.label}
                   </text>
@@ -942,8 +973,12 @@ export function Chart({
                     return `${series.length > 1 ? `${s.label} ` : ''}${withUnit(String(shown), unit)}`;
                   });
                   const head = formatLabel(data[activeIndex].label);
-                  const boxWidth = Math.max(head.length, ...rows.map((r) => r.length)) * 6.6 + 20;
-                  const boxHeight = 22 + rows.length * 16;
+                  // the widest line, measured at the head's size (the figures under it are set
+                  // at the reading size: a long figure overruns the box's 10 px padding)
+                  const boxWidth =
+                    textPx(Math.max(head.length, ...rows.map((r) => r.length)), SVG_TEXT.label) +
+                    20;
+                  const boxHeight = HOVER_HEAD_Y + 6 + rows.length * HOVER_LINE;
                   const px = x(activeIndex);
                   const bx = px + 14 + boxWidth > right ? px - 14 - boxWidth : px + 14;
                   const by = top + 4;
@@ -957,16 +992,21 @@ export function Chart({
                         fill="var(--c-base-surface)"
                         stroke="var(--c-base-border)"
                       />
-                      <text x={bx + 10} y={by + 16} fill="var(--c-text-dim)" fontSize="11">
+                      <text
+                        x={bx + 10}
+                        y={by + HOVER_HEAD_Y}
+                        fill="var(--c-text-dim)"
+                        fontSize={SVG_TEXT.label}
+                      >
                         {head}
                       </text>
                       {rows.map((row, i) => (
                         <text
                           key={row}
                           x={bx + 10}
-                          y={by + 33 + i * 16}
+                          y={by + HOVER_HEAD_Y + 1 + (i + 1) * HOVER_LINE}
                           fill="var(--c-text-bright)"
-                          fontSize="13"
+                          fontSize={SVG_TEXT.reading}
                         >
                           {row}
                         </text>
@@ -983,7 +1023,7 @@ export function Chart({
                   y={axisY + tick.row * X_LABEL_ROW}
                   textAnchor={tick.anchor}
                   fill="var(--c-text-dim)"
-                  fontSize="10"
+                  fontSize={SVG_TEXT.tick}
                 >
                   {tick.label}
                 </text>
@@ -993,7 +1033,7 @@ export function Chart({
                 x={left}
                 y={axisY}
                 fill="var(--c-text-dim)"
-                fontSize="10"
+                fontSize={SVG_TEXT.tick}
               >
                 {data[0].label}
               </text>
@@ -1004,7 +1044,7 @@ export function Chart({
                   y={axisY}
                   textAnchor="end"
                   fill="var(--c-text-dim)"
-                  fontSize="10"
+                  fontSize={SVG_TEXT.tick}
                 >
                   {data[data.length - 1].label}
                 </text>

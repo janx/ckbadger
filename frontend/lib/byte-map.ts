@@ -5,6 +5,8 @@
  * words name only what the bytes show (a length that matches, text that decodes), never a guess.
  */
 
+import { charPx } from '@/lib/type-metrics';
+
 /** One range of a byte map: `[start, end)`; `end === start` is an empty field (a sliver). */
 export interface ByteSpan {
   start: number;
@@ -123,9 +125,6 @@ export function scaleLayout(
   });
 }
 
-/** The advance of one 11 px JetBrains Mono glyph (`text-meta`). */
-export const META_CHAR_PX = 6.6;
-
 export interface RulerTick {
   value: number;
   x: number;
@@ -147,7 +146,8 @@ export function scaleRulerTicks(
 ): RulerTick[] {
   if (layout.length + 1 !== values.length)
     throw new Error(`byte map ruler: ${values.length} offsets for ${layout.length} parts`);
-  const text = (v: number) => format(v).length * META_CHAR_PX;
+  // a ruler's labels are set at the meta step (`text-meta`)
+  const text = (v: number) => format(v).length * charPx('meta');
   const lastLeft = width - text(values.at(-1)!);
   let right = -Infinity;
   return values.map((value, i) => {

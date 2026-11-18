@@ -187,7 +187,7 @@ it('writes each Newest row on one line with the name bright and the rest in its 
   const table = await screen.findByRole('table', { name: 'Newest objects' });
   const [, numbered, plain] = within(table).getAllByRole('row');
   const name = within(numbered).getByRole('link', { name: '#7' });
-  expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+  expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-row', 'truncate');
   // Without a number the object is its short id.
   const unnumbered = within(plain).getAllByRole('link')[0];
   expect(unnumbered).toHaveAccessibleName('0x03030303…030303');

@@ -14,12 +14,17 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { minerName } from '@/components/forks/miner-link';
 import { clipLabel, shortenHash } from '@/lib/shorten';
+import { SVG_TEXT } from '@/lib/chart-type';
+import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
 
 const MARK = ['', '①', '②', '③'] as const;
 /** A later mark on a block that already carries one is drawn this far beside it. */
 const MARK_STEP = { wide: 22, compact: 18 } as const;
-/** One character of 10 px JetBrains Mono, for fitting a miner name under a narrow tile. */
-const CHAR_10 = 6.4;
+/**
+ * One character of a miner name under a narrow tile (set at the tick size), at the advance
+ * Chromium was observed to draw it at: 6.4 px at 10 px.
+ */
+export const CHAR_10 = SVG_TEXT.tick * OBSERVED_ADVANCE_EM;
 
 /**
  * "The two branches" (Fork board V67): today's chain on the main row, the branch that lost dashed
@@ -98,17 +103,23 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
         <text
           x={tx + (compact ? 6 : 8)}
           y={y + (compact ? 14 : 16)}
-          fontSize="11"
+          fontSize={SVG_TEXT.label}
           fill={FORK_COLORS.ink}
         >
           #{String(t.number % 1000).padStart(3, '0')}
         </text>
         {compact ? (
-          <text x={tx + 6} y={y + 27} fontSize="10" fill={FORK_COLORS.tick}>
+          <text x={tx + 6} y={y + 27} fontSize={SVG_TEXT.tick} fill={FORK_COLORS.tick}>
             {t.hash.slice(2, 8)}
           </text>
         ) : (
-          <text x={tx + TW - 8} y={y + 16} textAnchor="end" fontSize="10" fill={FORK_COLORS.tick}>
+          <text
+            x={tx + TW - 8}
+            y={y + 16}
+            textAnchor="end"
+            fontSize={SVG_TEXT.tick}
+            fill={FORK_COLORS.tick}
+          >
             {t.hash.slice(2, 8)}
           </text>
         )}
@@ -117,7 +128,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             data-time
             x={labelsUnder ? tx : tx + 8}
             y={labelsUnder ? y + TH + 18 : y + 32}
-            fontSize="10"
+            fontSize={SVG_TEXT.tick}
             fill={FORK_COLORS.dim}
           >
             {blockClock(t.timestamp)}
@@ -127,7 +138,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
           <text
             x={labelsUnder ? tx : tx + 8}
             y={labelsUnder ? y + TH + 30 : y + 47}
-            fontSize="10"
+            fontSize={SVG_TEXT.tick}
             fill={FORK_COLORS.tick}
           >
             {labelsUnder ? clipLabel(miner, minerChars) : miner}
@@ -204,13 +215,13 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
                 strokeDasharray="3 3"
               />
             ))}
-            <text x={x(first.number)} y={y - 8} fontSize="11" fill={FORK_COLORS.tick}>
+            <text x={x(first.number)} y={y - 8} fontSize={SVG_TEXT.label} fill={FORK_COLORS.tick}>
               {row.label === 'dropped at this switch' ? 'branch' : 'adopted then, dropped since'}
             </text>
           </g>
         );
       })}
-      <text x={x(model.first)} y={yMain - 8} fontSize="11" fill={FORK_COLORS.tick}>
+      <text x={x(model.first)} y={yMain - 8} fontSize={SVG_TEXT.label} fill={FORK_COLORS.tick}>
         main chain
       </text>
       {collapsed && (
@@ -228,10 +239,20 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             fill={FORK_COLORS.tileFill}
             stroke={FORK_COLORS.tileStroke}
           />
-          <text x={x(collapsed.first) + 6} y={yMain + 14} fontSize="11" fill={FORK_COLORS.ink}>
+          <text
+            x={x(collapsed.first) + 6}
+            y={yMain + 14}
+            fontSize={SVG_TEXT.label}
+            fill={FORK_COLORS.ink}
+          >
             +{collapsed.count} earlier
           </text>
-          <text x={x(collapsed.first) + 6} y={yMain + 27} fontSize="10" fill={FORK_COLORS.tick}>
+          <text
+            x={x(collapsed.first) + 6}
+            y={yMain + 27}
+            fontSize={SVG_TEXT.tick}
+            fill={FORK_COLORS.tick}
+          >
             #{String(collapsed.first % 1000).padStart(3, '0')}–#
             {String(collapsed.last % 1000).padStart(3, '0')}
           </text>
@@ -289,7 +310,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
               x={cx}
               y={cy + (compact ? 3.5 : 4)}
               textAnchor="middle"
-              fontSize={compact ? 10 : 11}
+              fontSize={compact ? SVG_TEXT.tick : SVG_TEXT.label}
               fill={FORK_COLORS.ink}
             >
               {mark.n}

@@ -36,7 +36,7 @@ import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/a
 import type { CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { TYPE_SCALE } from '@/lib/type-scale';
+import { fontPx, textPx } from '@/lib/type-metrics';
 import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { cn } from '@/lib/utils';
@@ -274,7 +274,7 @@ function ReferenceFacts({
  * character in the mono face, and the cell's 16 px right padding (`pr-4`) before the next column.
  */
 function headBudget(label: string): number {
-  return Math.ceil(label.length * 0.6 * parseFloat(TYPE_SCALE.meta[0])) + 16;
+  return Math.ceil(textPx(label.length, fontPx('meta'))) + 16;
 }
 
 /**
@@ -669,12 +669,12 @@ export function ScriptFamilyPage({
         return lead ? (
           <Link
             href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
-            className="text-body text-text-bright leading-[18px] hover:underline"
+            className="text-body text-text-bright leading-row hover:underline"
           >
             {label}
           </Link>
         ) : (
-          <span className="text-body text-text-bright leading-[18px]">{label}</span>
+          <span className="text-body text-text-bright leading-row">{label}</span>
         );
       },
     },
@@ -1126,7 +1126,7 @@ export function ScriptFamilyPage({
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                          className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
+                          className="text-body text-text-bright hover:text-jade leading-row hover:underline"
                         >
                           <ShortId value={cell.txHash} kind="hash" size="row" />
                           <OutpointIndex index={cell.outputIndex} />

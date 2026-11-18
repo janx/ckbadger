@@ -3,6 +3,8 @@ import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CLASS_COLORS, EXPIRED_COLOR } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
+import { SVG_TEXT } from '@/lib/chart-type';
+import { advancePx, withAllowance } from '@/lib/type-metrics';
 
 export interface TenurePeriod {
   label: string;
@@ -25,9 +27,14 @@ export interface TenureBarProps {
 const DEFAULT_W = 900;
 const PAD = 20;
 const DAY = 86_400_000;
-/** Advance of one monospace character at the label sizes (11 / 10.5 px), for fitting labels. */
-const CHAR_11 = 6.7;
-const CHAR_10 = 6.4;
+/** The margin a label's fit keeps: 0.1 px a glyph over the face's advance. */
+const FIT_ALLOWANCE = 0.1;
+/**
+ * Advance of one monospace character at the label sizes (the label size, 11 px, for the period
+ * names and the now mark; the note size, 10.5 px, for the dates), for fitting labels: 6.7 and 6.4.
+ */
+export const CHAR_11 = withAllowance(advancePx(SVG_TEXT.label), FIT_ALLOWANCE);
+export const CHAR_10 = withAllowance(advancePx(SVG_TEXT.note), FIT_ALLOWANCE);
 
 /**
  * F2 identities (round 2, visual pass): the bar draws in its own measured width, so 1 unit is
@@ -139,19 +146,25 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
                 />
               )}
               {label && (
-                <text x={x1 + 2} y="22" fontSize="11" className="fill-text">
+                <text x={x1 + 2} y="22" fontSize={SVG_TEXT.label} className="fill-text">
                   {label}
                 </text>
               )}
               {10 * CHAR_10 <= dateRoom && (
-                <text x={x1 + 2} y="62" fontSize="10.5" className="fill-text-dim">
+                <text x={x1 + 2} y="62" fontSize={SVG_TEXT.note} className="fill-text-dim">
                   {formatUtc8Date(p.start)}
                 </text>
               )}
             </g>
           );
         })}
-        <text x={x(end) - 2} y="62" textAnchor="end" fontSize="10.5" className="fill-text-bright">
+        <text
+          x={x(end) - 2}
+          y="62"
+          textAnchor="end"
+          fontSize={SVG_TEXT.note}
+          className="fill-text-bright"
+        >
           {endDate}
         </text>
         {graceEnd !== undefined && (
@@ -167,7 +180,13 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
               strokeOpacity="0.5"
               strokeDasharray="3 3"
             />
-            <text x={x(graceEnd)} y="22" textAnchor="end" fontSize="11" className="fill-text">
+            <text
+              x={x(graceEnd)}
+              y="22"
+              textAnchor="end"
+              fontSize={SVG_TEXT.label}
+              className="fill-text"
+            >
               grace · {formatCount(Math.round((graceEnd - end) / DAY), 'day')}
             </text>
           </>
@@ -186,7 +205,7 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
               strokeDasharray="3 3"
             />
             {fit('lapsed · not renewed', x(now) - x(end) - 8) && (
-              <text x={x(end) + 4} y="22" fontSize="11" className="fill-text">
+              <text x={x(end) + 4} y="22" fontSize={SVG_TEXT.label} className="fill-text">
                 {fit('lapsed · not renewed', x(now) - x(end) - 8)}
               </text>
             )}
@@ -205,7 +224,7 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
           x={nowX}
           y="80"
           textAnchor={nowAnchor}
-          fontSize="11"
+          fontSize={SVG_TEXT.label}
           className="fill-text-bright"
         >
           <title>{nowAge}</title>

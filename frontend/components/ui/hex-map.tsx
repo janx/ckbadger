@@ -4,13 +4,8 @@ import { NoBreak } from '@/components/ui/no-break';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes, validateByteRanges, type ByteRange } from '@/lib/hex-bytes';
-import {
-  bytePieces,
-  META_CHAR_PX,
-  SCALE_DEFAULTS,
-  scaleLayout,
-  scaleRulerTicks,
-} from '@/lib/byte-map';
+import { bytePieces, SCALE_DEFAULTS, scaleLayout, scaleRulerTicks } from '@/lib/byte-map';
+import { charPx } from '@/lib/type-metrics';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { fade } from '@/lib/palette';
 import { cn } from '@/lib/utils';
@@ -271,7 +266,7 @@ export function ByteScaleMap({
   const [ref, width] = useElementWidth<HTMLDivElement>();
   // Many parts (a 72-gene DNA ruler) share 1 px gaps, so the gaps do not eat a phone column.
   const options = { ...SCALE_DEFAULTS, gap: segments.length > 24 ? 1 : SCALE_DEFAULTS.gap };
-  const room = (text: string) => text.length * META_CHAR_PX + 2 * LABEL_PAD_PX;
+  const room = (text: string) => text.length * charPx('meta') + 2 * LABEL_PAD_PX;
   const fits = (text: string, w: number) => room(text) <= w;
   // Each part keeps room for its byte count (its short label), as the cell page's map does.
   const layout =

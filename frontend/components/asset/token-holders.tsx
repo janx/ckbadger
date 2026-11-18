@@ -90,7 +90,7 @@ export function TokenDistributionView({
       // "10,000 – under 100,000" on one 13 px line.
       minWidth: 188,
       render: (b) => (
-        <span className="text-body text-text-bright whitespace-nowrap leading-[18px]">
+        <span className="text-body text-text-bright leading-row whitespace-nowrap">
           {bucketRange(b.lowerBound, b.upperBound, d.decimals)}
         </span>
       ),
@@ -268,7 +268,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         render: (h) => (
           <AppLink
             href={`/address/${h.address ?? h.lockScriptHash}`}
-            className="text-body text-text-bright leading-[18px]"
+            className="text-body text-text-bright leading-row"
           >
             <Hash
               hash={h.address ?? h.lockScriptHash}
@@ -276,7 +276,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               size="row"
               copyable={false}
               variant="bright"
-              className="text-body leading-[18px]"
+              className="text-body leading-row"
             />
           </AppLink>
         ),

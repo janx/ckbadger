@@ -361,7 +361,7 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
       [base, cellbase],
     ] as const) {
       const hash = within(row).getByTitle(tx.hash);
-      expect(hash).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+      expect(hash).toHaveClass('text-body', 'text-text-bright', 'leading-row');
       expect(hash).not.toHaveClass('text-small');
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/${tx.hash}`);
     }

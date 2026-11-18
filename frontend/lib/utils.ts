@@ -4,9 +4,16 @@ import { TYPE_STEPS } from '@/lib/type-scale';
 import { formatAgeOneUnit, formatSpan } from '@/lib/format-age';
 
 // tailwind-merge reads an unknown `text-<word>` as a colour; the scale's steps are sizes, so
-// `text-text-dim text-meta` keeps both classes and `text-body text-section` keeps the last.
+// `text-text-dim text-meta` keeps both classes and `text-body text-section` keeps the last. The
+// lines of lib/type-metrics.ts (`leading-row`, `leading-label`) are line heights, as the
+// `leading-[18px]` and `leading-[14px]` they replaced were: a later size step drops them alike.
 const twMerge = extendTailwindMerge({
-  extend: { classGroups: { 'font-size': [{ text: [...TYPE_STEPS] }] } },
+  extend: {
+    classGroups: {
+      'font-size': [{ text: [...TYPE_STEPS] }],
+      leading: [{ leading: ['row', 'label'] }],
+    },
+  },
 });
 
 export function cn(...inputs: ClassValue[]) {

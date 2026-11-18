@@ -23,6 +23,7 @@ import type { CSSProperties, ReactNode } from 'react';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { percentOf } from '@/lib/format-unit';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 export function AssetCount({ value }: { value: number | string | null | undefined }) {
   if (value === null || value === undefined)
@@ -333,10 +334,12 @@ function HMultiplier({ value }: { value: string | null }) {
  * Its head, "CKB held in its cells" (21 characters at 11 px, 138.6 px), is wider than the board's
  * 118 px amount; with the 16 px gap, 155 px.
  */
+const HELD_LABEL = 'CKB held in its cells';
 const HELD_COLUMN: ListColumn<Asset> = {
   key: 'capacity',
-  label: 'CKB held in its cells',
-  minWidth: 155,
+  label: HELD_LABEL,
+  // the head at the meta step and the 16 px gap
+  minWidth: columnPx(textPx(HELD_LABEL.length, fontPx('meta')) + 16),
   numeric: true,
   render: (a) => {
     const { held } = heldAndOccupied(a);
@@ -352,7 +355,7 @@ function TokenName({ asset: a }: { asset: Asset }) {
       <ClassMark kind="tokens" size={16} />
       <AppLink
         href={assetHref(a)}
-        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+        className="text-body text-text-bright leading-row min-w-0 truncate"
       >
         {a.name ?? a.symbol ?? (
           <Hash hash={a.id} size="row" copyable={false} className="text-small" />
@@ -481,7 +484,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
       </span>
       <AppLink
         href={assetHref(a)}
-        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+        className="text-body text-text-bright leading-row min-w-0 truncate"
       >
         {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>
@@ -579,7 +582,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
       <ClassMark kind="identities" size={16} />
       <AppLink
         href={assetHref(a)}
-        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+        className="text-body text-text-bright leading-row min-w-0 truncate"
       >
         {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>

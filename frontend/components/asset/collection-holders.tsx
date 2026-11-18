@@ -152,7 +152,7 @@ function ScopedCollectionHolders({
       }}
       size={size}
       // Table-rows L2-4: the holder is the row's bright key, on one 18 px line.
-      className="[&>span]:text-small [&_a]:text-text-bright max-w-full flex-nowrap whitespace-nowrap [&>span]:py-0 [&>span]:leading-[18px] [&_a]:leading-[18px]"
+      className="[&>span]:text-small [&_a]:text-text-bright [&>span]:leading-row [&_a]:leading-row max-w-full flex-nowrap whitespace-nowrap [&>span]:py-0"
     />
   );
   const holderTitle = (holder: CollectionHolder) =>
@@ -202,7 +202,7 @@ function ScopedCollectionHolders({
       label: 'Holds',
       minWidth: 65,
       render: (bucket) => (
-        <span className="text-body text-text-bright leading-[18px]">{bucket.range}</span>
+        <span className="text-body text-text-bright leading-row">{bucket.range}</span>
       ),
     },
     countColumn('holders', 'Holders', distribution ?? [], (bucket) => bucket.holders, assetClass),

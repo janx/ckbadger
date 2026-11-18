@@ -85,7 +85,7 @@ describe('Token distribution', () => {
     expect(within(table).getByText('Under 1')).toHaveClass(
       'text-body',
       'text-text-bright',
-      'leading-[18px]'
+      'leading-row'
     );
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');

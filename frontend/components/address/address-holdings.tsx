@@ -25,7 +25,7 @@ import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/co
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { META_CHAR_PX } from '@/lib/byte-map';
+import { charPx } from '@/lib/type-metrics';
 import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
@@ -230,7 +230,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
             {parts.map((p) => {
               const label = `${p.key} ${share(p.value)}`;
               const width = room === null ? 0 : (room * Number(p.value)) / Number(sum);
-              const fits = width >= label.length * META_CHAR_PX + 16;
+              const fits = width >= label.length * charPx('meta') + 16;
               return (
                 <div
                   key={p.key}

@@ -4,9 +4,7 @@ import { Fragment, useLayoutEffect, useRef, useState, type RefObject } from 'rea
 import { NoBreak } from '@/components/ui/no-break';
 import { useCopy } from '@/hooks/useCopy';
 import { cn } from '@/lib/utils';
-
-/** JetBrains Mono's advance before tracking: 0.6 em. */
-const ADVANCE_EM = 0.6;
+import { MONO_ADVANCE_EM } from '@/lib/type-metrics';
 
 const HEX_ID = /^0x[0-9a-fA-F]+$/;
 const ADDRESS = /^ck[bt]1[02-9ac-hj-np-z]+$/;
@@ -54,7 +52,7 @@ function useCharactersPerLine(): [RefObject<HTMLSpanElement | null>, number | nu
       const tracking = style.letterSpacing === 'normal' ? 0 : parseFloat(style.letterSpacing);
       if (!(line > 0) || !(fontSize > 0) || Number.isNaN(tracking)) return;
       // the epsilon keeps an exact fit (66 × 7.2 = 475.2) whole
-      setPerLine(Math.floor((line + 1e-6) / (ADVANCE_EM * fontSize + tracking)));
+      setPerLine(Math.floor((line + 1e-6) / (MONO_ADVANCE_EM * fontSize + tracking)));
     };
     read();
     const ro = new ResizeObserver(read);

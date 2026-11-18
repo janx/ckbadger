@@ -310,7 +310,7 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     expect(rankCell.firstElementChild).toHaveClass('text-text-bright');
     expect(within(first).getByRole('link').parentElement).toHaveClass(
       '[&_a]:text-text-bright',
-      '[&_a]:leading-[18px]',
+      '[&_a]:leading-row',
       'flex-nowrap'
     );
     expect(within(first).getByText('JoyID')).toHaveClass('border', 'text-meta');
@@ -333,7 +333,7 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     expect(within(buckets).getByText('3–5')).toHaveClass(
       'text-body',
       'text-text-bright',
-      'leading-[18px]'
+      'leading-row'
     );
     for (const td of buckets.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');

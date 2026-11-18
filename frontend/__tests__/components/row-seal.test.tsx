@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
-import { ROW_LINE_PX, ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
+import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { drawSeal, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
 import { expectOneRowSeal, SEAL_IDS, SEAL_INKS, sealIdsAt } from '@/__tests__/utils/seals';
 

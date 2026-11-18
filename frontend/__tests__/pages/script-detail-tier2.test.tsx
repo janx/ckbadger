@@ -77,7 +77,7 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     const table = screen.getByRole('table', { name: 'Its cells' });
     const [row] = within(table).getAllByRole('row').slice(1);
     const key = within(row).getByRole('link', { name: '0x44e5e96c…f8517f:1' });
-    expect(key).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(key).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     expect(row).toHaveClass('text-text');
     expect(row.querySelectorAll('.text-text-bright')).toHaveLength(1);
     // T5: column heads at 11 px.

@@ -7,6 +7,7 @@ import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
 import { percentOf } from '@/lib/format-unit';
+import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 export interface ConcentrationGroup {
   label: string;
@@ -28,11 +29,9 @@ export interface ConcentrationBarProps {
 
 /** The ranked groups' fills: the class colour at these alphas over the page ground. */
 export const CONCENTRATION_STEPS = [1, 0.7, 0.45, 0.22] as const;
-/** The in-segment words: 12 px with 10 px padding each side. */
-const LABEL_PX = 12;
+/** The in-segment words: the small step (`text-small`, 12 px) with 10 px padding each side. */
+const LABEL_PX = fontPx('small');
 const LABEL_PAD = 10;
-/** A monospace advance: whole pixels where the browser snaps them (Chromium), else 0.6 em. */
-const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
 
 /** The class colour at `alpha` as a background, so a segment's words keep their full ink. */
 const withAlpha = fade;
@@ -63,7 +62,7 @@ export function ConcentrationBar({
     i === 0 ? `${g.label} ${share(g)}` : `${g.label} · ${share(g)}`;
   const fits = (text: string, i: number) =>
     width !== null &&
-    (width * spans[i].width) / 100 >= text.length * advance(LABEL_PX) + 2 * LABEL_PAD;
+    (width * spans[i].width) / 100 >= text.length * snappedAdvancePx(LABEL_PX) + 2 * LABEL_PAD;
   const inside = labelsInside
     ? groups.map((g, i) => (fits(words(g, i), i) ? words(g, i) : ''))
     : [];

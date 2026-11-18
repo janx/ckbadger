@@ -487,7 +487,7 @@ describe('NetworkTrends', () => {
     expect(within(first).getByText('2025-07-01')).toHaveClass(
       'text-body',
       'text-text-bright',
-      'leading-[18px]'
+      'leading-row'
     );
     expect(
       within(first).getByRole('img', {

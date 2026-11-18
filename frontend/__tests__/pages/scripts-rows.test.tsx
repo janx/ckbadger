@@ -186,7 +186,7 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     render(<ScriptsPage />);
     const t = await table();
     const name = within(t).getByRole('link', { name: 'JoyID' });
-    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const [script] = cells(rowOf(t, 'JoyID'));
     expect(
       [...script.querySelectorAll<HTMLElement>('[data-row-tag]')].map((tag) => [

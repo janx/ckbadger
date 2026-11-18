@@ -74,7 +74,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
               <span className="text-text-dim text-meta">named</span>
               <span
                 title={edge.targetPeerId}
-                className="text-body text-text-bright whitespace-nowrap leading-[18px]"
+                className="text-body text-text-bright leading-row whitespace-nowrap"
               >
                 <ShortId value={edge.targetPeerId} kind="hash" size="row" />
               </span>

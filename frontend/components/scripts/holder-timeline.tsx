@@ -10,6 +10,7 @@ import { shortenHash } from '@/lib/shorten';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS } from '@/lib/design-tokens';
 import { unitNode } from '@/components/ui/units';
+import { LABEL_LINE_PX, fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 /**
  * "Who can change its code" as a picture (table-rows plan L1-3, rule T8; board ScriptDetail): one
@@ -33,16 +34,15 @@ export interface HolderTimelineProps {
 /** Past holders alternate two greys; the holder now is the lightest, with the left rule. */
 const PAST_FILL = ['var(--c-base-border)', 'var(--c-slate-other)'] as const;
 const CURRENT_FILL = 'var(--c-slate-ckb)';
-/** Monospace advance in px at a font size: whole pixels where Chromium snaps them. */
-const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
-/** A segment's words: 12 px with 6 px each side. */
-const LABEL_PX = 12;
+/** A segment's words: the small step (12 px) with 6 px each side. */
+const LABEL_PX = fontPx('small');
 const LABEL_PAD = 6;
-/** A version tick's words: 11 px, 4 px after the tick, 8 px apart from the next. */
-const TICK_PX = 11;
+/** A version tick's words: the meta step (11 px), 4 px after the tick, 8 px apart from the next. */
+const TICK_PX = fontPx('meta');
 const TICK_PAD = 4;
 const TICK_GAP = 8;
-const TICK_ROW_PX = 14;
+/** Rows of version ticks stack a tight label line apart (`leading-label`). */
+const TICK_ROW_PX = LABEL_LINE_PX;
 
 function day(ms: number): string {
   return formatUtc8Date(ms);
@@ -116,7 +116,9 @@ function segmentLabel(holder: CodeHolder, current: boolean, px: number | null): 
     keyed ? shortenHash(holder.custody.lockArgs!, 'tight') : '',
   ];
   return (
-    candidates.find((text) => text && text.length * advance(LABEL_PX) + 2 * LABEL_PAD <= px) ?? ''
+    candidates.find(
+      (text) => text && text.length * snappedAdvancePx(LABEL_PX) + 2 * LABEL_PAD <= px
+    ) ?? ''
   );
 }
 
@@ -156,7 +158,7 @@ function versionTicks(
     const text = `${versions.join(' · ')} ${date}`;
     if (width === null)
       return { key: date, versions: versions.join(' · '), date, at, row: 0, anchorRight: false };
-    const w = text.length * advance(TICK_PX) + TICK_PAD;
+    const w = text.length * snappedAdvancePx(TICK_PX) + TICK_PAD;
     const x = (at / 100) * width;
     const anchorRight = x + w > width;
     const [start, end] = anchorRight ? [x - w, x] : [x, x + w];
@@ -206,7 +208,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
             data-version-tick={tick.date}
             data-row={tick.row}
             className={cn(
-              'absolute whitespace-nowrap leading-[14px]',
+              'leading-label absolute whitespace-nowrap',
               tick.anchorRight ? 'border-r pr-1' : 'border-l pl-1'
             )}
             style={{

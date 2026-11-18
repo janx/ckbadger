@@ -24,6 +24,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -130,11 +131,12 @@ export function codeClassTotals(classes: readonly ScriptCodeClassTotalApi[]): {
   return { ordered, held, total };
 }
 
-/** The in-segment words: 12 px with 10 px padding each side (the DAO concentration bar's). */
-const SEGMENT_LABEL_PX = 12;
+/**
+ * The in-segment words: the small step (`text-small`, 12 px) with 10 px padding each side (the DAO
+ * concentration bar's).
+ */
+const SEGMENT_LABEL_PX = fontPx('small');
 const SEGMENT_LABEL_PAD = 10;
-/** A monospace advance: whole pixels where the browser snaps them (Chromium), else 0.6 em. */
-const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
 
 /**
  * "Who can change the code" as the Scripts index's picture (hierarchy v3, C1, R12, R15): a 28 px
@@ -158,7 +160,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
   const fits = (text: string, i: number) =>
     width !== null &&
     (width * spans[i].width) / 100 >=
-      text.length * advance(SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
+      text.length * snappedAdvancePx(SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
   return (
     <div
       ref={ref}
