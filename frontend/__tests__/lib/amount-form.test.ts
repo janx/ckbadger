@@ -134,8 +134,10 @@ describe('the four forms of a CKB amount, at their boundaries (R5)', () => {
     // a compact figure that shows only zeros has no sign; its title keeps it
     expect(signed('-0.00000001', 'compact')).toBe('0.00');
     expect(ckbAmountTitle(ckb('-0.00000001'), true)).toBe(`${MINUS}0.00000001 CKB`);
-    // unsigned, the magnitude
-    expect(ckbAmountText(ckb('-999.995'), 'summary')).toBe('999.99');
+    // unsigned, refused, never its magnitude (re-pinned, review of the fixes M2: this wrote '999.99')
+    expect(() => ckbAmountText(ckb('-999.995'), 'summary')).toThrow(
+      'CKB amount -99999500000 shannons is negative where a sign is not written'
+    );
   });
 
   it('keeps a 20-digit integer part whole, in BigInt, with no float anywhere', () => {
