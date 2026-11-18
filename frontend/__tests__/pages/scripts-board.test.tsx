@@ -540,7 +540,9 @@ describe('Scripts list phone row (board L6)', () => {
         key: 'code',
         tone: 'body',
         left: 'lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
-        right: '161,049 live · of 2,707,778 · 4.19% occupied',
+        // re-pinned on purpose (the coordinator's sweep, F3-e): the counts are two lines below
+        // 560 px, live of ever over the share (they were one, "… · of 2,707,778 · 4.19% occupied")
+        right: '161,049 live · of 2,707,7784.19% occupied',
       },
       {
         key: 'description',
