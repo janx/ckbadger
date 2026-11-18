@@ -1157,12 +1157,13 @@ describe('TransactionDetailPage', () => {
   it('renders exact occupied bytes, output liveness, and output locks that did not run', async () => {
     render(<TransactionDetailPage />);
     const output = await screen.findByTestId('tx-io-output-0');
-    expect(output).toHaveTextContent('occupied 94');
+    // B4 fix round (re-pinned on purpose): the tile's occupied bytes carry their unit
+    expect(output).toHaveTextContent('occupied 94 B');
     expect(output).not.toHaveTextContent('occupied 94.00000000');
     expect(output).toHaveTextContent('live');
     // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
     expect(screen.getByText(/^occupied 94 → 94/)).toHaveTextContent(
-      /^occupied 94 → 94 · common knowledge 0 B$/
+      /^occupied 94 → 94 B · common knowledge 0 B$/
     );
     expect(
       document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)

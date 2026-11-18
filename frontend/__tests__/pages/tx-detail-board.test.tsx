@@ -744,8 +744,10 @@ describe('Transaction board, tier 2', () => {
       '555.00000000 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
     );
     // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
+    // B4 fix round (re-pinned on purpose, tests MUST-2): the pair carries its unit once, after
+    // it ("occupied 563 → 589 B"); it was bare beside the delta's "+26 B"
     expect(screen.getByText(/^occupied 563 → 589/)).toHaveTextContent(
-      /^occupied 563 → 589 · common knowledge \+26 B$/
+      /^occupied 563 → 589 B · common knowledge \+26 B$/
     );
   });
 
