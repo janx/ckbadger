@@ -84,6 +84,12 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
     // 94 px between its insets and under a compact tile of at least 72 px (88 px with its run
     // into the gap); only a pool's longer name is cut
     const miner = t.minerAddress ? minerName(t.minerAddress, t.minerPool, 'row') : null;
+    // under a compact tile its labels start at its left edge, except in the last column, where
+    // they end at its right edge (the ruling on F3-d)
+    const lastColumn = labelsUnder && t.number === model.last;
+    const under = lastColumn
+      ? ({ x: tx + TW, textAnchor: 'end' } as const)
+      : ({ x: tx, textAnchor: undefined } as const);
     return (
       <g key={t.hash} data-tile={t.number} data-dropped={dropped || undefined}>
         <title>
@@ -109,7 +115,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
           strokeDasharray={dropped ? '3 3' : undefined}
         />
         <text
-          x={tx + (compact ? 6 : W.inset)}
+          x={tx + (compact ? C.inset : W.inset)}
           y={y + (compact ? C.numberY : W.numberY)}
           fontSize={SVG_TEXT.label}
           fill={FORK_COLORS.ink}
@@ -117,7 +123,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
           #{String(t.number % 1000).padStart(3, '0')}
         </text>
         {compact ? (
-          <text x={tx + 6} y={y + C.hashY} fontSize={SVG_TEXT.tick} fill={FORK_COLORS.tick}>
+          <text x={tx + C.inset} y={y + C.hashY} fontSize={SVG_TEXT.tick} fill={FORK_COLORS.tick}>
             {t.hash.slice(2, 8)}
           </text>
         ) : (
@@ -134,8 +140,9 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
         {t.timestamp && (
           <text
             data-time
-            x={labelsUnder ? tx : tx + W.inset}
+            x={labelsUnder ? under.x : tx + W.inset}
             y={labelsUnder ? y + TH + C.timeY : y + W.timeY}
+            textAnchor={labelsUnder ? under.textAnchor : undefined}
             fontSize={SVG_TEXT.tick}
             fill={FORK_COLORS.dim}
           >
@@ -144,8 +151,9 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
         )}
         {miner && (
           <text
-            x={labelsUnder ? tx : tx + W.inset}
+            x={labelsUnder ? under.x : tx + W.inset}
             y={labelsUnder ? y + TH + C.minerY : y + W.minerY}
+            textAnchor={labelsUnder ? under.textAnchor : undefined}
             fontSize={SVG_TEXT.tick}
             fill={FORK_COLORS.tick}
           >
@@ -258,7 +266,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             stroke={FORK_COLORS.tileStroke}
           />
           <text
-            x={x(collapsed.first) + 6}
+            x={x(collapsed.first) + C.inset}
             y={yMain + C.numberY}
             fontSize={SVG_TEXT.label}
             fill={FORK_COLORS.ink}
@@ -266,7 +274,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             +{collapsed.count} earlier
           </text>
           <text
-            x={x(collapsed.first) + 6}
+            x={x(collapsed.first) + C.inset}
             y={yMain + C.hashY}
             fontSize={SVG_TEXT.tick}
             fill={FORK_COLORS.tick}

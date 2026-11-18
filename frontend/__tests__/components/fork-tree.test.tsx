@@ -66,17 +66,16 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(svg).not.toHaveAttribute('width', '100%');
   });
 
-  // Re-pinned (readability F3): four 72 px blocks with their 12 px time and miner under them need
-  // 370 px (6 + 4 × 72 + 3 × 20 + the last column's 16 px label run); they fitted 358 at 10 px.
-  // At 358 the oldest heights fold (the seven-deep case below and the layout's own test).
-  it('fits 370 px: blocks shrink to 72 px, time and miner move under them, nothing scrolls (V4)', () => {
-    stubChartWidth(370);
+  // Re-pinned twice: lane F3-d moved this to 370 px; the ruling on F3-d sets it back to 358, the
+  // last column's labels ending at its tile's right edge (6 + 4 × 72 + 3 × 20 + 4 = 358).
+  it('fits 358 px: blocks shrink to 72 px, time and miner move under them, nothing scrolls (V4)', () => {
+    stubChartWidth(358);
     const model = forkTreeModel(multi as unknown as ReorgDetail);
     const { container } = render(<ForkTree model={model} />);
     const svg = container.querySelector('svg[data-fork-tree]')!;
-    expect(svg).toHaveAttribute('width', '370');
-    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 370 /);
-    expectInside(svg, 370);
+    expect(svg).toHaveAttribute('width', '358');
+    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 358 /);
+    expectInside(svg, 358);
     // the branch line, the dashed lost blocks, the uncle arcs and ① ② are all still drawn
     expect(svg.querySelectorAll('[data-tile][data-dropped] rect')[0]).toHaveAttribute(
       'stroke-dasharray',
@@ -94,12 +93,11 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(Number(box.getAttribute('width'))).toBe(72);
   });
 
-  // re-pinned (readability F3): at 358 the four heights fold to "+2 earlier" and two columns, so
-  // four boxes are drawn there (the fold's, two main tiles, one dropped); 370 draws all six
+  // re-pinned twice: lane F3-d had [1248, 6], [370, 6], [358, 4] (358 folded); the ruling on F3-d
+  // draws every tile at 358 again
   it.each([
     [1248, 6],
-    [370, 6],
-    [358, 4],
+    [358, 6],
   ])('draws every block tile square at %i px, the dropped ones too (U-02, R1)', (width, boxes) => {
     stubChartWidth(width);
     const { container } = render(
@@ -311,14 +309,15 @@ describe('ForkTree at 358 px: four heights, every column and the branch (ruling 
     const branch = svg.querySelector(`[data-tile="${FP + 1}"][data-dropped]`)!;
     expect(branch).not.toBeNull();
     expect(screen.getByText('branch')).toBeInTheDocument();
-    // a time and a miner under each block that has them: today's +1 and +2 and the dropped +1
+    // a time and a miner under each block that has them: today's +1 and +2 and the dropped +1;
+    // the miner cut to its column by the tree's rule, (72 + 16) / 7.2 → 12 characters
     for (const g of [
       svg.querySelector(`[data-tile="${FP + 1}"]:not([data-dropped])`)!,
       svg.querySelector(`[data-tile="${FP + 2}"]:not([data-dropped])`)!,
       branch,
     ]) {
       expect(g.querySelector('[data-time]'), g.getAttribute('data-tile')!).not.toBeNull();
-      expect([...g.querySelectorAll('text')].map((t) => t.textContent)).toContain('ckb1…qs93hhsj');
+      expect([...g.querySelectorAll('text')].map((t) => t.textContent)).toContain('ckb1…qs93hh…');
     }
     const lines = allTextLines(svg);
     for (const line of lines) expectLineInside(line, viewBox(svg), 'the tree', 'flush');
