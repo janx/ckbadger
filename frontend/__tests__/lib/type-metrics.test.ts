@@ -6,6 +6,7 @@ import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
 import { cmapCodePoints, woff2Tables } from '@/__tests__/utils/woff2';
 import {
   LABEL_LINE_PX,
+  MEASURE_CHARS,
   MONO_ADVANCE_EM,
   MONO_DESCENT_EM,
   ROW_LINE_PX,
@@ -183,6 +184,24 @@ describe('lines', () => {
       row: `${ROW_LINE_PX}px`,
       label: `${LABEL_LINE_PX}px`,
     });
+  });
+});
+
+describe('the measure (readability R4, lane B7)', () => {
+  it('holds 76 characters of running text, 638.4 px at the body step', () => {
+    expect(MEASURE_CHARS).toBe(76);
+    // the captions were 640 px: at the body step the measure keeps their width within a glyph
+    expect(textPx(MEASURE_CHARS, fontPx('body'))).toBe(638.4);
+    expect(textPx(MEASURE_CHARS, fontPx('small'))).toBe(592.8);
+    expect(textPx(MEASURE_CHARS, fontPx('meta'))).toBe(547.2);
+  });
+
+  it('is written in characters, `max-w-measure`: 76ch, the advance of the face at any step', () => {
+    // `ch` is the advance of the "0" of the element's face; every glyph of JetBrains Mono is that
+    // wide (0.6 em, the face's tests above), so 76ch is textPx(76, size) at every step
+    expect(MONO_ADVANCE_EM).toBe(0.6);
+    const theme = tailwindConfig.theme as { extend: { maxWidth?: Record<string, string> } };
+    expect(theme.extend.maxWidth).toEqual({ measure: '76ch' });
   });
 });
 

@@ -74,6 +74,17 @@ export function lineHeightPx(step: TypeStep): number {
  */
 export const ROW_LINE_PX = Math.ceil(lineHeightPx('small'));
 
+/**
+ * The measure (readability plan 2026-11-18, ruling R4, lane B7): the most characters a line of
+ * running text holds — a lede, a paragraph that explains, a note, a comment line — 76, inside the
+ * 45 to 90 a line is read comfortably at. Written in classes as `max-w-measure`, `76ch`: `ch` is
+ * the advance of the "0" of the element that carries the class, and every glyph of the face is
+ * that wide, so the line holds 76 characters at whatever step it is set (638.4 px at the body
+ * step, `textPx(76, 14)`, where the captions were 640 px; 592.8 at the small step, 547.2 at the
+ * meta step). It is a maximum: a paragraph in a narrower column is the column's width.
+ */
+export const MEASURE_CHARS = 76;
+
 /** The leading of a line set tight: the least that keeps two rows of labels clear. */
 const TIGHT_LEADING_PX = 3;
 
