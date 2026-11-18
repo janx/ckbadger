@@ -601,7 +601,9 @@ export function ActivitiesStreamExplorer({
             {/* Readability B4: each day's rows, under its divider, with their runs folded; a run
                 folds within its day and across the older pages appended to it. */}
             {dayGroups(visibleItems, now).map(({ key, label, items }) => (
-              <div key={key}>
+              // under the filter too: another filter shows another set of rows, and its runs'
+              // state starts anew (a run the reader never opened under it is never drawn open)
+              <div key={`${selectedFilter}:${key}`}>
                 <ActivityDayDivider label={label} />
                 <ActivityRuns
                   age
