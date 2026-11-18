@@ -1,3 +1,4 @@
+import { occupiedBytesText } from '@/lib/occupied';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
@@ -241,7 +242,9 @@ describe('CellTile: its out point is a link, its state and bytes are values', ()
     const t = screen.getByTestId('tile');
     const row = t.querySelector<HTMLElement>('[data-tile-row="occupied"]')!;
     expect(inkOf(within(row).getByText('live'))).toBe(READING);
-    expect(inkOfText(row, '61')).toBe(READING);
+    // B4 fix round (re-pinned on purpose, tests MUST-2): the figure carries its unit, one value
+    // in the reading ink ("61 B", the one writer's); it was the bare "61"
+    expect(inkOfText(row, occupiedBytesText(BigInt(61)))).toBe(READING);
     expect(inkOfText(row, 'occupied')).toBe(QUIET);
   });
 
