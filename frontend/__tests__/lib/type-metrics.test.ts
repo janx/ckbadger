@@ -1,9 +1,9 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { brotliDecompressSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import tailwindConfig from '@/tailwind.config';
 import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
+import { woff2Tables } from '@/__tests__/utils/woff2';
 import {
   LABEL_LINE_PX,
   MONO_ADVANCE_EM,
@@ -26,85 +26,6 @@ import {
  */
 
 const FONTS = join(__dirname, '..', '..', 'public', 'fonts');
-
-/**
- * The WOFF2 known-table tags, by the index a table directory entry's flags carry (WOFF2 §5.1),
- * through `glyf` and `loca`, whose transform the version bits mark the other way round.
- */
-const KNOWN_TAGS = [
-  'cmap',
-  'head',
-  'hhea',
-  'hmtx',
-  'maxp',
-  'name',
-  'OS/2',
-  'post',
-  'cvt ',
-  'fpgm',
-  'glyf',
-  'loca',
-  'prep',
-  'CFF ',
-  'VORG',
-  'EBDT',
-  'EBLC',
-  'gasp',
-  'hdmx',
-  'kern',
-  'LTSH',
-  'PCLT',
-  'VDMX',
-  'vhea',
-  'vmtx',
-  'BASE',
-  'GDEF',
-  'GPOS',
-  'GSUB',
-];
-
-/**
- * The untransformed tables of a WOFF2 file, by tag (WOFF2 §5–6): the table directory, then one
- * Brotli stream holding every table end to end in directory order. `head`, `hhea`, `OS/2` and
- * `post` are never transformed, so they are read as stored.
- */
-function woff2Tables(path: string): Map<string, Buffer> {
-  const b = readFileSync(path);
-  expect(b.toString('latin1', 0, 4), path).toBe('wOF2');
-  const numTables = b.readUInt16BE(12);
-  const compressedLength = b.readUInt32BE(20);
-  let p = 48;
-  const base128 = () => {
-    let v = 0;
-    for (let i = 0; i < 5; i++) {
-      const c = b[p++];
-      v = v * 128 + (c & 0x7f);
-      if (!(c & 0x80)) return v;
-    }
-    throw new Error(`${path}: a UIntBase128 longer than 5 bytes`);
-  };
-  const entries: { tag: string; length: number }[] = [];
-  for (let i = 0; i < numTables; i++) {
-    const flags = b[p++];
-    let tag: string;
-    if ((flags & 0x3f) === 0x3f) {
-      tag = b.toString('latin1', p, p + 4);
-      p += 4;
-    } else tag = KNOWN_TAGS[flags & 0x3f] ?? `#${flags & 0x3f}`;
-    const version = (flags >> 6) & 3;
-    const origLength = base128();
-    const transformed = tag === 'glyf' || tag === 'loca' ? version !== 3 : version !== 0;
-    entries.push({ tag, length: transformed ? base128() : origLength });
-  }
-  const data = brotliDecompressSync(b.subarray(p, p + compressedLength));
-  const tables = new Map<string, Buffer>();
-  let offset = 0;
-  for (const { tag, length } of entries) {
-    tables.set(tag, data.subarray(offset, offset + length));
-    offset += length;
-  }
-  return tables;
-}
 
 describe('the face (JetBrains Mono, public/fonts)', () => {
   const faces = readdirSync(FONTS).filter((name) => /^jetbrains-mono-.*\.woff2$/.test(name));
