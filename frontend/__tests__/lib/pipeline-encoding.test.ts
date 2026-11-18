@@ -6,6 +6,7 @@ import {
   CHIP_PAINT,
   CUT_FILL,
   GHOST,
+  GILT_FILL,
   LINK_PAINT,
   PLATE_EDGE,
   PLATE_FILL,
@@ -21,7 +22,6 @@ import {
   paintSquare,
   shadeStep,
   squareSide,
-  tailFill,
   tok,
   txLook,
 } from '@/lib/pipeline/encoding';
@@ -202,16 +202,25 @@ describe('materials: well, plate, cut and the predicted NEXT', () => {
     expect(PLATE_EDGE).toBe('var(--c-text-dim)');
   });
 
-  // Lane R (Plate.dc.html `.lk`): a link is filled ticks in the muted ink, gold in the window.
-  it('fills the links in the muted ink, at 0.7 from NEXT, gold in the window, the flows at 0.8', () => {
+  // Direction G (Strap.dc.html `.sp`, `.sq2`, `.fw`): the strap is the plate's own tone between
+  // two blocks, so the chain reads as one piece; gilt inside the window; from NEXT (and from a
+  // block still landing) NEXT's own dashed outline, the only stroke in the chain. The pool's flows
+  // are arrowheads in the muted ink at 0.8, as their ticks were.
+  it('lays the strap in the plate’s tone, gilt in the window, NEXT’s dashed outline from NEXT', () => {
+    expect(GILT_FILL).toBe('var(--pipeline-gilt)');
     expect(LINK_PAINT).toEqual({
-      solid: { fill: 'var(--pipeline-ink-dim)', fillOpacity: null },
-      pend: { fill: 'var(--pipeline-ink-dim)', fillOpacity: 0.7 },
-      win: { fill: 'var(--pipeline-gold)', fillOpacity: null },
+      solid: { fill: PLATE_FILL },
+      win: { fill: GILT_FILL },
+      pend: GHOST.outline,
       flow: { fill: 'var(--pipeline-ink-dim)', fillOpacity: 0.8 },
     });
-    expect(tailFill(true)).toBe('var(--pipeline-gold)');
-    expect(tailFill(false)).toBe('var(--pipeline-ink-dim)');
+    expect(LINK_PAINT.pend).toEqual({
+      stroke: 'var(--pipeline-jade)',
+      strokeOpacity: 0.6,
+      dash: '2 2',
+    });
+    // the tail is the strap run on: no paint of its own
+    expect('tailFill' in encoding).toBe(false);
   });
 });
 
@@ -336,8 +345,8 @@ describe('the drop ember', () => {
 
 describe('the plate tokens', () => {
   const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
-  it('declares the plate, the cut and the three dots over their palette keys', () => {
-    for (const name of ['plate', 'cut', 'dot-waiting', 'dot-committed', 'dot-expired']) {
+  it('declares the plate, the cut, the gilt and the three dots over their palette keys', () => {
+    for (const name of ['plate', 'cut', 'gilt', 'dot-waiting', 'dot-committed', 'dot-expired']) {
       expect(css).toContain(`--pipeline-${name}: var(--c-pipeline-${name});`);
       expect(encoding.tok(name as encoding.PipelineToken)).toBe(`var(--pipeline-${name})`);
     }

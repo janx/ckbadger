@@ -327,13 +327,37 @@ const FRACTION_INKS = [
   { sign: 'neutral', ink: 'text', fraction: 'text-dim' },
 ] as const;
 
-// Lane E2 round 3: the gold of a word on a pipeline tile is the plain gold by night (the home
-// page's approved look) and the gold's bright step by day, where the gold is 4.15:1 on the tile.
-// One key, two existing values: pinned equal so it can never drift from either.
-describe('the pipeline word gold', () => {
-  it('is the gold by night and the gold’s bright step by day', () => {
-    expect(PALETTE.dark['pipeline-word-gold']).toBe(PALETTE.dark.gold);
-    expect(PALETTE.light['pipeline-word-gold']).toBe(PALETTE.light['gold-bright']);
+// Direction G (round 7, Strap.dc.html, StrapDay.dc.html): the proposal window is a gilt strap
+// across the heads of its plates, so a block's number no longer turns gold inside it (the word
+// gold would be 4.2 : 1 on the gilt by night, 3.8 by day): the number stays text-bright and the
+// counts text. The word gold of lane E2 round 3 went with it.
+describe('the pipeline gilt (direction G)', () => {
+  it('takes the values the boards set, by night and by day, and the word gold is gone', () => {
+    expect(PALETTE.dark['pipeline-gilt']).toBe('#564013');
+    expect(PALETTE.light['pipeline-gilt']).toBe('#c8b47f');
+    expect('pipeline-word-gold' in PALETTE.dark).toBe(false);
+    expect('pipeline-word-gold' in PALETTE.light).toBe(false);
+  });
+
+  // The words a gilt plate's head line carries: its number (text-bright) and its "+N" (text).
+  // text-dim is not used on the gilt (2.7 / 2.9 : 1), as it is not on the plate.
+  it('reads the number and the counts on the gilt at body contrast, in both themes', () => {
+    for (const theme of THEMES)
+      for (const key of ['text-bright', 'text'] as const) {
+        const ratio = contrastRatio(PALETTE[theme][key], PALETTE[theme]['pipeline-gilt']);
+        expect(ratio, `${theme} ${key} on the gilt`).toBeGreaterThanOrEqual(4.5);
+      }
+    // measured for the ruling: text at 4.58 by night and 4.77 by day
+    expect(contrastRatio(PALETTE.dark.text, PALETTE.dark['pipeline-gilt'])).toBeCloseTo(4.58, 2);
+    expect(contrastRatio(PALETTE.light.text, PALETTE.light['pipeline-gilt'])).toBeCloseTo(4.77, 2);
+  });
+
+  it('stands the gilt off the plate it lies on by 1.25:1, in both themes', () => {
+    for (const theme of THEMES)
+      expect(
+        contrastRatio(PALETTE[theme]['pipeline-gilt'], PALETTE[theme]['pipeline-plate']),
+        theme
+      ).toBeGreaterThanOrEqual(1.25);
   });
 });
 
@@ -410,13 +434,19 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
     }
   });
 
-  it('keeps the gold of the window and the muted tick of a link at 3:1 on the page ground', () => {
-    for (const theme of THEMES)
-      for (const key of ['gold', 'ink-muted'] as const)
-        expect(
-          contrastRatio(PALETTE[theme][key], PALETTE[theme]['base-bg']),
-          `${theme} ${key}`
-        ).toBeGreaterThanOrEqual(3);
+  // Direction G: the window's gold is its one line of words now (text grade), and the muted ink
+  // marks the pool's flows as arrowheads (a shape, 3:1), where the links' ticks were.
+  it('keeps the window’s gold words at 4.5:1 and the flows’ muted arrowheads at 3:1 on the page ground', () => {
+    for (const theme of THEMES) {
+      expect(
+        contrastRatio(PALETTE[theme].gold, PALETTE[theme]['base-bg']),
+        `${theme} gold`
+      ).toBeGreaterThanOrEqual(4.5);
+      expect(
+        contrastRatio(PALETTE[theme]['ink-muted'], PALETTE[theme]['base-bg']),
+        `${theme} ink-muted`
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it('stands the plate off the page ground by 1.25:1, in both themes', () => {

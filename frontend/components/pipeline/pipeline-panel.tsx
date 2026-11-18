@@ -66,7 +66,7 @@ import {
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
 import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
-import { WindowLabel, WindowTicks } from '@/components/pipeline/window-ruler';
+import { WindowLabel } from '@/components/pipeline/window-ruler';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
@@ -74,9 +74,9 @@ import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 
 const SVG_LABEL = {
-  row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and its committed transactions set in cuts, starting with the cellbase',
+  row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as plates joined to their parents by one strap through their heads, gilt across the proposal window of the next block, each with its seal, its proposal dots and its committed transactions set in cuts, starting with the cellbase',
   column:
-    'A transaction lifetime read top to bottom: the mempool and proposed pool wells, the predicted next block, then the tip and three older blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and a line of transactions set in cuts, starting with the cellbase',
+    'A transaction lifetime read top to bottom: the mempool and proposed pool wells, the predicted next block, then the tip and three older blocks as plates joined to their parents by one strap down through their seals, gilt across the proposal window of the next block, each with its seal, its proposal dots and a line of transactions set in cuts, starting with the cellbase',
 } as const;
 
 /**
@@ -425,28 +425,25 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     mined: true,
     hash: c.block.hash,
     parentHash: c.block.parentHash,
-    solid: 1,
+    plate: true,
   }));
   const nextSlot = scene.next ? axis.along(scene.next) : null;
-  const rulerSlots: RulerSlot[] =
+  const windowSlots: RulerSlot[] =
     scene.next && nextSlot
       ? [{ number: scene.next.number, ...nextSlot, mined: false }, ...chainSlots]
       : chainSlots;
   const windowText = windowLabel(anchor, scene.windowTip, consensus);
-  const ruler = axis.ruler(rulerSlots, anchor, consensus, windowText);
-  // The window is drawn in full only while something that has one is hovered: NEXT, a block, the
-  // proposed well or the lane itself. At rest only its gold bands show it.
+  const windowWords = axis.lane(windowSlots, anchor, consensus, windowText).label;
+  // The window's words are drawn only while something that has a window is hovered: NEXT, a block,
+  // the proposed well or the lane itself. At rest (and under the pointer) the gilt strap says it.
   const showWindow = lane || windowBlock !== null;
-  // The lane above the cards holds the window in a row; a column has no lane (the rows span it).
-  const laneGeom =
-    scene.orientation === 'row'
-      ? axis.ruler(
-          rulerSlots,
-          defaultH,
-          consensus,
-          windowLabel(defaultH, scene.windowTip, consensus)
-        ).hit
-      : null;
+  // The lane above the cards holds the window's words in a row; a column has no lane.
+  const laneGeom = axis.lane(
+    windowSlots,
+    defaultH,
+    consensus,
+    windowLabel(defaultH, scene.windowTip, consensus)
+  ).hit;
   const paths = axis.chainPaths(chainSlots, nextSlot, anchor, consensus);
 
   // Pointing at a block makes it H: blocks outside its window step back (prototype paintCard).
@@ -711,8 +708,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
         }
       >
         <g pointerEvents="none">
-          <ChainLine paths={paths} tailOpen={ruler.tailOpen} along={scene.orientation} />
-          {showWindow && <WindowTicks d={axis.ticks(ruler)} faded={arc !== null} />}
+          <ChainLine paths={paths} along={scene.orientation} dim={dimAnchor !== null} />
         </g>
         {column ? (
           <ColumnPool scene={scene} dimOf={poolDim} onIds={onIds} />
@@ -726,20 +722,28 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
             ) : (
               <NextCard next={scene.next} dim={nextDim} />
             ))}
-          {scene.cards.map((c, i) => {
-            const Card = column ? ColumnBlock : BlockCard;
-            return (
-              <Card
+          {scene.cards.map((c, i) =>
+            column ? (
+              <ColumnBlock
                 key={c.id}
                 card={c}
-                numberInWindow={showWindow && inWindow(c.block.number, anchor, consensus)}
                 highlighted={motionView.highlighted(c.id)}
                 dim={cardDim(c.block.number)}
                 onIds={onIds}
                 age={i}
               />
-            );
-          })}
+            ) : (
+              <BlockCard
+                key={c.id}
+                card={c}
+                gilt={inWindow(c.block.number, anchor, consensus)}
+                highlighted={motionView.highlighted(c.id)}
+                dim={cardDim(c.block.number)}
+                onIds={onIds}
+                age={i}
+              />
+            )
+          )}
         </g>
         <g data-layer="labels" pointerEvents="none">
           {scene.bands ? (
@@ -748,7 +752,12 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
             <NextColumn available={snapshot.next !== null} />
           )}
           {showWindow && (
-            <WindowLabel ruler={ruler} emphasis={lane} faded={arc !== null} text={windowText} />
+            <WindowLabel
+              label={windowWords}
+              emphasis={lane}
+              faded={arc !== null}
+              text={windowText}
+            />
           )}
         </g>
         <g data-layer="hover" pointerEvents="none">

@@ -1,47 +1,32 @@
 'use client';
 
-import { tok } from '@/lib/pipeline/encoding';
-import { G, type RulerGeom } from '@/lib/pipeline/layout';
+import { G, type WindowLabelGeom } from '@/lib/pipeline/layout';
 import { T10C, T10G } from '@/components/pipeline/svg-text';
 
-interface WindowRulerProps {
-  ruler: RulerGeom;
+interface WindowLabelProps {
+  /** Where `windowLane` put the words; null when no plate of the window is in view. */
+  label: WindowLabelGeom | null;
   /** The window lane is hovered. */
   emphasis: boolean;
-  /** A reward link uses the lane above the cards; the ruler steps back meanwhile. */
+  /** A reward link uses the lane above the cards; the words step back meanwhile. */
   faded: boolean;
+  text: string;
 }
 
 /**
- * The hovered window: two ticks and the dimension line between them (a row), or ticks across the
- * gaps (a column); the rest is in the hover. `d` comes from the scene's axis. At rest the window
- * draws nothing of its own: its gold bands say it (chain-line.tsx).
+ * The window's one line of words in the lane above the plates (a row; a column has no lane),
+ * start-anchored where `windowLane` put it: at the left edge of the window's first plate in view,
+ * or ending at the view's edge. Nothing else marks the window under the pointer (direction G: no
+ * tick, no dimension line); the gilt strap says it.
  */
-export function WindowTicks({ d, faded }: { d: string; faded: boolean }) {
-  return (
-    <path
-      data-ruler-ticks
-      d={d || 'M0 0'}
-      fill="none"
-      strokeWidth={1}
-      strokeOpacity={0.9}
-      opacity={faded ? 0.15 : 1}
-      vectorEffect="non-scaling-stroke"
-      pointerEvents="none"
-      style={{ stroke: tok('gold') }}
-    />
-  );
-}
-
-/** The window's one line of text, where `windowRuler` put it: in the line's break, or beside it. */
-export function WindowLabel({ ruler, emphasis, faded, text }: WindowRulerProps & { text: string }) {
-  if (ruler.label === null) return null;
+export function WindowLabel({ label, emphasis, faded, text }: WindowLabelProps) {
+  if (label === null) return null;
   return (
     <text
       data-window-label
-      x={ruler.label.x.toFixed(1)}
+      x={label.x0.toFixed(1)}
       y={G.winY + 3.5}
-      textAnchor="middle"
+      textAnchor="start"
       opacity={faded ? 0.15 : 1}
       pointerEvents="none"
       className={emphasis ? T10C : T10G}

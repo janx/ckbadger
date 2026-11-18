@@ -13,7 +13,6 @@ import {
 } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import type { PipelineProposal, PipelineSnapshot, PipelineTx } from '@/lib/api';
 import {
-  BAND,
   BLOCK_FIELD_CAPACITY,
   CARD_H,
   CELL,
@@ -45,12 +44,10 @@ import {
   columnLineH,
   columnRewardLink,
   columnRowH,
-  columnRulerPath,
   columnWellCountAt,
   columnWellHeadAt,
   columnWellRect,
   columnWellShade,
-  columnWindowRuler,
   fitLine,
   flowPaths,
   packLine,
@@ -61,16 +58,16 @@ import {
   rewardLink,
   rewardTarget,
   rowHead,
-  rulerPath,
   side,
+  strapBox,
   tail4,
   uncleRowH,
   unclesH,
   wellRect,
   wellShade,
   windowLabel,
+  windowLane,
   windowRange,
-  windowRuler,
   labelWidth,
   type ChainSlotState,
   type WindowLabelGeom,
@@ -151,7 +148,7 @@ interface Rect {
   h: number;
 }
 
-/** The filled rectangles of a tick band's path; anything else in the path fails the test. */
+/** The filled rectangles of a strap's path; anything else in the path fails the test. */
 function rects(d: string): Rect[] {
   const out: Rect[] = [];
   let read = 0;
@@ -267,12 +264,25 @@ describe('geometry of the one-row canvas', () => {
     expect([G.mempoolX, G.proposedX, G.nextX, G.chainX0]).toEqual([0, 117, 246, 363]);
   });
 
-  it('keeps the window bracket, its label and the reward link in the 18 px lane above the plates', () => {
-    // The dimension line runs along the lane's middle; its ticks start 5 px above it, in the lane.
+  // Direction G (round 7, Strap.dc.html `.sp`): one strap through the head line of the plates, the
+  // head line itself (plate y 8 … 28), so the stone and the number stand on it.
+  it('runs the strap through the head line: canvas y 26 … 46, 20 px, the stone and the number on it', () => {
+    expect([G.strapY, G.strapH]).toEqual([26, 20]);
+    expect(G.strapY - G.cardTop).toBe(8);
+    // exactly the head line: it ends where the head does, and the words' middle is its middle
+    expect(G.strapY + G.strapH).toBe(G.cardTop + G.headH);
+    expect(G.strapY + G.strapH / 2).toBe(G.headY);
+    // the 14 px stone stands inside it, 3 px clear of both edges
+    expect(G.stoneY - G.strapY).toBe(3);
+    expect(G.strapY + G.strapH - (G.stoneY + G.stone)).toBe(3);
+    // a plate's own strap, local to its card: across the whole plate, at the strap's y
+    expect(strapBox('row', G.cardW, CARD_H)).toEqual({ x: 0, y: 26, width: 99, height: 20 });
+  });
+
+  it('keeps the window’s words and the reward link in the 18 px lane above the plates', () => {
     expect(G.winY).toBe(9);
-    expect(G.winY - 5).toBeGreaterThanOrEqual(0);
-    const ruler = { ticks: [400], label: null, hit: null, tailOpen: false };
-    expect(rulerPath(ruler)).toBe(`M400.0 4V${G.cardTop + G.headH}`);
+    // the words' baseline sits inside the lane, above the plates
+    expect(G.winY + 3.5).toBeLessThan(G.cardTop);
     // The reward link turns along the lane, never into a plate.
     const link = rewardLink({ X: 380, Y: 73.5 }, { X: 500, Y: 73.5 }, { x0: 600, x1: 666 });
     expect(link.d).toContain(`H495.0Q500.0 ${G.winY}`);
@@ -860,59 +870,41 @@ describe('proposal window', () => {
     expect(inWindow(89, 100, MAINNET)).toBe(false);
   });
 
-  it('puts both ticks in the middle of the gap between neighbouring plates', () => {
-    const ruler = windowRuler(slots, 101, MAINNET, 2000, textOf(101));
-    const at = (n: number) => slots.find((s) => s.number === n) as RulerSlot;
-    // Near edge: between #100 (H−1) and #99 (H−2). Far edge: between #91 (H−10) and #90 (H−11).
-    const xn = (at(100).x + at(100).w + at(99).x) / 2;
-    const xf = (at(91).x + at(91).w + at(90).x) / 2;
-    expect(ruler.ticks).toEqual([xn, xf]);
-    // The label fits between them: centred, with the line broken around it.
-    expect(ruler.label?.at).toBe('between');
-    expect(ruler.label?.x).toBe((xn + xf) / 2);
-    expect(ruler.tailOpen).toBe(false);
+  // Direction G: no tick and no dimension line. The window's one line of words starts at the left
+  // edge of its first plate in view (the one nearest NEXT); the lane's hit area runs on the plates'
+  // edges, where it ran on the mid-gap ticks.
+  it('starts the words at the first window plate in view, and runs the lane on the plates’ edges', () => {
+    const lane = windowLane(slots, 101, MAINNET, 2000, textOf(101));
+    // The window of #101 is #91 … #99: #99 at 480 is the first in view, #91 ends at 1180.
+    const text = textOf(101);
+    expect(labelWidth(text)).toBeCloseTo(343.2, 9);
+    expect(lane.label).toEqual({ x0: 480, x1: 480 + labelWidth(text) });
+    // the lane: from NEXT (H's own plate) to #90 past the far end; the head line from #99's left
+    // edge to #91's right edge
+    expect(lane.hit).toEqual({ x0: 214, x1: 1260, xn: 480, xf: 1180 });
+    expect(lane).not.toHaveProperty('ticks');
+    expect(lane).not.toHaveProperty('tailOpen');
   });
 
-  it('lets the window run off the last plate when its far edge is not on screen', () => {
+  it('lets the lane run to the view’s edge when the window’s far end is not on screen', () => {
     const chain = slots.filter((s) => s.mined).slice(0, 5);
-    const ruler = windowRuler(chain, 101, MAINNET, 1000, textOf(101));
-    expect(ruler.ticks).toHaveLength(1);
-    expect(ruler.tailOpen).toBe(true);
-    expect(ruler.hit?.xf).toBe(1000);
+    const lane = windowLane(chain, 101, MAINNET, 1000, textOf(101));
+    expect(lane.hit).toEqual({ x0: 480, x1: 1000, xn: 480, xf: 1000 });
   });
 
-  it('has no ruler when the near edge is not on screen', () => {
-    const ruler = windowRuler(
+  it('has no words and no lane when no plate of the window is in view', () => {
+    const lane = windowLane(
       [{ number: 100, x: 400, w: 60, mined: true }],
       120,
       MAINNET,
       1000,
       textOf(120)
     );
-    expect(ruler.ticks).toEqual([]);
-    expect(ruler.label).toBeNull();
-    expect(ruler.hit).toBeNull();
-    // re-pinned with lane R: the window at rest has no marks (its gold bands say it); hovered,
-    // such a window draws nothing either
-    expect(rulerPath(ruler)).toBe('');
-  });
-
-  it('raises the ticks to the dimension line when hovered and breaks the line around the label', () => {
-    const ruler = windowRuler(slots, 101, MAINNET, 2000, textOf(101));
-    const d = rulerPath(ruler);
-    const [xn, xf] = ruler.ticks;
-    // Both ticks drop from above the dimension line onto the head line (28 down the plate).
-    expect(d).toContain(`M${xn.toFixed(1)} 4V46`);
-    expect(d).toContain(`M${xf.toFixed(1)} 4V46`);
-    // Two segments of the dimension line, from each tick to the label's gap.
-    const segs = [...d.matchAll(/M([\d.]+) (\d+)H([\d.]+)/g)].map((m) => m.slice(1).map(Number));
-    expect(segs).toHaveLength(2);
-    expect(segs.every((g) => g[1] === G.winY)).toBe(true);
-    expect(segs[0][0]).toBeCloseTo(xn, 1);
-    expect(segs[1][2]).toBeCloseTo(xf, 1);
-    // The break is exactly the label's room.
-    expect(segs[0][2]).toBeCloseTo(ruler.label?.x0 as number, 1);
-    expect(segs[1][0]).toBeCloseTo(ruler.label?.x1 as number, 1);
+    expect(lane).toEqual({ label: null, hit: null });
+    // NEXT is never a plate of a window: a window of NEXT alone has none either
+    expect(
+      windowLane([{ number: 101, x: 214, w: 60, mined: false }], 103, MAINNET, 1000, textOf(103))
+    ).toEqual({ label: null, hit: null });
   });
 
   it('writes one line naming whose window it is and how many blocks it spans', () => {
@@ -925,8 +917,9 @@ describe('proposal window', () => {
   });
 });
 
-describe('window label placement: inside the view, never across a tick', () => {
-  // The 1246 px canvas: NEXT, then 7 blocks; the window of a block runs right, towards older ones.
+describe('window label placement: from the first window plate in view, inside the view', () => {
+  // The 1246 px canvas: NEXT, then 7 blocks (363, 480 … 1065, the last ending at 1164); the window
+  // of a block runs right, towards older ones.
   const W = CONTAINER_VIEW_W;
   const TIP = 18_734_755;
   const NEXT = TIP + 1;
@@ -939,99 +932,72 @@ describe('window label placement: inside the view, never across a tick', () => {
       mined: true,
     })),
   ];
-  const place = (H: number) => {
+  const place = (H: number, view = W) => {
     const text = windowLabel(H, TIP, MAINNET);
-    return { text, ruler: windowRuler(slots, H, MAINNET, W, text) };
+    return { text, lane: windowLane(slots, H, MAINNET, view, text) };
   };
-  const textBox = (label: WindowLabelGeom, text: string) => [
-    label.x - labelWidth(text) / 2,
-    label.x + labelWidth(text) / 2,
-  ];
 
-  // Measured in Chrome (lane F): the dimension line struck through the label's first and last
-  // glyphs, its gap sized for a 10 px glyph (6 px) while the canvas draws the label in text-meta.
+  // Measured in Chrome (lane F): the label is drawn in text-meta, so it is measured at 11 px.
   it('measures a label at the size the canvas draws it: text-meta, 11 px, 0.6 em a glyph', () => {
     expect(SMALL_TEXT_PX).toBe(11);
     expect(tailwindConfig.theme.fontSize.meta[0]).toBe(`${SMALL_TEXT_PX}px`);
-    // 49 glyphs of 6.6 px: 323.4 px (it was taken for 294), and 6 px of line kept clear each side
-    const { text, ruler } = place(TIP - 2);
+    // 49 glyphs of 6.6 px: 323.4 px, and the label's extent is exactly its text, no padding
+    const { text, lane } = place(TIP - 2);
     expect(text).toHaveLength(49);
     expect(labelWidth(text)).toBe(323.4);
-    const label = ruler.label as WindowLabelGeom;
-    expect(label.x1 - label.x0).toBeCloseTo(323.4 + 2 * 6, 9);
+    const label = lane.label as WindowLabelGeom;
+    expect(label.x1 - label.x0).toBeCloseTo(323.4, 9);
     expect([labelWidth('uncle'), labelWidth('+2999'), labelWidth('+3')]).toEqual([33, 33, 13.2]);
   });
 
-  it('centres the label between the ticks when it fits there, even with the far end off screen', () => {
-    // T−2: near tick at 822 (between …4752 ending at 813 and …4751 at 831), far end past the
-    // edge; 1246 − 822 = 424 ≥ 323.4 + 2 · 6.
-    const { text, ruler } = place(TIP - 2);
-    expect(ruler.ticks).toEqual([822]);
-    expect(ruler.label).toEqual({
-      x: (822 + W) / 2,
-      x0: (822 + W) / 2 - 167.7,
-      x1: (822 + W) / 2 + 167.7,
-      at: 'between',
-    });
-    const [l, r] = textBox(ruler.label as WindowLabelGeom, text);
-    expect(l).toBeGreaterThan(822);
-    expect(r).toBeLessThanOrEqual(W);
+  it('starts the label at the left edge of the first window plate in view', () => {
+    // NEXT's window is T−9 … T−1: T−1 at 480 is its first plate; 52 glyphs, 343.2 px, to 823.2
+    const next = place(NEXT);
+    expect(next.text).toHaveLength(52);
+    expect(next.lane.label).toEqual({ x0: 480, x1: 480 + 343.2 });
+    // T−2's window is T−12 … T−4: T−4 at 831, and 831 + 323.4 = 1154.4 stays inside 1246
+    expect(place(TIP - 2).lane.label).toEqual({ x0: 831, x1: 831 + 323.4 });
   });
 
-  it('puts it outside the window, before the near tick, when the window in view is too short', () => {
-    // T−4: near tick at 1056; the label (323.4 px + padding) no longer fits after it.
-    const xn = 1056;
-    const { text, ruler } = place(TIP - 4);
-    expect(ruler.ticks).toEqual([xn]);
-    expect(ruler.label).toEqual({ x: xn - 167.7, x0: xn - 335.4, x1: xn, at: 'outside' });
-    const [l, r] = textBox(ruler.label as WindowLabelGeom, text);
-    expect(l).toBeGreaterThanOrEqual(0);
-    expect(r).toBe(xn - 6);
-    // The dimension line is then drawn whole, from the tick to the view edge.
-    expect(rulerPath(ruler)).toBe(`M1056.0 4V46M1056.0 ${G.winY}H${W.toFixed(1)}`);
-    // T−3: near tick at 939, 307 px of window in view, under the label's 335.4: outside too.
-    const t3 = place(TIP - 3).ruler;
-    expect(t3.ticks).toEqual([939]);
-    expect(t3.label).toEqual({ x: 939 - 167.7, x0: 939 - 335.4, x1: 939, at: 'outside' });
+  it('ends it at the view’s edge instead when it would pass that edge', () => {
+    // T−3's window is T−13 … T−5: T−5 at 948 is its first plate, and 948 + 323.4 = 1271.4 > 1246
+    const t3 = place(TIP - 3).lane.label as WindowLabelGeom;
+    expect(t3.x0).toBeCloseTo(W - 323.4, 9);
+    expect(t3.x0).toBeCloseTo(922.6, 9);
+    expect(t3.x1).toBe(W);
+    // T−4's window starts at T−6 (1065): the same end
+    expect((place(TIP - 4).lane.label as WindowLabelGeom).x1).toBe(W);
   });
 
-  it('keeps every hovered window label of the row inside [0, viewW] and clear of its ticks', () => {
+  it('draws no label when no plate of the window is in view', () => {
+    // T−5's window is T−15 … T−7: the row ends at T−6
+    expect(place(TIP - 5).lane).toEqual({ label: null, hit: null });
+    // The 1246 px row read through a 760 px view: T−4's only plate in it (T−6 at 1065) is past it
+    expect(place(TIP - 4, 760).lane).toEqual({ label: null, hit: null });
+  });
+
+  it('keeps every window label of the row inside [0, viewW]', () => {
     for (const s of slots) {
-      const { text, ruler } = place(s.number);
-      if (!ruler.label) {
-        // Only a window whose near end is off screen has no label (and no ruler at all).
-        expect(ruler.hit).toBeNull();
-        continue;
-      }
-      const [l, r] = textBox(ruler.label, text);
-      expect(l).toBeGreaterThanOrEqual(0);
-      expect(r).toBeLessThanOrEqual(W);
-      for (const tx of ruler.ticks) expect(tx < l || tx > r).toBe(true);
+      const { text, lane } = place(s.number);
+      if (!lane.label) continue;
+      expect(lane.label.x0).toBeGreaterThanOrEqual(0);
+      expect(lane.label.x1).toBeLessThanOrEqual(W);
+      expect(lane.label.x1 - lane.label.x0).toBeCloseTo(labelWidth(text), 9);
     }
-  });
-
-  it('draws no label when the near tick itself is past the view edge', () => {
-    // The 1246 px row read through a 760 px view: the window of T−4 starts at 1056, off view.
-    const text = windowLabel(TIP - 4, TIP, MAINNET);
-    const ruler = windowRuler(slots, TIP - 4, MAINNET, 760, text);
-    expect(ruler.ticks).toEqual([1056]);
-    expect(ruler.label).toBeNull();
-    // The ruler itself is still drawn (and clipped by the view).
-    expect(rulerPath(ruler)).toContain(`M1056.0 ${G.winY}H760.0`);
   });
 });
 
 describe('a narrower view: fewer blocks, all of them whole', () => {
   it.each([589, 606, 760, 1000, CONTAINER_VIEW_W])(
-    'at %i px: no plate past the edge, a forward tail, every window label in view and off its ticks',
+    'at %i px: no plate past the edge, a forward tail, every window label in view',
     (W) => {
       const s = buildPipelineSnapshot();
       const scene = buildScene(s, W, 'settled');
       const next = scene.next as NonNullable<Scene['next']>;
       for (const c of scene.cards) expect(c.x + c.w).toBeLessThanOrEqual(W - G.marginR);
       const last = scene.cards[scene.cards.length - 1];
-      // The tail starts 2 px past the last plate and runs 66 px, or to the view edge.
-      const x0 = last.x + last.w + 2;
+      // The tail starts at the last plate's edge and runs 66 px, or to the view edge.
+      const x0 = last.x + last.w;
       expect(chainTail(scene.cards, W)).toEqual({ x0, x1: x0 + Math.min(66, W - x0) });
       expect(x0).toBeLessThan(W);
       const slots: RulerSlot[] = [
@@ -1040,29 +1006,28 @@ describe('a narrower view: fewer blocks, all of them whole', () => {
       ];
       for (const sl of slots) {
         const text = windowLabel(sl.number, scene.windowTip, s.consensus);
-        const ruler = windowRuler(slots, sl.number, s.consensus, W, text);
-        for (const tx of ruler.ticks) {
-          expect(tx).toBeGreaterThanOrEqual(0);
-          expect(tx).toBeLessThanOrEqual(W);
-        }
-        if (!ruler.label) {
-          // Only a window whose near end is past the last plate has no label (and no ruler).
-          expect(ruler.hit).toBeNull();
+        const lane = windowLane(slots, sl.number, s.consensus, W, text);
+        if (!lane.label) {
+          // Only a window whose near end is past the last plate has no words (and no lane).
+          expect(lane.hit).toBeNull();
           expect(sl.number - s.consensus.proposalWindowClosest).toBeLessThan(last.block.number);
           continue;
         }
-        const half = labelWidth(text) / 2;
-        expect(ruler.label.x - half).toBeGreaterThanOrEqual(0);
-        expect(ruler.label.x + half).toBeLessThanOrEqual(W);
-        for (const tx of ruler.ticks) {
-          expect(tx < ruler.label.x - half || tx > ruler.label.x + half).toBe(true);
-        }
+        expect(lane.label.x0).toBeGreaterThanOrEqual(0);
+        expect(lane.label.x1).toBeLessThanOrEqual(W);
+        // it starts at its first plate unless that would carry it past the view's edge
+        const first = Math.min(
+          ...scene.cards
+            .filter((c) => inWindow(c.block.number, sl.number, s.consensus))
+            .map((c) => c.x)
+        );
+        expect(lane.label.x0).toBe(Math.min(first, W - labelWidth(text)));
       }
     }
   );
 });
 
-describe('chainPaths: the links, two bands of ticks', () => {
+describe('chainPaths: the strap', () => {
   // NEXT at 246, then #100 … #85 every 117 px, all linked parent to child.
   const cards: ChainSlotState[] = Array.from({ length: 16 }, (_, i) => ({
     number: 100 - i,
@@ -1071,82 +1036,120 @@ describe('chainPaths: the links, two bands of ticks', () => {
     mined: true,
     hash: `h${100 - i}`,
     parentHash: `h${99 - i}`,
-    solid: 1,
+    plate: true,
   }));
   const next = { x: G.nextX, w: CARD_W };
   const VIEW = 2400;
-  /** The two bands of one 18 px gap after a plate ending at `end`: 4 ticks each. */
-  const gapBands = (end: number) =>
-    [50, 98]
-      .map((y) => [0, 4, 8, 12].map((k) => `M${(end + 2 + k).toFixed(1)} ${y}.0h2v10h-2Z`).join(''))
-      .join('');
+  /** The strap across the gap after a plate ending at `end`: the whole 18 px, 26 … 46. */
+  const gapStrap = (end: number) => `M${end.toFixed(1)} 26.0h18.0v20.0h-18.0Z`;
+  /** The two dashed lines of a strap not yet a block, from `x0` to `x1`. */
+  const dashedPair = (x0: number, x1: number) =>
+    `M${x0.toFixed(1)} 26.5H${x1.toFixed(1)}M${x0.toFixed(1)} 45.5H${x1.toFixed(1)}`;
 
-  it('is filled tick rectangles only, at 32 and 80 down the plate: no stroke, no arrowheads', () => {
-    expect(BAND.inset).toBe(2);
-    expect(BAND.link).toEqual({ tick: 2, pitch: 4, depth: 10 });
-    expect(G.linkY.map((y) => y - G.cardTop)).toEqual([32, 80]);
+  it('fills each link across the whole gap at the strap’s y and height: no tick, no inset', () => {
     const paths = chainPaths(cards, next, 101, MAINNET, VIEW);
-    expect(Object.keys(paths).sort()).toEqual(['pend', 'solid', 'tail', 'win']);
-    for (const d of Object.values(paths)) {
-      for (const r of rects(d)) {
-        expect([r.w, r.h]).toEqual([2, 10]);
-        expect([50, 98]).toContain(r.y);
+    expect(Object.keys(paths).sort()).toEqual(['pend', 'solid', 'tail', 'tailWin', 'win']);
+    for (const name of ['solid', 'win', 'tail', 'tailWin'] as const) {
+      for (const r of rects(paths[name])) {
+        expect([r.y, r.h], name).toEqual([G.strapY, G.strapH]);
       }
     }
+    // the tip (363 … 462) → #99 (480 …): one rect from the tip's right edge to #99's left edge
+    expect(paths.solid.startsWith(gapStrap(G.chainX0 + CARD_W))).toBe(true);
+    expect(rects(paths.solid)[0]).toEqual({ x: 462, y: 26, w: 18, h: 20 });
   });
 
-  it('crosses an 18 px gap in 4 ticks of 2 px on a 4 px pitch, 2 px inside it', () => {
+  it('is two dashed lines from NEXT to the tip, on the strap’s top and bottom pixel rows', () => {
     const paths = chainPaths(cards, next, 101, MAINNET, VIEW);
-    // NEXT ends at 345, the tip starts at 363: ticks at 347, 351, 355, 359, the last ending at 361.
-    expect(paths.pend).toBe(gapBands(G.nextX + CARD_W));
-    expect(paths.pend).toBe(
-      'M347.0 50.0h2v10h-2ZM351.0 50.0h2v10h-2ZM355.0 50.0h2v10h-2ZM359.0 50.0h2v10h-2Z' +
-        'M347.0 98.0h2v10h-2ZM351.0 98.0h2v10h-2ZM355.0 98.0h2v10h-2ZM359.0 98.0h2v10h-2Z'
+    // NEXT ends at 345, the tip starts at 363
+    expect(paths.pend).toBe('M345.0 26.5H363.0M345.0 45.5H363.0');
+    expect(paths.pend).toBe(dashedPair(G.nextX + CARD_W, G.chainX0));
+  });
+
+  it('is gilt between two plates inside the window and the plate’s tone outside it', () => {
+    const paths = chainPaths(cards, next, 101, MAINNET, VIEW);
+    // The window of #101 is #91 … #99: the eight joints between them are gilt.
+    expect(rects(paths.win)).toHaveLength(8);
+    expect(rects(paths.win).map((r) => r.x)).toEqual(
+      [99, 98, 97, 96, 95, 94, 93, 92].map((n) => G.chainX0 + (100 - n) * PITCH + CARD_W)
     );
-  });
-
-  it('is pending from NEXT to the tip, gold inside the window and plain outside it', () => {
-    const paths = chainPaths(cards, next, 101, MAINNET, VIEW);
-    // The window of #101 is #91 … #99: the eight links between them are gold, 8 ticks each.
-    expect(rects(paths.win)).toHaveLength(8 * 8);
     // #100 → #99 and #91 → #90 … #86 → #85 lie outside it.
-    expect(rects(paths.solid)).toHaveLength(7 * 8);
-    expect(paths.solid.startsWith(gapBands(G.chainX0 + CARD_W))).toBe(true);
+    expect(rects(paths.solid)).toHaveLength(7);
+    for (const r of [...rects(paths.win), ...rects(paths.solid)]) expect(r.w).toBe(18);
   });
 
   it('breaks where the newer plate does not name the older one as its parent', () => {
     const forked = cards.map((c) => (c.number === 95 ? { ...c, parentHash: 'elsewhere' } : c));
     const paths = chainPaths(forked, next, 101, MAINNET, VIEW);
-    expect(rects(paths.win)).toHaveLength(7 * 8);
-    expect(rects(paths.solid)).toHaveLength(7 * 8);
+    expect(rects(paths.win)).toHaveLength(7);
+    expect(rects(paths.solid)).toHaveLength(7);
+    // nothing across the gap after #95
+    const after95 = G.chainX0 + 5 * PITCH + CARD_W;
+    for (const r of [...rects(paths.win), ...rects(paths.solid)]) expect(r.x).not.toBe(after95);
   });
 
-  it('ends in the two bands continued 66 px past the last plate, or to the view edge', () => {
+  it('is dashed from a block still landing, until its plate is set, even inside the window', () => {
+    const landing = cards.map((c) => (c.number === 100 ? { ...c, plate: false } : c));
+    // no NEXT while a block lands: the landing block's link is the only dashed one
+    expect(chainPaths(landing, null, 101, MAINNET, VIEW).pend).toBe(
+      dashedPair(G.chainX0 + CARD_W, G.chainX0 + PITCH)
+    );
+    // with #100 inside the drawn window (that of #103) it is still dashed, never gilt
+    const inside = chainPaths(landing, null, 103, MAINNET, VIEW);
+    expect(inside.pend).toBe(dashedPair(G.chainX0 + CARD_W, G.chainX0 + PITCH));
+    expect(rects(inside.win).map((r) => r.x)).not.toContain(G.chainX0 + CARD_W);
+  });
+
+  it('draws nothing across a gap that two moving plates have closed', () => {
+    const closing = cards.slice(0, 3).map((c, i) => (i === 2 ? { ...c, x: c.x - PITCH + 50 } : c));
+    // #98 slid onto #99: their gap is gone, the tip → #99 link stays
+    const paths = chainPaths(closing, null, 200, MAINNET, VIEW);
+    expect(rects(paths.solid)).toEqual([{ x: 462, y: 26, w: 18, h: 20 }]);
+  });
+
+  it('runs on 66 px past the last plate, from its edge, or to the view edge', () => {
     const last = cards[cards.length - 1];
-    // #85 ends at 2217: the tail runs from 2219 for 66 px.
-    expect(chainTail(cards, VIEW)).toEqual({ x0: 2219, x1: 2285 });
-    const tail = rects(chainPaths(cards, next, 101, MAINNET, VIEW).tail);
-    expect(tail).toHaveLength(2 * 17);
-    expect(Math.min(...tail.map((r) => r.x))).toBe(last.x + CARD_W + 2);
-    expect(Math.max(...tail.map((r) => r.x + r.w))).toBe(2285);
-    // With 21 px of room it stops at the edge.
-    expect(chainTail(cards, 2240)).toEqual({ x0: 2219, x1: 2240 });
-    expect(rects(chainPaths(cards, next, 101, MAINNET, 2240).tail)).toHaveLength(2 * 5);
+    // #85 ends at 2217: the tail runs from there for 66 px.
+    expect(chainTail(cards, VIEW)).toEqual({ x0: 2217, x1: 2283 });
+    const paths = chainPaths(cards, next, 101, MAINNET, VIEW);
+    // the window of #101 ends on screen (#91): the tail is the plate's tone
+    expect(paths.tail).toBe('M2217.0 26.0h66.0v20.0h-66.0Z');
+    expect(paths.tailWin).toBe('');
+    expect(rects(paths.tail)[0].x).toBe(last.x + CARD_W);
+    // With 23 px of room it stops at the edge.
+    expect(chainTail(cards, 2240)).toEqual({ x0: 2217, x1: 2240 });
+    expect(chainPaths(cards, next, 101, MAINNET, 2240).tail).toBe('M2217.0 26.0h23.0v20.0h-23.0Z');
+    // a plate sliding out past the edge leaves no room: no tail
+    expect(chainPaths(cards, next, 101, MAINNET, 2200).tail).toBe('');
     expect(chainTail([], 2000)).toBeNull();
   });
 
-  it('runs one faint band of 1 px ticks on a 3 px pitch through each gap of the pool', () => {
-    expect(BAND.flow).toEqual({ tick: 1, pitch: 3, depth: 8 });
-    expect(G.flowY - G.cardTop).toBe(14);
-    const flows = flowPaths();
-    // mempool (0…99) ⇢ proposed (117…): 101 … 115, five ticks.
-    expect(rects(flows.toProposed)).toEqual(
-      [101, 104, 107, 110, 113].map((x) => ({ x, y: 32, w: 1, h: 8 }))
+  it('gilds the tail while the window runs on past the last plate on screen', () => {
+    // #100 … #96 on screen, NEXT's window running on to #91 past them
+    const paths = chainPaths(cards.slice(0, 5), next, 101, MAINNET, VIEW);
+    expect(paths.tail).toBe('');
+    expect(paths.tailWin).toBe(
+      `M${(G.chainX0 + 4 * PITCH + CARD_W).toFixed(1)} 26.0h66.0v20.0h-66.0Z`
     );
-    // proposed (117…216) ⇢ NEXT (246…): 218 … 244, nine ticks.
-    expect(rects(flows.toNext).map((r) => r.x)).toEqual([
-      218, 221, 224, 227, 230, 233, 236, 239, 242,
-    ]);
+    // the window of #96 (#86 … #94) does not reach the last plate (#96): plain
+    const plain = chainPaths(cards.slice(0, 5), next, 96, MAINNET, VIEW);
+    expect(plain.tailWin).toBe('');
+    expect(rects(plain.tail)).toHaveLength(1);
+  });
+
+  it('points arrowheads through each gap of the pool: 5 × 8 on a 7 px pitch, centred', () => {
+    const flows = flowPaths();
+    // mempool (0 … 99) ⇢ proposed (117 …): an 18 px gap holds two, 102 and 109, 5 px long
+    expect(flows.toProposed).toBe(
+      'M102.0 32.0L107.0 36.0L102.0 40.0ZM109.0 32.0L114.0 36.0L109.0 40.0Z'
+    );
+    // proposed (117 … 216) ⇢ NEXT (246 …): a 30 px gap holds four, 218 … 244
+    const tips = [...flows.toNext.matchAll(/M([\d.]+) 32\.0L([\d.]+) 36\.0L([\d.]+) 40\.0Z/g)];
+    expect(tips.map((m) => Number(m[1]))).toEqual([218, 225, 232, 239]);
+    expect(tips.every((m) => Number(m[2]) - Number(m[1]) === 5 && m[3] === m[1])).toBe(true);
+    expect(tips.map((m) => m[0]).join('')).toBe(flows.toNext);
+    // centred on the head line, the strap's middle
+    expect(G.headY).toBe(36);
   });
 });
 
@@ -1403,18 +1406,15 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
       mined: true,
       hash: c.block.hash,
       parentHash: c.block.parentHash,
-      solid: 1,
+      plate: true,
     }));
   const nextSlot = (sc: Scene): RulerSlot => {
     const n = sc.next as NonNullable<Scene['next']>;
     return { number: n.number, x: n.y, w: n.h, mined: false };
   };
-  /** The two link bands of a column gap [y0, y1], 4 ticks of 2 px each, at x 27 and 75. */
-  const colBands = (y0: number, y1: number) => {
-    const ys: number[] = [];
-    for (let y = y0; y + 2 <= y1; y += 4) ys.push(y);
-    return [27, 75].map((x) => ys.map((y) => `M${x}.0 ${y}.0h10v2h-10Z`).join('')).join('');
-  };
+  /** The strap down a column gap [y0, y1]: x 5 … 25, the whole gap. */
+  const colStrap = (y0: number, y1: number) =>
+    `M5.0 ${y0.toFixed(1)}h20.0v${(y1 - y0).toFixed(1)}h-20.0Z`;
 
   it('is picked by the measured width: the column below G.minViewW, the row from it', () => {
     expect(buildScene(quiet, G.minViewW - 1, 'settled').orientation).toBe('column');
@@ -1892,53 +1892,61 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
     expect(end + COL.endGap).toBeLessThanOrEqual(at.x - labelWidth(`+${grid.hidden}`));
   });
 
-  it('runs the two link bands down the gaps only, 2 px clear of the rows: pending, plain, gold, tail', () => {
-    expect(COL.linkX).toEqual([27, 75]);
+  // Direction G, turned (StrapPhone.dc.html `.vs`, `.vd`): the strap runs down through the stones,
+  // 20 px wide, 3 px of it on each side of the 14 px stone.
+  it('runs the strap down through the stones, x 5 … 25: dashed from NEXT, plate, gilt, the tail', () => {
+    expect([COL.strapX, COL.strapW]).toEqual([5, 20]);
+    expect(COL.stoneX - COL.strapX).toBe(3);
+    expect(COL.strapX + COL.strapW - (COL.stoneX + G.stone)).toBe(3);
+    // the same breadth as the row's strap, turned
+    expect(COL.strapW).toBe(G.strapH);
+    // a row's own strap, local to it: down its whole height
+    expect(strapBox('column', PHONE_W, 44)).toEqual({ x: 5, y: 0, width: 20, height: 44 });
+    expect(strapBox('column', PHONE_W, 61)).toEqual({ x: 5, y: 0, width: 20, height: 61 });
     const paths = columnChainPaths(slotsOf(scene), nextSlot(scene), T + 1, MAINNET, scene.H);
-    // NEXT ⇢ the tip pending; tip → tip−1 plain (the tip is outside NEXT's window); tip−1 … tip−3
-    // gold inside it; then the tail's 30 px.
-    expect(paths.pend).toBe(colBands(182, 196));
-    expect(paths.pend.startsWith('M27.0 182.0h10v2h-10ZM27.0 186.0h10v2h-10Z')).toBe(true);
-    expect(paths.solid).toBe(colBands(244, 258));
-    expect(paths.win).toBe(colBands(306, 320) + colBands(368, 382));
-    expect(paths.tail).toBe(colBands(430, 460));
-    expect(rects(paths.tail)).toHaveLength(2 * 8);
-    expect(columnChainTail(slotsOf(scene), scene.H)).toEqual({ x0: 430, x1: 460 });
-    // A link never runs under a row.
-    for (const d of Object.values(paths)) {
-      for (const r of rects(d)) {
-        expect([r.w, r.h]).toEqual([10, 2]);
-        for (const c of [...scene.cards, scene.next as NonNullable<Scene['next']>]) {
-          expect(r.y + r.h <= c.y - 2 || r.y >= c.y + c.h + 2).toBe(true);
-        }
+    // NEXT (136 … 180) ⇢ the tip (198 …): two dashed lines down the strap's outer pixel columns
+    expect(paths.pend).toBe('M5.5 180.0V198.0M24.5 180.0V198.0');
+    // the tip → tip−1 in the plate's tone (the tip is outside NEXT's window); tip−1 … tip−3 gilt
+    expect(paths.solid).toBe(colStrap(242, 260));
+    expect(paths.win).toBe(colStrap(304, 322) + colStrap(366, 384));
+    // The window of NEXT runs on below the last row: the tail is gilt, 30 px from its bottom edge.
+    expect(columnChainTail(slotsOf(scene), scene.H)).toEqual({ x0: 428, x1: 458 });
+    expect(paths.tailWin).toBe(colStrap(428, 458));
+    expect(paths.tail).toBe('');
+    // A link never runs over a row: each fills exactly the gap it crosses.
+    const rows = [...scene.cards, scene.next as NonNullable<Scene['next']>];
+    for (const name of ['solid', 'win'] as const) {
+      for (const r of rects(paths[name])) {
+        expect([r.x, r.w]).toEqual([5, 20]);
+        expect(rows.some((c) => c.y + c.h === r.y)).toBe(true);
+        expect(rows.some((c) => c.y === r.y + r.h)).toBe(true);
       }
     }
   });
 
-  it('runs one faint band 8 wide at x 28 down each gap of the pool', () => {
+  it('points arrowheads down each gap of the pool, 8 × 5 on a 7 px pitch, on the strap’s axis', () => {
     const flows = columnFlowPaths(bands);
-    // mempool (0…44) ⇢ proposed (62…): 46 … 60, five 1 px ticks on the 3 px pitch.
-    expect(rects(flows.toProposed)).toEqual(
-      [46, 49, 52, 55, 58].map((y) => ({ x: 28, y, w: 8, h: 1 }))
-    );
-    // proposed (62…106) ⇢ NEXT (136…): 108 … 134, nine ticks.
-    expect(rects(flows.toNext).map((r) => r.y)).toEqual([
-      108, 111, 114, 117, 120, 123, 126, 129, 132,
-    ]);
+    // mempool (0 … 44) ⇢ proposed (62 …): an 18 px gap holds two, from 47 and 54, tips at x 15
+    expect(flows.toProposed).toBe('M11.0 47.0L19.0 47.0L15.0 52.0ZM11.0 54.0L19.0 54.0L15.0 59.0Z');
+    // proposed (62 … 106) ⇢ NEXT (136 …): a 30 px gap holds four
+    const tops = [...flows.toNext.matchAll(/M11\.0 ([\d.]+)L19\.0 ([\d.]+)L15\.0 ([\d.]+)Z/g)];
+    expect(tops.map((m) => Number(m[1]))).toEqual([108, 115, 122, 129]);
+    expect(tops.every((m) => m[2] === m[1] && Number(m[3]) - Number(m[1]) === 5)).toBe(true);
+    expect(tops.map((m) => m[0]).join('')).toBe(flows.toNext);
+    expect(COL.strapX + COL.strapW / 2).toBe(15);
   });
 
-  // Re-pinned with lane P: the short gold mark across the first band at rest is gone, as the row's
-  // window marks went with lane R (the phone board draws none): the gold bands say the window.
-  it("ticks NEXT's window in the middle of the gap between tip and tip − 1, across it when hovered", () => {
-    const ruler = columnWindowRuler([nextSlot(scene), ...slotsOf(scene)], T + 1, MAINNET, scene.H);
-    // In the middle of the gap between the tip (198 + 44) and tip − 1 (260).
-    expect(ruler.ticks).toEqual([251]);
-    expect(ruler.label).toBeNull();
-    // The far end (tip − 9) is below the last row: the window runs on in the gold tail.
-    expect(ruler.tailOpen).toBe(true);
-    // Hovered, the tick runs across the whole gap.
-    expect(columnRulerPath(ruler, PHONE_W)).toBe('M0.0 251.0H358.0');
+  // A column has no lane beside its rows: the gilt says the window, the tips name its range.
+  it('has no lane and no words for the window in a column', () => {
+    const axis = axisOf(scene);
+    const text = windowLabel(T + 1, T, MAINNET);
+    expect(axis.lane([nextSlot(scene), ...slotsOf(scene)], T + 1, MAINNET, text)).toEqual({
+      label: null,
+      hit: null,
+    });
     expect(COL).not.toHaveProperty('markHalf');
+    expect(COL).not.toHaveProperty('linkX');
+    expect(COL).not.toHaveProperty('flowX');
   });
 
   it("lands a mined block in NEXT's row, beside the four older rows, then steps them down", () => {
@@ -1993,8 +2001,8 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
       ReturnType<typeof columnChainTail>
     >;
     expect(columnRewardLink(a, null, tail)).toEqual({
-      d: 'M133.5 219.5H125.0Q120.0 219.5 120.0 224.5V430.0',
-      tail: 'M120.0 430.0V460.0',
+      d: 'M133.5 219.5H125.0Q120.0 219.5 120.0 224.5V428.0',
+      tail: 'M120.0 428.0V458.0',
     });
     // A paid block on screen below: the link turns back into its cellbase.
     expect(columnRewardLink(a, { X: 133.5, Y: 343.5 }, tail)).toEqual({

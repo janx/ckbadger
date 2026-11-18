@@ -10,7 +10,6 @@ import {
   diamondPath,
   mixColor,
   paintFromBase,
-  tailFill,
   tok,
   type ShadeStep,
   type SquarePaint,
@@ -1055,10 +1054,21 @@ export class SceneMotion {
   }
 
   /**
+   * Repaints what the motion layer owns after a React commit that brought no new scene (a hover, a
+   * pin): every card from its values (a landing block's box, its stone, cuts and strap, a plate's
+   * edge) and the chain, so nothing React has just drawn shows a state the motion layer has not
+   * reached (a gilt strap on a block that has no plate yet).
+   */
+  repaint(): void {
+    for (const r of this.cards.values()) r.node.paint(r.node);
+    this.paintChain();
+  }
+
+  /**
    * Paints a card from its values: its place and entrance opacity, and its box. NEXT's box is its
    * dashed outline (React paints it). A block's box is its plate once `plate` is set, its own tone
    * with no stroke at rest (a 1 px dim edge while it is highlighted), and until then NEXT's dashed
-   * outline with neither its stone nor its cuts.
+   * outline with neither its stone, its cuts nor its gilt strap.
    */
   private paintCard(n: MotionNode): void {
     const { X, Y, op, w, h, solid, plate } = n.v;
@@ -1082,8 +1092,8 @@ export class SceneMotion {
       box.setAttribute('stroke-opacity', String(GHOST.outline.strokeOpacity));
       box.setAttribute('stroke-dasharray', GHOST.outline.dash);
     }
-    // The stone and the cuts are the plate's: none while the block is an outline.
-    for (const el of n.el.querySelectorAll('[data-stone], [data-cuts]')) {
+    // The stone, the cuts and the gilt strap are the plate's: none while the block is an outline.
+    for (const el of n.el.querySelectorAll('[data-stone], [data-cuts], [data-strap]')) {
       if (set) el.removeAttribute('opacity');
       else el.setAttribute('opacity', '0');
     }
@@ -1095,7 +1105,11 @@ export class SceneMotion {
     }
   }
 
-  /** The chain line and the window ruler follow the cards while they move. */
+  /**
+   * The strap and the window's words follow the cards while they move, drawn every frame from the
+   * same library functions as the static render (`axis.chainPaths`, `axis.lane`): a landing block's
+   * link is the dashed pair until its plate is set, and the tail is gilt while the window runs on.
+   */
   private paintChain(): void {
     const svg = this.svg;
     const scene = this.scene;
@@ -1121,11 +1135,11 @@ export class SceneMotion {
         mined: true,
         hash: r.hash,
         parentHash: r.parentHash,
-        solid: r.node.v.solid,
+        plate: r.node.v.plate >= 1,
       });
     }
     const paths = axis.chainPaths(slots, next, H, consensus);
-    const ruler = axis.ruler(
+    const lane = axis.lane(
       nextSlot ? [nextSlot, ...slots] : slots,
       H,
       consensus,
@@ -1136,14 +1150,12 @@ export class SceneMotion {
     set('[data-path="pend"]', paths.pend);
     set('[data-path="win"]', paths.win);
     set('[data-path="tail"]', paths.tail);
-    const tail = svg.querySelector('[data-path="tail"]') as SVGElement | null;
-    if (tail) tail.style.setProperty('fill', tailFill(ruler.tailOpen));
-    set('[data-ruler-ticks]', axis.ticks(ruler));
+    set('[data-path="tail-win"]', paths.tailWin);
     const label = svg.querySelector('[data-window-label]');
     if (label) {
-      if (ruler.label === null) label.setAttribute('visibility', 'hidden');
+      if (lane.label === null) label.setAttribute('visibility', 'hidden');
       else {
-        label.setAttribute('x', ruler.label.x.toFixed(1));
+        label.setAttribute('x', lane.label.x0.toFixed(1));
         label.removeAttribute('visibility');
       }
     }
