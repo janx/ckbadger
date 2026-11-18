@@ -12,12 +12,7 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
-import {
-  activityTypeShares,
-  nonCellbaseCount,
-  scriptShares,
-  totalActivities,
-} from '@/lib/activity-stats';
+import { activityTypeShares, nonCellbaseCount, scriptShares } from '@/lib/activity-stats';
 import {
   api,
   type ActivitySummary24h,
@@ -77,7 +72,6 @@ export function ActivityStats() {
 
 interface SummaryView {
   activities: number;
-  occurrences: number;
   addresses: number;
   ckbMoved: string;
   types: RankedRow[];
@@ -104,14 +98,14 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   }
   return {
     activities: s.activityCount,
-    occurrences: totalActivities(s),
     addresses: s.uniqueAddressCount,
     ckbMoved: formatCkbCompact(s.totalCkbMoved).value,
     types: activityTypeShares(s).map((r) => ({
       key: r.key,
       label: r.label,
       count: r.count,
-      total: totalActivities(s),
+      // One kind per transaction: the types are a partition of the activities.
+      total: s.activityCount,
       href: TYPE_BREAKDOWN,
     })),
     scripts: rows,
@@ -144,7 +138,7 @@ function Summary({ view }: { view: SummaryView }) {
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-x-10 gap-y-[22px]">
         <RankedBars
           testId="home-activity-types"
-          title={`By type, share of ${n(view.occurrences)} kind occurrences`}
+          title={`By type, share of ${formatCount(view.activities, 'transaction')}`}
           titleHref={TYPE_BREAKDOWN}
           rows={view.types}
         />

@@ -236,21 +236,28 @@ const SCRIPT_COUNTS = [
   },
 ];
 
+/** One kind per transaction: the kinds sum to activityCount (7,115). */
 export const activitySummary24h: ActivitySummary24h = {
   activityCount: 7115,
-  transferCount: 1302,
-  daoDepositCount: 4,
-  daoWithdrawRequestCount: 3,
-  daoWithdrawCompleteCount: 1,
-  tokenCount: 0,
-  objectCount: 0,
-  identityCount: 10,
-  scriptCallCount: 5795,
-  unknownCount: 0,
+  kindCounts: {
+    dao: 7,
+    token: 0,
+    object: 0,
+    identity: 10,
+    protocol: 1,
+    script: 5795,
+    ckb: 1302,
+  },
   coinbaseCount: 9800,
   uniqueAddressCount: 1497,
   totalCkbMoved: '34628000000000000',
   scriptCounts: SCRIPT_COUNTS,
+  protocolActionCounts: {
+    'dao:deposit': 4,
+    'dao:withdraw_complete': 1,
+    'dao:withdraw_request': 3,
+    'fiber:channel_open': 1,
+  },
   hoursCovered: 24,
 };
 
@@ -259,19 +266,21 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
   const total = i === 28 ? 6691 : 6200 + ((i * 397) % 1500);
   return {
     date: iso.replace(/-/g, ''),
-    transferCount: total - 5000,
-    daoDepositCount: 0,
-    daoWithdrawRequestCount: 0,
-    daoWithdrawCompleteCount: 0,
-    tokenCount: 0,
-    objectCount: 0,
-    identityCount: 0,
-    scriptCallCount: 5000,
-    unknownCount: 3,
+    activityCount: total,
+    kindCounts: {
+      dao: 0,
+      token: 0,
+      object: 0,
+      identity: 0,
+      protocol: 0,
+      script: 5000,
+      ckb: total - 5000,
+    },
     coinbaseCount: 9800,
     uniqueAddressCount: 500,
     totalCkbMoved: '0',
     scriptCounts: [],
+    protocolActionCounts: {},
   };
 });
 

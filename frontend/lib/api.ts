@@ -1439,39 +1439,35 @@ interface ScriptCountEntry {
   count: number;
 }
 
+/**
+ * Non-cellbase transactions by kind, each in exactly one: the kind the global activity filter lists
+ * it under, so each count is what that filter lists. Keys are the filter's values.
+ */
+type ActivityKindCounts = Record<Exclude<GlobalActivityFilter, 'all'>, number>;
+
 interface DailyActivityStats {
   date: string;
-  transferCount: number;
-  daoDepositCount: number;
-  daoWithdrawRequestCount: number;
-  daoWithdrawCompleteCount: number;
-  tokenCount: number;
-  objectCount: number;
-  identityCount: number;
-  scriptCallCount: number;
-  unknownCount: number;
+  /** The day's non-cellbase transactions: the sum of `kindCounts`, one number from the API. */
+  activityCount: number;
+  kindCounts: ActivityKindCounts;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
+  /** Protocol actions by `protocol:action`: actions, not transactions (the DAO split by action). */
+  protocolActionCounts: Record<string, number>;
 }
 
 interface ActivitySummary24h {
-  /** Non-cellbase transactions, counted once even when activity kinds overlap. */
+  /** The window's non-cellbase transactions: the sum of `kindCounts`. */
   activityCount: number;
-  transferCount: number;
-  daoDepositCount: number;
-  daoWithdrawRequestCount: number;
-  daoWithdrawCompleteCount: number;
-  tokenCount: number;
-  objectCount: number;
-  identityCount: number;
-  scriptCallCount: number;
-  unknownCount: number;
+  kindCounts: ActivityKindCounts;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
+  /** Protocol actions by `protocol:action`: actions, not transactions. */
+  protocolActionCounts: Record<string, number>;
   hoursCovered: number;
 }
 
@@ -3883,6 +3879,7 @@ export type {
   GlobalActivity,
   GlobalActivityFilter,
   ScriptCountEntry,
+  ActivityKindCounts,
   DailyActivityStats,
   ActivitySummary24h,
   TopTokenEntry,
@@ -5320,18 +5317,7 @@ export const api = {
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        value: [
-          s.transferCount,
-          s.daoDepositCount,
-          s.daoWithdrawRequestCount,
-          s.daoWithdrawCompleteCount,
-          s.tokenCount,
-          s.objectCount,
-          s.identityCount,
-          s.scriptCallCount,
-        ]
-          .reduce((sum, count) => sum + BigInt(count), BigInt(0))
-          .toString(),
+        value: String(s.activityCount),
       })),
       title: 'Daily Activity Volume',
       yAxisLabel: 'Activities',
@@ -5343,17 +5329,15 @@ export const api = {
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+        // One kind per transaction: the stack is a partition of the day's activityCount.
         values: {
-          transfer: String(s.transferCount),
-          dao: (
-            BigInt(s.daoDepositCount) +
-            BigInt(s.daoWithdrawRequestCount) +
-            BigInt(s.daoWithdrawCompleteCount)
-          ).toString(),
-          token: String(s.tokenCount),
-          object: String(s.objectCount),
-          identity: String(s.identityCount),
-          scriptCall: String(s.scriptCallCount),
+          transfer: String(s.kindCounts.ckb),
+          dao: String(s.kindCounts.dao),
+          token: String(s.kindCounts.token),
+          object: String(s.kindCounts.object),
+          identity: String(s.kindCounts.identity),
+          scriptCall: String(s.kindCounts.script),
+          protocol: String(s.kindCounts.protocol),
         },
       })),
       series: [
@@ -5363,6 +5347,7 @@ export const api = {
         { key: 'object', label: 'Object', color: color('object') },
         { key: 'identity', label: 'Identity', color: color('identity') },
         { key: 'scriptCall', label: 'Script Call', color: color('amber') },
+        { key: 'protocol', label: 'Protocol', color: color('slate-other') },
       ],
       title: 'Activity Type Breakdown',
     };

@@ -41,20 +41,14 @@ it('links every chart drawn from activities (lane L)', async () => {
   );
 });
 
-it('uses the exact non-cellbase count instead of overlapping kind occurrences', async () => {
+it('counts All from the exact non-cellbase transactions of the completed day', async () => {
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     {
       ...dailyActivities[0],
       date: '20261025',
       coinbaseCount: 10,
-      transferCount: 12,
-      daoDepositCount: 1,
-      daoWithdrawRequestCount: 2,
-      daoWithdrawCompleteCount: 3,
-      tokenCount: 4,
-      objectCount: 5,
-      identityCount: 6,
-      scriptCallCount: 7,
+      activityCount: 50,
+      kindCounts: { dao: 3, token: 4, object: 5, identity: 6, protocol: 13, script: 7, ckb: 12 },
       uniqueAddressCount: 42,
     },
     { ...dailyActivities[0], date: '20261026', uniqueAddressCount: 9999 },

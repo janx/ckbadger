@@ -6,23 +6,27 @@ import { chartModel } from '@/components/charts/chart-model';
 afterEach(() => vi.restoreAllMocks());
 
 describe('daily activity chart adapter', () => {
-  it('uses exact category counts and shannons from one canonical complete-day source', async () => {
+  it('uses exact kind counts, the API total and shannons from one canonical complete-day source', async () => {
+    const max = 4294967295;
     const daily = vi.spyOn(api, 'getDailyActivityStats').mockResolvedValue([
       {
         date: '20261027',
-        transferCount: 4294967295,
-        daoDepositCount: 4294967295,
-        daoWithdrawRequestCount: 4294967295,
-        daoWithdrawCompleteCount: 4294967295,
-        tokenCount: 4294967295,
-        objectCount: 4294967295,
-        identityCount: 4294967295,
-        scriptCallCount: 4294967295,
-        unknownCount: 1,
+        // Seven u32 kinds at their maximum; their total is the API's one number, never summed here.
+        activityCount: 7 * max,
+        kindCounts: {
+          dao: max,
+          token: max,
+          object: max,
+          identity: max,
+          protocol: max,
+          script: max,
+          ckb: max,
+        },
         coinbaseCount: 1,
-        uniqueAddressCount: 4294967295,
+        uniqueAddressCount: max,
         totalCkbMoved: '900719925474099300',
         scriptCounts: [],
+        protocolActionCounts: { 'dao:deposit': max },
       },
     ]);
     const volume = chartModel(
@@ -40,8 +44,13 @@ describe('daily activity chart adapter', () => {
     const ckb = chartModel(CHART_BY_SLUG.get('ckb-volume')!, await api.getCkbVolumeChart());
     expect(daily).toHaveBeenCalledTimes(4);
     expect(daily).toHaveBeenCalledWith(0);
-    expect(volume.latest?.raw).toBe('34359738360');
-    expect(types.points[0].values.dao).toBe('12884901885');
+    expect(volume.latest?.raw).toBe('30064771065');
+    expect(types.points[0].values.dao).toBe('4294967295');
+    // F-6: the protocol kind is a band of its own, and the stack is a partition of the total.
+    expect(types.points[0].values.protocol).toBe('4294967295');
+    expect(
+      Object.values(types.points[0].values).reduce((sum, v) => sum + BigInt(v as string), BigInt(0))
+    ).toBe(BigInt(30064771065));
     expect(addresses.latest?.raw).toBe('4294967295');
     expect(ckb.latest?.raw).toBe('9007199254.740993');
     expect(

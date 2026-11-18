@@ -1327,6 +1327,7 @@ const CLASSED_SERIES: Readonly<
     object: { label: 'Objects', color: ACTIVITY_KIND_COLORS.object },
     identity: { label: 'Identities', color: ACTIVITY_KIND_COLORS.identity },
     scriptCall: { label: 'Script calls', color: ACTIVITY_KIND_COLORS.scriptCall },
+    protocol: { label: 'Protocols', color: ACTIVITY_KIND_COLORS.protocol },
   },
 };
 
@@ -1375,13 +1376,19 @@ const CARD_GROUPS: Readonly<
     { key: 'w1m3', label: '1 w – 3 m', members: ['1m3m', '1w1m'] },
     { key: 'under1w', label: 'under 1 w', members: ['1d1w', '24h'] },
   ],
-  'activity-type-breakdown': ['scriptCall', 'transfer', 'token', 'object', 'identity', 'dao'].map(
-    (key) => ({
-      key,
-      label: CLASSED_SERIES['activity-type-breakdown'][key].label,
-      members: [key],
-    })
-  ),
+  'activity-type-breakdown': [
+    'scriptCall',
+    'transfer',
+    'token',
+    'object',
+    'identity',
+    'dao',
+    'protocol',
+  ].map((key) => ({
+    key,
+    label: CLASSED_SERIES['activity-type-breakdown'][key].label,
+    members: [key],
+  })),
 };
 
 /** The exact sum of non-negative decimals, trailing zeros trimmed. */

@@ -625,18 +625,18 @@ describe('Transactions pool view', () => {
   });
 });
 
-it('keeps the pool banner above tabs and uses exact day counts even when kinds overlap', async () => {
+it('keeps the pool banner above tabs and gives each kind its transactions, one kind each', async () => {
   const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     {
       ...dailyActivities[0],
       date: yesterday,
-      transferCount: 12,
-      tokenCount: 11,
+      // 17 non-cellbase transactions and 3 cellbases: the 20 of the day.
+      activityCount: 17,
+      kindCounts: { dao: 2, token: 11, object: 0, identity: 0, protocol: 0, script: 0, ckb: 4 },
       coinbaseCount: 3,
-      daoDepositCount: 2,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 0,
+      // Three DAO actions in the two DAO transactions: the chip counts transactions.
+      protocolActionCounts: { 'dao:deposit': 2, 'dao:withdraw_request': 1 },
     },
   ]);
   vi.mocked(api.getTxStats).mockResolvedValue({
@@ -657,8 +657,13 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All20')
   );
-  expect(screen.getByRole('button', { name: 'Nervos DAO' })).toHaveTextContent(/^Nervos DAO3$/);
-  expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Nervos DAO' })).toHaveTextContent(/^Nervos DAO2$/);
+  expect(screen.queryByText(/overlap|DAO counts actions/)).not.toBeInTheDocument();
+  expect(screen.getByText('Yesterday, UTC+8')).toBeInTheDocument();
+  // The day's bar: every transaction once, so its widths are shares of the 20.
+  const bar = screen.getByRole('img', { name: "Yesterday's transactions by kind" });
+  const widths = [...bar.querySelectorAll('span')].map((span) => parseFloat(span.style.width));
+  expect(widths.reduce((sum, w) => sum + w, 0)).toBeCloseTo(100, 9);
   expect(screen.getByRole('button', { name: 'Tokens' })).toHaveTextContent('11');
   expect(screen.getByRole('button', { name: 'Cellbase' })).toHaveTextContent('3');
   expect(
@@ -758,7 +763,12 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
   it('folds the kind chips into one select with yesterday’s counts beside a pool chip', async () => {
     const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
     vi.mocked(api.getDailyActivityStats).mockResolvedValue([
-      { ...dailyActivities[0], date: yesterday, tokenCount: 11, coinbaseCount: 3 },
+      {
+        ...dailyActivities[0],
+        date: yesterday,
+        kindCounts: { ...dailyActivities[0].kindCounts, token: 11 },
+        coinbaseCount: 3,
+      },
     ]);
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],

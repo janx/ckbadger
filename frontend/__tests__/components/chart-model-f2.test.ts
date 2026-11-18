@@ -150,35 +150,41 @@ describe('Charts index encodings (F2 charts)', () => {
   // colours; the merged "Assets" band had no class colour to take. The review's item D: they stand
   // in the page's fixed class order, not by size (the test said "largest first" and its data could
   // not tell); here the largest kind is not first and the shares do not descend.
-  it('summarises activity by type in its six kinds, in the page’s fixed class order (CH-07, CH-02)', () => {
+  // F-6 (2026-11-18): one kind per transaction, so Protocols is the seventh band (re-pinned: the
+  // fixture moves 10 of the 50 transfers to it, so the shares still sum to 100%).
+  it('summarises activity by type in its seven kinds, in the page’s fixed class order (CH-07, CH-02)', () => {
     const model = chartModel(def('activity-type-breakdown'), {
       title: 'Activity Type Breakdown',
-      series: ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall'].map((key) => ({
-        key,
-        label: key,
-        color: '#000',
-      })),
+      series: ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall', 'protocol'].map(
+        (key) => ({
+          key,
+          label: key,
+          color: '#000',
+        })
+      ),
       data: [
         {
           date: '2026-10-29',
           values: {
-            transfer: '50',
+            transfer: '40',
             dao: '22',
             token: '3',
             object: '4',
             identity: '1',
             scriptCall: '20',
+            protocol: '10',
           },
         },
       ],
     });
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
       'Script calls 20.00%',
-      'CKB transfers 50.00%',
+      'CKB transfers 40.00%',
       'Tokens 3.00%',
       'Objects 4.00%',
       'Identities 1.00%',
       'Nervos DAO 22.00%',
+      'Protocols 10.00%',
     ]);
     // the headline reads the first kind of the fixed order (unchanged here; said in the hand-back)
     expect(model.headline).toEqual({ pre: 'script calls', display: '20.00', unit: '%' });

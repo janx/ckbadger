@@ -311,19 +311,18 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-activity-volume': () => ({
     overview:
-      'Counts indexed activity events in each canonical chain day, across transfers, DAO changes, tokens, objects, identities and script calls.',
+      'Counts the non-cellbase transactions of each canonical chain day: CKB transfers, Nervos DAO, tokens, objects, identities, script calls and protocols.',
     legendItems: [
       {
         label: 'Activities',
-        description:
-          'Sum the daily counts of each indexed activity category; one transaction can yield more than one activity.',
+        description: 'The day’s non-cellbase transactions, each counted once, in one kind.',
       },
     ],
   }),
   'chart-activity-type-breakdown': ({ seriesLabels }) => ({
     overview:
-      'Splits each indexed chain day’s activity count by the event category recorded by the activity index.',
-    legendItems: bySeriesLabels(seriesLabels, () => 'Indexed activities of this kind, per day.'),
+      'Splits each chain day’s non-cellbase transactions into the kinds the Activities filters list; each transaction is in exactly one kind, so the kinds sum to the day’s activities.',
+    legendItems: bySeriesLabels(seriesLabels, () => 'Transactions of this kind, per day.'),
   }),
   'chart-active-addresses': () => ({
     overview:

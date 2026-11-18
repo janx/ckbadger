@@ -200,19 +200,16 @@ describe('renderMarkdownPage', () => {
   it('renders activities markdown', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 29,
-      transferCount: 12,
-      daoDepositCount: 3,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 1,
-      tokenCount: 4,
-      objectCount: 2,
-      identityCount: 1,
-      scriptCallCount: 5,
-      unknownCount: 0,
+      kindCounts: { dao: 5, token: 4, object: 2, identity: 1, protocol: 0, script: 5, ckb: 12 },
       coinbaseCount: 1,
       uniqueAddressCount: 9,
       totalCkbMoved: '123000000000',
       scriptCounts: [],
+      protocolActionCounts: {
+        'dao:deposit': 3,
+        'dao:withdraw_complete': 1,
+        'dao:withdraw_request': 1,
+      },
       hoursCovered: 24,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
@@ -260,7 +257,11 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Activities');
     expect(result.body).toContain('## Last 24 Hours');
     expect(result.body).toContain('daoDeposit');
-    expect(result.body).toContain('daoDepositCount');
+    // One kind per transaction, and the DAO split by action from the action counts.
+    expect(result.body).toContain('| kindCounts.dao | 5 |');
+    expect(result.body).toContain('| kindCounts.ckb | 12 |');
+    expect(result.body).toContain('| protocolActionCounts.dao:deposit | 3 |');
+    expect(result.body).not.toContain('unknownCount');
     expect(api.getGlobalActivities).toHaveBeenCalledWith({
       limit: 1,
       cursor: undefined,
@@ -271,19 +272,12 @@ describe('renderMarkdownPage', () => {
   it('writes DAO metadata exactly, past 2^53, from the exact strings the API serves', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 29,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 1, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 28 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       scriptCounts: [],
+      protocolActionCounts: { 'dao:withdraw_request': 1 },
       hoursCovered: 24,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
@@ -336,19 +330,12 @@ describe('renderMarkdownPage', () => {
   it('writes "-" for an activity with no party, not an invented 0 CKB or an empty address', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 29,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 1,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 1, ckb: 28 },
       coinbaseCount: 0,
       uniqueAddressCount: 0,
       totalCkbMoved: '0',
       scriptCounts: [],
+      protocolActionCounts: {},
       hoursCovered: 24,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
@@ -393,19 +380,12 @@ describe('renderMarkdownPage', () => {
     const lockHash = `0x${'5'.repeat(64)}`;
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 29,
-      transferCount: 1,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 29 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       scriptCounts: [],
+      protocolActionCounts: {},
       hoursCovered: 24,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({

@@ -89,7 +89,7 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'common-knowledge-composition')
     return keyed(['transfer', 'dao', 'udt', 'nftSpore', 'otherContracts']);
   if (definition.slug === 'activity-type-breakdown')
-    return keyed(['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall']);
+    return keyed(['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall', 'protocol']);
   if (definition.slug === 'epoch-time-length')
     return {
       ...simple,

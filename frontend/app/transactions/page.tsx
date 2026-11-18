@@ -31,7 +31,6 @@ import {
   completedYesterdayActivities,
   completedYesterdayTransactions,
   previousChainDay,
-  totalActivities,
 } from '@/lib/activity-stats';
 import { formatCount } from '@/lib/format-count';
 import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
@@ -262,7 +261,8 @@ export default function TransactionsPage() {
     : total === undefined
       ? {}
       : { all: total };
-  const occurrences = day ? totalActivities(day) + day.coinbaseCount : 0;
+  // Every transaction of the day once: one kind each, or the cellbase.
+  const dayTransactions = day ? day.activityCount + day.coinbaseCount : 0;
   const largestPoolSize = poolHead.data?.data.length
     ? Math.max(...poolHead.data.data.map((row) => row.txSize))
     : undefined;
@@ -534,15 +534,11 @@ export default function TransactionsPage() {
                 </button>
               ))}
             </div>
-            {day && (
-              <p className="text-text-dim text-meta">
-                Kind occurrences may overlap; DAO counts actions. “All” counts unique transactions.
-              </p>
-            )}
-            {occurrences > 0 && (
+            {day && <p className="text-text-dim text-meta">Yesterday, UTC+8</p>}
+            {dayTransactions > 0 && (
               <div
                 role="img"
-                aria-label={`Yesterday's kind occurrences; categories overlap`}
+                aria-label="Yesterday's transactions by kind"
                 className="flex h-2 overflow-hidden"
               >
                 {KINDS.filter(
@@ -555,7 +551,7 @@ export default function TransactionsPage() {
                     key={option.value}
                     title={`${option.label}: ${counts[option.value]}`}
                     style={{
-                      width: `${(counts[option.value]! / occurrences) * 100}%`,
+                      width: `${(counts[option.value]! / dayTransactions) * 100}%`,
                       backgroundColor: option.color,
                     }}
                   />

@@ -81,17 +81,25 @@ describe('ActivityStats', () => {
     expect(stats).toHaveTextContent('CKB moved346.28M');
   });
 
-  it('uses the exact transaction count independently of overlapping category occurrences', async () => {
+  it('shares the types of the one transaction count the API sends: one kind per transaction', async () => {
     server.use(
       http.get(`${API}/stats/activity-summary-24h`, () =>
-        HttpResponse.json({ ...activitySummary24h, activityCount: 123 })
+        HttpResponse.json({
+          ...activitySummary24h,
+          activityCount: 20,
+          kindCounts: { dao: 1, token: 2, object: 3, identity: 4, protocol: 5, script: 0, ckb: 5 },
+        })
       )
     );
     render(<ActivityStats />);
     await waitFor(() =>
-      expect(screen.getByTestId('home-activity-stats')).toHaveTextContent('Activities123')
+      expect(screen.getByTestId('home-activity-stats')).toHaveTextContent('Activities20')
     );
-    expect(screen.getByTestId('home-activity-types')).toHaveTextContent('7,115 kind occurrences');
+    const types = screen.getByTestId('home-activity-types');
+    expect(types).toHaveTextContent('By type, share of 20 transactions');
+    expect(types).not.toHaveTextContent('occurrences');
+    // F-6: a protocol-only transaction is a kind of its own, with its share of the total.
+    expect(types).toHaveTextContent('Protocol25.00%');
   });
 
   it('ranks activity types by share, hiding the empty ones', async () => {
@@ -101,7 +109,7 @@ describe('ActivityStats', () => {
     const labels = [...types.querySelectorAll('[data-rank-row]')].map((r) =>
       r.getAttribute('data-rank-row')
     );
-    expect(labels).toEqual(['script', 'transfer', 'identity', 'dao']);
+    expect(labels).toEqual(['script', 'transfer', 'identity', 'dao', 'protocol']);
     // CH-14 (re-pinned): the one percentage of a count in the total, two decimals (was 81.4%)
     expect(types).toHaveTextContent('Script call81.45%');
     expect(types).not.toHaveTextContent('Token');

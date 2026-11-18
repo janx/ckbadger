@@ -10,49 +10,34 @@ import {
   formatShare,
   scriptLabel,
   scriptShares,
-  totalActivities,
   type ActivityCounts,
 } from '@/lib/activity-stats';
 
+/** One kind per transaction: the kinds sum to activityCount, the one total the API sends. */
 const counts: ActivityCounts = {
-  transferCount: 1302,
-  daoDepositCount: 4,
-  daoWithdrawRequestCount: 3,
-  daoWithdrawCompleteCount: 1,
-  tokenCount: 0,
-  objectCount: 0,
-  identityCount: 10,
-  scriptCallCount: 5795,
+  activityCount: 7115,
+  kindCounts: { dao: 7, token: 0, object: 0, identity: 10, protocol: 1, script: 5795, ckb: 1302 },
 };
 
-describe('totalActivities', () => {
-  it('sums every typed activity', () => {
-    expect(totalActivities(counts)).toBe(7115);
-  });
-});
-
 describe('activityTypeShares', () => {
-  it('ranks the types by count, folds the three DAO steps into one row and hides empty types', () => {
+  it('ranks the kinds by count as shares of the transactions and hides empty kinds', () => {
     const rows = activityTypeShares(counts);
     expect(rows.map((r) => [r.label, r.count])).toEqual([
       ['Script call', 5795],
       ['Transfer', 1302],
       ['Identity', 10],
-      ['DAO', 8],
+      ['DAO', 7],
+      ['Protocol', 1],
     ]);
+    // A partition: the shares of the transactions sum to one.
     expect(rows.reduce((s, r) => s + r.share, 0)).toBeCloseTo(1, 12);
   });
 
   it('has no rows without activity', () => {
     expect(
       activityTypeShares({
-        ...counts,
-        transferCount: 0,
-        daoDepositCount: 0,
-        daoWithdrawRequestCount: 0,
-        daoWithdrawCompleteCount: 0,
-        identityCount: 0,
-        scriptCallCount: 0,
+        activityCount: 0,
+        kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 0 },
       })
     ).toEqual([]);
   });
@@ -157,8 +142,17 @@ describe('exact completed day counts', () => {
       )
     ).toBe(0);
   });
-  it('keeps unique totals separate from overlapping occurrences', () => {
-    expect(activityFilterCounts(counts, 10).all).toBe(10);
+  it('gives each filter chip its kind count, Protocols included, and All when known', () => {
+    expect(activityFilterCounts(counts, 7115)).toEqual({
+      all: 7115,
+      dao: 7,
+      token: 0,
+      object: 0,
+      identity: 10,
+      protocol: 1,
+      script: 5795,
+      ckb: 1302,
+    });
     expect(activityFilterCounts(counts).all).toBeUndefined();
     expect(nonCellbaseCount(25, 10, '2026-10-25')).toBe(15);
     expect(() => nonCellbaseCount(9, 10, '2026-10-25')).toThrow(

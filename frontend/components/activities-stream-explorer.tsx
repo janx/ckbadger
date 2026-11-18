@@ -10,7 +10,7 @@ import {
   STREAM_COLORS,
   type AssetClass,
 } from '@/lib/design-tokens';
-import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
+import { activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
@@ -211,7 +211,8 @@ function ActivityStreamToolbar({
   totalCount?: number;
 }) {
   const counts = summary ? activityFilterCounts(summary, totalCount) : null;
-  const occurrences = summary ? totalActivities(summary) : 0;
+  // One kind per transaction: the bar is a partition of the day's transactions.
+  const dayTransactions = summary ? summary.activityCount : 0;
   return (
     <div
       data-testid="activities-stream-toolbar"
@@ -250,15 +251,11 @@ function ActivityStreamToolbar({
           </button>
         ))}
       </div>
-      {summary && (
-        <p className="text-text-dim text-meta mt-2">
-          Yesterday, UTC+8 · kind occurrences may overlap; DAO counts actions.
-        </p>
-      )}
-      {counts && occurrences > 0 && (
+      {summary && <p className="text-text-dim text-meta mt-2">Yesterday, UTC+8</p>}
+      {counts && dayTransactions > 0 && (
         <div
           role="img"
-          aria-label={`Activity kind occurrences on ${summary!.date}; categories overlap`}
+          aria-label={`Transactions by kind on ${summary!.date}`}
           className="mt-3 flex h-2 overflow-hidden"
         >
           {FILTER_OPTIONS.filter(
@@ -268,7 +265,7 @@ function ActivityStreamToolbar({
               key={o.value}
               title={`${o.label}: ${counts[o.value]}`}
               style={{
-                width: `${(counts[o.value]! / occurrences) * 100}%`,
+                width: `${(counts[o.value]! / dayTransactions) * 100}%`,
                 backgroundColor: o.mark ? CLASS_COLORS[o.mark] : (o.swatch ?? CLASS_COLORS.other),
               }}
             />

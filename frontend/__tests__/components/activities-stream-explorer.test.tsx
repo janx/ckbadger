@@ -129,22 +129,34 @@ describe('ActivitiesStreamExplorer', () => {
         totalCount={100}
         summary={{
           ...dailyActivities[0],
-          transferCount: 12,
-          daoDepositCount: 1,
-          daoWithdrawRequestCount: 2,
-          daoWithdrawCompleteCount: 3,
-          tokenCount: 0,
-          objectCount: 4,
-          identityCount: 5,
-          scriptCallCount: 6,
+          activityCount: 100,
+          kindCounts: {
+            dao: 6,
+            token: 0,
+            object: 4,
+            identity: 5,
+            protocol: 67,
+            script: 6,
+            ckb: 12,
+          },
+          protocolActionCounts: { 'dao:deposit': 9 },
         }}
       />
     );
     expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All100');
     expect(screen.getByRole('button', { name: 'Tokens' })).toHaveTextContent('Tokens0');
+    // DAO transactions, not the day's nine deposit actions.
     expect(screen.getByRole('button', { name: 'Nervos DAO' })).toHaveTextContent('Nervos DAO6');
-    expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Protocols' })).toHaveTextContent(/^Protocols$/);
+    // F-6: the Protocols chip has its kind's count.
+    expect(screen.getByRole('button', { name: 'Protocols' })).toHaveTextContent('Protocols67');
+    expect(screen.queryByText(/overlap|DAO counts actions/)).not.toBeInTheDocument();
+    expect(screen.getByText('Yesterday, UTC+8')).toBeInTheDocument();
+    const bar = screen.getByRole('img', {
+      name: `Transactions by kind on ${dailyActivities[0].date}`,
+    });
+    // One kind per transaction: the bar's widths are shares of All and sum to 100%.
+    const widths = [...bar.querySelectorAll('span')].map((span) => parseFloat(span.style.width));
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBeCloseTo(100, 9);
     expect(
       await screen.findByText('Nothing of this kind in the latest activities.')
     ).toBeInTheDocument();

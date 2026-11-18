@@ -12,32 +12,11 @@ import type {
 import { shortenHash } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
 
-/** The activity-type counters a summary or a daily row carries. */
-export type ActivityCounts = Pick<
-  ActivitySummary24h,
-  | 'transferCount'
-  | 'daoDepositCount'
-  | 'daoWithdrawRequestCount'
-  | 'daoWithdrawCompleteCount'
-  | 'tokenCount'
-  | 'objectCount'
-  | 'identityCount'
-  | 'scriptCallCount'
->;
-
-/** Typed activity occurrences: categories can overlap. Never use as a transaction total. */
-export function totalActivities(c: ActivityCounts): number {
-  return (
-    c.transferCount +
-    c.daoDepositCount +
-    c.daoWithdrawRequestCount +
-    c.daoWithdrawCompleteCount +
-    c.tokenCount +
-    c.objectCount +
-    c.identityCount +
-    c.scriptCallCount
-  );
-}
+/**
+ * The activity kinds a summary or a daily row carries: each non-cellbase transaction in exactly one
+ * kind (the one the global filter lists it under), and their total, one number from the API.
+ */
+export type ActivityCounts = Pick<ActivitySummary24h, 'activityCount' | 'kindCounts'>;
 
 export interface ShareRow {
   key: string;
@@ -47,21 +26,18 @@ export interface ShareRow {
   share: number;
 }
 
-/** Each activity type's share of `totalActivities`, largest first; types with no activity are left out. */
+/** Each activity kind's share of the transactions, largest first; kinds with none are left out. */
 export function activityTypeShares(c: ActivityCounts): ShareRow[] {
-  const total = totalActivities(c);
+  const total = c.activityCount;
   if (total === 0) return [];
   return [
-    { key: 'script', label: 'Script call', count: c.scriptCallCount },
-    { key: 'transfer', label: 'Transfer', count: c.transferCount },
-    { key: 'token', label: 'Token', count: c.tokenCount },
-    { key: 'object', label: 'Object', count: c.objectCount },
-    { key: 'identity', label: 'Identity', count: c.identityCount },
-    {
-      key: 'dao',
-      label: 'DAO',
-      count: c.daoDepositCount + c.daoWithdrawRequestCount + c.daoWithdrawCompleteCount,
-    },
+    { key: 'script', label: 'Script call', count: c.kindCounts.script },
+    { key: 'transfer', label: 'Transfer', count: c.kindCounts.ckb },
+    { key: 'token', label: 'Token', count: c.kindCounts.token },
+    { key: 'object', label: 'Object', count: c.kindCounts.object },
+    { key: 'identity', label: 'Identity', count: c.kindCounts.identity },
+    { key: 'dao', label: 'DAO', count: c.kindCounts.dao },
+    { key: 'protocol', label: 'Protocol', count: c.kindCounts.protocol },
   ]
     .filter((row) => row.count > 0)
     .map((row) => ({ ...row, share: row.count / total }))
@@ -154,19 +130,13 @@ export function nonCellbaseCount(transactions: number, cellbase: number, date: s
     throw new Error(`Invalid transaction/cellbase counts on ${date}: ${transactions}/${cellbase}`);
   return transactions - cellbase;
 }
-/** Per-kind occurrences, with All supplied independently as an exact unique count. */
+/** Each filter chip's count: its kind's transactions (what that filter lists), and All. */
 export function activityFilterCounts(
   summary: ActivityCounts,
   allCount?: number
 ): Partial<Record<GlobalActivityFilter, number>> {
   return {
     ...(allCount === undefined ? {} : { all: allCount }),
-    ckb: summary.transferCount,
-    token: summary.tokenCount,
-    object: summary.objectCount,
-    identity: summary.identityCount,
-    dao:
-      summary.daoDepositCount + summary.daoWithdrawRequestCount + summary.daoWithdrawCompleteCount,
-    script: summary.scriptCallCount,
+    ...summary.kindCounts,
   };
 }
