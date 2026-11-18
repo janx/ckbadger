@@ -563,12 +563,6 @@ function ProtocolActionList({
   );
 }
 
-/**
- * The tx-level facts of an activity, from the one event classification (T7): the protocol actions
- * (`actions`, drawn inline or as a list by `ActivityRow`), then the type calls and the lock calls by
- * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
- * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
- */
 /** A protocol action read for its row's note, or the error it cannot be read with. */
 type ProtocolRead =
   | { facts: ProtocolNoteFact[]; error?: undefined }
@@ -593,6 +587,12 @@ export function rowReadFails(activity: ActivityBody): boolean {
   );
 }
 
+/**
+ * The tx-level facts of an activity, from the one event classification (T7): the protocol actions
+ * (`actions`, drawn inline or as a list by `ActivityRow`), then the type calls and the lock calls by
+ * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
+ * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
+ */
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
@@ -1081,12 +1081,6 @@ export type ActivityRowProps = {
   showEvidence?: boolean;
   /** F2 blocks: the row's own evidence line (see `ActivityRowHead.evidence`). */
   evidence?: ReactNode;
-  /**
-   * F2 objects (IV-14, OB-12): was the lock kind's own grid column. Option A (T7) draws the lock
-   * kind as a tag on every participant line, so this no longer changes the row; kept so the
-   * callers that pass it need no change in this lane.
-   */
-  lockColumn?: boolean;
   /** F2 objects: fold a batch of objects behind "+N more objects", leading with `focusItemId` (OB-M3). */
   foldObjects?: boolean;
   focusItemId?: string;
