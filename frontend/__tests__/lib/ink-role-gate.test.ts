@@ -922,6 +922,41 @@ describe('the ink-role scan finds what it must, and only that', () => {
     ).toEqual(['2 td column className', '3 td column render <span>', '4 td column render <span>']);
   });
 
+  // Review of main..fix/readability (2026-11-18, test finding 6): the quiet ink reached a link, a
+  // cell or a paragraph uncounted through an arbitrary-value class and through an inline style
+  // colour, both read as "another ink".
+  it('finds the quiet ink set by an arbitrary-value class or an inline style colour', () => {
+    expect(
+      sitesOf([
+        '<p className="text-[color:var(--c-text-dim)] text-small">a sentence</p>;',
+        '<td className="md:text-[var(--c-text-dim)]">1,234</td>;',
+        '<Link href="/x" style={{ color: \'var(--c-text-dim)\' }}>x</Link>;',
+        "<p style={{ color: color('text-dim') }}>explains</p>;",
+        "<div style={{ color: on ? color('text') : color('text-dim') }}><BlockLink number={1} /></div>;",
+        "const ink = color('text-dim');",
+        '<p style={{ color: ink }}>held in a name</p>;',
+      ])
+    ).toEqual([
+      '1 prose <p>',
+      '2 td <td>',
+      '3 link <Link>',
+      '4 prose <p>',
+      '5 link <BlockLink>',
+      '7 prose <p>',
+    ]);
+  });
+
+  it('passes another arbitrary or inline ink, and a quiet ink at an alpha', () => {
+    expect(
+      sitesOf([
+        '<p className="text-[color:var(--c-text)]">reads</p>;',
+        "<p style={{ color: color('text') }}>reads</p>;",
+        '<div style={{ color: color(\'text-dim\') }}><Link href="/l" className="text-text">l</Link></div>;',
+        "<p style={{ color: alpha('text-dim', 0.6) }}>alpha is the other gate’s</p>;",
+      ])
+    ).toEqual([]);
+  });
+
   it('passes a set-back row, a state variant, a prop handed to a component and a label', () => {
     expect(
       sitesOf([
