@@ -21,15 +21,26 @@ const CHART_TYPE = '@/lib/chart-type';
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib', 'src'];
 const SVG_TEXT_TAGS = new Set(['svg', 'g', 'text', 'tspan', 'textPath']);
 
-/** Sites that keep a size of their own, as `path#expression` → why. */
-const ALLOWLIST: Record<string, string> = {
-  'components/home/mini-chart.tsx#fontSize={f1(size)}':
-    'the sparkline: eighth-block glyphs (▁…█) drawn as bars, one glyph a slot wide, so under 12 px where the slots are narrow (a phone, a long range); they are marks, not words to read, and the bucket values are in the readout',
+/** Sites that keep a size of their own, as `path#expression` → how many and why. */
+const ALLOWLIST: Record<string, { count: number; reason: string }> = {
+  'components/home/mini-chart.tsx#fontSize={f1(size)}': {
+    count: 1,
+    reason:
+      'the sparkline: eighth-block glyphs (▁…█) drawn as bars, one glyph a slot wide, so under 12 px where the slots are narrow (a phone, a long range); they are marks, not words to read, and the bucket values are in the readout',
+  },
 };
 
 interface Offence {
   line: number;
   what: string;
+}
+
+/** The offences an allowlist does not cover, as `path:line what`. */
+function unlisted(
+  offences: readonly { site: string; key: string }[],
+  allowlist: Record<string, { count: number; reason: string }>
+): string[] {
+  return offences.filter((o) => !(o.key in allowlist)).map((o) => o.site);
 }
 
 /** Every `fontSize` in a TSX source that does not come from lib/chart-type.ts. */
@@ -156,6 +167,98 @@ describe('the SVG size gate finds what it must, and only that', () => {
       { line: 11, what: 'fontSize: 9' },
     ]);
   });
+
+  // review-fb-tests finding 7, review-fa-tests finding 5: the routes a size took past the gate.
+  it('reads a name in its own scope: a const of one function, a parameter shadowing a role', () => {
+    const code = [
+      "import { SVG_TEXT } from '@/lib/chart-type';",
+      'const LABEL = SVG_TEXT.label;',
+      'function A() {',
+      '  const px = 10;',
+      '  return <text fontSize={px}>a</text>;',
+      '}',
+      'function B() {',
+      '  const px = SVG_TEXT.label;',
+      '  return <text fontSize={px}>b</text>;',
+      '}',
+      'function C(LABEL: number) {',
+      '  return <text fontSize={LABEL}>c</text>;',
+      '}',
+      'function D({ SVG_TEXT }: { SVG_TEXT: { tick: number } }) {',
+      '  return <text fontSize={SVG_TEXT.tick}>d</text>;',
+      '}',
+      'const E = () => <text fontSize={LABEL}>e</text>;',
+    ].join('\n');
+    expect(offSvgSizes('a.tsx', code)).toEqual([
+      { line: 5, what: 'fontSize={px}' },
+      { line: 12, what: 'fontSize={LABEL}' },
+      { line: 15, what: 'fontSize={SVG_TEXT.tick}' },
+    ]);
+  });
+
+  it('reads the font shorthand, a computed key, a style held in a name, a spread', () => {
+    const code = [
+      "import { SVG_TEXT } from '@/lib/chart-type';",
+      'const ok = { fontSize: SVG_TEXT.tick };',
+      "const bad = { fontSize: 10, fill: 'red' };",
+      'export function A(props: object, s: object) {',
+      '  const fontSize = 11;',
+      '  return (<svg>',
+      "    <text style={{ font: '10px mono' }}>a</text>",
+      '    <text font="10px mono">b</text>',
+      "    <text style={{ ['fontSize']: 10 }}>c</text>",
+      '    <text style={ok}>d</text><text style={bad}>e</text>',
+      '    <text style={s}>f</text>',
+      '    <text {...props}>g</text>',
+      '    <text style={{ ...bad }}>h</text>',
+      '    <text style={{ fontSize }}>i</text>',
+      '    <g {...props}><text fontSize={SVG_TEXT.tick}>j</text></g>',
+      '    <svg {...props}><path d="M0 0" /></svg>',
+      '  </svg>);',
+      '}',
+    ].join('\n');
+    expect(offSvgSizes('a.tsx', code)).toEqual([
+      { line: 7, what: "font: '10px mono'" },
+      { line: 8, what: 'font="10px mono"' },
+      { line: 9, what: "['fontSize']: 10" },
+      { line: 10, what: 'fontSize: 10 (style={bad})' },
+      { line: 11, what: 'style={s}' },
+      { line: 12, what: '{...props}' },
+      { line: 13, what: 'fontSize: 10 (...bad)' },
+      { line: 14, what: 'fontSize' },
+      { line: 15, what: '{...props}' },
+    ]);
+  });
+
+  it('reads a .ts source: a size set as an attribute, and SVG markup in a string', () => {
+    const code = [
+      "import { SVG_TEXT } from '@/lib/chart-type';",
+      'export function f(el: Element) {',
+      "  el.setAttribute('font-size', '10');",
+      "  el.setAttribute('font-size', String(SVG_TEXT.tick));",
+      "  el.setAttribute('font', '10px mono');",
+      '  return \'<svg><text font-size="10">x</text></svg>\';',
+      '}',
+    ].join('\n');
+    expect(offSvgSizes('a.ts', code)).toEqual([
+      { line: 3, what: "el.setAttribute('font-size', '10')" },
+      { line: 5, what: "el.setAttribute('font', '10px mono')" },
+      { line: 6, what: 'font-size="10"' },
+    ]);
+  });
+
+  it('counts an allowlisted expression: a second site of it is an offence', () => {
+    const at = (line: number) => ({
+      site: `x.tsx:${line} fontSize={f(s)}`,
+      key: 'x.tsx#fontSize={f(s)}',
+    });
+    const list = { 'x.tsx#fontSize={f(s)}': { count: 1, reason: 'one glyph bar, read elsewhere' } };
+    expect(unlisted([at(3)], list)).toEqual([]);
+    expect(unlisted([at(3), at(9)], list)).toEqual([
+      'x.tsx:3 fontSize={f(s)}',
+      'x.tsx:9 fontSize={f(s)}',
+    ]);
+  });
 });
 
 describe('the floor (readability R4): no SVG text under 12 px', () => {
@@ -183,11 +286,13 @@ describe('no SVG text size outside lib/chart-type.ts', () => {
   });
 
   it('finds no SVG fontSize that does not come from lib/chart-type.ts', () => {
-    expect(offences.filter((o) => !(o.key in ALLOWLIST)).map((o) => o.site)).toEqual([]);
+    expect(unlisted(offences, ALLOWLIST)).toEqual([]);
   });
 
   it('keeps the allowlist reasoned and current', () => {
-    for (const [key, reason] of Object.entries(ALLOWLIST)) {
+    // one site keeps a size of its own; a new one is a ruling, not a line added here
+    expect(Object.keys(ALLOWLIST)).toHaveLength(1);
+    for (const [key, { reason }] of Object.entries(ALLOWLIST)) {
       expect(reason.trim().length, key).toBeGreaterThan(10);
       expect(
         offences.map((o) => o.key),

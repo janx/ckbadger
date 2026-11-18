@@ -287,6 +287,31 @@ describe('the scale gate finds what it must, and only that', () => {
     ].join('\n');
     expect(inlineFontSizes('a.tsx', code).map((o) => o.line)).toEqual([2, 3, 9, 10, 13]);
   });
+
+  // review-fb-tests finding 7: the routes a size took past the gate.
+  it('flags the font shorthand and a computed key on an HTML element, not a canvas font', () => {
+    const code = [
+      'export function A() {',
+      "  const box = { ['fontSize']: 12, [`font-size`]: 13 };",
+      "  return <div style={{ font: '12px mono' }}><span style={box} /></div>;",
+      '}',
+      'function g(el: HTMLElement, ctx: CanvasRenderingContext2D) {',
+      "  el.style.font = '12px mono';",
+      "  el.style.cssText = 'font: 600 15px/1.5 mono';",
+      "  ctx.font = '12px mono';",
+      "  const inherits = { font: 'inherit' };",
+      '}',
+    ].join('\n');
+    expect(inlineFontSizes('a.tsx', code).map((o) => o.line)).toEqual([2, 2, 3, 6, 7]);
+  });
+
+  it('flags a size relative to its parent: text-[0.5em], text-[80%], in any variant', () => {
+    const code = '<span className="text-[0.5em] sm:text-[80%] text-[var(--c-text)] text-meta">';
+    expect(offScaleClasses(code)).toEqual([
+      { line: 1, what: 'text-[0.5em]' },
+      { line: 1, what: 'sm:text-[80%]' },
+    ]);
+  });
 });
 
 describe('the stylesheet and eyebrow gates find what they must, and only that (R12)', () => {
@@ -309,6 +334,21 @@ describe('the stylesheet and eyebrow gates find what they must, and only that (R
       { line: 2, what: '.prose-tier2 p 15px' },
       { line: 6, what: '.x 0.85em' },
       { line: 10, what: '.comment-lg 21px' },
+    ]);
+  });
+
+  it('reads the size in a font shorthand, never its weight or its line (review-fb-tests 7)', () => {
+    const css = [
+      '.x { font: 600 15px/1.5 var(--font-mono); }',
+      '.y { font: inherit; }',
+      '.z { font: 14px var(--font-mono); }',
+      '.w {',
+      '  font: italic 500 0.9em/2 serif;',
+      '}',
+    ].join('\n');
+    expect(offScaleCss(css)).toEqual([
+      { line: 1, what: '.x 15px' },
+      { line: 5, what: '.w 0.9em' },
     ]);
   });
 
