@@ -178,11 +178,9 @@ export function cellTiles(
               content(cell)
             ),
             capacity,
-            occupied: (
-              exactUnsignedInteger(
-                required(cell.commonKnowledgeSize, tx.hash, `input ${i} occupied`),
-                `${tx.hash}: input ${i} occupied bytes`
-              ) * BigInt(100000000)
+            occupiedBytes: exactUnsignedInteger(
+              required(cell.commonKnowledgeSize, tx.hash, `input ${i} occupied`),
+              `${tx.hash}: input ${i} occupied bytes`
             ).toString(),
             state: 'consumed',
           };
@@ -222,9 +220,9 @@ export function cellTiles(
           content(cell)
         ),
         capacity: cell.capacity,
-        occupied: (
-          exactUnsignedInteger(cell.commonKnowledgeSize, `${tx.hash}: output ${i} occupied bytes`) *
-          BigInt(100000000)
+        occupiedBytes: exactUnsignedInteger(
+          cell.commonKnowledgeSize,
+          `${tx.hash}: output ${i} occupied bytes`
         ).toString(),
         state: status,
       };

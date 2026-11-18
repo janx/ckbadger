@@ -819,6 +819,7 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
  */
 function ParticipantLine({
   p,
+  txHash,
   focus,
   fee,
   foldObjects,
@@ -828,6 +829,8 @@ function ParticipantLine({
   notes,
 }: {
   p: ActivityParticipant & { key: string };
+  /** The line's transaction, named where its figures are refused. */
+  txHash: string;
   focus: boolean;
   /** Its only movement is the fee (`feeOnlyParty`): "fee" and the fee, in the reading ink. */
   fee: boolean;
@@ -939,7 +942,7 @@ function ParticipantLine({
           data-role="occupied"
           className="text-meta text-text-dim whitespace-nowrap tabular-nums"
         >
-          occupied {formatOccupiedDelta(p.usedDelta)}
+          occupied {formatOccupiedDelta(p.usedDelta, `transaction ${txHash}, party ${p.key}`)}
         </span>
       )}
       {phoneObjects && objectsOpen && (
@@ -1032,6 +1035,7 @@ function Participants({
         <ParticipantLine
           key={p.key}
           p={p}
+          txHash={txHash}
           focus={p === focus}
           fee={feePayer !== null && p.key === partyKey(participants[feePayer], feePayer)}
           foldObjects={foldObjects}

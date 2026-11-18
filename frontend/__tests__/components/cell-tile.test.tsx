@@ -47,7 +47,7 @@ describe('CellTile occupied wording (TX-19)', () => {
           kind: 'other',
           content: 'CKBFS file',
           capacity: '19500000000',
-          occupied: '19500000000',
+          occupiedBytes: '195',
           state: 'consumed',
         })}
       />
@@ -66,6 +66,9 @@ describe('CellTile occupied wording (TX-19)', () => {
     expect(outputs[0]).not.toHaveProperty('occupied');
   });
 
+  // B4 second fix round (re-pinned on purpose): the tile takes bytes, so a figure that is not a
+  // whole number of bytes is refused as one (it took shannons and refused one not a multiple of
+  // 10^8); the change that is not whole bytes is refused where shannons are read, lib/occupied
   it('refuses an occupied amount that is not whole bytes', () => {
     expect(() =>
       render(
@@ -79,12 +82,14 @@ describe('CellTile occupied wording (TX-19)', () => {
             kind: 'ckb',
             content: 'CKB',
             capacity: '19500000000',
-            occupied: '6100000001',
+            occupiedBytes: '61.00000001',
             state: 'consumed',
           })}
         />
       )
-    ).toThrow('in:0: occupied 6100000001 shannons is not whole bytes');
+    ).toThrow(
+      'in:0: occupied bytes: expected a non-negative decimal integer, received "61.00000001"'
+    );
   });
 });
 
@@ -546,8 +551,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     // (TileText's end: ml-auto).
     const narrowest = 203 + 30 + 10 - Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16) - 10;
     expect(narrowest).toBe(215);
-    const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES))}`;
-    expect(widest).toBe('occupied 1,236,271 B');
+    const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES), 'a cell')}`;
+    expect(widest).toBe('occupied 1,236,271\u00a0B');
     const line = 56 + 6 + textPx(widest.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
     expect(line).toBeCloseTo(269.6, 10);
     expect(line).toBeGreaterThan(narrowest);
@@ -567,7 +572,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
           kind: 'ckb',
           content: 'CKB',
           capacity: '6100000000',
-          occupied: '6100000000',
+          occupiedBytes: '61',
           state: 'consumed',
           anatomy: { lock: '53', type: '0', data: '0' },
         })}

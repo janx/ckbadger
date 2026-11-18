@@ -226,9 +226,10 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
     expect(genesisTransactions[0].txSize).toBeGreaterThan(blockBytes);
     expect(1_236_271 + 13_568 * 597_000).toBe(8_101_332_271);
     expect(WIDEST_OCCUPIED_CHANGE).toBe(
-      `−${(GENESIS_BLOCK_BYTES + MAX_TX_INPUTS * MAX_BLOCK_BYTES).toLocaleString('en-US')} B`
+      `−${(GENESIS_BLOCK_BYTES + MAX_TX_INPUTS * MAX_BLOCK_BYTES).toLocaleString('en-US')}\u00a0B`
     );
-    expect(WIDEST_OCCUPIED_CHANGE).toBe('−8,101,332,271 B');
+    // its unit after a no-break space, as the one writer writes it (B4 second fix round)
+    expect(WIDEST_OCCUPIED_CHANGE).toBe('−8,101,332,271\u00a0B');
     // the shrinking side is the wider: the growing side is at most one transaction's bytes
     expect(`+${LARGEST_TX_BYTES.toLocaleString('en-US')} B`.length).toBeLessThan(
       WIDEST_OCCUPIED_CHANGE.length

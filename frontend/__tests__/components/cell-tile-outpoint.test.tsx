@@ -113,7 +113,7 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
           kind: 'ckb',
           content: 'CKB',
           capacity: '6100000000',
-          occupied: '6100000000',
+          occupiedBytes: '61',
           state: 'consumed',
         })}
       />

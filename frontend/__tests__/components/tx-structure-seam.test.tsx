@@ -31,7 +31,7 @@ const tile = (id: string): CellTileData =>
     kind: 'ckb',
     content: 'CKB',
     capacity: '20000000000',
-    occupied: '6100000000',
+    occupiedBytes: '61',
     state: id.startsWith('in') ? 'consumed' : 'live',
   });
 

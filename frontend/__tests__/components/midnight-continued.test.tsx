@@ -228,7 +228,7 @@ describe('move 3 on the tx page’s cells diagram', () => {
       kind: 'ckb',
       content: 'CKB',
       capacity: '106200000000',
-      occupied: '6100000000',
+      occupiedBytes: '61',
       state,
     });
   // C11: the one frame became two sheets of one contract, each its own instrument frame, in a

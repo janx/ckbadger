@@ -1812,7 +1812,7 @@ export default function TransactionDetailPage() {
             {knowledgeDelta !== null && (
               <dd>
                 {/* "occupied" always carries its unit, the pair's once after it (B4) */}
-                occupied {occupiedPairText(occupiedIn!, occupiedOut!)}{' '}
+                occupied {occupiedPairText(occupiedIn!, occupiedOut!, `transaction ${hash}`)}{' '}
                 <span className="text-text-dim">
                   · common knowledge {occupiedBytesDelta(knowledgeDelta)}
                 </span>

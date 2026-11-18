@@ -174,7 +174,10 @@ export function BalanceChanges({
                     <CkbAmount form="column" shannons={BigInt(p.ckbDelta)} />
                   </span>
                   <span role="cell" className="whitespace-nowrap text-right tabular-nums">
-                    {formatOccupiedDelta(p.usedDelta)}
+                    {formatOccupiedDelta(
+                      p.usedDelta,
+                      `transaction ${activity.txHash}, party ${partyKey(p, i)}`
+                    )}
                   </span>
                   <span role="cell" className="flex min-w-0 flex-wrap gap-x-3.5 gap-y-0.5">
                     <Items participant={p} size="row" />
@@ -196,7 +199,10 @@ export function BalanceChanges({
                         <CkbAmount form="column" shannons={n.ckb} tone="plain" />
                       </span>
                       <span role="cell" className="whitespace-nowrap text-right tabular-nums">
-                        {formatOccupiedDelta(n.occupied.toString())}
+                        {formatOccupiedDelta(
+                          n.occupied.toString(),
+                          `transaction ${activity.txHash}, net`
+                        )}
                       </span>
                       <span role="cell">{netNote(n.note)}</span>
                     </>
@@ -216,7 +222,12 @@ export function BalanceChanges({
                 const occupied = (
                   <>
                     occupied{' '}
-                    <span className="tabular-nums">{formatOccupiedDelta(p.usedDelta)}</span>
+                    <span className="tabular-nums">
+                      {formatOccupiedDelta(
+                        p.usedDelta,
+                        `transaction ${activity.txHash}, party ${partyKey(p, i)}`
+                      )}
+                    </span>
                   </>
                 );
                 return form === 'three-line' ? (
@@ -293,7 +304,10 @@ export function BalanceChanges({
                       <span>
                         Net <CkbAmount form="summary" shannons={n.ckb} tone="plain" /> · occupied{' '}
                         <span className="text-text whitespace-nowrap tabular-nums">
-                          {formatOccupiedDelta(n.occupied.toString())}
+                          {formatOccupiedDelta(
+                            n.occupied.toString(),
+                            `transaction ${activity.txHash}, net`
+                          )}
                         </span>
                       </span>
                       <span>{netNote(n.note)}</span>

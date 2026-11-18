@@ -34,7 +34,7 @@ const cell: CellTileData = sealedTile(
     kind: 'tokens',
     content: 'USDI',
     capacity: '10000000000',
-    occupied: '6100000000',
+    occupiedBytes: '61',
     state: 'consumed',
   },
   'ink'
@@ -186,8 +186,9 @@ describe('exact capacity and cell anatomy', () => {
     );
     expect(container.textContent).toContain('100.00000000 CKB');
     expect(screen.getByText('JoyID')).toBeInTheDocument();
-    expect(() => render(<CellTile cell={{ ...cell, occupied: '10000000001' }} />)).toThrow(
-      'in:0: occupied'
+    // B4 second fix round: a cell's occupied bytes, 101 of them, past its 100 CKB of capacity
+    expect(() => render(<CellTile cell={{ ...cell, occupiedBytes: '101' }} />)).toThrow(
+      'in:0: occupied 101 bytes (10100000000 shannons) exceed capacity 10000000000 shannons'
     );
   });
 });
