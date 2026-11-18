@@ -71,24 +71,48 @@ colour leaves sRGB) until it cleared — see the derivation below.
 
 ## Text hierarchy
 
-Use the following hierarchy in `frontend/app` and `frontend/components`:
+Three inks carry words, each by its role (readability plan 2026-11-18, ruling R3). The quiet ink is
+not the default: a page set mostly in its weakest word ink has no hierarchy, its links, dates, table
+values and explaining sentences as quiet as their labels.
 
-1. `Primary Data` (numbers/hashes/status that users scan first)
+- **bright** (`text-text-bright`; `text-emphasis`, `text-interactive` where an accent names it):
+  the one figure or name a reader scans first in a block;
+- **reading** (`text-text`): every other value, every link, every date and number, and every
+  sentence that explains;
+- **quiet** (`text-text-dim`): a label, a unit that repeats down a column, a separator, a note under
+  a figure, and a set-back row (the `quiet` class, "Set back" below).
 
-- `text-text-bright`, `text-emphasis`, `text-interactive`
+Under them, never a word nor a figure: the ghost for padding and decoration (`text-text-ghost`),
+and for marks and rules the quiet slate (`ink-quiet`) and the muted ink (`ink-muted`), both under
+text grade ("The ghost ink" below).
 
-2. `Secondary Context` (labels, section metadata, minor values)
+| What                     | For example                                                                                                                                          | Ink     |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| the figure scanned first | a page's h1, a hero or display figure, the height that names a block's row                                                                           | bright  |
+| label                    | a `dt`, a column head, a figure's eyebrow, a kind word ("Block"), a prompt heading's args, "occupied" before its bytes, a lock's kind, a `RowTag`    | quiet   |
+| value                    | a hash, an address, an out point, a name, a state ("live", "consumed"), a full id under its h1                                                       | reading |
+| link                     | every link wherever it stands: a block height in a sentence, an out point in a tile, a menu's entry; it turns jade on hover                          | reading |
+| date                     | "2025-01-07", "3 m ago"                                                                                                                              | reading |
+| number                   | a count, a percentage, a size in bytes, a pager's "Showing 1–25 of 1,234" (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
+| unit                     | the "CKB" after each amount, "B", a display figure's unit                                                                                            | quiet   |
+| separator                | the "·" between the parts of a line, JSON's braces and commas, "→"                                                                                   | quiet   |
+| note                     | a line under a figure that says how to read it or what it leaves out, a figure's sub-line, a hint ("tap or hover"), the word "selected" before a pin | quiet   |
+| explaining sentence      | a lede, a hero's companion line, a help popover's body, a banner's detail, a paragraph that explains a mechanism, a readout's idle line              | reading |
+| set-back row             | a cellbase row in the transactions list, a neighbour's row: the `quiet` class sets every word in it quiet                                            | quiet   |
 
-- `text-text`
+A note and an explaining sentence differ by where they stand: a note qualifies the figure right
+above it and is read with it; a sentence that explains stands on its own (the head's lede, a
+section's paragraph, a banner). A link stays a link inside a quiet line: it takes the reading ink.
 
-3. `Helper/Delimiter` (placeholders, separators, helper copy)
-
-- `text-text-dim`
-
-4. `Padding and decoration` (never a word, never a figure)
-
-- `text-text-ghost`; for marks and rules also the quiet slate (`ink-quiet`) and the muted ink
-  (`ink-muted`), both under text grade
+`__tests__/lib/ink-role-gate.test.ts` holds the rule where the source shows it: a link renderer
+(`<a>`, `Address`, a `…Link`), a CKB or token amount that takes its parent's ink, a table cell (a
+`<td>`, a `ListTable` column's class or the root of what its `render` returns) and a paragraph
+(`<p>`) never carry `text-text-dim` outside a `quiet` subtree, by their own class or by the
+nearest ink their file sets around them. The sites tolerated today are listed per file with their
+count and a reason: the page lanes' work list, which only shrinks (a new site fails, and a site that
+goes fails until its count is lowered). A paragraph that is a note under a figure stays quiet, its
+count kept with that reason. `__tests__/utils/ink-role.ts` (`inkOf`) reads the ink a rendered word
+is drawn in, for a component's own test of its roles.
 
 ### The ghost ink
 
@@ -97,14 +121,15 @@ purpose: it is for the **padding zeros** of a number (the trailing zeros that ke
 aligned, a leading zero) and for **pure decoration** (the `#` of a comment line, a separator, an
 arrow between two tiles, a rule). It never carries information. A section heading's note, a hint
 ("tap or hover …"), a caption, a footnote, a field's name, a count, "occupied ±N" and a tick are
-information: they are the dim ink. A link inside a note names no ink of its own: it keeps the
-note's dim and takes the page's link hover (`a:hover`).
+information: they take a word's ink by their role ("Text hierarchy"), never the ghost. A link inside
+a note is still a link: it takes the reading ink and the page's link hover (`a:hover`).
 
 The rule is about what an ink is used for, not its name: the quiet slate (`ink-quiet`, Lc 28–30 /
 3.6–4.4:1 by night, 2.7–3.3:1 by day) and the muted ink (`ink-muted`, Lc 43–45 / 5.4–6.6:1 by
 night, pinned at 3:1 as a mark's ink) are under text grade too. Like the ghost they draw marks — a rule, a tick, a swatch, a frame, the
 separator between two names (↔, →) — and never a word or a figure: an offset, a date, a day label,
-a caption, a framing byte's hex, "vs", a dash that stands for "none" are the dim ink. Where a quiet
+a caption, a framing byte's hex, "vs", a dash that stands for "none" take a word's ink by their
+role. Where a quiet
 ink used to set two kinds of bytes apart (framing from fields, padding from sections), the dim ink
 against the other's own tone does it, both readable. The gate refuses all three on words.
 
@@ -382,8 +407,9 @@ elements that do.
 
 ## Review checklist
 
-- New placeholder/separator text uses `text-text-dim`
-- New helper or instruction text uses `text-text-dim` or `text-text`
+- An ink by role ("Text hierarchy"): a label, a repeated unit, a separator, a note `text-text-dim`;
+  a value, a link, a date, a number, an explaining sentence `text-text`; the figure scanned first
+  `text-text-bright`
 - The ghost ink only on padding zeros and decoration; a zero that is a datum is dim
 - Nothing set back with opacity: the `quiet` class, the seal at full strength in its state's ink
 - No ink thinned with `/<n>`; an amount in one ink (`AMOUNT_INK`), its digits never quieter than its integer

@@ -491,7 +491,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(bytes).toHaveTextContent(/^occupied 61$/);
     expect(bytes).toHaveClass('text-meta', 'text-text-dim');
     const state = expectEnd(occupied.text, /^live$/);
-    expect(state.firstElementChild).toHaveClass('text-meta', 'text-text-dim');
+    // re-pinned with readability ruling R3: the state is a value, the reading ink (it was dim)
+    expect(state.firstElementChild).toHaveClass('text-meta', 'text-text');
     // the state once in the tile
     expect(within(tile).getAllByText('live')).toHaveLength(1);
     // the narrowest sheet's text column (1024: 203 px) holds the 56 px bar, 'occupied 231' and

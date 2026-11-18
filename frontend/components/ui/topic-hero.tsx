@@ -81,6 +81,7 @@ function GridHero({ title, lede, figures, breadcrumb }: TopicHeroProps) {
               >
                 {unitNode(figure.value)}
               </dd>
+              {/* a note under the figure: quiet by rule (R3) */}
               {figure.sub && (
                 <dd className="text-text-dim text-meta mt-0.5">{unitNode(figure.sub)}</dd>
               )}
@@ -93,8 +94,8 @@ function GridHero({ title, lede, figures, breadcrumb }: TopicHeroProps) {
 }
 
 /**
- * Hierarchy v3 (R13), after the DAO page: the hero section holds the title, one short lede (dim,
- * ≤ 90 characters, 560 px), the one display figure with its companion on the same baseline row, and
+ * Hierarchy v3 (R13), after the DAO page: the hero section holds the title, one short lede (the
+ * reading ink since R3, ≤ 90 characters, 560 px), the one display figure with its companion on the same baseline row, and
  * the picture right under it; the picture's reading and the other figures (one quiet row: meta
  * label, section value, inline dim note) follow the section.
  */
@@ -118,7 +119,9 @@ function FigureHero({
             {title}
           </h1>
         </div>
-        <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{lede}</p>
+        {/* A sentence that explains: the reading ink (R3). The eyebrow, the unit and the notes
+            below are labels and notes: quiet. */}
+        <p className="text-text text-body mt-1.5 max-w-[560px]">{lede}</p>
         {figure && (
           <div data-role="figure" className="mt-9 min-w-0">
             <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">
@@ -140,8 +143,9 @@ function FigureHero({
                   </span>
                 )}
               </div>
+              {/* the figure's companion: a value in words, the reading ink (R3) */}
               {figure.companion && (
-                <p className="text-body text-text-dim min-w-0">{unitNode(figure.companion)}</p>
+                <p className="text-body text-text min-w-0">{unitNode(figure.companion)}</p>
               )}
             </div>
           </div>

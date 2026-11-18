@@ -156,11 +156,11 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
     expect(nameBox).toHaveTextContent(`#20,914,858${SEAL_IDS.block.hash}`);
   });
 
-  // C10 round 2: the id line speaks in one voice on every plate, the kind line's — text-small in
-  // text-text-dim — set once here around what the page gives, so the page's own pieces carry no
+  // C10 round 2: the id line speaks in one voice on every plate — text-small, the kind line's size,
+  // in the reading ink since R3 — set once here around what the page gives, so the page's own pieces carry no
   // size or ink (the cell's full out point was text-body in the bright ink, competing with the h1
   // above it; the block's hash and the address were text-body in their own inks).
-  it('sets the id line in the kind line’s quiet voice, once, around what the page gives', () => {
+  it('sets the id line in one voice, once, around what the page gives', () => {
     const { container } = render(
       <SealedHead
         id={SEAL_IDS.cell}
@@ -180,7 +180,9 @@ describe('PageSeal and SealedHead by kind (the seals by kind)', () => {
     const { kindLine, nameBox, idLine } = expectNamePlate(container, 'Cell');
     expect(nameBox.lastElementChild).toBe(idLine);
     expect(idLine).toHaveAttribute('data-sealed-id');
-    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    // re-pinned with readability ruling R3: one voice still, in the reading ink (the id is a
+    // value; it was text-text-dim)
+    expect(idLine.className).toBe('text-text text-small min-w-0 [overflow-wrap:anywhere]');
     // the kind word's own voice
     expect(kindLine.firstElementChild).toHaveClass('text-text-dim', 'text-small');
     expect(idLine.firstElementChild!.firstElementChild).toBe(screen.getByTestId('outpoint'));

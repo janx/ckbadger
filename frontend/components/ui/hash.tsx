@@ -10,7 +10,8 @@ type HashProps = IdShortening & {
   kind?: IdKind;
   className?: string;
   copyable?: boolean;
-  variant?: 'default' | 'bright' | 'dim';
+  /** An id is a value: the reading ink, or bright; never quiet (R3, `HexCode`). */
+  variant?: 'default' | 'bright';
 };
 
 export function Hash({

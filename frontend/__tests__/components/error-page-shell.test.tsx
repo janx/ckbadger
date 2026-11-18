@@ -19,6 +19,7 @@ import { drawSeal, type SealId } from '@/lib/seal/stones';
 import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ErrorPageShell } from '@/components/error-page-shell';
+import { inkOf } from '@/__tests__/utils/ink-role';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
@@ -135,6 +136,10 @@ describe('ErrorPageShell', () => {
       'href',
       '/mainnet/blocks/1000000'
     );
+    // readability ruling R3: the caption is a note, quiet; the block's link and its hash in it are
+    // a link and a value, the reading ink
+    expect(inkOf(within(caption).getByRole('link', { name: '#1,000,000' }))).toBe('text-text');
+    expect(inkOf(within(caption).getByText('0xabc123de…34abcd'))).toBe('text-text');
     // no WebGL, no CSS night, no 256 squares
     expect(document.querySelector('canvas, .error-night, .error-night-bits')).toBeNull();
   });

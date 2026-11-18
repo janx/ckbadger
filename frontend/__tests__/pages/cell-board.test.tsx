@@ -164,10 +164,12 @@ describe('Cell page against the Cell board', () => {
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${cell.txHash}:1copy$`));
     expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy out point' }));
-    // C10 round 2: the id line in the plate's one quiet voice, set by the plate: the full out
+    // C10 round 2: the id line in the plate's one voice, set by the plate: the full out
     // point (it was text-body in the bright ink, competing with the h1 above it) takes it, its
     // colon in the same ink; the copy button keeps its own classes
-    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    // re-pinned with readability ruling R3: one voice still, in the reading ink (the id is a
+    // value; it was text-text-dim)
+    expect(idLine.className).toBe('text-text text-small min-w-0 [overflow-wrap:anywhere]');
     const full = within(idLine).getByText(`${cell.txHash}:1`);
     expect(full.className).toBe('min-w-0');
     expect(full.children).toHaveLength(0);

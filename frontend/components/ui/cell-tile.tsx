@@ -101,6 +101,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         </span>
         <TileText>
           <span className="min-w-0">
+            {/* R3: the label ("input 0") is quiet; the out point, the tile's link, reads */}
             {cell.outPoint ? (
               <>
                 <span className="text-text-dim">{cell.label}</span>{' '}
@@ -109,14 +110,14 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
                 <Link
                   href={cell.href}
                   title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
-                  className="text-text-dim hover:text-jade whitespace-nowrap"
+                  className="text-text hover:text-jade whitespace-nowrap"
                 >
                   <ShortId value={cell.outPoint.txHash} kind="hash" size="tight" />
                   <OutpointIndex index={cell.outPoint.index} />
                 </Link>
               </>
             ) : (
-              <Link href={cell.href} className="text-text-dim hover:text-jade">
+              <Link href={cell.href} className="text-text hover:text-jade">
                 {cell.label}
               </Link>
             )}
@@ -127,6 +128,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         <span data-tile-mark className="flex items-start justify-center">
           <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="-my-px" />
         </span>
+        {/* the lock's kind, a label beside the owner: quiet (R3) */}
         <TileText end={cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}>
           {/* the owner is one unit, never broken */}
           <span className="whitespace-nowrap">{cell.owner}</span>
@@ -146,7 +148,8 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
             ('consumed') = 200 px, inside the narrowest text column (203 px, the sheets at 1024) */}
         <TileText
           align="center"
-          end={<span className="text-text-dim text-meta">{cell.state}</span>}
+          // the cell's state is a value: the reading ink (R3)
+          end={<span className="text-text text-meta">{cell.state}</span>}
         >
           {cell.anatomy ? (
             <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
@@ -158,9 +161,13 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
               />
             </div>
           )}
-          {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195". */}
+          {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195".
+              R3: "occupied" is the label, quiet; its bytes are a number, the reading ink. */}
           <span className="text-text-dim text-meta">
-            occupied {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}
+            occupied{' '}
+            <span className="text-text">
+              {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}
+            </span>
           </span>
         </TileText>
       </div>

@@ -256,9 +256,11 @@ describe('Address v3', () => {
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${addressText}$`));
     expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy address' }));
-    // C10 round 2: the id line in the plate's one quiet voice, set by the plate: the full address
+    // C10 round 2: the id line in the plate's one voice, set by the plate: the full address
     // (it was text-body in the text ink) takes it; the copy button keeps its own classes
-    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    // re-pinned with readability ruling R3: one voice still, in the reading ink (the id is a
+    // value; it was text-text-dim)
+    expect(idLine.className).toBe('text-text text-small min-w-0 [overflow-wrap:anywhere]');
     // A4 Chrome F3 (re-pinned): a full id in a head is the head's HeadId, one line where the
     // measured line holds it, else equal unbreakable lines — never the own-box scroller it was
     // (box 328 px for 698 px at 390)

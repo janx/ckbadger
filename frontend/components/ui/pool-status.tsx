@@ -85,7 +85,8 @@ export function PoolInterpretationNotice({
  */
 export function PoolTruncatedNotice() {
   return (
-    <div className="border-base-border bg-base-surface/50 text-text-dim text-small border-b px-4 py-2 font-mono">
+    // a sentence that explains why the list is short: the reading ink (R3)
+    <div className="border-base-border bg-base-surface/50 text-text text-small border-b px-4 py-2 font-mono">
       More unconfirmed transactions than shown.
     </div>
   );
@@ -97,7 +98,8 @@ export function PoolTruncatedNotice() {
  */
 export function PoolUnavailableNotice() {
   return (
-    <div className="border-base-border bg-base-surface/50 text-text-dim text-small border-b px-4 py-2 font-mono">
+    // a sentence that explains why the list is short: the reading ink (R3)
+    <div className="border-base-border bg-base-surface/50 text-text text-small border-b px-4 py-2 font-mono">
       Pool view unavailable — the node could not be reached, so unconfirmed transactions are not
       shown. Confirmed history below is unaffected.
     </div>

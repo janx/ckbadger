@@ -74,7 +74,8 @@ export function CursorPagination({
         className
       )}
     >
-      <span className="text-text-dim text-body font-mono">
+      {/* the counts are numbers: the reading ink (R3) */}
+      <span className="text-text text-body font-mono">
         {summary !== undefined ? summary : (sentence ?? '\u00a0')}
       </span>
       <div
@@ -85,7 +86,7 @@ export function CursorPagination({
           {previousLabel}
         </button>
         {page !== undefined && (
-          <span className="text-text-dim text-body whitespace-nowrap font-mono">
+          <span className="text-text text-body whitespace-nowrap font-mono">
             Page {page.toLocaleString('en-US')}
             {totalPages !== undefined ? ` of ${totalPages.toLocaleString('en-US')}` : ''}
           </span>
