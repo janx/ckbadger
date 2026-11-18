@@ -21,7 +21,7 @@ import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ERROR_PAGE_LAYOUT, ErrorPageShell } from '@/components/error-page-shell';
 import { inkOf } from '@/__tests__/utils/ink-role';
-import { textRunPx } from '@/__tests__/utils/tailwind-box';
+import { displayAt, textRunPx } from '@/__tests__/utils/tailwind-box';
 import { WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
@@ -562,10 +562,15 @@ describe('the pressed seal stands clear of the text column (readability R6)', ()
 // the item after it, a line breaks before it, never after it, and it is not drawn where its item
 // starts a line), so every "·" of the caption is a Dotted separator. jsdom lays nothing out: the
 // caption's units are read from the rendered DOM (its words, and every box a line does not break
-// inside: a nowrap run, an inline list), measured at the caption's own step (tailwind-box), and set
+// inside: a nowrap run, an inline list), each box's display read at the window through
+// tailwind-box (`displayAt`, as line-runs reads it), measured at the caption's own step, and set
 // greedily on lines as wide as the caption's box at each window (ERROR_PAGE_LAYOUT: the stone's
-// 256 px column from 1280, the room between the gutters below). The block number is counted at
-// its widest (`WIDEST_BLOCK_NUMBER`), whatever the tip is.
+// 256 px column from 1280, the room between the gutters below). A block-level box (a list drawn
+// `flex`, not `inline-flex`) stands on lines of its own: it closes the line before it and the
+// next unit starts a new one (review rules-tests SHOULD-3: the units were all read as inline, so a
+// caption whose list had lost `inline` passed while Chrome drew it on a line of its own). What the
+// reader cannot lay out it refuses: a block wider than its line, a box of any other display. The
+// block number is counted at its widest (`WIDEST_BLOCK_NUMBER`), whatever the tip is.
 describe('the caption under the 404 seal never opens a line with a separator', () => {
   const { gutters, besideFrom, sealPx } = ERROR_PAGE_LAYOUT;
   const gutterAt = (width: number) => [...gutters].reverse().find((g) => width >= g.from)!.px;
@@ -582,7 +587,11 @@ describe('the caption under the 404 seal never opens a line with a separator', (
     breakBefore: boolean;
     /** An inline Dotted list: one box on a line, its separators its own (hidden at a line start). */
     dotted: boolean;
+    /** A block-level box: it stands on lines of its own. */
+    block: boolean;
   }
+  /** The block-level displays (line-runs' set): such a box opens and closes its own lines. */
+  const BLOCK_LEVEL = new Set(['block', 'flex', 'grid', 'list-item', 'table']);
   /** The text an element draws, a block number written at its widest. */
   const drawn = (node: Node): string =>
     node instanceof HTMLAnchorElement && /\/blocks\/\d+$/.test(node.getAttribute('href') ?? '')
@@ -590,8 +599,8 @@ describe('the caption under the 404 seal never opens a line with a separator', (
       : node.nodeType === 3
         ? (node.textContent ?? '')
         : Array.from(node.childNodes).map(drawn).join('');
-  /** The caption's units in order: words, and the boxes a line never breaks inside. */
-  function units(root: Element): Unit[] {
+  /** The caption's units in order at a window: words, and the boxes a line never breaks inside. */
+  function units(root: Element, viewport: number): Unit[] {
     const out: Unit[] = [];
     let space = false;
     const walk = (node: Node) => {
@@ -600,21 +609,36 @@ describe('the caption under the 404 seal never opens a line with a separator', (
           if (piece === '') continue;
           if (/^\s+$/.test(piece)) space = true;
           else {
-            out.push({ text: piece, breakBefore: space, dotted: false });
+            out.push({ text: piece, breakBefore: space, dotted: false, block: false });
             space = false;
           }
         }
         return;
       }
       const el = node as HTMLElement;
+      const display = displayAt(el, viewport);
+      const block = BLOCK_LEVEL.has(display);
       const dotted = el.hasAttribute('data-dotted');
+      if (dotted && !block && display !== 'inline-flex')
+        throw new Error(
+          `${viewport}: a separated list drawn ${display}, which the reader does not lay out`
+        );
       if (dotted || el.classList.contains('whitespace-nowrap') || drawn(el) !== el.textContent) {
         const text = drawn(el).replace(/\s+/g, ' ');
         if (/^\s/.test(text)) space = true;
-        out.push({ text: text.trim(), breakBefore: space, dotted });
-        space = /\s$/.test(text);
+        out.push({
+          text: text.trim(),
+          breakBefore: space || block,
+          dotted: dotted && !block,
+          block,
+        });
+        space = /\s$/.test(text) || block;
         return;
       }
+      if (block)
+        throw new Error(
+          `${viewport}: a ${display} box in the caption, which the reader does not lay out`
+        );
       el.childNodes.forEach(walk);
     };
     root.childNodes.forEach(walk);
@@ -626,24 +650,43 @@ describe('the caption under the 404 seal never opens a line with a separator', (
     const px = (text: string) => textRunPx(text, caption, viewport);
     const out: Unit[][] = [[]];
     let x = 0;
-    for (const unit of units(caption)) {
+    let closed = false;
+    for (const unit of units(caption, viewport)) {
       const w = px(unit.text);
       if (w > width)
         throw new Error(`${viewport}: "${unit.text}" (${w} px) is wider than its ${width} px line`);
       const line = out[out.length - 1];
       const need = line.length === 0 ? w : (unit.breakBefore ? px(' ') : 0) + w;
-      if (line.length > 0 && x + need > width && unit.breakBefore) {
+      // a block-level box closes the line before it and the line it stands on
+      if (line.length > 0 && (unit.block || closed || (x + need > width && unit.breakBefore))) {
         out.push([unit]);
         x = w;
       } else {
         line.push(unit);
         x += need;
       }
+      closed = unit.block;
     }
     return out;
   }
   const text = (line: Unit[]) =>
     line.map((u, i) => (i > 0 && u.breakBefore ? ' ' : '') + u.text).join('');
+
+  it('reads the caption’s list as one inline box, a line of its own when it is a block', async () => {
+    const node = await caption();
+    const list = node.querySelector('[data-dotted]')!;
+    // the caption passes `inline`: the list is inline-flex at every window, never a block
+    for (const viewport of VIEWPORTS) expect(displayAt(list, viewport)).toBe('inline-flex');
+    expect(units(node, 640).map((u) => [u.text.slice(0, 11), u.dotted, u.block])).toEqual([
+      ['the', false, false],
+      ['seal', false, false],
+      ['of', false, false],
+      ['the', false, false],
+      ['newest', false, false],
+      ['block,', false, false],
+      [WIDEST_BLOCK_NUMBER, true, false],
+    ]);
+  });
 
   async function caption(): Promise<HTMLElement> {
     render(
