@@ -336,7 +336,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           mark="tokens"
           loadActivities={(p) => api.getTokenActivityFeed(typeHash, p)}
           loadTransactions={(p) => api.getTokenTransactions(typeHash, p)}
-          token={{ typeHash, symbol: t.symbol, decimals: t.decimals }}
+          // the token as the API names it (its rows carry that hash), not the address's spelling
+          token={{ typeHash: t.typeScriptHash, symbol: t.symbol, decimals: t.decimals }}
         />
       }
       tier2={
