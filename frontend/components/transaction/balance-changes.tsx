@@ -1,7 +1,7 @@
 'use client';
 import { ItemDeltaFact, readable } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { formatOccupiedDelta } from '@/components/activity/activity-row';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { DetailSection } from '@/components/ui/detail-layout';

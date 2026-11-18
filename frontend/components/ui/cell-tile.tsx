@@ -7,6 +7,7 @@ import { RowSeal } from '@/components/ui/row-seal';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import type { CellSeal } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { occupiedBytesText } from '@/lib/occupied';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import type { AssetClass } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
@@ -145,9 +146,11 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
-        {/* the bar, its bytes and the state at 12 px: 56 + 6 + 86.4 ('occupied 231') + 6 + 57.6
-            ('consumed') = 212 px, inside the narrowest text column (215 px, the sheets at 1024; it
-            was 203 beside the 30 px mark column, where the state wrapped under the bar) */}
+        {/* the bar, its bytes and the state at 12 px, budgeted at a cell's widest occupied figure:
+            at most a block's serialized size (MAX_BLOCK_BYTES, 597,000, consensus), so
+            "occupied 597,000 B", 129.6 px: 56 + 6 + 129.6 + 6 + 57.6 ('consumed') = 255.2 px. It
+            holds in the 343 px text column at 1280; in the 215 px column at 1024 (from "occupied
+            9 B" on) the state, the line's end, drops under the bar on its own line at the right */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)
@@ -163,13 +166,12 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
               />
             </div>
           )}
-          {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195".
-              R3: "occupied" is the label, quiet; its bytes are a number, the reading ink. */}
+          {/* F2-tx (TX-19): occupied capacity is bytes, written whole with its unit by the one
+              writer, "occupied 195 B" (B4). R3: "occupied" is the label, quiet; its figure is a
+              number, the reading ink. */}
           <span className="text-text-dim text-meta">
             occupied{' '}
-            <span className="text-text">
-              {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}
-            </span>
+            <span className="text-text">{occupiedBytesText(occupiedBytes(cell.id, occupied))}</span>
           </span>
         </TileText>
       </div>

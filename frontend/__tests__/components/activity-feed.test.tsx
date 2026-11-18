@@ -7,7 +7,7 @@ import { server } from '@/__tests__/msw/server';
 import { feedSamples, latestActivities } from '@/__tests__/msw/fixtures/home';
 import { MINUS } from '@/lib/chart-ticks';
 import { ActivityFeed, FEED_ROWS } from '@/components/home/activity-feed';
-import { formatOccupiedDelta } from '@/components/activity/activity-row';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import { ACTIVITY_HEAD_CLASS } from '@/components/home/section';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { createTestQueryClient } from '@/__tests__/utils/test-utils';

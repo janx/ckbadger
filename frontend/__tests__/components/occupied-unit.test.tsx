@@ -9,7 +9,8 @@ import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { BalanceChanges } from '@/components/transaction/balance-changes';
-import { ActivityRow, formatOccupiedDelta } from '@/components/activity/activity-row';
+import { ActivityRow } from '@/components/activity/activity-row';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import type { ParticipantInfo } from '@/lib/api';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 

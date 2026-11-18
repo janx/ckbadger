@@ -23,7 +23,7 @@ import {
   readable,
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { formatOccupiedDelta } from '@/components/activity/activity-row';
+import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
@@ -1801,11 +1801,10 @@ export default function TransactionDetailPage() {
             <dd>{capacityFact}</dd>
             {knowledgeDelta !== null && (
               <dd>
-                occupied {occupiedIn!.toLocaleString('en-US')} →{' '}
-                {occupiedOut!.toLocaleString('en-US')}{' '}
+                {/* "occupied" always carries its unit, the pair's once after it (B4) */}
+                occupied {occupiedPairText(occupiedIn!, occupiedOut!)}{' '}
                 <span className="text-text-dim">
-                  · common knowledge{' '}
-                  {formatOccupiedDelta((knowledgeDelta * BigInt(100000000)).toString())}
+                  · common knowledge {occupiedBytesDelta(knowledgeDelta)}
                 </span>
               </dd>
             )}
