@@ -139,29 +139,36 @@ function getActivityDayLabel(timestamp: string, now: number): string {
   }).format(new Date(`${day}T00:00:00Z`));
 }
 
-/** The rows in their days, in order: consecutive rows under one divider are one group. */
 /**
- * The stream's rows by day, in order, each group keyed by what it is: its day and which time the
- * day comes in the stream (a block's time may be earlier than its parent's, so near midnight a day
- * can come again after the next). A row arriving at the top or an older page at the bottom leaves
- * every key as it was, so no group is remounted under the reader (lane B4 fix round).
+ * The stream's rows by day, in order: consecutive rows of one UTC+8 date are one group under one
+ * divider. A group is keyed by what it is, that date and which time the date comes in the stream
+ * (a block's time may be earlier than its parent's, so near midnight a day can come again after
+ * the next); its label ("Today", "Yesterday", "Nov 13") is the reader's, relative to `now`, and
+ * is no part of its key. A row arriving at the top, an older page at the bottom and the turn of
+ * the day leave every key as it was, so no group is remounted under the reader (lane B4 fix
+ * rounds).
  */
 function dayGroups(
   items: readonly GlobalActivity[],
   now: number
 ): { key: string; label: string; items: GlobalActivity[] }[] {
-  const groups: { key: string; label: string; items: GlobalActivity[] }[] = [];
+  const groups: { key: string; date: string; label: string; items: GlobalActivity[] }[] = [];
   const seen = new Map<string, number>();
   for (const activity of items) {
-    const label = getActivityDayLabel(activity.timestamp, now);
+    const date = formatUtc8Date(toActivityDate(activity.timestamp).getTime());
     const last = groups[groups.length - 1];
-    if (last && last.label === label) {
+    if (last && last.date === date) {
       last.items.push(activity);
       continue;
     }
-    const time = seen.get(label) ?? 0;
-    seen.set(label, time + 1);
-    groups.push({ key: `${label}#${time}`, label, items: [activity] });
+    const time = seen.get(date) ?? 0;
+    seen.set(date, time + 1);
+    groups.push({
+      key: `${date}#${time}`,
+      date,
+      label: getActivityDayLabel(activity.timestamp, now),
+      items: [activity],
+    });
   }
   return groups;
 }
