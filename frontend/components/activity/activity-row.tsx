@@ -180,10 +180,11 @@ export function ActivityRowHead({
       {showEvidence && evidence === undefined && (
         <span
           data-role="evidence"
-          className={cn(
-            'text-text-dim text-meta shrink-0',
-            line && 'leading-row ml-auto whitespace-nowrap'
-          )}
+          // no run around the parts: each unit owns its white-space (the block number has no space
+          // to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
+          // device's clock is behind" break between its words), so the line breaks only between
+          // them (lane B4)
+          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
         >
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
