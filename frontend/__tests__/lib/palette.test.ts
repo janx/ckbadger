@@ -3,6 +3,7 @@ import { AMOUNT_INK } from '@/components/ui/ckb-amount';
 import { STEP_W } from '@/lib/pipeline/encoding';
 import {
   alpha,
+  apcaLc,
   color,
   contrastRatio,
   fade,
@@ -748,5 +749,32 @@ describe('the palette as CSS', () => {
     expect(() => hexToRgb('var(--c-jade)')).toThrow('not #rrggbb');
     // white on black is 21:1, the scale's end
     expect(contrastRatio('#ffffff', '#000000')).toBeCloseTo(21, 5);
+  });
+});
+
+// Readability plan 2026-11-18, ruling R2: the night text grade is perceptual, APCA Lc on the ground
+// an ink is used on. apcaLc is APCA-W3 0.0.98G-4g, the implementation the review measured with
+// (docs/superpowers/reviews/2026-11-18-readability-review/analyze_read.py, apca_y and apca).
+describe('apcaLc: the perceptual contrast (APCA-W3 0.0.98G-4g)', () => {
+  // the published reference pairs, text on background → Lc
+  it.each([
+    ['#888888', '#ffffff', 63.06],
+    ['#ffffff', '#888888', -68.54],
+    ['#000000', '#aaaaaa', 58.15],
+    ['#aaaaaa', '#000000', -56.24],
+    ['#112233', '#ddeeff', 91.67],
+    ['#ddeeff', '#112233', -93.07],
+  ])('reads %s on %s at Lc %s', (text, ground, lc) => {
+    expect(apcaLc(text, ground)).toBeCloseTo(lc, 2);
+  });
+
+  it('is signed by polarity, its grade the absolute value, and zero for an ink on itself', () => {
+    // dark ink on a light ground is positive, light ink on a dark ground negative
+    expect(apcaLc('#000000', '#ffffff')).toBeGreaterThan(100);
+    expect(apcaLc('#ffffff', '#000000')).toBeLessThan(-100);
+    expect(apcaLc('#15120f', '#15120f')).toBe(0);
+    // under the low clamp (|Lc| below 10 before the offset) there is no contrast to speak of
+    expect(apcaLc('#16130f', '#15120f')).toBe(0);
+    expect(() => apcaLc('#fff', '#000000')).toThrow('#fff is not #rrggbb');
   });
 });

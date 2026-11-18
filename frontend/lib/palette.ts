@@ -512,6 +512,38 @@ export function contrastRatio(a: string, b: string): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+// ---- perceptual contrast (APCA-W3 0.0.98G-4g): the night text grade (readability ruling R2) ----
+
+/** APCA's screen luminance: each sRGB channel to the 2.4 power (no linear toe), weighted. */
+function apcaLuminance(hex: string): number {
+  const { r, g, b } = hexToRgb(hex);
+  return 0.2126729 * (r / 255) ** 2.4 + 0.7151522 * (g / 255) ** 2.4 + 0.072175 * (b / 255) ** 2.4;
+}
+
+/** APCA's soft clamp of a near-black luminance (flare). */
+function apcaClampBlack(y: number): number {
+  return y > 0.022 ? y : y + (0.022 - y) ** 1.414;
+}
+
+/**
+ * The lightness contrast (APCA Lc) of `ink` read on `ground`, APCA-W3 0.0.98G-4g: positive for a
+ * dark ink on a light ground, negative for a light ink on a dark one; the grade is its absolute
+ * value. Unlike `contrastRatio` it is not symmetric, and it weighs a light ink on a dark ground as
+ * the eye does, weaker than the same ratio the other way round, which is why the night theme's
+ * text is graded by it (palette.test pins the floors) and WCAG's 4.5:1 stays the second floor.
+ */
+export function apcaLc(ink: string, ground: string): number {
+  const text = apcaClampBlack(apcaLuminance(ink));
+  const back = apcaClampBlack(apcaLuminance(ground));
+  if (Math.abs(back - text) < 0.0005) return 0;
+  if (back > text) {
+    const s = (back ** 0.56 - text ** 0.57) * 1.14;
+    return s < 0.1 ? 0 : (s - 0.027) * 100;
+  }
+  const s = (back ** 0.65 - text ** 0.62) * 1.14;
+  return s > -0.1 ? 0 : (s + 0.027) * 100;
+}
+
 // ---- the ink of words inside a filled segment (DY-03, UI review 2026-11-14) ----
 
 /**
