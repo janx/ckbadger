@@ -227,23 +227,15 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
     }
   });
 
-  // Review fb-tests 6: one quantity, two bounds. The tables budget a height of eight digits
-  // (WIDEST_BLOCK_NUMBER), the shell's budget nine (__tests__/utils/shell-budget.ts, the shell
-  // lane's file). Pinned as a known fault so the list can only shrink: when the shell takes this
-  // bound, this case fails and its entry goes.
-  const KNOWN_FAULTS = [
-    {
-      case: 'the status line budgets a block height of nine digits, the tables of eight',
-      shortfall:
-        'one glyph: "#999,999,999" against "#99,999,999", 7.2 px at the status line’s 12 px',
-      lane: 'shell + gates',
-      why: '__tests__/utils/shell-budget.ts (WIDEST.block) is that lane’s file; it should read WIDEST_BLOCK_NUMBER from lib/list-bounds.ts and drop WIDEST.blockToday, the same eight digits',
-    },
-  ] as const;
-  it('keeps one bound for a block height: the known fault of the shell, pinned', () => {
-    expect(KNOWN_FAULTS).toHaveLength(1);
-    expect(WIDEST.blockToday).toBe(WIDEST_BLOCK_NUMBER);
-    expect(WIDEST.block.length - WIDEST_BLOCK_NUMBER.length).toBe(1);
+  // Review fb-tests 6: one quantity, one bound. The tables budgeted a height of eight digits
+  // (WIDEST_BLOCK_NUMBER) and the shell nine (__tests__/utils/shell-budget.ts); the shell lane's
+  // follow-up made the shell read this bound (2026-11-19), and its known fault left this list,
+  // which can only shrink.
+  const KNOWN_FAULTS: readonly { case: string; shortfall: string; lane: string; why: string }[] =
+    [];
+  it('keeps one bound for a block height: the shell budgets the tables’ own', () => {
+    expect(KNOWN_FAULTS).toHaveLength(0);
+    expect(WIDEST.block).toBe(WIDEST_BLOCK_NUMBER);
   });
 });
 

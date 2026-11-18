@@ -1,4 +1,4 @@
-import { formatBlockNumber } from '@/lib/format-block';
+import { WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 import {
   FIELD_INSETS_PX,
   SEARCH_PLACEHOLDER,
@@ -59,8 +59,9 @@ export function contentPx(viewport: number): number {
 /**
  * The widest real content each part is budgeted for, as the site writes it.
  *
- * - A block height of nine digits (`#999,999,999`): mainnet stood at #21,045,159 on 2026-11-18, a
- *   block every 8.9 s or so, so the ninth digit is some 22 years away; eight is today's.
+ * - A block height as the lists bound it, one bound for one quantity (lib/list-bounds.ts
+ *   `WIDEST_BLOCK_NUMBER`, `#99,999,999`, eight digits of record: mainnet stood at #21,045,159 on
+ *   2026-11-18, a block every 8.9 s or so, so the ninth digit is some 22 years away).
  * - An epoch number of five digits (15,317 on 2026-11-18, six epochs a day: 99,999 in about 38
  *   years).
  * - `index / length` of the longest epoch: CKB caps an epoch at 1,800 blocks (4 h at the 8 s least
@@ -77,8 +78,7 @@ export function contentPx(viewport: number): number {
  *   its longer state, `· syncing`.
  */
 export const WIDEST = {
-  block: formatBlockNumber(999_999_999),
-  blockToday: formatBlockNumber(99_999_999),
+  block: WIDEST_BLOCK_NUMBER,
   epoch: (99_999).toLocaleString('en-US'),
   position: `${(1_799).toLocaleString('en-US')} / ${(1_800).toLocaleString('en-US')}`,
   left: '≈ 23h 59m left',

@@ -83,12 +83,12 @@ The 640–767 band has one content width to design for. Below 640 the container 
   reader, and the status line's mode block says it). The mining figures and the epoch's position
   and time left are the home page's below `md` — a ruled exception to principle 2 (UI review
   2026-11-14, PA-14): with the 52 px header and the 26 px status line the three lines took 212 of
-  an 844 px first screen on every page. At the 12 / 13 / 14 px steps (readability R4) that line is
-  280.8 of 328 px at 360 (289.2 with a nine-digit block) and 280.8 of 288 at 320, where a ninth
-  digit puts the epoch under the block; it is 44 px tall at 390. On the home page the epoch's line
-  breaks between its two groups, the epoch with its bar and its position with the time left, never
-  inside either, where the line cannot hold both (340.8 px at the widest content: at 360 and
-  below). From `md` the row wraps by whole items: one line at 1280 (1,223.8 of 1,232 px at the
+  an 844 px first screen on every page. At the 12 / 13 / 14 px steps (readability R4) and the
+  widest block number the lists budget (`lib/list-bounds.ts` `WIDEST_BLOCK_NUMBER`, `#99,999,999`:
+  one bound for one quantity) that line is 280.8 of 328 px at 360 and 280.8 of 288 at 320; it is
+  44 px tall at 390. On the home page the epoch's line breaks between its two groups, the epoch
+  with its bar and its position with the time left, never inside either, where the line cannot
+  hold both (340.8 px at the widest content: at 360 and below). From `md` the row wraps by whole items: one line at 1280 (1,215.4 of 1,232 px at the
   widest), the difficulty and the live mark on a second line at 1024, the block and the epoch on
   the first and the mining figures and the live mark on the second at 768.
 - **Status line** (every page; `components/layout/status-line.tsx`): the terminal session's last
@@ -103,11 +103,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
   what it writes) and gives its parts up in one order: the key hints from the last (`g b blocks`,
   `/ search`, `? help`: the help lists them all), the tip's word (the number stays: its `#` says it
   is a block), the tip (the vitals strip's first figure), the network, the release; the mode and
-  the clock never. At the widest real content (a nine-digit tip, `SYNCING`, `· syncing`) the wide
-  form holds every part from 810 px and gives up `g b blocks` at 768 (713.6 of 768 px: room for a
-  release seven characters longer); the narrow form holds every part down to 390, the tip's
-  number without its word at 360 while the mode is `SYNCING` or `OFFLINE`, and at 320 the number
-  alone while `LIVE`, no tip otherwise. Never two rows, never a part cut at the edge, never a
+  the clock never. At the widest real content (the tip at the block number the lists budget,
+  `#99,999,999`; `SYNCING`; `· syncing`) the wide form holds every part from 802.2 px and gives up
+  `g b blocks` at 768 (706.4 of 768 px: room for a release eight characters longer); the narrow
+  form holds every part down to 390, the tip's number without its word at 360 while the mode is
+  `SYNCING` or `OFFLINE`, and at 320 the number alone while `LIVE`, no tip otherwise. Never two rows, never a part cut at the edge, never a
   sideways scroller, never over the page's last prompt.
 - **Page end** (every page, the not-found and error pages too): the footer is the page's last
   quiet row, then the empty prompt (the cinnabar square and the cursor), the last thing before the
