@@ -223,8 +223,11 @@ describe('DAO depositors page (DAO-12)', () => {
     }
   });
 
-  it('puts a depositor on one line in the 640 band, where the five-column table does not fit', async () => {
-    atContainerWidth(608);
+  // Re-pinned on purpose (readability F3-e): the five columns, each its content, need 605 px, so
+  // the 608 px band draws the table; the two-line holder row is the form one pixel under, 604 px
+  // (renamed: it was "in the 640 band", where it no longer is the form).
+  it('puts a depositor on one line where the five-column table does not fit (604 px)', async () => {
+    atContainerWidth(604);
     onTestFinished(() => {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();

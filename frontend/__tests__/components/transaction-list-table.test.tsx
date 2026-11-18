@@ -159,13 +159,16 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // long as the bar's track. Old issue C: the Size track is 56 px (was 80); its 24 px went to the
   // transaction's hash. Re-pinned on purpose (readability B5): the Cycles track is 56 px too (was
   // 80), its ticks "0 … 2M"; its 24 px went to What it did, whose note was cut mid-word.
-  it('heads its bars with the shared ScaleHeader: Size and Cycles 56 px ticks, 2 px under the name', () => {
+  // Re-pinned on purpose (readability F3-e): each track is its head's widest tick row at 12 px,
+  // "0 600,000" (64.8 px; the 56 px track was budgeted at 11 px and 12 px ticks ran past it), and
+  // the Cycles head's "0 750M" under the 48 px a bar keeps at least, so 48.
+  it('heads its bars with the shared ScaleHeader: Size 64.8 and Cycles 48 px ticks, 2 px under the name', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table');
     const heads = within(table).getAllByRole('columnheader');
     for (const [i, end, track] of [
-      [6, '1,000', '56px'],
-      [7, '2M', '56px'],
+      [6, '1,000', '64.8px'],
+      [7, '2M', '48px'],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
       expect(ticks).toHaveAttribute('aria-hidden', 'true');
@@ -186,6 +189,8 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // 600,000: "0" … "600,000" in 52.8 of the 56 px. Any cycles scale under a billion (a page whose
   // largest transaction takes up to 750,000,000 cycles): re-pinned on purpose (readability B5),
   // "0" … "750M" in 33 of the 56 px (it was "750,000,000" in 79.2 of 80).
+  // Re-pinned on purpose (readability F3-e): the ticks are 12 px since R4, 7.2 px a character:
+  // "0" and "600,000" take 57.6 of the 64.8 px track, "0" and "750M" 36 of the 48.
   it('holds the widest tick row of each bar head inside its track', () => {
     render(
       <TransactionListTable
@@ -194,13 +199,13 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     );
     const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
     for (const [i, end, used] of [
-      [6, '600,000', 52.8],
-      [7, '750M', 33],
+      [6, '600,000', 57.6],
+      [7, '750M', 36],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
       const text = Array.from(ticks.children).map((t) => t.textContent!);
       expect(text).toEqual(['0', end]);
-      expect(text.join('').length * 6.6).toBeCloseTo(used, 6);
+      expect(text.join('').length * 7.2).toBeCloseTo(used, 6);
       expect(used).toBeLessThan(Number.parseFloat(ticks.style.width));
     }
   });
@@ -209,9 +214,10 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     render(<TransactionListTable transactions={[{ ...transfer, cycles: 1000 }, scriptCall]} />);
     const row = within(screen.getByRole('table')).getAllByRole('row')[1];
     // 1,000 of a 2,000,000-cycle scale on a 56 px track (re-pinned on purpose, readability B5: it
-    // was 80, 0.04 px): 0.028, drawn to the hundredth, 0.03 px.
+    // was 80, 0.04 px): 0.028, drawn to the hundredth, 0.03 px. Re-pinned on purpose (F3-e): the
+    // track is 48 px, 0.024, drawn to the hundredth, 0.02 px.
     const fill = row.querySelector('td:nth-child(8) [data-segment="value"]') as HTMLElement;
-    expect(fill.style.width).toBe('0.03px');
+    expect(fill.style.width).toBe('0.02px');
     expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
   });
 
@@ -240,17 +246,25 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // gap: "CKB Transfer" and "12 participants", "Cellbase" and "pays #21,042,681", on one line.
   // Re-pinned with readability R4 (lane F3, step 2): the table text is 13 px (7.8 px a glyph, was 7.2) and its key 14 px (8.4, was 7.8), so the table needs 1,286 px (was 1,230) and takes its row form in the
   // widest 1,232 px container; what each column holds is unchanged.
-  it('gives What it did the width of a common row on one line, inside the 1,286 px (B5)', () => {
+  // Re-pinned on purpose (readability F3-e, the flexible column's minimum): What it did takes what
+  // the container gives beyond the table's 1,220 px; at its minimum it holds the longest DAO
+  // headline whole and a note goes under its headline, and a common row is one line from a
+  // container of 1,275 px (at 1,232, What it did has 216 px).
+  it('gives What it did a common row on one line from 1,275 px, beyond the 1,220 (B5, F3-e)', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const widths = Array.from(table.querySelectorAll('col')).map((c) =>
-      Number.parseFloat((c as HTMLElement).style.width)
+      Number.parseFloat((c as HTMLElement).style.minWidth)
     );
+    const sum = widths.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(1220);
+    const what = (container: number) => container - (sum - widths[2]);
     const line = (headline: string, note: string) =>
       16 + 8 + (headline.length + note.length) * 7.8 + 8 + 16;
-    expect(line('CKB Transfer', '12 participants')).toBeLessThanOrEqual(widths[2]);
-    expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(widths[2]);
-    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1286);
+    expect(line('CKB Transfer', '12 participants')).toBeLessThanOrEqual(what(1275));
+    expect(line('CKB Transfer', '12 participants')).toBeGreaterThan(what(1274));
+    expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(what(1275));
+    expect(what(1232)).toBe(216);
   });
 
   it('says what each transaction did: kind, mark and a quiet note', () => {
@@ -308,12 +322,16 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
 describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   // Re-pinned with readability R4 (lane F3, step 2): the table text is 13 px (7.8 px a glyph, was 7.2) and its key 14 px (8.4, was 7.8): the table is drawn from 1,286 px (it fitted a 1,248 px container at
   // 1,230), and narrower it takes its row form; it never scrolls.
-  it('is drawn from its 1,286 px minimum, keeps block · age on one line and drops the per-cell unit', () => {
+  // Re-pinned on purpose (readability F3-e): the table is drawn from 1,220 px, and the block and
+  // its age are the cell's two lines (they were one, "#… · age"), each whole on its line.
+  it('is drawn from its 1,220 px minimum, keeps the block and its age each on one line and drops the per-cell unit', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1286);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
     const row = within(table).getAllByRole('row')[2];
-    expect(row.querySelector('td:nth-child(2) > span')).toHaveClass('whitespace-nowrap');
+    const lines = row.querySelectorAll('td:nth-child(2) > span > *');
+    expect(lines).toHaveLength(2);
+    for (const line of lines) expect(line).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('td:nth-child(4)')).toHaveTextContent(/^767\.29874184$/);
     expect(row.querySelector('td:nth-child(5)')).toHaveTextContent(/^0\.00030000$/);
   });
@@ -327,18 +345,20 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   // The Cells column held "3 → 3" but wrapped "10 → 2" onto a second line (a 61 px row): it is
   // 62 px wide and never wraps (coordinator ruling on lane M's report). Re-pinned with readability
   // R4: "10 → 2" at 13 px is 46.8 px, and the gap and 2 spare make the column 65 px.
-  it('keeps a two-digit cells count on one line (65 px, nowrap)', () => {
+  // Re-pinned on purpose (readability F3-e): the column holds four digits a side, "9,999 →
+  // 9,999" (101.4 px), and the gap: 118 px.
+  it('keeps a two-digit cells count on one line (118 px, nowrap)', () => {
     render(
       <TransactionListTable transactions={[{ ...transfer, inputsCount: 10, outputsCount: 2 }]} />
     );
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const heads = within(table).getAllByRole('columnheader');
     const at = heads.findIndex((th) => th.textContent === 'Cells');
-    expect((table.querySelectorAll('col')[at] as HTMLElement).style.width).toBe('65px');
+    expect((table.querySelectorAll('col')[at] as HTMLElement).style.width).toBe('118px');
     const cell = within(table).getAllByRole('row')[1].querySelectorAll('td')[at];
     expect(cell).toHaveTextContent(/^10 → 2$/);
     expect(cell).toHaveClass('whitespace-nowrap');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1286);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
   });
 
   // CH-14 (the thousands hunt): a count of four digits or more is grouped, as every count is
@@ -461,14 +481,16 @@ describe('TransactionListTable row stones', () => {
     render(<TransactionListTable transactions={txs} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const widths = Array.from(table.querySelectorAll('col')).map((c) =>
-      Number.parseFloat((c as HTMLElement).style.width)
+      Number.parseFloat((c as HTMLElement).style.minWidth)
     );
     // Re-pinned on purpose (readability B5): What it did 215 → 246, from the Transaction column's
     // spare (221 → 208) and the Cycles bar (180 → 162, its track 80 → 56); 1,230 px as before.
     // Re-pinned with readability R4 (lane F3, step 2): the table text is 13 px (7.8 px a glyph, was 7.2) and its key 14 px (8.4, was 7.8): every derived column grows with its text, 1,286 px.
-    expect(widths).toEqual([218, 175, 262, 172, 102, 65, 124, 168]);
-    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1286);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1286);
+    // Re-pinned on purpose (readability F3-e): every column its content, the spares gone, the
+    // block over its age, What it did the flexible column (its minimum read from minWidth): 1,220.
+    expect(widths).toEqual([216, 110, 204, 180, 102, 118, 146, 144]);
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
     expect(ROW_SEAL.tx.footprint).toBe(56.5);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at the body step, 14 px since R4 (8.4; 7.8 at 13 px; it was 19
@@ -479,31 +501,37 @@ describe('TransactionListTable row stones', () => {
     const chars = shown.textContent!.length;
     expect(chars).toBe(17);
     // the stone, the hash and the 16 px gap fit the column (re-pinned on purpose, B5: 208 px, 2.9
-    // px to spare; it was 221 with 15.9; R4: 218 px, the hash at 14 px, 2.7 to spare)
+    // px to spare; it was 221 with 15.9; R4: 218 px, the hash at 14 px, 2.7 to spare; F3-e: 216
+    // px, the spare gone, 0.7 of rounding up to a whole pixel)
     const used = ROW_SEAL.tx.footprint + chars * 8.4 + 16;
     expect(used).toBeCloseTo(215.3, 6);
-    expect(widths[0] - used).toBeCloseTo(2.7, 6);
-    // Cycles: its 56 px track, the bar's 10 px gap, the figure of any scale under a billion
-    // ("750,000,000", 11 ch at 13 px since R4, 12 before) and the 16 px gap
-    expect(widths[7] - (56 + 10 + 11 * 7.8 + 16)).toBeCloseTo(0.2, 6);
-    // What it did keeps the longest DAO headline whole beside its 16 px mark and two 8 px gaps
-    expect(16 + 8 + 'DAO Withdraw Complete'.length * 7.8 + 8 + 16).toBeLessThanOrEqual(widths[2]);
-    // Size: its 56 px track, the bar's 10 px gap, a 5-digit scale's figure (5 ch at 13 px) and the
-    // 16 px gap, 3 px to spare as at the 80 px track's 145
-    expect(widths[6] - (56 + 10 + 5 * 7.8 + 16)).toBeCloseTo(3, 6);
+    expect(widths[0] - used).toBeCloseTo(0.7, 6);
+    // Cycles: its 48 px track (F3-e: it was 56), the bar's 10 px gap and the figure of any scale
+    // under a billion ("750,000,000", 11 ch at 13 px since R4, 12 before); the last column, no gap
+    // after it (F3-e: it counted 16)
+    expect(widths[7] - (48 + 10 + 11 * 7.8)).toBeCloseTo(0.2, 6);
+    // What it did keeps the longest DAO headline whole beside its 16 px mark and its 8 px gap.
+    // Re-pinned on purpose (F3-e): this counted the 8 px between headline and note too, which the
+    // headline's line does not take where the note goes under it, as it does at the minimum.
+    expect(16 + 8 + 'DAO Withdraw Complete'.length * 7.8 + 16).toBeLessThanOrEqual(widths[2]);
+    // Size: its track holds its head's "0 600,000" at 12 px (64.8; F3-e: it was 56, which 12 px
+    // ticks ran past), the bar's 10 px gap, the scale's figure "600,000" (7 ch at 13 px; it counted
+    // a 5-digit "2,000") and the gap; 0.6 of rounding up to a whole pixel
+    expect(widths[6] - (9 * 7.2 + 10 + 7 * 7.8 + 16)).toBeCloseTo(0.6, 6);
   });
 
   // U-09 (re-pinned; old issue C had the table and the phone row alike at 10 + 6): the size is
   // the form's, the row size in the table and the tight size in the phone row.
   it('shows the hash at the row size in the table and the tight size in the phone row', () => {
     // re-pinned (readability R4): the table is drawn from 1,286 px (was 1,230)
-    for (const width of [1286, 1232, 608, 358]) {
+    // re-pinned (readability F3-e): the table is drawn from 1,220 px, so at 1,232 too
+    for (const width of [1232, 1220, 1219, 608, 358]) {
       atContainerWidth(width);
       const { unmount } = render(<TransactionListTable transactions={[scriptCall]} />);
       expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(
-        width === 1286 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
+        width >= 1220 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
       );
-      expect(screen.queryByRole('table') === null).toBe(width < 1286);
+      expect(screen.queryByRole('table') === null).toBe(width < 1220);
       unmount();
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
@@ -512,12 +540,13 @@ describe('TransactionListTable row stones', () => {
 
   // The form changes at the table's minimum: a table from 1,286 px (re-pinned, readability R4:
   // 1,230 at 12 / 13 px text), the phone rows below; the widest content box, 1,232, takes the rows.
-  it('changes form at its 1,286 px minimum', () => {
+  // Re-pinned on purpose (readability F3-e): a table from 1,220 px, so the widest content box,
+  // 1,232, draws it.
+  it('changes form at its 1,220 px minimum', () => {
     for (const [width, form] of [
-      [1288, 'table'],
-      [1286, 'table'],
-      [1285, 'rows'],
-      [1232, 'rows'],
+      [1232, 'table'],
+      [1220, 'table'],
+      [1219, 'rows'],
     ] as const) {
       atContainerWidth(width);
       const { container, unmount } = render(<TransactionListTable transactions={txs} />);

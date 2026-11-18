@@ -81,6 +81,12 @@ const HEAD_CLASS =
   'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 pr-4 font-normal last:pr-0 after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule';
 const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
 
+/**
+ * The gap a column keeps after its content, its cells' `pr-4` (the last column keeps none,
+ * `last:pr-0`): every column but the last budgets it in its minimum width.
+ */
+export const CELL_GAP_PX = 16;
+
 /** `td` classes per density; `th` is the same in both. */
 const CELL_CLASS: Record<ListTableDensity, string> = {
   default: 'min-w-0 py-3 pr-4 align-top last:pr-0',

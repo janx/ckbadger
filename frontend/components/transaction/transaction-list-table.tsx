@@ -2,11 +2,11 @@
 
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { ClassMark } from '@/components/ui/class-mark';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
   activityClassMark,
@@ -22,27 +22,35 @@ import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import {
+  MAX_BLOCK_BYTES,
+  TX_CYCLES_BOUND,
+  WIDEST_AGE,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_BLOCK_REWARD,
+  shortChars,
+  WIDEST_COMPACT_TICK,
+  WIDEST_COUNT,
+  WIDEST_TX_FEE,
+  WIDEST_TX_VALUE,
+} from '@/lib/list-bounds';
 
 /**
- * The Cycles bar's track, as long as the Size one: its head's ticks say the scale as a tick does
- * ("2M", "750M"), so any scale under a billion cycles, "0" … "750M" (5 characters at 11 px,
- * 33 px), fits it. It was 80 for "0" … "750,000,000" (79.2 px); its 24 px went to What it did
- * (readability B5), whose note was cut mid-word. The figure beside each bar stays exact.
+ * The widest scale each bar column writes (readability F3-e). Size: a transaction is no larger
+ * than a block's 597,000 bytes, whose scale is 600,000; its head writes the scale exact, "0" …
+ * "600,000", which its track holds whole (64.8 px). Cycles: any scale under a billion cycles (lane
+ * B5's bound of record: a page's largest transaction under 750,000,000), its head's ticks in the
+ * tick form ("0" … "750M", at most four characters), so its track is the shortest a bar takes, 48
+ * px; the exact figure beside each bar keeps its 11 characters.
  */
-const CYCLES_TRACK = 56;
-
-/**
- * The Size bar's track, shorter than the Cycles one: its head's widest tick row, "0" … "600,000"
- * (a transaction is no larger than a block's 597,000 bytes, whose scale is 600,000; 8 characters
- * at 11 px, 52.8 px), fits it with 3.2 px between the two ticks. It was 80; its 24 px went to the
- * transaction's hash (old issue C): the developer figures give way before the columns every
- * reader reads.
- */
-const SIZE_TRACK = 56;
+const SIZE_SCALE = resourceScale([MAX_BLOCK_BYTES]).toLocaleString('en-US');
+const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
+const SIZE_TRACK = trackPx(['0', SIZE_SCALE]);
+const CYCLES_TRACK = trackPx(['0', WIDEST_COMPACT_TICK]);
 
 /** The cells a transaction consumed: a cellbase none (the API counts its one null input). */
 function consumedCells(tx: Transaction): number {
@@ -237,43 +245,22 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
 }
 
 /**
- * The committed list of the Transactions board (TX-25 / TX-26): general columns first (tx,
- * block · age, what it did, value, fee), then the quieter cells / size / cycles on one shared
- * scale per column. A cellbase row is set back (the quiet variant: every word dim, its stone
- * pressed; R4) and shows the reward it pays, grey (D5): Value
- * itself excludes cellbase issuance, so the reward is never added to a total.
+ * The committed list's columns (readability F3-e: each budgeted from the widest value it holds),
+ * on the page's two bar scales.
  */
-export function TransactionListTable({
-  transactions,
-  label = 'Committed transactions',
-}: {
-  transactions: readonly Transaction[];
-  label?: string;
-}) {
-  for (const tx of transactions) {
-    if (!Number.isSafeInteger(tx.txSize) || tx.txSize! <= 0)
-      throw new Error(`Transaction ${tx.hash} is missing its exact serialized size`);
-    if (tx.cyclesStatus === 'complete' ? tx.cycles === null : tx.cycles !== null)
-      throw new Error(`Transaction ${tx.hash} has inconsistent cycle evidence`);
-    if (tx.isCellbase ? tx.outputCapacity === undefined : !tx.activity)
-      throw new Error(
-        `Transaction ${tx.hash} is missing its ${tx.isCellbase ? 'output capacity' : 'activity'}`
-      );
-  }
-  const sizeScale = resourceScale(transactions.map((tx) => tx.txSize!));
-  const cycleScale = resourceScale(
-    transactions.flatMap((tx) => (tx.cycles === null ? [] : [tx.cycles]))
-  );
-  const columns: ListColumn<Transaction>[] = [
+function committedColumns(sizeScale: number, cycleScale: number): ListColumn<Transaction>[] {
+  return [
     {
       key: 'transaction',
       label: 'Transaction',
       // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
-      // characters at 13 px (132.6 px; it was 19 with three dots, 148.2 px), and the 16 px gap:
-      // 205.1 of its 208 px. It had 221 (old issue C: the 29 px it gained over 192 came from the
-      // Size bar's track and What it did); 13 of its 15.9 spare went back to What it did (B5): 2 px
-      // spare.
-      minWidth: columnPx(ROW_SEAL.tx.footprint + textPx(17, fontPx('body')) + 16, 2),
+      // characters at the key's 14 px (142.8), and the gap: 215.3. Its 2 px spare went
+      // (readability F3-e): it stood for no content, and a glyph advances exactly 0.6 em.
+      minWidth: columnPx(
+        ROW_SEAL.tx.footprint +
+          textPx(shortChars(SHORT_FORMS.row.hash), fontPx('body')) +
+          CELL_GAP_PX
+      ),
       // Table-rows T5: the hash is the row's key, 13 px bright on the row's 18 px line (a cellbase
       // row keeps its dim row class); its stone leads it, overhanging that line (RowSeal).
       render: (tx) => (
@@ -293,14 +280,24 @@ export function TransactionListTable({
     {
       key: 'block',
       label: 'Block · date',
-      minWidth: 175,
+      // Two data on two lines (readability F3-e): the block, "#99,999,999", over its age, "10y
+      // 364d ago" (12 characters at 13 px, 93.6, the wider), and the gap. On one line, with " · "
+      // between them, they took 25 characters (211 px; it was 175, which held "59m ago" and not an
+      // older page's age), and the table could not hold its columns at 1,232 px; at its minimum
+      // every row is two lines already, the note under its headline in What it did.
+      minWidth: columnPx(
+        textPx(Math.max(WIDEST_BLOCK_NUMBER.length, WIDEST_AGE.length), fontPx('small')) +
+          CELL_GAP_PX
+      ),
       render: (tx) => (
-        <span className="text-small whitespace-nowrap">
-          <Link href={`/blocks/${tx.blockNumber}`} className="hover:text-jade">
+        <span className="text-small">
+          <Link
+            href={`/blocks/${tx.blockNumber}`}
+            className="hover:text-jade block whitespace-nowrap"
+          >
             {formatBlockNumber(tx.blockNumber)}
           </Link>
-          <span className="text-text-dim">
-            {' · '}
+          <span className="text-text-dim block whitespace-nowrap">
             <Utc8Age timestamp={tx.timestamp} />
           </span>
         </span>
@@ -309,13 +306,17 @@ export function TransactionListTable({
     {
       key: 'what',
       label: 'What it did',
-      // B5: the note is never cut (it was truncated mid-word, "2 participa"): it follows the
-      // headline on its line when it fits and wraps under it, part by part, when it does not. The
-      // mark (16), its 8 px gap, the 8 px between headline and note and the 16 px gap leave them
-      // 206 px: "CKB Transfer" and "12 participants" (27 characters at 12 px, 194.4 px) or
-      // "Cellbase" and "pays #21,042,681" (24, 172.8 px) on one line. Its 246 px are the 215 it
-      // had, 13 from the hash's spare and 18 from the Cycles bar (its track 80 → 56): 3 px spare.
-      minWidth: columnPx(16 + 8 + 8 + 16 + textPx(27, fontPx('small')), 3),
+      // The table's flexible column (readability F3-e): it takes what the container gives beyond
+      // the sum. B5: the note is never cut (it was truncated mid-word, "2 participa"): it follows
+      // the headline on its line when it fits and wraps under it, part by part, when it does not.
+      // At its minimum the mark (16), its 8 px gap, the longest DAO headline, "DAO Withdraw
+      // Complete" (21 characters at 13 px, 163.8), whole, and the gap: 203.8; a common row's note
+      // ("CKB Transfer" and "12 participants", 258.6 px on one line) goes under its headline there
+      // and joins it from a container of 1,275 px.
+      minWidth: columnPx(
+        16 + 8 + textPx('DAO Withdraw Complete'.length, fontPx('small')) + CELL_GAP_PX
+      ),
+      width: 'auto',
       render: (tx) => {
         const mark = tx.activity ? activityClassMark(tx.activity) : null;
         return (
@@ -345,10 +346,15 @@ export function TransactionListTable({
     {
       key: 'value',
       label: 'Value, CKB',
-      // Every value under a billion CKB, "999,999,999.99999999" (20 characters at 12 px, 144 px),
-      // and the 16 px gap; the next width is 22 characters, so 170 held nothing more. Its 10 px
-      // and the fee's 9 went to the row seal.
-      minWidth: columnPx(textPx(20, fontPx('small')) + 16),
+      // Every value under a billion CKB, "999,999,999.99999999" (20 characters), or a cellbase's
+      // "reward" and a reward of four whole digits, "reward 9,999.99999999" (21, the wider: 163.8 at
+      // 13 px; the first epochs paid 1,917 CKB), and the gap.
+      minWidth: columnPx(
+        textPx(
+          Math.max(WIDEST_TX_VALUE.length, `reward ${WIDEST_BLOCK_REWARD}`.length),
+          fontPx('small')
+        ) + CELL_GAP_PX
+      ),
       numeric: true,
       render: (tx) =>
         tx.isCellbase ? (
@@ -379,8 +385,8 @@ export function TransactionListTable({
     {
       key: 'fee',
       label: 'Fee, CKB',
-      // A fee under 100 CKB, "99.99999999" (11 characters at 12 px, 79.2 px), and the 16 px gap.
-      minWidth: columnPx(textPx(11, fontPx('small')) + 16),
+      // A fee under 100 CKB, "99.99999999" (11 characters at 13 px, 85.8), and the gap.
+      minWidth: columnPx(textPx(WIDEST_TX_FEE.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
       render: (tx) => (
         <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
@@ -397,8 +403,11 @@ export function TransactionListTable({
     {
       key: 'cells',
       label: 'Cells',
-      // "10 → 2" (6 characters, 43.2 px) and the 16 px gap, on one line: it wrapped at 56; 2 spare.
-      minWidth: columnPx(textPx(6, fontPx('small')) + 16, 2),
+      // Four digits a side, "9,999 → 9,999" (13 characters at 13 px, 101.4), and the gap, on one
+      // line. It held "10 → 2" (65 px), and the genesis cellbase's "0 → 671" ran past it.
+      minWidth: columnPx(
+        textPx(`${WIDEST_COUNT} → ${WIDEST_COUNT}`.length, fontPx('small')) + CELL_GAP_PX
+      ),
       className: 'whitespace-nowrap',
       render: (tx) => (
         <span className="text-text-dim text-small">
@@ -409,9 +418,12 @@ export function TransactionListTable({
     {
       key: 'size',
       label: 'Size, bytes',
-      // The track (SIZE_TRACK, 56), the bar's 10 px gap, a 5-digit scale's figure ("2,000", 36 px)
-      // and the 16 px gap, with 3 px to spare, as at the 80 px track's 145 (it gave 24 to the hash).
-      minWidth: columnPx(SIZE_TRACK + 10 + textPx(5, fontPx('small')) + 16, 3),
+      // The track (SIZE_TRACK, its head's "0" … "600,000" whole, 64.8), the bar's 10 px gap, the
+      // scale's figure ("600,000", 7 characters at 13 px, 54.6) and the gap. It held a 5-digit
+      // scale ("2,000") on a 56 px track its head's ticks ran past.
+      minWidth: columnPx(
+        SIZE_TRACK + BAR_FIGURE_GAP + textPx(SIZE_SCALE.length, fontPx('small')) + CELL_GAP_PX
+      ),
       // The shared head at this table's own geometry: a tick row as long as the track, 2 px under
       // the name.
       header: (
@@ -436,10 +448,12 @@ export function TransactionListTable({
     {
       key: 'cycles',
       label: 'Cycles',
-      // The 56 px track, the bar's 10 px gap, the figure of any scale under a billion
-      // ("750,000,000", 11 characters at 12 px, 79.2 px) and the 16 px gap: 161.2. It was 180
-      // on an 80 px track, which a 9-digit scale overran (185.2).
-      minWidth: columnPx(CYCLES_TRACK + 10 + textPx(11, fontPx('small')) + 16),
+      // The track (CYCLES_TRACK, 48: its head's ticks in the tick form), the bar's 10 px gap and
+      // the figure of any scale under a billion ("750,000,000", 11 characters at 13 px, 85.8); the
+      // last column, no gap after it (it counted 16).
+      minWidth: columnPx(
+        CYCLES_TRACK + BAR_FIGURE_GAP + textPx(CYCLES_SCALE.length, fontPx('small'))
+      ),
       header: (
         <ScaleHeader
           label="Cycles"
@@ -464,6 +478,46 @@ export function TransactionListTable({
         ),
     },
   ];
+}
+
+/**
+ * The width the committed list changes form at, the sum of its columns' minimums (1,220 px): the
+ * pool list on the same page changes form there too (both lists are one page).
+ */
+export const TRANSACTION_LIST_MIN_PX = minimumWidth(
+  'Committed transactions',
+  committedColumns(1, 1)
+);
+
+/**
+ * The committed list of the Transactions board (TX-25 / TX-26): general columns first (tx,
+ * block · age, what it did, value, fee), then the quieter cells / size / cycles on one shared
+ * scale per column. A cellbase row is set back (the quiet variant: every word dim, its stone
+ * pressed; R4) and shows the reward it pays, grey (D5): Value
+ * itself excludes cellbase issuance, so the reward is never added to a total.
+ */
+export function TransactionListTable({
+  transactions,
+  label = 'Committed transactions',
+}: {
+  transactions: readonly Transaction[];
+  label?: string;
+}) {
+  for (const tx of transactions) {
+    if (!Number.isSafeInteger(tx.txSize) || tx.txSize! <= 0)
+      throw new Error(`Transaction ${tx.hash} is missing its exact serialized size`);
+    if (tx.cyclesStatus === 'complete' ? tx.cycles === null : tx.cycles !== null)
+      throw new Error(`Transaction ${tx.hash} has inconsistent cycle evidence`);
+    if (tx.isCellbase ? tx.outputCapacity === undefined : !tx.activity)
+      throw new Error(
+        `Transaction ${tx.hash} is missing its ${tx.isCellbase ? 'output capacity' : 'activity'}`
+      );
+  }
+  const sizeScale = resourceScale(transactions.map((tx) => tx.txSize!));
+  const cycleScale = resourceScale(
+    transactions.flatMap((tx) => (tx.cycles === null ? [] : [tx.cycles]))
+  );
+  const columns = committedColumns(sizeScale, cycleScale);
   return (
     <ListTable
       label={label}

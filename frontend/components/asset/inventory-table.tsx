@@ -1,5 +1,5 @@
 import { type Asset } from '@/lib/api';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -24,6 +24,28 @@ import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { percentOf } from '@/lib/format-unit';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { UNAVAILABLE, WIDEST_CKB_HELD, WIDEST_ROW_COUNT } from '@/lib/list-bounds';
+
+/**
+ * What every inventory column holds, measured at its step (readability F3-e, lib/list-bounds.ts):
+ * names at the body step (14 px), cells at the small (13), tags, heads and notes at the meta (12),
+ * and the 16 px gap after every column but the last.
+ */
+const name = (chars: number) => textPx(chars, fontPx('body'));
+const cell = (text: string) => textPx(text.length, fontPx('small'));
+const meta = (text: string) => textPx(text.length, fontPx('meta'));
+/** A row tag (`RowTag`): its words at the meta step, 5 px sides and a 1 px border each side. */
+const tag = (text: string) => meta(text) + 2 * 5 + 2 * 1;
+/**
+ * A name column's least share of the name, 12 characters at 14 px: the column takes what the
+ * container gives beyond the table's sum, and a longer name ends in the one ellipsis there, the
+ * row's title holding it whole.
+ */
+const NAME_CHARS = 12;
+/** A count (holders, transfers, live, registered), or "Unavailable" before the API derives it. */
+const COUNT_PX = columnPx(Math.max(cell(WIDEST_ROW_COUNT), cell(UNAVAILABLE)) + CELL_GAP_PX);
+/** The H-multiplier to 2 dp ("×1.64"), or "Unavailable": the last column, no gap after it. */
+const H_MULT_PX = columnPx(cell(UNAVAILABLE));
 
 export function AssetCount({ value }: { value: number | string | null | undefined }) {
   if (value === null || value === undefined)
@@ -331,15 +353,15 @@ function HMultiplier({ value }: { value: string | null }) {
  * title; readability R5), right aligned under its own head (readability B5,
  * plan §7.6: a bar on a linear scale to the page's largest holding was a 1–3 px stub on most rows,
  * and its head stood over the bar, not over the sorted figure). The figure shows the magnitude.
- * Its head, "CKB held in its cells" (21 characters at 11 px, 138.6 px), is wider than the board's
- * 118 px amount; with the 16 px gap, 155 px.
+ * Its head, "CKB held in its cells" (21 characters at 12 px, 151.2), is wider than the widest
+ * amount, "99,999,999,999" (14 at 13 px, 109.2); with the 16 px gap, 168 px.
  */
 const HELD_LABEL = 'CKB held in its cells';
 const HELD_COLUMN: ListColumn<Asset> = {
   key: 'capacity',
   label: HELD_LABEL,
-  // the head at the meta step and the 16 px gap
-  minWidth: columnPx(textPx(HELD_LABEL.length, fontPx('meta')) + 16),
+  // the head at the meta step, wider than the widest amount, and the gap
+  minWidth: columnPx(Math.max(meta(HELD_LABEL), cell(WIDEST_CKB_HELD)) + CELL_GAP_PX),
   numeric: true,
   render: (a) => {
     const { held } = heldAndOccupied(a);
@@ -388,14 +410,18 @@ function tokenColumns(): ListColumn<Asset>[] {
     {
       key: 'identity',
       label: 'Token',
-      minWidth: 240,
+      // The flexible column: the 16 px mark, a name (NAME_CHARS), the symbol's tag (a symbol of 8
+      // characters) and the "sUDT" tag, 8 px apart, and the gap: 267.2. It was 240.
+      minWidth: columnPx(
+        16 + 8 + name(NAME_CHARS) + 8 + tag('x'.repeat(8)) + 8 + tag('sUDT') + CELL_GAP_PX
+      ),
       width: 'auto',
       render: (a) => <TokenName asset={a} />,
     },
     {
       key: 'holders',
       label: 'Holders',
-      minWidth: 90,
+      minWidth: COUNT_PX,
       numeric: true,
       render: (a) => (
         <span>
@@ -406,7 +432,7 @@ function tokenColumns(): ListColumn<Asset>[] {
     {
       key: 'activity',
       label: 'Transfers',
-      minWidth: 100,
+      minWidth: COUNT_PX,
       numeric: true,
       render: (a) => (
         <span>
@@ -417,7 +443,9 @@ function tokenColumns(): ListColumn<Asset>[] {
     {
       key: 'supply',
       label: 'Supply',
-      minWidth: 170,
+      // 19 characters of a supply, "100,000,000,000,000" (a hundred trillion whole units, 148.2 at
+      // 13 px), and the gap; a wider one ends in the one ellipsis, its exact value in its title.
+      minWidth: columnPx(cell('100,000,000,000,000') + CELL_GAP_PX),
       numeric: true,
       className: 'text-text-dim',
       // One line; a supply too long for the column ends in an ellipsis, every digit in its hover.
@@ -434,7 +462,7 @@ function tokenColumns(): ListColumn<Asset>[] {
     {
       key: 'hm',
       label: 'H-mult.',
-      minWidth: 90,
+      minWidth: H_MULT_PX,
       numeric: true,
       className: 'text-text-dim',
       render: (a) => <HMultiplier value={a.hMultiplier} />,
@@ -446,13 +474,12 @@ function tokenColumns(): ListColumn<Asset>[] {
 function countColumn(
   key: string,
   label: string,
-  minWidth: number,
   value: (a: Asset) => number | string | null | undefined
 ): ListColumn<Asset> {
   return {
     key,
     label,
-    minWidth,
+    minWidth: COUNT_PX,
     numeric: true,
     render: (a) => (
       <span>
@@ -536,22 +563,37 @@ function objectColumns(): ListColumn<Asset>[] {
     {
       key: 'identity',
       label: 'Collection',
-      minWidth: 300,
+      // The flexible column: the 24 px framed thumb, a name (NAME_CHARS), the standard's tag
+      // ("m-NFT", "Spore") and the widest composition tag, "Composition unavailable", 8 px apart,
+      // and the gap: 390.4. It was 300, which the tags alone could fill.
+      minWidth: columnPx(
+        24 +
+          8 +
+          name(NAME_CHARS) +
+          8 +
+          tag('m-NFT') +
+          8 +
+          tag('Composition unavailable') +
+          CELL_GAP_PX
+      ),
       width: 'auto',
       render: (a) => <CollectionName asset={a} />,
     },
     {
       key: 'live',
       label: 'Live items',
-      minWidth: 120,
+      // Six digits live and the quiet " / 999,999" minted beside them (the largest collections
+      // hold thousands), and the gap: 142.6.
+      minWidth: columnPx(cell('999,999') + meta(' / 999,999') + CELL_GAP_PX),
       numeric: true,
       render: (a) => <LiveOfMinted asset={a} />,
     },
-    countColumn('holders', 'Holders', 90, (a) => a.holdersCount),
+    countColumn('holders', 'Holders', (a) => a.holdersCount),
     {
       key: 'activity',
       label: 'Activity',
-      minWidth: 100,
+      // Eight digits (a count not derived yet says nothing, never "Unavailable") and the gap.
+      minWidth: columnPx(cell(WIDEST_ROW_COUNT) + CELL_GAP_PX),
       numeric: true,
       // Round 3 (contracts L2): a collection's count is null (unknown) on the cached list until
       // the indexer has derived it — say nothing rather than a stand-in.
@@ -566,7 +608,7 @@ function objectColumns(): ListColumn<Asset>[] {
     {
       key: 'hm',
       label: 'H-mult.',
-      minWidth: 90,
+      minWidth: H_MULT_PX,
       numeric: true,
       className: 'text-text-dim',
       render: (a) => <HMultiplier value={a.hMultiplier} />,
@@ -608,18 +650,22 @@ function identityColumns(): ListColumn<Asset>[] {
     {
       key: 'identity',
       label: 'System',
-      minWidth: 200,
+      // The flexible column: the 16 px mark, a name (NAME_CHARS) and the widest standard's tag,
+      // ".bit Cell", 8 px apart, and the gap: 225.6. It was 200.
+      minWidth: columnPx(16 + 8 + name(NAME_CHARS) + 8 + tag('.bit Cell') + CELL_GAP_PX),
       width: 'auto',
       render: (a) => <SystemName asset={a} />,
     },
-    countColumn('live', 'Live now', 100, (a) => a.liveCount),
-    countColumn('minted', 'Ever registered', 130, (a) => a.totalSupply),
-    countColumn('holders', 'Holders', 90, (a) => a.holdersCount),
+    countColumn('live', 'Live now', (a) => a.liveCount),
+    countColumn('minted', 'Ever registered', (a) => a.totalSupply),
+    countColumn('holders', 'Holders', (a) => a.holdersCount),
     HELD_COLUMN,
     {
       key: 'occupied',
       label: 'Occupied',
-      minWidth: 130,
+      // Occupied CKB whole from 1,000 up, "99,999,999,999" (wider than "Unavailable"); the last
+      // column, no gap after it. It was 130.
+      minWidth: columnPx(Math.max(cell(WIDEST_CKB_HELD), cell(UNAVAILABLE))),
       numeric: true,
       className: 'text-text-dim',
       render: (a) => {

@@ -300,14 +300,19 @@ describe('BlocksPage · Blocks v3 board', () => {
       'Cycles0' + resourceScale([6831940, 0]).toLocaleString('en-US')
     );
     expect(size).toHaveClass('text-left');
-    for (const th of [size, cycles])
-      expect((th.querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe('120px');
+    // Re-pinned on purpose (readability F3-e): each track is its head's widest tick row, "0" and the
+    // widest scale at 12 px a glyph apart ("1,500,000": 79.2 px; "4,000,000,000": 108), not 120
+    const tracks = ['79.2px', '108px'];
+    [size, cycles].forEach((th, i) =>
+      expect((th.querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe(tracks[i])
+    );
     const bars = table.querySelectorAll('tbody [data-aligned-bar]');
     expect(bars).toHaveLength(4);
-    for (const bar of Array.from(bars)) {
+    Array.from(bars).forEach((bar, i) => {
       expect(bar.closest('td')).not.toHaveClass('text-right');
-      expect((bar.querySelector('[data-track]') as HTMLElement).style.width).toBe('120px');
-    }
+      // Size, then Cycles, on each row: the row's bars on their columns' tracks
+      expect((bar.querySelector('[data-track]') as HTMLElement).style.width).toBe(tracks[i % 2]);
+    });
   });
 
   it('shows the legend for block overhead and user transactions (BA-04)', async () => {
@@ -429,18 +434,20 @@ describe('BlocksPage · Blocks v3 board', () => {
   // Miner 2; Height keeps its 2 px of room so its number never breaks).
   // re-pinned with readability R4 (lane F3, step 2): the key at 14 px, the table text 13, the hash 12: the derived columns grow with their text and the table needs
   // 1,260 px (was 1,230), so the widest 1,232 px container draws the 608 px table.
-  it('budgets the seal in the Block column and keeps the table at 1,260 px', async () => {
+  // Re-pinned on purpose (readability F3-e): every column is its content (Block's 13 px spare and
+  // the spares of Reward and Fees went; Age, Contents, Size and Cycles, written by hand, hold their
+  // widest values; Miner is the flexible column), 1,284 px.
+  it('budgets the seal in the Block column and keeps the table at 1,284 px', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1260);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1284);
     const cols = Array.from(table.querySelectorAll('col')).map(
-      (c) => (c as HTMLElement).style.width
+      (c) => (c as HTMLElement).style.minWidth
     );
-    expect(cols).toEqual(['243px', '70px', '170px', '160px', '127px', '112px', '182px', '196px']);
-    // the Block column: 195.4 px of text and gap rounded up and its 13 spare, and the stone's
-    // footprint, 26 + 8 (229 = 195 + 34 at 12 / 13 px)
+    expect(cols).toEqual(['230px', '110px', '194px', '118px', '126px', '110px', '176px', '220px']);
+    // the Block column: 195.4 px of text and gap rounded up, and the stone's footprint, 26 + 8
     expect(ROW_SEAL.block.footprint).toBe(34);
-    expect(cols[0]).toBe(`${196 + 13 + ROW_SEAL.block.footprint}px`);
+    expect(cols[0]).toBe(`${196 + ROW_SEAL.block.footprint}px`);
     // what the column with the stone and the column it took from hold, at 0.6 em a character
     // (monospace) and the 16 px gap: Block, the stone, "#20,879,198" at 14 px, a space at 13 px
     // and the tight hash "0xd161…8fef" at 12 px, 11 characters with its one ellipsis (re-pinned,
@@ -955,8 +962,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       await screen.findByRole('table', { name: 'Latest blocks' });
       expect(screen.queryByLabelText('Legend')).toBeNull();
       narrow.unmount();
-      // the wide table from its 1,260 px minimum (re-pinned, readability R4: 1,232 held it at 1,230)
-      atContainerWidth(1260);
+      // the wide table from its 1,284 px minimum (re-pinned, readability R4: 1,232 held it at 1,230;
+      // F3-e: 1,260 → 1,284, every column its content)
+      atContainerWidth(1284);
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       expect(table.closest('[data-list-form]')).toHaveAttribute('data-list-form', 'table');

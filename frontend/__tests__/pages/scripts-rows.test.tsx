@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { screen, waitFor, within } from '@testing-library/react';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, type KnownScript } from '@/lib/api';
@@ -390,6 +391,30 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     expect(Number.parseFloat(t.style.minWidth)).toBe(sum);
     const track = cells(rowOf(t, 'JoyID'))[4].querySelector<HTMLElement>('[data-track]')!;
     expect(Number.parseFloat(track.style.width)).toBe(at('0 50 100%', 12));
+  });
+
+  it('draws the table where its 854 px fit and the phone rows below (F3-e)', async () => {
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    for (const [width, form] of [
+      [1232, 'table'],
+      [854, 'table'],
+      [853, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount } = render(<ScriptsPage />);
+      await waitFor(() =>
+        expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form)
+      );
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      vi.mocked(api.getScripts).mockResolvedValue(response);
+    }
   });
 
   it('keeps each row within 90 visible characters (T6)', async () => {

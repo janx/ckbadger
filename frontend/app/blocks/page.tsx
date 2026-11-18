@@ -6,7 +6,12 @@ import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { api, type Block } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
-import { ListTable, type ListColumn, type ListTableForm } from '@/components/ui/list-table';
+import {
+  CELL_GAP_PX,
+  ListTable,
+  type ListColumn,
+  type ListTableForm,
+} from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
@@ -17,6 +22,7 @@ import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   BlockContents,
   BlocksLimitsNote,
+  CONTENTS_GLYPH,
   ResourceBar,
   ScaleHeader,
   resourceScale,
@@ -30,10 +36,31 @@ import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import type { ShortSize } from '@/lib/shorten';
 import { useState } from 'react';
 import { unitNode } from '@/components/ui/units';
 import { charPx, columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { BAR_FIGURE_GAP, trackPx } from '@/components/ui/aligned-bar';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
+import {
+  GENESIS_BLOCK_BYTES,
+  MAX_BLOCK_CYCLES,
+  WIDEST_AGE,
+  WIDEST_BLOCK_FEES,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_BLOCK_REWARD,
+  WIDEST_COUNT,
+  shortChars,
+} from '@/lib/list-bounds';
+
+/**
+ * The widest scale each bar column's head and figure write (readability F3-e): genesis's 1,236,271
+ * bytes, the one block over the 597,000-byte limit, on a 1,500,000 scale; the 3,500,000,000-cycle
+ * limit on a 4,000,000,000 one. Each track holds its head's tick row, "0" and that scale, whole.
+ */
+const SIZE_SCALE = resourceScale([GENESIS_BLOCK_BYTES]).toLocaleString('en-US');
+const CYCLES_SCALE = resourceScale([MAX_BLOCK_CYCLES]).toLocaleString('en-US');
+const SIZE_TRACK = trackPx(['0', SIZE_SCALE]);
+const CYCLES_TRACK = trackPx(['0', CYCLES_SCALE]);
 
 export default function BlocksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
@@ -58,27 +85,26 @@ export default function BlocksPage() {
     {
       key: 'block',
       label: 'Block',
-      // The block's stone and its gap (26 + 8, ROW_SEAL.block.footprint), "#20,879,198" (11
-      // characters at 13 px, 85.8 px), a 12 px space (7.2 px) and "0xd161…8fef" (11 at 11 px,
-      // 72.6 px, the tight size: the hash is the key cell's second token, beside the block
-      // number, and the row size's 17 characters, 112.2 px, would need 256 here and a table of
-      // 1,257 px, wider than 1,232 at 1280): 199.6 px and the 16 px gap, 215.6 (was 228.8 with
-      // "0xd161...8fef" at 13 characters, 200 without a seal, 222 with the old hash seal's 27),
-      // and 13 px spare.
+      // The block's stone and its gap (ROW_SEAL.block.footprint, 34), the widest height,
+      // "#99,999,999" at the key's 14 px (92.4), a space at 13 px (7.8) and the hash at its tight
+      // size, "0xd161…8fef" at 12 px (79.2: the hash is the key cell's second token, beside the
+      // number), and the gap: 229.4. Its 13 px spare went (readability F3-e): it stood for no
+      // content, and a glyph advances exactly 0.6 em.
       minWidth: columnPx(
         ROW_SEAL.block.footprint +
-          textPx(11, fontPx('body')) +
+          textPx(WIDEST_BLOCK_NUMBER.length, fontPx('body')) +
           charPx('small') +
-          textPx(11, fontPx('meta')) +
-          16,
-        13
+          textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('meta')) +
+          CELL_GAP_PX
       ),
       render: (block) => <BlockIdentity block={block} />,
     },
     {
       key: 'age',
       label: 'Age',
-      minWidth: 70,
+      // The widest age, "10y 364d ago" (12 characters at 13 px, 93.6), and the gap: it was 70,
+      // which held "59m ago" and not an older page's "6y 363d ago".
+      minWidth: columnPx(textPx(WIDEST_AGE.length, fontPx('small')) + CELL_GAP_PX),
       className: 'whitespace-nowrap',
       // the age reads the page's one clock (the review's item H), the date-time its hover
       render: (block) => <Utc8Age timestamp={block.timestamp} className="text-text-dim" />,
@@ -86,7 +112,15 @@ export default function BlocksPage() {
     {
       key: 'contents',
       label: 'Contents',
-      minWidth: 170,
+      // The glyph (112 px), its 8 px gap and the widest count, "9,999 tx" at 12 px (57.6), and the
+      // gap: 193.6. It was 170, which held a count of two digits. A block with more than seven
+      // user transactions or more proposals than dots says so on a second line.
+      minWidth: columnPx(
+        CONTENTS_GLYPH.width +
+          CONTENTS_GLYPH.gap +
+          textPx(`${WIDEST_COUNT} tx`.length, fontPx('meta')) +
+          CELL_GAP_PX
+      ),
       // T2: a flex box, so the glyph's 18 px inline box does not sit on the text baseline and
       // stretch the line to 23 px (a 48 px row); the row stays one 18 px line.
       render: (block) => (
@@ -102,17 +136,23 @@ export default function BlocksPage() {
     {
       key: 'miner',
       label: 'Miner',
-      minWidth: 160,
-      className: 'whitespace-nowrap',
+      // The table's flexible column: an unnamed miner whole at the row size, "ckb1…4s93hhsj" (13
+      // characters at 13 px, 101.4), and the gap; it takes what the container gives beyond the sum.
+      // A pool name, as long as pools.toml writes it, ends in the one ellipsis there; the link's
+      // title is the miner's address. It was 160 and named no content.
+      minWidth: columnPx(
+        textPx(shortChars(SHORT_FORMS.row.address), fontPx('small')) + CELL_GAP_PX
+      ),
+      width: 'auto',
+      className: 'whitespace-nowrap truncate',
       render: (block) => miner(block, 'row'),
     },
     {
       key: 'reward',
       label: 'Reward, CKB',
-      // A reward of four integer digits, "1,917.80821917" (14 characters at 12 px, 100.8 px), and
-      // the 16 px gap: the column gave the row seal's 22 px from its 140 so the table keeps its
-      // 1,230 px minimum (the widest container is 1,232): 1 px spare.
-      minWidth: columnPx(textPx(14, fontPx('small')) + 16, 1),
+      // A reward of four whole digits, "9,999.99999999" (14 characters at 13 px, 109.2: the first
+      // epochs paid 1,917 CKB), and the gap. Its 1 px spare went (F3-e).
+      minWidth: columnPx(textPx(WIDEST_BLOCK_REWARD.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
@@ -141,12 +181,9 @@ export default function BlocksPage() {
     {
       key: 'fees',
       label: 'Fees, CKB',
-      // Fees under 1,000 CKB, "999.99999999" (12 characters at 12 px, 86.4 px), and the 16 px
-      // gap: 102.4 px. Every amount has its eight decimals, so no fee is 13 characters and the
-      // next is 14 ("1,000.00000000", 116.8 px), which 112 did not hold either: the column gave
-      // the block stone's 7 px more than the old hash seal's from its 112 and keeps 2.6 to spare,
-      // so the table keeps its 1,230 px minimum (the widest container is 1,232).
-      minWidth: columnPx(textPx(12, fontPx('small')) + 16, 2),
+      // Fees under 1,000 CKB, "999.99999999" (12 characters at 13 px, 93.6), and the gap. Every
+      // amount has its eight decimals, so no fee is 13 characters. Its 2 px spare went (F3-e).
+      minWidth: columnPx(textPx(WIDEST_BLOCK_FEES.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
       render: (block) => (
         <CkbAmount
@@ -161,8 +198,13 @@ export default function BlocksPage() {
     {
       key: 'size',
       label: 'Size, bytes',
-      header: <ScaleHeader label="Size, bytes" scale={sizeScale} />,
-      minWidth: 182,
+      header: <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={SIZE_TRACK} />,
+      // The track (its head's widest ticks, "0 … 1,500,000": genesis's 1,236,271 bytes), the
+      // bar's 10 px gap, the scale's figure ("1,500,000", 9 characters at 13 px, 70.2) and the gap.
+      // It was 182 on a 120 px track and held a scale of four characters.
+      minWidth: columnPx(
+        SIZE_TRACK + BAR_FIGURE_GAP + textPx(SIZE_SCALE.length, fontPx('small')) + CELL_GAP_PX
+      ),
       className: 'whitespace-nowrap',
       render: (block) => (
         <ResourceBar
@@ -170,14 +212,20 @@ export default function BlocksPage() {
           value={block.size}
           overhead={block.overheadSize}
           scale={sizeScale}
+          trackWidth={SIZE_TRACK}
         />
       ),
     },
     {
       key: 'cycles',
       label: 'Cycles',
-      header: <ScaleHeader label="Cycles" scale={cyclesScale} />,
-      minWidth: 196,
+      header: <ScaleHeader label="Cycles" scale={cyclesScale} trackWidth={CYCLES_TRACK} />,
+      // The track (its head's widest ticks, "0 … 4,000,000,000": the 3,500,000,000-cycle limit),
+      // the 10 px gap and the scale's figure (13 characters at 13 px, 101.4); the last column, no
+      // gap after it. It was 196 on a 120 px track and held a scale of six characters.
+      minWidth: columnPx(
+        CYCLES_TRACK + BAR_FIGURE_GAP + textPx(CYCLES_SCALE.length, fontPx('small'))
+      ),
       className: 'whitespace-nowrap',
       render: (block) =>
         block.cycles === null ? (
@@ -185,7 +233,12 @@ export default function BlocksPage() {
             {block.cyclesStatus === 'failed' ? 'Replay failed' : 'Not yet run'}
           </span>
         ) : (
-          <ResourceBar label="Cycles" value={Number(block.cycles)} scale={cyclesScale} />
+          <ResourceBar
+            label="Cycles"
+            value={Number(block.cycles)}
+            scale={cyclesScale}
+            trackWidth={CYCLES_TRACK}
+          />
         ),
     },
   ];

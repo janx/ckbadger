@@ -6,6 +6,12 @@ import { percentOf } from '@/lib/format-unit';
 
 const PROPOSAL_COLOR = CLASS_COLORS.dao;
 const GLYPH_WIDTH = 112;
+
+/**
+ * What a block's contents glyph takes on its line beside its count (a list column budgets them):
+ * the glyph's width, the diamond and seven squares and the dots after them, and its `gap-2`.
+ */
+export const CONTENTS_GLYPH = { width: GLYPH_WIDTH, gap: 8 } as const;
 const DOT_STEP = 6;
 const DOT_R = 2.4;
 
@@ -107,10 +113,19 @@ interface ResourceBarProps {
   overhead?: number;
   /** Keep the exact count above its bar when a table column is narrow. */
   stacked?: boolean;
+  /** The inline bar's track in px, its column's (its head's ticks fit it); AlignedBar's default. */
+  trackWidth?: number;
 }
 
 /** Geometry uses numbers; the printed resource count stays an exact integer. */
-export function ResourceBar({ label, value, scale, overhead, stacked = false }: ResourceBarProps) {
+export function ResourceBar({
+  label,
+  value,
+  scale,
+  overhead,
+  stacked = false,
+  trackWidth,
+}: ResourceBarProps) {
   if (
     !Number.isSafeInteger(value) ||
     value < 0 ||
@@ -132,6 +147,7 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
       <AlignedBar
         label={label}
         scale={scale}
+        trackWidth={trackWidth}
         segments={
           overhead === undefined
             ? [{ key: 'value', label, value, tone: 'data' }]

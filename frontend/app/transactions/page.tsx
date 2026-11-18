@@ -9,13 +9,16 @@ import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import { DetailLayout } from '@/components/ui/detail-layout';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { RowSeal } from '@/components/ui/row-seal';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { activityHeadline } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { TransactionListTable } from '@/components/transaction/transaction-list-table';
+import {
+  TRANSACTION_LIST_MIN_PX,
+  TransactionListTable,
+} from '@/components/transaction/transaction-list-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
 import type { PoolStatus } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
@@ -38,6 +41,16 @@ import { formatCount } from '@/lib/format-count';
 import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { SHORT_FORMS } from '@/lib/shorten';
+import {
+  MAX_BLOCK_BYTES,
+  MAX_BLOCK_CYCLES,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_FEE_RATE,
+  WIDEST_POOL_VALUE_LINE,
+  WIDEST_TX_FEE,
+  shortChars,
+} from '@/lib/list-bounds';
 
 type TransactionKind =
   | 'all'
@@ -203,6 +216,204 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
   );
 }
 
+/** The pool transactions' statuses, each a word in the Status column. */
+const POOL_STATUSES: readonly PoolStatus[] = ['pending', 'proposed', 'committed_awaiting_index'];
+
+/**
+ * The pool list's columns (readability F3-e: each budgeted from the widest value it holds).
+ * `sameWidth` is what What it does keeps beyond its own minimum so the pool changes form where
+ * the committed list does (both lists are one page).
+ */
+function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
+  return [
+    {
+      key: 'tx',
+      label: 'Transaction',
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
+      // characters at the key's 14 px (142.8), and the gap: 215.3. Its 31 px spare, kept so the
+      // two lists changed form at one width, went (readability F3-e): What it does keeps that.
+      minWidth: columnPx(
+        ROW_SEAL.tx.footprint +
+          textPx(shortChars(SHORT_FORMS.row.hash), fontPx('body')) +
+          CELL_GAP_PX
+      ),
+      render: (tx) => (
+        <div className="flex items-start">
+          <RowSeal id={poolSealId(tx)} state="unpressed" overhang />
+          <div className="min-w-0 space-y-1">
+            {/* Table-rows T5: the pool row's key, 13 px bright on an 18 px line. */}
+            <Link href={`/tx/${tx.hash}`}>
+              <Hash
+                hash={tx.hash}
+                size="row"
+                copyable={false}
+                className="text-body text-text-bright leading-row"
+              />
+            </Link>
+            <PoolInterpretationNotice interpretation={tx.interpretation} />
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: 'activity',
+      label: 'What it does',
+      // The table's flexible column (readability F3-e): a headline, or "Interpretation
+      // unavailable", breaks between its words, so at its minimum it holds the longest word,
+      // "Interpretation" (14 characters at 13 px, 109.2), and the gap, and it takes what the
+      // container gives beyond the sum. Both of the page's lists change form at one width, the
+      // larger of their sums: `sameWidth` is what the committed list's sum is over the pool's
+      // (none today: both are 1,220 px). It was 180 and named no content.
+      minWidth:
+        columnPx(textPx('Interpretation'.length, fontPx('small')) + CELL_GAP_PX) + sameWidth,
+      width: 'auto',
+      render: (tx) =>
+        tx.activity ? (
+          activityHeadline(tx.activity)
+        ) : (
+          <span className="text-text-dim">Interpretation unavailable</span>
+        ),
+    },
+    {
+      key: 'status',
+      label: 'Status · waiting',
+      // Its widest content on one line: the 7 px dot, the 6 px gap, the widest status word
+      // ("Confirming", 10 characters at 13 px, 78), the 6 px gap and the longest wait
+      // formatTimeAgo writes for any age under 100 days ("· 59s ago" / "· 59m ago" / "· 23h ago" /
+      // "· 99d ago", 9 characters, 70.2), and the gap: 183.2. At 150 it lived on the container's
+      // spread slack and "● Pending · 26s ago" (150.2) broke when that went to the hash (old issue
+      // C). A wait of 100 days or more, or "this device's clock is behind", wraps inside the cell.
+      minWidth: columnPx(
+        7 +
+          6 +
+          textPx(
+            Math.max(...POOL_STATUSES.map((s) => poolStatusLabel(s).length)),
+            fontPx('small')
+          ) +
+          6 +
+          textPx('· 99d ago'.length, fontPx('small')) +
+          CELL_GAP_PX
+      ),
+      render: (tx) => (
+        <span className="text-small flex items-center gap-1.5">
+          <PoolDot status={tx.status} />
+          <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
+            {poolStatusLabel(tx.status)}
+          </span>
+          <span className="text-text-dim">
+            · <Utc8Age timestamp={tx.timestamp} />
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: 'cells',
+      label: 'Cells',
+      // Four digits a side as the pool writes them (ungrouped), "9999 → 9999" (11 characters at
+      // 13 px, 85.8), and the gap. It was 64, which held "10 → 2".
+      minWidth: columnPx(
+        textPx(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT_DIGITS}`.length, fontPx('small')) +
+          CELL_GAP_PX
+      ),
+      numeric: true,
+      render: (tx) => `${poolConsumed(tx)} → ${tx.outputsCount}`,
+    },
+    {
+      key: 'value',
+      label: 'Value',
+      // A value under a million CKB on one line, "999,999.99999999" (16 characters at 13 px,
+      // 124.8), its unit " CKB" at 12 px (28.8) and the gap; a larger one breaks before its
+      // decimals (wrap), each of its lines narrower. It was 164, which broke one from 100,000 CKB.
+      minWidth: columnPx(
+        textPx(WIDEST_POOL_VALUE_LINE.length, fontPx('small')) +
+          textPx(' CKB'.length, fontPx('meta')) +
+          CELL_GAP_PX
+      ),
+      numeric: true,
+      render: (tx) =>
+        tx.value === null ? (
+          <span className="text-text-dim whitespace-normal">Interpretation partial</span>
+        ) : (
+          <CkbAmount
+            form="column"
+            shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
+            signed={false}
+            tone="plain"
+            wrap
+          />
+        ),
+    },
+    {
+      key: 'fee',
+      label: 'Fee',
+      // A fee under 100 CKB, "99.99999999" (11 characters at 13 px, 85.8), its unit (28.8) and
+      // the gap. It was 128, which broke a fee from 10 CKB.
+      minWidth: columnPx(
+        textPx(WIDEST_TX_FEE.length, fontPx('small')) +
+          textPx(' CKB'.length, fontPx('meta')) +
+          CELL_GAP_PX
+      ),
+      numeric: true,
+      render: (tx) => (
+        <CkbAmount
+          form="column"
+          shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
+          signed={false}
+          tone="plain"
+          wrap
+        />
+      ),
+    },
+    {
+      key: 'feeRate',
+      label: 'Fee rate, shannon/KB',
+      // A rate up to 1,000,000,000 (13 characters at 13 px, 101.4), wider than the head's longest
+      // word on its two lines ("shannon/KB", 10 at 12 px, 72), and the gap. Its 13 px spare went
+      // (readability F3-e).
+      minWidth: columnPx(
+        Math.max(
+          textPx(WIDEST_FEE_RATE.length, fontPx('small')),
+          textPx('shannon/KB'.length, fontPx('meta'))
+        ) + CELL_GAP_PX
+      ),
+      numeric: true,
+      render: (tx) => BigInt(tx.feeRate).toLocaleString('en-US'),
+    },
+    {
+      key: 'size',
+      label: 'Size, bytes',
+      // The largest a transaction can be, a block's "597,000" (7 characters at 13 px, 54.6), and
+      // the gap; its 1 px spare went (readability F3-e). Its head takes two lines ("Size," /
+      // "bytes"), as "Fee rate, shannon/KB" beside it already does, so the head row keeps its
+      // height; the 22 px its one-line head held went to Status (old issue C).
+      minWidth: columnPx(
+        textPx(MAX_BLOCK_BYTES.toLocaleString('en-US').length, fontPx('small')) + CELL_GAP_PX
+      ),
+      numeric: true,
+      render: (tx) => tx.txSize.toLocaleString('en-US'),
+    },
+    {
+      key: 'cycles',
+      label: 'Cycles',
+      // The most a transaction may take, "3,500,000,000" (13 characters at 13 px, 101.4), and no
+      // gap (the last column); 16 px went to the row seal.
+      minWidth: columnPx(textPx(MAX_BLOCK_CYCLES.toLocaleString('en-US').length, fontPx('small'))),
+      numeric: true,
+      render: (tx) => BigInt(tx.cycles).toLocaleString('en-US'),
+    },
+  ];
+}
+
+/** The pool list's columns at their own minimums: their sum is the pool's side of the one width. */
+const POOL_MIN_PX = minimumWidth('Transactions in the pool', poolColumns(0));
+
+/**
+ * The pool list's columns as drawn: both of the page's lists change form at one width, the
+ * larger of their sums, so What it does keeps what the committed list's sum is over the pool's
+ * (none today: both are 1,220 px; a test holds the pool's no larger).
+ */
+const POOL_COLUMNS = poolColumns(Math.max(0, TRANSACTION_LIST_MIN_PX - POOL_MIN_PX));
+
 export default function TransactionsPage() {
   const searchParams = useSearchParams();
   const pathname = usePathname();
@@ -284,141 +495,6 @@ export default function TransactionsPage() {
       router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
     }
   };
-  const poolColumns: ListColumn<PoolRow>[] = [
-    {
-      key: 'tx',
-      label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
-      // characters at 13 px (132.6 px; it was 21 with three dots, 163.8 px), and the 16 px gap:
-      // 205.1 of its 237 px. The table is 1,230 px, the committed table's width, and both of the
-      // page's lists change form at the same width, so the column keeps its 237: 31 px spare.
-      minWidth: columnPx(ROW_SEAL.tx.footprint + textPx(17, fontPx('body')) + 16, 31),
-      render: (tx) => (
-        <div className="flex items-start">
-          <RowSeal id={poolSealId(tx)} state="unpressed" overhang />
-          <div className="min-w-0 space-y-1">
-            {/* Table-rows T5: the pool row's key, 13 px bright on an 18 px line. */}
-            <Link href={`/tx/${tx.hash}`}>
-              <Hash
-                hash={tx.hash}
-                size="row"
-                copyable={false}
-                className="text-body text-text-bright leading-row"
-              />
-            </Link>
-            <PoolInterpretationNotice interpretation={tx.interpretation} />
-          </div>
-        </div>
-      ),
-    },
-    {
-      key: 'activity',
-      label: 'What it does',
-      minWidth: 180,
-      render: (tx) =>
-        tx.activity ? (
-          activityHeadline(tx.activity)
-        ) : (
-          <span className="text-text-dim">Interpretation unavailable</span>
-        ),
-    },
-    {
-      key: 'status',
-      label: 'Status · waiting',
-      // Its widest content on one line: the 7 px dot, the 6 px gap, the widest status word
-      // ("Confirming", 10 characters at 12 px, 72 px), the 6 px gap and the longest wait
-      // formatTimeAgo writes for any age under 100 days ("· 59s ago" / "· 59m ago" / "· 23h ago" /
-      // "· 99d ago", 9 characters, 64.8 px), and the 16 px gap: 171.8 of its 172. At 150 it lived
-      // on the container's spread slack and "● Pending · 26s ago" (150.2) broke when that went to
-      // the hash (old issue C). A wait of 100 days or more, or "this device's clock is behind",
-      // wraps inside the cell.
-      minWidth: columnPx(7 + 6 + textPx(10, fontPx('small')) + 6 + textPx(9, fontPx('small')) + 16),
-      render: (tx) => (
-        <span className="text-small flex items-center gap-1.5">
-          <PoolDot status={tx.status} />
-          <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
-            {poolStatusLabel(tx.status)}
-          </span>
-          <span className="text-text-dim">
-            · <Utc8Age timestamp={tx.timestamp} />
-          </span>
-        </span>
-      ),
-    },
-    {
-      key: 'cells',
-      label: 'Cells',
-      minWidth: 64,
-      numeric: true,
-      render: (tx) => `${poolConsumed(tx)} → ${tx.outputsCount}`,
-    },
-    {
-      key: 'value',
-      label: 'Value',
-      minWidth: 164,
-      numeric: true,
-      render: (tx) =>
-        tx.value === null ? (
-          <span className="text-text-dim whitespace-normal">Interpretation partial</span>
-        ) : (
-          <CkbAmount
-            form="column"
-            shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
-        ),
-    },
-    {
-      key: 'fee',
-      label: 'Fee',
-      minWidth: 128,
-      numeric: true,
-      render: (tx) => (
-        <CkbAmount
-          form="column"
-          shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
-          signed={false}
-          tone="plain"
-          wrap
-        />
-      ),
-    },
-    {
-      key: 'feeRate',
-      label: 'Fee rate, shannon/KB',
-      // The head on its two lines ("shannon/KB", 10 characters at 11 px, 66 px) or a rate of
-      // 1,000,000,000 (13 at 12 px, 93.6 px), and the 16 px gap; 7 px went to the row seal, and 13
-      // are spare.
-      minWidth: columnPx(
-        Math.max(textPx(10, fontPx('meta')), textPx(13, fontPx('small'))) + 16,
-        13
-      ),
-      numeric: true,
-      render: (tx) => BigInt(tx.feeRate).toLocaleString('en-US'),
-    },
-    {
-      key: 'size',
-      label: 'Size, bytes',
-      // The largest a transaction can be, a block's "597,000" (7 characters at 12 px, 50.4 px), and
-      // the 16 px gap, with 1.6 px to spare. Its head takes two lines ("Size," / "bytes"), as
-      // "Fee rate, shannon/KB" beside it already does, so the head row keeps its height; the 22 px
-      // its one-line head held went to Status (old issue C).
-      minWidth: columnPx(textPx(7, fontPx('small')) + 16, 1),
-      numeric: true,
-      render: (tx) => tx.txSize.toLocaleString('en-US'),
-    },
-    {
-      key: 'cycles',
-      label: 'Cycles',
-      // The most a transaction may take, "3,500,000,000" (13 characters at 12 px, 93.6 px), and no
-      // gap (the last column); 16 px went to the row seal.
-      minWidth: columnPx(textPx(13, fontPx('small'))),
-      numeric: true,
-      render: (tx) => BigInt(tx.cycles).toLocaleString('en-US'),
-    },
-  ];
   const active = tab === 'committed' ? committed : pool;
   return (
     <div className="min-h-screen">
@@ -744,7 +820,7 @@ export default function TransactionsPage() {
               )}
               <ListTable
                 label="Transactions in the pool"
-                columns={poolColumns}
+                columns={POOL_COLUMNS}
                 rows={pool.data.data}
                 rowKey={(tx) => tx.hash}
                 empty="The node's pool is empty."

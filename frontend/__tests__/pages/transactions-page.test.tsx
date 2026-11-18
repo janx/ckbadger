@@ -14,6 +14,7 @@ import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
+import { TRANSACTION_LIST_MIN_PX } from '@/components/transaction/transaction-list-table';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -183,7 +184,9 @@ describe('Transactions pool view', () => {
     fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the table is drawn from 1,272 px (was within 1,248)
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1272);
+    // re-pinned on purpose (readability F3-e): every column its content, 1,220 px, which the
+    // widest 1,232 px container holds
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
     expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
     expect(table).toHaveTextContent('0.00012345 CKB');
     expect(table).toHaveTextContent('3,500,000,000');
@@ -196,13 +199,16 @@ describe('Transactions pool view', () => {
     // took 1,200), so every other column keeps its width and the table is 1,230 px, the committed
     // table's width; the most cycles still fit.
     const cols = Array.from(table.querySelectorAll('col')).map((c) =>
-      Number.parseFloat((c as HTMLElement).style.width)
+      Number.parseFloat((c as HTMLElement).style.minWidth)
     );
     // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the derived columns grow with their text, 1,272 px, more than the
     // widest 1,232 px container holds
-    expect(cols).toEqual([247, 180, 184, 64, 164, 128, 131, 72, 102]);
-    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1272);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1272);
+    // re-pinned on purpose (readability F3-e): every column its content (the spares gone; What it
+    // does, Cells, Value and Fee hold their widest values; What it does is the flexible column,
+    // its minimum read from minWidth): 1,220 px
+    expect(cols).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
+    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at 14 px since R4 (8.4; 7.8 at 13 px; it was 21, 12 + 6 with
     // three dots)
@@ -213,9 +219,11 @@ describe('Transactions pool view', () => {
     // the stone, the hash and the 16 px gap fit the 247 px with 31.7 px to spare (the 31 px the
     // column kept so both lists changed form at one width; re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8), the pool's table at
     // 1,272 and the committed one at 1,286)
+    // re-pinned on purpose (readability F3-e): the column is its content, 216 px, 0.7 of rounding
+    // up to a whole pixel; both lists change form at 1,220 px, their sums being equal
     const used = ROW_SEAL.tx.footprint + chars * 8.4 + 16;
     expect(used).toBeCloseTo(215.3, 6);
-    expect(247 - used).toBeCloseTo(31.7, 6);
+    expect(cols[0] - used).toBeCloseTo(0.7, 6);
   });
 
   // Old issue C, round 2: at 1,200 px the pool's columns lived on the 32 px the 1,232 px container
@@ -305,7 +313,8 @@ describe('Transactions pool view', () => {
     const rate = heads.findIndex((th) => th.textContent === 'Fee rate, shannon/KB');
     const colWidth = (i: number) =>
       Number.parseFloat((table.querySelectorAll('col')[i] as HTMLElement).style.width);
-    expect(colWidth(size)).toBe(72);
+    // re-pinned on purpose (readability F3-e): 71 px, its 1 px spare gone
+    expect(colWidth(size)).toBe(71);
     expect(within(table).getAllByText('597,000')).toHaveLength(3);
     expect('597,000'.length * 7.8).toBeLessThanOrEqual(colWidth(size) - 16);
     expect('Size, bytes'.length * 7.2).toBeGreaterThan(colWidth(size) - 16);
@@ -316,7 +325,9 @@ describe('Transactions pool view', () => {
   // Old issue C: the pool's table changed form at 1,230 px, where the committed one did, and the
   // widest container (1,232 px from 1280) held both. re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the pool's table is
   // drawn from 1,272 px, the committed one from 1,286; the widest container holds neither.
-  it('lays the pool out as a table from 1,272 px, phone rows below', async () => {
+  // Re-pinned on purpose (readability F3-e): the pool's table is drawn from 1,220 px, as the
+  // committed one is, so the widest container draws both.
+  it('lays the pool out as a table from 1,220 px, phone rows below', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -349,10 +360,9 @@ describe('Transactions pool view', () => {
       vi.restoreAllMocks();
     });
     for (const [width, form] of [
-      [1274, 'table'],
-      [1272, 'table'],
-      [1271, 'rows'],
-      [1232, 'rows'],
+      [1232, 'table'],
+      [1220, 'table'],
+      [1219, 'rows'],
       [976, 'rows'],
     ] as const) {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
@@ -403,6 +413,8 @@ describe('Transactions pool view', () => {
     ];
     expect(budgets).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
     expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    // the committed list's sum is the larger (or equal), so the pool takes it
+    expect(TRANSACTION_LIST_MIN_PX).toBe(1220);
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
