@@ -171,7 +171,7 @@ export function ActivityRowHead({
       {showEvidence && evidence !== undefined && (
         <span
           data-role="evidence"
-          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
+          className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
         >
           {evidence}
         </span>
@@ -179,11 +179,14 @@ export function ActivityRowHead({
       {showEvidence && evidence === undefined && (
         <span
           data-role="evidence"
-          // no run around the parts: each unit owns its white-space (the block number has no space
-          // to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
-          // device's clock is behind" break between its words), so the line breaks only between
-          // them (lane B4)
-          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
+          // An item of the head's wrapping row that may shrink (lane B4 fix round: it was
+          // shrink-0, so it stood at its whole width, one line past a phone's): beside the headline
+          // while both fit, on its own line when not, where it takes the line's room and breaks
+          // between its units. No run around them: each owns its white-space (the block number has
+          // no space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets
+          // "this device's clock is behind" break between its words), so a line breaks only
+          // between them, never inside one.
+          className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
         >
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
