@@ -67,13 +67,15 @@ describe('CkbAmount', () => {
   // integer, in the `-dim` ink of the amount's sign, never the sign's ink at 78 %. Readability R5
   // (re-pinned on purpose): one ink per amount — the decimals take the integer's own ink, the
   // sign's or the reading ink — and still never an opacity.
+  // Re-pinned on purpose (review of main..fix/readability, logic finding 5): the plain negative
+  // was unsigned, which now fails; it keeps its sign, and the plain tone still inks it text-text.
   it('sets the fraction digits in the amount’s one ink, never at an opacity', () => {
     const { container } = render(
       <>
         <CkbAmount form="column" shannons={BigInt(-30000)} />
         <CkbAmount form="column" shannons={BigInt('75000000123')} />
         <CkbAmount form="column" shannons={BigInt('75000000123')} signed={false} tone="plain" />
-        <CkbAmount form="column" shannons={BigInt(-30000)} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={BigInt(-30000)} tone="plain" />
       </>
     );
     const amounts = [...container.querySelectorAll('[data-ckb-amount]')];
@@ -116,10 +118,12 @@ describe('CkbAmount', () => {
 
   // Rubbing × Song print, phase 5 (T4): a sentence that names an amount the page draws (the
   // transaction comment's fee) takes its digits from exactCkbText; it must read as CkbAmount does.
+  // Re-pinned on purpose (review of main..fix/readability, logic finding 5): unsigned, a negative
+  // ('-30000') printed its absolute value; it now fails (the test below), so it is read signed.
   it('prints the same digits as exactCkbText, signed or not, zero included', () => {
     const amounts = ['0', '1647', '64119', '100000', '100000000', '75000000000', '-30000'];
     for (const signed of [true, false])
-      for (const raw of amounts) {
+      for (const raw of amounts.filter((a) => signed || !a.startsWith('-'))) {
         const shannons = BigInt(raw);
         const { container, unmount } = render(
           <CkbAmount form="column" shannons={shannons} signed={signed} tone="plain" />
