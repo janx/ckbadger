@@ -238,7 +238,7 @@ function Gel({
   const laneOpacity = (gene: string) =>
     activeGene !== null ? (gene === activeGene ? 1 : 0.2) : rowActive ? 0.4 : 1;
   // A band's label (a trait value, the collection creator's text) stands 4 px clear of its
-  // band's sides, cut to that room at whole graphemes by the upper bound of lib/type-metrics.ts
+  // band's sides, cut to that room at whole graphemes by the bound of lib/type-metrics.ts
   // (review F-B, logic finding 5).
   const labelRoom = lw - 2 * inset - 8;
   return (

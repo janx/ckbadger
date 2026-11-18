@@ -6,7 +6,7 @@ import { cleanup } from '@testing-library/react';
 import { configure } from '@testing-library/dom';
 import { vi } from 'vitest';
 import { server } from './msw/server';
-import { cellFaults, faultLines, listTables } from './utils/list-table-cells';
+import { assertListTables } from './utils/list-table-cells';
 
 // How long a findBy* / waitFor waits before it fails: 10 s, not Testing Library's default 1 s.
 // Measured with two full suites running at once (load average 50-60 on 24 cores, 7,212 waits):
@@ -124,13 +124,15 @@ vi.mock('@/src/navigation', () => ({
 // rule is held on every table of the site, with its real columns and the data each test gives it,
 // not on one fixture. A fault fails the test that drew the table, naming the table, the row and
 // the column.
+// What it does not see: a table the test unmounted itself (`__tests__/utils/list-table-cells.ts`).
 afterEach(() => {
   if (typeof document === 'undefined') return;
-  const faults = listTables().flatMap(cellFaults);
-  if (!faults.length) return;
-  // a failing hook stops the hooks after it: unmount here, so the next test starts on an empty page
-  cleanup();
-  throw new Error(
-    `A list table's cells break its rules (components/ui/list-table.tsx, "A cell holds its content"):\n${faultLines(faults).join('\n')}`
-  );
+  try {
+    assertListTables();
+  } catch (error) {
+    // a failing hook stops the hooks after it: unmount here, so the next test starts on an empty
+    // page
+    cleanup();
+    throw error;
+  }
 });

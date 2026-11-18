@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
+import { NoBreak } from '@/components/ui/no-break';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -214,16 +215,23 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
               <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
             </Link>
           ),
+          // the block and its age are each a unit; "this device's clock is behind" in the age's
+          // place is words and breaks between them (Utc8Age), never one run with the block (L2)
           right: (
-            <span className="whitespace-nowrap">
-              <Link href={`/blocks/${tx.blockNumber}`} className="text-text-bright hover:text-jade">
-                {formatBlockNumber(tx.blockNumber)}
-              </Link>
+            <>
+              <NoBreak>
+                <Link
+                  href={`/blocks/${tx.blockNumber}`}
+                  className="text-text-bright hover:text-jade"
+                >
+                  {formatBlockNumber(tx.blockNumber)}
+                </Link>
+              </NoBreak>
               <span className="text-text">
                 {' · '}
                 <Utc8Age timestamp={tx.timestamp} />
               </span>
-            </span>
+            </>
           ),
         },
         wide

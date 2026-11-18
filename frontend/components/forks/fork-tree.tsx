@@ -70,23 +70,24 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
   // A row's name stands over the tip marks that hang on its tiles' top corners, a pixel clear of
   // them: "adopted then, dropped since" is wider than a tile, and its row's tip is marked (②).
   const rowNameLift = markR + MARK_OVERHANG + 1 + descentPx(SVG_TEXT.label);
-  // a miner's room (U-09): inside a wide tile, its width less the insets; under a compact one, its
-  // column (the tile and the 16 px of the gap after it)
-  const minerRoom = compact ? TW + C.labelRun : TW - 2 * W.inset;
   /**
-   * A miner on the tree (review F-B, logic finding 4): a pool by its name, a word in any script
-   * (the operator's pools.toml), measured as text that is not ours and cut to the room at whole
+   * A miner on the tree (review F-B, logic finding 4), in the room its tile's labels have
+   * (`layout.labelRoom`: inside a wide tile its width less the insets; under a compact one the
+   * tile and its run into the gap, its share of the gap before the last column where both sides
+   * of it draw labels, review fb-logic 1): a pool by its name, a word in any script (the
+   * operator's pools.toml), measured as text that is not ours and cut to the room at whole
    * graphemes with the one ellipsis (finding 5); an unnamed one by its address in the id form the
    * room holds, never cut again: the row form, the narrative's and the tables' (R9), where it
    * stands whole (13 characters, 93.6 px at 12 px: inside a wide tile's 94 px between its insets,
-   * and under a compact tile of at least 78 px), else the tight form (11 characters, 79.2 px:
-   * under a 72 px tile, whose column is 88 px; lib/fork-tree.ts holds that the narrowest column
-   * takes it).
+   * under a compact tile of at least 78 px, or of 86 px beside the shared gap), else the tight form
+   * (11 characters, 79.2 px: lib/fork-tree.ts holds that the narrowest room, 72 + 8 = 80 px, takes
+   * it).
    */
-  const minerLabel = (pool: string | null, address: string): string => {
-    if (pool !== null) return clipForeignLabel(pool, SVG_TEXT.tick, minerRoom);
+  const minerLabel = (t: ForkTreeTile, address: string): string => {
+    const room = layout.labelRoom(t);
+    if (t.minerPool !== null) return clipForeignLabel(t.minerPool, SVG_TEXT.tick, room);
     const fits = (size: ShortSize) =>
-      textPx(minerName(address, null, size).length, SVG_TEXT.tick) <= minerRoom;
+      textPx(minerName(address, null, size).length, SVG_TEXT.tick) <= room;
     const size: ShortSize = fits('row') ? 'row' : 'tight';
     return minerName(address, null, size);
   };
@@ -94,7 +95,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
   const tile = (t: ForkTreeTile, y: number, dropped: boolean) => {
     const tx = x(t.number);
     const lit = !dropped && (t.number === model.main[0].number || targets.has(t.number));
-    const miner = t.minerAddress ? minerLabel(t.minerPool, t.minerAddress) : null;
+    const miner = t.minerAddress ? minerLabel(t, t.minerAddress) : null;
     // under a compact tile its labels start at its left edge, except in the last column, where
     // they end at its right edge (the ruling on F3-d)
     const lastColumn = labelsUnder && t.number === model.last;

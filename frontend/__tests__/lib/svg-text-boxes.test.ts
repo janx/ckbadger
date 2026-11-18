@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { meetings, pastPx, type TextLine } from '@/__tests__/utils/svg-text-boxes';
+import {
+  allTextLines,
+  meetings,
+  pastPx,
+  textLines,
+  type TextLine,
+} from '@/__tests__/utils/svg-text-boxes';
 
 /**
  * The two measures a known fault of a figure is pinned by (review F-B's test finding 1): how far
@@ -44,5 +50,51 @@ describe('pastPx', () => {
   it('is 0 for a line flush with the box and negative inside it', () => {
     expect(pastPx(line('flush', 300, 326), box)).toBe(0);
     expect(pastPx(line('inside', 10, 20, 10, 25), box)).toBe(-10);
+  });
+});
+
+// Review fb-tests SHOULD-4 (lane rd/fb-fixes-2, T4): the reader measured every run at 0.6 em a code
+// point, so a CJK character counted 7.2 px at 12 px and a ZWJ emoji five glyphs, against the
+// ruling for text that is not ours. It measures a run as the figures do (foreignTextPx): a
+// grapheme of the served Latin subset at 0.6 em, any other at 1.25 em (15 px at 12 px).
+describe('textLines measures text that is not ours as the figures do', () => {
+  it('counts a CJK character and an emoji at 1.25 em, a Latin glyph at 0.6', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const text = (x: number, anchor: string, words: string) => {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.setAttribute('x', String(x));
+      el.setAttribute('y', '20');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('text-anchor', anchor);
+      el.textContent = words;
+      svg.append(el);
+    };
+    text(10, 'start', '蚂蚁矿池 AntPool');
+    text(200, 'end', '👨‍👩‍👧 ok');
+    const [cjk, emoji] = allTextLines(svg);
+    // four CJK characters (60) and " AntPool" (8 Latin glyphs, 57.6)
+    expect(cjk.right - cjk.left).toBeCloseTo(4 * 15 + 8 * 7.2, 9);
+    // one family (15) and " ok" (21.6), ending at its x
+    expect(emoji.right).toBe(200);
+    expect(emoji.right - emoji.left).toBeCloseTo(15 + 3 * 7.2, 9);
+  });
+
+  it('reads the face a run is drawn from: our → at 0.6 em in the regular face, not in the semibold', () => {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    for (const weight of ['400', '600', '700']) {
+      const el = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      el.setAttribute('x', '0');
+      el.setAttribute('y', '20');
+      el.setAttribute('font-size', '12');
+      el.setAttribute('font-weight', weight);
+      el.textContent = 'a → b';
+      svg.append(el);
+    }
+    const [regular, semibold, bold] = Array.from(svg.querySelectorAll('text'));
+    // the regular face maps the arrow (U+2192); the semibold subset does not, so a fallback draws it
+    expect(textLines(regular)[0].right).toBeCloseTo(5 * 7.2, 9);
+    expect(textLines(semibold)[0].right).toBeCloseTo(4 * 7.2 + 15, 9);
+    // no face is served at 700: the reader cannot say what draws it
+    expect(() => textLines(bold)).toThrow(/no served face for 700/);
   });
 });

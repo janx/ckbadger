@@ -16,7 +16,10 @@ import { describe, expect, it } from 'vitest';
  *   `__tests__/lib/ink-gate.test.ts`;
  * - the class is written only on an element's `className`, where the gate sees what it holds (a
  *   constant or a helper that carried it would hide its element), and the scan's CSS variable
- *   (`--m-fill-scan`) is named nowhere in the source and read by the `.scan-fill` rule alone;
+ *   (`--m-fill-scan`) is named nowhere in the source and read by the `.scan-fill` rule alone (in
+ *   any `var(` of it, a fallback or a space too); its material key (`fill-scan`, which
+ *   `material(…)` turns into that variable unnamed) is read by `components/ui/scan-fill.tsx`
+ *   alone, wherever the source writes it but the palette's definition and a type;
  * - the elements that carry the scan are listed below by file: a new one is a decision (the
  *   seals, the pipeline's plates and strap, a tile and a word never take it), and one that went
  *   leaves a count behind.
@@ -34,6 +37,15 @@ const CLASS = /(?<![\w-])scan-fill(?![\w-])/;
 const CLASS_ALL = new RegExp(CLASS.source, 'g');
 /** The scan's CSS variable (the material `fill-scan`, `lib/palette.ts`). */
 const FILL_VAR_ALL = /--m-fill-scan(?![\w-])/g;
+/** The scan's material key: `material(…)` of it is the variable, unnamed. */
+const MATERIAL_KEY = 'fill-scan';
+/**
+ * The sources that read the material key, by file, with their count: the SVG twin of the class,
+ * which asks the theme whether the scan is on (`materials['fill-scan'] === 'none'` by day).
+ */
+const KEY_READERS: Readonly<Record<string, number>> = {
+  'components/ui/scan-fill.tsx': 1,
+};
 const TEXT_TAGS = new Set(['text', 'tspan', 'textPath']);
 const UNPAINTED_TAGS = new Set([
   'title',
@@ -98,8 +110,16 @@ interface Site {
   scan: boolean;
 }
 
-/** The fills, the masks and the stray class names of one TSX source. */
-function scanSites(code: string): { fills: Site[]; masks: Site[]; stray: number[] } {
+/**
+ * The fills, the masks and the stray class names of one TSX source, and the lines that read the
+ * material key `fill-scan` (`keyReads`).
+ */
+function scanSites(code: string): {
+  fills: Site[];
+  masks: Site[];
+  stray: number[];
+  keyReads: number[];
+} {
   const source = ts.createSourceFile(
     'scan.tsx',
     code,
@@ -267,7 +287,22 @@ function scanSites(code: string): { fills: Site[]; masks: Site[]; stray: number[
     ts.forEachChild(node, scanTokens);
   };
   scanTokens(source);
-  return { fills, masks, stray };
+
+  // the material key read anywhere: an argument (`material('fill-scan')`), an index, a pattern's
+  // key, a name that holds it; the palette's definition of the key and a type are not reads
+  const keyReads: number[] = [];
+  const readsKey = (node: ts.Node): void => {
+    if (
+      ts.isStringLiteralLike(node) &&
+      node.text === MATERIAL_KEY &&
+      !(ts.isPropertyAssignment(node.parent) && node.parent.name === node) &&
+      !ts.isLiteralTypeNode(node.parent)
+    )
+      keyReads.push(lineOf(node));
+    ts.forEachChild(node, readsKey);
+  };
+  readsKey(source);
+  return { fills, masks, stray, keyReads };
 }
 
 function sourceFiles(root: string): string[] {
@@ -283,11 +318,16 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-/** The selectors of the CSS rules (inside an at-rule too) whose declarations read `variable`. */
+/**
+ * The selectors of the CSS rules (inside an at-rule too) whose declarations read `variable`: a
+ * `var(` of it, with or without spaces after the paren and with or without a fallback.
+ */
 function cssRulesReading(css: string, variable: string): string[] {
   const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const name = variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reads = new RegExp(`var\\(\\s*${name}(?![\\w-])`);
   return [...code.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-    .filter(([, , body]) => body.includes(`var(${variable})`))
+    .filter(([, , body]) => reads.test(body))
     .map(([, selector]) => selector.trim().replace(/\s+/g, ' '));
 }
 
@@ -368,6 +408,25 @@ describe('the scan gate finds what it must, and only that', () => {
     expect(stray).toEqual([1, 2]);
   });
 
+  // Review of the fixes (2026-11-19, S2): `material('fill-scan')` is the palette's documented way
+  // to read a material, and returns the scan's variable without the source naming it, so a
+  // paragraph masked by it passed the gate. A read of the material key is a site of its own.
+  it('flags a read of the material key fill-scan: a call, an index, a pattern, a name', () => {
+    const { keyReads, stray } = sites([
+      "<p style={{ maskImage: material('fill-scan') }}>8,131 CKB</p>;",
+      "const key = materials['fill-scan'];",
+      'const m = material(`fill-scan`);',
+      "const { 'fill-scan': scan } = materials;",
+      "const KEY = 'fill-scan';",
+      "const m2 = materials?.['fill-scan'];",
+      "const MATERIALS = { 'fill-scan': 'none', glow: 'x' };",
+      "material('fill-glow');",
+      "type Key = 'fill-scan';",
+    ]);
+    expect(keyReads).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(stray).toEqual([]);
+  });
+
   it('flags the class name where the gate cannot see its element: a constant, a helper, a call', () => {
     const { stray } = sites([
       "const FILL = 'scan-fill h-1';",
@@ -399,6 +458,25 @@ describe('the scan gate finds what it must, and only that', () => {
       )
     ).toEqual(['.scan-fill', '.title, h1']);
   });
+
+  // Review of the fixes (2026-11-19, S2): the rule check matched the literal `var(--m-fill-scan)`
+  // only, so a rule that read the variable with a fallback, or with a space after the paren, laid
+  // the scan on what it selects unseen.
+  it('reads the variable in a rule with a fallback or a space, and not a longer name', () => {
+    expect(
+      cssRulesReading(
+        [
+          '.scan-fill { mask-image: var(--m-fill-scan); }',
+          '.title { mask-image: var(--m-fill-scan, none); }',
+          '.spaced { -webkit-mask-image: var( --m-fill-scan ); }',
+          '.broken { mask-image: var(\n    --m-fill-scan\n  ); }',
+          '.other { mask-image: var(--m-fill-scan-x); }',
+          '.named { --scan: --m-fill-scan; }',
+        ].join('\n'),
+        '--m-fill-scan'
+      )
+    ).toEqual(['.scan-fill', '.title', '.spaced', '.broken']);
+  });
 });
 
 describe('the scan stands on fills, never on words (R1)', () => {
@@ -423,6 +501,14 @@ describe('the scan stands on fills, never on words (R1)', () => {
   it('writes the class only on an element’s className', () => {
     const stray = found.flatMap(({ path, stray }) => stray.map((line) => `${path}:${line}`));
     expect(stray).toEqual([]);
+  });
+
+  // Review of the fixes (2026-11-19, S2): the material key read elsewhere is the scan's mask
+  // without its name; it is read by the SVG twin of the class alone.
+  it('reads the material key fill-scan in components/ui/scan-fill.tsx alone', () => {
+    const readers: Record<string, number> = {};
+    for (const { path, keyReads } of found) if (keyReads.length) readers[path] = keyReads.length;
+    expect(readers).toEqual(KEY_READERS);
   });
 
   it('carries the scan where the board put it, and nowhere else', () => {

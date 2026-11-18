@@ -69,7 +69,7 @@ export type AlleleGelLayout =
 /**
  * A gene name as drawn on the gel: the collection creator's text, cut to the room of the gel's
  * caption budget (14 Latin glyphs at the tick size, 100.8 px) at whole graphemes, measured by the
- * upper bound of lib/type-metrics.ts (review F-B, logic finding 5).
+ * bound of lib/type-metrics.ts (review F-B, logic finding 5).
  */
 export function geneCaption(gene: string): string {
   return clipForeignLabel(gene, SVG_TEXT.tick, textPx(ALLELE_GEL.captionChars, SVG_TEXT.tick));
