@@ -672,6 +672,64 @@ describe('the caption under the 404 seal never opens a line with a separator', (
   const text = (line: Unit[]) =>
     line.map((u, i) => (i > 0 && u.breakBefore ? ' ' : '') + u.text).join('');
 
+  // The reader's self-tests (review rules-fixes-tests NOTE-4): three things it walked without
+  // reading, none in the caption today, so it must read them or refuse them by name when one
+  // arrives. Each on a small fixture caption at the caption's own step.
+  describe('the reader of the caption’s units', () => {
+    const fixture = (children: React.ReactNode) => {
+      const { container } = bareRender(
+        <figcaption className="text-text-dim text-meta">{children}</figcaption>
+      );
+      return container.firstElementChild as HTMLElement;
+    };
+    const texts = (root: Element, viewport: number) => units(root, viewport).map((u) => u.text);
+
+    it('reads an atomic inline box that is not a list as one unit: its words never part', () => {
+      for (const box of ['inline-block', 'inline-flex'])
+        expect(
+          texts(
+            fixture(
+              <>
+                words <span className={box}>two words</span>
+              </>
+            ),
+            390
+          ),
+          box
+        ).toEqual(['words', 'two words']);
+    });
+
+    it('counts no word of a box hidden at the window', () => {
+      const node = fixture(
+        <>
+          shown <span className="hidden md:inline">wide only</span>
+        </>
+      );
+      expect(texts(node, 390)).toEqual(['shown']);
+      expect(texts(node, 1024)).toEqual(['shown', 'wide', 'only']);
+    });
+
+    it('takes the block link alone for one unit at the widest number, never a box around it', () => {
+      // the words beside the link stay words a line may break between
+      expect(
+        texts(
+          fixture(
+            <span>
+              newest block <a href="/mainnet/blocks/5">#5</a>
+            </span>
+          ),
+          390
+        )
+      ).toEqual(['newest', 'block', WIDEST_BLOCK_NUMBER]);
+    });
+
+    it('refuses a block link that holds words, which it would write as one number', () => {
+      expect(() => units(fixture(<a href="/mainnet/blocks/5">block five</a>), 390)).toThrow(
+        '390: the block link holds words ("block five"), the reader counts it as one number'
+      );
+    });
+  });
+
   it('reads the caption’s list as one inline box, a line of its own when it is a block', async () => {
     const node = await caption();
     const list = node.querySelector('[data-dotted]')!;
