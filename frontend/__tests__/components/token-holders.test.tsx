@@ -440,7 +440,11 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     vi.restoreAllMocks();
   });
   const unregistered = `0x${'43'.repeat(32)}`;
-  const scriptPage = expect.stringMatching(new RegExp(`/script/${unregistered}$`));
+  // B4 second fix round (re-pinned on purpose): the link opens that lock, by the hash type its
+  // address spells, as a lock (the script page reads both)
+  const scriptPage = expect.stringMatching(
+    new RegExp(`/script/${unregistered}\\?hashType=type&kind=lock$`)
+  );
   const page = {
     data: [
       {

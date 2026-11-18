@@ -4,6 +4,7 @@ import Link from '@/components/ui/link';
 import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import type { ParticipantRef } from '@/lib/api';
+import { getScriptDetailHref } from '@/lib/detail-routes';
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
@@ -41,6 +42,9 @@ export type LockWords =
       form: 'lock';
       name: string | null;
       codeHash: string | null;
+      /** its hash type where the place knows it (its link opens that lock) */
+      hashType: ScriptRefHashType | null;
+      /** the hash type written after it, where its name does not cover it */
       byHashType: ScriptRefHashType | null;
     }
   /** a column's lock that is not indexed: "not indexed" in quiet words */
@@ -74,8 +78,8 @@ export function lockWords(facts: LockFacts, place: LockPlace): LockWords | null 
     isDefaultLock(codeHash, 'type') &&
     hashType !== 'type';
   return notTheDefault
-    ? { form: 'lock', name: null, codeHash, byHashType: hashType }
-    : { form: 'lock', name, codeHash, byHashType: null };
+    ? { form: 'lock', name: null, codeHash, hashType, byHashType: hashType }
+    : { form: 'lock', name, codeHash, hashType, byHashType: null };
 }
 
 /**
@@ -181,7 +185,14 @@ export function LockWordsView({
         <>
           lock{' '}
           <Link
-            href={`/script/${codeHash}`}
+            // the script page of that lock: its hash type where known, as a lock (B4 second fix
+            // round: a bare code hash opened the family of the code hash's `type` script, the
+            // default lock's for a by-data lock on its code hash)
+            href={getScriptDetailHref({
+              codeHash: codeHash!,
+              hashType: words.form === 'lock' ? words.hashType : null,
+              scriptKind: 'lock',
+            })}
             title={codeHash ?? undefined}
             className="hover:text-jade transition-colors"
           >

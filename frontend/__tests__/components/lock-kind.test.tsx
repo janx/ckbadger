@@ -37,7 +37,12 @@ describe('LockKind (R-2)', () => {
     const kind = container.querySelector('[data-lock-kind]') as HTMLElement;
     expect(kind).toHaveTextContent(/^lock 0x9b9b9b9b…9b9b9b$/);
     const link = screen.getByRole('link', { name: '0x9b9b9b9b…9b9b9b' });
-    expect(link).toHaveAttribute('href', expect.stringMatching(new RegExp(`/script/${CODE}$`)));
+    // B4 second fix round (re-pinned on purpose): a lock's script page, as a lock; a bare code hash
+    // gives no hash type to carry
+    expect(link).toHaveAttribute(
+      'href',
+      expect.stringMatching(new RegExp(`/script/${CODE}\\?kind=lock$`))
+    );
     expect(link).toHaveAttribute('title', CODE);
     expect(kind).toHaveClass('whitespace-nowrap');
   });
