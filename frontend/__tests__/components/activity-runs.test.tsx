@@ -10,7 +10,7 @@ import { ActivitiesStreamExplorer } from '@/components/activities-stream-explore
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
-import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
+import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
 
@@ -383,5 +383,57 @@ describe('a run is set back as its rows are (R4)', () => {
       />
     );
     expect(document.querySelector('[data-role="activity-run"]')).toHaveClass('quiet');
+  });
+
+  // Lane B4 fix round (review-rules-tests SHOULD-2, the coordinator's item 8): the feed's own
+  // decision, through the feed. An identity's feed with two of a neighbour's rows and then one of
+  // its own, all three saying ".cell · ring pointer changed" with the same scripts and party: the
+  // neighbour's two fold into one run, set back as their rows are, and the identity's own row is
+  // not in it (its rows are compared apart from a neighbour's).
+  it('folds a neighbour’s rows in an identity’s feed apart from its own, set back', async () => {
+    const relinked = (n: number, actedOn: 'self' | 'neighbour'): ItemActivity => ({
+      ...oracle(n, 'q3q7ue', '0x00', n * 49),
+      itemContext: {
+        itemId: `0x${'a7'.repeat(20)}`,
+        action: 'update',
+        protocolActions: ['ring_relink'],
+        ringRelink: null,
+        actedOn,
+        createdCell: null,
+        consumedCell: null,
+      },
+    });
+    const rows = [relinked(1, 'neighbour'), relinked(2, 'neighbour'), relinked(3, 'self')];
+    render(
+      <AssetFeed
+        queryKey="runs-neighbour"
+        scope="This identity's whole life"
+        item={{ kind: 'identity', protocolName: '.cell' }}
+        loadActivities={async () => ({ ...page(rows), total: 3 })}
+        loadTransactions={async () => ({
+          data: [],
+          total: 0,
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })}
+      />
+    );
+    await waitFor(() =>
+      expect(document.querySelector('[data-role="activity-run"]')).not.toBeNull()
+    );
+    const runs = [...document.querySelectorAll('[data-role="activity-run"]')];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toHaveAttribute('data-run-count', '2');
+    expect(runs[0]).toHaveClass('quiet');
+    // the identity's own row, drawn alone after the run, in full ink
+    const own = document.querySelector(`article[data-feed-row="${rows[2].txHash}"]`)!;
+    expect(own).not.toBeNull();
+    expect(own).not.toHaveClass('quiet');
+    expect(
+      [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual([rows[2].txHash]);
   });
 });
