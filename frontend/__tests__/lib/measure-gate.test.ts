@@ -893,6 +893,36 @@ describe('the measure scan finds what it must, and only that', () => {
     ).toEqual(['1 block <li>']);
   });
 
+  // The second fix round (review of the fixes, tests SHOULD-1): the text written at a declared
+  // component's call site counts as before, unless the component's root is itself exempt.
+  it('counts the text written at a declared component’s call site unless its root is exempt', () => {
+    expect(
+      sitesOf([
+        'function Box({ children }) { return <div>{children}</div>; }',
+        `<section><Box>${'w '.repeat(60)}</Box></section>;`,
+        'function Row({ children }) { return <div className="flex gap-2">{children}</div>; }',
+        `<section><Row>${'w '.repeat(60)}</Row></section>;`,
+      ])
+    ).toEqual(['2 block <section>']);
+  });
+
+  // The second fix round (NOTE-6): `cn` is twMerge(clsx(…)), so a later class of its group wins;
+  // a class the scan cannot read may be any class, and a plain list's conflict is the stylesheet's.
+  it('reads a cn list as tailwind-merge does, and refuses a class another may override', () => {
+    expect(
+      sitesOf([
+        "<p className={cn('flex gap-2', 'block')}>{x}</p>;",
+        "<p className={cn('block', 'flex gap-2')}>{x}</p>;",
+        '<p className="flex block">{x}</p>;',
+        '<p className="flex md:block">{x}</p>;',
+        "<p className={cn('max-w-measure', className)}>{x}</p>;",
+        "<p className={cn(className, 'max-w-measure')}>{x}</p>;",
+        "<p className={cn('max-w-measure', 'max-w-[400px]')}>{x}</p>;",
+        '<p className={`max-w-measure ${extra}`}>{x}</p>;',
+      ])
+    ).toEqual(['1 p <p>', '3 p <p>', '4 p <p>', '5 p <p>', '7 p <p>', '8 p <p>']);
+  });
+
   it('reads a component the file declares as the element it returns, a factory’s call as one', () => {
     expect(
       sitesOf([
@@ -945,7 +975,19 @@ describe('a slot is measured where its component writes it', () => {
   });
 });
 
+/** The tolerated list's sites, summed. */
+function toleratedSites(list: Readonly<Record<string, Tolerated>>): number {
+  return Object.values(list).reduce((n, t) => n + (t.sites.p ?? 0) + (t.sites.block ?? 0), 0);
+}
+
 describe('the tolerated list keys a file by its count per kind, so it only shrinks', () => {
+  // The second fix round (NOTE-1): the pinned total counts every kind, a refused tag too.
+  it('totals the tolerated sites over every kind', () => {
+    expect(
+      toleratedSites({ 'app/a.tsx': { sites: { p: 1, block: 2, tag: 1 }, reason: 'three kinds' } })
+    ).toBe(4);
+  });
+
   const site = (kind: Kind, line: number): Site => ({ kind, line, what: '<p>' });
   const list: Record<string, Tolerated> = {
     'app/a.tsx': { sites: { p: 2 }, reason: 'two banners whose frame spans the column' },
@@ -1019,8 +1061,6 @@ describe('running text stands inside the measure (R4, lane B7)', () => {
   it('keeps the tolerated list short and reasoned: its length is pinned', () => {
     // pinned: a file more is a decision, not a line added here (9 sites in 8 files)
     expect(Object.keys(TOLERATED)).toHaveLength(8);
-    expect(
-      Object.values(TOLERATED).reduce((n, t) => n + (t.sites.p ?? 0) + (t.sites.block ?? 0), 0)
-    ).toBe(9);
+    expect(toleratedSites(TOLERATED)).toBe(9);
   });
 });
