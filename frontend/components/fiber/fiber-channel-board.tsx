@@ -531,7 +531,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                 )}
               </div>
               <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
-                The chain sees no Fiber payment, only the split at the open and at the close.
+                The chain sees no Fiber payment, only the split at the open and the close.
               </p>
             </DetailSection>
           )}

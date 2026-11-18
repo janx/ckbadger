@@ -217,8 +217,10 @@ describe('FiberChannelBoard', () => {
     const section = screen.getByRole('heading', { name: 'What moved inside the channel' })
       .parentElement!.parentElement!;
     const caption = section.querySelector('p[data-role="caption"]')!;
+    // re-pinned with the measure (lane B7, the fix round): one line of 74 characters (it said "at
+    // the open and at the close", 77, and wrapped)
     expect(caption).toHaveTextContent(
-      'The chain sees no Fiber payment, only the split at the open and at the close.'
+      'The chain sees no Fiber payment, only the split at the open and the close.'
     );
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'max-w-measure');
