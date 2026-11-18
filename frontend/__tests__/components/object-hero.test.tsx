@@ -168,3 +168,49 @@ it('lists the decoder output beside the DNA evidence (OB-14)', () => {
     expect.stringContaining('/spore/objects/0x51c7/media/968c5878')
   );
 });
+// The owner's report (2026-11-18): the page of 0x707532f6…c7ba, a DOB/1 object whose IMAGE trait
+// holds its SVG, threw "shorten: an empty hash". The decoder's stored outputs are listed with
+// their bytes, step and sha256; the picture /render draws from the traits has no stored bytes, so
+// its row says what it is and gives neither a byte count nor a sha256.
+import { within } from '@/__tests__/utils/test-utils';
+import {
+  dob1SvgDecoded,
+  DOB1_SVG_ID,
+  DOB1_SVG_STEP0_HASH,
+  DOB1_SVG_STEP1_HASH,
+} from '@/__tests__/fixtures/objects/dob1-svg-trait';
+it('lists a DOB/1 object’s stored outputs with bytes and sha256, its drawn picture with neither', () => {
+  render(
+    <ObjectGeneticsEvidence
+      evidence={nervape3xGenetics}
+      subject="Its object"
+      decoded={dob1SvgDecoded()}
+    />
+  );
+  const rows = within(screen.getByRole('list', { name: 'Decoder output' })).getAllByRole(
+    'listitem'
+  );
+  expect(rows).toHaveLength(3);
+  expect(rows[0]).toHaveTextContent(
+    'application/json · 456 bytes · step 1 sha256 d0111ca8e5…e0d606 Open the decoded file ↗'
+  );
+  expect(rows[1]).toHaveTextContent(
+    'application/json · 22,953 bytes · step 2 sha256 7a8245b77f…af37b0 Open the decoded file ↗'
+  );
+  expect(within(rows[0]).getByRole('link')).toHaveAttribute(
+    'href',
+    expect.stringMatching(new RegExp(`/spore/objects/${DOB1_SVG_ID}/media/${DOB1_SVG_STEP0_HASH}$`))
+  );
+  expect(within(rows[1]).getByRole('link')).toHaveAttribute(
+    'href',
+    expect.stringMatching(new RegExp(`/spore/objects/${DOB1_SVG_ID}/media/${DOB1_SVG_STEP1_HASH}$`))
+  );
+  expect(rows[2]).toHaveTextContent(
+    'image/svg+xml · drawn from the traits on request, not a stored file Open the picture ↗'
+  );
+  expect(rows[2]).not.toHaveTextContent(/byte|sha256|step/);
+  expect(within(rows[2]).getByRole('link', { name: 'Open the picture ↗' })).toHaveAttribute(
+    'href',
+    expect.stringMatching(new RegExp(`/spore/objects/${DOB1_SVG_ID}/render$`))
+  );
+});
