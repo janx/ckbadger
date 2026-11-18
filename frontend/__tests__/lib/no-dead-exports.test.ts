@@ -81,6 +81,10 @@ const ALLOWLIST: Record<string, { why: string; anchor?: { file: string; text: st
     why: "the frontend side of the pipeline truncation contract: a block card's field, the API serving one fewer (the cellbase)",
     anchor: { file: '../crates/api/src/routes/pipeline.rs', text: '`BLOCK_FIELD_CAPACITY`' },
   },
+  'lib/palette.ts#apcaLc': {
+    why: 'an instrument (readability plan 2026-11-18, ruling R2): the perceptual grade palette.test.ts pins the night text by, kept beside contrastRatio so every check of a pairing reads one implementation; no page grades an ink at run time',
+    anchor: { file: 'lib/palette.ts', text: 'palette.test pins the floors' },
+  },
   'lib/theme.ts#resetThemeForTests': {
     why: 'a test seam, by its name: the theme store keeps module state (the snapshot, its listeners, the window watchers) that each test must drop; the app never resets it',
     anchor: { file: 'lib/theme.ts', text: 'Test seam:' },

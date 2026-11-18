@@ -26,8 +26,9 @@ describe('overGround', () => {
   it('lays a palette colour over a ground as the eye sees it', () => {
     expect(overGround('dark', 'gold', 1)).toBe(PALETTE.dark.gold);
     expect(overGround('dark', 'gold', 0)).toBe(PALETTE.dark['base-bg']);
-    // #c9a45c at 70 % over #15120f
-    expect(overGround('dark', 'gold', 0.7)).toBe('#937845');
+    // #e4bf76 at 70 % over #15120f (re-pinned on purpose with the night gold of readability ruling
+    // R2; with #c9a45c it was #937845)
+    expect(overGround('dark', 'gold', 0.7)).toBe('#a68b57');
     // #80600f at 70 % over the paper #f3eee4
     expect(overGround('light', 'gold', 0.7)).toBe('#a38b4f');
     expect(overGround('light', 'gold', 0.7, 'base-surface')).toBe('#a58d53');
