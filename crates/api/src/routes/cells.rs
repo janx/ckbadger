@@ -30,7 +30,7 @@ use crate::utils::{
     is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_address_to_script,
     parse_hash32, parse_optional_block_tx_cursor, parse_output_index, registered_script_name,
     resolve_code_hash_for_hash_type, resolve_script_form_by_hash, script_to_address,
-    shannon_to_ckb,
+    shannon_to_ckb_u128,
 };
 use crate::warmup::{
     CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
@@ -2002,12 +2002,26 @@ pub struct DaoInfo {
     pub withdraw_block: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub withdraw_timestamp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compensation: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compensation_ckb: Option<String>,
+    /// The deposit's exact compensation in shannons, read as
+    /// `compensation_state` says at `compensation_at_block`.
+    pub compensation: String,
+    pub compensation_ckb: String,
+    pub compensation_state: DaoCompensationState,
+    pub compensation_at_block: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub estimated_apc: Option<String>,
+}
+
+/// What a DAO cell's compensation figure is, one state per lifecycle status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DaoCompensationState {
+    /// Deposited: unclaimed and still accruing, read at the tip.
+    Accruing,
+    /// Withdraw requested: unclaimed, fixed at the request block's AR.
+    Frozen,
+    /// Withdrawn: claimed by the completion, at its block.
+    Claimed,
 }
 
 #[derive(Debug, Serialize)]
@@ -3651,10 +3665,11 @@ fn lookup_code_cell_scripts(
 }
 
 fn lookup_dao_info(
-    store: &ckbadger_store::CkbadgerStore,
+    state: &AppState,
     tx_hash: &[u8],
     output_index: i16,
 ) -> anyhow::Result<Option<DaoInfo>> {
+    let store = &state.store;
     let outpoint_key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
     let context = format!("DAO cell 0x{}:{output_index}", hex::encode(tx_hash));
 
@@ -3692,13 +3707,12 @@ fn lookup_dao_info(
         return Ok(None);
     };
 
-    let dao_status = match entry.status {
-        0 => "deposited",
-        1 => "withdrawing",
-        2 => "withdrawn",
+    let (dao_status, compensation_state) = match entry.status {
+        0 => ("deposited", DaoCompensationState::Accruing),
+        1 => ("withdrawing", DaoCompensationState::Frozen),
+        2 => ("withdrawn", DaoCompensationState::Claimed),
         _ => anyhow::bail!("{context} has invalid DAO status {}", entry.status),
-    }
-    .to_string();
+    };
 
     // Get block header for deposit timestamp
     let timestamp_for_block = |bn: i64| -> anyhow::Result<String> {
@@ -3722,20 +3736,44 @@ fn lookup_dao_info(
         .transpose()?;
     let withdraw_timestamp = entry.withdraw_block.map(timestamp_for_block).transpose()?;
 
-    let compensation = entry.compensation.map(|c| c.to_string());
-    let compensation_ckb = compensation.as_ref().map(|c| shannon_to_ckb(c));
+    // The one lifecycle computation the address and DAO routes make:
+    // `dao_compensation_for_entry_at` at the tip of this request's read view.
+    // Every block the row names has a header in that view (its timestamp was
+    // read above), so none is past the tip: a deposit accrues up to the tip, a
+    // request is fixed at its own AR, a completion answers its stored claim
+    // (which the function checks against that AR).
+    let (tip_block, tip_ar, _, _) =
+        super::dao::resolve_latest_block_and_ar(state, "cell compensation")
+            .map_err(|(_, error)| anyhow::anyhow!("{context}: {}", error.0.message))?;
+    let breakdown = ckbadger_store::dao_compensation_for_entry_at(&entry, tip_block, tip_ar)
+        .map_err(|error| anyhow::anyhow!("{context} compensation: {error:#}"))?;
+    let (compensation, compensation_at_block) = match compensation_state {
+        DaoCompensationState::Accruing => (breakdown.unclaimed, Some(tip_block)),
+        DaoCompensationState::Frozen => (breakdown.unclaimed, entry.withdraw_request_block),
+        DaoCompensationState::Claimed => (breakdown.claimed, entry.withdraw_block),
+    };
+    let compensation_at_block = compensation_at_block.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{context} status {} names no block for its compensation",
+            entry.status
+        )
+    })?;
+    let compensation = u128::try_from(compensation)
+        .map_err(|_| anyhow::anyhow!("{context} negative compensation {compensation}"))?;
 
     Ok(Some(DaoInfo {
         is_dao_cell: true,
-        dao_status,
+        dao_status: dao_status.to_string(),
         deposit_block_number: entry.deposit_block_number,
         deposit_timestamp,
         withdraw_request_block: entry.withdraw_request_block,
         withdraw_request_timestamp,
         withdraw_block: entry.withdraw_block,
         withdraw_timestamp,
-        compensation,
-        compensation_ckb,
+        compensation: compensation.to_string(),
+        compensation_ckb: shannon_to_ckb_u128(compensation),
+        compensation_state,
+        compensation_at_block,
         estimated_apc: None,
     }))
 }
@@ -4170,7 +4208,7 @@ async fn get_cell(
         None
     };
 
-    let dao_info = lookup_dao_info(&state.store, &hash_bytes, output_idx)
+    let dao_info = lookup_dao_info(&state, &hash_bytes, output_idx)
         .map_err(|error| ApiError::internal(error.to_string()))?;
 
     let cell_output_molecule = cell_anatomy::cell_output(&info).map_err(|error| {
