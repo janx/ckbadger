@@ -614,4 +614,18 @@ describe('a filled histogram fails on what it cannot read', () => {
       'bucket axis: run 1..63 is past the 63 points drawn'
     );
   });
+
+  // Review of the fixes (2026-11-19, N1): the run indexes the model's points, while a tile hands
+  // its axis a card's points where it has one; no histogram has a card, and a definition that
+  // would give one a card window fails by its key instead of reading the run against other points.
+  it('fails a histogram that its definition would give a card', () => {
+    expect(() =>
+      chartModel(
+        { ...def('epoch-time-distribution'), cardDays: 60 },
+        { title: 'epoch-time-distribution', yAxisLabel: 'Epochs', data: minutes(180, 300) }
+      )
+    ).toThrow(
+      'epoch-time-distribution: a histogram has no card: its bucket run indexes the points it draws'
+    );
+  });
 });
