@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import defaultTheme from 'tailwindcss/defaultTheme';
 import { MemoryRouter } from 'react-router-dom';
 import { render as bareRender } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
@@ -18,7 +19,7 @@ import { parsed, SEAL_INKS } from '@/__tests__/utils/seals';
 import { drawSeal, type SealId } from '@/lib/seal/stones';
 import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { ErrorPageShell } from '@/components/error-page-shell';
+import { ERROR_PAGE_LAYOUT, ErrorPageShell } from '@/components/error-page-shell';
 import { inkOf } from '@/__tests__/utils/ink-role';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
@@ -352,5 +353,194 @@ describe('ErrorPageShell', () => {
       if (oldClipboard) Object.defineProperty(navigator, 'clipboard', oldClipboard);
       else Reflect.deleteProperty(navigator, 'clipboard');
     }
+  });
+});
+
+// Readability ruling R6 (the review: by night the stone lay under the verse and the facts, its red
+// strokes through their glyphs): the newest block's seal stands clear of the text column at every
+// width. jsdom does not lay out, so the boxes are the page's own layout constants
+// (ERROR_PAGE_LAYOUT), tied below to the classes and the drawing that make them, and the
+// arithmetic is done here at the five widths the lead measures: 1280, 1024, 640, 390, 360.
+describe('the pressed seal stands clear of the text column (readability R6)', () => {
+  const { gutters, besideFrom, textColumnPx, sealGapPx, sealPx, sealTilt } = ERROR_PAGE_LAYOUT;
+  const WIDTHS = [1280, 1024, 640, 390, 360] as const;
+  interface Box {
+    left: number;
+    right: number;
+    top: number;
+    bottom: number;
+  }
+  /** The side gutter at a window width: the column's padding at its breakpoint. */
+  const gutterAt = (width: number) => [...gutters].reverse().find((g) => width >= g.from)!.px;
+  /** How far a square of `side` turned by `tilt` degrees draws past its box on every side. */
+  const turnedPast = (side: number, tilt: number) => {
+    const turn = (Math.abs(tilt) * Math.PI) / 180;
+    return (side * (Math.cos(turn) + Math.sin(turn)) - side) / 2;
+  };
+  const meet = (a: Box, b: Box) =>
+    a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+  /**
+   * The text column's box and the stone's drawn box at a window width, px from the column's top
+   * left corner on the page, for a column `textHeight` tall (whatever its words make it).
+   */
+  function boxes(width: number, textHeight: number) {
+    const gutter = gutterAt(width);
+    const inner = width - 2 * gutter;
+    const beside = width >= besideFrom;
+    const textWidth = beside ? Math.min(textColumnPx, inner - sealGapPx - sealPx) : inner;
+    const text: Box = { left: gutter, right: gutter + textWidth, top: 0, bottom: textHeight };
+    const x = beside ? gutter + textWidth + sealGapPx : gutter;
+    const y = beside ? 0 : textHeight + sealGapPx;
+    const past = turnedPast(sealPx, sealTilt);
+    const seal: Box = {
+      left: x - past,
+      right: x + sealPx + past,
+      top: y - past,
+      bottom: y + sealPx + past,
+    };
+    return { gutter, inner, beside, text, seal };
+  }
+  const tenth = (px: number) => Math.round(px * 100) / 100;
+
+  it('turned −3°, the 256 px stone draws 269.05 px across, 6.52 past its box on every side', () => {
+    expect(tenth(sealPx + 2 * turnedPast(sealPx, sealTilt))).toBe(269.05);
+    expect(tenth(turnedPast(sealPx, sealTilt))).toBe(6.52);
+    // at 1280 the column, the gap and the stone are exactly what the gutters leave
+    expect(textColumnPx + sealGapPx + sealPx).toBe(1280 - 2 * gutterAt(1280));
+  });
+
+  it.each(WIDTHS)(
+    'at %i px the stone, as drawn, never meets the text column and stays on the page',
+    (width) => {
+      for (const textHeight of [80, 240, 480, 960]) {
+        const { text, seal } = boxes(width, textHeight);
+        expect(
+          meet(text, seal),
+          `${width} px: text column ${JSON.stringify(text)}, stone ${JSON.stringify(seal)}`
+        ).toBe(false);
+        expect(seal.left).toBeGreaterThanOrEqual(0);
+        expect(seal.right).toBeLessThanOrEqual(width);
+      }
+    }
+  );
+
+  // The arithmetic per width, as the hand-back states it: the gutter, the room between the
+  // gutters, where the stone stands, the text column across, the stone's drawn box across, and the
+  // clear space between the column and the drawn stone (across beside it, down below it).
+  it('states the boxes at each width', () => {
+    const rows = WIDTHS.map((width) => {
+      const { gutter, inner, beside, text, seal } = boxes(width, 240);
+      return {
+        width,
+        gutter,
+        inner,
+        stone: beside ? 'beside' : 'below',
+        text: [text.left, text.right],
+        drawn: [tenth(seal.left), tenth(seal.right)],
+        clear: tenth(beside ? seal.left - text.right : seal.top - text.bottom),
+      };
+    });
+    expect(rows).toEqual([
+      {
+        width: 1280,
+        gutter: 96,
+        inner: 1088,
+        stone: 'beside',
+        text: [96, 864],
+        drawn: [921.48, 1190.52],
+        clear: 57.48,
+      },
+      {
+        width: 1024,
+        gutter: 96,
+        inner: 832,
+        stone: 'below',
+        text: [96, 928],
+        drawn: [89.48, 358.52],
+        clear: 57.48,
+      },
+      {
+        width: 640,
+        gutter: 32,
+        inner: 576,
+        stone: 'below',
+        text: [32, 608],
+        drawn: [25.48, 294.52],
+        clear: 57.48,
+      },
+      {
+        width: 390,
+        gutter: 16,
+        inner: 358,
+        stone: 'below',
+        text: [16, 374],
+        drawn: [9.48, 278.52],
+        clear: 57.48,
+      },
+      {
+        width: 360,
+        gutter: 16,
+        inner: 328,
+        stone: 'below',
+        text: [16, 344],
+        drawn: [9.48, 278.52],
+        clear: 57.48,
+      },
+    ]);
+  });
+
+  // The numbers above are the page's: its breakpoints are Tailwind's, its padding and grid classes
+  // are these constants, the stone is drawn at sealPx and turned sealTilt, and it stands in the
+  // page's flow, never pressed over the box that holds the text.
+  it('lays the page out by those constants: the text column, then the stone in its own place', async () => {
+    const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
+    const at = css.indexOf('\n.error-seal {');
+    expect(at, 'globals.css has no .error-seal rule').toBeGreaterThan(-1);
+    const sealRule = css.slice(at, css.indexOf('}', at));
+    // pressed over main's whole box (absolute, inset 0, z −1) it lay under every line of text
+    expect(sealRule, 'the stone is pressed over main, which holds the text column').not.toMatch(
+      /position:\s*absolute|inset:|z-index:/
+    );
+    expect(sealRule).toContain('opacity: var(--m-seal-press);');
+    expect(Number.parseInt(defaultTheme.screens.sm, 10)).toBe(gutters[1].from);
+    expect(Number.parseInt(defaultTheme.screens.lg, 10)).toBe(gutters[2].from);
+    expect(Number.parseInt(defaultTheme.screens.xl, 10)).toBe(besideFrom);
+    render(
+      <MemoryRouter initialEntries={['/mainnet/nowhere']}>
+        <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
+          <span>facts</span>
+        </ErrorPageShell>
+      </MemoryRouter>
+    );
+    const stone = await screen.findByTestId('error-seal');
+    await waitFor(() => expect(stone.querySelector('[data-seal] svg')).not.toBeNull());
+    const layout = screen.getByRole('main').querySelector<HTMLElement>('[data-error-layout]');
+    expect(layout, 'the page has no layout of the text column and the stone').not.toBeNull();
+    expect(layout).toHaveClass(
+      ...gutters.map(({ from, px }) =>
+        from === 0 ? `px-${px / 4}` : `${from === 640 ? 'sm' : 'lg'}:px-${px / 4}`
+      ),
+      'grid',
+      'grid-cols-[minmax(0,1fr)]',
+      `gap-y-${sealGapPx / 4}`,
+      `xl:grid-cols-[minmax(0,${textColumnPx}px)_${sealPx}px]`,
+      `xl:gap-x-${sealGapPx / 4}`
+    );
+    // two places: the text column (the eyebrow, the verse, the facts), then the stone's
+    const [text, figure] = Array.from(layout!.children) as HTMLElement[];
+    expect(layout!.children).toHaveLength(2);
+    expect(text).toHaveAttribute('data-error-text');
+    expect(text).toContainElement(screen.getByRole('heading', { level: 1, name: VERSE_NAME }));
+    expect(text).toContainElement(screen.getByText('facts'));
+    expect(text).not.toContainElement(stone);
+    expect(figure.tagName).toBe('FIGURE');
+    expect(figure.firstElementChild).toBe(stone);
+    // the stone's box is sealPx square before its drawing arrives, and drawn sealPx, turned
+    expect(stone.style.width).toBe(`${sealPx}px`);
+    expect(stone.style.height).toBe(`${sealPx}px`);
+    const svg = stone.querySelector('svg')!;
+    expect(svg).toHaveAttribute('width', String(sealPx));
+    expect(svg).toHaveAttribute('height', String(sealPx));
+    expect(svg.getAttribute('style')).toBe(`transform: rotate(${sealTilt}deg)`);
   });
 });

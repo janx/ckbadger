@@ -53,6 +53,29 @@ interface ErrorPageShellProps {
 
 const EYEBROW_EGG = 'You are (not) here';
 
+/**
+ * Where the newest block's seal stands, px (readability ruling R6: the pressed seal moves clear of
+ * the text column). The side gutters are the column's padding (`px-4 sm:px-8 lg:px-24`): 16, from
+ * 640 px 32, from 1024 96. From 1280 (Tailwind's `xl`) the text column and the stone stand side by
+ * side: the column at most 768 px (48rem, the widest measure in it, the facts'), a 64 px gap, the
+ * 256 px stone: 768 + 64 + 256 = 1,088, all that 1280 leaves between its gutters (with less, a
+ * window's scrollbar, the column gives way, never the stone). Below 1280 the stone stands under
+ * the column, 64 px below it. Pressed −3°, it draws 256 × (cos 3° + sin 3°) = 269.05 px across,
+ * 6.52 past its box on every side, inside the 64 px either way.
+ */
+export const ERROR_PAGE_LAYOUT = {
+  gutters: [
+    { from: 0, px: 16 },
+    { from: 640, px: 32 },
+    { from: 1024, px: 96 },
+  ],
+  besideFrom: 1280,
+  textColumnPx: 768,
+  sealGapPx: 64,
+  sealPx: 256,
+  sealTilt: -3,
+} as const;
+
 /** In the frame by default; `standalone` / `contextSafe` when drawn in place of it. */
 export function ErrorPageShell({
   status,
@@ -129,7 +152,7 @@ const Seal = lazy(() => import('@/components/ui/seal').then((m) => ({ default: m
  */
 const SEAL_PX = 469;
 /** Pressed a little askew, as a hand presses a seal (the not-found board's −3°). */
-const SEAL_TILT = -3;
+const SEAL_TILT = ERROR_PAGE_LAYOUT.sealTilt;
 
 /**
  * The newest block's seal, pressed behind the verse, and a line naming it. The tip is the vitals'
