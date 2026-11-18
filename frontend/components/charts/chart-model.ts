@@ -336,7 +336,7 @@ function singleChart(
   // Cell size names its buckets in the axis' words (CH-12); every other label is the API's own.
   const pointLabel = (date: string) =>
     definition.slug === 'cell-size-distribution' ? cellSizeBucketLabel(date) : date;
-  const points: ChartPoint[] = payload.data.map((point) => {
+  const returned: ChartPoint[] = payload.data.map((point) => {
     const primary = point[primaryField];
     if (primary === undefined || primary === null)
       throw new Error(`${definition.slug}: missing ${primaryField} at ${point.date}`);
@@ -355,6 +355,8 @@ function singleChart(
     }
     return { label: pointLabel(point.date), values };
   });
+  // A histogram's regular run has every bucket of its grid, an empty one its 0 (2026-11-18).
+  const points = fillBucketRun(definition.slug, returned, definition.scale);
   const currentIndex = timelineMarkers ? timelineCurrentIndex(definition.slug, payload.data) : null;
   // Two series of one unit are named in the page's words (CH-21); a companion with no names fails.
   const companionNames = hasSecond && !definition.secondary ? definition.seriesNames : undefined;
@@ -1557,6 +1559,16 @@ export function bucketName(label: string, unit: string | undefined): string {
   return label;
 }
 
+/**
+ * An x-axis label at a point index. `edge`: an open-ended outlier label of a histogram (`≤ 2.05`,
+ * `≥ 7.67 h`), which says where the axis stops being regular; the chart keeps it (placeXTicks).
+ */
+export interface AxisTick {
+  index: number;
+  label: string;
+  edge?: true;
+}
+
 /** A numeric histogram's bucket values, each above the one before (CH-12). */
 function bucketValues(points: readonly ChartPoint[]): number[] {
   const values = points.map((point) => Number(point.label));
@@ -1600,10 +1612,7 @@ function bucketRun(
  * ({@link bucketRun}) and, beyond the run at either end, the outlying buckets marked open-ended on
  * the run's side (`≤ 2.05`, `≥ 50.50`). `max` bounds the round values.
  */
-function numericBucketTicks(
-  points: readonly ChartPoint[],
-  max: number
-): { index: number; label: string }[] {
+function numericBucketTicks(points: readonly ChartPoint[], max: number): AxisTick[] {
   const values = bucketValues(points);
   const { lo, hi, step } = bucketRun(values, max);
   const decimals = stepDecimals(step);
@@ -1611,11 +1620,77 @@ function numericBucketTicks(
     values[hi] > values[lo]
       ? roundTicks(values, lo, hi, step, (value) => value.toFixed(decimals))
       : [{ index: lo, label: points[lo].label }];
+  // An open-ended outlier label is an edge of the axis (`edge`): placed apart from the round ones.
   return [
-    ...(lo > 0 ? [{ index: lo - 1, label: `≤ ${points[lo - 1].label}` }] : []),
+    ...(lo > 0 ? [{ index: lo - 1, label: `≤ ${points[lo - 1].label}`, edge: true as const }] : []),
     ...ticks,
-    ...(hi < points.length - 1 ? [{ index: hi + 1, label: `≥ ${points[hi + 1].label}` }] : []),
+    ...(hi < points.length - 1
+      ? [{ index: hi + 1, label: `≥ ${points[hi + 1].label}`, edge: true as const }]
+      : []),
   ];
+}
+
+/**
+ * The bucket grid of a numeric histogram, as its API labels it: `perUnit` buckets to one unit of
+ * the axis, each labelled at `decimals` places, half up (the API's `format_ratio`). Block intervals
+ * are every 0.1 s of 0–50 s; Epoch durations every minute, the indexer counting an epoch at its
+ * duration rounded to the minute, labelled in hours.
+ */
+const BUCKET_GRIDS: Readonly<Record<string, { perUnit: number; decimals: number }>> = {
+  'block-time-distribution': { perUnit: 10, decimals: 1 },
+  'epoch-time-distribution': { perUnit: 60, decimals: 2 },
+};
+
+/**
+ * The tick budget a histogram's regular run is read with when the model fills it: the detail
+ * page's. Filled, the run has no gap, so an axis of fewer ticks (a chart tile's 6) reads it the same.
+ */
+const BUCKET_RUN_TICKS = 8;
+
+/**
+ * A numeric histogram's points with every bucket of its regular run (readability 2026-11-18): the
+ * API sends only the buckets something fell in (Epoch durations: the minutes some epoch took), and
+ * a slot axis gave each of those one slot, so the axis ran unevenly in its own unit (3.5 → 4.5 h
+ * over 574 px, 4.5 → 5.5 h over 325, at 1280). Inside the run each empty bucket of the grid is
+ * drawn as the 0 it is; the outlying buckets beyond it keep a slot each, their labels open-ended
+ * (`≤ 2.05`, `≥ 7.67 h`). A label off its grid fails: the grid is the API's, not a guess.
+ */
+function fillBucketRun(
+  slug: string,
+  points: readonly ChartPoint[],
+  scale: ChartScale
+): ChartPoint[] {
+  const grid = BUCKET_GRIDS[slug];
+  if (!grid || points.length < 2) return [...points];
+  if (points.some((point) => Object.keys(point.values).join() !== 'primary'))
+    throw new Error(
+      `${slug}: a filled histogram has one series; an empty bucket has no other value`
+    );
+  const perUnit = BigInt(grid.perUnit);
+  // the grid bucket a label names: label × perUnit, half up, exact; it must write the label back
+  const bucketOf = (label: string): bigint => {
+    if (!NUMERIC_BUCKET.test(label)) throw new Error(`${slug}: bucket ${label} is not a number`);
+    const [whole, fraction = ''] = label.split('.');
+    const places = BigInt(10) ** BigInt(fraction.length);
+    const n = (BigInt(whole + fraction) * perUnit * BigInt(2) + places) / (places * BigInt(2));
+    if (formatScaledInteger(n, perUnit, grid.decimals) !== label)
+      throw new Error(`${slug}: bucket ${label} is not one of 1/${grid.perUnit} of its unit`);
+    return n;
+  };
+  const { lo, hi } = bucketRun(bucketValues(points), BUCKET_RUN_TICKS);
+  const filled: ChartPoint[] = points.slice(0, lo);
+  let next = bucketOf(points[lo].label);
+  for (const point of points.slice(lo, hi + 1)) {
+    const at = bucketOf(point.label);
+    for (; next < at; next++)
+      filled.push({
+        label: formatScaledInteger(next, perUnit, grid.decimals),
+        values: { primary: chartUnitValue('0', scale, `${slug} empty bucket`) },
+      });
+    filled.push(point);
+    next = at + BigInt(1);
+  }
+  return [...filled, ...points.slice(hi + 1)];
 }
 
 /**
@@ -1629,11 +1704,11 @@ export function axisTicks(
   style: AxisStyle,
   max: number,
   unit?: string
-): { index: number; label: string }[] {
+): AxisTick[] {
   if (!points.length) return [];
   if (style === 'bucket') {
     const numeric = points.every((point) => NUMERIC_BUCKET.test(point.label));
-    const ticks = numeric
+    const ticks: AxisTick[] = numeric
       ? numericBucketTicks(points, max)
       : points.map((point, index) => ({
           index,

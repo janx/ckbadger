@@ -218,6 +218,8 @@ export interface XTickInput {
   label: string;
   /** The x of the point (or slot centre) the label names. */
   at: number;
+  /** A histogram's open-ended outlier label (`≤ 2.05`, `≥ 7.67 h`): an edge of the regular axis. */
+  edge?: boolean;
 }
 
 export interface PlacedXTick {
@@ -227,6 +229,7 @@ export interface PlacedXTick {
   anchor: 'start' | 'middle' | 'end';
   /** 0 for the first label row under the plot, 1 for the one below it, and so on. */
   row: number;
+  edge?: boolean;
 }
 
 const xSpan = (t: { x: number; anchor: PlacedXTick['anchor']; label: string }) => {
@@ -237,8 +240,13 @@ const xSpan = (t: { x: number; anchor: PlacedXTick['anchor']; label: string }) =
 
 /**
  * Where the x labels go. A time axis keeps every k-th label, the fewest thinnings at which no
- * two touch, so the kept labels stay evenly spaced. A categorical axis (a few named buckets, one bar each) keeps every label: centred under its bar,
- * held inside the chart, and stacked onto as many rows as it takes for no two on a row to touch.
+ * two touch, so the kept labels stay evenly spaced. A histogram's open-ended outlier labels
+ * (`edge`) stand outside that sequence: each is always kept, since it says where the regular axis
+ * stops (and the last carries the unit), and a regular label that would touch one gives way
+ * (readability 2026-11-18: thinning from "≤ 2.05" kept 3.5 / 4.5 / 5.5 and dropped the 4 h peak
+ * and the unit). A categorical axis (a few named buckets, one bar each) keeps every label: centred
+ * under its bar, held inside the chart, and stacked onto as many rows as it takes for no two on a
+ * row to touch.
  */
 export function placeXTicks(
   ticks: readonly XTickInput[],
@@ -256,17 +264,28 @@ export function placeXTicks(
           ? 'end'
           : 'middle') as PlacedXTick['anchor'],
       row: 0,
+      ...(tick.edge ? { edge: true } : {}),
     }));
-    // Every k-th tick from the first, for the smallest k at which no two kept labels touch: the
-    // kept ticks stay evenly spaced (C#17: dropping only the touching one printed "#0 #2,000",
-    // then jumped to "#6,000").
+    const edges = anchored.filter((tick) => tick.edge);
+    const regular = anchored.filter((tick) => !tick.edge);
+    const touch = (a: PlacedXTick, b: PlacedXTick) => {
+      const [s, t] = [xSpan(a), xSpan(b)];
+      return s.from < t.to + X_LABEL_GAP && t.from < s.to + X_LABEL_GAP;
+    };
+    // Every k-th regular tick from the first, for the smallest k at which no two kept labels
+    // touch: the kept ticks stay evenly spaced (C#17: dropping only the touching one printed
+    // "#0 #2,000", then jumped to "#6,000").
     // A single kept label always fits, so the search ends by k = the tick count.
-    const everyKth = (k: number) => anchored.filter((_, i) => i % k === 0);
+    const everyKth = (k: number) => regular.filter((_, i) => i % k === 0);
     const apart = (kept: readonly PlacedXTick[]) =>
-      kept.map(xSpan).every((s, i, all) => i === 0 || s.from >= all[i - 1].to + X_LABEL_GAP);
+      kept.every((tick, i) => i === 0 || !touch(kept[i - 1], tick));
     let k = 1;
     while (!apart(everyKth(k))) k++;
-    return { ticks: everyKth(k), rows: 1 };
+    const kept = [
+      ...everyKth(k).filter((tick) => edges.every((edge) => !touch(edge, tick))),
+      ...edges,
+    ].sort((a, b) => a.index - b.index);
+    return { ticks: kept, rows: 1 };
   }
   const centred = ticks.map((tick) => {
     const w = tick.label.length * AXIS_CHAR_PX;
