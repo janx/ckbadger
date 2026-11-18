@@ -248,6 +248,12 @@ describe('a place that may name no lock leaves the part out', () => {
       (s) => s.childNodes.length === 0 && s.getAttribute('aria-hidden') !== 'true'
     );
     expect(empty).toEqual([]);
+    // B4 second fix round (tests NOTE-8): and the ends are drawn, the other lock named beside its
+    // party (an absence alone passes on a section that draws nothing)
+    const ends = [...container.querySelectorAll('[data-flow-end="party"]')];
+    expect(ends.length).toBeGreaterThanOrEqual(2);
+    expect(ends.some((e) => /JoyID/.test(e.textContent ?? ''))).toBe(true);
+    expect(ends.some((e) => e.textContent?.includes(DEFAULT_ADDRESS.slice(-8)))).toBe(true);
   });
 
   it('Balance changes: a party a protocol named, with no cell here, is silent on the default lock', () => {
@@ -257,6 +263,10 @@ describe('a place that may name no lock leaves the part out', () => {
     const a: GlobalActivity = { ...base, participants: [...base.participants, named] };
     render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     expect(document.body).not.toHaveTextContent('Default Lock');
+    // B4 second fix round (tests NOTE-8): and the party is drawn, in its row of the table
+    const table = screen.getByRole('table', { name: 'Balance changes by participant' });
+    expect(within(table).getAllByRole('row')).toHaveLength(base.participants.length + 3);
+    expect(table).toHaveTextContent(`ckb1…${DEFAULT_ADDRESS.slice(-8)}`);
   });
 });
 
@@ -329,6 +339,28 @@ describe('the transaction’s cell tiles read the same decision', () => {
     );
   });
 
+  // B4 second fix round (review-rules-fixes-tests SHOULD-5, the coordinator's item 7): a tile
+  // names a lock on the default code hash by data as another lock, by its code hash and hash type
+  // (lockWordsText's "by <hash type>"), and refuses a hash type the chain does not have, naming it.
+  it('names a by-data lock on the default code hash with its hash type, as text', () => {
+    const outputs = [
+      output(DEFAULT_LOCK_CODE_HASH, false, 'bydata', 'data'),
+      output(DEFAULT_LOCK_CODE_HASH, true, 'bydat1', 'data1'),
+    ];
+    expect(cellTiles(txOf(outputs), LOOKUP).outputs.map((t) => t.lockKind)).toEqual([
+      'lock 0x9bd7e06f…a3cce8 by data',
+      'lock 0x9bd7e06f…a3cce8 by data1 · change',
+    ]);
+  });
+
+  it('refuses a lock hash type the chain does not have, naming the word and the cell', () => {
+    const cell = output(JOYID_CODE_HASH, false, 'weird');
+    const odd = { ...cell, lock: { ...cell.lock, hashType: 'data3' } };
+    expect(() => cellTiles(txOf([odd]), LOOKUP)).toThrow(
+      `Transaction 0x${'ee'.repeat(32)} output 0: lock hash type "data3" is not a CKB hash type`
+    );
+  });
+
   it('owns a cell with no address form by its lock hash, its lock in words', () => {
     const args = `0x${'ab'.repeat(600)}`;
     const cell = {
@@ -356,6 +388,7 @@ describe('the transaction’s cell tiles read the same decision', () => {
       output(JOYID_CODE_HASH, false, 'cccccc'),
     ];
     const tiles = cellTiles(txOf(outputs), LOOKUP).outputs;
+    // B4 second fix round (review-rules-fixes-tests SHOULD-5, the coordinator's item 7)
     const words = tiles.map((t) => {
       const { container } = render(<span>{t.lockKind}</span>);
       return container.textContent;
