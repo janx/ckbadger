@@ -6,8 +6,8 @@ import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
-import { SVG_TEXT } from '@/lib/chart-type';
-import { advancePx } from '@/lib/type-metrics';
+import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { advancePx, descentPx, tightLinePx } from '@/lib/type-metrics';
 
 interface Day {
   date: string;
@@ -19,11 +19,26 @@ interface Day {
 const DESIGN_WIDTH = 1210;
 /** The bars' height: with the name band and the axis the plot is ≥ 280 px (hierarchy v3, R13). */
 const H0 = 230;
-/** The band at the top that holds the name and the key: one 11 px line, two on a narrow column. */
-const NAME_LINE = 28;
-const NAME_LINE_2 = 16;
-/** Under the bars: the first and last day's labels. */
-const AXIS = 22;
+/*
+ * The plot's words are set at the label size, each a tight line (lib/chart-type.ts), and its bands
+ * follow from them (readability plan 2026-11-18, lane F3).
+ */
+const LINE = tightLinePx(SVG_TEXT.label);
+/**
+ * The band at the top that holds the name and the key: 4 px, its line (two on a narrow column) and
+ * 9 px over the plot: 28 px, 43 with two lines (was 44).
+ */
+const NAME_PAD = 4;
+const NAME_GAP = 9;
+const keyBaseline = (line: number) => NAME_PAD + line * LINE + lineAscentPx(SVG_TEXT.label);
+/** A key's 10 px swatch, centred where the key's digits centre. */
+const SWATCH = 10;
+const swatchY = (line: number) => keyBaseline(line) - centreShift(SVG_TEXT.label) - SWATCH / 2;
+/** Under the bars: the first and last day's labels, 5 px under the axis and 2 px over the foot: 22 px. */
+const AXIS_GAP = 5;
+const AXIS = AXIS_GAP + LINE + 2;
+/** A value stands a pixel over its gridline. */
+const tickBaseline = (gridline: number) => gridline - 1 - descentPx(SVG_TEXT.label);
 /** A character of the plot's text, all of it set at the label size: 6.6 px at 11 px. */
 const CHAR = advancePx(SVG_TEXT.label);
 const UNCLES_KEY = 'uncles on chain, per day';
@@ -74,7 +89,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
   const keyGap = 16;
   const secondX = 14 + UNCLES_KEY.length * CHAR + keyGap;
   const oneLine = secondX + 14 + SWITCHES_KEY.length * CHAR <= W;
-  const top = NAME_LINE + (oneLine ? 0 : NAME_LINE_2);
+  const top = NAME_PAD + (oneLine ? 1 : 2) * LINE + NAME_GAP;
   const H = top + H0 + AXIS;
   const { cap, step } = scale(Math.max(...days.map((d) => Math.max(d.uncles, d.nodeSwitches))));
   const ticks = Array.from({ length: cap / step }, (_, i) => (i + 1) * step);
@@ -83,9 +98,9 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
   const bw = (W - lane) / Math.max(days.length, 1);
   const y = (v: number) => top + H0 - (v / cap) * H0;
   // A value whose label would reach into the name's band is not written (as the DAO charts).
-  const written = (v: number) => y(v) - 4 - 11 >= top;
+  const written = (v: number) => tickBaseline(y(v)) - lineAscentPx(SVG_TEXT.label) >= top;
   const base = top + H0;
-  const keyY2 = oneLine ? 0 : NAME_LINE_2;
+  const secondLine = oneLine ? 0 : 1;
   return (
     <div ref={box} className="min-w-0">
       <svg
@@ -108,20 +123,27 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
         onBlur={() => pin.hover(null)}
       >
         <g data-role="chart-name">
-          <rect x="0" y="6" width="10" height="10" fill={FORK_COLORS.uncles} opacity=".5" />
-          <text x="14" y="15" fontSize={SVG_TEXT.label} fill={FORK_COLORS.tick}>
+          <rect
+            x="0"
+            y={swatchY(0)}
+            width={SWATCH}
+            height={SWATCH}
+            fill={FORK_COLORS.uncles}
+            opacity=".5"
+          />
+          <text x="14" y={keyBaseline(0)} fontSize={SVG_TEXT.label} fill={FORK_COLORS.tick}>
             {UNCLES_KEY}
           </text>
           <rect
             x={oneLine ? secondX : 0}
-            y={6 + keyY2}
-            width="10"
-            height="10"
+            y={swatchY(secondLine)}
+            width={SWATCH}
+            height={SWATCH}
             fill={FORK_COLORS.nodeSwitches}
           />
           <text
             x={(oneLine ? secondX : 0) + 14}
-            y={15 + keyY2}
+            y={keyBaseline(secondLine)}
             fontSize={SVG_TEXT.label}
             fill={FORK_COLORS.tick}
           >
@@ -136,7 +158,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
               <text
                 data-role="y-tick"
                 x="0"
-                y={y(v) - 4}
+                y={tickBaseline(y(v))}
                 fontSize={SVG_TEXT.label}
                 fill={FORK_COLORS.tick}
               >
@@ -186,7 +208,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
               {(first || last) && (
                 <text
                   x={last ? x + width : x}
-                  y={base + 16}
+                  y={base + AXIS_GAP + lineAscentPx(SVG_TEXT.label)}
                   textAnchor={last ? 'end' : 'start'}
                   fontSize={SVG_TEXT.label}
                   fill={FORK_COLORS.tick}
