@@ -45,7 +45,24 @@ const supply = {
   })),
   kind: 'stacked' as const,
 };
-type Shape = typeof deposits | typeof supply;
+/**
+ * Most-utilised scripts' and assets' two histories (review of the fixes, M1): the top 20 and
+ * "Others", 21 bands, each a `Chart` 260 px high with a key under the plot (chart-detail.tsx).
+ */
+const bandSeries = Array.from({ length: 21 }, (_, i) => ({
+  key: `band${i}`,
+  label: i === 20 ? 'Others' : `script ${i + 1}`,
+  color: 'var(--c-jade)',
+}));
+const bands = {
+  series: bandSeries,
+  data: days.map((label) => ({
+    label,
+    values: Object.fromEntries(bandSeries.map((s, i) => [s.key, `${i + 1}.5`])),
+  })),
+  kind: 'stacked' as const,
+};
+type Shape = typeof deposits | typeof supply | typeof bands;
 
 /** The texts the reading draws, as the chart writes them: the date, then each band's figure. */
 function lines(shape: Shape, index: number): { text: string; size: number }[] {
@@ -62,7 +79,7 @@ function lines(shape: Shape, index: number): { text: string; size: number }[] {
   ];
 }
 
-function mount(shape: Shape, width: number, index: number) {
+function mount(shape: Shape, width: number, index: number, height = 360) {
   stubChartWidth(width);
   return render(
     <Chart
@@ -72,46 +89,76 @@ function mount(shape: Shape, width: number, index: number) {
       series={shape.series}
       unit="CKB"
       kind={shape.kind}
-      height={360}
+      height={height}
       hideCaption
       pointDots
       activeIndex={index}
       formatValue={(value) => formatChartHover(value, 'CKB')}
+      // as the detail page draws a history of many bands: its key under the plot (C#5)
+      seriesLegend={shape === bands}
+      pinnedReadout={shape === bands ? { label: 'Occupied common knowledge' } : undefined}
     />
   );
 }
 
-/** The reading's box and texts as drawn, each text's right end at its own size. */
+/** The svg's own size, as drawn. */
+function svgOf(container: HTMLElement) {
+  const svg = container.querySelector('svg[role="img"]')!;
+  return { width: Number(svg.getAttribute('width')), height: Number(svg.getAttribute('height')) };
+}
+
+/**
+ * The reading's box and texts as drawn: the box's edges, each text's ends at its own size and its
+ * baseline, its cap a size above the baseline.
+ */
 function readingOf(container: HTMLElement) {
   const g = container.querySelector('[data-hover-reading]');
   if (!g) return null;
   const rect = g.querySelector('rect')!;
   const x = Number(rect.getAttribute('x'));
+  const y = Number(rect.getAttribute('y'));
   return {
-    rect: { left: x, right: x + Number(rect.getAttribute('width')) },
+    rect: {
+      left: x,
+      right: x + Number(rect.getAttribute('width')),
+      top: y,
+      bottom: y + Number(rect.getAttribute('height')),
+    },
     texts: [...g.querySelectorAll('text')].map((t) => {
       const left = Number(t.getAttribute('x'));
+      const size = Number(t.getAttribute('font-size'));
+      const baseline = Number(t.getAttribute('y'));
       return {
         text: t.textContent!,
         left,
-        right: left + textPx(t.textContent!.length, Number(t.getAttribute('font-size'))),
+        right: left + textPx(t.textContent!.length, size),
+        top: baseline - size,
+        baseline,
       };
     }),
   };
 }
 
 const EPS = 1e-6;
-function expectWhole(container: HTMLElement, width: number, label: string) {
+/** The box's 1 px border is centred on its edge: half of it lies outside the rect. */
+const HALF_BORDER = 0.5;
+/** The reading drawn whole: its box and border inside the svg, in x and in y; its texts in its box. */
+function expectWhole(container: HTMLElement, label: string) {
   const reading = readingOf(container);
   expect(reading, label).not.toBeNull();
   const { rect, texts } = reading!;
-  expect(rect.left, `${label}: rect left`).toBeGreaterThanOrEqual(0);
-  expect(rect.right, `${label}: rect right`).toBeLessThanOrEqual(width + EPS);
+  const svg = svgOf(container);
+  expect(rect.left - HALF_BORDER, `${label}: rect left`).toBeGreaterThanOrEqual(-EPS);
+  expect(rect.right + HALF_BORDER, `${label}: rect right`).toBeLessThanOrEqual(svg.width + EPS);
+  expect(rect.top - HALF_BORDER, `${label}: rect top`).toBeGreaterThanOrEqual(-EPS);
+  expect(rect.bottom + HALF_BORDER, `${label}: rect bottom`).toBeLessThanOrEqual(svg.height + EPS);
   for (const t of texts) {
     expect(t.left, `${label}: "${t.text}" left in its rect`).toBeGreaterThanOrEqual(rect.left);
     expect(t.right, `${label}: "${t.text}" right in its rect`).toBeLessThanOrEqual(
       rect.right + EPS
     );
+    expect(t.top, `${label}: "${t.text}" cap in its rect`).toBeGreaterThanOrEqual(rect.top);
+    expect(t.baseline, `${label}: "${t.text}" baseline in its rect`).toBeLessThan(rect.bottom);
   }
 }
 
@@ -139,7 +186,7 @@ describe('the in-plot hover reading is drawn whole or not at all', () => {
             ]),
             label
           ).toEqual(needed + 1 <= width ? drawn.map((line) => [line.text, line.size]) : []);
-          if (needed + 1 <= width) expectWhole(container, width, label);
+          if (needed + 1 <= width) expectWhole(container, label);
           else expect(readingOf(container), label).toBeNull();
           unmount();
         }
@@ -156,12 +203,67 @@ describe('the in-plot hover reading is drawn whole or not at all', () => {
   it('stands right of the point at 1232, left of it at the last point, whole', () => {
     for (const index of [0, 14, 29]) {
       const { container, unmount } = mount(deposits, 1232, index);
-      expectWhole(container, 1232, `1232 px, point ${index}`);
+      expectWhole(container, `1232 px, point ${index}`);
       const cx = Number(container.querySelector('[data-hover-dot]')!.getAttribute('cx'));
       const { rect } = readingOf(container)!;
       if (index < 29) expect(rect.left, `point ${index}`).toBeGreaterThan(cx);
       else expect(rect.right, `point ${index}`).toBeLessThan(cx);
       unmount();
     }
+  });
+
+  // Review of the fixes (2026-11-19, M1; the lead saw it in Chrome at 1280): the box was bounded
+  // in x only. On /charts/most-utilized-scripts and /charts/most-utilized-assets each history has
+  // 21 bands in a 260 px chart, and the reading's rect stood 358 px tall from y 20, its last 8 rows
+  // (and "Others") past the svg's foot, clipped. Where the svg cannot hold the box in y either, no
+  // box is drawn; nothing else changes: the key under the plot states every band at the point.
+  it('draws no reading for 21 bands in a 260 px chart; the key under the plot states every band', () => {
+    for (const index of [0, 14, 29]) {
+      const label = `21 bands, 260 px, point ${index}`;
+      const { container, unmount } = mount(bands, 1232, index, 260);
+      expect(svgOf(container).height, label).toBe(260);
+      expect(readingOf(container), label).toBeNull();
+      expect(container.querySelector('[data-hover-dot]'), label).not.toBeNull();
+      const key = [...container.querySelectorAll('ul[aria-label="Reading legend"] li')];
+      const squeezed = (text: string) => text.replace(/\s+/g, '');
+      expect(
+        key.map((li) => squeezed(li.textContent!)),
+        label
+      ).toEqual(
+        bandSeries.map((s) =>
+          squeezed(
+            `${s.label}${withUnit(formatChartHover(bands.data[index].values[s.key], 'CKB'), 'CKB')}`
+          )
+        )
+      );
+      unmount();
+    }
+  });
+
+  it('stands in an svg exactly as tall as its box and border, and in none a pixel shorter', () => {
+    // where the svg has room, the 21 bands' box is drawn whole; its top and height do not depend
+    // on the svg's height
+    const roomy = mount(bands, 1232, 14, 1000);
+    expectWhole(roomy.container, '21 bands, 1000 px');
+    const { rect } = readingOf(roomy.container)!;
+    roomy.unmount();
+    const exact = rect.bottom + HALF_BORDER;
+    const fits = mount(bands, 1232, 14, exact);
+    expect(readingOf(fits.container)!.rect, `${exact} px`).toEqual(rect);
+    expectWhole(fits.container, `21 bands, ${exact} px`);
+    fits.unmount();
+    const short = mount(bands, 1232, 14, exact - 1);
+    expect(readingOf(short.container), `${exact - 1} px`).toBeNull();
+  });
+
+  it('stands in an svg exactly as wide as its box and border, and in none a pixel narrower', () => {
+    const drawn = lines(deposits, 14);
+    const needed =
+      Math.max(...drawn.map((line) => textPx(line.text.length, line.size))) + 2 * HOVER_PAD;
+    const fits = mount(deposits, needed + 2 * HALF_BORDER, 14);
+    expectWhole(fits.container, `${needed + 1} px wide`);
+    fits.unmount();
+    const short = mount(deposits, needed + 2 * HALF_BORDER - 1, 14);
+    expect(readingOf(short.container), `${needed} px wide`).toBeNull();
   });
 });
