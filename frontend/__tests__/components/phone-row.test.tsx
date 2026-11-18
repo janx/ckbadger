@@ -70,6 +70,40 @@ describe('PhoneRow (boards L1–L8)', () => {
       expect(line).toHaveClass('col-start-2');
   });
 
+  // Readability F3, the lead's final overflow sweep: at 360 px `/transactions` was 1 px wider than
+  // its window. The committed row's quiet line ends in a list of three figures ("3 → 3 cells ·
+  // 1,791 B · 3,124,755 cycles": 40 glyphs, 288 px at the 12 px meta step) and the line beside a
+  // 16 px stone is 271.5 px; the right part dropped under the left whole, as it should, but as a
+  // part that may not shrink it kept its 288 px and stood 16.6 px past the row. A layout fact, so
+  // what this test can hold is the rule that makes it: the right part is never wider than its line
+  // (`max-w-full`), so on a line of its own it takes the line's width and its list breaks between
+  // its figures. Measured in Chrome with `lanes/checks/phone_right_try.cjs` (the review folder).
+  it('never lets a right part be wider than its line', () => {
+    render(
+      <PhoneRow
+        testId="row"
+        mark={<span>seal</span>}
+        lines={[
+          { key: 'identity', tone: 'head', left: '0x8c33…81c4', right: '#21,046,643' },
+          {
+            key: 'figures',
+            tone: 'quiet',
+            left: 'fee 0.00001791 CKB',
+            right: <Dotted parts={['3 → 3 cells', '1,791 B', '3,124,755 cycles']} />,
+          },
+        ]}
+      />
+    );
+    const row = screen.getByTestId('row');
+    const rights = Array.from(row.querySelectorAll('[data-part="right"]'));
+    expect(rights).toHaveLength(2);
+    for (const right of rights) expect(right).toHaveClass('ml-auto', 'shrink-0', 'max-w-full');
+    // The list inside it is the wrapping one: it can break between its figures.
+    const list = rights[1].querySelector('[data-dotted]') as HTMLElement;
+    expect(list).toHaveClass('flex', 'flex-wrap', 'min-w-0');
+    expect(list.querySelectorAll('[data-dotted-item]')).toHaveLength(3);
+  });
+
   it('draws no mark column when it is given none', () => {
     render(<PhoneRow testId="row" lines={[{ key: 'identity', tone: 'head', left: '#1' }]} />);
     const row = screen.getByTestId('row');
