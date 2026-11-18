@@ -3,6 +3,7 @@ import { join, relative } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { MEASURE_CHARS } from '@/lib/type-metrics';
+import { cn } from '@/lib/utils';
 
 /**
  * Gate for the measure (readability plan 2026-11-18, ruling R4, lane B7 `rd/prose`; the review's
@@ -18,8 +19,9 @@ import { MEASURE_CHARS } from '@/lib/type-metrics';
  * - `block`: any other intrinsic element that holds text as a block (a `div`, `li`, `dd`, `dt`,
  *   `figcaption`, `blockquote`, `section`, …, a `span` set `block`) whose written text — the text
  *   the source writes in it and in its inline children (a link, a `<span>`, an `<em>`, the children
- *   of a component, but a component the file declares stands as the one element it returns) — is
- *   longer than the measure;
+ *   written at a component's call site; only where a component the file declares returns one
+ *   element that is a line or a row, `NOT_RUNNING` in every branch, do its children stand in that
+ *   element and not in this one) — is longer than the measure;
  * - `tag`: a tag it cannot read (a constant it cannot resolve to strings, a call that is not a
  *   component factory, a component passed as a value), refused by name. A tag held in a constant
  *   (`inline ? 'span' : 'p'`) or in a destructured prop (`as: Tag = 'div'`, its declared string
@@ -28,7 +30,14 @@ import { MEASURE_CHARS } from '@/lib/type-metrics';
  * A class is read through `?:`, `&&`, `||`, `??`, templates, `cn` and `clsx` (an object's keys each
  * there or not), the file's constants and the string constants it imports from the app's own
  * modules; any other call, a prop or a property is not read and proves nothing. A class counts only
- * when every way the expression can evaluate holds it, an exemption too.
+ * when every way the expression can evaluate holds it, an exemption too, and only as it holds on
+ * the page: `cn` is twMerge(clsx(…)) (lib/utils.ts), so each way of a `cn` list is merged by the
+ * project's own `cn` (a later class of a group replaces an earlier one: `cn('flex gap-2', 'block')`
+ * is no row); a class with another of its group left in the list (the max width for the measure,
+ * the display for `flex` and `grid`, the white space for `truncate` and `whitespace-nowrap`, at any
+ * variant: `flex md:block`) is refused, the stylesheet's order or a width deciding; and a part the
+ * scan cannot read may be any class, so it refuses the class it may override (one after it in a
+ * merged list, any in a list nothing merged).
  *
  * It stands inside the measure when an intrinsic element, it or one around it in its file, holds
  * `max-w-measure` at rest (no variant) in every branch; when it is a `<p>` inside `<Prose>`
@@ -212,6 +221,73 @@ const atRest = (token: string) => !token.includes(':');
 const UNREAD = '\u0000unread';
 /** The calls whose arguments are a class list (`lib/utils.ts` `cn`, and `clsx` under it). */
 const CLASS_CALLS = new Set(['cn', 'clsx']);
+/** Marks a class list `cn` merged (tailwind-merge kept the last class of each group). */
+const MERGED = '\u0001merged';
+/** A part of a class the scan cannot read: a token in a list that holds one. */
+const unreadToken = (token: string) => token.includes('\u0000');
+/** The utilities that set an element's display. */
+const DISPLAY = new Set([
+  'block',
+  'inline-block',
+  'inline',
+  'flex',
+  'inline-flex',
+  'grid',
+  'inline-grid',
+  'table',
+  'inline-table',
+  'table-caption',
+  'table-cell',
+  'table-column',
+  'table-column-group',
+  'table-footer-group',
+  'table-header-group',
+  'table-row-group',
+  'table-row',
+  'flow-root',
+  'contents',
+  'list-item',
+  'hidden',
+]);
+/**
+ * The groups a class the gate rests on can be overridden within: the max width (the measure),
+ * the display (`flex`, `grid`), the white space (`truncate`, `whitespace-nowrap`).
+ */
+const GROUPS: readonly ((utility: string) => boolean)[] = [
+  (u) => u.startsWith('max-w-'),
+  (u) => DISPLAY.has(u),
+  (u) => u === 'truncate' || u.startsWith('whitespace-'),
+];
+/** A class token's utility, its variants taken off (`md:block` → `block`). */
+function utilityOf(token: string): string {
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < token.length; i++) {
+    if (token[i] === '[') depth++;
+    else if (token[i] === ']') depth--;
+    else if (token[i] === ':' && depth === 0) start = i + 1;
+  }
+  return token.slice(start);
+}
+/**
+ * Whether a class list holds one of the classes so that it holds on the page: at rest, with no
+ * other class of its group in the list (at any variant: a later class of a list `cn` merged has
+ * already replaced it, and in a list nothing merged the stylesheet's order decides, which the scan
+ * does not read), and no part the scan cannot read where it may override it (after it in a merged
+ * list, anywhere in a list nothing merged).
+ */
+function holds(list: string, set: ReadonlySet<string>): boolean {
+  const all = list.split(/\s+/).filter(Boolean);
+  const merged = all[0] === MERGED;
+  const tokens = all.filter((t) => t !== MERGED);
+  return tokens.some((t, i) => {
+    if (!atRest(t) || !set.has(t)) return false;
+    const group = GROUPS.find((g) => g(t));
+    if (group && tokens.some((u, j) => j !== i && !unreadToken(u) && group(utilityOf(u))))
+      return false;
+    return merged ? !tokens.slice(i + 1).some(unreadToken) : !tokens.some(unreadToken);
+  });
+}
 /** More ways than this for one class to evaluate, and it is not read. */
 const MAX_ALTERNATIVES = 64;
 
@@ -374,8 +450,13 @@ function scanFile(code: string, path?: string) {
       ts.isCallExpression(e) &&
       ts.isIdentifier(e.expression) &&
       CLASS_CALLS.has(e.expression.text)
-    )
-      return product(e.arguments.map((a) => argClasses(a, depth + 1))) ?? [UNREAD];
+    ) {
+      const joined = product(e.arguments.map((a) => argClasses(a, depth + 1)));
+      if (joined === null) return [UNREAD];
+      // `cn` is twMerge(clsx(…)) (lib/utils.ts): the project's own `cn` merges each way
+      const plain = joined.map((c) => c.split(MERGED).join(' '));
+      return e.expression.text === 'cn' ? plain.map((c) => `${MERGED} ${cn(c)}`) : plain;
+    }
     if (ts.isIdentifier(e)) {
       const values = locals.get(e.text);
       if (values) return values.flatMap(next);
@@ -434,13 +515,12 @@ function scanFile(code: string, path?: string) {
     }
     return undefined;
   };
-  const tokens = (classList: string) => classList.split(/\s+/).filter((t) => t && atRest(t));
-  /** Whether every way the element's class can evaluate holds one of the classes. */
+  /** Whether every way the element's class can evaluate holds one of the classes on the page. */
   const every = (n: ts.JsxOpeningLikeElement, set: ReadonlySet<string>) =>
-    classes(classAttr(n)).every((c) => tokens(c).some((t) => set.has(t)));
-  /** Whether some way the element's class can evaluate holds one of the classes. */
+    classes(classAttr(n)).every((c) => holds(c, set));
+  /** Whether some way the element's class can evaluate writes one of the classes, at rest. */
   const some = (n: ts.JsxOpeningLikeElement, set: ReadonlySet<string>) =>
-    classes(classAttr(n)).some((c) => tokens(c).some((t) => set.has(t)));
+    classes(classAttr(n)).some((c) => c.split(/\s+/).some((t) => atRest(t) && set.has(t)));
   const MEASURE = new Set([MEASURE_CLASS]);
 
   /** The string-literal union a prop's declared type names, or null where it names anything else. */
@@ -581,16 +661,17 @@ function scanFile(code: string, path?: string) {
         } else if (ts.isJsxFragment(c)) add(c.children);
         else if (ts.isJsxElement(c) || ts.isJsxSelfClosingElement(c)) {
           const o = opening(c);
-          // a component the file declares stands as the one element it returns (its class read
-          // where it is written); another component's or an unread tag's children are counted as
-          // this element's text, and it builds more
+          // a component's or an unread tag's children are counted as this element's text, and it
+          // builds more; but where a component the file declares returns one element that is a
+          // line or a row (its class read where it is written, NOT_RUNNING in every branch), its
+          // children stand in that line or row, not in this element's text
           const root = ts.isIdentifier(o.tagName) ? roots.get(o.tagName.text) : undefined;
-          const as = root ?? o;
-          const tags = intrinsic(readTag(as.tagName));
-          const inline =
-            tags === null ||
-            tags.every((t) => INLINE.has(t) && !(t === 'span' && some(as, SPAN_BLOCK)));
-          if (tags === null || root) built = true;
+          const tags = intrinsic(readTag(o.tagName));
+          const inline = root
+            ? !every(root, NOT_RUNNING)
+            : tags === null ||
+              tags.every((t) => INLINE.has(t) && !(t === 'span' && some(o, SPAN_BLOCK)));
+          if (tags === null) built = true;
           if (inline) {
             const inner = ownText(c);
             text += inner.text;
@@ -977,7 +1058,10 @@ describe('a slot is measured where its component writes it', () => {
 
 /** The tolerated list's sites, summed. */
 function toleratedSites(list: Readonly<Record<string, Tolerated>>): number {
-  return Object.values(list).reduce((n, t) => n + (t.sites.p ?? 0) + (t.sites.block ?? 0), 0);
+  return Object.values(list).reduce(
+    (n, t) => n + KINDS.reduce((m, kind) => m + (t.sites[kind] ?? 0), 0),
+    0
+  );
 }
 
 describe('the tolerated list keys a file by its count per kind, so it only shrinks', () => {

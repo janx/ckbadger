@@ -1,6 +1,5 @@
 'use client';
 import type { ReactNode } from 'react';
-import { cn } from '@/lib/utils';
 import Link from '@/components/ui/link';
 import { NoBreak } from '@/components/ui/no-break';
 import { ShortId } from '@/components/ui/short-id';
@@ -110,19 +109,17 @@ function holderSentence(custody: ScriptCustodyApi): string {
  */
 function NoteSentence({
   inline,
-  className,
   testId,
   children,
 }: {
   inline: boolean;
-  className?: string;
   testId?: string;
   children: ReactNode;
 }) {
   return inline ? (
     <span data-testid={testId}>{children}</span>
   ) : (
-    <p data-testid={testId} className={cn('text-body max-w-measure', className)}>
+    <p data-testid={testId} className="text-body max-w-measure">
       {children}
     </p>
   );
@@ -892,9 +889,8 @@ export function ScriptCustodyMechanism({
         </NoteSentence>
       )}
       {inline && lineage && ' '}
-      <NoteSentence inline={inline} className="text-text-dim">
-        Code versions: {unitText(binaries)}.
-      </NoteSentence>
+      {/* the code versions are values: the reading ink (R3), as the sentences around them */}
+      <NoteSentence inline={inline}>Code versions: {unitText(binaries)}.</NoteSentence>
     </>
   );
 }
