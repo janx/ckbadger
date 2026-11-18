@@ -30,6 +30,7 @@ const rewardBlock = {
   rewardPaidAtBlock: 20_827_943,
   rewardFinalizesAt: 20_827_943,
   minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgp909qk',
+  minerPool: null as string | null,
   totalFees: '5060000',
   transactionsCount: 4,
 };
