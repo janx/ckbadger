@@ -503,6 +503,70 @@ describe('the measure scan finds what it must, and only that', () => {
       ])
     ).toEqual([]);
   });
+
+  // Review of the merged rules branch (tests SHOULD-1): what the scan cannot read, it refuses.
+
+  it('reads a tag held in a variable as every tag it can be, and refuses one it cannot read', () => {
+    expect(
+      sitesOf([
+        "const Sentence = inline ? 'span' : 'p';",
+        '<Sentence className="text-body">{x}</Sentence>;',
+        "function Note({ as: Tag = 'div' }: { as?: 'div' | 'p' }) { return <Tag>{x}</Tag>; }",
+        'const Pick = choose();',
+        '<Pick>{x}</Pick>;',
+        'function Wide() { return null; }',
+        'function Narrow() { return null; }',
+        'const Card = wide ? Wide : Narrow;',
+        '<Card>{x}</Card>;',
+        "const Group = nav ? 'nav' : 'span';",
+        '<Group>{x}</Group>;',
+      ])
+    ).toEqual(['2 p <Sentence>', '3 p <Tag>', '5 tag <Pick>']);
+  });
+
+  it('counts a class only when every branch of its expression has it, an exemption too', () => {
+    expect(
+      sitesOf([
+        "<p className={wide ? 'max-w-measure' : 'max-w-[900px]'}>{x}</p>;",
+        "<p className={cn('text-body', compact && 'truncate')}>{x}</p>;",
+        "<p className={wide ? 'mt-2 max-w-measure' : 'max-w-measure'}>{x}</p>;",
+        "<p className={wide ? 'flex' : 'grid'}>{x}</p>;",
+        "<div className={on ? 'max-w-measure' : undefined}><p>{x}</p></div>;",
+      ])
+    ).toEqual(['1 p <p>', '2 p <p>', '5 p <p>']);
+  });
+
+  it('trusts the class on an element, never on a component that may not forward it', () => {
+    expect(
+      sitesOf([
+        '<Card className="max-w-measure"><p>{x}</p></Card>;',
+        '<section className="max-w-measure"><p>{x}</p></section>;',
+      ])
+    ).toEqual(['1 p <p>']);
+  });
+
+  it('follows cn and clsx to their arguments, and no other call', () => {
+    expect(
+      sitesOf([
+        "<p className={pick('max-w-measure')}>{x}</p>;",
+        "<p className={clsx('max-w-measure', on && 'mt-2')}>{x}</p>;",
+        "<p className={cn({ 'mt-2': on }, 'max-w-measure')}>{x}</p>;",
+      ])
+    ).toEqual(['1 p <p>']);
+  });
+
+  // The fix round's item 2: a list item or a definition that writes more than the measure holds
+  // is running text past it; one whose text an expression builds is not read (a value or a row as
+  // often as a sentence), and says so in the header.
+  it('counts a block whose written text passes the measure, a list item or a definition too', () => {
+    expect(
+      sitesOf([
+        `<li>${'w '.repeat(39)}</li>;`,
+        `<dd>${'w'.repeat(MEASURE_CHARS)}</dd>;`,
+        '<li>{item.description}</li>;',
+      ])
+    ).toEqual(['1 block <li>']);
+  });
 });
 
 describe('a slot is measured where its component writes it', () => {
@@ -522,6 +586,11 @@ describe('a slot is measured where its component writes it', () => {
       )
     ).toBe(false);
     expect(slotMeasured('<div className="max-w-measure">{title}</div>;', 'lede')).toBe(false);
+    // every branch (tests SHOULD-1 b), and an element, not a component (c)
+    expect(
+      slotMeasured("<div className={wide ? 'max-w-measure' : 'mt-4'}>{lede}</div>;", 'lede')
+    ).toBe(false);
+    expect(slotMeasured('<Box className="max-w-measure">{lede}</Box>;', 'lede')).toBe(false);
   });
 });
 
