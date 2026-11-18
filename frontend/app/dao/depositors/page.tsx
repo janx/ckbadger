@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { formatShareTick, percentHundredths } from '@/components/ui/share-bar';
@@ -105,6 +106,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
         scale={shareScale(rows)}
         trackWidth={SHARE_TRACK}
         format={formatShareTick}
+        figureWidth={SHARE_TEXT}
       />
     ),
     render: (d) => (
@@ -217,28 +219,26 @@ export default function DaoDepositorsPage() {
                   />
                 )}
               />
-              <div className="flex justify-between gap-3 pt-4">
-                {cursors.length > 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => setCursors((c) => c.slice(0, -1))}
-                    className="border-base-border text-text hover:text-text-bright text-small h-9 border px-4"
-                  >
-                    ← Previous
-                  </button>
-                ) : (
-                  <span />
-                )}
-                {page.hasMore && page.nextCursor && (
-                  <button
-                    type="button"
-                    onClick={() => setCursors((c) => [...c, page.nextCursor ?? undefined])}
-                    className="border-base-border text-text hover:text-text-bright text-small h-9 border px-4"
-                  >
-                    Next {pageSize} →
-                  </button>
-                )}
-              </div>
+              {/* The site's one pager (B5): it draws nothing for one page. The buttons keep this
+                  page's words, the size of a page on Next (R2). */}
+              <CursorPagination
+                className="pt-4"
+                total={page.total}
+                totalLabel="depositors"
+                page={cursors.length}
+                pageSize={pageSize}
+                currentCount={page.data.length}
+                hasMore={page.hasMore}
+                hasPrevious={cursors.length > 1}
+                onNext={() => {
+                  if (page.nextCursor === null)
+                    throw new Error('DAO depositors: a page with more ranks has no next cursor');
+                  setCursors((c) => [...c, page.nextCursor!]);
+                }}
+                onPrevious={() => setCursors((c) => c.slice(0, -1))}
+                previousLabel="← Previous"
+                nextLabel={`Next ${pageSize} →`}
+              />
             </>
           )}
         </DetailLayout>

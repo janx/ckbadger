@@ -40,6 +40,9 @@ export interface AlignedBarProps {
 /** The bar's height on every row table (T4). */
 export const ALIGNED_BAR_HEIGHT = 8;
 
+/** px between an AlignedBar's track and its figure, its `gap-2.5`; a head over the figure spans it. */
+const FIGURE_GAP = 10;
+
 const TONE = {
   overhead: CLASS_COLORS.ckb,
   data: DATA_COLOR,
@@ -128,6 +131,13 @@ export interface ScaleHeaderProps {
   format?: (value: number) => string;
   /** Also mark the middle of the scale: "0 · 25B · 50B" instead of "0 … 50B". */
   midpoint?: boolean;
+  /**
+   * The width in px of the figure the column's bars print right of their track (their
+   * `displayWidth`). Given, the name stands over that figure, ending where it ends, and the ticks
+   * stay over the track (readability B5: a head stands over what it names, and in a column of a
+   * bar and its figure that is the figure). Without it the name stands over the track.
+   */
+  figureWidth?: number;
 }
 
 /**
@@ -141,16 +151,30 @@ export function ScaleHeader({
   tickGap = 3,
   format = fmt,
   midpoint = false,
+  figureWidth,
 }: ScaleHeaderProps) {
   if (!Number.isSafeInteger(scale) || scale <= 0)
     throw new Error(`${label}: invalid column scale ${scale}`);
   if (!Number.isFinite(tickGap) || tickGap < 0)
     throw new Error(`${label}: invalid tick gap ${tickGap}`);
+  if (figureWidth !== undefined && !(Number.isFinite(figureWidth) && figureWidth > 0))
+    throw new Error(`${label}: invalid figure width ${figureWidth}`);
   const ticks = midpoint ? [0, scale / 2, scale] : [0, scale];
   return (
     <span className="flex flex-col" style={{ gap: `${tickGap}px` }}>
-      {/* A column head at meta (table-rows T5), whatever cell holds it. */}
-      <span className="text-meta">{label}</span>
+      {/* A column head at meta (table-rows T5), whatever cell holds it; over the figure, it runs
+          from the track's start to the figure's end and stands at that end (a longer name reaches
+          left over the track, never past the figure). */}
+      {figureWidth === undefined ? (
+        <span className="text-meta">{label}</span>
+      ) : (
+        <span
+          className="text-meta flex justify-end whitespace-nowrap"
+          style={{ width: `${trackWidth + FIGURE_GAP + figureWidth}px` }}
+        >
+          {label}
+        </span>
+      )}
       <span
         data-scale-ticks
         aria-hidden="true"

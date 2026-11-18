@@ -10,8 +10,6 @@ import TokensPage from '@/app/inventory/tokens/page';
 import ObjectsPage from '@/app/inventory/objects/page';
 import IdentitiesPage from '@/app/inventory/identities/page';
 import { api, type Asset, type InventorySummary } from '@/lib/api';
-import { CLASS_COLORS } from '@/lib/design-tokens';
-import { resourceScale } from '@/components/blocks/block-visual';
 
 vi.mock('@/src/navigation', () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
@@ -217,20 +215,16 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
     );
     expect(screen.queryByRole('group', { name: 'Standard filters' })).not.toBeInTheDocument();
   });
-  it('frames on-chain thumbnails, says m-NFT and draws CKB held in violet', async () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the violet CKB held bar left the list; the
+  // amount, right aligned under its head, shows the magnitude.
+  it('frames on-chain thumbnails, says m-NFT and prints CKB held with no bar', async () => {
     render(<ObjectsPage />);
     const table = await screen.findByRole('table', { name: 'Object collections' });
     expect(table.querySelector('[data-thumb-frame="btc_ckb"]')).not.toBeNull();
     expect(table.querySelector('[data-thumb-frame="centralized_mixture"]')).toBeNull();
     expect(within(table).getByText(/^m-NFT/)).toBeInTheDocument();
-    // Table-rows L2-2: an 8 px AlignedBar per row on the page's round scale.
-    const scale = resourceScale([983730, 322852]);
-    const bars = table.querySelectorAll('[data-segment]');
-    expect(bars).toHaveLength(2);
-    expect(bars[0]).toHaveStyle({
-      width: `${Math.round((983730 / scale) * 120 * 100) / 100}px`,
-      backgroundColor: CLASS_COLORS.objects,
-    });
+    expect(table.querySelectorAll('[data-segment]')).toHaveLength(0);
+    expect(table.querySelectorAll('[data-ckb-two-places]')).toHaveLength(2);
   });
 });
 
@@ -277,18 +271,16 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
       ).toEqual(['All 723', 'xUDT 629', 'sUDT 94'])
     );
   });
-  it('draws CKB held as an azure bar on the page’s scale, and occupied in whole CKB in the title', async () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the azure bar on the page's scale left the
+  // list; CKB held is its amount, cut to 2 dp.
+  it('prints CKB held as its amount with no bar, and occupied in whole CKB in the title', async () => {
     render(<TokensPage />);
     const table = await screen.findByRole('table', { name: 'Tokens' });
-    // Table-rows L2-1: an 8 px AlignedBar per row on one round page scale (30,670,103 and
-    // 7,667,525 whole CKB); Occupied leaves the row for its title.
-    const scale = resourceScale([30670103, 7667525]);
-    const bars = table.querySelectorAll('[data-segment]');
-    expect(bars[0]).toHaveStyle({
-      width: `${Math.round((30670103 / scale) * 120 * 100) / 100}px`,
-      backgroundColor: CLASS_COLORS.tokens,
-    });
-    expect(bars[1]).toHaveStyle({ width: `${Math.round((7667525 / scale) * 120 * 100) / 100}px` });
+    // Occupied leaves the row for its title.
+    expect(table.querySelectorAll('[data-segment]')).toHaveLength(0);
+    expect(
+      Array.from(table.querySelectorAll('[data-ckb-two-places]')).map((n) => n.textContent)
+    ).toEqual(['30,670,103.00', '7,667,525.75']);
     expect(within(table).queryByRole('columnheader', { name: 'Occupied' })).toBeNull();
     expect(within(table).getAllByRole('row')[2].getAttribute('title')).toContain(
       '7,667,525.75 CKB held · 1,838 CKB occupied'
@@ -314,7 +306,8 @@ describe('Identities view (IV-12, IV-02)', () => {
     window.history.replaceState(null, '', '/inventory/identities');
     vi.mocked(api.getAssets).mockResolvedValue(identities);
   });
-  it('lists the systems plainly: no standard chips, no repeated name, rose bars', async () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the rose bars left the list.
+  it('lists the systems plainly: no standard chips, no repeated name, no CKB held bar', async () => {
     render(<IdentitiesPage />);
     const table = await screen.findByRole('table', { name: 'Identity systems' });
     const name = within(table).getByRole('link', { name: '.bit' });
@@ -324,9 +317,6 @@ describe('Identities view (IV-12, IV-02)', () => {
     expect(
       screen.getByText('4 naming systems · every identity’s record lives in its cell on CKB')
     ).toBeInTheDocument();
-    // Table-rows L2-3: the 8 px AlignedBar segment carries the rose class colour.
-    expect(table.querySelector('[data-segment]')).toHaveStyle({
-      backgroundColor: CLASS_COLORS.identities,
-    });
+    expect(table.querySelector('[data-segment]')).toBeNull();
   });
 });

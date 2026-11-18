@@ -6,7 +6,7 @@ import { RewardBreakdown, RewardPaidBy } from '@/components/blocks/reward-breakd
 import { BlockTransactionsTable } from '@/components/blocks/block-transactions-table';
 import { positionParts } from '@/components/blocks/block-position';
 import { sentenceText } from '@/components/ui/block-link';
-import { BlocksLimitsFootnote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
+import { BlocksLimitsNote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -233,9 +233,9 @@ describe('Blocks list pieces', () => {
       maxBlockCycles: '3500000000',
     };
     expect(() =>
-      BlocksLimitsFootnote({ blocks: [row, { ...row, number: 2, maxBlockBytes: 1 }] })
+      BlocksLimitsNote({ blocks: [row, { ...row, number: 2, maxBlockBytes: 1 }] })
     ).toThrow('consensus limits differ');
-    render(<BlocksLimitsFootnote blocks={[row]} />);
+    render(<BlocksLimitsNote blocks={[row]} />);
     expect(screen.getByText(/cycles not run yet for these blocks/)).toBeInTheDocument();
   });
 });

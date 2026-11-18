@@ -117,6 +117,43 @@ describe('Token distribution', () => {
       /^Balance, THolders.*0 and above/
     );
   });
+  // Readability 2026-11-18, lane B5: from xl the holder list and the balance bands stood side by
+  // side 24 px apart on one row grid, so a holder's row read on into a band's ("…tllakf 562,997.00
+  // 2.32%" into "Under 1 · 36 · <0.01%"). Between them now: a gutter twice the old one with a rule
+  // in the row-rule ink down its middle (32 px, 1 px, 32 px; a column gap in a table is 16 px).
+  it('keeps the holders and the balance bands apart: a gutter with a rule between them (B5)', () => {
+    render(
+      <TokenDistributionView
+        distribution={distribution}
+        symbol="T"
+        holders={<div data-testid="holders" />}
+      />
+    );
+    const grid = screen.getByTestId('holders').parentElement!;
+    expect(grid).toHaveClass('xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]', 'xl:gap-x-8');
+    const bands = screen.getByRole('table', { name: 'Holders by balance' });
+    const column = Array.from(grid.children).find((c) => c.contains(bands)) as HTMLElement;
+    // a column of its own around the list (the list measures its own box, without the gutter)
+    expect(column).not.toHaveAttribute('data-list-form');
+    expect(column).toHaveClass('xl:border-l', 'xl:border-row-rule', 'xl:pl-8');
+  });
+
+  // Readability B5: a head stands over what it names; in a column of a bar and its figure, the
+  // figure (the name ends where the figure ends, the ticks stay over the track).
+  it('stands each bar column’s name over its figure (B5)', async () => {
+    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    const table = screen.getByRole('table', { name: 'Holders by balance' });
+    const head = within(table).getAllByRole('columnheader')[1];
+    const name = within(head).getByText('Holders');
+    expect(name).toHaveClass('justify-end');
+    const cell = within(table).getAllByRole('row')[1].children[1] as HTMLElement;
+    const track = cell.querySelector<HTMLElement>('[data-track]')!;
+    const figure = cell.querySelector<HTMLElement>('[data-aligned-bar] > :last-child')!;
+    expect(Number.parseFloat(name.style.width)).toBe(
+      Number.parseFloat(track.style.width) + 10 + Number.parseFloat(figure.style.width)
+    );
+  });
+
   it('rejects missing holders and mismatched aggregate supply', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>
@@ -198,6 +235,22 @@ describe('Token holders (board L5)', () => {
     expect(second.querySelector('[data-segment]')).toHaveStyle({
       width: barWidth(4123, scale, 48),
     });
+  });
+
+  // Readability B5: the Share head stands over the share, not over its bar.
+  it('stands the Share head over the share, the ticks over the track (B5)', async () => {
+    atContainerWidth(1248);
+    mount();
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const name = within(within(table).getAllByRole('columnheader')[4]).getByText('Share');
+    expect(name).toHaveClass('justify-end');
+    const cell = within(table).getAllByRole('row')[1].children[4] as HTMLElement;
+    const track = cell.querySelector<HTMLElement>('[data-track]')!;
+    const figure = cell.querySelector<HTMLElement>('[data-aligned-bar] > :last-child')!;
+    expect(figure).toHaveTextContent('2.32%');
+    expect(Number.parseFloat(name.style.width)).toBe(
+      Number.parseFloat(track.style.width) + 10 + Number.parseFloat(figure.style.width)
+    );
   });
 
   it('writes each holder on one row-density line: rank and address bright, 2-dp amount, the rest in the title (L2-4)', async () => {
