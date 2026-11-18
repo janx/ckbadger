@@ -15,6 +15,8 @@ import { api } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { TRANSACTION_LIST_MIN_PX } from '@/components/transaction/transaction-list-table';
+import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
+import { CLOCK_BEHIND } from '@/lib/format-age';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -320,6 +322,46 @@ describe('Transactions pool view', () => {
     expect('Size, bytes'.length * 7.2).toBeGreaterThan(colWidth(size) - 16);
     expect('bytes'.length * 7.2).toBeLessThanOrEqual(colWidth(size) - 16);
     expect('Fee rate, shannon/KB'.length * 7.2).toBeGreaterThan(colWidth(rate) - 16);
+  });
+
+  // Review fb-logic 3 (the lead's ruling): the wait is a figure; the clock-behind sentence is
+  // words. In the Status column (168 px of content: the dot, "Confirming" and their gaps leave 71
+  // px for the wait) it was one NoBreak 233.4 px wide ("· " and 29 characters) in a flex row that
+  // does not wrap; it breaks between its words, and the comment that said it did is now true.
+  it('lets the clock-behind sentence break between its words in the Status column', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 0, proposed: 0, awaitingIndex: 1 },
+      data: [
+        {
+          hash: `0x${'7'.repeat(64)}`,
+          status: 'committed_awaiting_index' as const,
+          value: '100000000',
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 597000,
+          cycles: '3500000000',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: String(Date.now() + 10 * 60_000),
+          interpretation: { status: 'complete' as const, reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const sentence = within(table).getByText(CLOCK_BEHIND);
+    expect(sentence.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
+    expect(faultLines(cellFaults(table))).toEqual([]);
   });
 
   // Old issue C: the pool's table changed form at 1,230 px, where the committed one did, and the

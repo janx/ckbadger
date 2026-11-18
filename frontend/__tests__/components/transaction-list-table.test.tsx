@@ -16,6 +16,8 @@ import {
 } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { drawSeal, type SealId } from '@/lib/seal/stones';
+import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
+import { CLOCK_BEHIND } from '@/lib/format-age';
 
 const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
   blockNumber: 20829775,
@@ -274,6 +276,61 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     expect(line('CKB Transfer', '12 participants')).toBeGreaterThan(what(1257));
     expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(what(1258));
     expect(what(1232)).toBe(233);
+  });
+
+  // A cell holds its content (components/ui/list-table.tsx). The lead's Chrome reading of
+  // /transactions at 1280 (2026-11-18): ".bit · recycle expired account", one nowrap run 234 px
+  // wide in What it did's 193 px line beside its mark, drew 41 px past its content box and 25 px
+  // over Value, on 3 of 20 live rows. The ruling: a headline is words; it breaks first between its
+  // separated parts (the " · " belongs to the part after it), then between the words of a part
+  // still too long, and the row grows taller.
+  it('breaks a headline between its parts, then between its words, never past its cell', () => {
+    const recycle: Transaction = {
+      ...scriptCall,
+      hash: `0x0bb1${'00'.repeat(29)}1e`,
+      activity: {
+        ...scriptCall.activity!,
+        txHash: `0x0bb1${'00'.repeat(29)}1e`,
+        protocolActions: [
+          {
+            protocol: 'dotbit',
+            protocolName: '.bit',
+            action: 'recycle_expired_account',
+            metadata: { accountId: '0x' + 'da'.repeat(20) },
+          },
+        ],
+      },
+    };
+    render(<TransactionListTable transactions={[recycle, transfer]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const [, first, second] = within(table).getAllByRole('row');
+    const headline = (row: HTMLElement) =>
+      row.querySelectorAll('td')[2].querySelector('.flex-wrap')!.firstElementChild as HTMLElement;
+    expect(headline(first)).toHaveTextContent('.bit · recycle expired account');
+    expect(
+      Array.from(headline(first).querySelectorAll('[data-dotted-item]')).map((p) => p.textContent)
+    ).toEqual(['.bit', ' · recycle expired account']);
+    expect(headline(second)).toHaveTextContent('CKB Transfer');
+    for (const row of [first, second]) {
+      expect(headline(row)).not.toHaveClass('whitespace-nowrap');
+      expect(
+        headline(row).querySelector('.whitespace-nowrap:not([data-dotted-separator])')
+      ).toBeNull();
+    }
+    expect(faultLines(cellFaults(table))).toEqual([]);
+  });
+
+  // Review fb-logic 3: the age under the block is a figure; the clock-behind sentence is words
+  // and breaks under the block in Block · date's 110 px, where it stood on one 226 px line.
+  it('lets the clock-behind sentence break under its block', () => {
+    const ahead = new Date(Date.now() + 10 * 60_000).toISOString();
+    render(<TransactionListTable transactions={[{ ...transfer, timestamp: ahead }]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const block = within(table).getAllByRole('row')[1].querySelectorAll('td')[1] as HTMLElement;
+    expect(
+      within(block).getByText(CLOCK_BEHIND).closest('[data-nobreak], .whitespace-nowrap')
+    ).toBeNull();
+    expect(faultLines(cellFaults(table))).toEqual([]);
   });
 
   it('says what each transaction did: kind, mark and a quiet note', () => {

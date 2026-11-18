@@ -15,6 +15,8 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import type { SealId } from '@/lib/seal/stones';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
+import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
+import { CLOCK_BEHIND } from '@/lib/format-age';
 
 // Time and record the seals' drawing without changing what it draws (a plain wrapper, not a mock
 // function: the phone describe's restoreAllMocks would reset one).
@@ -775,6 +777,37 @@ describe('BlocksPage · Blocks v3 board', () => {
         vi.unstubAllGlobals();
         vi.restoreAllMocks();
         vi.mocked(api.getBlocks).mockResolvedValue(page);
+      }
+    });
+  });
+
+  // A cell holds its content (components/ui/list-table.tsx; review fb-logic 3, the lead's ruling):
+  // an age is a figure, one unit; "this device's clock is behind" (29 characters, 226.2 px at 13
+  // px) is words and breaks between them in the 94 px Age column and the 106 px Age · txs column,
+  // where it stood on one line and drew some 130 px over the next column.
+  describe('a cell holds its content (the lead’s rulings on the fb reviews)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('lets the clock-behind sentence break between its words in both tables', async () => {
+      const ahead = new Date(Date.now() + 10 * 60_000).toISOString();
+      for (const width of [1232, 608]) {
+        atContainerWidth(width);
+        vi.mocked(api.getBlocks).mockResolvedValue({
+          ...page,
+          data: [{ ...page.data[0], timestamp: ahead }, page.data[1]],
+        });
+        const { unmount } = render(<BlocksPage />);
+        const table = await screen.findByRole('table', { name: 'Latest blocks' });
+        const [first] = Array.from(table.querySelectorAll('tbody tr'));
+        const age = within(first.querySelectorAll('td')[1] as HTMLElement).getByText(CLOCK_BEHIND);
+        expect(age.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
+        expect(faultLines(cellFaults(table))).toEqual([]);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
       }
     });
   });
