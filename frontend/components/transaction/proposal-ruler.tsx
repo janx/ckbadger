@@ -1,4 +1,5 @@
 import { formatCount } from '@/lib/format-count';
+import { SVG_TEXT } from '@/lib/chart-type';
 
 const X0 = 8;
 const X1 = 248;
@@ -54,7 +55,7 @@ export function ProposalRuler({
       ))}
       <circle data-proposal cx={X0} cy={Y} r={3.6} className="fill-gold" />
       <rect data-commit x={at(distance) - 4} y={Y - 4} width={8} height={8} className="fill-jade" />
-      <g className="fill-text-dim" fontSize={10} fontFamily="inherit">
+      <g className="fill-text-dim" fontSize={SVG_TEXT.tick} fontFamily="inherit">
         <text x={2} y={28}>
           {tail(proposedIn)}
         </text>

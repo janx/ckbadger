@@ -224,6 +224,10 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
   ],
   ['components/fiber/fiber-network-graph.tsx', 'fontSize="11" (4 sites)', 11, SVG_TEXT.label],
   ['lib/fiber-network-model.ts', 'labelHalf: 23', 23, FIBER_GRAPH.labelHalf],
+  // the block's position diagram and the proposal ruler
+  ['components/blocks/block-position.tsx', 'fontSize="11" (10 sites)', 11, SVG_TEXT.label],
+  ['components/blocks/block-position.tsx', 'fontSize="12" (a tile\'s number)', 12, SVG_TEXT.head],
+  ['components/transaction/proposal-ruler.tsx', 'fontSize={10}', 10, SVG_TEXT.tick],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
   // transaction-list-table: 1,230 and 564 px as before)

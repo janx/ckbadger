@@ -11,7 +11,9 @@ import { describe, expect, it } from 'vitest';
  * SVG text element takes its size from that module: its expression names an import of
  * `@/lib/chart-type` (directly, or through a `const` of the same file that does) and holds no
  * number of its own. A literal (`fontSize="10"`), an arithmetic on a role (`SVG_TEXT.label + 1`) or
- * a size from anywhere else is an offence. Canvas text (`ctx.font`) is not SVG and not gated.
+ * a size from anywhere else is an offence. Canvas text (`ctx.font`) is not SVG and not gated. When
+ * it was written it found 109 sizes of their own in 15 files; lane F3 converted them one family a
+ * commit, the count of each file still to convert pinned in the gate until none was left.
  */
 
 const CHART_TYPE = '@/lib/chart-type';
@@ -22,16 +24,6 @@ const SVG_TEXT_TAGS = new Set(['svg', 'g', 'text', 'tspan', 'textPath']);
 const ALLOWLIST: Record<string, string> = {
   'components/home/mini-chart.tsx#fontSize={f1(size)}':
     'the sparkline: eighth-block glyphs drawn as marks, sized so one glyph is one slot wide, not text set at a size',
-};
-
-/**
- * The files lane F3 converts one family at a time, each with the number of sizes it still sets
- * itself (109 in 15 files when the gate was written). The count must be exact, so the list only
- * shrinks; the lane ends with it empty and removed.
- */
-const PENDING: Record<string, number> = {
-  'components/blocks/block-position.tsx': 11,
-  'components/transaction/proposal-ruler.tsx': 1,
 };
 
 interface Offence {
@@ -170,7 +162,6 @@ describe('no SVG text size outside lib/chart-type.ts', () => {
   const files = sourceFiles(root);
   const offences = files.flatMap((file) =>
     offSvgSizes(file, readFileSync(file, 'utf8')).map((o) => ({
-      path: relative(root, file),
       site: `${relative(root, file)}:${o.line} ${o.what}`,
       key: `${relative(root, file)}#${o.what}`,
     }))
@@ -181,15 +172,7 @@ describe('no SVG text size outside lib/chart-type.ts', () => {
   });
 
   it('finds no SVG fontSize that does not come from lib/chart-type.ts', () => {
-    expect(
-      offences.filter((o) => !(o.key in ALLOWLIST) && !(o.path in PENDING)).map((o) => o.site)
-    ).toEqual([]);
-  });
-
-  it('counts each file still to convert exactly', () => {
-    const counts: Record<string, number> = {};
-    for (const o of offences) if (o.path in PENDING) counts[o.path] = (counts[o.path] ?? 0) + 1;
-    expect(counts).toEqual(PENDING);
+    expect(offences.filter((o) => !(o.key in ALLOWLIST)).map((o) => o.site)).toEqual([]);
   });
 
   it('keeps the allowlist reasoned and current', () => {
