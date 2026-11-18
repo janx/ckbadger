@@ -33,6 +33,12 @@ import { CLOCK_BEHIND } from '@/lib/format-age';
  * the sentence's 29 glyphs (208.8): 326.4 px, 1.6 px inside the 328 px line at 360, the whole
  * status and its sentence held as one. Now the widest run of either is the badge, 96 px, or the
  * block number, 11 glyphs, 79.2 px; the folded row's widest, "device's", 57.6 px.
+ *
+ * Second fix round (review-rules-fixes-logic NOTE 1, tests NOTE-7; the coordinator's ruling: a
+ * line never starts with a separator, and the separators have one owner): the parts of the right
+ * part are a `Dotted` list. Its separator hangs before the part after it, so a "·" is never a run
+ * of its own and never ends one (a line may end only where a run does): it stands at the head of
+ * the part's first word, clipped where that part opens a line. Every "·" in it is the list's.
  */
 
 /** Two minutes ahead of this device's clock: further than consensus allows (15 s). */
@@ -79,14 +85,22 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** The runs of a row's right part, and those wider than its line. */
+/** The runs of a row's right part, those wider than its line, and its separators. */
 function runsOf(container: HTMLElement, viewport: number) {
   const evidence = container.querySelector('[data-role="evidence"]') as HTMLElement;
   const runs = lineRuns(evidence, viewport);
   const line = containerContentPx(viewport);
+  const texts = runs.map((r) => r.text);
+  // every "·" of the right part's text, and how many of them a separated list owns
+  const dots = (evidence.textContent ?? '').split('·').length - 1;
+  const owned = evidence.querySelectorAll('[data-dotted] [data-dotted-separator]').length;
   return {
-    texts: runs.map((r) => r.text),
+    texts,
     past: runs.filter((r) => r.px > line + 1e-9).map((r) => `${r.text} ${r.px.toFixed(1)}`),
+    // a "·" standing alone, or ending a run, could open or end a line
+    loose: texts.filter((t) => t === '·' || t.endsWith('·')),
+    dots,
+    owned,
   };
 }
 
@@ -96,19 +110,23 @@ describe.each([390, 360, 320])(
     it('the committed row: the block number one unit, the sentence words', () => {
       atViewportWidth(viewport);
       const { container } = render(<ActivityRow activity={row()} age />);
-      const { texts, past } = runsOf(container, viewport);
+      const { texts, past, loose, dots, owned } = runsOf(container, viewport);
       // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
-      expect(texts).toEqual(['#21,047,791', '·', ...SENTENCE]);
+      expect(loose).toEqual([]);
+      expect([dots, owned]).toEqual([1, 1]);
+      expect(texts).toEqual(['#21,047,791', `· ${SENTENCE[0]}`, ...SENTENCE.slice(1)]);
     });
 
     it('the pool row: the status one unit, the sentence words', () => {
       atViewportWidth(viewport);
       const { container } = render(<ActivityRow activity={pool()} age />);
-      const { texts, past } = runsOf(container, viewport);
+      const { texts, past, loose, dots, owned } = runsOf(container, viewport);
       // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
-      expect(texts).toEqual(['Confirming', '·', ...SENTENCE]);
+      expect(loose).toEqual([]);
+      expect([dots, owned]).toEqual([1, 1]);
+      expect(texts).toEqual(['Confirming', `· ${SENTENCE[0]}`, ...SENTENCE.slice(1)]);
     });
 
     it('the folded row: "newest" and the sentence, words', () => {
