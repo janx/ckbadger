@@ -289,7 +289,8 @@ function DepositedPlot({
   const left = tickGutter(ticks.values.filter((v) => v > 0).map((v) => formatTick(v, ticks.step)));
   const oneLine = textWidth(name.length, NAME_PX) + 16 <= width - left;
   const band = mainNameBand(oneLine ? 1 : 2);
-  const bottom = band + MAIN_DATA_H;
+  // the foot of a plot whose name takes one line, and a line lower where it takes two
+  const bottom = MAIN_PLOT_H + (band - mainNameBand(1));
   const y = (v: number) => bottom - (v / top) * MAIN_DATA_H;
   // U-19: the round values sit in a gutter left of the plot, in the dim ink (as every chart's),
   // never inside it, where the line and its fill cross them; a value whose line would reach into
@@ -446,7 +447,7 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
         (() => {
           const x = (i: number) => (i / last) * width;
           const band = multipleBand(1);
-          const height = band + MULTIPLE_DATA_H;
+          const height = MULTIPLE_H;
           const y = (v: number) => height - 2 - (v / top) * (MULTIPLE_DATA_H - 2);
           const path = days.map((d, i) => `${i ? 'L' : 'M'}${x(i)},${y(shares[i])}`).join(' ');
           return (
