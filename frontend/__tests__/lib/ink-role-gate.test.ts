@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { TYPE_STEPS } from '@/lib/type-scale';
@@ -565,7 +565,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 
 // ---- the scan ----
 
-const SCAN_DIRS = ['app', 'components'];
+/** The scan gate's directories (`scan-fill-gate.test.ts`): every `.ts` and `.tsx` in them. */
+const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'];
 
 /** `text-<x>` classes that are not an ink: the type steps and the alignments and wraps. */
 const NOT_INK = new Set<string>([
@@ -661,15 +662,15 @@ interface QuietSite {
   what: string;
 }
 
-/** Every site of the four kinds in a TSX source, and every element that exempts its subtree. */
-function scanInkRoles(code: string): { sites: Site[]; quiet: QuietSite[] } {
-  const source = ts.createSourceFile(
-    'scan.tsx',
-    code,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+/**
+ * Every site of the four kinds in a source (TSX unless `kind` says otherwise), and every element
+ * that exempts its subtree.
+ */
+function scanInkRoles(
+  code: string,
+  kind: ts.ScriptKind = ts.ScriptKind.TSX
+): { sites: Site[]; quiet: QuietSite[] } {
+  const source = ts.createSourceFile('scan.tsx', code, ts.ScriptTarget.Latest, true, kind);
   const lineOf = (n: ts.Node) => source.getLineAndCharacterOfPosition(n.getStart(source)).line + 1;
   const text = (n: ts.Node) => n.getText(source).replace(/\s+/g, ' ');
 
@@ -907,7 +908,7 @@ function sourceFiles(root: string): string[] {
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
       if (statSync(path).isDirectory()) walk(path);
-      else if (name.endsWith('.tsx')) files.push(path);
+      else if (/\.tsx?$/.test(name) && !name.endsWith('.d.ts')) files.push(path);
     }
   };
   for (const dir of SCAN_DIRS) walk(join(root, dir));
@@ -1217,13 +1218,31 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   const found = new Map<string, Site[]>();
   const quiet = new Map<string, QuietSite[]>();
   for (const file of files) {
-    const scanned = scanInkRoles(readFileSync(file, 'utf8'));
+    const scanned = scanInkRoles(
+      readFileSync(file, 'utf8'),
+      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+    );
     if (scanned.sites.length) found.set(relative(root, file), scanned.sites);
     if (scanned.quiet.length) quiet.set(relative(root, file), scanned.quiet);
   }
 
   it('scans the page source', () => {
     expect(files.length).toBeGreaterThan(250);
+  });
+
+  // Review of the fixes (2026-11-19, N4): the gate read `app` and `components` only, while the
+  // scan gate reads `hooks` and `lib` too (a `.tsx` there draws words as well).
+  it('reads the directories the scan gate reads, every source in them', () => {
+    expect(SCAN_DIRS).toEqual(['app', 'components', 'hooks', 'lib']);
+    expect(new Set(files.map((file) => relative(root, file).split(sep)[0]))).toEqual(
+      new Set(SCAN_DIRS)
+    );
+  });
+
+  // Review of the fixes (2026-11-19, N4): the pin was per file, so the list could grow by a file
+  // without a second look at the whole; its total is pinned too.
+  it('sets back three elements in all: the pinned total of QUIET_SITES', () => {
+    expect(Object.values(QUIET_SITES).reduce((total, entry) => total + entry.count, 0)).toBe(3);
   });
 
   it('draws no link, amount, table cell or paragraph in the quiet ink but the tolerated list’s', () => {
