@@ -1734,6 +1734,30 @@ const lineKeeps = (b: PipelineBlock) =>
   side(1 + 4) + (b.txCount > 1 ? COL.endGap + labelWidth(`+${b.txCount - 1}`) : 0);
 
 /**
+ * Where a column row's uncles break into lines when they take lines of their own under its tx
+ * line: as many to a line as fit `room`, `COL.endGap` apart, in order (readability R4: at 12 px
+ * two uncles of the widest kind, "+1500" each, need 156 px, and the narrowest column's line, 154,
+ * takes one; at 11 px they needed 144). The index of each line's first uncle. An uncle wider than
+ * a whole line is refused, `what` naming its block.
+ */
+export function columnUncleLines(widths: readonly number[], room: number, what: string): number[] {
+  const starts: number[] = [];
+  let used = Infinity;
+  widths.forEach((w, ui) => {
+    if (w > room)
+      throw new Error(
+        `pipeline: uncle ${ui} of ${what} needs ${w} px, more than a ${room} px line of its own`
+      );
+    const at = starts.length ? used + COL.endGap + w : Infinity;
+    if (at > room) {
+      starts.push(ui);
+      used = w;
+    } else used = at;
+  });
+  return starts;
+}
+
+/**
  * A block as a column row: its own proposal dots, then its tx line — the cellbase and the txs that
  * fit, then its "+N" — and its uncles. The uncles follow the tx line, `endGap` apart, when all of
  * them fit in what is left after `lineKeeps`; otherwise all of them take a line of their own under
@@ -1749,24 +1773,14 @@ function columnCard(f: BlockFacts, slot: SceneCard['slot'], w: number): SceneCar
   const forms = f.byUncle.map((list) => columnUncle(list.length));
   const unclesW = forms.reduce((sum, un) => sum + COL.endGap + un.w, 0);
   const line: UncleLine = lineEnd - lineX - lineKeeps(b) >= unclesW ? 'tx' : 'own';
-  // On lines of their own, as many uncles to a line as fit, from lineX (readability R4: at 12 px
-  // two uncles of the widest kind, "+1500" each, need 156 px, and the narrowest column's line,
-  // 154, takes one; at 11 px they needed 144). An uncle wider than a whole line is refused.
-  const uncleLines: number[] = [];
-  if (line === 'own') {
-    let used = Infinity;
-    forms.forEach((un, ui) => {
-      if (un.w > lineEnd - lineX)
-        throw new Error(
-          `pipeline: uncle ${ui} of block #${b.number} needs ${un.w} px, more than a ${lineEnd - lineX} px line of its own`
-        );
-      const at = uncleLines.length ? used + COL.endGap + un.w : Infinity;
-      if (at > lineEnd - lineX) {
-        uncleLines.push(ui);
-        used = un.w;
-      } else used = at;
-    });
-  }
+  const uncleLines =
+    line === 'own'
+      ? columnUncleLines(
+          forms.map((un) => un.w),
+          lineEnd - lineX,
+          `block #${b.number}`
+        )
+      : [];
   /** The line an uncle stands on, when they have lines of their own: 0 for the first. */
   const lineOf = (ui: number) => uncleLines.filter((first) => first <= ui).length - 1;
   const txEnd = line === 'tx' ? lineEnd - unclesW : lineEnd;
