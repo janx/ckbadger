@@ -44,6 +44,7 @@ import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { DocumentTitle } from '@/lib/use-document-title';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 
 type MinerBlock = {
   number: number;
@@ -497,6 +498,9 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
     ),
   ];
   const nonCellbase = orphanedTransactions.filter((tx) => tx.txIndex > 0);
+  // The blocks fall to their phone rows under the table's 820 px (at 640 and 768 too), beside the
+  // narrative and the tree, which write the same miner at the row size: tight only below sm (R9).
+  const phoneSize = useTightBelowSm();
   return (
     <div className="min-w-0">
       <ForkHeading event={event} />
@@ -639,7 +643,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                           style={inkStyle(BOARD_INKS.link)}
                           title={row.hash}
                         >
-                          <ShortId value={row.hash} kind="hash" size="tight" />
+                          <ShortId value={row.hash} kind="hash" size={phoneSize} />
                         </span>
                       </>
                     ),
@@ -651,7 +655,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     left: (
                       <>
                         <span className="text-text-dim">miner </span>
-                        <Miner block={row} size="tight" />
+                        <Miner block={row} size={phoneSize} />
                       </>
                     ),
                     right: formatCount(row.transactionsCount, 'tx'),

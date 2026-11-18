@@ -447,6 +447,13 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
     svgLabel("holderName(holder.custody, 'tight')"),
     svgLabel("shortenHash(holder.custody.lockArgs!, 'tight')"),
   ],
+  'components/scripts/script-family-board.tsx': [
+    {
+      reason:
+        'the history readout under the picture at desktop width: tier 1’s prose budget (160 characters, __tests__/utils/hierarchy.ts) holds it at the tight size and the row size passes it (162 for JoyID); the readout is P2’s and B7’s to rework',
+      anchor: "holderName(deployment.custody, 'tight')",
+    },
+  ],
   'components/scripts/script-family-page.tsx': [
     phoneRow('value={r.referenceHash}'),
     phoneRow("depOf(r, 'tight')"),

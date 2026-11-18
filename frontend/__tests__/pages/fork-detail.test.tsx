@@ -344,7 +344,8 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     const table = screen.getByRole('table', { name: 'Blocks' });
     expect(within(table).getAllByRole('link', { name: 'ckb1…qw93hhsj' })).toHaveLength(3);
-    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('ckb1…93hhsj');
+    // R9 (re-pinned): the tree's label at the row size too, 13 characters in the 96 px tile
+    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('ckb1…qw93hhsj');
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier2).getByRole('link', { name: address })).toHaveAttribute(
       'href',

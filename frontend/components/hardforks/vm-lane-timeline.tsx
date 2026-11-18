@@ -435,7 +435,7 @@ export function VmLaneTimeline({
                       key={deployment.versionHash}
                       {...readout.bind(deployment.versionHash)}
                       data-lane-dot={hashType}
-                      aria-label={`${markName(deployment, 'tight')}, ${hashType}, deployed ${formatUtc8Date(deployment.timestampMs)}`}
+                      aria-label={`${markName(deployment, 'row')}, ${hashType}, deployed ${formatUtc8Date(deployment.timestampMs)}`}
                       className="cursor-pointer"
                     >
                       <title>

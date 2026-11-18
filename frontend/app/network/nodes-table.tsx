@@ -458,8 +458,11 @@ function PeerRow({
               <span aria-hidden="true" className="text-text-dim text-small">
                 {expanded ? '▾' : '▸'}
               </span>
+              {/* The one-line row is drawn from 560 px of container, at every desktop width (the
+                  table needs 2,144): the row size, the evidence lines' (R9); 17 characters at
+                  12 px, 122.4 px, the address beside it cut to what is left. */}
               <span className="text-aqua text-small whitespace-nowrap">
-                <ShortId value={peer.peerId} kind="hash" size="tight" />
+                <ShortId value={peer.peerId} kind="hash" size="row" />
               </span>
               {/* As wide as its words (R16), at most the column, cut to fit. */}
               <span

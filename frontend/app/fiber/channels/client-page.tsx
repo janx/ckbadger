@@ -29,6 +29,7 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenHash } from '@/lib/shorten';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
 type StateFilter = 'all' | FiberChannelState;
@@ -142,12 +143,17 @@ function quietFigures(summary: FiberNetwork['summary']): TopicFigure[] {
   ];
 }
 
-/** A party in the phone row: its address or lock hash at the tight size (U-09). */
+/**
+ * A party in the phone row: its address or lock hash at the tight size below sm; from sm (the
+ * rows are drawn under the 820 px table, at 640 and 768 too) the row size the network reading
+ * above the list writes the same party in (R9).
+ */
 function PartySuffix({ party }: { party: FiberChannel['observedParties'][number] }) {
+  const size = useTightBelowSm();
   const text = party.address ? (
-    <ShortId value={party.address} kind="address" size="tight" />
+    <ShortId value={party.address} kind="address" size={size} />
   ) : (
-    <ShortId value={party.lockScriptHash} kind="hash" size="tight" />
+    <ShortId value={party.lockScriptHash} kind="hash" size={size} />
   );
   return party.address ? (
     <Link
@@ -197,6 +203,8 @@ function lifetime(channel: FiberChannel): string {
  * opened and how long it lived — three labelled lines. In a wide container (640) two lines.
  */
 function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boolean }) {
+  // the channel id at the size of its parties (R9): tight below sm, the row size from it
+  const size = useTightBelowSm();
   const id = (
     <Link
       href={`/fiber/channels/${channel.channelId}`}
@@ -204,7 +212,7 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
       style={inkStyle(BOARD_INKS.link)}
       title={channel.channelId}
     >
-      <ShortId value={channel.channelId} kind="hash" size="tight" />
+      <ShortId value={channel.channelId} kind="hash" size={size} />
     </Link>
   );
   const pair = (

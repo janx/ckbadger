@@ -65,8 +65,10 @@ describe('HolderTimeline (table-rows L1-3)', () => {
     expect(current).toHaveClass('border-l-[3px]');
     expect(first.dataset.current).toBe('false');
     expect(first).not.toHaveClass('border-l-[3px]');
+    // R9 (re-pinned): the figure's description is prose, its ids at the row size (the segments'
+    // labels keep the tight size the chart fits them to)
     expect(bar().getAttribute('aria-label')).toBe(
-      "Who held JoyID's code cell over time: multisig 0xd1db…b95c from 2023-10-07 to 2025-08-28, multisig 0x07a2…68ca to 2025-11-21, multisig 0x6598…d696 since then"
+      "Who held JoyID's code cell over time: multisig 0xd1dbde92…0cb95c from 2023-10-07 to 2025-08-28, multisig 0x07a21dc2…9d68ca to 2025-11-21, multisig 0x65983f1d…eed696 since then"
     );
   });
 
@@ -123,19 +125,23 @@ describe('HolderTimeline (table-rows L1-3)', () => {
 
   it('reads the holder now in one row, and the hovered or tapped holder instead', () => {
     mount(1248);
+    // R9 (re-pinned): the reading under the timeline writes the holder at the row size, the
+    // lede's and the tables'
     expect(reading()).toHaveTextContent(
-      /^held now by multisig 0x6598…d696\s*since 2025-11-21\s*signers not on chain yet · has never signed\s*3 holders · 5 versions · 2 handovers\s*tap or hover$/
+      /^held now by multisig 0x65983f1d…eed696\s*since 2025-11-21\s*signers not on chain yet · has never signed\s*3 holders · 5 versions · 2 handovers\s*tap or hover$/
     );
-    expect(within(reading()).getByText('multisig 0x6598…d696')).toHaveClass('text-text-bright');
+    expect(within(reading()).getByText('multisig 0x65983f1d…eed696')).toHaveClass(
+      'text-text-bright'
+    );
     const [first] = segments();
     fireEvent.mouseEnter(first);
     expect(reading()).toHaveTextContent(
-      /^held by multisig 0xd1db…b95c\s*2023-10-07 → 2025-08-28\s*3 of 5 signatures · signed v2 and v3\s*3 holders · 5 versions · 2 handovers/
+      /^held by multisig 0xd1dbde92…0cb95c\s*2023-10-07 → 2025-08-28\s*3 of 5 signatures · signed v2 and v3\s*3 holders · 5 versions · 2 handovers/
     );
     fireEvent.mouseLeave(first);
-    expect(reading()).toHaveTextContent(/^held now by multisig 0x6598…d696/);
+    expect(reading()).toHaveTextContent(/^held now by multisig 0x65983f1d…eed696/);
     fireEvent.click(segments()[1]);
-    expect(reading()).toHaveTextContent(/^held by multisig 0x07a2…68ca/);
+    expect(reading()).toHaveTextContent(/^held by multisig 0x07a21dc2…9d68ca/);
   });
 
   it('closes with one caption of at most 160 characters', () => {
