@@ -14,7 +14,7 @@ import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { ShortId } from '@/components/ui/short-id';
-import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, lineAscentPx, wrapPhrases } from '@/lib/chart-type';
 import { textPx, tightLinePx } from '@/lib/type-metrics';
 
 type Point = NetworkMap['points'][number];
@@ -23,11 +23,15 @@ const DOT_R = 3.6;
 const RING_R = 6.2;
 /**
  * Hierarchy v3 (R13): the band above the clusters that holds the map's name, inside the plot: its
- * label line 2 px under the top and 7 px over the clusters (24 px).
+ * label lines 2 px under the top and 7 px over the clusters (24 px for one line). The name, 8 px
+ * in from the svg's sides, breaks after "verified nodes" where it does not fit (a 320 px window's
+ * 270 px svg; review F-B, logic finding 2), and the band grows a line at a time.
  */
 const NAME_PAD = 2;
 const NAME_Y = NAME_PAD + lineAscentPx(SVG_TEXT.label);
-const NAME_BAND = NAME_PAD + tightLinePx(SVG_TEXT.label) + 7;
+const NAME_LINE = tightLinePx(SVG_TEXT.label);
+const nameBand = (lines: number) => NAME_PAD + lines * NAME_LINE + 7;
+const NAME_PHRASES = ['verified nodes', 'approximate GeoIP place'] as const;
 /**
  * A country's label (the tick size) stands a pixel under its cluster's reach: its baseline that and
  * its line's ascent under the cluster's radius, its line's foot a tight line under the pixel
@@ -372,6 +376,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
   const layout = placed?.dots ?? [];
   const countryLabels = placed?.labels ?? [];
   const counts = ready ? mapCounts(ready) : null;
+  const nameLines = wrapPhrases(NAME_PHRASES, SVG_TEXT.label, width - 16);
+  const band = nameBand(nameLines.length);
   return (
     <div className="min-w-0">
       <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -389,8 +395,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
               ) : (
                 <svg
                   width={width}
-                  height={height + NAME_BAND}
-                  viewBox={`0 0 ${width} ${height + NAME_BAND}`}
+                  height={height + band}
+                  viewBox={`0 0 ${width} ${height + band}`}
                   role="img"
                   aria-label="Approximate GeoIP locations of retained verified CKB peers"
                   className="block"
@@ -401,8 +407,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       key={'lon' + k}
                       x1={(width * k) / 8}
                       x2={(width * k) / 8}
-                      y1={NAME_BAND}
-                      y2={height + NAME_BAND}
+                      y1={band}
+                      y2={height + band}
                       stroke="var(--c-grid-faint)"
                     />
                   ))}
@@ -411,8 +417,8 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       key={'lat' + k}
                       x1="0"
                       x2={width}
-                      y1={NAME_BAND + (height * k) / 6}
-                      y2={NAME_BAND + (height * k) / 6}
+                      y1={band + (height * k) / 6}
+                      y2={band + (height * k) / 6}
                       stroke={k === 3 ? 'var(--c-base-border-subtle)' : 'var(--c-grid-faint)'}
                     />
                   ))}
@@ -423,14 +429,19 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                     fontSize={SVG_TEXT.label}
                     fill="var(--c-text-dim)"
                   >
-                    verified nodes · approximate GeoIP place
+                    {nameLines[0]}
+                    {nameLines.slice(1).map((line, i) => (
+                      <tspan key={`${i}:${line}`} x="8" dy={NAME_LINE}>
+                        {line}
+                      </tspan>
+                    ))}
                   </text>
                   {countryLabels.map(({ country, count, x, y }) => (
                     <text
                       key={country}
                       data-country-label
                       x={x}
-                      y={y + NAME_BAND}
+                      y={y + band}
                       textAnchor="middle"
                       fontSize={SVG_TEXT.tick}
                       fill="var(--c-text-dim)"
@@ -442,7 +453,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                     </text>
                   ))}
                   {layout.map(({ point, x, y: mapY }) => {
-                    const y = mapY + NAME_BAND;
+                    const y = mapY + band;
                     return (
                       <g
                         key={point.peerId}
