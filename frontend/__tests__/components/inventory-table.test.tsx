@@ -8,9 +8,6 @@ import {
   TokenTwoPlaces,
 } from '@/components/asset/inventory-table';
 import type { Asset } from '@/lib/api';
-import { resourceScale } from '@/components/blocks/block-visual';
-import { formatTick } from '@/lib/chart-ticks';
-import { CLASS_COLORS } from '@/lib/design-tokens';
 const asset: Asset = {
   id: '0x' + 'ab'.repeat(32),
   assetType: 'token',
@@ -48,7 +45,6 @@ function cellUnder(table: HTMLElement, row: number, head: string): HTMLElement {
   if (i < 0) throw new Error(`no column ${head}`);
   return within(table).getAllByRole('row')[row].children[i] as HTMLElement;
 }
-const TRACK = 120;
 
 /** Every column head is its words in an inline box, never a bare text node filling the cell. */
 function expectWordHeads(table: HTMLElement) {
@@ -57,8 +53,6 @@ function expectWordHeads(table: HTMLElement) {
     expect(th.firstElementChild?.tagName).toBe('SPAN');
   }
 }
-const barWidth = (value: number, scale: number) =>
-  `${Math.max(Math.round((value / scale) * TRACK * 100) / 100, value > 0 ? 2 : 0)}px`;
 
 describe('Inventory rows', () => {
   it('rounds a long H-multiplier to 2 dp on its one line and keeps it exact in the hover (L2-1)', () => {
@@ -178,7 +172,7 @@ describe('Inventory rows', () => {
 
 // Table-rows round, lane L2-1 (board Lists.dc.html · tokens): one 40 px line of six fields — mark +
 // bright name + symbol tag (+ a set-back standard tag when not xUDT) · Holders · Transfers · Supply
-// (dim, 2 dp) · CKB held as an 8 px bar on the page's scale with its 2-dp amount · H-mult. "0 in
+// (dim, 2 dp) · CKB held, its 2-dp amount (its bar left with B5) · H-mult. "0 in
 // 24 h", Occupied, the standard and the exact digits are the row's title (and the token page's).
 describe('Tokens table on the row rules (table-rows L2-1)', () => {
   const seal: Asset = {
@@ -243,21 +237,13 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     expect(within(supply).getByTitle('16,063,603.56572848')).toBeInTheDocument();
   });
 
-  it('draws CKB held as an 8 px token-blue bar on the page’s scale with a 2-dp amount', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the 8 px token-blue bar on the page's scale
+  // left the list; CKB held is its 2-dp amount alone.
+  it('prints CKB held as its 2-dp amount', () => {
     const table = mount();
-    const scale = resourceScale([100, 400]);
-    const head = within(table).getByRole('columnheader', { name: 'CKB held in its cells' });
-    expect(
-      Array.from(head.querySelector('[data-scale-ticks]')!.children).map((t) => t.textContent)
-    ).toEqual(['0', formatTick(scale / 2, scale / 2), formatTick(scale, scale / 2)]);
     const first = cellUnder(table, 1, 'CKB held in its cells');
     const second = cellUnder(table, 2, 'CKB held in its cells');
-    expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px', width: '120px' });
-    expect(first.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(100, scale),
-      backgroundColor: CLASS_COLORS.tokens,
-    });
-    expect(second.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(400, scale) });
+    expect(first.querySelector('[data-track]')).toBeNull();
     expect(first).toHaveTextContent('100.00');
     expect(second).toHaveTextContent('400.00');
     expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent('×2.18');
@@ -274,7 +260,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
 
 // Table-rows round, lane L2-2 (board Lists.dc.html · objects): 24 px framed mark + bright name +
 // the standard and the composition as tags · Live items (a ghost "/ N" only when minted differs) ·
-// Holders · Activity · CKB held as a violet 8 px bar · H-mult. Occupied and the collection id go to
+// Holders · Activity · CKB held (its violet bar left with B5) · H-mult. Occupied and the collection id go to
 // the row's title (and the collection page).
 describe('Objects table on the row rules (table-rows L2-2)', () => {
   const spore: Asset = {
@@ -349,14 +335,12 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
     ]);
   });
 
-  it('shows "/ minted" only when it differs from live, and draws CKB held in violet', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the violet CKB held bar left the list.
+  it('shows "/ minted" only when it differs from live, and prints CKB held as its amount', () => {
     const table = mount();
     expect(cellUnder(table, 1, 'Live items')).toHaveTextContent(/^93$/);
     expect(cellUnder(table, 2, 'Live items')).toHaveTextContent('2,712 / 2,811');
-    const scale = resourceScale([100, 400]);
-    expect(
-      cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')
-    ).toHaveStyle({ width: barWidth(100, scale), backgroundColor: CLASS_COLORS.objects });
+    expect(cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
     expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent('400.00');
     expect(cellUnder(table, 2, 'Activity')).toHaveTextContent('3,014');
     expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.64');
@@ -372,8 +356,8 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
 });
 
 // Table-rows round, lane L2-3: the identity systems on the same rules — the name bright on one
-// line (the standard a tag when the name differs), counts, CKB held as a rose 8 px bar with its 2-dp
-// amount, occupied in whole CKB; every digit in the row title.
+// line (the standard a tag when the name differs), counts, CKB held as its 2-dp amount (its rose bar
+// left with B5), occupied in whole CKB; every digit in the row title.
 describe('Identity systems table on the row rules (table-rows L2-3)', () => {
   const dotbit: Asset = {
     ...asset,
@@ -427,12 +411,10 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     expect(first.querySelector('svg[data-class="identities"]')).not.toBeNull();
   });
 
-  it('draws CKB held as a rose bar with a 2-dp amount and keeps occupied on one line', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the rose CKB held bar left the list.
+  it('prints CKB held as its 2-dp amount and keeps occupied on one line', () => {
     const table = mount();
-    const scale = resourceScale([100, 400]);
-    expect(
-      cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')
-    ).toHaveStyle({ width: barWidth(400, scale), backgroundColor: CLASS_COLORS.identities });
+    expect(cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
     expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent('100.00');
     expect(cellUnder(table, 1, 'Occupied')).toHaveTextContent(/^61$/);
     const occupied = cellUnder(table, 2, 'Occupied');
