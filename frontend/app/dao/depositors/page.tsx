@@ -105,6 +105,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
         scale={shareScale(rows)}
         trackWidth={SHARE_TRACK}
         format={formatShareTick}
+        figureWidth={SHARE_TEXT}
       />
     ),
     render: (d) => (
