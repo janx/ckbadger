@@ -1,3 +1,4 @@
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
 import { occupiedBytesText } from '@/lib/occupied';
 import { describe, it, expect, vi } from 'vitest';
@@ -80,8 +81,6 @@ describe('CellTile occupied wording (TX-19)', () => {
 
 /* ---------- the seals by kind (C3) ---------- */
 
-const ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwyt2p74pg74c';
-const OWNER_ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2fh0zmj';
 const HASH = sealHash('c3 tile transaction');
 const PREV = sealHash('c3 tile previous transaction');
 /** The real script hash of { code_hash 0x9b × 32, hash_type type, args 0x } (blake2b, CKB). */
@@ -89,6 +88,12 @@ const LOCK = '0x82cbea9785c59f24117b45294cff296e8ab0ac2f29bbfa78af6b01e4d5325644
 const NEW_OWNER = sealHash('c3 tile new owner');
 const TOKEN = sealHash('c3 tile token type');
 const lock = { codeHash: `0x${'9b'.repeat(32)}`, hashType: 'type', args: '0x' };
+// B4 second fix round (tests MUST-1): an owner's address is the real address of the cell's own
+// lock (a tile refuses one that spells another); these failed the bech32m checksum
+const ADDRESS = ckbAddress(lock as { codeHash: string; hashType: 'type'; args: string });
+const OWNER_ADDRESS = ckbAddress(
+  scriptHashToScript(NEW_OWNER) as { codeHash: string; hashType: 'type'; args: string }
+);
 const token = { codeHash: sealHash('c3 xudt code'), hashType: 'type', args: '0x' };
 const tokenDisplay = {
   kind: 'token' as const,
@@ -579,7 +584,10 @@ describe('a transaction of 300 cells draws each tile’s seals once (seal kinds,
       commonKnowledgeSize: '61',
       display: null,
       lock: { ...lock, args: `0x${i.toString(16).padStart(40, '0')}` },
-      address: ADDRESS,
+      address: ckbAddress({
+        codeHash: lock.codeHash,
+        args: `0x${i.toString(16).padStart(40, '0')}`,
+      }),
     });
     const lockOf = (side: 'in' | 'out', i: number) => sealHash(`c3 300 ${side} lock ${i}`);
     const tx = {

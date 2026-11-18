@@ -1,4 +1,5 @@
 // Round 3 lane F (contracts R-B · R-9, SC-K5): an output that is a code cell says whose code it is.
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
@@ -13,7 +14,8 @@ const output = (over: Record<string, unknown> = {}) => ({
   commonKnowledgeSize: '100438',
   status: 'live' as const,
   display: null,
-  address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq4s93hhsj',
+  // the real address of its lock (B4 second fix round: the one it had failed its checksum)
+  address: ckbAddress({ codeHash: `0x${'9b'.repeat(32)}`, args: '0x' }),
   lock: { codeHash: `0x${'9b'.repeat(32)}`, hashType: 'type', args: '0x' },
   type: { codeHash: TYPE_ID, hashType: 'type', args: `0x${'aa'.repeat(32)}` },
   isChange: false,

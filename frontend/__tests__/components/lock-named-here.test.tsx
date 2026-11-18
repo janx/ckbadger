@@ -10,6 +10,7 @@
 //   hash and hash type, "lock 0x9bd7e06f…a3cce8 by data".
 // - In a column headed "Lock" no cell is empty: the default lock by its name, a lock that is not
 //   indexed as "not indexed", both in quiet words without the column's tag.
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -229,24 +230,31 @@ describe('a place that may name no lock leaves the part out', () => {
 });
 
 describe('the transaction’s cell tiles read the same decision', () => {
-  const output = (codeHash: string, isChange: boolean, seed: string) => ({
-    capacity: '10000000000',
-    commonKnowledgeSize: '61',
-    status: 'live' as const,
-    display: null,
-    address: seededAddress(seed, codeHash),
-    lock: { codeHash, hashType: 'type', args: `0x${'00'.repeat(14)}${'61'.repeat(6)}` },
-    type: null,
-    isChange,
-  });
-
-  it('writes no lock beside a default-lock owner, "change" alone on its change, another lock’s name', () => {
-    const outputs = [
-      output(DEFAULT_LOCK_CODE_HASH, false, 'aaaaaa'),
-      output(DEFAULT_LOCK_CODE_HASH, true, 'bbbbbb'),
-      output(JOYID_CODE_HASH, false, 'cccccc'),
-    ];
-    const tx = {
+  /** An output of `lock` (by type unless said), owned at that lock's real address. */
+  const output = (
+    codeHash: string,
+    isChange: boolean,
+    seed: string,
+    hashType: 'type' | 'data' | 'data1' | 'data2' = 'type'
+  ) => {
+    // B4 second fix round (tests MUST-1): the address spells the cell's own lock, args and all
+    const args = `0x${[...seed]
+      .map((c) => c.charCodeAt(0).toString(16))
+      .join('')
+      .padStart(40, '0')}`;
+    return {
+      capacity: '10000000000',
+      commonKnowledgeSize: '61',
+      status: 'live' as const,
+      display: null,
+      address: ckbAddress({ codeHash, hashType, args }),
+      lock: { codeHash, hashType, args },
+      type: null,
+      isChange,
+    };
+  };
+  const txOf = (outputs: Record<string, unknown>[]) =>
+    ({
       hash: `0x${'ee'.repeat(32)}`,
       status: 'committed',
       isCellbase: false,
@@ -262,12 +270,61 @@ describe('the transaction’s cell tiles read the same decision', () => {
         script: o.lock,
         cycles: null,
       })),
-    } as unknown as TransactionDetail;
-    const lookup = {
-      [DEFAULT_LOCK_CODE_HASH]: { name: 'Default Lock' },
-      [JOYID_CODE_HASH]: { name: 'JoyID' },
-    } as never;
-    const tiles = cellTiles(tx, lookup).outputs;
+    }) as unknown as TransactionDetail;
+  const LOOKUP = {
+    [DEFAULT_LOCK_CODE_HASH]: { name: 'Default Lock' },
+    [JOYID_CODE_HASH]: { name: 'JoyID' },
+  } as never;
+
+  // B4 second fix round (review-rules-fixes-logic MUST 2, tests MUST-1; the two refusals the
+  // removed lockCodeHashesByAddress tests held): a tile's owner and its lock are one cell's, so a
+  // cell with an address and no lock, or an address that spells another lock, is refused with the
+  // transaction and the cell named; a lock with no address form (args over 599 bytes: the API
+  // sends no address) is owned by its lock hash, as a row writes a party with no address.
+  it('refuses a cell with an address and no lock, naming the transaction and the output', () => {
+    const cell = { ...output(JOYID_CODE_HASH, false, 'nolock'), lock: null };
+    expect(() => cellTiles(txOf([cell]), LOOKUP)).toThrow(
+      `Transaction 0x${'ee'.repeat(32)} missing required field "output 0.lock"`
+    );
+  });
+
+  it('refuses a cell whose address spells another lock than its own, naming both', () => {
+    const joy = output(JOYID_CODE_HASH, false, 'spells');
+    const cell = { ...joy, lock: { ...joy.lock, codeHash: DEFAULT_LOCK_CODE_HASH } };
+    expect(() => cellTiles(txOf([cell]), LOOKUP)).toThrow(
+      new RegExp(
+        `^Transaction 0x(ee){32} output 0: address ${joy.address} spells the lock ${JOYID_CODE_HASH} by type, args ${joy.lock.args}; the cell's lock is ${DEFAULT_LOCK_CODE_HASH} by type`
+      )
+    );
+  });
+
+  it('owns a cell with no address form by its lock hash, its lock in words', () => {
+    const args = `0x${'ab'.repeat(600)}`;
+    const cell = {
+      ...output(JOYID_CODE_HASH, false, 'long'),
+      address: null,
+      lock: { codeHash: JOYID_CODE_HASH, hashType: 'type', args },
+    };
+    const [tile] = cellTiles(txOf([cell]), LOOKUP).outputs;
+    render(
+      <span>
+        <span data-testid="owner">{tile.owner}</span>
+        <span data-testid="lock">{tile.lockKind}</span>
+      </span>
+    );
+    const owner = screen.getByTestId('owner').querySelector('a')!;
+    expect(owner).toHaveAttribute('href', `/mainnet/address/0x${'1'.repeat(64)}`);
+    expect(owner).toHaveTextContent(/^0x11111111…111111$/);
+    expect(screen.getByTestId('lock')).toHaveTextContent(/^JoyID$/);
+  });
+
+  it('writes no lock beside a default-lock owner, "change" alone on its change, another lock’s name', () => {
+    const outputs = [
+      output(DEFAULT_LOCK_CODE_HASH, false, 'aaaaaa'),
+      output(DEFAULT_LOCK_CODE_HASH, true, 'bbbbbb'),
+      output(JOYID_CODE_HASH, false, 'cccccc'),
+    ];
+    const tiles = cellTiles(txOf(outputs), LOOKUP).outputs;
     const words = tiles.map((t) => {
       const { container } = render(<span>{t.lockKind}</span>);
       return container.textContent;
