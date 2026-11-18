@@ -104,6 +104,16 @@ A note and an explaining sentence differ by where they stand: a note qualifies t
 above it and is read with it; a sentence that explains stands on its own (the head's lede, a
 section's paragraph, a banner). A link stays a link inside a quiet line: it takes the reading ink.
 
+`__tests__/lib/ink-role-gate.test.ts` holds the rule where the source shows it: a link renderer
+(`<a>`, `Address`, a `…Link`), a CKB or token amount that takes its parent's ink, a table cell (a
+`<td>`, a `ListTable` column's class or the root of what its `render` returns) and a paragraph
+(`<p>`) never carry `text-text-dim` outside a `quiet` subtree, by their own class or by the
+nearest ink their file sets around them. The sites tolerated today are listed per file with their
+count and a reason: the page lanes' work list, which only shrinks (a new site fails, and a site that
+goes fails until its count is lowered). A paragraph that is a note under a figure stays quiet, its
+count kept with that reason. `__tests__/utils/ink-role.ts` (`inkOf`) reads the ink a rendered word
+is drawn in, for a component's own test of its roles.
+
 ### The ghost ink
 
 The ghost (`text-text-ghost`, Lc 20 / about 3:1 by night and 2:1 by day) is below every text grade on
