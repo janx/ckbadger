@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AMOUNT_INK } from '@/components/ui/ckb-amount';
 import { STEP_W } from '@/lib/pipeline/encoding';
+import { CODE_CLASS_KEYS } from '@/lib/design-tokens';
 import {
   alpha,
   apcaLc,
@@ -11,6 +12,7 @@ import {
   glowAlpha,
   hexAlpha,
   hexToRgb,
+  inkOnFill,
   material,
   MATERIAL_KEYS,
   MATERIALS,
@@ -509,6 +511,33 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
         contrastRatio(ink(theme, 'pipeline-plate'), PALETTE[theme]['base-bg']),
         theme
       ).toBeGreaterThanOrEqual(1.25);
+  });
+});
+
+// Readability F1 follow-up: the "Who can change the code" bar on /scripts writes each class's name
+// and share inside its fill, in the ink the fill-ink rule gives (inkOnFill). By night that ink reads
+// at the night's word grade on every code-class fill; it did not on the unspendable grey, a mix of
+// two inks that drifted to a mid grey (#8a8175) when the inks moved lighter: the rule's ink there
+// read 5.06:1 but Lc 38, the bright ink 3.11:1 and Lc 56. By day the WCAG pin stands; the day
+// pairs measure Lc 74.9 (base-void on the fixed grey #7a7163, 4.57:1), 60.4 (text-bright on the
+// unspendable grey #bbb1a0, 8.07:1), 94.1 on the paper and 83.3 on the hair.
+describe('words on the code-class fills (the scripts bar)', () => {
+  const fills = [...new Set(Object.values(CODE_CLASS_KEYS).map((k) => k.fill))];
+
+  it('reads the fill-ink rule’s ink on every code-class fill at Lc 60 or more by night', () => {
+    const short: string[] = [];
+    for (const fill of fills) {
+      const { ink: key } = inkOnFill('dark', fill, 1);
+      const lc = Math.abs(apcaLc(PALETTE.dark[key], PALETTE.dark[fill]));
+      if (lc < 60) short.push(`${key} on ${fill}: Lc ${lc.toFixed(1)}`);
+    }
+    expect(short).toEqual([]);
+  });
+
+  it('reads it at 4.5:1 or more on every code-class fill in both themes', () => {
+    for (const theme of THEMES)
+      for (const fill of fills)
+        expect(inkOnFill(theme, fill, 1).contrast, `${theme} ${fill}`).toBeGreaterThanOrEqual(4.5);
   });
 });
 
