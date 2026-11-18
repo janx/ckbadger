@@ -545,6 +545,24 @@ describe('words on the code-class fills (the scripts bar)', () => {
   });
 });
 
+// Readability F1 follow-up, found by the survey of words on fills: the plain-CKB slate is a word's
+// ground in two bars, the address balance bar's "free" part and the holder timeline's current
+// holder, both writing in text-bright. As the mix dim ghost 0.12 it drifted with the night inks
+// to #72695f, where text-bright read 4.37:1 (6.82 on main) and the dark ink 3.5:1. By day the pair
+// is #1f1b17 on #a69c8c, 6.32:1 and Lc 49.5 (no day Lc floor is pinned).
+describe('words on the plain-CKB slate (the balance bar, the holder timeline)', () => {
+  it('reads text-bright on it at 4.5:1 in both themes and at Lc 60 or more by night', () => {
+    for (const theme of THEMES)
+      expect(
+        contrastRatio(PALETTE[theme]['text-bright'], PALETTE[theme]['slate-ckb']),
+        theme
+      ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      Math.abs(apcaLc(PALETTE.dark['text-bright'], PALETTE.dark['slate-ckb']))
+    ).toBeGreaterThanOrEqual(60);
+  });
+});
+
 describe('the amount inks (R5: one ink per amount)', () => {
   it('pins the table every amount renderer reads (AMOUNT_INK): one ink per sign, no fraction ink', () => {
     expect(AMOUNT_INK).toEqual(Object.fromEntries(AMOUNT_INKS.map((a) => [a.sign, a.className])));
