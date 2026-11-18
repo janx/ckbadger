@@ -450,6 +450,47 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
   });
 });
 
+// Readability 2026-11-18, lane B5 (§7.6, approved): on a linear scale to the page's largest
+// holding, the "CKB held" bar was a 1–3 px stub from about the twelfth row on, and its head stood
+// over the bar while the sorted figure had none. The bar leaves the three lists; the figure, right
+// aligned under its own head, shows the magnitude.
+describe('CKB held is a right-aligned figure under its head, with no bar (readability B5)', () => {
+  const rich: Asset = {
+    ...asset,
+    id: '0x' + 'ef'.repeat(32),
+    ownedCapacity: '40000000000',
+    ownedKnowledge: '18300000000',
+  };
+  const cases = [
+    ['token', 'Tokens'],
+    ['object', 'Object collections'],
+    ['identity', 'Identity systems'],
+  ] as const;
+  it.each(cases)('draws the %s list’s CKB held as its 2-dp figure alone', (assetType, label) => {
+    render(
+      <InventoryRows
+        assetType={assetType}
+        rows={[
+          { ...asset, assetType },
+          { ...rich, assetType },
+        ]}
+      />
+    );
+    const table = screen.getByRole('table', { name: label });
+    const head = within(table).getByRole('columnheader', { name: 'CKB held in its cells' });
+    expect(head).toHaveClass('text-right');
+    expect(head.querySelector('[data-scale-ticks]')).toBeNull();
+    for (const row of [1, 2]) {
+      const cell = cellUnder(table, row, 'CKB held in its cells');
+      expect(cell).toHaveClass('text-right', 'tabular-nums', 'whitespace-nowrap');
+      expect(cell.querySelector('[data-aligned-bar], [data-track], [data-segment]')).toBeNull();
+    }
+    // the figure as before (lane B2 owns its form): cut to 2 dp
+    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent(/^100\.00$/);
+    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent(/^400\.00$/);
+  });
+});
+
 // Table-rows L2 follow-up: a row's 2-dp amount is the exact amount CUT at 2 places, never rounded
 // (a rounded figure can show a digit that is not on chain); the exact value is in the title.
 describe('2-dp row amounts truncate, never round (table-rows L2)', () => {
