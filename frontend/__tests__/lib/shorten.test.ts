@@ -10,8 +10,9 @@ import {
 } from '@/lib/shorten';
 
 /**
- * The one shortening rule (UI review 2026-11-14, U-09, PB-19): three sizes, two kinds, one
- * ellipsis character. Counts are characters of the value as written, `0x` and `ckb1` included.
+ * The one shortening rule (UI review 2026-11-14, U-09, PB-19; readability 2026-11-18, R9): three
+ * sizes, two kinds, one ellipsis character. Counts are characters of the value as written, `0x`
+ * and `ckb1` included.
  */
 const HASH = '0x8e4f9c6f1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5';
 const ADDRESS =
@@ -24,21 +25,43 @@ describe('the three sizes (U-09)', () => {
     expect(shortenHash(HASH, 'tight')).toBe('0x8e4f…b4c5');
   });
 
-  // The lead's ruling (2026-11-14, B3 follow-up): a tight address is 4…6, the network in the
-  // head and the identity in the tail; its first eight characters ("ckb1q" and the start of the
-  // lock's code hash) are the same for every address of a lock. 11 characters, a tight hash's width.
-  it('writes an address at 12…8, 10…6 and 4…6', () => {
-    expect(shortenAddress(ADDRESS, 'head')).toBe('ckb1qzda0cr0…4c0cgwga');
-    expect(shortenAddress(ADDRESS, 'row')).toBe('ckb1qzda0c…0cgwga');
+  // R9 (readability 2026-11-18): an address keeps its network and its identity at every size,
+  // `ckb1…` and its tail, 8 characters at the head and row sizes, 6 at tight. The characters after
+  // `ckb1` are the lock's code hash, the same for every address of a lock. 13 characters at the
+  // head and row sizes; 11 at tight, a tight hash's width.
+  it('writes an address at 4…8, 4…8 and 4…6', () => {
+    expect(shortenAddress(ADDRESS, 'head')).toBe('ckb1…4c0cgwga');
+    expect(shortenAddress(ADDRESS, 'row')).toBe('ckb1…4c0cgwga');
     expect(shortenAddress(ADDRESS, 'tight')).toBe('ckb1…0cgwga');
+    expect(shortenAddress(ADDRESS, 'row')).toHaveLength(13);
     expect(shortenAddress(ADDRESS, 'tight')).toHaveLength(shortenHash(HASH, 'tight').length);
+  });
+
+  it('spends no character of a shortened address on what every address of a lock shares', () => {
+    // two default-lock addresses from the chain: the same first 58 characters (`ckb1`, the
+    // format, the lock's code hash and its hash type), different args
+    const a =
+      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0exelczgn2y6k0p9udvjs4fdmj8cghs3shprdnn';
+    const b =
+      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfdwlcghv62qw704s93hhsj';
+    expect(a.slice(0, 58)).toBe(b.slice(0, 58));
+    for (const size of ['head', 'row', 'tight'] as const) {
+      const [shortA, shortB] = [shortenAddress(a, size), shortenAddress(b, size)];
+      expect(shortA).not.toBe(shortB);
+      // the head is the network alone: everything kept after it is the tail, which tells them apart
+      expect(shortA.split(ELLIPSIS)[0]).toBe('ckb1');
+      expect(shortB.split(ELLIPSIS)[0]).toBe('ckb1');
+    }
+    expect(shortenAddress(a, 'row')).toBe('ckb1…3shprdnn');
+    expect(shortenAddress(b, 'row')).toBe('ckb1…4s93hhsj');
+    expect(shortenAddress(b, 'tight')).toBe('ckb1…93hhsj');
   });
 
   it('is one typed table, each form as long as it says', () => {
     const sizes: ShortSize[] = ['head', 'row', 'tight'];
     expect(SHORT_FORMS).toEqual({
-      head: { hash: { head: 12, tail: 8 }, address: { head: 12, tail: 8 } },
-      row: { hash: { head: 10, tail: 6 }, address: { head: 10, tail: 6 } },
+      head: { hash: { head: 12, tail: 8 }, address: { head: 4, tail: 8 } },
+      row: { hash: { head: 10, tail: 6 }, address: { head: 4, tail: 8 } },
       tight: { hash: { head: 6, tail: 4 }, address: { head: 4, tail: 6 } },
     });
     for (const size of sizes) {
@@ -79,6 +102,10 @@ describe('a value no longer than its shortened form is written whole', () => {
     // tight address: 4 + 1 + 6 = 11
     expect(shortenAddress('ckb1q1abcde', 'tight')).toBe('ckb1q1abcde'); // 11: whole
     expect(shortenAddress('ckb1q12abcde', 'tight')).toBe('ckb1…2abcde'); // 12: cut
+    // row (and head) address: 4 + 1 + 8 = 13
+    expect(shortenAddress('ckb1q1abcdefg', 'row')).toBe('ckb1q1abcdefg'); // 13: whole
+    expect(shortenAddress('ckb1q12abcdefg', 'row')).toBe('ckb1…2abcdefg'); // 14: cut
+    expect(shortenAddress('ckb1q12abcdefg', 'head')).toBe('ckb1…2abcdefg'); // 14: cut
   });
 });
 
