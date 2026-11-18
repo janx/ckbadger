@@ -102,8 +102,9 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
 /*
  * The tree's words (readability plan 2026-11-18, lane F3): a tile's number at the label size, its
  * hash, time and miner at the tick size, each a tight line (lib/chart-type.ts), so a tile's height
- * and width follow from them. A miner is named by its address in the row form (13 characters) or
- * by its pool's name, cut to the room it is given (U-09).
+ * and width follow from them. A miner is named by its address in the id form its room holds (the
+ * row form, 13 characters, else the tight form, 11; never cut again) or by its pool's name, cut to
+ * the room it is given (U-09).
  */
 const LABEL_LINE = tightLinePx(SVG_TEXT.label);
 const TICK_LINE = tightLinePx(SVG_TEXT.tick);
@@ -183,6 +184,18 @@ export const FORK_TREE = {
     top: 40,
   },
 } as const;
+
+/*
+ * An unnamed miner is its address in an id form, never cut again (review F-B, logic finding 4): a
+ * wide tile holds the row form by its width (WIDE_TILE), and the narrowest compact tile's column,
+ * the tile and its run into the gap (88 px), holds the tight form (11 characters, 79.2 px at
+ * 12 px). Checked once, at load.
+ */
+const TIGHT_ADDRESS = SHORT_FORMS.tight.address.head + 1 + SHORT_FORMS.tight.address.tail;
+if (textPx(TIGHT_ADDRESS, SVG_TEXT.tick) > FORK_TREE.compact.minTile + FORK_TREE.compact.labelRun)
+  throw new Error(
+    `fork tree: a ${FORK_TREE.compact.minTile} px tile's column cannot hold a tight address (${textPx(TIGHT_ADDRESS, SVG_TEXT.tick)} px)`
+  );
 
 export interface ForkTreeLayout {
   form: 'wide' | 'compact';

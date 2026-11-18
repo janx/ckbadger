@@ -166,4 +166,18 @@ describe('forkTreeLayout (responsive V4: the two branches drawn to the measured 
   it('refuses a width that cannot hold the collapsed column and one block', () => {
     expect(() => forkTreeLayout(deep, 150)).toThrow(/150 px/);
   });
+
+  // Review F-B (test finding 9; logic finding 4): the compact form's room, pinned to literals so
+  // a change of the module's constants shows here and in the component's band test, which
+  // derives the same numbers on its own. A tile's labels run 16 px into the 20 px gap after it,
+  // 4 px short of the next tile; under it they take 4 + 15 + 15 + 4 = 38 px; the svg keeps 4 px
+  // after the last tile. The narrowest column, 72 + 16 = 88 px, holds a tight address (11
+  // characters at 12 px, 79.2 px) and not the row form (13, 93.6); a wide tile's 110 − 2 × 8 = 94
+  // px between its insets holds the row form.
+  it('keeps the room an unnamed miner is written in', () => {
+    const c = FORK_TREE.compact;
+    expect([c.minTile, c.gap, c.labelRun, c.under, c.right]).toEqual([72, 20, 16, 38, 4]);
+    expect(c.minTile + c.labelRun).toBe(88);
+    expect(FORK_TREE.wide.tile - 2 * FORK_TREE.wide.inset).toBe(94);
+  });
 });

@@ -442,6 +442,9 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
     phoneRow("ownerLink(o, 'tight')"),
     phoneRow("lockLink(o, 'tight')"),
   ],
+  // an unnamed miner under a compact tile of the fork tree, where the row form (93.6 px at 12 px)
+  // does not fit the 88 px column of a 72 px tile (review F-B, logic finding 4)
+  'components/forks/fork-tree.tsx': [svgLabel("fits('row') ? 'row' : 'tight'")],
   // the holders' segments on the timeline, each the longest name that fits its segment's px
   'components/scripts/holder-timeline.tsx': [
     svgLabel("holderName(holder.custody, 'tight')"),

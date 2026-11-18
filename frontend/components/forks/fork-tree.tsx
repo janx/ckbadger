@@ -14,9 +14,9 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { minerName } from '@/components/forks/miner-link';
-import { clipLabel, shortenHash } from '@/lib/shorten';
+import { clipLabel, shortenHash, type ShortSize } from '@/lib/shorten';
 import { SVG_TEXT, centreShift } from '@/lib/chart-type';
-import { advancePx, descentPx } from '@/lib/type-metrics';
+import { advancePx, descentPx, textPx } from '@/lib/type-metrics';
 
 const MARK = ['', '①', '②', '③'] as const;
 /** A later mark on a block that already carries one is drawn this far beside it. */
@@ -72,18 +72,30 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
   // A row's name stands over the tip marks that hang on its tiles' top corners, a pixel clear of
   // them: "adopted then, dropped since" is wider than a tile, and its row's tip is marked (②).
   const rowNameLift = markR + MARK_OVERHANG + 1 + descentPx(SVG_TEXT.label);
-  // a miner is cut to its room (U-09): inside a wide tile, its width less the insets; under a
-  // compact one, its column (the tile and the 16 px of the gap after it)
-  const minerChars = Math.floor((compact ? TW + C.labelRun : TW - 2 * W.inset) / MINER_CHAR);
+  // a miner's room (U-09): inside a wide tile, its width less the insets; under a compact one, its
+  // column (the tile and the 16 px of the gap after it)
+  const minerRoom = compact ? TW + C.labelRun : TW - 2 * W.inset;
+  const minerChars = Math.floor(minerRoom / MINER_CHAR);
+  /**
+   * A miner on the tree (review F-B, logic finding 4): a pool by its name, a word, cut to the room
+   * with the one ellipsis; an unnamed one by its address in the id form the room holds, never cut
+   * again: the row form, the narrative's and the tables' (R9), where it stands whole (13
+   * characters, 93.6 px at 12 px: inside a wide tile's 94 px between its insets, and under a
+   * compact tile of at least 78 px), else the tight form (11 characters, 79.2 px: under a 72 px
+   * tile, whose column is 88 px; lib/fork-tree.ts holds that the narrowest column takes it).
+   */
+  const minerLabel = (pool: string | null, address: string): string => {
+    if (pool !== null) return clipLabel(pool, minerChars);
+    const fits = (size: ShortSize) =>
+      textPx(minerName(address, null, size).length, SVG_TEXT.tick) <= minerRoom;
+    const size: ShortSize = fits('row') ? 'row' : 'tight';
+    return minerName(address, null, size);
+  };
 
   const tile = (t: ForkTreeTile, y: number, dropped: boolean) => {
     const tx = x(t.number);
     const lit = !dropped && (t.number === model.main[0].number || targets.has(t.number));
-    // a label on the tree at the row size, the narrative's and the tables' (R9), then cut to its
-    // room (U-09): an address is 13 characters, 93.6 px at 12 px, whole inside the wide tile's
-    // 94 px between its insets and under a compact tile of at least 72 px (88 px with its run
-    // into the gap); only a pool's longer name is cut
-    const miner = t.minerAddress ? minerName(t.minerAddress, t.minerPool, 'row') : null;
+    const miner = t.minerAddress ? minerLabel(t.minerPool, t.minerAddress) : null;
     // under a compact tile its labels start at its left edge, except in the last column, where
     // they end at its right edge (the ruling on F3-d)
     const lastColumn = labelsUnder && t.number === model.last;
@@ -157,7 +169,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
             fontSize={SVG_TEXT.tick}
             fill={FORK_COLORS.tick}
           >
-            {clipLabel(miner, minerChars)}
+            {miner}
           </text>
         )}
       </g>

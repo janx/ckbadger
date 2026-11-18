@@ -253,15 +253,6 @@ const KNOWN_FAULTS = [
     owner: 'P4 rd/p-topics (forks, fork)',
     why: 'the tree’s phone form needs a design (PAGE-LANE-NOTES, P4: two of mainnet’s 58 forks, #21,022,666 and #21,006,834); this lane does not redesign it',
   },
-  {
-    width: 358,
-    shape: 'four heights, the last two today’s',
-    // the miners of +2 and +3, the address cut a second time to 12 characters (86.4 px): the
-    // same 8.8 px
-    meets: { a: 'ckb1…qs93hh…', b: 'ckb1…qs93hh…', by: 8.8 },
-    owner: 'P4 rd/p-topics (forks, fork)',
-    why: 'the tree’s phone form needs a design (as above)',
-  },
 ] as const;
 
 describe('ForkTree: every word inside its tile (readability F3)', () => {
@@ -287,7 +278,9 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
   const UNDER = 4 + 2 * (12 + 3) + 4;
 
   it('pins the known faults it holds, which only shrink', () => {
-    expect(KNOWN_FAULTS).toHaveLength(2);
+    // 1: the miners of +2 and +3 met by 8.8 px too, the address cut a second time to 12
+    // characters (86.4 px); in the tight form (79.2 px) they stand 5.6 px apart
+    expect(KNOWN_FAULTS).toHaveLength(1);
     for (const fault of KNOWN_FAULTS)
       expect(cases.some(([w, name]) => w === fault.width && name === fault.shape)).toBe(true);
   });
