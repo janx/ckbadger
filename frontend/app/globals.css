@@ -199,35 +199,6 @@ body * {
     font-variant-numeric: tabular-nums;
   }
 
-  .crt-screen {
-    position: relative;
-    overflow: hidden;
-  }
-
-  .crt-screen::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      var(--m-inset-scan) 0px,
-      var(--m-inset-scan) 1px,
-      transparent 1px,
-      transparent 2px
-    );
-    pointer-events: none;
-    z-index: 10;
-  }
-
-  .crt-screen::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: radial-gradient(ellipse at center, transparent 0%, var(--m-vignette) 100%);
-    pointer-events: none;
-    z-index: 10;
-  }
-
   .hex-char {
     display: inline-block;
     transition: all 0.1s ease-out;

@@ -31,7 +31,9 @@ it('keeps class/copper encodings separate and bundles fonts without runtime requ
   // the serif left with the vessels: the error pages are the mono sign over the night
   expect(css).not.toContain('Noto Serif Display');
   expect(statSync(resolve('public/fonts')).isDirectory()).toBe(true);
-  expect(css).toContain('.crt-screen::before');
+  // re-pinned for readability R1: `.crt-screen` (an inset scan with no user) is gone
+  // (skeleton-css.test lists it among the rules nothing renders)
+  expect(css).not.toContain('.crt-screen');
 });
 it('paints every scrollbar in the palette, thin inside the page, so a region that scrolls inside itself shows no platform-grey bar', () => {
   // The vitals strip and the pipeline scroll inside themselves below md; with classic (non-overlay)
