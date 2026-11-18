@@ -15,6 +15,7 @@ import {
   sealHash,
 } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { drawSeal, type SealId } from '@/lib/seal/stones';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
@@ -292,20 +293,24 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // The page's real widths (app/transactions/page.tsx's `main.container`: Tailwind's container at
   // sm 640 / md 768 / lg 1024 / xl 1280 less its gutters, 16 px a side, 24 from lg): the list stands
   // in 1,232 px from a 1280 window, 976 from 1024, 736 from 768, 608 from 640, and the window less
-  // 32 below (358 at 390, 328 at 360). The page changes both its lists' form at 1,228 px, its
+  // 32 below (358 at 390, 328 at 360). The page changes both its lists' form at 1,212 px, its
   // pool's sum (transactions-page.test.tsx pins it), so only 1,232 draws the table, What it did
-  // taking its 205 px minimum and the 4 px beyond; every narrower width draws the phone rows, whose
-  // what-line wraps by design.
-  const PAGE_FORM_PX = 1228;
+  // taking its 205 px minimum and the 20 px beyond; every narrower width draws the phone rows,
+  // whose what-line wraps by design. Re-pinned on purpose (readability R6): the transaction's row
+  // stone 24 × 48.5 → 16 × 32.3 px gives each list's Transaction column 16 px back, so the pool's
+  // sum is 1,212 (was 1,228) and What it did has 225 px at 1,232 (was 209).
+  const PAGE_FORM_PX = 1212;
   const PAGE_WIDTHS = [1232, 976, 736, 608, 358, 328] as const;
   /** Where "a common row stands on one line" does not hold: pinned, so the list can only shrink. */
   const KNOWN_FAULTS = [
     {
       case: 'a common row, "CKB Transfer" and "12 participants", on one line in What it did at 1,232 px',
       width: 1232,
-      shortfall: 49.6,
+      // re-pinned on purpose (readability R6): 49.6 → 33.6, the 16 px the smaller transaction
+      // stone gives back to What it did; not cured
+      shortfall: 33.6,
       lane: 'P3 (the lists pages)',
-      why: 'What it did, the flexible column, has 209 px at 1,232 (its 205 px minimum and the 4 px the container gives beyond the 1,228) and the row needs 258.6 (the mark, its gap, 27 glyphs at 7.8 px, the 8 px between headline and note, the cell gap); the other columns are budgeted to what they hold, honestly since this lane (13,568 inputs, genesis’s cellbase), and the lead ruled the column budgets do not change here: where the list gets its width is the page’s layout',
+      why: 'What it did, the flexible column, has 225 px at 1,232 (its 205 px minimum and the 20 px the container gives beyond the 1,212) and the row needs 258.6 (the mark, its gap, 27 glyphs at 7.8 px, the 8 px between headline and note, the cell gap); the other columns are budgeted to what they hold, honestly since this lane (13,568 inputs, genesis’s cellbase), and the lead ruled the column budgets do not change here: where the list gets its width is the page’s layout',
     },
   ] as const;
   it('keeps a common row on one line at the page’s widths, but for its pinned known fault', () => {
@@ -484,10 +489,11 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   // its age are the cell's two lines (they were one, "#… · age"), each whole on its line.
   // Re-pinned on purpose (the coordinator's ruling): 1,203 px on its own (renamed: "1,220").
   // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px (renamed: "1,203").
-  it('is drawn from its 1,227 px minimum, keeps the block and its age each on one line and drops the per-cell unit', () => {
+  // Re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 → 16 × 32.3 px, its footprint 56.5 → 40.3, Transaction 216 → 200: 1,211 px (renamed: "1,227").
+  it('is drawn from its 1,211 px minimum, keeps the block and its age each on one line and drops the per-cell unit', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1211);
     const row = within(table).getAllByRole('row')[2];
     const lines = row.querySelectorAll('td:nth-child(2) > span > *');
     expect(lines).toHaveLength(2);
@@ -528,7 +534,8 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     expect(cell).toHaveClass('whitespace-nowrap');
     // re-pinned on purpose (the coordinator's ruling): the list is 1,203 px on its own
     // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
+    // Re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 → 16 × 32.3 px, its footprint 56.5 → 40.3, Transaction 216 → 200: 1,211 px
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1211);
   });
 
   // CH-14 (the thousands hunt): a count of four digits or more is grouped, as every count is
@@ -565,9 +572,9 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   });
 });
 
-// The seals by kind (C2): every row leads with its transaction's row stone, the long slab (24 px
-// high, 48.5 wide): rods for the cells it consumed, the glyph in its rim, rods for the cells it
-// created. The hash stays the row's link.
+// The seals by kind (C2): every row leads with its transaction's row stone, the long slab (16 px
+// high, 32.3 wide since readability R6; it was 24 and 48.5): rods for the cells it consumed, the
+// glyph in its rim, rods for the cells it created. The hash stays the row's link.
 describe('TransactionListTable row stones', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -581,16 +588,20 @@ describe('TransactionListTable row stones', () => {
     { kind: 'tx', hash: cellbase.hash, consumed: 0, created: 1 },
   ];
 
-  it('leads every table row with its stone, overhanging the hash line by 3 px, before the hash link', () => {
+  // re-pinned on purpose (readability R6): the 16 px stone stands centred on the hash's 20 px line,
+  // 2 px clear above and below, where the 24 px one overhung it by 2 px (`-my-[2px]`); renamed:
+  // "overhanging the hash line by 3 px"
+  it('leads every table row with its stone, centred on the hash line, before the hash link', () => {
     render(<TransactionListTable transactions={txs} />);
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
     rows.forEach((tr, i) => {
       const seal = expectOneRowSeal(tr, ids[i]);
       expect(tr.querySelector('td')).toContainElement(seal);
-      // (24 − the 20 px line) / 2 (re-pinned, readability R4: the row line was 18 px): the
-      // one-line row keeps its height
-      expect(seal).toHaveClass('-my-[2px]');
+      // (the 20 px line − 16) / 2 clear above and below: the one-line row keeps its height
+      expect((ROW_LINE_PX - ROW_SEAL.tx.height) / 2).toBe(2);
+      expect(seal).toHaveClass('h-row', 'items-center');
+      expect(seal.className).not.toMatch(/-my-/);
       expectBefore(seal, within(tr).getByTitle(txs[i].hash).closest('a')!);
     });
     // a cellbase row is set back in the dim ink; its stone keeps its own state, pressed at full
@@ -611,7 +622,7 @@ describe('TransactionListTable row stones', () => {
       const seal = expectOneRowSeal(card, ids[i]);
       expect(card.firstElementChild).toHaveAttribute('data-part', 'mark');
       expect(card.firstElementChild).toContainElement(seal);
-      expect(seal).not.toHaveClass('-my-[2px]');
+      expect(seal.className).not.toMatch(/-my-/);
       expectBefore(seal, within(card).getByTitle(txs[i].hash));
     });
   });
@@ -647,6 +658,7 @@ describe('TransactionListTable row stones', () => {
   // it replaced. Old issue C: the hash keeps its 19 characters, 10 + 6 as in the phone row; the
   // Transaction column's 29 px come from the Size bar's track (80 → 56, 24 px) and What it did
   // (220 → 215, 5 px), so the table keeps its 1,230 px in the widest 1,232 px container.
+  // Readability R6: the stone's footprint is 40.3 px (32.3 and the 8 px gap).
   it('budgets the stone and the 19-character hash in the Transaction column inside the 1,230 px', () => {
     render(<TransactionListTable transactions={txs} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
@@ -660,10 +672,11 @@ describe('TransactionListTable row stones', () => {
     // block over its age, What it did the flexible column (its minimum read from minWidth): 1,220.
     // Re-pinned on purpose (the coordinator's ruling): Size on a 48 px track, 146 → 129: 1,203.
     // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px.
-    expect(widths).toEqual([216, 110, 204, 180, 102, 126, 145, 144]);
-    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1227);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
-    expect(ROW_SEAL.tx.footprint).toBe(56.5);
+    // Re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 → 16 × 32.3 px, its footprint 56.5 → 40.3, Transaction 216 → 200: 1,211 px.
+    expect(widths).toEqual([200, 110, 204, 180, 102, 126, 145, 144]);
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1211);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1211);
+    expect(ROW_SEAL.tx.footprint).toBe(40.3);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at the body step, 14 px since R4 (8.4; 7.8 at 13 px; it was 19
     // with three dots)
@@ -674,10 +687,11 @@ describe('TransactionListTable row stones', () => {
     expect(chars).toBe(17);
     // the stone, the hash and the 16 px gap fit the column (re-pinned on purpose, B5: 208 px, 2.9
     // px to spare; it was 221 with 15.9; R4: 218 px, the hash at 14 px, 2.7 to spare; F3-e: 216
-    // px, the spare gone, 0.7 of rounding up to a whole pixel)
+    // px, the spare gone, 0.7 of rounding up to a whole pixel; R6: 200 px, the stone 16 px less,
+    // 199.1 used and 0.9 of rounding up)
     const used = ROW_SEAL.tx.footprint + chars * 8.4 + 16;
-    expect(used).toBeCloseTo(215.3, 6);
-    expect(widths[0] - used).toBeCloseTo(0.7, 6);
+    expect(used).toBeCloseTo(199.1, 6);
+    expect(widths[0] - used).toBeCloseTo(0.9, 6);
     // Cycles: its 48 px track (F3-e: it was 56), the bar's 10 px gap and the figure of any scale
     // under a billion ("750,000,000", 11 ch at 13 px since R4, 12 before); the last column, no gap
     // after it (F3-e: it counted 16)
@@ -703,13 +717,14 @@ describe('TransactionListTable row stones', () => {
     // re-pinned (readability F3-e): the table is drawn from 1,220 px, so at 1,232 too
     // re-pinned (the coordinator's ruling): on its own from 1,203 px
     // re-pinned (reviews fb-tests 6, fb-logic 6): on its own from 1,227 px
-    for (const width of [1232, 1227, 1226, 608, 358]) {
+    // re-pinned (readability R6, the transaction stone 16 px): on its own from 1,211 px
+    for (const width of [1232, 1211, 1210, 608, 358]) {
       atContainerWidth(width);
       const { unmount } = render(<TransactionListTable transactions={[scriptCall]} />);
       expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(
-        width >= 1227 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
+        width >= 1211 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
       );
-      expect(screen.queryByRole('table') === null).toBe(width < 1227);
+      expect(screen.queryByRole('table') === null).toBe(width < 1211);
       unmount();
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
@@ -722,11 +737,13 @@ describe('TransactionListTable row stones', () => {
   // 1,232, draws it.
   // Re-pinned on purpose (the coordinator's ruling): on its own from 1,203 px (renamed: "1,220").
   // Re-pinned on purpose (reviews fb-tests 6, fb-logic 6): from 1,227 px (renamed: "1,203").
-  it('changes form at its 1,227 px minimum', () => {
+  // Re-pinned on purpose (readability R6, the transaction stone 16 px): from 1,211 px (renamed:
+  // "1,227").
+  it('changes form at its 1,211 px minimum', () => {
     for (const [width, form] of [
       [1232, 'table'],
-      [1227, 'table'],
-      [1226, 'rows'],
+      [1211, 'table'],
+      [1210, 'rows'],
     ] as const) {
       atContainerWidth(width);
       const { container, unmount } = render(<TransactionListTable transactions={txs} />);
@@ -806,15 +823,16 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
 
   // re-pinned on purpose (the coordinator's ruling): 1,203 px on its own (renamed: "1,220 px")
   // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px (renamed: "1,203 px")
-  it('pins each column to its content and the table to their sum, 1,227 px', () => {
+  // Re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 → 16 × 32.3 px, its footprint 56.5 → 40.3, Transaction 216 → 200: 1,211 px (renamed: "1,227 px")
+  it('pins each column to its content and the table to their sum, 1,211 px', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-    expect(budgets).toEqual([216, 110, 204, 180, 102, 126, 145, 144]);
+    expect(budgets).toEqual([200, 110, 204, 180, 102, 126, 145, 144]);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
     expect(cols[2].width).toBe('auto');
-    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1227);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1211);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1211);
     // each bar's track holds its head's widest tick row
     const heads = within(table).getAllByRole('columnheader');
     expect((heads[6].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe(
@@ -828,7 +846,8 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
   // on its own the list is 1,203 px (the page changes both its lists' form at the larger sum).
   // Re-pinned on purpose (reviews fb-tests 6, fb-logic 6): the column is budgeted for genesis's
   // cellbase, "1,500,000" (145), Cells for 13,568 inputs (126): 1,227 px (renamed: "1,203").
-  it('heads Size in the tick form on a 48 px track: 1,227 px on its own', () => {
+  // Re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 → 16 × 32.3 px, its footprint 56.5 → 40.3, Transaction 216 → 200: 1,211 px (renamed: "1,227").
+  it('heads Size in the tick form on a 48 px track: 1,211 px on its own', () => {
     render(
       <TransactionListTable
         transactions={[{ ...transfer, txSize: 597000, cycles: 750_000_000 }, scriptCall]}
@@ -842,9 +861,9 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
     expect(ceil(48 + 10 + at('1,500,000', 13) + 16)).toBe(145);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual([
-      216, 110, 204, 180, 102, 126, 145, 144,
+      200, 110, 204, 180, 102, 126, 145, 144,
     ]);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1211);
   });
 
   it('writes the block over its age, two lines with no separator', () => {
@@ -867,11 +886,13 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
 
   // re-pinned on purpose (the coordinator's ruling): on its own from 1,203 px (renamed: "1,220")
   // re-pinned on purpose (reviews fb-tests 6, fb-logic 6): from 1,227 px (renamed: "1,203")
-  it('changes form where the sum stops fitting: a table at 1,232 and 1,227, rows below', () => {
+  // re-pinned on purpose (readability R6, the transaction stone 16 px): from 1,211 px (renamed:
+  // "1,227")
+  it('changes form where the sum stops fitting: a table at 1,232 and 1,211, rows below', () => {
     for (const [width, form] of [
       [1232, 'table'],
-      [1227, 'table'],
-      [1226, 'rows'],
+      [1211, 'table'],
+      [1210, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {

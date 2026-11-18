@@ -208,10 +208,11 @@ export function expectNamePlate(root: ParentNode, kind: string): NamePlate {
 /**
  * `row` holds exactly one seal of the seals by kind, the row stone of `id` in `state` (pressed
  * when not given): the drawing of that id (compared as markup with `drawSeal`'s), at its kind's
- * row height and drawn width, with the 8 px gap after it (none with `gap: false`, a stone standing
- * alone in a cell tile's mark column, the column's gap its gap); an image and not a link (the
- * row's own link stays the row's link). Owner stones before an address in the row (OwnerSeal) are
- * not the row's seal and are not counted. Returns the seal's holder.
+ * row height and drawn width, standing centred in a box one row line tall (`h-row`, readability
+ * R6: no stone is taller than the line, none overhangs it), with the 8 px gap after it (none with
+ * `gap: false`, a stone standing alone in a cell tile's mark column, the column's gap its gap); an
+ * image and not a link (the row's own link stays the row's link). Owner stones before an address
+ * in the row (OwnerSeal) are not the row's seal and are not counted. Returns the seal's holder.
  */
 export function expectOneRowSeal(
   row: Element,
@@ -236,7 +237,8 @@ export function expectOneRowSeal(
   expect(seal.innerHTML).toBe(
     parsed(drawSeal(id, { form: 'row', height, state, ...SEAL_INKS }).svg)
   );
-  expect(seal).toHaveClass('[&>svg]:block');
+  expect(seal).toHaveClass('flex', 'h-row', 'items-center');
+  expect(seal.className).not.toMatch(/(^|\s)-?m[ty]-/);
   if (gap) expect(seal).toHaveClass('mr-2');
   else expect(seal.className).not.toMatch(/(^|\s)m[rx]-/);
   expect(seal.closest('a')).toBeNull();

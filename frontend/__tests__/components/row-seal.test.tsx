@@ -22,20 +22,56 @@ describe('RowSeal by kind (the seals by kind)', () => {
       }
   });
 
-  it('measures each stone: block 26 × 26, transaction 24 high and 48.5 wide, cell 30 × 30, script 28 high and 21 wide, the gap 8', () => {
-    // re-pinned (readability R4, F3 step 2): the row line 18 → 20 px, so each overhang is 1 px less
-    expect(ROW_LINE_PX).toBe(20);
+  // Re-pinned on purpose (readability ruling R6, judged on the Gate F0 prototype: "good"): a list
+  // row's stone is small, as in the home page's pipeline, the block's 16 px, each kind about two
+  // thirds of what it was with its proportions kept. Was: block 26 × 26, transaction 24 × 48.5,
+  // cell 30 × 30, script 28 × 21 (footprints 34, 56.5, 38, 29; overhangs 3, 2, 5, 4 on the 20 px
+  // line). The widths are drawSeal's at the heights (the next test draws them for every id).
+  it('measures each stone: block 16 × 16, transaction 16 high and 32.3 wide, cell 18 × 18, script 16 high and 12 wide, the gap 8', () => {
     expect(ROW_SEAL).toEqual({
-      block: { height: 26, width: 26, gap: 8, footprint: 34, overhang: 3 },
-      tx: { height: 24, width: 48.5, gap: 8, footprint: 56.5, overhang: 2 },
-      cell: { height: 30, width: 30, gap: 8, footprint: 38, overhang: 5 },
-      script: { height: 28, width: 21, gap: 8, footprint: 29, overhang: 4 },
+      block: { height: 16, width: 16, gap: 8, footprint: 24 },
+      tx: { height: 16, width: 32.3, gap: 8, footprint: 40.3 },
+      cell: { height: 18, width: 18, gap: 8, footprint: 26 },
+      script: { height: 16, width: 12, gap: 8, footprint: 20 },
     });
-    // the arithmetic: footprint = width + gap, overhang = (height − the 20 px line) / 2
+    // the arithmetic: footprint = width + gap; each about two thirds of the height it had
+    const was = { block: 26, tx: 24, cell: 30, script: 28 } as const;
     for (const kind of KINDS) {
       const m = ROW_SEAL[kind];
       expect(m.footprint).toBe(m.width + m.gap);
-      expect(m.height).toBe(ROW_LINE_PX + 2 * m.overhang);
+    }
+    expect(
+      Object.fromEntries(
+        KINDS.map((kind) => [kind, Math.round((ROW_SEAL[kind].height / was[kind]) * 100) / 100])
+      )
+    ).toEqual({ block: 0.62, tx: 0.67, cell: 0.6, script: 0.57 });
+    // a kind's proportion is kept: the drawn width over the height, as at the old height (to the
+    // tenth of a pixel drawSeal rounds a width to)
+    const wasWidth = { block: 26, tx: 48.5, cell: 30, script: 21 } as const;
+    for (const kind of KINDS)
+      expect(ROW_SEAL[kind].width, kind).toBeCloseTo(
+        (wasWidth[kind] / was[kind]) * ROW_SEAL[kind].height,
+        1
+      );
+  });
+
+  // Readability R6: at 16 and 18 px no stone is taller than the 20 px row line, so none overhangs
+  // it; each stands centred on it, (line − height) / 2 clear above and below.
+  it('stands every stone centred in a box one row line tall: 2 px clear of a 16 px stone, 1 px of the cell’s 18', () => {
+    expect(ROW_LINE_PX).toBe(20);
+    const clear = Object.fromEntries(
+      KINDS.map((kind) => [kind, (ROW_LINE_PX - ROW_SEAL[kind].height) / 2])
+    );
+    expect(clear).toEqual({ block: 2, tx: 2, cell: 1, script: 2 });
+    for (const kind of KINDS) {
+      const { container, unmount } = render(<RowSeal id={SEAL_IDS[kind]} />);
+      const holder = container.firstElementChild as HTMLElement;
+      // the box is the row line (tailwind.config.ts: h-row is ROW_LINE_PX), the stone centred in it
+      expect(holder).toHaveClass('flex', 'h-row', 'items-center');
+      expect(holder).not.toHaveClass('inline-block');
+      // nothing pulls it over the line or pushes it off it
+      expect(holder.className).not.toMatch(/(^|\s)-?m[ty]-/);
+      unmount();
     }
   });
 
@@ -58,49 +94,37 @@ describe('RowSeal by kind (the seals by kind)', () => {
         expect(svg).toHaveAttribute('height', String(height));
         unmount();
       }
-    // a transaction's counts past nine are a full block, the same width
+    // a transaction's counts past nine are a full block, the same width (re-pinned, R6: 24 high
+    // and 48.5 wide)
     const many: SealId = { ...SEAL_IDS.tx, consumed: 13000, created: null };
-    expect(drawSeal(many, { form: 'row', height: 24, state: 'pressed', ...SEAL_INKS }).width).toBe(
-      48.5
+    expect(drawSeal(many, { form: 'row', height: 16, state: 'pressed', ...SEAL_INKS }).width).toBe(
+      32.3
     );
+    // a block's count past nine is a full block too, and a cell's capacity of eleven digits
+    for (const id of [
+      { ...SEAL_IDS.block, txs: 13568 },
+      { ...SEAL_IDS.cell, capacity: BigInt('99999999999') * BigInt(100000000) },
+    ] satisfies SealId[])
+      expect(
+        drawSeal(id, { form: 'row', height: ROW_SEAL[id.kind].height, ...SEAL_INKS, state: 'ink' })
+          .width
+      ).toBe(ROW_SEAL[id.kind].width);
     // the gap is the seal's own 8 px right margin
     const { container } = render(<RowSeal id={SEAL_IDS.cell} />);
     expect(container.firstElementChild).toHaveClass('mr-2');
   });
 
-  it('overhangs a one-line row by (height − the row line) / 2 above and below only when asked', () => {
-    const classes: Record<SealKind, string> = {
-      block: '-my-[3px]',
-      tx: '-my-[2px]',
-      cell: '-my-[5px]',
-      script: '-my-[4px]',
-    };
-    for (const kind of KINDS) {
-      expect(classes[kind]).toBe(`-my-[${ROW_SEAL[kind].overhang}px]`);
-      const { container, rerender, unmount } = render(<RowSeal id={SEAL_IDS[kind]} />);
-      const holder = () => container.firstElementChild as HTMLElement;
-      expect(holder().className).not.toMatch(/-my-/);
-      rerender(<RowSeal id={SEAL_IDS[kind]} overhang />);
-      expect(holder()).toHaveClass(classes[kind]);
-      for (const other of KINDS)
-        if (classes[other] !== classes[kind]) expect(holder()).not.toHaveClass(classes[other]);
-      unmount();
-    }
-  });
-
-  // C11: a cell tile stands its stone alone in a 30 px mark column, the column's 10 px gap being
-  // the stone's gap; its own 8 px margin there would push it off the column's centre.
+  // C11: a cell tile stands its stone alone in its mark column, the column's 10 px gap being the
+  // stone's gap; its own 8 px margin there would push it off the column's centre.
   it('keeps no gap of its own when asked, for a stone standing alone in a mark column', () => {
     for (const kind of KINDS) {
-      const { container, rerender, unmount } = render(
-        <RowSeal id={SEAL_IDS[kind]} overhang gap={false} />
-      );
+      const { container, rerender, unmount } = render(<RowSeal id={SEAL_IDS[kind]} gap={false} />);
       const holder = () => container.firstElementChild as HTMLElement;
       expectOneRowSeal(container, SEAL_IDS[kind], 'pressed', { gap: false });
       expect(holder()).not.toHaveClass('mr-2');
-      expect(holder()).toHaveClass(`-my-[${ROW_SEAL[kind].overhang}px]`, '[&>svg]:block');
+      expect(holder()).toHaveClass('flex', 'h-row', 'items-center');
       // the default keeps it
-      rerender(<RowSeal id={SEAL_IDS[kind]} overhang />);
+      rerender(<RowSeal id={SEAL_IDS[kind]} />);
       expect(holder()).toHaveClass('mr-2');
       unmount();
     }

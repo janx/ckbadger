@@ -87,10 +87,10 @@ export default function BlocksPage() {
     {
       key: 'block',
       label: 'Block',
-      // The block's stone and its gap (ROW_SEAL.block.footprint, 34), the widest height,
+      // The block's stone and its gap (ROW_SEAL.block.footprint, 24), the widest height,
       // "#99,999,999" at the key's 14 px (92.4), a space at 13 px (7.8) and the hash at its tight
       // size, "0xd161…8fef" at 12 px (79.2: the hash is the key cell's second token, beside the
-      // number), and the gap: 229.4. Its 13 px spare went (readability F3-e): it stood for no
+      // number), and the gap: 219.4. Its 13 px spare went (readability F3-e): it stood for no
       // content, and a glyph advances exactly 0.6 em.
       minWidth: columnPx(
         ROW_SEAL.block.footprint +
@@ -354,13 +354,14 @@ function blockSeal(block: Block): SealId {
 
 /**
  * The row seal, then "#20,879,198 0xd161…8fef" on one line; a hardfork activation below it. The
- * number is the row's one bright thing at body (table-rows T5), on an 18 px line so the row keeps
- * its height (the 26 px stone overhangs that line by 4 px above and below, RowSeal).
+ * number is the row's one bright thing at body (table-rows T5), on the 20 px row line, and the
+ * 16 px stone stands centred on that line, 2 px clear above and below (RowSeal), so the row keeps
+ * its height.
  */
 function BlockIdentity({ block }: { block: Block }) {
   return (
     <div className="flex items-start">
-      <RowSeal id={blockSeal(block)} overhang />
+      <RowSeal id={blockSeal(block)} />
       <div className="min-w-0 space-y-1">
         <div className="whitespace-nowrap">
           <Link href={`/blocks/${block.number}`} className={KEY}>
@@ -462,19 +463,20 @@ function reward(block: Block) {
  * non-zero.
  *
  * The head line never wraps: the 13 px height, "#20,987,284" (11 characters, 85.8 px), and the
- * 12 px gap leave 196.2 px at 360 and 226.2 at 390 for the right part, 27 and 31 characters at
+ * 12 px gap leave 206.2 px at 360 and 236.2 at 390 for the right part, 28 and 32 characters at
  * 12 px; "999 txs · 59m ago" is 17 (122.4 px, 220.2 in all). Only an age that is not an age, "this
  * device's clock is behind" (29 characters), drops it under the height, whole. With the counts it
  * read "4 txs · 1 proposal · 13s ago" (28) and dropped at 360 while its neighbours did not.
  *
- * The miner line keeps one shape at 390 and 360 px (text columns of 324 and 294 px beside the
- * stone: 390 and 360 less the two 16 px gutters and the block stone's 34; 12 px, 7.2 px a
+ * The miner line keeps one shape at 390 and 360 px (text columns of 334 and 304 px beside the
+ * stone: 390 and 360 less the two 16 px gutters and the block stone's 24; 12 px, 7.2 px a
  * character, the unit 11 px, 6.6): "miner ckb1…93hhsj" (17 characters, 122.4 px, the tight address
  * at 4…6), the 12 px gap and the widest fee below 10 CKB, "fees 9.99999999" (15, 108) and " CKB"
- * (26.4), make 268.8 px, 25.2 to spare at 360; a fee of 100–999 CKB makes 283.2. At 8…6, "miner
- * ckb1qzda…93hhsj" (151.2 px), it was 297.6 and the fee dropped under the miner at 360. A fee from
- * 1,000 CKB at 360 (the separator: 297.6), from 1,000,000 CKB at 390, or a long pool name drops the
- * fees under the miner whole, right-aligned (PhoneRow's rule).
+ * (26.4), make 268.8 px, 35.2 to spare at 360; a fee of 100–999 CKB makes 283.2. Beside the 26 px
+ * stone (294 px at 360, 324 at 390) the 8…6 form, "miner ckb1qzda…93hhsj" (151.2 px), made it 297.6
+ * and the fee dropped under the miner at 360, as a fee from 1,000 CKB did there (the separator:
+ * 297.6) and one from 1,000,000 CKB at 390. A long pool name drops the fees under the miner whole,
+ * right-aligned (PhoneRow's rule).
  */
 function BlockPhoneRow({ block }: { block: Block }) {
   return (
@@ -556,16 +558,17 @@ function BlockPhoneRow({ block }: { block: Block }) {
  * Board L1's 640 table, five columns in 608 px (readability F3-e, the coordinator's ruling): every
  * column at its honest budget, and the transaction count is the age's second line, as the hash is
  * the height's and the cycles the size's, so each row stays two lines. The reward is not a column
- * (it is paid eleven blocks later). 595 px: a table from a 595 px container, rows below.
+ * (it is paid eleven blocks later). 585 px: a table from a 585 px container, rows below.
  */
 export const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'height',
     label: 'Height',
-    // The block's stone and its gap (ROW_SEAL.block.footprint, 34) beside its two lines, the
+    // The block's stone and its gap (ROW_SEAL.block.footprint, 24) beside its two lines, the
     // widest height, "#99,999,999" at the key's 14 px (92.4), over the tight hash at 12 px (79.2),
-    // and the gap: 142.4. Its 2 px spare went: a glyph advances exactly 0.6 em. A hardfork
-    // activation is a third line, on its one block.
+    // and the gap: 132.4. Its 2 px spare went: a glyph advances exactly 0.6 em. A hardfork
+    // activation is a third line, on its one block. The stone stands centred on the height's line
+    // (RowSeal).
     minWidth: columnPx(
       ROW_SEAL.block.footprint +
         Math.max(

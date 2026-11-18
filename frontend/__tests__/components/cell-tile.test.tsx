@@ -176,9 +176,11 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
       'pressed',
       IN_MARK_COLUMN
     );
-    // it overhangs the 20 px line by 5 px above and below, so the first line keeps its height
-    // (re-pinned, readability R4: 6 px over the 18 px line)
-    expect(seal).toHaveClass('-my-[5px]');
+    // the 18 px stone stands centred in a box of the 20 px line, 1 px clear above and below, so
+    // the first line keeps its height (re-pinned on purpose, readability R6: the 30 px stone
+    // overhung the line by 5 px, `-my-[5px]`)
+    expect(seal).toHaveClass('h-row', 'items-center');
+    expect(seal.className).not.toMatch(/-my-/);
     const outPoint = within(tile).getByRole('link', { name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:1$/ });
     expect(outPoint).toHaveAttribute('href', `/mainnet/cell/${HASH}-1`);
     expectBefore(seal, outPoint);
@@ -387,8 +389,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     const tile = screen.getByTestId('tx-io-output-0');
     expect(tile.tagName).toBe('ARTICLE');
     expect(tile).toHaveClass('grid', 'grid-cols-[30px_minmax(0,1fr)]', 'gap-x-2.5', 'gap-y-2.5');
-    // 12 px above, so the stone overhanging its line by 6 px stays 6 px inside the border; a
-    // 10 px row gap keeps the round stone's 5 px drawn overhang 4 px clear of the owner's stone
+    // 12 px above (it held the 30 px stone's overhang; since readability R6 the 18 px stone stands
+    // inside its line, 1 px clear of it)
     expect(tile).toHaveClass('pt-3', 'pb-2', 'px-3', 'min-w-0');
     const [cell, owner, content, occupied] = tileRows(tile);
     expect(cell.mark.children).toHaveLength(1);
@@ -398,8 +400,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(content.mark.children).toHaveLength(1);
     expect(content.mark.firstElementChild).toHaveAttribute('data-class', 'ckb');
     expect(occupied.mark.childNodes).toHaveLength(0);
-    // each mark centred in the column, its top on its row's first line (the stones overhang the
-    // 18 px line by their own negative margins; the 16 px class mark sits 1 px down)
+    // each mark centred in the column, on its row's first line (the cell's stone centred in a box
+    // of the 20 px line, the owner's overhanging it by 1 px; the 16 px class mark sits 1 px down)
     for (const { mark } of [cell, owner, content])
       expect(mark).toHaveClass('flex', 'items-start', 'justify-center');
     expect(content.mark).toHaveClass('pt-px');
@@ -424,8 +426,10 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     const tile = screen.getByTestId('tx-io-output-0');
     const [cell] = tileRows(tile);
     const seal = expectOneRowSeal(cell.mark, outputs[0].seal.id, 'pressed', IN_MARK_COLUMN);
-    // 5 px over the 20 px row line (re-pinned, readability R4: 6 over 18)
-    expect(seal).toHaveClass('-my-[5px]');
+    // centred on the 20 px row line, 1 px clear above and below (re-pinned on purpose, readability
+    // R6: the 30 px stone was 5 px over it, `-my-[5px]`)
+    expect(seal).toHaveClass('h-row', 'items-center');
+    expect(seal.className).not.toMatch(/-my-/);
     // the out point with its index is one unit, never broken, and the cell's link
     const outPoint = within(cell.text).getByRole('link', {
       name: /^0x[0-9a-f]{4}…[0-9a-f]{4}:0$/,

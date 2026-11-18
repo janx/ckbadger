@@ -184,17 +184,19 @@ const BUDGETS: [file: string, name: string, ruled: number, drawn: number][] = [
   ['lib/pipeline/layout.ts', 'SMALL_TEXT_PX', 12, SMALL_TEXT_PX],
   ['lib/pipeline/layout.ts', 'NUMBER_TEXT_PX', 12, NUMBER_TEXT_PX],
   // the list tables' columns (lane F3-e: each from the widest value it holds, rounded up to a
-  // whole pixel). /blocks' 608 px table: Height, the stone's 34, "#99,999,999" at 14 px, 92.4,
-  // and the gap, 142.4; Miner, "ckb1…4s93hhsj" at 13 px, 101.4, and the gap; Size · cycles,
-  // "3,500,000,000" at 13 px, the last column
-  ['app/blocks/page.tsx', 'NARROW_COLUMNS height', 143, minWidthOf(NARROW_COLUMNS, 'height')],
+  // whole pixel). /blocks' 608 px table: Height, the stone's 24, "#99,999,999" at 14 px, 92.4,
+  // and the gap, 132.4 (re-pinned on purpose, readability R6: the stone's 34, 142.4, 143); Miner,
+  // "ckb1…4s93hhsj" at 13 px, 101.4, and the gap; Size · cycles, "3,500,000,000" at 13 px, the
+  // last column
+  ['app/blocks/page.tsx', 'NARROW_COLUMNS height', 133, minWidthOf(NARROW_COLUMNS, 'height')],
   ['app/blocks/page.tsx', 'NARROW_COLUMNS miner', 118, minWidthOf(NARROW_COLUMNS, 'miner')],
   ['app/blocks/page.tsx', 'NARROW_COLUMNS resources', 102, minWidthOf(NARROW_COLUMNS, 'resources')],
-  // the pool's list: Transaction, the stone's 56.5, 17 glyphs at 14 px, 142.8, and the gap,
-  // 215.3; Status · waiting, the 7 px dot, 6, "Confirming" at 13 px, 78, 6, "· 99d ago", 70.2,
-  // and the gap, 183.2; Fee rate, "1,000,000,000" at 13 px, 101.4, and the gap; Size, "597,000",
-  // 54.6, and the gap; Cycles, "3,500,000,000", 101.4, the last column
-  ['app/transactions/page.tsx', 'POOL_COLUMNS tx', 216, minWidthOf(POOL_COLUMNS, 'tx')],
+  // the pool's list: Transaction, the stone's 40.3, 17 glyphs at 14 px, 142.8, and the gap,
+  // 199.1 (re-pinned on purpose, readability R6: the stone's 56.5, 215.3, 216); Status ·
+  // waiting, the 7 px dot, 6, "Confirming" at 13 px, 78, 6, "· 99d ago", 70.2, and the gap,
+  // 183.2; Fee rate, "1,000,000,000" at 13 px, 101.4, and the gap; Size, "597,000", 54.6, and
+  // the gap; Cycles, "3,500,000,000", 101.4, the last column
+  ['app/transactions/page.tsx', 'POOL_COLUMNS tx', 200, minWidthOf(POOL_COLUMNS, 'tx')],
   ['app/transactions/page.tsx', 'POOL_COLUMNS status', 184, minWidthOf(POOL_COLUMNS, 'status')],
   ['app/transactions/page.tsx', 'POOL_COLUMNS feeRate', 118, minWidthOf(POOL_COLUMNS, 'feeRate')],
   ['app/transactions/page.tsx', 'POOL_COLUMNS size', 71, minWidthOf(POOL_COLUMNS, 'size')],
