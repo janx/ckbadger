@@ -69,10 +69,10 @@ import {
   windowLane,
   windowRange,
   labelWidth,
+  type BlockSpan,
   type ChainSlotState,
   type WindowLabelGeom,
   type PickTargets,
-  type RulerSlot,
   type Scene,
 } from '@/lib/pipeline/layout';
 
@@ -852,7 +852,7 @@ describe('proposal window', () => {
   /** The label of the window of `H` when NEXT is #101. */
   const textOf = (H: number) => windowLabel(H, 100, MAINNET);
   /** NEXT #101 and the chain #100 … #85, each 60 px wide with a 20 px gap. */
-  const slots: RulerSlot[] = [
+  const slots: BlockSpan[] = [
     { number: 101, x: 214, w: 60, mined: false },
     ...Array.from({ length: 16 }, (_, i) => ({
       number: 100 - i,
@@ -872,7 +872,7 @@ describe('proposal window', () => {
 
   // Direction G: no tick and no dimension line. The window's one line of words starts at the left
   // edge of its first plate in view (the one nearest NEXT); the lane's hit area runs on the plates'
-  // edges, where it ran on the mid-gap ticks.
+  // edges.
   it('starts the words at the first window plate in view, and runs the lane on the plates’ edges', () => {
     const lane = windowLane(slots, 101, MAINNET, 2000, textOf(101));
     // The window of #101 is #91 … #99: #99 at 480 is the first in view, #91 ends at 1180.
@@ -923,7 +923,7 @@ describe('window label placement: from the first window plate in view, inside th
   const W = CONTAINER_VIEW_W;
   const TIP = 18_734_755;
   const NEXT = TIP + 1;
-  const slots: RulerSlot[] = [
+  const slots: BlockSpan[] = [
     { number: NEXT, x: G.nextX, w: CARD_W, mined: false },
     ...chainLayout(8, W, false).map((sl, i) => ({
       number: TIP - i,
@@ -1000,7 +1000,7 @@ describe('a narrower view: fewer blocks, all of them whole', () => {
       const x0 = last.x + last.w;
       expect(chainTail(scene.cards, W)).toEqual({ x0, x1: x0 + Math.min(66, W - x0) });
       expect(x0).toBeLessThan(W);
-      const slots: RulerSlot[] = [
+      const slots: BlockSpan[] = [
         { number: next.number, x: next.x, w: next.w, mined: false },
         ...scene.cards.map((c) => ({ number: c.block.number, x: c.x, w: c.w, mined: true })),
       ];
@@ -1408,7 +1408,7 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
       parentHash: c.block.parentHash,
       plate: true,
     }));
-  const nextSlot = (sc: Scene): RulerSlot => {
+  const nextSlot = (sc: Scene): BlockSpan => {
     const n = sc.next as NonNullable<Scene['next']>;
     return { number: n.number, x: n.y, w: n.h, mined: false };
   };

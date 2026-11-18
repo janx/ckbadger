@@ -99,8 +99,8 @@ function PoolWell({
 }
 
 /**
- * Arrowheads through a gap, in the muted ink (direction G, where a faint band of ticks was): the
- * tx moves on to the next stage. The row's (`flowPaths`) and the column's (`columnFlowPaths`).
+ * Arrowheads through a gap, in the muted ink (direction G): the tx moves on to the next stage. The
+ * row's (`flowPaths`) and the column's (`columnFlowPaths`).
  */
 export function FlowLink({ d }: { d: string }) {
   return (

@@ -435,7 +435,7 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
   });
 
   // Direction G: the window's gold is its one line of words now (text grade), and the muted ink
-  // marks the pool's flows as arrowheads (a shape, 3:1), where the links' ticks were.
+  // marks the pool's flows as arrowheads (a shape, 3:1).
   it('keeps the window’s gold words at 4.5:1 and the flows’ muted arrowheads at 3:1 on the page ground', () => {
     for (const theme of THEMES) {
       expect(

@@ -81,8 +81,8 @@ The 640–767 band has one content width to design for. Below 640 the container 
 - **Transaction pipeline** (homepage): a block is a plate 99 px wide; one row down to a 589 px
   canvas (two whole plates); below that a vertical timeline (the mempool and proposed wells, the
   dashed next block and the plates as rows 44 px tall, taller only for a 3×3 or 4×4 square or a
-  line of uncles; two bands of ticks join them in the gaps). Never scaled, never folded, a plate
-  never narrower than 99 px.
+  line of uncles, joined by one strap that runs down through their stones, gilt through the
+  proposal window). Never scaled, never folded, a plate never narrower than 99 px.
 - **Lists and tables**: a table is shown when the measured container holds every column's minimum
   width; otherwise each row is a designed phone row of two or three lines that keeps every column
   (no generic label/value dump). Twenty rows per page below `md`.

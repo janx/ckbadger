@@ -588,7 +588,12 @@ export function inWindow(num: number, H: number, w: WindowParams): boolean {
   return num >= H - w.proposalWindowFarthest && num <= H - w.proposalWindowClosest;
 }
 
-export interface RulerSlot {
+/**
+ * What a block's card spans along the chain, NEXT's too: its number, from `x`, `w` long, and
+ * whether it is mined. The window's words (`windowLane`) read these; the strap's pieces read them
+ * with each block's chain state (`ChainSlotState`).
+ */
+export interface BlockSpan {
   number: number;
   /** Along the chain: a card's left edge and width in a row, its top and height in a column. */
   x: number;
@@ -620,8 +625,8 @@ export interface WindowLane {
 }
 
 /**
- * The window of H in a row, under the pointer (direction G: no tick and no dimension line, the gilt
- * strap says the window). Its one line of words starts at the left edge of the window's first plate
+ * The window of H in a row, under the pointer (direction G: the gilt strap says the window, and
+ * nothing else marks it). Its one line of words starts at the left edge of the window's first plate
  * in view (the one nearest NEXT) or, when the text would pass the view's right edge, ends at that
  * edge; there are none when no plate of the window is in view. The lane's hit area runs on the
  * plates' edges: above the plates from H's own plate to the one past the window's far end, and on
@@ -630,7 +635,7 @@ export interface WindowLane {
  * the words from this one result.
  */
 export function windowLane(
-  slots: readonly RulerSlot[],
+  slots: readonly BlockSpan[],
   H: number,
   w: WindowParams,
   viewW: number,
@@ -788,7 +793,7 @@ export function columnRewardLink(a: Point, b: Point | null, tail: ChainTail): Re
   };
 }
 
-export interface ChainSlotState extends RulerSlot {
+export interface ChainSlotState extends BlockSpan {
   hash: string;
   parentHash: string;
   /** Its plate is set: false while a block lands (NEXT's dashed outline until contact). */
@@ -2001,7 +2006,7 @@ export interface SceneAxis {
    * The window's one line of words and the lane's hit area, in a row (`windowLane`); a column has
    * no lane beside its rows, so neither (the gilt says the window, the tips name its range).
    */
-  lane(slots: readonly RulerSlot[], H: number, w: WindowParams, text: string): WindowLane;
+  lane(slots: readonly BlockSpan[], H: number, w: WindowParams, text: string): WindowLane;
   tail(cards: readonly { x: number; w: number }[]): ChainTail | null;
   rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink;
 }

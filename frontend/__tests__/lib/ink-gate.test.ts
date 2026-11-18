@@ -154,7 +154,7 @@ const FADE_ALLOWLIST: Allowlist = {
     linked('bucketOpacity(i, hovered)'),
   ],
   // the window's label while a pointed cellbase's reward link runs through its lane
-  'components/pipeline/window-ruler.tsx': [linked('faded ? 0.15')],
+  'components/pipeline/window-label.tsx': [linked('faded ? 0.15')],
   // a lane and its gene name while another gene or a genotype row is pointed at or pinned
   'components/ui/allele-gel.tsx': [linked('laneOpacity(lane.gene)')],
   // a gene's map, bytes and name while another gene is pointed at

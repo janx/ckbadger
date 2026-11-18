@@ -324,16 +324,25 @@ export function nextTip(s: PipelineSnapshot): TipContent {
   };
 }
 
+/**
+ * A predicted tx's first facts: its size, as its share of a block's room, and the block it is
+ * predicted for, the next one. Its tooltip opens with them, and the readout of a pinned predicted
+ * tx whose pool tx is not listed says them.
+ */
+export function predictedFacts(tx: { size: number }, s: PipelineSnapshot): [string, string][] {
+  return [
+    ['size · area', `${fmtBytes(tx.size)} · ${pct(tx.size, s.consensus.maxBlockBytes)}`],
+    ['predicted for', num(s.tip.number + 1)],
+  ];
+}
+
 /** A predicted tx on the NEXT card; `pool` is its pool entry when the listed pool has it. */
 export function predictedTip(
   tx: { hash: string; size: number },
   pool: PipelinePoolTx | null,
   s: PipelineSnapshot
 ): TipContent {
-  const rows: [string, string][] = [
-    ['size · area', `${fmtBytes(tx.size)} · ${pct(tx.size, s.consensus.maxBlockBytes)}`],
-    ['predicted for', num(s.tip.number + 1)],
-  ];
+  const rows = predictedFacts(tx, s);
   if (pool?.proposedIn) {
     rows.push(['proposal in', num(pool.proposedIn.block)], ['fee rate', feeRate(pool.feeRate)]);
   }

@@ -16,6 +16,7 @@ import {
   cellbaseTip,
   chipTip,
   nextTip,
+  predictedFacts,
   predictedTip,
   txTip,
   uncleTip,
@@ -299,5 +300,28 @@ describe('the sentence that closes a tip whose mark opens a page', () => {
   it('renders the closing sentence as the last words of the footnote', () => {
     const el = renderTip(withOpen(uncleTip(blockAt(T - 1), 0), 'block'));
     expect(el.lastElementChild?.textContent).toMatch(/them\. Click to open the block\.$/);
+  });
+});
+
+// Lane S2: a predicted tx's first facts, which its tip opens with and a pinned predicted tx's
+// readout says (the readout of one whose pool tx is not listed), from this one function.
+describe('predictedFacts: what a predicted tx is, for its tip and its readout', () => {
+  const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
+  const w0 = pool.proposed.find((t) => t.hash === poolTxHash('w0'));
+  if (!w0) throw new Error('fixture: w0 is not proposed');
+
+  it('gives its size, its share of a block and the next block it is predicted for', () => {
+    expect(predictedFacts({ size: 900 }, snapshot)).toEqual([
+      ['size · area', `900 B · ${pct(900, snapshot.consensus.maxBlockBytes)}`],
+      ['predicted for', `#${(T + 1).toLocaleString('en-US')}`],
+    ]);
+  });
+
+  it('opens the tip of a predicted tx, listed in the pool or not', () => {
+    const listed = predictedTip({ hash: w0.hash, size: w0.size }, w0, snapshot);
+    expect(listed.rows.slice(0, 2)).toEqual(predictedFacts(w0, snapshot));
+    expect(listed.rows.slice(2).map(([k]) => k)).toEqual(['proposal in', 'fee rate']);
+    const outside = predictedTip({ hash: `0x${'ab'.repeat(32)}`, size: 900 }, null, snapshot);
+    expect(outside.rows).toEqual(predictedFacts({ size: 900 }, snapshot));
   });
 });

@@ -30,7 +30,7 @@ import {
   type SceneNext,
   type ScenePoolGrid,
 } from '@/lib/pipeline/layout';
-import { PlateStone, type DimLevel } from '@/components/pipeline/block-card';
+import { PlateStone, PlateStrap, type DimLevel } from '@/components/pipeline/block-card';
 import { FlowLink } from '@/components/pipeline/pool-zone';
 import { T10, T10B, T11C, T12C, T12D, fmtInt } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
@@ -50,6 +50,8 @@ const wordY = (u: { y: number; h: number }) => u.y + u.h / 2 + 3.5;
 
 interface ColumnBlockProps {
   card: SceneCard;
+  /** The block lies inside the drawn proposal window: the gilt strap runs down through its stone. */
+  gilt: boolean;
   highlighted: boolean;
   dim: DimLevel;
   onIds?: ReadonlySet<string>;
@@ -64,7 +66,10 @@ interface ColumnBlockProps {
  * number, its own proposal dots, then the line: the cellbase and its txs, each set in its cut —
  * one cut per mark, drawn first, and none where there is no transaction — then its "+N" and its
  * uncles (each its word and its dots or its "+N"; no box, no stone), on the line or on a line of
- * their own under it.
+ * their own under it. Inside the drawn proposal window (direction G, StrapPhone.dc.html) the gilt
+ * strap runs down the row's whole height through its stone, x 5 … 25 (`PlateStrap`), as tall as
+ * the row it crosses, so a 3×3 or 4×4 square or a line of uncles does not break it; above the
+ * plate's fill and under its stone, cuts, dots and words, never faded and never set back.
  *
  * An older block steps back by its marks' fill alone (`agedPaint` toward the cut, `agedChip`
  * toward the plate); the plate, the stone and the words keep full strength, the number in
@@ -72,7 +77,7 @@ interface ColumnBlockProps {
  * and the marks beneath them, but an uncle's word, which is what the pointer reads the uncle by.
  * The motion layer owns the outer group's `opacity` and, while a block lands, its box.
  */
-export function ColumnBlock({ card, highlighted, dim, onIds, age }: ColumnBlockProps) {
+export function ColumnBlock({ card, gilt, highlighted, dim, onIds, age }: ColumnBlockProps) {
   const { block } = card;
   const head = columnHeadAt(card);
   const chipCount = columnChipCountAt(card);
@@ -97,6 +102,7 @@ export function ColumnBlock({ card, highlighted, dim, onIds, age }: ColumnBlockP
           pointerEvents="all"
           style={{ fill: PLATE_FILL, stroke: highlighted ? PLATE_EDGE : 'none' }}
         />
+        {gilt && <PlateStrap o="column" w={card.w} h={card.h} highlighted={highlighted} />}
         {card.stone && (
           <PlateStone hash={block.hash} txs={block.txCount} x={head.stoneX} y={head.stoneY} />
         )}

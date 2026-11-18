@@ -29,8 +29,8 @@ import {
   pickTargets,
   rewardTarget,
   windowLabel,
+  type BlockSpan,
   type ChainSlotState,
-  type RulerSlot,
   type Scene,
   type ScenePhase,
   type SceneSquare,
@@ -56,6 +56,7 @@ import {
   fmtBytes,
   chipTip,
   nextTip,
+  predictedFacts,
   predictedTip,
   txTip,
   uncleTip,
@@ -66,7 +67,7 @@ import {
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
 import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
-import { WindowLabel } from '@/components/pipeline/window-ruler';
+import { WindowLabel } from '@/components/pipeline/window-label';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
@@ -305,13 +306,14 @@ const samePin = (a: PipelinePin | null, b: PipelinePin) =>
     ? b.kind === 'tx' && a.hash === b.hash
     : b.kind === 'block' && a.number === b.number);
 
+/** A ring `pad` px around a mark's box (a square, a ghost), in canvas px. */
 function Ring({
   q,
   pad,
   testId,
   dashed,
 }: {
-  q: AbsSquare;
+  q: { X: number; Y: number; s: number };
   pad: number;
   testId: string;
   dashed?: boolean;
@@ -428,7 +430,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     plate: true,
   }));
   const nextSlot = scene.next ? axis.along(scene.next) : null;
-  const windowSlots: RulerSlot[] =
+  const windowSlots: BlockSpan[] =
     scene.next && nextSlot
       ? [{ number: scene.next.number, ...nextSlot, mined: false }, ...chainSlots]
       : chainSlots;
@@ -461,8 +463,12 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   };
 
   const hovered = hoverTx ? (squares.get(hoverTx) ?? null) : null;
-  const pinnedSq =
-    pinned?.kind === 'tx' && pinned.hash !== hoverTx ? (squares.get(pinned.hash) ?? null) : null;
+  // The pinned tx's mark, where the readout under the canvas finds it: its square in a well or on
+  // a plate, else (its pool tx not in the listed pool) its predicted ghost on NEXT.
+  const pinnedMark =
+    pinned?.kind === 'tx' && pinned.hash !== hoverTx
+      ? (squares.get(pinned.hash) ?? ghostOfTx.get(pinned.hash) ?? null)
+      : null;
   const chip = hoverTx ? (chipOfTx.get(hoverTx) ?? null) : null;
   const ghost = hoverTx ? (ghostOfTx.get(hoverTx) ?? null) : null;
   const onIds = useMemo(() => new Set(hovered && hoverTx ? [hoverTx] : []), [hovered, hoverTx]);
@@ -722,18 +728,10 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
             ) : (
               <NextCard next={scene.next} dim={nextDim} />
             ))}
-          {scene.cards.map((c, i) =>
-            column ? (
-              <ColumnBlock
-                key={c.id}
-                card={c}
-                highlighted={motionView.highlighted(c.id)}
-                dim={cardDim(c.block.number)}
-                onIds={onIds}
-                age={i}
-              />
-            ) : (
-              <BlockCard
+          {scene.cards.map((c, i) => {
+            const Card = column ? ColumnBlock : BlockCard;
+            return (
+              <Card
                 key={c.id}
                 card={c}
                 gilt={inWindow(c.block.number, anchor, consensus)}
@@ -742,8 +740,8 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
                 onIds={onIds}
                 age={i}
               />
-            )
-          )}
+            );
+          })}
         </g>
         <g data-layer="labels" pointerEvents="none">
           {scene.bands ? (
@@ -833,10 +831,8 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
               <Ring q={hovered} pad={2} testId="ring" />
             </>
           )}
-          {pinnedSq && <Ring q={pinnedSq} pad={2.5} testId="pin-ring" dashed />}
-          {ghost && (
-            <Ring q={{ ...ghost, stage: 'committed' }} pad={2} testId="ghost-ring" dashed />
-          )}
+          {pinnedMark && <Ring q={pinnedMark} pad={2.5} testId="pin-ring" dashed />}
+          {ghost && <Ring q={ghost} pad={2} testId="ghost-ring" dashed />}
         </g>
       </MotionSvg>
       <PipelineTooltip ref={tipRef} content={tip} />
@@ -859,7 +855,16 @@ const TAG_TONE = {
   block: 'text-jade border-jade/50',
 } as const;
 
-/** Where the pinned tx is now, in one line, read from the snapshot on screen. */
+/** A tip's facts said in one line: `label value · label value`. */
+const factsLine = (facts: readonly [string, string][]) =>
+  facts.map(([k, v]) => `${k} ${v}`).join(' · ');
+
+/**
+ * Where the pinned tx is now, in one line, read from the snapshot on screen: in the pool, on a
+ * block, or found only among NEXT's predicted txs (its pool tx not in the listed pool, which is
+ * truncated): then it is a proposed tx the next block is expected to commit, said in the facts
+ * its tip opens with (`predictedFacts`). null when the snapshot has it nowhere.
+ */
 function selectionText(
   hash: string,
   s: PipelineSnapshot
@@ -895,6 +900,8 @@ function selectionText(
       };
     }
   }
+  const predicted = s.next?.txs.find((t) => t.hash === hash);
+  if (predicted) return { tag: 'proposed', text: factsLine(predictedFacts(predicted, s)) };
   return null;
 }
 
@@ -905,12 +912,7 @@ function blockSelectionText(
 ): { tag: keyof typeof TAG_TONE; text: string } | null {
   const b = s.blocks.find((x) => x.number === n);
   if (!b) return null;
-  return {
-    tag: 'block',
-    text: blockFacts(b)
-      .map(([k, v]) => `${k} ${v}`)
-      .join(' · '),
-  };
+  return { tag: 'block', text: factsLine(blockFacts(b)) };
 }
 
 /**

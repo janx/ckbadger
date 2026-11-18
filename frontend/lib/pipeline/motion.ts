@@ -20,10 +20,10 @@ import {
   axisOf,
   cardBox,
   windowLabel,
+  type BlockSpan,
   type BoxRect,
   type ChainSlotState,
   type Orientation,
-  type RulerSlot,
   type Scene,
   type SceneSquare,
 } from '@/lib/pipeline/layout';
@@ -1068,7 +1068,7 @@ export class SceneMotion {
    * Paints a card from its values: its place and entrance opacity, and its box. NEXT's box is its
    * dashed outline (React paints it). A block's box is its plate once `plate` is set, its own tone
    * with no stroke at rest (a 1 px dim edge while it is highlighted), and until then NEXT's dashed
-   * outline with neither its stone, its cuts nor its gilt strap.
+   * outline with neither its stone, its cuts, its gilt strap nor the edge drawn over the gilt.
    */
   private paintCard(n: MotionNode): void {
     const { X, Y, op, w, h, solid, plate } = n.v;
@@ -1092,8 +1092,11 @@ export class SceneMotion {
       box.setAttribute('stroke-opacity', String(GHOST.outline.strokeOpacity));
       box.setAttribute('stroke-dasharray', GHOST.outline.dash);
     }
-    // The stone, the cuts and the gilt strap are the plate's: none while the block is an outline.
-    for (const el of n.el.querySelectorAll('[data-stone], [data-cuts], [data-strap]')) {
+    // The stone, the cuts, the gilt strap and the edge drawn over it are the plate's: none while
+    // the block is an outline.
+    for (const el of n.el.querySelectorAll(
+      '[data-stone], [data-cuts], [data-strap], [data-edge]'
+    )) {
       if (set) el.removeAttribute('opacity');
       else el.setAttribute('opacity', '0');
     }
@@ -1119,7 +1122,7 @@ export class SceneMotion {
     const H = this.view.anchor();
     const slots: ChainSlotState[] = [];
     let next: { x: number; w: number } | null = null;
-    let nextSlot: RulerSlot | null = null;
+    let nextSlot: BlockSpan | null = null;
     for (const r of [...this.cards.values(), ...this.exitingCards]) {
       if (r.node.v.op <= 0.02) continue;
       const { X, Y, w, h } = r.node.v;

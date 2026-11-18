@@ -205,7 +205,7 @@ describe('materials: well, plate, cut and the predicted NEXT', () => {
   // Direction G (Strap.dc.html `.sp`, `.sq2`, `.fw`): the strap is the plate's own tone between
   // two blocks, so the chain reads as one piece; gilt inside the window; from NEXT (and from a
   // block still landing) NEXT's own dashed outline, the only stroke in the chain. The pool's flows
-  // are arrowheads in the muted ink at 0.8, as their ticks were.
+  // are arrowheads in the muted ink at 0.8.
   it('lays the strap in the plate’s tone, gilt in the window, NEXT’s dashed outline from NEXT', () => {
     expect(GILT_FILL).toBe('var(--pipeline-gilt)');
     expect(LINK_PAINT).toEqual({

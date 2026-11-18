@@ -3,7 +3,14 @@
 import { useMemo } from 'react';
 import { color } from '@/lib/palette';
 import { CUT_FILL, GILT_FILL, PLATE_EDGE, PLATE_FILL, agedChip } from '@/lib/pipeline/encoding';
-import { G, cardBox, strapBox, tail4, type SceneCard } from '@/lib/pipeline/layout';
+import {
+  G,
+  cardBox,
+  strapBox,
+  tail4,
+  type Orientation,
+  type SceneCard,
+} from '@/lib/pipeline/layout';
 import { drawSeal } from '@/lib/seal/stones';
 import { T10B, T12C } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
@@ -58,6 +65,45 @@ export function PlateStone({
   );
 }
 
+/**
+ * A plate's own strap inside the drawn proposal window (direction G): the gilt across a row plate's
+ * head line from edge to edge, or down a column row's whole height through its stone
+ * (`strapBox`), drawn right above the plate's fill and under its stone, cuts, dots and words, a
+ * ground as the plate is, never faded with age and never set back with the marks; it lets the
+ * pointer through to the plate. It crosses the plate's outer pixels (a row plate's sides, a column
+ * row's top and bottom), so while the plate is highlighted its 1 px edge (`cardBox` with its line,
+ * in `PLATE_EDGE`, as the box draws it) is drawn again over the gilt, never broken by it. While a
+ * block lands the motion layer hides both until its plate is set.
+ */
+export function PlateStrap({
+  o,
+  w,
+  h,
+  highlighted,
+}: {
+  o: Orientation;
+  w: number;
+  h: number;
+  highlighted: boolean;
+}) {
+  return (
+    <>
+      <rect data-strap {...strapBox(o, w, h)} pointerEvents="none" style={{ fill: GILT_FILL }} />
+      {highlighted && (
+        <rect
+          data-edge
+          {...cardBox(o, w, h, true)}
+          fill="none"
+          strokeWidth={1}
+          vectorEffect="non-scaling-stroke"
+          pointerEvents="none"
+          style={{ stroke: PLATE_EDGE }}
+        />
+      )}
+    </>
+  );
+}
+
 interface BlockCardProps {
   card: SceneCard;
   /** The block lies inside the drawn proposal window: the gilt strap crosses its head. */
@@ -78,9 +124,9 @@ interface BlockCardProps {
  * stone), and its transactions, each square and the cellbase set in its cut — one cut per mark,
  * drawn first, and none where there is no transaction: nothing on a plate stands for what the
  * block does not have. Inside the drawn proposal window (direction G) the gilt strap crosses its
- * head line from edge to edge, above the plate's fill and under its stone, cuts, dots and words:
- * a ground as the plate is, never faded with age and never set back with the marks; the number
- * stays in the bright ink on it.
+ * head line from edge to edge (`PlateStrap`), above the plate's fill and under its stone, cuts,
+ * dots and words: a ground as the plate is, never faded with age and never set back with the
+ * marks; the number stays in the bright ink on it.
  *
  * An older block steps back by its marks' fill alone, each mixed toward the ground it stands on
  * (`agedPaint` toward the cut, `agedChip` toward the plate), never by an opacity; the plate, the
@@ -112,14 +158,7 @@ export function BlockCard({ card, gilt, highlighted, dim, onIds, age }: BlockCar
           pointerEvents="all"
           style={{ fill: PLATE_FILL, stroke: highlighted ? PLATE_EDGE : 'none' }}
         />
-        {gilt && (
-          <rect
-            data-strap
-            {...strapBox('row', card.w, card.h)}
-            pointerEvents="none"
-            style={{ fill: GILT_FILL }}
-          />
-        )}
+        {gilt && <PlateStrap o="row" w={card.w} h={card.h} highlighted={highlighted} />}
         {card.stone && (
           <PlateStone hash={block.hash} txs={block.txCount} x={G.stoneX} y={G.stoneY} />
         )}

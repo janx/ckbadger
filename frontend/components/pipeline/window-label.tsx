@@ -16,8 +16,8 @@ interface WindowLabelProps {
 /**
  * The window's one line of words in the lane above the plates (a row; a column has no lane),
  * start-anchored where `windowLane` put it: at the left edge of the window's first plate in view,
- * or ending at the view's edge. Nothing else marks the window under the pointer (direction G: no
- * tick, no dimension line); the gilt strap says it.
+ * or ending at the view's edge. Nothing else marks the window under the pointer: the gilt strap
+ * says it (direction G).
  */
 export function WindowLabel({ label, emphasis, faded, text }: WindowLabelProps) {
   if (label === null) return null;
