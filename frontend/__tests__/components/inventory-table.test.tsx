@@ -515,8 +515,18 @@ describe('inventory columns budgeted from what they hold (readability F3-e)', ()
       'object',
       'Object collections',
       [
-        // the 24 px framed thumb, a name, the standard's tag and the widest composition tag
-        ceil(24 + 8 + name + 8 + tag('m-NFT') + 8 + tag('Composition unavailable') + 16),
+        // the 24 px framed thumb, 10 characters of the name (12 would make the table 984 px,
+        // past the 976 of a 1024 px window), the standard's tag and the widest composition tag
+        ceil(
+          24 +
+            8 +
+            at('x'.repeat(10), 14) +
+            8 +
+            tag('m-NFT') +
+            8 +
+            tag('Composition unavailable') +
+            16
+        ),
         // live items and the quiet " / minted" beside them, six digits each
         ceil(at('999,999', 13) + at(' / 999,999', 12) + 16),
         count,
@@ -525,7 +535,7 @@ describe('inventory columns budgeted from what they hold (readability F3-e)', ()
         held,
         ceil(at('Unavailable', 13)),
       ],
-      [391, 143, 102, 94, 168, 86],
+      [374, 143, 102, 94, 168, 86],
     ],
     [
       'identity',
@@ -557,8 +567,11 @@ describe('inventory columns budgeted from what they hold (readability F3-e)', ()
       expect(cols[0].width).toBe('auto');
       expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
       unmount();
+      // every inventory table keeps its form at a 1024 px window (976 px of content)
+      expect(sum).toBeLessThanOrEqual(976);
       for (const [width, form] of [
         [1232, 'table'],
+        [976, 'table'],
         [sum, 'table'],
         [sum - 1, 'rows'],
         [608, 'rows'],

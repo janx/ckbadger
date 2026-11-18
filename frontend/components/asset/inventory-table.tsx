@@ -563,18 +563,13 @@ function objectColumns(): ListColumn<Asset>[] {
     {
       key: 'identity',
       label: 'Collection',
-      // The flexible column: the 24 px framed thumb, a name (NAME_CHARS), the standard's tag
-      // ("m-NFT", "Spore") and the widest composition tag, "Composition unavailable", 8 px apart,
-      // and the gap: 390.4. It was 300, which the tags alone could fill.
+      // The flexible column: the 24 px framed thumb, the name's first 10 characters, the
+      // standard's tag ("m-NFT", "Spore") and the widest composition tag, "Composition
+      // unavailable", 8 px apart, and the gap: 373.6. Ten, not NAME_CHARS' 12: beside the widest
+      // tags the table keeps its form at a 1024 px window (976 px of content; 984 with 12). It was
+      // 300, which the tags alone could fill.
       minWidth: columnPx(
-        24 +
-          8 +
-          name(NAME_CHARS) +
-          8 +
-          tag('m-NFT') +
-          8 +
-          tag('Composition unavailable') +
-          CELL_GAP_PX
+        24 + 8 + name(10) + 8 + tag('m-NFT') + 8 + tag('Composition unavailable') + CELL_GAP_PX
       ),
       width: 'auto',
       render: (a) => <CollectionName asset={a} />,
