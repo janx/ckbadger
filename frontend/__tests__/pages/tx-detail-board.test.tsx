@@ -624,6 +624,23 @@ describe('Transaction board, tier 2', () => {
     }
   });
 
+  // Readability review 2026-11-18 (lane A): a dep group's member that no script of the
+  // transaction names read "1,048,576 B no script here names": when its size was added (R2b-a,
+  // 63fabc55) the member lost "it" and became a size with no noun. The board's words are "a
+  // 70,320 B cell no script here names" (Main.dc.html, DEPS); a named member keeps "Default Lock
+  // code, 52,048 B".
+  it("says what a dep group's member no script here names is: a cell of its size", async () => {
+    render(<TransactionDetailPage />);
+    const dep0 = await waitFor(() => {
+      const el = document.querySelector('#tx-dep-0');
+      if (!el) throw new Error('no dep row yet');
+      return el as HTMLElement;
+    });
+    const [named, unnamed] = Array.from(dep0.querySelectorAll('.pl-3 > span'));
+    expect(named).toHaveTextContent(/^↳ 0xmember:0 · Default Lock code, 52,048 B$/);
+    expect(unnamed).toHaveTextContent(/^↳ 0xother:1 · a 1,048,576 B cell no script here names$/);
+  });
+
   it('says which script each cell dep supplies code for (TX-15)', async () => {
     render(<TransactionDetailPage />);
     const dep0 = await waitFor(() => {
@@ -635,7 +652,9 @@ describe('Transaction board, tier 2', () => {
     // beside "for X").
     expect(dep0).toHaveTextContent('dep group for Default Lock');
     expect(dep0).toHaveTextContent('↳ 0xmember:0 · Default Lock code, 52,048 B');
-    expect(dep0).toHaveTextContent('↳ 0xother:1 · 1,048,576 B no script here names');
+    // Re-pinned (readability 2026-11-18): the member is a cell of its size, in the board's words
+    // (was "1,048,576 B no script here names", a size with no noun).
+    expect(dep0).toHaveTextContent('↳ 0xother:1 · a 1,048,576 B cell no script here names');
     expect(document.querySelector('#tx-dep-1')).toHaveTextContent('code for Spore · 76,752 B');
     const dep2 = document.querySelector('#tx-dep-2') as HTMLElement;
     expect(dep2).toHaveTextContent('code of Default Lock, not run here · 122,552 B');

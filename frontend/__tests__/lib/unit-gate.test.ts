@@ -15,6 +15,8 @@ import { unprotectedUnits } from '@/__tests__/utils/unit-scan';
  *   a template literal, a ternary, a concatenation;
  * - a field named for a date (`date`, `day`, `weekStart`, `activationDate`, `completeThrough`,
  *   `from`, `through`) rendered as a child as it is (`{peak.date}`);
+ * - a range of two values, its dash between them (`{a}–{b}`, `${a}–${b}` in a child's template):
+ *   a line breaks after an en dash, and `unitText` holds no range (readability review 2026-11-18);
  *
  * unless the string goes through `unitText` / `unitNode` (components/ui/units.tsx) on its way, or
  * an element around it renders it as a unit (NoBreak, ShortId, time, Utc8Date, Utc8DateTime,
@@ -96,6 +98,22 @@ describe('the unit gate reads the AST exactly (self-tests)', () => {
     expect(scan(`<svg><text>{formatUtc8Date(t)}</text></svg>`)).toEqual([]);
     // a value computed for something else, not written as text here
     expect(scan(`<p>{rows.map((r) => r.day.length)}</p>`)).toEqual([]);
+  });
+
+  // Readability review 2026-11-18 (lane A): the transaction page wrote its commit window as
+  // `window {close}–{far}`, and the line broke after the dash ("window 2–" / "10"). A range of two
+  // values is one unit; `unitText` holds no range, so only an element around it does.
+  it('finds a range of two values written as text, held only by an element that renders a unit', () => {
+    expect(scan('<span>window {w.close}–{w.far}</span>')).toEqual(['range: {w.close}–{w.far}']);
+    expect(scan('<p>{`bytes ${a}–${b}`}</p>')).toEqual(['range: `bytes ${a}–${b}`']);
+    expect(scan('<p>{unitText(`bytes ${a}–${b}`)}</p>')).toEqual(['range: `bytes ${a}–${b}`']);
+    expect(scan('<span>window <NoBreak>{w.close}–{w.far}</NoBreak></span>')).toEqual([]);
+    expect(scan('<span className="whitespace-nowrap">{a}–{b}</span>')).toEqual([]);
+    expect(scan('<svg><text>{a}–{b}</text></svg>')).toEqual([]);
+    // a dash that is not between two values, and a range that is not written here
+    expect(scan('<span>{a} – {b}</span>')).toEqual([]);
+    expect(scan('<span>2–10 {a}</span>')).toEqual([]);
+    expect(scan('<a title={`${a}–${b}`}>x</a>')).toEqual([]);
   });
 
   // A4 round 4: Tailwind's truncate is white-space: nowrap (with overflow hidden and an ellipsis),

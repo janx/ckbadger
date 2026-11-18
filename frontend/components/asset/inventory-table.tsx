@@ -540,12 +540,11 @@ function countColumn(
   };
 }
 
-const ON_CHAIN_TIERS = new Set<Asset['compositionTier']>(['pure_ckb', 'btc_ckb']);
-
 /**
  * Board objects row: a 24 px mark in the collection's frame (crystal / copper for the fully
- * on-chain tiers, IV-10), the name bright, then the standard and the composition as tags. The
- * mark overhangs the 18 px line by 3 px each way, so the row stays 41 px.
+ * on-chain tiers, IV-10), the name bright, then the standard as a tag and the composition: a fully
+ * on-chain tier as the site's one composition badge (IV-24), 18 px tall as a tag is, an off-chain
+ * tier as a tag. The mark overhangs the 18 px line by 3 px each way, so the row stays 41 px.
  */
 function CollectionName({ asset: a }: { asset: Asset }) {
   const frame = thumbFrame(a.compositionTier);
@@ -568,10 +567,13 @@ function CollectionName({ asset: a }: { asset: Asset }) {
         {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>
       <RowTag>{formatStandard(a.standard)}</RowTag>
-      {a.compositionTier ? (
-        <RowTag variant={ON_CHAIN_TIERS.has(a.compositionTier) ? 'accent' : 'default'}>
-          {formatCompositionTier(a.compositionTier)}
-        </RowTag>
+      {a.compositionTier === 'pure_ckb' || a.compositionTier === 'btc_ckb' ? (
+        // One class, one hue (readability 2026-11-18): the frame and ink of COMPOSITION_BADGES, as
+        // the filter chip above the list and the phone row draw it; the accent row tag drew
+        // BTC+CKB in Pure CKB's jade.
+        <CompositionBadge tier={a.compositionTier} size="sm" />
+      ) : a.compositionTier ? (
+        <RowTag>{formatCompositionTier(a.compositionTier)}</RowTag>
       ) : (
         <RowTag>Composition unavailable</RowTag>
       )}

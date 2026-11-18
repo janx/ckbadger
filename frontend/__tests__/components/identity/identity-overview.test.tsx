@@ -151,6 +151,28 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Records')).toHaveTextContent('0');
     expect(fact('Sub-names · for sale')).toHaveTextContent('none · no');
   });
+
+  // Readability review 2026-11-18 (lane A): on verification.cell at 1280 "CKB held in its cell"
+  // broke into five lines, "240" / ".00000000 CKB" / … : the amount was allowed a break before its
+  // decimals, and its column (one seventh of the row, 148.6 px) was under the 148.8 px its value
+  // needs on one line. A figure is one unit; the row gives each column at least its content.
+  it("keeps the .cell's CKB held one unit, its integer never parted from its decimals", () => {
+    const item = dotcellItem();
+    const protocol = structuredClone(dotcellProtocolProducer) as IdentityProtocol;
+    render(
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol, { graceEndsAt: item.graceEndsAt })}
+        now={NOW}
+        isLive
+        createdAtBlock={100}
+        dotcell={item}
+      />
+    );
+    const value = fact('CKB held in its cell')!.querySelector('dd [data-ckb-amount]')!;
+    expect(value).toHaveClass('whitespace-nowrap');
+    expect(value).not.toHaveClass('flex-wrap');
+  });
 });
 
 describe('identity summary (ID-C5)', () => {

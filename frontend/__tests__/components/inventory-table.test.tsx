@@ -8,6 +8,7 @@ import {
   TokenTwoPlaces,
 } from '@/components/asset/inventory-table';
 import type { Asset } from '@/lib/api';
+import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 const asset: Asset = {
   id: '0x' + 'ab'.repeat(32),
   assetType: 'token',
@@ -324,15 +325,41 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
         t.textContent,
         t.getAttribute('data-row-tag'),
       ]);
-    // Fully on-chain tiers are the accent tag; a centralized mix is a plain one.
-    expect(tags(pure)).toEqual([
-      ['Spore', 'default'],
-      ['Pure CKB', 'accent'],
-    ]);
+    // Re-pinned (readability 2026-11-18, one class one hue): a fully on-chain tier is the site's
+    // composition badge, 18 px as a tag is, in its class's frame and ink (was the accent tag, in
+    // jade for both on-chain tiers); a centralized mix is still a plain tag.
+    expect(tags(pure)).toEqual([['Spore', 'default']]);
+    const badge = pure.querySelector('[data-composition="pure_ckb"]')!;
+    expect(badge).toHaveTextContent('Pure CKB');
+    expect(badge).toHaveClass('h-[18px]', 'text-meta');
     expect(tags(central)).toEqual([
       ['m-NFT', 'default'],
       ['Centralized mix', 'default'],
     ]);
+  });
+
+  // Readability review 2026-11-18 (lane A): a "BTC+CKB" row chip was drawn in the "Pure CKB" hue
+  // (both an accent row tag, jade; sampled 149,194,183 on mainnet), while the filter chip of the
+  // same class above the list is in the copper ink. One class, one hue: the row draws the
+  // composition from the table that owns the classes' inks (COMPOSITION_BADGES), as the filter
+  // and every other page do.
+  it("draws each on-chain row's composition in its own class's ink, the filter's", () => {
+    const btc: Asset = {
+      ...spore,
+      id: '0x' + '7c'.repeat(32),
+      name: 'Nervape',
+      compositionTier: 'btc_ckb',
+    };
+    render(<InventoryRows assetType="object" rows={[spore, btc]} />);
+    const table = screen.getByRole('table', { name: 'Object collections' });
+    for (const [tier, label] of [
+      ['pure_ckb', 'Pure CKB'],
+      ['btc_ckb', 'BTC+CKB'],
+    ] as const) {
+      const words = within(table).getByText(label);
+      expect(words).toHaveStyle({ backgroundImage: COMPOSITION_BADGES[tier].ink });
+      expect(words).not.toHaveClass('text-jade');
+    }
   });
 
   // Re-pinned on purpose (readability B5, plan §7.6): the violet CKB held bar left the list.
