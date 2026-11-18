@@ -254,7 +254,7 @@ function DetailBody({
           <Prose>
             <p>{description.overview}</p>
           </Prose>
-          <ul className="text-text-dim mt-3 space-y-2">
+          <ul className="text-text-dim max-w-measure mt-3 space-y-2">
             {description.legendItems.map((item) => (
               <li key={item.label}>
                 <span className="text-text-bright">{item.label}:</span> {item.description}

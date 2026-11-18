@@ -182,7 +182,7 @@ export function RewardBreakdown({
                 unit={false}
               />
             </dd>
-            <dd className="text-text-dim col-span-3 col-start-2 md:col-span-1 md:col-start-auto">
+            <dd className="text-text-dim max-w-measure col-span-3 col-start-2 md:col-span-1 md:col-start-auto">
               {notes[p.key]}
             </dd>
           </div>
