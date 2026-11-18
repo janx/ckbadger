@@ -77,7 +77,8 @@ describe('NotFoundPage', () => {
     );
     expect(screen.getByRole('main').parentElement).toHaveClass('overflow-x-hidden');
     expect(screen.queryByRole('contentinfo')).toBeNull();
-    // behind the verse, the newest block's seal: the vitals' tip, its hash read from /blocks/{n}
+    // beside the verse (below it on a narrower screen), the newest block's seal: the vitals' tip,
+    // its hash read from /blocks/{n}
     const seal = await pressedSeal();
     expect(seal.querySelectorAll('[data-seal]')).toHaveLength(1);
     expect(seal.querySelector('[data-seal="block"][data-seal-form="page"] svg')).toHaveAttribute(
@@ -182,7 +183,7 @@ describe('NotFoundPage', () => {
       'the local index was asked; it holds none.',
       "honey badger don't care.",
     ]);
-    // the seal pressed behind is the newest block's, never the hash that was asked for
+    // the seal pressed beside the verse is the newest block's, never the hash that was asked for
     const seal = await pressedSeal();
     expect(seal.querySelector('svg')).toHaveAttribute('aria-label', TIP_SEAL_LABEL);
     expect(seal.querySelector('svg')?.getAttribute('aria-label')).not.toContain(HASH.slice(0, 10));

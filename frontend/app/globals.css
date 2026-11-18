@@ -841,30 +841,16 @@ h1.text-index {
 }
 
 /* The not-found and error pages (rubbing × Song print, phase 4; the seals by kind, C5): the verse
-   over the newest block's seal. The seal (components/error-page-shell.tsx, the block's square stone
-   in the cinnabar mark) is pressed on the page's ground behind every line of text (z -1 in main's
-   isolated stack), centred, faint (`--m-seal-press`, the theme's material). It takes about the
-   area the old tall brush seal before it took (11.94 × 28.14 units, as tall as main's box and one
-   screen at most): a square 0.65 as tall (√(11.94 / 28.14) = 0.651), and never wider than the
-   page less its 16 px gutters. Its SVG keeps its drawn proportions at whatever height it is
-   given. */
+   and, in its own place, the newest block's seal (components/error-page-shell.tsx, the block's
+   square stone in the cinnabar mark), faint (`--m-seal-press`, the theme's material). It stands
+   clear of the text column at every width (readability R6: pressed behind the verse, its strokes
+   crossed the glyphs): beside the column from 1280, under it below, drawn at its own 256 px
+   (ERROR_PAGE_LAYOUT), in the page's flow. */
 .error-seal {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px 0;
   pointer-events: none;
   opacity: var(--m-seal-press);
 }
-.error-seal > [data-seal] {
-  display: block;
-  height: min(65%, 65svh, calc(100vw - 32px));
-}
+.error-seal > [data-seal],
 .error-seal svg {
   display: block;
-  height: 100%;
-  width: auto;
 }

@@ -84,7 +84,11 @@ describe('ErrorPageShell', () => {
 
   // The seals by kind (C5): the newest block's square stone, its transactions counted in rods, in
   // place of the old brush seal of its hash.
-  it('with providers it presses the newest block’s seal behind the verse: the tip block’s stone, once', async () => {
+  // Re-pinned on purpose (readability R6): the stone stands in its own place clear of the text,
+  // 256 px (it was 469, behind the verse), main no longer isolates a stack for it, and the caption
+  // under it says no place ("behind: " went); renamed: "presses the newest block's seal behind
+  // the verse".
+  it('with providers it presses the newest block’s seal in its own place: the tip block’s stone, once', async () => {
     render(
       <MemoryRouter initialEntries={['/mainnet/nowhere']}>
         <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
@@ -95,7 +99,7 @@ describe('ErrorPageShell', () => {
     const seal = await screen.findByTestId('error-seal');
     // the drawing is a lazy chunk: the seal library is not in the entry
     await waitFor(() => expect(seal.querySelector('[data-seal] svg')).not.toBeNull());
-    // decoration behind the text: hidden from the reader, who has the caption
+    // decoration beside the text: hidden from the reader, who has the caption
     expect(seal).toHaveAttribute('aria-hidden', 'true');
     expect(seal).toHaveClass('error-seal');
     // one seal on the page, the stone and not the old hash seal
@@ -106,29 +110,32 @@ describe('ErrorPageShell', () => {
     expect(drawn).toHaveAttribute('data-seal', 'block');
     expect(drawn).toHaveAttribute('data-seal-form', 'page');
     expect(drawn).toHaveAttribute('data-seal-state', 'pressed');
-    // the tip's block as /blocks/{n} serves it: its hash and its 5 transactions, drawn 469 px
-    // square (the area of the old 306 × 720 brush seal), pressed −3° (the not-found board's hand)
+    // the tip's block as /blocks/{n} serves it: its hash and its 5 transactions, drawn 256 px
+    // square (the room beside the text column at 1280; it was 469, the area of the old 306 × 720
+    // brush seal), pressed −3° (the not-found board's hand)
     const id: SealId = { kind: 'block', hash: TIP_HASH, txs: 5 };
     expect(drawn.innerHTML).toBe(
       parsed(
-        drawSeal(id, { form: 'page', height: 469, state: 'pressed', ...SEAL_INKS, tilt: -3 }).svg
+        drawSeal(id, { form: 'page', height: 256, state: 'pressed', ...SEAL_INKS, tilt: -3 }).svg
       )
     );
     const svg = drawn.querySelector('svg')!;
     expect(svg).toHaveAttribute('aria-label', 'Block seal 0xabc123de, 5 transactions');
-    expect(svg).toHaveAttribute('width', '469');
-    expect(svg).toHaveAttribute('height', '469');
+    expect(svg).toHaveAttribute('width', '256');
+    expect(svg).toHaveAttribute('height', '256');
     // in the cinnabar mark, pressed a little askew; faint is the CSS's (--m-seal-press)
     expect(drawn.innerHTML).toContain('var(--c-mark)');
     expect(drawn.innerHTML).not.toContain('var(--c-rouge)');
     expect(svg.getAttribute('style')).toBe('transform: rotate(-3deg)');
-    // the seal sits in main, behind the verse, the first screen's height (globals.css)
+    // the seal sits in main, in the page's flow; nothing is stacked under the text
     expect(screen.getByRole('main')).toContainElement(seal);
-    expect(screen.getByRole('main')).toHaveClass('isolate');
-    // the caption names the block, as a link, and its hash
+    expect(screen.getByRole('main')).not.toHaveClass('isolate');
+    // the caption under the stone names the block, as a link, and its hash
     const caption = document.querySelector('[data-seal-caption]') as HTMLElement;
+    expect(caption.tagName).toBe('FIGCAPTION');
+    expect(caption.parentElement).toBe(seal.parentElement);
     expect(caption).toHaveTextContent(
-      'behind: the seal of the newest block, #1,000,000 · 0xabc123de…34abcd'
+      /^the seal of the newest block, #1,000,000 · 0xabc123de…34abcd$/
     );
     // R4 (UI review 2026-11-14, U-08): a caption is information, in the dim ink, never the ghost
     expect(caption).toHaveClass('text-text-dim', 'text-meta');
@@ -202,21 +209,23 @@ describe('ErrorPageShell', () => {
     expect(screen.getByRole('heading', { level: 1, name: VERSE_NAME })).toBeInTheDocument();
   });
 
-  // The stone takes about the area the old brush seal took: that one was 11.94 × 28.14 units, as
-  // tall as main's box (a screen at most); a square of its area is 0.651 of its height.
-  it('sizes the stone from the first screen: 0.65 of the old brush seal’s height, never past the gutters', () => {
+  // Re-pinned on purpose (readability R6): the stone took about the area of the old brush seal
+  // behind the verse, 0.65 of main's height (`height: min(65%, 65svh, calc(100vw - 32px))`);
+  // standing in its own place it is shown at the size it is drawn, 256 px, the room beside the
+  // text column at 1280 (the R6 tests below), and the CSS sets no size (renamed: "sizes the stone
+  // from the first screen").
+  it('shows the stone at the size it is drawn, faint, with no size of its own in the CSS', () => {
     const css = readFileSync(resolve(__dirname, '../../app/globals.css'), 'utf-8');
     const rule = (selector: string) => {
       const at = css.indexOf(`\n${selector} {`);
       expect(at).toBeGreaterThan(-1);
       return css.slice(at, css.indexOf('}', at));
     };
-    expect(Math.sqrt(11.94 / 28.14)).toBeCloseTo(0.65, 2);
-    expect(rule('.error-seal > [data-seal]')).toContain(
-      'height: min(65%, 65svh, calc(100vw - 32px));'
-    );
     expect(rule('.error-seal')).toContain('opacity: var(--m-seal-press);');
-    expect(rule('.error-seal svg')).toContain('width: auto;');
+    expect(rule('.error-seal > [data-seal],\n.error-seal svg')).toContain('display: block;');
+    expect(css.slice(css.indexOf('\n.error-seal {'))).not.toMatch(
+      /^\.error-seal[^{]*\{[^}]*(height|width):/m
+    );
     // the old hash seal's rule is gone with it
     expect(css).not.toContain('[data-hash-seal]');
   });
