@@ -123,6 +123,9 @@ const RUBBING = {
   // The darker code-class grey, set by its words (readability F1 follow-up): the bright ink at Lc
   // 70 on it. It was the mix dim ghost 0.4, #8a8175 since the ruling (#665d53 before), unpinned.
   codeUnspendableFill: '#6a6155',
+  // The plain-CKB slate, set by the words on it the same way: text-bright at Lc 70. It was the mix
+  // dim ghost 0.12, #72695f since the ruling (#524941 before), unpinned.
+  slateCkb: '#6a6157',
 };
 
 /** The alpha of an `rgba(r, g, b, a)` material. */
@@ -173,6 +176,7 @@ describe('the palette: one source for both themes', () => {
     expect(dark.object).toBe(RUBBING.object);
     expect(dark.identity).toBe(RUBBING.identity);
     expect(dark['code-unspendable-fill']).toBe(RUBBING.codeUnspendableFill);
+    expect(dark['slate-ckb']).toBe(RUBBING.slateCkb);
     expect(MATERIALS.dark.glow).toBe('1');
   });
 

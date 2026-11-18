@@ -107,8 +107,13 @@ const dark = {
   object: '#d0b8fe',
   identity: '#fcaec2',
   copper: '#fab487',
-  /** Plain CKB as a mark: the dim ink, a step above ghost. */
-  'slate-ckb': '#72695f',
+  /**
+   * Plain CKB as a mark, a hair above the ghost; also the ground of words (an address balance
+   * bar's "free" part, the current code-cell holder), set by them by night: the neutral of the mix
+   * dim ghost 0.12 moved in OKLCH lightness until text-bright reads on it at Lc 70 (4.93:1). The
+   * mix drifted with the inks to #72695f, where neither ink held a word (4.37:1 and 3.5:1).
+   */
+  'slate-ckb': '#6a6157',
   /** "Other" as a mark, and a tile's outline: the boards' second line (lib.js line2), at 1.60:1. */
   'slate-other': '#3f3730',
   // the cell's four parts
