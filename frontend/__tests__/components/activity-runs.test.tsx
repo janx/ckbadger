@@ -372,6 +372,48 @@ describe('an older page that continues the last run (B4 fix round)', () => {
   });
 });
 
+// Lane B4 fix round (review-rules-logic NOTE 2, the coordinator's item 12): a folded run's head
+// shows the parties its rows show, by the one rule (`participantsToShow`: over six, the five
+// largest, in the feed's order: paid, then received, each largest first). A run of 7-party
+// transactions with no focus, its parties in an API order that is not that order.
+describe('a folded run shows the parties its rows show (B4 fix round)', () => {
+  it('caps its parties by the rows’ rule: the five largest, in the rows’ order, and the count', async () => {
+    const user = userEvent.setup();
+    const deltas = ['1', '2', '-700', '300', '400', '500', '600'];
+    const crowded = (n: number): GlobalActivity => ({
+      ...oracle(n, 'q3q7ue', '0x00', n * 49),
+      participants: deltas.map((d, i) => ({ ...oracleParty(`cap${i}`), ckbDelta: d })),
+    });
+    const rows = [crowded(1), crowded(2)];
+    render(
+      <ActivityRuns
+        rows={rows.map((a) => ({
+          key: a.txHash,
+          subject: runSubject(a, activityTitleText(a)),
+          activity: a,
+          title: <ActivityTitle activity={a} />,
+          row: <ActivityRow activity={a} />,
+        }))}
+      />
+    );
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    const head = [...folded.querySelectorAll('[data-role="party"]')].map((p) =>
+      p.getAttribute('data-party')
+    );
+    expect(folded.querySelector('[data-role="run-parties"]')).toHaveTextContent(
+      /\+2 participants$/
+    );
+    await user.click(within(folded).getByRole('button', { name: '2 transactions ↓' }));
+    const row = document.querySelector(`article[data-feed-row="${rows[0].txHash}"]`)!;
+    const drawn = [...row.querySelectorAll('[data-role="participant"] [data-party]')].map((p) =>
+      p.getAttribute('data-party')
+    );
+    // paid 700, then received 600, 500, 400, 300; the 2 and the 1 under "+2 participants"
+    expect(drawn).toEqual([2, 6, 5, 4, 3].map((i) => `${rows[0].participants[i].lockHash}:${i}`));
+    expect(head).toEqual(drawn);
+  });
+});
+
 describe('a token page’s feed folds within the page it shows (B4 item 5)', () => {
   it('folds the run it loaded, and folds nothing it did not', async () => {
     const run = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
