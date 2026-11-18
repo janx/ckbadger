@@ -57,6 +57,8 @@ independent `.worktrees/site-redesign-*` worktrees, with root owning integration
 - Homepage 24-hour activities count each non-cellbase transaction once. Per-kind occurrences stay
   separate because categories overlap. Daily activity joins exact complete-day transaction counts
   with same-day cellbase counts; it does not sum classification counters.
+  (Replaced by the owner's ruling of 2026-11-18, F-6: the daily counts are one classification
+  with the activity filter, each transaction in exactly one kind, so the kinds no longer overlap.)
 - Blocks list/detail use node molecule bytes including extensions, exact transaction sizes and
   fees, complete/pending/failed cycles, consensus limits, cellbase messages, uncles/proposals,
   reward components and payment height. Counts are checked against the canonical index.

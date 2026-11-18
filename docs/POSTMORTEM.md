@@ -4149,6 +4149,84 @@ are on the API read path; no domain, append-only, or network writes change.
 
 ---
 
+### STATS-019: Transactions counted in no activity kind, and an `unknown` counter that could not move (F-6)
+
+**Date**: 2026-11-18
+
+**Symptom**: The Activities and Transactions pages showed "All 7,847" for 2026-11-17 beside kind
+chips summing to 7,841. The six missing transactions were CKB-only Fiber channel opens (4) and
+closes (2); 2026-11-16 had 56. The "Protocols" chip had no count at all, and `unknown_count`,
+documented as the signal of a classification bug, stayed 0.
+
+**Root cause**: Two classifications of one transaction. The activity and transaction filters list
+a transaction under one global bucket (`classify_global_bucket`: DAO, token, object, identity,
+protocol, script, CKB, by precedence). The daily counters were a second, per-layer rule in
+`DailyActivityStats::accumulate_from_tx_actions`: DAO counted per action, token / object / identity
+from participant tags, script calls from unrecognized type scripts, and "transfer" or `unknown` only
+when nothing else matched. A protocol action made a transaction "matched", but among protocol
+actions only `dao` had a counter, so a transaction whose only signal was a non-DAO protocol action
+was counted nowhere. The reach was every non-DAO protocol the detectors know: a CKB-only action of
+`fiber`, `rgbpp`, `stablepp` or `utxoswap` (listed under Protocol) and an in-place `.bit` or `.cell`
+action that moves no name — a renewal, an edit, a proposal (listed under Identity). The two rules
+also disagreed where they did count: a lock call alone was a "transfer" to the counters and
+"script" to the filter; a token transfer with an unrecognized type script counted in two kinds;
+a batch of DAO deposits counted once per deposit; an RGB++ token leap counted as "token" while the
+filter listed it under protocol. Over 9,216 combinations of tags, protocol actions and type / lock
+calls, 4,382 were not counted in exactly the kind their filter lists.
+
+**Why `unknown_count` could not catch it**: it moved only for a transaction with no match and a
+type-call tag. The builder sets `TAG_TYPE_CALL` exactly when it records an unrecognized type call,
+and a recorded type call is itself a match, so the branch was unreachable: a counter that cannot
+move is not a bug signal. The fault had no signal at all.
+
+**Fix** (owner's ruling of 2026-11-18, option A: one classification for the filter and the daily
+counts):
+
+- `ClassifiedTxActions` pairs a `TxActions` with its bucket and can only be made by `classify`.
+  Each sync path classifies a transaction once — live sync per transaction of a block, bulk build
+  in `build_history_rows_for_block` — and writes both its `tx_actions_by_bucket` row and its kind
+  count from that value. The API's rolling 24 h window classifies each transaction it reads the
+  same way.
+- `DailyActivityStats` stores `kind_counts`, one transaction count per bucket, beside
+  `coinbase_count`, `unique_address_count`, `total_ckb_moved`, `script_counts` and
+  `protocol_action_counts`. `transfer_count`, the three `dao_*` counts, `token_count`,
+  `object_count`, `identity_count`, `script_call_count` and `unknown_count` are gone. A cellbase
+  counts only as a cellbase. The DAO split by action is read from `protocol_action_counts`.
+- The stored row starts with the layout tag `ACTIVITY_STATS_LAYOUT`, and
+  `DailyActivityStats::decode` (strict bincode) refuses any other layout: "written by an older
+  layout, re-sync from genesis". The live writer raises it as rebuild-required. A new binary never
+  misreads an old store, and there is no compatibility read.
+- `/stats/daily-activities` and `/stats/activity-summary-24h` send `kindCounts` (keyed by the
+  filter's values), `activityCount` (their sum) and `protocolActionCounts`.
+
+**Regression checks**: `a_fiber_channel_open_alone_is_counted_in_the_protocol_kind` and
+`every_transaction_is_counted_in_exactly_the_kind_its_filter_lists` (store; red first: `[]` for the
+Fiber open, 4,382 of 9,216 combinations), `a_ckb_only_action_of_every_known_protocol_lands_in_its_filter_kind`
+(indexer, over `production_detectors` on both networks; red first for dotbit, dotcell, fiber, rgbpp,
+stablepp and utxoswap), `a_rolled_back_block_takes_its_kind_counts_back_out` (journal rollback, kind
+by kind), `activity_stats_rows_decode_only_in_the_one_kind_layout` and
+`activity_rows_of_an_older_layout_are_refused_by_every_reader`, and on the API
+`daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all` (each kind's count equals
+what `/activities?filter=<kind>` lists, the kinds sum to the unfiltered feed, the 24 h window agrees).
+
+**Lesson**: A count shown beside a filter must be computed by the filter's own function, from the
+same call. Two rules that agree on the common cases drift on the rest, and a fallback counter
+defined as "whatever the first rule missed" cannot see what the first rule silently absorbed.
+
+**Re-sync required**: Yes. The domain-store `stats_chain` activity rows (`ACTIVITY_DAILY` /
+`ACTIVITY_HOURLY`) change layout and meaning. Delete the domain store and re-sync from genesis;
+the append-only and network stores are untouched, and no append-only write path changed. The API
+and the indexer ship together with the re-sync: the new API refuses the old rows.
+
+**Files**: `crates/ckbadger-store/src/{types,global_bucket,batch,stats_ops,lib}.rs`,
+`crates/indexer/src/db/writer/statistics.rs`, `crates/indexer/src/sync/{batch,undo}.rs`,
+`crates/indexer/src/sync/bulk_build/mod.rs`, `crates/api/src/cache/activity_window.rs`,
+`crates/api/src/routes/statistics.rs`, `crates/api/tests/api_statistics.rs`,
+`docs/{STORE_SCHEMA,ACTIVITY_SYSTEM,API,SITE_REDESIGN_EXECUTION}.md`,
+`docs/prompts/ACTIVITY_DESIGN.md`
+
+---
+
 ### PROTO-013: Startup label cleanup erased families learned from mainnet Type ID history
 
 **Date**: 2026-10-27

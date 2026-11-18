@@ -1995,7 +1995,7 @@ impl ActivityStatsAccumulator {
                 )
             })?;
             crate::db::BatchWriter::accumulate_tx_activity_stats(
-                tx_actions.actions(),
+                tx_actions.view(),
                 &mut open.stats,
             );
             if !tx_actions.is_cellbase {
@@ -2168,7 +2168,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes()),
-                bincode::serialize(&stats)?,
+                stats.encode(),
             ));
             if let Some(addrs) = self.daily_addrs.get(&date) {
                 push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Daily, &date, addrs)?;
@@ -2189,7 +2189,7 @@ impl ActivityStatsAccumulator {
             rows.push(materialize::MaterializedRow::new(
                 CF_STATS_CHAIN,
                 keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour.as_bytes()),
-                bincode::serialize(&stats)?,
+                stats.encode(),
             ));
             if let Some(addrs) = self.hourly_addrs.get(&hour) {
                 push_activity_addr_rows(&mut rows, keys::ActivityBucketKind::Hourly, &hour, addrs)?;
@@ -2268,7 +2268,7 @@ fn drain_activity_bucket_rows(
         rows.push(materialize::MaterializedRow::new(
             CF_STATS_CHAIN,
             keys::encode_stats_key(stats_prefix, bucket.as_bytes()),
-            bincode::serialize(&stats)?,
+            stats.encode(),
         ));
     }
     Ok(rows)
@@ -10154,7 +10154,8 @@ mod tests {
             .format("%Y%m%d")
             .to_string();
         let daily = acc.daily_stats.get(&date_key).expect("daily stats");
-        assert_eq!(daily.transfer_count, 1, "pure CKB transfer");
+        assert_eq!(daily.kind_counts.ckb, 1, "pure CKB transfer");
+        assert_eq!(daily.kind_counts.total(), 1);
         assert_eq!(daily.total_ckb_moved, 100_00000000);
         assert_eq!(daily.coinbase_count, 0);
         assert_eq!(acc.daily_addrs.get(&date_key).unwrap().len(), 1);
@@ -10196,7 +10197,7 @@ mod tests {
             .to_string();
         let daily = acc.daily_stats.get(&date_key).expect("daily stats");
         assert_eq!(daily.coinbase_count, 1);
-        assert_eq!(daily.transfer_count, 0);
+        assert_eq!(daily.kind_counts.total(), 0, "a cellbase is in no kind");
         assert!(!acc.daily_addrs.contains_key(&date_key) || acc.daily_addrs[&date_key].is_empty());
     }
 
@@ -11523,7 +11524,9 @@ mod tests {
         );
         for stats in [&run.daily_stats[&date], &run.hourly_stats[&hour]] {
             assert_eq!(stats.protocol_action_counts["dotbit:transfer_account"], 4);
-            assert_eq!(stats.identity_count, 2);
+            // `.bit` actions are listed under Identity: two transactions.
+            assert_eq!(stats.kind_counts.identity, 2);
+            assert_eq!(stats.kind_counts.total(), 2);
             assert_eq!(stats.total_ckb_moved, 60);
         }
         assert_eq!(run.daily_addrs[&date].len(), 5, "locks 0x40..0x44");
@@ -11664,12 +11667,12 @@ mod tests {
                 .daily_stats
                 .entry(date.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx.into());
             oracle
                 .hourly_stats
                 .entry(hour.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx);
+                .accumulate_from_tx_actions(tx.into());
             if !tx.is_cellbase {
                 for participant in &tx.participants {
                     if let ParticipantId::Lock(lock_hash) = participant.id {

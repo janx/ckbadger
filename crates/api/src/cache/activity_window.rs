@@ -3,7 +3,7 @@
 use anyhow::{anyhow, ensure, Result};
 use ckbadger_common::stats_bucket::{DAY_MS, HOUR_MS};
 use ckbadger_store::types::ParticipantId;
-use ckbadger_store::{CachedBlockHeader, CkbadgerStore, DailyActivityStats};
+use ckbadger_store::{CachedBlockHeader, CkbadgerStore, ClassifiedTxActions, DailyActivityStats};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
@@ -15,7 +15,6 @@ struct ActivityWindow {
     tip: Option<(i64, Vec<u8>)>,
     blocks: BTreeMap<i64, BlockActivity>,
     stats: DailyActivityStats,
-    activity_count: u64,
     addresses: HashMap<[u8; 32], u32>,
     hours: HashMap<i64, u32>,
 }
@@ -23,17 +22,18 @@ struct ActivityWindow {
 struct BlockActivity {
     chain_time_ms: i64,
     stats: DailyActivityStats,
-    activity_count: u64,
     addresses: HashSet<[u8; 32]>,
 }
 
 impl ActivityWindowCache {
-    /// Call in a blocking task while the request's read view is pinned.
+    /// The window's activity and the UTC hours it covers. Call in a blocking
+    /// task while the request's read view is pinned. Its non-cellbase
+    /// transactions are `kind_counts.total()`: each is in exactly one kind.
     pub fn summary(
         &self,
         store: &CkbadgerStore,
         tip: Option<(i64, CachedBlockHeader)>,
-    ) -> Result<(DailyActivityStats, u32, u64)> {
+    ) -> Result<(DailyActivityStats, u32)> {
         let mut slot = self
             .0
             .lock()
@@ -41,7 +41,7 @@ impl ActivityWindowCache {
         // An error discards any partly updated memory; it never serves stale totals.
         let mut window = slot.take().unwrap_or_default();
         let Some((tip_number, tip_header)) = tip else {
-            return Ok((DailyActivityStats::default(), 0, 0));
+            return Ok((DailyActivityStats::default(), 0));
         };
         if let Some((number, hash)) = &window.tip {
             let extends = if *number > tip_number {
@@ -59,11 +59,7 @@ impl ActivityWindowCache {
             }
         }
         window.advance(store, tip_number, &tip_header)?;
-        let answer = (
-            window.stats.clone(),
-            u32::try_from(window.hours.len())?,
-            window.activity_count,
-        );
+        let answer = (window.stats.clone(), u32::try_from(window.hours.len())?);
         *slot = Some(window);
         Ok(answer)
     }
@@ -119,19 +115,13 @@ impl ActivityWindow {
                     .or_insert_with(|| BlockActivity {
                         chain_time_ms: header.chain_time_ms,
                         stats: DailyActivityStats::default(),
-                        activity_count: 0,
                         addresses: HashSet::new(),
                     });
-                block.stats.accumulate_from_tx_actions(tx);
+                // The one classification the filter lists the transaction by.
+                block
+                    .stats
+                    .accumulate_from_tx_actions(ClassifiedTxActions::classify(tx));
                 if !tx.is_cellbase {
-                    block.activity_count =
-                        block.activity_count.checked_add(1).ok_or_else(|| {
-                            anyhow!(
-                                "activity count overflow: block={} tx=0x{}",
-                                tx.block_number,
-                                hex::encode(&tx.tx_hash)
-                            )
-                        })?;
                     for participant in &tx.participants {
                         if let ParticipantId::Lock(hash) = participant.id {
                             block.addresses.insert(hash);
@@ -166,14 +156,14 @@ impl ActivityWindow {
     }
 
     fn apply(&mut self, block: &BlockActivity, add: bool) -> Result<()> {
-        self.activity_count = if add {
-            self.activity_count.checked_add(block.activity_count)
+        self.stats.kind_counts = if add {
+            self.stats.kind_counts.checked_add(&block.stats.kind_counts)
         } else {
-            self.activity_count.checked_sub(block.activity_count)
+            self.stats.kind_counts.checked_sub(&block.stats.kind_counts)
         }
-        .ok_or_else(|| {
+        .map_err(|e| {
             anyhow!(
-                "rolling activity count overflow/underflow: chain_time_ms={}",
+                "rolling activity {e} at chain_time_ms={}",
                 block.chain_time_ms
             )
         })?;
@@ -184,19 +174,7 @@ impl ActivityWindow {
                     .ok_or_else(|| anyhow!("rolling activity {} overflow/underflow at chain_time_ms={}", stringify!($field), block.chain_time_ms))?;
             )+ };
         }
-        counters!(
-            transfer_count,
-            dao_deposit_count,
-            dao_withdraw_request_count,
-            dao_withdraw_complete_count,
-            token_count,
-            object_count,
-            identity_count,
-            script_call_count,
-            unknown_count,
-            coinbase_count,
-            total_ckb_moved
-        );
+        counters!(coinbase_count, total_ckb_moved);
         for (key, count) in &block.stats.script_counts {
             update_count(&mut self.stats.script_counts, key.clone(), *count, add)?;
         }
@@ -334,8 +312,8 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         let rebuild_us = started.elapsed().as_micros();
-        assert_eq!(initial.0.transfer_count, 128 * 31);
-        assert_eq!(initial.2, 128 * 31);
+        assert_eq!(initial.0.kind_counts.ckb, 128 * 31);
+        assert_eq!(initial.0.kind_counts.total(), 128 * 31);
         assert_eq!(initial.0.coinbase_count, 128);
         assert_eq!(initial.0.unique_address_count, 3);
         seed(&store, 128, DAY_MS + 128_000, 128, 32);
@@ -344,16 +322,16 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         let extension_us = started.elapsed().as_micros();
-        assert_eq!(extended.0.transfer_count, 129 * 31);
-        assert_eq!(extended.2, 129 * 31);
+        assert_eq!(extended.0.kind_counts.ckb, 129 * 31);
+        assert_eq!(extended.0.kind_counts.total(), 129 * 31);
         eprintln!("activity window synthetic: rebuild 4096 rows={rebuild_us}us; extension 32 rows={extension_us}us");
         // A window jump evicts whole blocks at the exact inclusive lower boundary.
         seed(&store, 129, 2 * DAY_MS + 127_000, 129, 32);
         let evicted = cache
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
-        assert_eq!(evicted.0.transfer_count, 2 * 31);
-        assert_eq!(evicted.2, 2 * 31);
+        assert_eq!(evicted.0.kind_counts.ckb, 2 * 31);
+        assert_eq!(evicted.0.kind_counts.total(), 2 * 31);
         assert_eq!(evicted.0.total_ckb_moved, 2 * 31 * 7);
         assert_eq!(evicted.0.unique_address_count, 2);
         // Same-height reorg changes a participant and lowers time, reopening the window.
@@ -368,10 +346,13 @@ mod tests {
             serde_json::to_value(&reorg).unwrap(),
             serde_json::to_value(&fresh).unwrap()
         );
-        assert_eq!(reorg.0.transfer_count, 130 * 31);
-        assert_eq!(reorg.2, 130 * 31);
+        assert_eq!(reorg.0.kind_counts.ckb, 130 * 31);
+        assert_eq!(reorg.0.kind_counts.total(), 130 * 31);
         assert_eq!(reorg.0.unique_address_count, 3);
-        assert_eq!(cache.summary(&store, None).unwrap().0.transfer_count, 0);
+        assert_eq!(
+            cache.summary(&store, None).unwrap().0.kind_counts.total(),
+            0
+        );
         assert!(cache.0.lock().unwrap().is_none());
     }
 
@@ -393,11 +374,18 @@ mod tests {
             let mut batch = StoreBatch::new(&store);
             batch.put_tx_actions(&tx);
             batch.commit().unwrap();
-            let (stats, _, _) = cache
+            let (stats, _) = cache
                 .summary(&store, store.get_sync_tip_block().unwrap())
                 .unwrap();
             assert_eq!(stats.coinbase_count, 1);
-            assert_eq!(stats.transfer_count, 0);
+            // The window holds this block only; its transaction is a DAO one.
+            assert_eq!(
+                stats.kind_counts,
+                ckbadger_store::ActivityKindCounts {
+                    dao: 1,
+                    ..Default::default()
+                }
+            );
             assert_eq!(stats.total_ckb_moved, 7);
             assert_eq!(
                 stats.script_counts,
@@ -407,8 +395,6 @@ mod tests {
                 stats.protocol_action_counts,
                 BTreeMap::from([(format!("dao:{action}"), 1)])
             );
-            assert_eq!(stats.dao_deposit_count, u32::from(number == 0));
-            assert_eq!(stats.dao_withdraw_request_count, u32::from(number == 1));
         }
     }
 
@@ -440,8 +426,13 @@ mod tests {
         );
         assert!(cache.0.lock().unwrap().is_none());
     }
+    /// Each transaction of the window is counted once, in the kind the global
+    /// filter lists it under: a token and object transfer that also calls an
+    /// unrecognized type script is a token transaction; a CKB-only Fiber
+    /// channel open (F-6) is a protocol one. The kinds sum to the window's
+    /// non-cellbase transactions.
     #[test]
-    fn activity_count_counts_overlapping_and_protocol_only_transactions_once() {
+    fn every_window_transaction_is_counted_once_in_its_filter_kind() {
         use ckbadger_store::types::{ProtocolAction, TypeCallEntry, TAG_OBJECT, TAG_TOKEN};
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -465,9 +456,18 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         assert_eq!(
-            summary.0.token_count + summary.0.object_count + summary.0.script_call_count,
-            3
+            summary.0.kind_counts,
+            ckbadger_store::ActivityKindCounts {
+                token: 1,
+                protocol: 1,
+                ..Default::default()
+            }
         );
-        assert_eq!(serde_json::to_value(summary).unwrap()[2], 2, "two non-cellbase transactions, regardless of category overlap or protocol-only actions");
+        assert_eq!(summary.0.kind_counts.total(), 2);
+        assert_eq!(summary.0.coinbase_count, 1);
+        for tx in [&mixed, &protocol] {
+            let kind = ckbadger_store::classify_global_bucket(tx).unwrap();
+            assert_eq!(summary.0.kind_counts.get(kind), 1, "{}", kind.as_filter());
+        }
     }
 }

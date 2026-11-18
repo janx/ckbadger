@@ -2605,7 +2605,10 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
             .put_hourly_activity_stats(
                 &format!("20231115{hour:02}"),
                 &ckbadger_store::DailyActivityStats {
-                    transfer_count: 1,
+                    kind_counts: ckbadger_store::ActivityKindCounts {
+                        ckb: 1,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             )
@@ -2632,7 +2635,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
     );
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
-        json["transferCount"], 522,
+        json["kindCounts"]["ckb"], 522,
         "all pages in (cutoff,tip] count"
     );
     assert_eq!(
@@ -2665,6 +2668,198 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
     assert_eq!(status, StatusCode::OK, "{after_reorg}");
     assert_eq!(after_reorg["uniqueAddressCount"], 3);
     assert_eq!(after_reorg["totalCkbMoved"], "646");
+}
+
+// ============================================================
+// F-6: a day's activity kinds are what the activity filter lists
+// ============================================================
+
+/// One complete UTC+8 day (2026-11-17) whose block 1 carries a transaction
+/// of every kind, several with overlapping signals; its daily row is written
+/// by the indexer's own live path (classify once, accumulate, merge into the
+/// bucket). For every kind, the day's count is the number of transactions
+/// `/activities?filter=<kind>` lists; the kinds sum to the day's
+/// `activityCount` and to what the unfiltered feed lists ("All"); the rolling
+/// 24 h window, which holds the same transactions, says the same. The DAO
+/// split by action is read from `protocolActionCounts` (two deposits in one
+/// transaction are one DAO transaction and two deposits).
+#[tokio::test]
+async fn daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all() {
+    use ckbadger_store::types::{
+        LockCallEntry, ParticipantDelta, ParticipantId, ProtocolAction, TxActions, TypeCallEntry,
+        TAG_DAO, TAG_IDENTITY, TAG_LOCK_CALL, TAG_OBJECT, TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
+    };
+    use ckbadger_store::{ClassifiedTxActions, DailyActivityStats, StoreBatch};
+
+    let store = test_store();
+    // 22:00 and 23:00 UTC+8 on the 17th; the tip at 00:30 on the 18th makes
+    // the 17th complete, and its 24 h window still holds blocks 0 and 1.
+    let times = [
+        utc_ms("2026-11-17T14:00:00Z"),
+        utc_ms("2026-11-17T15:00:00Z"),
+        utc_ms("2026-11-17T16:30:00Z"),
+    ];
+    seed_block_headers_at(&store, &[(0, times[0]), (1, times[1]), (2, times[2])]);
+
+    let tx =
+        |index: i32, tags: u16, protocols: &[(&str, &str)], type_call: bool, lock_call: bool| {
+            TxActions {
+                tx_hash: vec![0x40 + index as u8; 32],
+                block_hash: vec![1; 32],
+                block_number: 1,
+                tx_index: index,
+                timestamp: times[1],
+                is_cellbase: index == 0,
+                protocol_actions: protocols
+                    .iter()
+                    .map(|(p, a)| ProtocolAction::new(*p, *a, serde_json::json!({})))
+                    .collect(),
+                type_calls: if type_call {
+                    vec![TypeCallEntry {
+                        type_code_hash: vec![0x77; 32],
+                        type_hash_type: 1,
+                        type_args: vec![],
+                    }]
+                } else {
+                    vec![]
+                },
+                lock_calls: if lock_call {
+                    vec![LockCallEntry {
+                        lock_code_hash: vec![0x78; 32],
+                        lock_hash_type: 1,
+                        lock_args: vec![],
+                    }]
+                } else {
+                    vec![]
+                },
+                participants: vec![ParticipantDelta {
+                    id: ParticipantId::Lock([0x10 + index as u8; 32]),
+                    ckb_delta: 100,
+                    used_delta: 0,
+                    item_deltas: vec![],
+                    tags,
+                    roles: 0,
+                }],
+            }
+        };
+    let txs = [
+        // Block 1's cellbase: no activities row, counted as a cellbase only.
+        tx(0, 0, &[], false, false),
+        // Two deposits beside a token delta: one DAO transaction.
+        tx(
+            1,
+            TAG_DAO | TAG_TOKEN | TAG_PROTOCOL,
+            &[("dao", "deposit"), ("dao", "deposit")],
+            false,
+            false,
+        ),
+        // F-6: a CKB-only Fiber channel open.
+        tx(2, TAG_PROTOCOL, &[("fiber", "channel_open")], false, false),
+        // An RGB++ leap moving a token: Protocol before Token.
+        tx(
+            3,
+            TAG_TOKEN | TAG_PROTOCOL,
+            &[("rgbpp", "leap_to_ckb")],
+            false,
+            false,
+        ),
+        // A token transfer that also calls an unrecognized type script.
+        tx(4, TAG_TOKEN | TAG_TYPE_CALL, &[], true, false),
+        tx(5, TAG_OBJECT | TAG_IDENTITY, &[], false, false),
+        // A `.bit` renewal: no item moves; the action decides.
+        tx(
+            6,
+            TAG_PROTOCOL,
+            &[("dotbit", "renew_account")],
+            false,
+            false,
+        ),
+        // A non-standard lock alone.
+        tx(7, TAG_LOCK_CALL, &[], false, true),
+        tx(8, 0, &[], false, false),
+        tx(9, 0, &[], false, false),
+    ];
+    let mut batch = StoreBatch::new(store.as_ref());
+    let mut day = DailyActivityStats::default();
+    for actions in &txs {
+        // The live writer's order: classify once, then the bucket row and the
+        // day's counts from that one classification.
+        let classified = ClassifiedTxActions::classify(actions);
+        BatchWriter::accumulate_tx_activity_stats(classified, &mut day);
+        if !actions.is_cellbase {
+            batch.put_tx_actions(classified);
+            index_tx_of_actions(&mut batch, actions);
+        }
+    }
+    // Block 0's cellbase, on the same day.
+    BatchWriter::accumulate_tx_activity_stats(
+        ClassifiedTxActions::classify(&TxActions {
+            block_number: 0,
+            block_hash: vec![0; 32],
+            timestamp: times[0],
+            ..tx(0, 0, &[], false, false)
+        }),
+        &mut day,
+    );
+    let writer = BatchWriter::new(store.clone(), store.clone());
+    writer
+        .update_activity_bucket_stats(
+            ckbadger_store::keys::ActivityBucketKind::Daily,
+            "20261117",
+            &day,
+            &std::collections::BTreeSet::new(),
+            None,
+            &mut batch,
+        )
+        .unwrap();
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, days) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{days}");
+    let row = days
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["date"] == "20261117")
+        .unwrap_or_else(|| panic!("the complete day: {days}"));
+    let expected = serde_json::json!({
+        "dao": 1, "token": 1, "object": 1, "identity": 1, "protocol": 2, "script": 1, "ckb": 2
+    });
+    assert_eq!(row["kindCounts"], expected, "{row}");
+    assert_eq!(row["activityCount"], 9);
+    assert_eq!(row["coinbaseCount"], 2);
+    assert_eq!(
+        row["protocolActionCounts"]["dao:deposit"], 2,
+        "actions, not transactions"
+    );
+    assert_eq!(row["protocolActionCounts"]["fiber:channel_open"], 1);
+
+    let mut kinds_sum = 0;
+    for kind in ckbadger_store::GlobalBucket::ALL {
+        let filter = kind.as_filter();
+        let (status, page) =
+            get_json(&app, &format!("/activities?filter={filter}&limit=100")).await;
+        assert_eq!(status, StatusCode::OK, "{filter}: {page}");
+        let listed = page["data"].as_array().unwrap().len() as u64;
+        assert_eq!(page["hasMore"], false, "{filter}");
+        assert_eq!(
+            row["kindCounts"][filter].as_u64().unwrap(),
+            listed,
+            "the {filter} count is what the {filter} filter lists"
+        );
+        kinds_sum += listed;
+    }
+    let (status, all) = get_json(&app, "/activities?limit=100").await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all["data"].as_array().unwrap().len() as u64, kinds_sum);
+    assert_eq!(kinds_sum, 9, "All is the sum of the kinds");
+
+    let (status, window) = get_json(&app, "/stats/activity-summary-24h").await;
+    assert_eq!(status, StatusCode::OK, "{window}");
+    assert_eq!(window["kindCounts"], expected, "{window}");
+    assert_eq!(window["activityCount"], 9);
+    assert_eq!(window["protocolActionCounts"]["dao:deposit"], 2);
 }
 
 // ============================================================
@@ -3001,7 +3196,10 @@ async fn test_daily_activities_exclude_the_in_progress_tip_day() {
             .put_daily_activity_stats(
                 date,
                 &ckbadger_store::types::DailyActivityStats {
-                    transfer_count: transfers,
+                    kind_counts: ckbadger_store::ActivityKindCounts {
+                        ckb: transfers,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
             )
@@ -3019,7 +3217,7 @@ async fn test_daily_activities_exclude_the_in_progress_tip_day() {
         .map(|d| {
             (
                 d["date"].as_str().unwrap(),
-                d["transferCount"].as_u64().unwrap(),
+                d["kindCounts"]["ckb"].as_u64().unwrap(),
             )
         })
         .collect();

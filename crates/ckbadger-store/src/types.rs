@@ -3031,54 +3031,154 @@ pub struct FiberChannel {
 // Group J: Daily Activity Stats
 // ============================================
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// Non-cellbase transactions by activity kind: one count per global activity
+/// bucket ([`crate::GlobalBucket`]), the kinds the activity and transaction
+/// filters list. Every transaction is in exactly one kind — the bucket
+/// `classify_global_bucket` gives it — so the counts of a bucket sum to its
+/// non-cellbase transactions ([`Self::total`]). Field order is the buckets'
+/// key-prefix order.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityKindCounts {
+    pub dao: u32,
+    pub token: u32,
+    pub object: u32,
+    pub identity: u32,
+    pub protocol: u32,
+    pub script: u32,
+    pub ckb: u32,
+}
+
+impl ActivityKindCounts {
+    /// The transactions counted in `kind`.
+    pub fn get(&self, kind: crate::GlobalBucket) -> u32 {
+        use crate::GlobalBucket as K;
+        match kind {
+            K::Dao => self.dao,
+            K::Token => self.token,
+            K::Object => self.object,
+            K::Identity => self.identity,
+            K::Protocol => self.protocol,
+            K::Script => self.script,
+            K::Ckb => self.ckb,
+        }
+    }
+
+    fn slot(&mut self, kind: crate::GlobalBucket) -> &mut u32 {
+        use crate::GlobalBucket as K;
+        match kind {
+            K::Dao => &mut self.dao,
+            K::Token => &mut self.token,
+            K::Object => &mut self.object,
+            K::Identity => &mut self.identity,
+            K::Protocol => &mut self.protocol,
+            K::Script => &mut self.script,
+            K::Ckb => &mut self.ckb,
+        }
+    }
+
+    /// Every non-cellbase transaction counted: the sum of the kinds (seven
+    /// `u32`s always fit a `u64`).
+    pub fn total(&self) -> u64 {
+        crate::GlobalBucket::ALL
+            .into_iter()
+            .map(|kind| u64::from(self.get(kind)))
+            .sum()
+    }
+
+    /// The counts of `self` and `other` together, kind by kind; an overflow
+    /// names its kind.
+    pub fn checked_add(&self, other: &Self) -> anyhow::Result<Self> {
+        self.combine(other, "+", u32::checked_add)
+    }
+
+    /// `self` without `other`, kind by kind (a rolling window dropping a block
+    /// it counted); an underflow names its kind.
+    pub fn checked_sub(&self, other: &Self) -> anyhow::Result<Self> {
+        self.combine(other, "-", u32::checked_sub)
+    }
+
+    fn combine(
+        &self,
+        other: &Self,
+        op: &str,
+        f: fn(u32, u32) -> Option<u32>,
+    ) -> anyhow::Result<Self> {
+        let mut out = *self;
+        for kind in crate::GlobalBucket::ALL {
+            let (a, b) = (self.get(kind), other.get(kind));
+            *out.slot(kind) = f(a, b).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "activity kind count {} out of range: {a} {op} {b}",
+                    kind.as_filter()
+                )
+            })?;
+        }
+        Ok(out)
+    }
+}
+
+/// The first field of every stored activity bucket row (`ACTIVITY_DAILY` /
+/// `ACTIVITY_HOURLY`, [`DailyActivityStats::encode`]): the layout that counts
+/// each transaction in exactly one kind (2026-11-18, F-6). The layout before
+/// it began with `transfer_count`, a day's or an hour's plain CKB transfers,
+/// which never come near 2,893,086,722 (CKB carries well under 10^8
+/// transactions a day), so a row written before is refused, never misread:
+/// re-sync from genesis.
+pub const ACTIVITY_STATS_LAYOUT: u32 = 0xAC71_0002;
+
+/// One UTC+8 day's or hour's activity: the value of an `ACTIVITY_DAILY` /
+/// `ACTIVITY_HOURLY` row in `stats_chain`, and the API's rolling 24 h window.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DailyActivityStats {
-    /// Plain CKB transfers (no asset changes, not coinbase)
-    pub transfer_count: u32,
-    /// DAO deposit activities
-    pub dao_deposit_count: u32,
-    /// DAO withdraw request activities
-    pub dao_withdraw_request_count: u32,
-    /// DAO withdraw completion activities
-    pub dao_withdraw_complete_count: u32,
-    /// Token (xUDT/sUDT) transfer activities
-    pub token_count: u32,
-    /// Object activities (Spore + M-NFT)
-    pub object_count: u32,
-    /// Identity activities (.bit + did:ckb)
-    #[serde(default)]
-    pub identity_count: u32,
-    /// Activities involving unrecognized type scripts
-    #[serde(default)]
-    pub script_call_count: u32,
-    /// Fallback — should always be 0; non-zero indicates a classification bug
-    #[serde(default)]
-    pub unknown_count: u32,
-    /// Coinbase (miner reward) activities
+    /// Non-cellbase transactions by kind, each in exactly one: the kind the
+    /// global activity filter lists it under.
+    pub kind_counts: ActivityKindCounts,
+    /// Cellbase (miner reward) transactions, one a block: counted here and
+    /// in nothing else.
     pub coinbase_count: u32,
     /// Number of unique addresses active this day
     pub unique_address_count: u32,
     /// Sum of positive participant CKB deltas in shannons, excluding cellbase
     pub total_ckb_moved: u128,
     /// Per-script activity counts: hex code_hash -> count
-    #[serde(default)]
     pub script_counts: BTreeMap<String, u32>,
-    /// Per-protocol action counts: "rgbpp:leap_to_ckb" -> count
-    #[serde(default)]
+    /// Per-protocol action counts: "rgbpp:leap_to_ckb" -> count. Actions, not
+    /// transactions: the DAO split by action (`dao:deposit`,
+    /// `dao:withdraw_request`, `dao:withdraw_complete`) is read here.
     pub protocol_action_counts: BTreeMap<String, u32>,
 }
 
 impl DailyActivityStats {
-    /// Accumulate statistics from a single transaction's actions.
+    /// Accumulate one transaction, classified once by the caller
+    /// ([`crate::ClassifiedTxActions`]): its bucket is its kind.
     ///
-    /// This is the **single calculation path** for activity stats accumulation,
-    /// shared by both live sync (indexer) and reorg rollback (store).
-    pub fn accumulate_from_tx_actions(&mut self, tx_actions: &TxActions) {
-        // Coinbase transactions are counted but excluded from all other metrics
-        if tx_actions.is_cellbase {
-            self.coinbase_count += 1;
+    /// The **single calculation path** for activity stats: live sync's block
+    /// accumulation, bulk build's runs and the API's rolling 24 h window all
+    /// fold transactions through it. (A rollback does not recompute: the
+    /// block journal restores each bucket row a rolled-back block wrote.)
+    pub fn accumulate_from_tx_actions(&mut self, tx: crate::ClassifiedTxActions<&TxActions>) {
+        let tx_actions = tx.actions();
+        let Some(kind) = tx.bucket() else {
+            // A cellbase is counted once, as a cellbase, and in nothing else.
+            self.coinbase_count = self.coinbase_count.checked_add(1).unwrap_or_else(|| {
+                panic!(
+                    "coinbase_count overflow: block={} tx=0x{}",
+                    tx_actions.block_number,
+                    hex::encode(&tx_actions.tx_hash)
+                )
+            });
             return;
-        }
+        };
+
+        let slot = self.kind_counts.slot(kind);
+        *slot = slot.checked_add(1).unwrap_or_else(|| {
+            panic!(
+                "activity kind {} count overflow: block={} tx=0x{}",
+                kind.as_filter(),
+                tx_actions.block_number,
+                hex::encode(&tx_actions.tx_hash)
+            )
+        });
 
         self.total_ckb_moved = self
             .total_ckb_moved
@@ -3106,73 +3206,38 @@ impl DailyActivityStats {
             let key = format!("{}:{}", pa.protocol, pa.action);
             *self.protocol_action_counts.entry(key).or_insert(0) += 1;
         }
+    }
 
-        // DAO counts from protocol_actions (TX-level)
-        let mut has_dao = false;
-        for pa in &tx_actions.protocol_actions {
-            if pa.protocol == "dao" {
-                has_dao = true;
-                match pa.action.as_str() {
-                    "deposit" => self.dao_deposit_count += 1,
-                    "withdraw_request" => self.dao_withdraw_request_count += 1,
-                    "withdraw_complete" => self.dao_withdraw_complete_count += 1,
-                    _ => {}
-                }
-            }
-        }
+    /// The stored value of an activity bucket row: [`ACTIVITY_STATS_LAYOUT`],
+    /// then the row (bincode).
+    pub fn encode(&self) -> Vec<u8> {
+        bincode::serialize(&(ACTIVITY_STATS_LAYOUT, self)).expect("serialize DailyActivityStats")
+    }
 
-        // Token/Object/Identity/Script call flags from participant tags
-        let mut has_token = false;
-        let mut has_object = false;
-        let mut has_identity = false;
-        for p in &tx_actions.participants {
-            if p.tags & TAG_TOKEN != 0 {
-                has_token = true;
-            }
-            if p.tags & TAG_OBJECT != 0 {
-                has_object = true;
-            }
-            if p.tags & TAG_IDENTITY != 0 {
-                has_identity = true;
-            }
+    /// Decode the activity bucket row of `bucket` (a `YYYYMMDD` day or
+    /// `YYYYMMDDHH` hour): [`ACTIVITY_STATS_LAYOUT`] and exactly one row
+    /// (strict bincode). A row of any other layout — the one written before
+    /// each transaction was counted in one kind among them — is refused:
+    /// re-sync from genesis.
+    pub fn decode(bucket: &str, value: &[u8]) -> anyhow::Result<Self> {
+        let refused = |reason: String| {
+            anyhow::anyhow!(
+                "activity stats row of {bucket} ({} bytes) {reason}: written by an older layout, \
+                 re-sync from genesis",
+                value.len()
+            )
+        };
+        let (layout, stats) = bincode::DefaultOptions::new()
+            .with_fixint_encoding()
+            .reject_trailing_bytes()
+            .deserialize::<(u32, Self)>(value)
+            .map_err(|e| refused(format!("does not decode ({e})")))?;
+        if layout != ACTIVITY_STATS_LAYOUT {
+            return Err(refused(format!(
+                "starts with 0x{layout:08x}, not the layout 0x{ACTIVITY_STATS_LAYOUT:08x}"
+            )));
         }
-
-        let has_script_call = !tx_actions.type_calls.is_empty();
-
-        if has_token {
-            self.token_count += 1;
-        }
-        if has_object {
-            self.object_count += 1;
-        }
-        if has_identity {
-            self.identity_count += 1;
-        }
-        if has_script_call {
-            self.script_call_count += 1;
-        }
-
-        // transfer_count = Layer 1 only (CKB delta with no Layer 2 or Layer 3 signals).
-        // Any Layer 2 asset/script signal or Layer 3 protocol action excludes from transfer.
-        let has_protocol_action = !tx_actions.protocol_actions.is_empty();
-        let matched = has_dao
-            || has_token
-            || has_object
-            || has_identity
-            || has_script_call
-            || has_protocol_action;
-        if !matched {
-            // Check if any participant has a type_call tag (meaning type script was involved)
-            let has_type_call_tag = tx_actions
-                .participants
-                .iter()
-                .any(|p| p.tags & TAG_TYPE_CALL != 0);
-            if !has_type_call_tag {
-                self.transfer_count += 1;
-            } else {
-                self.unknown_count += 1;
-            }
-        }
+        Ok(stats)
     }
 
     /// Add another accumulation of the same bucket — the transactions it
@@ -3205,31 +3270,7 @@ impl DailyActivityStats {
             }
             Ok(())
         }
-        self.transfer_count = add("transfer_count", self.transfer_count, other.transfer_count)?;
-        self.dao_deposit_count = add(
-            "dao_deposit_count",
-            self.dao_deposit_count,
-            other.dao_deposit_count,
-        )?;
-        self.dao_withdraw_request_count = add(
-            "dao_withdraw_request_count",
-            self.dao_withdraw_request_count,
-            other.dao_withdraw_request_count,
-        )?;
-        self.dao_withdraw_complete_count = add(
-            "dao_withdraw_complete_count",
-            self.dao_withdraw_complete_count,
-            other.dao_withdraw_complete_count,
-        )?;
-        self.token_count = add("token_count", self.token_count, other.token_count)?;
-        self.object_count = add("object_count", self.object_count, other.object_count)?;
-        self.identity_count = add("identity_count", self.identity_count, other.identity_count)?;
-        self.script_call_count = add(
-            "script_call_count",
-            self.script_call_count,
-            other.script_call_count,
-        )?;
-        self.unknown_count = add("unknown_count", self.unknown_count, other.unknown_count)?;
+        self.kind_counts = self.kind_counts.checked_add(&other.kind_counts)?;
         self.coinbase_count = add("coinbase_count", self.coinbase_count, other.coinbase_count)?;
         self.total_ckb_moved = self
             .total_ckb_moved
@@ -3593,15 +3634,15 @@ mod tests {
         ];
         let mut all = DailyActivityStats::default();
         for tx in &txs {
-            all.accumulate_from_tx_actions(tx);
+            all.accumulate_from_tx_actions(tx.into());
         }
         let mut first = DailyActivityStats::default();
         let mut second = DailyActivityStats::default();
         for tx in &txs[..2] {
-            first.accumulate_from_tx_actions(tx);
+            first.accumulate_from_tx_actions(tx.into());
         }
         for tx in &txs[2..] {
-            second.accumulate_from_tx_actions(tx);
+            second.accumulate_from_tx_actions(tx.into());
         }
         first.unique_address_count = 7;
         second.unique_address_count = 9;
@@ -3622,15 +3663,33 @@ mod tests {
     #[test]
     fn activity_stats_add_counts_fails_on_overflow_naming_the_field() {
         let mut stats = DailyActivityStats {
-            identity_count: u32::MAX,
+            kind_counts: ActivityKindCounts {
+                identity: u32::MAX,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let one = DailyActivityStats {
-            identity_count: 1,
+            kind_counts: ActivityKindCounts {
+                identity: 1,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let err = stats.add_counts(&one).unwrap_err().to_string();
-        assert!(err.contains("identity_count"), "{err}");
+        assert!(err.contains("activity kind count identity"), "{err}");
+        let mut coinbase = DailyActivityStats {
+            coinbase_count: u32::MAX,
+            ..Default::default()
+        };
+        let err = coinbase
+            .add_counts(&DailyActivityStats {
+                coinbase_count: 1,
+                ..Default::default()
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("coinbase_count"), "{err}");
 
         let mut keyed = DailyActivityStats::default();
         keyed
@@ -3647,27 +3706,103 @@ mod tests {
         );
     }
 
+    /// A stored activity row is the layout tag and one row; the row written
+    /// before each transaction counted in one kind (transfer, three DAO
+    /// action counts, token, object, identity, script call and unknown
+    /// counters first) is refused with "re-sync from genesis", whatever its
+    /// counts, never read as the new shape.
+    #[test]
+    fn activity_stats_rows_decode_only_in_the_one_kind_layout() {
+        let mut row = DailyActivityStats {
+            kind_counts: ActivityKindCounts {
+                dao: 1,
+                token: 2,
+                object: 3,
+                identity: 4,
+                protocol: 5,
+                script: 6,
+                ckb: 7,
+            },
+            coinbase_count: 8,
+            unique_address_count: 9,
+            total_ckb_moved: 10,
+            ..Default::default()
+        };
+        row.script_counts.insert("ab".repeat(32), 11);
+        row.protocol_action_counts
+            .insert("fiber:channel_open".to_string(), 12);
+        let encoded = row.encode();
+        assert_eq!(&encoded[..4], &ACTIVITY_STATS_LAYOUT.to_le_bytes());
+        assert_eq!(
+            DailyActivityStats::decode("20261117", &encoded).unwrap(),
+            row
+        );
+        assert_eq!(row.kind_counts.total(), 28);
+
+        #[derive(Serialize, Default)]
+        struct PreOneKindLayout {
+            transfer_count: u32,
+            dao_deposit_count: u32,
+            dao_withdraw_request_count: u32,
+            dao_withdraw_complete_count: u32,
+            token_count: u32,
+            object_count: u32,
+            identity_count: u32,
+            script_call_count: u32,
+            unknown_count: u32,
+            coinbase_count: u32,
+            unique_address_count: u32,
+            total_ckb_moved: u128,
+            script_counts: BTreeMap<String, u32>,
+            protocol_action_counts: BTreeMap<String, u32>,
+        }
+        let mut busy = PreOneKindLayout {
+            transfer_count: 4_102,
+            dao_deposit_count: 31,
+            token_count: 2_210,
+            coinbase_count: 9_004,
+            unique_address_count: 6_120,
+            total_ckb_moved: 12_345_678_900_000_000,
+            ..Default::default()
+        };
+        busy.script_counts.insert("cd".repeat(32), 77);
+        busy.protocol_action_counts
+            .insert("dao:deposit".to_string(), 31);
+        for old in [PreOneKindLayout::default(), busy] {
+            let err = DailyActivityStats::decode("20261117", &bincode::serialize(&old).unwrap())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("activity stats row of 20261117")
+                    && err.contains("written by an older layout, re-sync from genesis"),
+                "{err}"
+            );
+        }
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        assert!(DailyActivityStats::decode("2026111708", &trailing)
+            .unwrap_err()
+            .to_string()
+            .contains("re-sync from genesis"));
+        let mut wrong_tag = encoded;
+        wrong_tag[0] ^= 1;
+        let err = DailyActivityStats::decode("2026111708", &wrong_tag)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not the layout 0xac710002"), "{err}");
+    }
+
     // ── F-6: every non-cellbase transaction is counted in exactly one kind ──
 
     /// The activity kinds (the global filter's names) one transaction's
-    /// accumulation put it in, once per counter that moved.
+    /// accumulation put it in, once per count.
     fn counted_kinds(stats: &DailyActivityStats) -> Vec<&'static str> {
         let mut kinds = Vec::new();
-        for (kind, count) in [
-            ("ckb", stats.transfer_count),
-            (
-                "dao",
-                stats.dao_deposit_count
-                    + stats.dao_withdraw_request_count
-                    + stats.dao_withdraw_complete_count,
-            ),
-            ("token", stats.token_count),
-            ("object", stats.object_count),
-            ("identity", stats.identity_count),
-            ("script", stats.script_call_count),
-            ("unknown", stats.unknown_count),
-        ] {
-            kinds.extend(std::iter::repeat_n(kind, count as usize));
+        for kind in crate::GlobalBucket::ALL {
+            kinds.extend(std::iter::repeat_n(
+                kind.as_filter(),
+                stats.kind_counts.get(kind) as usize,
+            ));
         }
         kinds
     }
@@ -3744,7 +3879,7 @@ mod tests {
             Some("protocol")
         );
         let mut stats = DailyActivityStats::default();
-        stats.accumulate_from_tx_actions(&tx);
+        stats.accumulate_from_tx_actions((&tx).into());
         assert_eq!(counted_kinds(&stats), vec!["protocol"]);
     }
 
@@ -3790,7 +3925,7 @@ mod tests {
                         cases += 1;
                         let tx = signal_tx(tags, protocols, type_call, lock_call, is_cellbase);
                         let mut stats = DailyActivityStats::default();
-                        stats.accumulate_from_tx_actions(&tx);
+                        stats.accumulate_from_tx_actions((&tx).into());
                         let got = counted_kinds(&stats);
                         let ok = match crate::global_bucket::classify_global_bucket(&tx) {
                             None => got.is_empty() && stats.coinbase_count == 1,
@@ -4193,11 +4328,11 @@ mod tests {
                 .collect(),
         };
         let mut stats = DailyActivityStats::default();
-        stats.accumulate_from_tx_actions(&actions);
+        stats.accumulate_from_tx_actions((&actions).into());
         assert_eq!(stats.total_ckb_moved, 100, "exclude sender, change and fee");
         assert_eq!(actions.ckb_moved(), 100);
         actions.is_cellbase = true;
-        stats.accumulate_from_tx_actions(&actions);
+        stats.accumulate_from_tx_actions((&actions).into());
         assert_eq!(stats.total_ckb_moved, 100, "issuance is not movement");
     }
 

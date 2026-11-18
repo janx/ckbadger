@@ -1201,7 +1201,8 @@ fn bulk_build_materializes_sealed_activity_stats_from_single_pass() {
         .next()
         .expect("daily activity stats");
     assert_eq!(daily.coinbase_count, 1);
-    assert_eq!(daily.transfer_count, 1);
+    assert_eq!(daily.kind_counts.ckb, 1);
+    assert_eq!(daily.kind_counts.total(), 1);
     assert_eq!(daily.unique_address_count, 1);
     assert_eq!(daily.total_ckb_moved, 0);
 
@@ -1211,7 +1212,8 @@ fn bulk_build_materializes_sealed_activity_stats_from_single_pass() {
         .next()
         .expect("hourly activity stats");
     assert_eq!(hourly.coinbase_count, 1);
-    assert_eq!(hourly.transfer_count, 1);
+    assert_eq!(hourly.kind_counts.ckb, 1);
+    assert_eq!(hourly.kind_counts.total(), 1);
     assert_eq!(hourly.unique_address_count, 1);
     assert_eq!(hourly.total_ckb_moved, 0);
 }
@@ -1302,7 +1304,7 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_cross_batch_st
         .next()
         .expect("single daily activity stats");
     assert_eq!(split_daily.coinbase_count, single_daily.coinbase_count);
-    assert_eq!(split_daily.transfer_count, single_daily.transfer_count);
+    assert_eq!(split_daily.kind_counts, single_daily.kind_counts);
     assert_eq!(
         split_daily.unique_address_count,
         single_daily.unique_address_count
@@ -1319,7 +1321,7 @@ fn bulk_build_multi_batch_materialization_matches_single_pass_for_cross_batch_st
         .next()
         .expect("single hourly activity stats");
     assert_eq!(split_hourly.coinbase_count, single_hourly.coinbase_count);
-    assert_eq!(split_hourly.transfer_count, single_hourly.transfer_count);
+    assert_eq!(split_hourly.kind_counts, single_hourly.kind_counts);
     assert_eq!(
         split_hourly.unique_address_count,
         single_hourly.unique_address_count

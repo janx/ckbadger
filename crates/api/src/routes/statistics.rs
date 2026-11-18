@@ -4418,23 +4418,25 @@ async fn get_hodl_wave_chart(
 // Daily Activity Stats
 // ============================================
 
+/// One complete UTC+8 day's activity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyActivityStatsResponse {
     pub date: String,
-    pub transfer_count: u32,
-    pub dao_deposit_count: u32,
-    pub dao_withdraw_request_count: u32,
-    pub dao_withdraw_complete_count: u32,
-    pub token_count: u32,
-    pub object_count: u32,
-    pub identity_count: u32,
-    pub script_call_count: u32,
-    pub unknown_count: u32,
+    /// The day's non-cellbase transactions: the sum of `kind_counts`.
+    pub activity_count: u64,
+    /// The day's non-cellbase transactions by kind, each in exactly one: the
+    /// kind the global activity filter (`/activities?filter=<kind>`) lists it
+    /// under. Keys are the filter's values.
+    pub kind_counts: ckbadger_store::ActivityKindCounts,
     pub coinbase_count: u32,
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
+    /// Protocol actions by `protocol:action` — actions, not transactions (a
+    /// transaction can carry several): the DAO split by action is
+    /// `dao:deposit`, `dao:withdraw_request`, `dao:withdraw_complete`.
+    pub protocol_action_counts: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4448,22 +4450,19 @@ pub struct ScriptCountEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivitySummary24hResponse {
-    /// Canonical non-cellbase transactions, counted once regardless of category overlap.
+    /// Canonical non-cellbase transactions of the window: the sum of
+    /// `kind_counts`.
     pub activity_count: u64,
-    pub transfer_count: u32,
-    pub dao_deposit_count: u32,
-    pub dao_withdraw_request_count: u32,
-    pub dao_withdraw_complete_count: u32,
-    pub token_count: u32,
-    pub object_count: u32,
-    pub identity_count: u32,
-    pub script_call_count: u32,
-    pub unknown_count: u32,
+    /// The window's non-cellbase transactions by kind, each in exactly one
+    /// (the kind the global activity filter lists it under).
+    pub kind_counts: ckbadger_store::ActivityKindCounts,
     pub coinbase_count: u32,
     /// Exact distinct Lock participants in the rolling chain-time window.
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
+    /// Protocol actions by `protocol:action` (actions, not transactions).
+    pub protocol_action_counts: BTreeMap<String, u32>,
     /// UTC hour buckets containing activity; a rolling 24h window can span 25.
     pub hours_covered: u32,
 }
@@ -4568,19 +4567,13 @@ async fn get_daily_activity_stats(
 
             DailyActivityStatsResponse {
                 date,
-                transfer_count: s.transfer_count,
-                dao_deposit_count: s.dao_deposit_count,
-                dao_withdraw_request_count: s.dao_withdraw_request_count,
-                dao_withdraw_complete_count: s.dao_withdraw_complete_count,
-                token_count: s.token_count,
-                object_count: s.object_count,
-                identity_count: s.identity_count,
-                script_call_count: s.script_call_count,
-                unknown_count: s.unknown_count,
+                activity_count: s.kind_counts.total(),
+                kind_counts: s.kind_counts,
                 coinbase_count: s.coinbase_count,
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),
                 script_counts,
+                protocol_action_counts: s.protocol_action_counts,
             }
         })
         .collect();
@@ -4624,7 +4617,7 @@ async fn get_activity_summary_24h(
 
     let store = state.store.clone();
     let activity_window = state.activity_window.clone();
-    let (agg, hours_covered, activity_count) =
+    let (agg, hours_covered) =
         tokio::task::spawn_blocking(move || activity_window.summary(&store, tip))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
@@ -4662,20 +4655,13 @@ async fn get_activity_summary_24h(
     script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
 
     let result = ActivitySummary24hResponse {
-        activity_count,
-        transfer_count: agg.transfer_count,
-        dao_deposit_count: agg.dao_deposit_count,
-        dao_withdraw_request_count: agg.dao_withdraw_request_count,
-        dao_withdraw_complete_count: agg.dao_withdraw_complete_count,
-        token_count: agg.token_count,
-        object_count: agg.object_count,
-        identity_count: agg.identity_count,
-        script_call_count: agg.script_call_count,
-        unknown_count: agg.unknown_count,
+        activity_count: agg.kind_counts.total(),
+        kind_counts: agg.kind_counts,
         coinbase_count: agg.coinbase_count,
         unique_address_count: agg.unique_address_count,
         total_ckb_moved: agg.total_ckb_moved.to_string(),
         script_counts,
+        protocol_action_counts: agg.protocol_action_counts,
         hours_covered,
     };
 

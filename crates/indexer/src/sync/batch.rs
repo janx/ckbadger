@@ -3332,7 +3332,7 @@ impl Indexer {
                             parsed.number
                         );
                     }
-                    BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut block_activity);
+                    BatchWriter::accumulate_tx_activity_stats(classified, &mut block_activity);
 
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
@@ -12848,7 +12848,8 @@ mod tests {
             // The fixture exercises what it claims: one day, three hours,
             // the `.bit` counters and the hours' address sets.
             let day = ckbadger_common::stats_bucket::stats_date_key(1_700_002_790_000).unwrap();
-            let daily: ckbadger_store::types::DailyActivityStats = bincode::deserialize(
+            let daily = ckbadger_store::types::DailyActivityStats::decode(
+                &day,
                 &bulk
                     .iter()
                     .find(|(key, _)| {
