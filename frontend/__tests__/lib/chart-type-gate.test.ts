@@ -34,8 +34,6 @@ const PENDING: Record<string, number> = {
   'components/blocks/block-position.tsx': 11,
   'components/fiber/fiber-channel-timeline.tsx': 7,
   'components/fiber/fiber-network-graph.tsx': 4,
-  'components/forks/fork-days-chart.tsx': 4,
-  'components/forks/fork-tree.tsx': 10,
   'components/hardforks/vm-lane-timeline.tsx': 17,
   'components/transaction/proposal-ruler.tsx': 1,
   'components/ui/allele-gel.tsx': 4,

@@ -6,6 +6,8 @@ import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
+import { SVG_TEXT } from '@/lib/chart-type';
+import { advancePx } from '@/lib/type-metrics';
 
 interface Day {
   date: string;
@@ -22,8 +24,8 @@ const NAME_LINE = 28;
 const NAME_LINE_2 = 16;
 /** Under the bars: the first and last day's labels. */
 const AXIS = 22;
-/** About 6.6 px a character at 11 px in the app's mono face. */
-const CHAR = 6.6;
+/** A character of the plot's text, all of it set at the label size: 6.6 px at 11 px. */
+const CHAR = advancePx(SVG_TEXT.label);
 const UNCLES_KEY = 'uncles on chain, per day';
 const SWITCHES_KEY = 'this node’s branch switches';
 
@@ -107,7 +109,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
       >
         <g data-role="chart-name">
           <rect x="0" y="6" width="10" height="10" fill={FORK_COLORS.uncles} opacity=".5" />
-          <text x="14" y="15" fontSize="11" fill={FORK_COLORS.tick}>
+          <text x="14" y="15" fontSize={SVG_TEXT.label} fill={FORK_COLORS.tick}>
             {UNCLES_KEY}
           </text>
           <rect
@@ -120,7 +122,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
           <text
             x={(oneLine ? secondX : 0) + 14}
             y={15 + keyY2}
-            fontSize="11"
+            fontSize={SVG_TEXT.label}
             fill={FORK_COLORS.tick}
           >
             {SWITCHES_KEY}
@@ -131,7 +133,13 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
             {/* The scale's lines are grid: solid (visual finish V13 b). */}
             <line data-role="grid" x1="0" x2={W} y1={y(v)} y2={y(v)} stroke={FORK_COLORS.grid} />
             {written(v) && (
-              <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={FORK_COLORS.tick}>
+              <text
+                data-role="y-tick"
+                x="0"
+                y={y(v) - 4}
+                fontSize={SVG_TEXT.label}
+                fill={FORK_COLORS.tick}
+              >
                 {v.toLocaleString('en-US')}
               </text>
             )}
@@ -180,7 +188,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
                   x={last ? x + width : x}
                   y={base + 16}
                   textAnchor={last ? 'end' : 'start'}
-                  fontSize="11"
+                  fontSize={SVG_TEXT.label}
                   fill={FORK_COLORS.tick}
                 >
                   {day.date.slice(5)}

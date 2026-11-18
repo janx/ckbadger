@@ -4,6 +4,7 @@ import { LABEL_ADVANCE as UPGRADE_LABEL_ADVANCE } from '@/components/scripts/scr
 import { cn } from '@/lib/utils';
 import { NODE_H } from '@/components/transaction/what-moved';
 import { ROW_SEAL } from '@/components/ui/row-seal';
+import { CHAR_10 as FORK_CHAR_10 } from '@/components/forks/fork-tree';
 import {
   LABEL_LINE_PX,
   MONO_ADVANCE_EM,
@@ -122,6 +123,13 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
   ['components/scripts/holder-timeline.tsx', 'TICK_ROW_PX = 14', 14, LABEL_LINE_PX],
   ['components/transaction/what-moved.tsx', 'NODE_H = 40 (two 18 px lines)', 40, NODE_H],
   ['components/transaction/what-moved.tsx', 'PITCH = 50', 50, NODE_H + 10],
+  // the fork figures
+  ['components/forks/fork-tree.tsx', 'fontSize="11" (4 sites)', 11, SVG_TEXT.label],
+  ['components/forks/fork-tree.tsx', 'fontSize="10" (5 sites)', 10, SVG_TEXT.tick],
+  ['components/forks/fork-tree.tsx', 'fontSize={compact ? 10 : 11}: 10', 10, SVG_TEXT.tick],
+  ['components/forks/fork-tree.tsx', 'CHAR_10 = 6.4 (0.64 em, observed)', 6.4, FORK_CHAR_10],
+  ['components/forks/fork-days-chart.tsx', 'fontSize="11" (4 sites)', 11, SVG_TEXT.label],
+  ['components/forks/fork-days-chart.tsx', 'CHAR = 6.6', 6.6, advancePx(SVG_TEXT.label)],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
   // transaction-list-table: 1,230 and 564 px as before)
