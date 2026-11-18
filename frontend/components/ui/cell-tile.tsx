@@ -147,10 +147,11 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
         {/* the bar, its bytes and the state at 12 px, budgeted at a cell's widest occupied figure:
-            at most a block's serialized size (MAX_BLOCK_BYTES, 597,000, consensus), so
-            "occupied 597,000 B", 129.6 px: 56 + 6 + 129.6 + 6 + 57.6 ('consumed') = 255.2 px. It
-            holds in the 343 px text column at 1280; in the 215 px column at 1024 (from "occupied
-            9 B" on) the state, the line's end, drops under the bar on its own line at the right */}
+            no more than the transaction that made it (LARGEST_TX_BYTES, of record: genesis's
+            cellbase), "occupied 1,236,271 B", 144 px: 56 + 6 + 144 + 6 + 57.6 ('consumed') =
+            269.6 px. It holds in the 343 px text column at 1280; in the 215 px column at 1024
+            (from "occupied 9 B" on) the state, the line's end, drops under the bar on its own line
+            at the right */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)

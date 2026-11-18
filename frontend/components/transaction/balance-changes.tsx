@@ -10,9 +10,24 @@ import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
 import type { ShortSize } from '@/lib/shorten';
+import { WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
+/** The participant's track and the CKB change's (as they were drawn). */
+const PARTY_PX = 190;
+const CKB_PX = 180;
+/**
+ * The Occupied track holds the widest change a party can make in one transaction, with its unit
+ * (WIDEST_OCCUPIED_CHANGE, "−16,773,724,928 B"), at the body step its cells inherit from the
+ * transaction page: 143 px. A change past it is held on its line (nowrap) and runs into the gap.
+ */
+const OCCUPIED_PX = columnPx(textPx(WIDEST_OCCUPIED_CHANGE.length, fontPx('body')));
+/** The room the items keep beside them, as the 700 px table left them with a 100 px Occupied. */
+const ITEMS_MIN_PX = 182;
+/** gap-4, between the four tracks. */
+const GAP_PX = 16;
 /** The four columns' minimum: below it the table would have to scroll, so the cards are drawn. */
-const TABLE_MIN_W = 700;
+const TABLE_MIN_W = PARTY_PX + CKB_PX + OCCUPIED_PX + ITEMS_MIN_PX + 3 * GAP_PX;
 /** From here a card holds the party and its CKB change on one line (the 640 board). */
 const TWO_LINE_MIN_W = 480;
 
@@ -63,7 +78,11 @@ function Items({ participant, size }: { participant: ParticipantInfo; size: Shor
   );
 }
 
-const BALANCE_GRID = 'grid grid-cols-[190px_180px_100px_minmax(0,1fr)] gap-4';
+const BALANCE_GRID = 'grid gap-4';
+/** Each row is its own grid on these tracks (the Items track takes the rest). */
+const BALANCE_TRACKS = {
+  gridTemplateColumns: `${PARTY_PX}px ${CKB_PX}px ${OCCUPIED_PX}px minmax(0,1fr)`,
+};
 
 function netNote(note: ReturnType<typeof balanceNet>['note']): string {
   switch (note) {
@@ -83,7 +102,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 /**
  * Balance changes (TX-12, TX-19): every participant, then the Net row that explains the sum.
  * The measured width decides the form (docs/RESPONSIVE_LAYOUT.md rule 4): the four-column table
- * where its 700 px fit, otherwise one card per participant — party and lock, CKB and occupied,
+ * where its tracks fit (TABLE_MIN_W, 743 px), otherwise one card per participant — party and lock, CKB and occupied,
  * the items moved — with the Net row as the last card. Never a sideways scroller. A value the
  * section cannot read fails the section in place, under its heading (review 45fd ruling D7).
  */
@@ -113,6 +132,7 @@ export function BalanceChanges({
             <div role="table" aria-label="Balance changes by participant">
               <div
                 role="row"
+                style={BALANCE_TRACKS}
                 className={cn(
                   BALANCE_GRID,
                   'border-row-rule text-text-dim text-meta border-b pb-1.5'
@@ -131,6 +151,7 @@ export function BalanceChanges({
                 <div
                   key={partyKey(p, i)}
                   role="row"
+                  style={BALANCE_TRACKS}
                   className={cn(BALANCE_GRID, 'border-row-rule items-baseline border-b py-2')}
                 >
                   <span role="cell" className="min-w-0">
@@ -151,6 +172,7 @@ export function BalanceChanges({
               <div
                 role="row"
                 data-testid="tx-balance-net"
+                style={BALANCE_TRACKS}
                 className={cn(BALANCE_GRID, 'text-text-dim items-baseline py-2')}
               >
                 {readable(activity.txHash, () => {

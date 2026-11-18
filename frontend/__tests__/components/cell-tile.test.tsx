@@ -1,4 +1,5 @@
-import { WIDEST_OCCUPIED } from '@/lib/list-bounds';
+import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
+import { occupiedBytesText } from '@/lib/occupied';
 import { describe, it, expect, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { CellTile } from '@/components/ui/cell-tile';
@@ -521,8 +522,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(within(tile).getAllByText('live')).toHaveLength(1);
     // The line's budget at a stated bound (B4 fix round, tests NOTE-4; it was the sample
     // 'occupied 231'): a cell's occupied bytes are no more than the transaction that made it, and
-    // the largest is genesis's cellbase, past the block limit (WIDEST_OCCUPIED, of record: it was
-    // MAX_BLOCK_BYTES here, which a genesis cell is not held by), so the widest figure is
+    // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record: it
+    // was MAX_BLOCK_BYTES here, which a genesis cell is not held by), so the widest figure is
     // "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px. With the 56 px
     // bar, 'consumed' and the 6 px gaps the line is 269.6 px. The text column is 215 px at its
     // narrowest (1024: the recorded 203 px column, the 30 px mark column and the 10 px gap, less
@@ -531,7 +532,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     // (TileText's end: ml-auto).
     const narrowest = 203 + 30 + 10 - Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16) - 10;
     expect(narrowest).toBe(215);
-    const widest = `occupied ${WIDEST_OCCUPIED}`;
+    const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES))}`;
     expect(widest).toBe('occupied 1,236,271 B');
     const line = 56 + 6 + textPx(widest.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
     expect(line).toBeCloseTo(269.6, 10);
