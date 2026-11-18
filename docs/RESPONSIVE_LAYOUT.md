@@ -142,6 +142,28 @@ The 640–767 band has one content width to design for. Below 640 the container 
   wider.
 - **Analytic tables** that explain a page (balance changes, script groups, peer evidence) get a
   phone form of their own; they are never a sideways scroller in a first screen.
+- **Prose** (readability 2026-11-18, R4, lane B7): running text — a lede, a paragraph that
+  explains, a note, a caption, a comment line — stands on one measure, the class `max-w-measure`:
+  76 characters of the element that carries it (`MEASURE_CHARS`, `lib/type-metrics.ts`; the class
+  is `76ch`, the face's advance at its own step: 638.4 px at the body step, 592.8 at the small,
+  547.2 at the meta). It is a maximum, so a paragraph in a narrower column is the column's width:
+  on a phone (358 px at 390, 328 at 360: 42 and 39 characters at the body step) the class does
+  nothing, and that is right, since the column is already a comfortable line and nothing is gained
+  by a narrower one. One class and no literal caps: `Prose` applies it to its paragraphs
+  (`.prose-tier2 p`), `Comment` to its paragraph, the lede slots of `DetailLayout`,
+  `AssetDetailShell` and `TopicHero` to what they are handed; any other paragraph carries it
+  itself or stands in a block that does, the class on the element whose step the text is set at
+  (text a step smaller under a body-step measure runs more characters a line). A sentence that
+  explains reads at the body step in the reading ink in both tiers; a note under a figure may stay
+  quiet at the small or meta step, on the measure too. A table cell (`ListTable` owns its width),
+  raw data, a one-line label and a row of items are not running text.
+  `__tests__/lib/measure-gate.test.ts` holds the rule where the source shows it: a `<p>`, or a
+  block with more than 110 characters of its own text, outside the measure fails, but for the sites
+  it lists with their reason. A reading of more than three facts is drawn as labelled facts, the
+  detail pages' `dl` rows (`DetailFacts`, `components/ui/detail-layout.tsx`: a quiet label beside
+  its value), not joined by "·" into a line that runs across the page (the DAO history's reading,
+  the address balance's parts, the "CKB held" readings of an asset and of a script); "·" stays for
+  two or three short facts of one kind ("tx 12 · sequence 3").
 - **Scrollbars**: painted in the page's palette and thin inside the page (`app/globals.css`), so a
   region that legitimately scrolls shows no platform-grey bar.
 - **Touch**: anything a hover reveals must also be reachable by a tap that pins a readout under the
