@@ -27,6 +27,7 @@ import {
 } from '@/lib/type-metrics';
 import { SVG_TEXT, centreShift, labelAdvancePx } from '@/lib/chart-type';
 import { FIBER_GRAPH } from '@/lib/fiber-network-model';
+import { NUMBER_TEXT_PX, SMALL_TEXT_PX } from '@/lib/pipeline/layout';
 import { AXIS_CHAR_PX } from '@/lib/chart-ticks';
 import {
   HOVER_HEAD_Y,
@@ -228,6 +229,9 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
   ['components/blocks/block-position.tsx', 'fontSize="11" (10 sites)', 11, SVG_TEXT.label],
   ['components/blocks/block-position.tsx', 'fontSize="12" (a tile\'s number)', 12, SVG_TEXT.head],
   ['components/transaction/proposal-ruler.tsx', 'fontSize={10}', 10, SVG_TEXT.tick],
+  // the home pipeline's text (its geometry is not redrawn in this lane)
+  ['lib/pipeline/layout.ts', 'SMALL_TEXT_PX = 11', 11, SMALL_TEXT_PX],
+  ['lib/pipeline/layout.ts', 'NUMBER_TEXT_PX = 12', 12, NUMBER_TEXT_PX],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
   // transaction-list-table: 1,230 and 564 px as before)
@@ -382,6 +386,13 @@ describe('cn() reads the named lines as the arbitrary ones they replaced', () =>
 
   it.each(lists)('keeps and drops them alike: %s', (...list) => {
     expect(cn(...list.map(named))).toBe(named(cn(...list)));
+  });
+});
+
+describe("the pipeline's monoWidth on every label it measures", () => {
+  it('gives (n × px × 3) / 5 to the bit, for up to 80 glyphs at both of its sizes', () => {
+    for (const px of [11, 12])
+      for (let n = 0; n <= 80; n++) expect(textPx(n, px), `${n} at ${px}`).toBe((n * px * 3) / 5);
   });
 });
 
