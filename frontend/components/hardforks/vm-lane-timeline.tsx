@@ -48,7 +48,7 @@ const UTC8_MS = 8 * 3_600_000;
 /** On a phone, the clear space kept above the first lane's header line for the rules. */
 const LANE_HEAD_CLEAR = 4;
 /** A glyph of an edition block's sub-line (the note size), for keeping labels apart. */
-const CHAR_PX = advancePx(SVG_TEXT.note);
+export const CHAR_PX = advancePx(SVG_TEXT.note);
 /**
  * The plot's name, inside it at the top-left (hierarchy v3, R13): the page's former section title
  * and its hint line. It wraps after the title where one line does not fit (a phone).
@@ -61,16 +61,16 @@ const PLOT_HINT = 'dots: when each known script version was deployed';
  */
 /** The plot's name at the label size. */
 const NAME_PX = SVG_TEXT.label;
-const NAME_CHAR_PX = advancePx(NAME_PX);
+export const NAME_CHAR_PX = advancePx(NAME_PX);
 /** The hint under the title, a tight label line below it (15 px). */
-const PLOT_NAME_LINE = tightLinePx(NAME_PX);
+export const PLOT_NAME_LINE = tightLinePx(NAME_PX);
 /** The name's first line stands 2 px under the svg's top. */
 const PLOT_NAME_PAD = 2;
 const PLOT_NAME_Y = PLOT_NAME_PAD + lineAscentPx(NAME_PX);
 /** Clear space between the name band and the edition labels under it. */
 const PLOT_NAME_GAP = 5;
 /** Glyph width of the edition names, set at the title size. */
-const EDITION_CHAR_PX = advancePx(SVG_TEXT.title);
+export const EDITION_CHAR_PX = advancePx(SVG_TEXT.title);
 /**
  * An edition block: its name (the title size) over its epoch (the note size), 6 px under the
  * name band: their baselines 18.45 and 33.9 under it (were 18 and 33, where the two lines met);

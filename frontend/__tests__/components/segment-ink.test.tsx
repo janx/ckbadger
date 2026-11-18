@@ -113,36 +113,40 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const DAO_GROUPS = [
-  { label: 'largest', value: BigInt(823) },
+/** The DAO's four groups with a largest one of 11 %, whose words fit its segment at 1,232 px. */
+const DAO_GROUPS_INSIDE = [
+  { label: 'largest', value: BigInt(1100) },
   { label: 'next 9', value: BigInt(1783) },
   { label: 'next 90', value: BigInt(3091) },
-  { label: 'the other 16,495', value: BigInt(4303) },
+  { label: 'the other 16,495', value: BigInt(4026) },
 ];
 
 describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)', (theme) => {
   it('reads every group of the DAO concentration bar at 4.5:1 or more', () => {
     inTheme(theme);
-    // re-pinned (readability R4): the words are text-small, 13 px since R4 (7.8 px a glyph, was
-    // 7 px snapped at 12): "largest 8.3%"'s 13 characters and 20 px padding need 121.4 px, 8.3 %
-    // of a 1,463 px bar (was 1,338), so the bar is drawn 1,480 px wide here (was 1,408)
-    stubChartWidth(1480);
+    // Re-pinned (review-fb-tests finding 3): the bar was drawn 1,480 px wide (1,408 before R4) so
+    // that mainnet's largest group, 8.23 %, held its words, a width no page gives it (the DAO
+    // page's column is at most 1,232 px; at mainnet's shares the largest group's words stand in the
+    // legend row there, dao-board.test.tsx). The bar is drawn at the page's widest, 1,232 px, with
+    // a largest group of 11 %: "largest 11.00%" is 14 glyphs at 13 px and 2 × 10 px of padding,
+    // 129.2 px of the segment's 135.5, so every group's words are inside and their ink is read.
+    stubChartWidth(1232);
     render(
       <ConcentrationBar
         label="Share of deposits"
         assetClass="dao"
         total={BigInt(10000)}
-        groups={DAO_GROUPS}
+        groups={DAO_GROUPS_INSIDE}
         labelsInside
       />
     );
     const bar = screen.getByRole('img', { name: /^Share of deposits/ });
     const words = Array.from(bar.children).flatMap((s) => inks(s as HTMLElement, theme));
     expect(words.map((w) => w.text)).toEqual([
-      'largest 8.23%',
+      'largest 11.00%',
       'next 9 · 17.83%',
       'next 90 · 30.91%',
-      'the other 16,495 · 43.03%',
+      'the other 16,495 · 40.26%',
     ]);
     expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);
   });

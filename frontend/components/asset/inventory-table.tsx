@@ -357,7 +357,7 @@ function HMultiplier({ value }: { value: string | null }) {
  * amount, "99,999,999,999" (14 at 13 px, 109.2); with the 16 px gap, 168 px.
  */
 const HELD_LABEL = 'CKB held in its cells';
-const HELD_COLUMN: ListColumn<Asset> = {
+export const HELD_COLUMN: ListColumn<Asset> = {
   key: 'capacity',
   label: HELD_LABEL,
   // the head at the meta step, wider than the widest amount, and the gap

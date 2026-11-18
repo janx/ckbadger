@@ -88,6 +88,89 @@ export function tightLinePx(px: number): number {
  */
 export const LABEL_LINE_PX = tightLinePx(fontPx('meta'));
 
+/*
+ * Text that is not ours (review F-B, logic finding 5): a gene's name, rule and trait value (a
+ * collection creator's), a pool's name (the operator's pools.toml), an organisation (the ASN
+ * registry's), an asset's name in a figure. It may be in any script, and only the face's Latin
+ * subset is served at every weight: a character outside it is drawn from a fallback face, whose
+ * advance the site does not know. Such a text is measured by an upper bound, not a measurement:
+ * walking its grapheme clusters (what a reader sees as one character: a letter and its accents,
+ * an emoji with its modifier or a ZWJ sequence of several), a cluster of the served Latin subset
+ * at the face's 0.6 em and any other at 1.25 em, the widest fallback advance measured: 1.2 em for
+ * CJK in Maple Mono NF CN (what `monospace` resolves to on the owner's machine) and 1 em in Noto
+ * Sans CJK, 1.245 em for an emoji in Noto Color Emoji. Our own text — labels we write, numbers,
+ * hashes — is measured exactly by `textPx`. A cut of such a text walks the same clusters
+ * (`clipForeignLabel`, lib/shorten.ts), so it never splits one.
+ */
+
+/**
+ * The code points every face the site serves maps (`public/fonts/jetbrains-mono-*.woff2`): the
+ * semibold, light and italic files are subsets of 229 glyphs, all held by the regular and medium
+ * faces too. Basic Latin and Latin-1, a few Latin letters and spacing marks, the combining accents
+ * the subset composes with, and the punctuation and symbols listed (… − • € ™ ↑ ↓; not → ← ■ ≤ ≥
+ * ✓ ∞, which only the regular and medium faces hold). `__tests__/lib/type-metrics.test.ts` reads
+ * it from the five files.
+ */
+const SERVED_LATIN: readonly (readonly [number, number])[] = [
+  [0x0d, 0x0d],
+  [0x20, 0x7e],
+  [0xa0, 0xff],
+  [0x102, 0x102],
+  [0x131, 0x131],
+  [0x152, 0x153],
+  [0x2bc, 0x2bc],
+  [0x2c6, 0x2c6],
+  [0x2da, 0x2da],
+  [0x2dc, 0x2dc],
+  [0x300, 0x301],
+  [0x303, 0x304],
+  [0x308, 0x309],
+  [0x323, 0x323],
+  [0x2013, 0x2014],
+  [0x2018, 0x201a],
+  [0x201c, 0x201e],
+  [0x2022, 0x2022],
+  [0x2026, 0x2026],
+  [0x2032, 0x2033],
+  [0x2039, 0x203a],
+  [0x2044, 0x2044],
+  [0x20ac, 0x20ac],
+  [0x2122, 0x2122],
+  [0x2191, 0x2191],
+  [0x2193, 0x2193],
+  [0x2212, 0x2212],
+  [0x2215, 0x2215],
+  [0xfeff, 0xfeff],
+];
+
+/** The most a grapheme outside the served Latin subset advances, in units of the em (1.25 em). */
+const FALLBACK_UNITS = 1250;
+
+const served = (cp: number) => SERVED_LATIN.some(([from, to]) => cp >= from && cp <= to);
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * A text that is not ours as its grapheme clusters, each with the most it advances in units of
+ * the em (thousandths): 600 for a cluster of the served Latin subset, 1,250 for any other.
+ */
+export function foreignGraphemes(text: string): { grapheme: string; units: number }[] {
+  return Array.from(GRAPHEMES.segment(text), ({ segment }) => ({
+    grapheme: segment,
+    units: Array.from(segment).every((ch) => served(ch.codePointAt(0)!))
+      ? ADVANCE_UNITS
+      : FALLBACK_UNITS,
+  }));
+}
+
+/**
+ * The most a text that is not ours can draw at `px` (an upper bound, see above): exactly
+ * `textPx(length, px)` for a text of the served Latin subset.
+ */
+export function foreignTextPx(text: string, px: number): number {
+  const units = foreignGraphemes(text).reduce((sum, g) => sum + g.units, 0);
+  return (units * px) / UNITS_PER_EM;
+}
+
 /**
  * A sum of widths to the hundredth of a pixel the budgets are written in: in binary floating point
  * 56.5 + 132.6 + 16 can land a hair over 205.1.

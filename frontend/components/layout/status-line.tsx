@@ -12,7 +12,7 @@ import { clockNow, clockText, subscribeClock, zoned } from '@/lib/clock';
 import { formatBlockNumber } from '@/lib/format-block';
 import { releaseOf, resolveBuildVersion } from '@/lib/runtime-config';
 import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
-import { TIP_WORD, fitStatusLine } from '@/lib/status-line-fit';
+import { STATUS_LINE_INSET_PX, TIP_WORD, fitStatusLine } from '@/lib/status-line-fit';
 import { cn } from '@/lib/utils';
 
 /** The mode block's ground per mode: celadon live, gold (the warning hue) syncing, cinnabar off. */
@@ -22,7 +22,14 @@ const MODE_CLASS: Record<ChainMode, string> = {
   OFFLINE: 'bg-rouge text-base-bg',
 };
 
-/** A segment: its own cell between 1 px lines, the line on the side away from the edge it keeps. */
+/** The mode block's and a segment's insets, drawn from the line's budget (lib/status-line-fit.ts). */
+const { mode: MODE_PAD, segment: SEGMENT_PAD, line: LINE, gap: GAP } = STATUS_LINE_INSET_PX;
+
+/**
+ * A segment: its own cell between 1 px lines, the line on the side away from the edge it keeps.
+ * Its padding, its line and the gap between its runs are the budget's own numbers, an inline style
+ * over any class, so what the line draws is what it counted.
+ */
 function Segment({
   children,
   side = 'left',
@@ -37,11 +44,13 @@ function Segment({
   return (
     <span
       title={title}
-      className={cn(
-        'border-base-border flex items-center gap-1.5 px-3',
-        side === 'left' ? 'border-r' : 'border-l',
-        className
-      )}
+      className={cn('border-base-border flex items-center', className)}
+      style={{
+        paddingLeft: SEGMENT_PAD,
+        paddingRight: SEGMENT_PAD,
+        columnGap: GAP,
+        ...(side === 'left' ? { borderRightWidth: LINE } : { borderLeftWidth: LINE }),
+      }}
     >
       {children}
     </span>
@@ -103,9 +112,10 @@ export function StatusLine() {
         data-mode={mode ?? 'unknown'}
         title={modeTitle(mode, error, stats)}
         className={cn(
-          'flex items-center px-2.5 font-semibold',
+          'flex items-center font-semibold',
           mode === null ? 'bg-base-border text-text-dim' : MODE_CLASS[mode]
         )}
+        style={{ paddingLeft: MODE_PAD, paddingRight: MODE_PAD }}
       >
         {mode ?? '—'}
       </span>

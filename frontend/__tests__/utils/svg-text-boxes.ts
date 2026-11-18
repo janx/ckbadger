@@ -223,17 +223,23 @@ export function expectInside(
   what: string,
   mode: 'clear' | 'flush' = 'clear'
 ) {
-  const ok =
-    mode === 'clear'
-      ? line.left > box.left &&
+  expect(
+    standsInside(line, box, mode),
+    `${what}: "${line.text}" ${fmt(line)} is not inside ${fmt(box)}`
+  ).toBe(true);
+}
+
+/** Whether a line stands inside a box, as `expectInside` holds it. */
+export function standsInside(line: Box, box: Box, mode: 'clear' | 'flush' = 'clear'): boolean {
+  return mode === 'clear'
+    ? line.left > box.left &&
         line.right < box.right &&
         line.top > box.top &&
         line.bottom < box.bottom
-      : line.left >= box.left - 1e-9 &&
+    : line.left >= box.left - 1e-9 &&
         line.right <= box.right + 1e-9 &&
         line.top >= box.top - 1e-9 &&
         line.bottom <= box.bottom + 1e-9;
-  expect(ok, `${what}: "${line.text}" ${fmt(line)} is not inside ${fmt(box)}`).toBe(true);
 }
 
 /**
@@ -243,6 +249,49 @@ export function expectInside(
 export function meets(a: Box, b: Box): boolean {
   return (
     a.left <= b.right && b.left <= a.right && a.top < b.bottom - 1e-9 && b.top < a.bottom - 1e-9
+  );
+}
+
+const hundredth = (px: number) => Math.round(px * 100) / 100;
+
+/** Two lines that meet, and how far across they share, px to the hundredth. */
+export interface Meeting {
+  a: string;
+  b: string;
+  by: number;
+}
+
+/**
+ * Every two of `lines` that meet (`meets`), each with how far across the two overlap: the
+ * measure a known fault is pinned by, so a test holds it at its size until it is fixed.
+ */
+export function meetings(lines: readonly TextLine[]): Meeting[] {
+  const met: Meeting[] = [];
+  lines.forEach((a, i) =>
+    lines.slice(i + 1).forEach((b) => {
+      if (meets(a, b))
+        met.push({
+          a: a.text,
+          b: b.text,
+          by: hundredth(Math.min(a.right, b.right) - Math.max(a.left, b.left)),
+        });
+    })
+  );
+  return met;
+}
+
+/**
+ * How far a line stands outside a box on its farthest side, px to the hundredth; 0 or less when
+ * it stands inside it (flush counts as inside).
+ */
+export function pastPx(line: Box, box: Box): number {
+  return hundredth(
+    Math.max(
+      box.left - line.left,
+      line.right - box.right,
+      box.top - line.top,
+      line.bottom - box.bottom
+    )
   );
 }
 

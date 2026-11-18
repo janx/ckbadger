@@ -16,6 +16,7 @@ import {
 import type { ChainMode } from '@/lib/chain-mode';
 import { fontPx, textPx } from '@/lib/type-metrics';
 import type { TypeStep } from '@/lib/type-scale';
+import { contentPx as drawnContentPx } from './tailwind-box';
 
 /**
  * The shell's budget at the type scale (readability plan 2026-11-18, lane F3-f): what the header,
@@ -315,46 +316,15 @@ export function stripLines(viewport: number, block: string = WIDEST.block): Stri
 // ---------------------------------------------------------------------------------------------
 // The status line as drawn (components/layout/status-line.tsx), for the component's own tests
 
-/** Whether an element of the line is drawn at a viewport below md or from it, by its classes. */
-function drawn(el: Element, fromMd: boolean): boolean {
-  if (el.classList.contains('sr-only')) return false;
-  if (!el.classList.contains('hidden')) return true;
-  return fromMd && ['md:flex', 'md:inline', 'md:block'].some((c) => el.classList.contains(c));
-}
-
-/** The characters of the text an element draws (an `sr-only` run is no box in the line). */
-function drawnChars(node: Node, fromMd: boolean): number {
-  if (node.nodeType === Node.TEXT_NODE) return [...(node.textContent ?? '')].length;
-  if (node instanceof Element && !drawn(node, fromMd)) return 0;
-  return sum(Array.from(node.childNodes).map((c) => drawnChars(c, fromMd)));
-}
-
-/** The flex items of a box that are drawn: its elements that are drawn and its non-empty texts. */
-function drawnRuns(el: Element, fromMd: boolean): Node[] {
-  return Array.from(el.childNodes).filter((c) =>
-    c.nodeType === Node.TEXT_NODE
-      ? (c.textContent ?? '') !== ''
-      : c instanceof Element && drawn(c, fromMd)
-  );
-}
-
 /**
- * The width the status line's drawn parts take, measured as the type model measures them at the
- * line's meta step with the insets its classes give: the mode block `px-2.5` each side; a segment
- * `px-3` each side, its 1 px line, `gap-1.5` between its runs; the right-hand group (`ml-auto`)
- * the sum of its segments. What a class hides at the viewport, and an `sr-only` run, take no room.
+ * The width the status line's drawn parts take in a window `viewport` px wide, read off the line
+ * as drawn (__tests__/utils/tailwind-box.ts): each part's text at the step it inherits, 0.6 em a
+ * glyph, and the insets its classes and its inline style give it, from Tailwind's theme and the
+ * cascade, never from lib/status-line-fit.ts. What is hidden at the viewport, and an `sr-only`
+ * run, take no room. A test that compares this with the line's budget compares two readings.
  */
-export function drawnStatusLinePx(bar: HTMLElement, fromMd: boolean): number {
-  const meta = fontPx('meta');
-  const partPx = (el: Element): number => {
-    if (!drawn(el, fromMd)) return 0;
-    if (el.getAttribute('data-testid') === 'status-mode')
-      return textPx(drawnChars(el, fromMd), meta) + 20;
-    if (el.classList.contains('ml-auto')) return sum(Array.from(el.children).map(partPx));
-    const runs = drawnRuns(el, fromMd);
-    return textPx(drawnChars(el, fromMd), meta) + 6 * (runs.length - 1) + 2 * 12 + 1;
-  };
-  return px(sum(Array.from(bar.children).map(partPx)));
+export function drawnStatusLinePx(bar: HTMLElement, viewport: number): number {
+  return px(drawnContentPx(bar, viewport));
 }
 
 // ---------------------------------------------------------------------------------------------

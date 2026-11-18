@@ -60,6 +60,41 @@ describe('NetworkDistributions', () => {
     expect(screen.getByText('/ckb/2')).toBeInTheDocument();
   });
 
+  // Review F-B (logic finding 5): an organisation's name is the ASN registry's text, in any
+  // script, and a segment wrote it where it measured to fit at 0.6 em a UTF-16 unit; no face the
+  // site serves holds a CJK character, which draws from a fallback face. At 240 px each of two
+  // equal segments has 120 px: "中国电信 50.00%" is 4 CJK characters at the small step (13 px,
+  // 16.25 each at 1.25 em) and 7 Latin glyphs (7.8 each), 119.6 px, and 20 px of padding (it was
+  // counted 105.8, and drawn clipped by its segment); its share alone, 66.8 px, fits.
+  it('writes an organisation’s name in its segment only where its bound fits', async () => {
+    stubChartWidth(240);
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          verifiedRetained: 10,
+          sameNetworkReachable: 10,
+          verifiedUnavailable: 0,
+          versions: [{ label: '0.114.0', count: 10 }],
+          countries: [{ label: 'China', count: 10 }],
+          asns: [
+            { label: 'AS4134 中国电信', count: 5 },
+            { label: 'AS24940 Hetzner', count: 5 },
+          ],
+          protocols: [{ label: '/ckb/2', count: 10 }],
+        })
+      )
+    );
+    const { container } = render(<HostingBar />);
+    const segment = await waitFor(() => {
+      const found = container.querySelector('[data-provider="中国电信"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(segment.textContent).toBe('50.00%');
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   // Review fix: a read paused between retries (a hidden tab, the browser offline) is pending
   // without fetching, so isLoading is false: the three parts said "Failed to load …" while they
   // waited.

@@ -30,7 +30,7 @@ export interface ConcentrationBarProps {
 /** The ranked groups' fills: the class colour at these alphas over the page ground. */
 export const CONCENTRATION_STEPS = [1, 0.7, 0.45, 0.22] as const;
 /** The in-segment words: the small step (`text-small`, 12 px) with 10 px padding each side. */
-const LABEL_PX = fontPx('small');
+export const LABEL_PX = fontPx('small');
 const LABEL_PAD = 10;
 
 /** The class colour at `alpha` as a background, so a segment's words keep their full ink. */

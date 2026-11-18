@@ -166,4 +166,43 @@ describe('forkTreeLayout (responsive V4: the two branches drawn to the measured 
   it('refuses a width that cannot hold the collapsed column and one block', () => {
     expect(() => forkTreeLayout(deep, 150)).toThrow(/150 px/);
   });
+
+  // Review F-B (logic finding 8): from "+100 earlier" (12 glyphs at 12 px, 86.4 px, and 6 px each
+  // side: 99 px) the fold's box needs more than the 96 px a tile stops growing at, and the layout
+  // capped it there, its words running 2.4 px past it. The box is as wide as its words need.
+  it('draws the "+N earlier" box as wide as its words, past a hundred folded heights too', () => {
+    // 120 heights: the fork point 100 and today's 101–219, one dropped block at 219
+    const tall: ForkTreeModel = {
+      main: Array.from({ length: 120 }, (_, i) => tile(100 + i, `m${i}`, i === 0)),
+      rows: [{ label: 'dropped at this switch', tiles: [tile(219, 'b219')] }],
+      uncleLinks: [],
+      marks: [{ n: 1, hash: hash('b219') }],
+      first: 100,
+      last: 219,
+    };
+    for (const width of [1248, 608, 358]) {
+      const layout = forkTreeLayout(tall, width);
+      expect(layout.form).toBe('compact');
+      const count = layout.collapsed!.count;
+      expect(count).toBeGreaterThanOrEqual(100);
+      // its words at 0.6 em of 12 px, 6 px in from each side, up to a whole pixel
+      const words = `+${count} earlier`.length * 7.2 + 2 * 6;
+      expect(layout.tileW, `${width} px: +${count} earlier`).toBeGreaterThanOrEqual(words);
+      expect(layout.x(219) + layout.tileW, `${width} px`).toBeLessThanOrEqual(width - 4);
+    }
+  });
+
+  // Review F-B (test finding 9; logic finding 4): the compact form's room, pinned to literals so
+  // a change of the module's constants shows here and in the component's band test, which
+  // derives the same numbers on its own. A tile's labels run 16 px into the 20 px gap after it,
+  // 4 px short of the next tile; under it they take 4 + 15 + 15 + 4 = 38 px; the svg keeps 4 px
+  // after the last tile. The narrowest column, 72 + 16 = 88 px, holds a tight address (11
+  // characters at 12 px, 79.2 px) and not the row form (13, 93.6); a wide tile's 110 − 2 × 8 = 94
+  // px between its insets holds the row form.
+  it('keeps the room an unnamed miner is written in', () => {
+    const c = FORK_TREE.compact;
+    expect([c.minTile, c.gap, c.labelRun, c.under, c.right]).toEqual([72, 20, 16, 38, 4]);
+    expect(c.minTile + c.labelRun).toBe(88);
+    expect(FORK_TREE.wide.tile - 2 * FORK_TREE.wide.inset).toBe(94);
+  });
 });

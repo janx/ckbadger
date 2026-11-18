@@ -9,9 +9,26 @@ import tailwindConfig from '@/tailwind.config';
  * whole `fontSize` is the eight steps (Tailwind's defaults `text-xs` … `text-9xl` do not exist), and
  * no page code sets a size outside them — no arbitrary `text-[Npx]` class, no default size class and
  * no inline `fontSize` style on an HTML element. Ruling R3 exempts only chart renderers' own text:
- * SVG `<text fontSize=…>` / `<tspan>` attributes and canvas `ctx.font`. Sizes relative to their
- * parent (`text-[0.85em]` decimals and units) and the error pages' fluid `clamp()` artwork type are
- * not steps of their own and are not gated; the measurement script reports them as `offScaleRel`.
+ * SVG `<text fontSize=…>` / `<tspan>` attributes and canvas `ctx.font` (the SVG gate,
+ * `chart-type-gate.test.ts`, holds SVG text to lib/chart-type.ts).
+ *
+ * What it reads: every class string in app, components, hooks, lib and src (.ts and .tsx, comments
+ * too); every object key `fontSize` / `font-size` (plain, quoted, or computed from a literal) and
+ * every `font` shorthand key but `inherit`, outside the style of SVG text; every assignment to
+ * `.fontSize` or `.style.font`; every string holding CSS text with a size (`font-size: 12px`,
+ * `font: 600 15px/1.5 …`); every `font-size` and `font` shorthand in app/globals.css. A size relative
+ * to its parent (`text-[0.5em]`, `text-[80%]`) is an offence too since review-fb-tests finding 7:
+ * it was exempt as "not a step of its own", so the 12 px floor was never checked on it; the one site
+ * is listed below with the sizes it computes to.
+ *
+ * What a source gate still cannot see: a size computed at run time into a class name
+ * (`text-[${n}px]`: Tailwind would not generate it either), a size set on an element from a module
+ * outside the scanned folders, a CSS rule's size through a custom property (`font-size: var(--x)`),
+ * the size a relative unit computes to on the page (the allowlist states it by reading the classes
+ * of its parents; a parent's change is not seen here), and text a transform scales. (The error
+ * pages' fluid `clamp()` type this header once exempted is gone: no `clamp()` size is left in the
+ * source or the stylesheet, and a new one is an offence.) The Chrome probes of the readability
+ * review measure the rendered sizes.
  */
 
 /** R1, smallest first: name, font size, line height. */
@@ -46,6 +63,20 @@ const RATIO_EXCEPTIONS: Record<string, string> = {
 const ALLOWLIST: Record<string, string> = {};
 
 /**
+ * Sizes relative to their parent the gate tolerates (review-fb-tests finding 7), as `path#class` →
+ * how many, the sizes they compute to on the page, read from their parents' classes, and the lane
+ * that owns the file. Each computes to the 12 px floor or more.
+ */
+const RELATIVE_ALLOWLIST: Record<string, { count: number; reason: string; lane: string }> = {
+  'components/home/ckbytes-section.tsx#text-[0.5em]': {
+    count: 1,
+    reason:
+      'the unit after the supply figure, half its size: the figure is text-index (26 px) below 640 and sm:text-display (40 px) from 640, so " CKB" is 13 and 20 px',
+    lane: 'none of the readability lanes (the home page)',
+  },
+};
+
+/**
  * UI review 2026-11-14, ruling R12 (U-05): the stylesheet is read too — a `font-size` in
  * app/globals.css is a step of the scale or one of these, each a voice or a mark, never running
  * text (tier-2 prose was 14 px there, outside the scale and larger than tier 1's 13 px body).
@@ -64,8 +95,20 @@ const CSS_ALLOWLIST: Record<string, string> = {
 const EYEBROW_ALLOWLIST: Record<string, string> = {};
 
 const CSS_FILE = 'app/globals.css';
-/** In order on a line: a rule's opening (its selector), a font size, a rule's end. */
-const CSS_TOKEN = /([^{};]*)\{|font-size\s*:\s*([^;]+);|\}/g;
+/**
+ * In order on a line: a rule's opening (its selector), a font size, a `font` shorthand, a rule's
+ * end.
+ */
+const CSS_TOKEN = /([^{};]*)\{|font-size\s*:\s*([^;]+);|(?<![\w-])font\s*:\s*([^;]+);|\}/g;
+
+/** The size in a `font` shorthand (`600 15px/1.5 …` → `15px`), or null for a keyword (`inherit`). */
+function shorthandSize(value: string): string | null {
+  for (const token of value.trim().split(/\s+/)) {
+    const size = token.split('/')[0];
+    if (/^\d*\.?\d+(px|rem|em|%)$/.test(size) || /^(clamp|calc|min|max)\(/.test(size)) return size;
+  }
+  return null;
+}
 const STEP_SIZES = new Set<string>(R1.map(([, size]) => size));
 /** A string literal holding the class `eyebrow`. */
 const EYEBROW_LITERAL = /(['"`])((?:(?!\1).)*?(?<![\w-])eyebrow(?![\w-])(?:(?!\1).)*)\1/g;
@@ -86,10 +129,12 @@ function offScaleCss(css: string): Offence[] {
     .forEach((text, i) => {
       for (const m of text.matchAll(CSS_TOKEN)) {
         if (m[0] === '}') open.pop();
-        else if (m[2] === undefined) open.push(m[1].trim());
-        else if (!STEP_SIZES.has(m[2].trim())) {
+        else if (m[1] !== undefined) open.push(m[1].trim());
+        else {
+          const size = m[2] !== undefined ? m[2].trim() : shorthandSize(m[3]);
+          if (size === null || STEP_SIZES.has(size)) continue;
           const rule = [...open].reverse().find((s) => !s.startsWith('@')) ?? '(top level)';
-          out.push({ line: i + 1, what: `${rule} ${m[2].trim()}` });
+          out.push({ line: i + 1, what: `${rule} ${size}` });
         }
       }
     });
@@ -120,10 +165,15 @@ function offSizeEyebrows(code: string): Offence[] {
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib', 'src'];
 const SVG_TEXT_TAGS = new Set(['svg', 'g', 'text', 'tspan', 'textPath']);
-/** An arbitrary px/rem size (`text-[13px]`) or a Tailwind default size (`text-xs` … `text-9xl`). */
+/**
+ * An arbitrary size (`text-[13px]`, `text-[1.5rem]`), a size relative to the parent
+ * (`text-[0.5em]`, `text-[80%]`), a computed one (`text-[clamp(…)]`), or a Tailwind default size
+ * (`text-xs` … `text-9xl`).
+ */
 const OFF_SCALE =
-  /(?<![\w-])(?:[\w-]+:)*text-(?:\[(?:length:)?\d*\.?\d+(?:px|rem)\]|(?:xs|sm|base|lg|xl|[2-9]xl)(?![\w-]))/g;
-const CSS_FONT_SIZE = /font-size\s*:\s*\d/;
+  /(?<![\w-])(?:[\w-]+:)*text-(?:\[(?:length:)?(?:\d*\.?\d+(?:px|rem|em|%)|(?:clamp|calc|min|max)\([^\]]*)\]|(?:xs|sm|base|lg|xl|[2-9]xl)(?![\w-]))/g;
+/** CSS text that sets a size: `font-size: 12px`, or a `font` shorthand with a size in it. */
+const CSS_FONT_SIZE = /font-size\s*:\s*\d|(?<![\w-])font\s*:[^;'"`]*\d/;
 
 interface Offence {
   line: number;
@@ -157,8 +207,13 @@ function inlineFontSizes(file: string, code: string): Offence[] {
   const out: Offence[] = [];
   const at = (node: ts.Node) =>
     source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+  // a key plain, quoted, or computed from a literal (`['fontSize']`, review-fb-tests finding 7)
   const keyName = (name: ts.PropertyName) =>
-    ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : '';
+    ts.isIdentifier(name) || ts.isStringLiteral(name)
+      ? name.text
+      : ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)
+        ? name.expression.text
+        : '';
   const onSvgText = (node: ts.Node) => {
     for (let p = node.parent; p; p = p.parent) {
       if (ts.isJsxAttribute(p)) {
@@ -176,10 +231,16 @@ function inlineFontSizes(file: string, code: string): Offence[] {
     ts.isPropertyAssignment(node) &&
     (ts.isArrayLiteralExpression(node.initializer) ||
       ts.isObjectLiteralExpression(node.initializer));
+  /** A `font` shorthand key that sets no size: `inherit` and the other keywords with no digit. */
+  const fontKeyword = (node: ts.PropertyAssignment | ts.ShorthandPropertyAssignment) =>
+    ts.isPropertyAssignment(node) &&
+    ts.isStringLiteralLike(node.initializer) &&
+    !/\d/.test(node.initializer.text);
   const visit = (node: ts.Node) => {
     if (
       (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
-      ['fontSize', 'font-size'].includes(keyName(node.name)) &&
+      (['fontSize', 'font-size'].includes(keyName(node.name)) ||
+        (keyName(node.name) === 'font' && !fontKeyword(node))) &&
       !isTable(node) &&
       !onSvgText(node)
     )
@@ -188,7 +249,11 @@ function inlineFontSizes(file: string, code: string): Offence[] {
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isPropertyAccessExpression(node.left) &&
-      node.left.name.text === 'fontSize'
+      (node.left.name.text === 'fontSize' ||
+        // `el.style.font = …`; a canvas's `ctx.font` is not a style (R3)
+        (node.left.name.text === 'font' &&
+          ts.isPropertyAccessExpression(node.left.expression) &&
+          node.left.expression.name.text === 'style'))
     )
       out.push({ line: at(node), what: node.getText(source).slice(0, 60) });
     if (
@@ -251,6 +316,9 @@ describe('the scale gate finds what it must, and only that', () => {
       { line: 2, what: 'md:hover:text-[length:12.5px]' },
       { line: 3, what: 'text-[0.14px]' },
       { line: 3, what: 'text-[1.5rem]' },
+      // re-pinned (review-fb-tests finding 7): a size relative to its parent is an offence now,
+      // the R4 floor unchecked on it while it was exempt
+      { line: 3, what: 'text-[0.85em]' },
     ]);
   });
 
@@ -287,6 +355,40 @@ describe('the scale gate finds what it must, and only that', () => {
     ].join('\n');
     expect(inlineFontSizes('a.tsx', code).map((o) => o.line)).toEqual([2, 3, 9, 10, 13]);
   });
+
+  // review-fb-tests finding 7: the routes a size took past the gate.
+  it('flags the font shorthand and a computed key on an HTML element, not a canvas font', () => {
+    const code = [
+      'export function A() {',
+      "  const box = { ['fontSize']: 12, [`font-size`]: 13 };",
+      "  return <div style={{ font: '12px mono' }}><span style={box} /></div>;",
+      '}',
+      'function g(el: HTMLElement, ctx: CanvasRenderingContext2D) {',
+      "  el.style.font = '12px mono';",
+      "  el.style.cssText = 'font: 600 15px/1.5 mono';",
+      "  ctx.font = '12px mono';",
+      "  const inherits = { font: 'inherit' };",
+      '}',
+    ].join('\n');
+    expect(inlineFontSizes('a.tsx', code).map((o) => o.line)).toEqual([2, 2, 3, 6, 7]);
+  });
+
+  it('flags a size relative to its parent: text-[0.5em], text-[80%], in any variant', () => {
+    const code = '<span className="text-[0.5em] sm:text-[80%] text-[var(--c-text)] text-meta">';
+    expect(offScaleClasses(code)).toEqual([
+      { line: 1, what: 'text-[0.5em]' },
+      { line: 1, what: 'sm:text-[80%]' },
+    ]);
+  });
+
+  it('flags a computed size class, clamp or calc', () => {
+    expect(
+      offScaleClasses('<p className="text-[clamp(1rem,4vw,2rem)] md:text-[calc(1em+2px)]">')
+    ).toEqual([
+      { line: 1, what: 'text-[clamp(1rem,4vw,2rem)]' },
+      { line: 1, what: 'md:text-[calc(1em+2px)]' },
+    ]);
+  });
 });
 
 describe('the stylesheet and eyebrow gates find what they must, and only that (R12)', () => {
@@ -309,6 +411,21 @@ describe('the stylesheet and eyebrow gates find what they must, and only that (R
       { line: 2, what: '.prose-tier2 p 15px' },
       { line: 6, what: '.x 0.85em' },
       { line: 10, what: '.comment-lg 21px' },
+    ]);
+  });
+
+  it('reads the size in a font shorthand, never its weight or its line (review-fb-tests 7)', () => {
+    const css = [
+      '.x { font: 600 15px/1.5 var(--font-mono); }',
+      '.y { font: inherit; }',
+      '.z { font: 14px var(--font-mono); }',
+      '.w {',
+      '  font: italic 500 0.9em/2 serif;',
+      '}',
+    ].join('\n');
+    expect(offScaleCss(css)).toEqual([
+      { line: 1, what: '.x 15px' },
+      { line: 5, what: '.w 0.9em' },
     ]);
   });
 
@@ -358,6 +475,9 @@ describe('no font size outside the scale in the stylesheet, one size for every e
   });
 
   it('keeps the stylesheet and eyebrow allowlists reasoned and current', () => {
+    // pinned: an entry more is a ruling, not a line added here
+    expect(Object.keys(CSS_ALLOWLIST)).toHaveLength(4);
+    expect(Object.keys(EYEBROW_ALLOWLIST)).toHaveLength(0);
     for (const [allowlist, sites] of [
       [CSS_ALLOWLIST, cssOffences],
       [EYEBROW_ALLOWLIST, eyebrows.map(key)],
@@ -372,27 +492,45 @@ describe('no font size outside the scale in the stylesheet, one size for every e
 describe('no font size outside the scale (R2, R3)', () => {
   const root = join(__dirname, '..', '..');
   const files = sourceFiles(root);
-  const offences = files.flatMap((file) => {
+  const found = files.flatMap((file) => {
     const code = readFileSync(file, 'utf8');
     const path = relative(root, file);
-    return [...offScaleClasses(code), ...inlineFontSizes(file, code)].map(
-      (o) => `${path}:${o.line} ${o.what}`
-    );
+    return [...offScaleClasses(code), ...inlineFontSizes(file, code)].map((o) => ({
+      site: `${path}:${o.line} ${o.what}`,
+      relative: `${path}#${o.what}`,
+    }));
   });
+  const offences = found.map((o) => o.site);
   const key = (offence: string) => offence.split(' ')[0];
+  /** How often each `path#class` occurs, so a relative size listed once covers one site only. */
+  const counts = new Map<string, number>();
+  for (const o of found) counts.set(o.relative, (counts.get(o.relative) ?? 0) + 1);
+  const listed = (o: (typeof found)[number]) =>
+    key(o.site) in ALLOWLIST ||
+    (o.relative in RELATIVE_ALLOWLIST &&
+      counts.get(o.relative) === RELATIVE_ALLOWLIST[o.relative].count);
 
   it('scans the page source', () => {
     expect(files.length).toBeGreaterThan(300);
   });
 
-  it('finds no off-scale class (text-[Npx], text-xs …) and no inline fontSize on an HTML element', () => {
-    expect(offences.filter((o) => !(key(o) in ALLOWLIST))).toEqual([]);
+  it('finds no off-scale class (text-[Npx], text-[Nem], text-xs …) and no inline fontSize on an HTML element', () => {
+    expect(found.filter((o) => !listed(o)).map((o) => o.site)).toEqual([]);
   });
 
-  it('keeps the allowlist reasoned and current', () => {
+  it('keeps the allowlists reasoned, current and their length pinned', () => {
+    expect(Object.keys(ALLOWLIST)).toHaveLength(0);
+    expect(Object.keys(RELATIVE_ALLOWLIST)).toHaveLength(1);
     for (const [site, reason] of Object.entries(ALLOWLIST)) {
       expect(reason.trim().length, site).toBeGreaterThan(10);
       expect(offences.map(key), site).toContain(site);
+    }
+    for (const [site, { reason }] of Object.entries(RELATIVE_ALLOWLIST)) {
+      expect(reason.trim().length, site).toBeGreaterThan(10);
+      expect(
+        found.map((o) => o.relative),
+        site
+      ).toContain(site);
     }
   });
 });

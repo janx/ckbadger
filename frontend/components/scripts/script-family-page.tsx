@@ -282,7 +282,7 @@ function ReferenceFacts({
  * overran its column, read "hash typecode hash"): the head on one line at the meta step, 0.6 em a
  * character in the mono face, and the cell's 16 px right padding (`pr-4`) before the next column.
  */
-function headBudget(label: string): number {
+export function headBudget(label: string): number {
   return Math.ceil(textPx(label.length, fontPx('meta'))) + 16;
 }
 

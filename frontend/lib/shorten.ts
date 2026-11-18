@@ -35,6 +35,8 @@
  * document title) calls the functions here.
  */
 
+import { foreignGraphemes } from '@/lib/type-metrics';
+
 export type ShortSize = 'head' | 'row' | 'tight';
 export type IdKind = 'hash' | 'address';
 
@@ -94,4 +96,30 @@ export function clipLabel(text: string, chars: number): string {
   if (!Number.isInteger(chars) || chars < 2)
     throw new Error(`clipLabel: a budget of ${chars} characters cannot hold a cut label`);
   return text.length <= chars ? text : `${text.slice(0, chars - 1)}${ELLIPSIS}`;
+}
+
+/**
+ * A text that is not ours in a figure — a gene's name, rule or trait value, a pool's name, an
+ * organisation (review F-B, logic finding 5) — cut to `room` px at `px` by the upper bound
+ * `foreignGraphemes` (lib/type-metrics.ts) gives each of its grapheme clusters: as many whole
+ * clusters as fit with the one ellipsis, so a cut never splits an emoji or a letter from its
+ * accent. Whole where it fits. A room that cannot hold the first cluster and the ellipsis is
+ * refused.
+ */
+export function clipForeignLabel(text: string, px: number, room: number): string {
+  const graphemes = foreignGraphemes(text);
+  const width = (units: number) => (units * px) / 1000;
+  if (width(graphemes.reduce((sum, g) => sum + g.units, 0)) <= room) return text;
+  let units = foreignGraphemes(ELLIPSIS)[0].units;
+  let kept = '';
+  for (const g of graphemes) {
+    if (width(units + g.units) > room) break;
+    units += g.units;
+    kept += g.grapheme;
+  }
+  if (kept === '')
+    throw new Error(
+      `clipForeignLabel: ${room} px at ${px} px cannot hold "${graphemes[0].grapheme}" and the ellipsis`
+    );
+  return `${kept}${ELLIPSIS}`;
 }

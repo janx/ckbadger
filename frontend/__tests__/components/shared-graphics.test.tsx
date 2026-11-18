@@ -13,11 +13,19 @@ import {
   allTextLines,
   expectApart,
   expectInside,
+  meetings,
   meets,
+  pastPx,
   rectBox,
+  standsInside,
   textLines,
   viewBox,
 } from '@/__tests__/utils/svg-text-boxes';
+
+/** A word of the icicle where it should not stand, by what it measures. */
+type IcicleFault =
+  | { kind: 'meets'; a: string; b: string; by: number }
+  | { kind: 'out of its box'; text: string; box: string; by: number };
 
 describe('AlignedBar (BA-01)', () => {
   it('starts every bar at one left baseline: fixed track first, value in a fixed column after', () => {
@@ -378,32 +386,40 @@ describe('ConcentrationBar with the group names inside its segments (hierarchy v
     { label: 'next 90', value: BigInt(311) },
     { label: 'the other 16,541', value: BigInt(427) },
   ];
-  const bar = (width: number) => {
+  /** A largest group of 11 %, whose words fit its segment at the DAO page's widest column. */
+  const fitting = [
+    { label: 'largest', value: BigInt(110) },
+    { label: 'next 9', value: BigInt(179) },
+    { label: 'next 90', value: BigInt(311) },
+    { label: 'the other 16,541', value: BigInt(400) },
+  ];
+  const bar = (width: number, of = groups) => {
     stubChartWidth(width);
     return render(
       <ConcentrationBar
         label="Share of deposits"
         assetClass="dao"
         total={BigInt(1000)}
-        groups={groups}
+        groups={of}
         labelsInside
       />
     );
   };
 
   it('draws a 28 px bar with each name and share inside its segment, and no legend row', () => {
-    // re-pinned (readability R4): the words are text-small, 13 px since R4 (7.8 px a glyph, was
-    // 7 px snapped at 12): "largest 8.3%"'s 13 characters and 20 px padding need 121.4 px, 8.3 %
-    // of a 1,463 px bar (was 1,338), so the bar is drawn 1,480 px wide here (was 1,408)
-    const { container } = bar(1480);
+    // Re-pinned (review-fb-tests finding 3): the bar was drawn 1,480 px wide (1,408 before R4) so
+    // that a largest group of 8.3 % held its words, a width no page gives it (the DAO page's
+    // column is at most 1,232 px). Drawn at 1,232 with a largest group of 11 %: "largest 11.00%"
+    // is 14 glyphs at 13 px and 2 × 10 px of padding, 129.2 px of the segment's 135.5.
+    const { container } = bar(1232, fitting);
     const img = screen.getByRole('img', { name: /^Share of deposits/ });
     expect(img).toHaveClass('h-[28px]');
     const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
     expect(segments.map((s) => s.textContent)).toEqual([
-      'largest 8.30%',
+      'largest 11.00%',
       'next 9 · 17.90%',
       'next 90 · 31.10%',
-      'the other 16,541 · 42.70%',
+      'the other 16,541 · 40.00%',
     ]);
     // The fade is the background's, so the words keep full ink. Re-pinned with DY-03 (UI review
     // 2026-11-14): the ink is the one the fill's own luminance calls for in the theme (by night the
@@ -748,6 +764,47 @@ describe('IciclePartition: every word where it is written (readability F3)', () 
     ['words inside the boxes at 1200', { root: inside, width: 1200 }] as const,
   ];
 
+  /**
+   * The icicle's known faults, each pinned by what it measures (the ruling on review F-B's test
+   * finding 1: no case is filtered out and no check relaxed; a fault a later lane owns is held at
+   * its measured size). They are all in the original drawing's "labels under the boxes" form,
+   * which no page draws (the DAO page passes `rows`): under the boxes a part's name wider than
+   * its part runs into the next part's, and a placeholder's words wider than their part run out
+   * of their dashed box. Every other case holds the property whole. The list can only shrink: a
+   * fix fails its entry's pin, and the entry goes with it.
+   */
+  const UNDER_FORM = 'labels under the boxes, on the 900-unit viewBox';
+  const NO_RULE =
+    'the "labels under the boxes" form has no rule for a name wider than its part (PAGE-LANE-NOTES, P4); no page draws it, and this lane does not design one';
+  const KNOWN_FAULTS: readonly {
+    case: string;
+    fault: IcicleFault;
+    owner: string;
+    why: string;
+  }[] = [
+    {
+      case: UNDER_FORM,
+      // "paid out" (8 glyphs at 12 px, 57.6 px) under its 45-unit part runs 12.6 px into
+      // "still owed", written from the next part's left edge, 45 units on
+      fault: { kind: 'meets', a: 'paid out', b: 'still owed', by: 12.6 },
+      owner: 'P4 rd/p-topics (DAO)',
+      why: NO_RULE,
+    },
+    {
+      case: UNDER_FORM,
+      // "paid in cellbases" (17 glyphs at 12 px, 122.4 px) in the dashed box under the 90-unit
+      // "to miners" part ends 41.4 px past the box's inner right edge
+      fault: { kind: 'out of its box', text: 'paid in cellbases', box: 'a placeholder', by: 41.4 },
+      owner: 'P4 rd/p-topics (DAO)',
+      why: NO_RULE,
+    },
+  ];
+
+  it('pins the known faults it holds, which only shrink', () => {
+    expect(KNOWN_FAULTS).toHaveLength(2);
+    for (const known of KNOWN_FAULTS) expect(cases.map(([name]) => name)).toContain(known.case);
+  });
+
   it.each(cases)('%s', (name, props) => {
     const { container } = render(
       <IciclePartition label="issuance" formatValue={String} {...props} />
@@ -758,9 +815,6 @@ describe('IciclePartition: every word where it is written (readability F3)', () 
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) expectInside(line, viewBox(svg), 'the icicle', 'flush');
     // A part's words stand apart: its name, value and note under its box, or its words inside.
-    // Under the boxes, a name wider than its part meets the next part's name ("paid out", 57.6 px
-    // under a 45-unit box, met "still owed" at 11 px too): that form has no rule for it, and no
-    // page draws it, so across parts only the forms the pages draw are held apart.
     const parts = [...svg.querySelectorAll('g')].filter((g) =>
       [...g.children].some((c) => c.hasAttribute('data-node'))
     );
@@ -771,20 +825,24 @@ describe('IciclePartition: every word where it is written (readability F3)', () 
         allTextLines(part),
         `${name}: ${part.querySelector('rect')!.getAttribute('data-node')}`
       );
-    if (!name.startsWith('labels under')) expectApart(lines, name);
+    const faults: IcicleFault[] = [];
+    // across parts too, no two words meet (within a part they are held apart above)
+    for (const m of meetings(lines)) faults.push({ kind: 'meets', ...m });
     for (const line of lines) {
-      // a word that stands on a box stands inside it; one under its box meets none (under the
-      // boxes, a placeholder's words wider than their part are its form's own, as above: held
-      // inside it top to foot only)
+      // a word that stands on a box stands inside it, clear of its edges; one under its box
+      // meets none
       const host = boxes.find((b) => meets(rectBox(b), line));
       if (!host) continue;
       const box = rectBox(host);
-      expectInside(
-        line,
-        name.startsWith('labels under') ? { ...box, left: -Infinity, right: Infinity } : box,
-        `"${line.text}" in its box`
-      );
+      if (!standsInside(line, box))
+        faults.push({
+          kind: 'out of its box',
+          text: line.text,
+          box: host.getAttribute('data-node') ?? 'a placeholder',
+          by: pastPx(line, box),
+        });
     }
+    expect(faults, name).toEqual(KNOWN_FAULTS.filter((k) => k.case === name).map((k) => k.fault));
   });
 });
 
