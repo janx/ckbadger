@@ -25,6 +25,7 @@ import { CellBar } from '@/components/ui/cell-bar';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { ItemDeltaFact } from '@/components/activity-event-row';
 import { ScriptNames } from '@/components/ui/script-byte-map';
+import { ReadFailure } from '@/components/read-failure';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import { fullText } from '@/__tests__/utils/full-text';
 import { BRIGHT, QUIET, READING, inkOf } from '@/__tests__/utils/ink-role';
@@ -458,6 +459,13 @@ describe('ScriptNames: its chain tiles and its last sentence explain', () => {
     expect(inkOf(screen.getByText(/^Change one byte of args and both names change/))).toBe(READING);
     expect(inkOf(screen.getAllByText('lock hash')[0])).toBe(BRIGHT);
     expect(inkOf(screen.getByText('both derived, neither stored'))).toBe(QUIET);
+  });
+});
+
+describe('ReadFailure: a failed read says why, in a sentence', () => {
+  it('reads the sentence in the reading ink', () => {
+    render(<ReadFailure what="block" error={new Error('the API is down')} />);
+    expect(inkOf(screen.getByRole('alert'))).toBe(READING);
   });
 });
 
