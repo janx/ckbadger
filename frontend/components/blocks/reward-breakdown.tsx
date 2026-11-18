@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
-import { Address } from '@/components/ui/address';
+import { MinerLink } from '@/components/forks/miner-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import type { Block, BlockProposalFees } from '@/lib/api';
@@ -20,6 +20,7 @@ type RewardBlock = Pick<
   | 'rewardPaidAtBlock'
   | 'rewardFinalizesAt'
   | 'minerAddress'
+  | 'minerPool'
   | 'totalFees'
   | 'transactionsCount'
 >;
@@ -134,7 +135,14 @@ export function RewardBreakdown({
         {block.minerAddress && (
           <>
             <span className="text-text-dim text-small font-normal"> to </span>
-            <Address address={block.minerAddress} size="row" className="text-body font-normal" />
+            {/* the payee is the block's miner, named as every miner is (B3): its pool, else its
+                address at the row size */}
+            <MinerLink
+              address={block.minerAddress}
+              pool={block.minerPool}
+              size="row"
+              className="text-body font-normal"
+            />
           </>
         )}
       </div>

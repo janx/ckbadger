@@ -256,12 +256,13 @@ describe('29 chart variants', () => {
       data: rows,
     });
     const preview = model.rankedPreview!;
+    // R9 (re-pinned): `ckb1…` and the last 8 characters, two of the fixture's x and its tail
     expect(preview.rows.map((row) => row.label)).toEqual([
-      'ckb1qzda0c…93hhsj',
-      'ckb1qzda0c…p909qk',
-      'ckb1qzda0c…aaaaaa',
-      'ckb1qzda0c…bbbbbb',
-      'ckb1qzda0c…cccccc',
+      'ckb1…xx93hhsj',
+      'ckb1…xxp909qk',
+      'ckb1…xxaaaaaa',
+      'ckb1…xxbbbbbb',
+      'ckb1…xxcccccc',
       'Others',
     ]);
     // 1,123 of 66,477 blocks at two decimals, the one share form (re-pinned for CH-03 / CH-14:
@@ -272,14 +273,14 @@ describe('29 chart variants', () => {
     // address is the row's link title (re-pinned for CH-03: the row printed all 97 characters).
     expect(model.facts?.[0]).toEqual({
       label: 'Leading miner',
-      name: 'ckb1qzda0c…93hhsj',
+      name: 'ckb1…xx93hhsj',
       // the review's item I (re-pinned): the share is the miner's blocks in the window's, 41,743 of
       // 66,477 (the fixture's API percentage, '0', was a placeholder the model read before)
       // the review's item C (re-pinned): the count through formatCount, a no-break space
       value: '41,743\u00a0blocks · 62.79%',
     });
     expect(model.rankedRows?.[0]).toMatchObject({
-      label: 'ckb1qzda0c…93hhsj',
+      label: 'ckb1…xx93hhsj',
       title: rows[0].address,
     });
   });

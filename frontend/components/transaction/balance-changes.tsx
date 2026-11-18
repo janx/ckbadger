@@ -213,8 +213,11 @@ export function BalanceChanges({
           ) : (
             <ul aria-label="Balance changes by participant" data-form={form}>
               {activity.participants.map((p, i) => {
-                // the list forms are phone rows: tight (U-09)
-                const party = <ParticipantRefView participant={p} size="tight" compact quiet />;
+                // the three-line card is a phone's (under 480 px of container): tight; the
+                // two-line card is drawn at 1024 too (the 640 px column), beside the summary,
+                // the tiles and What moved, which write the same party at the row size (R9)
+                const size: ShortSize = form === 'three-line' ? 'tight' : 'row';
+                const party = <ParticipantRefView participant={p} size={size} compact quiet />;
                 const ckb = <ExactCkb shannons={BigInt(p.ckbDelta)} />;
                 const occupied = (
                   <>
@@ -234,7 +237,7 @@ export function BalanceChanges({
                       className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size="tight" />
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size={size} />
                     </div>
                     <div
                       data-line="amounts"
@@ -248,7 +251,7 @@ export function BalanceChanges({
                         data-line="items"
                         className="text-small flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                       >
-                        <Items participant={p} size="tight" />
+                        <Items participant={p} size={size} />
                       </div>
                     )}
                   </li>
@@ -265,7 +268,7 @@ export function BalanceChanges({
                       className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size="tight" />
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size={size} />
                     </div>
                     <div data-role="ckb" className="text-body text-right">
                       {ckb}
@@ -274,7 +277,7 @@ export function BalanceChanges({
                       data-role="items"
                       className="text-small flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                     >
-                      <Items participant={p} size="tight" />
+                      <Items participant={p} size={size} />
                     </div>
                     <div
                       data-role="occupied"

@@ -29,6 +29,7 @@ import {
 import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 
 /** What the page lights in the cells diagram when a flow's party or asset is hovered. */
 export type WhatMovedHover =
@@ -85,7 +86,7 @@ function endStroke(end: FlowEnd): { opacity: number | null; dashed: boolean } {
 
 /**
  * The asset's name, for the plate and for a reader; an id in it at the size of the strip's form
- * (U-09): `row` in the ribbon, `tight` in the narrow list.
+ * (U-09): `row` in the ribbon and in the narrow list from sm, `tight` in the list below sm (R9).
  */
 function assetName(asset: FlowAsset, size: ShortSize): string {
   switch (asset.kind) {
@@ -453,6 +454,9 @@ function ListStrip({
     from: false,
     to: false,
   });
+  // the list is drawn at 1024 too (the transaction's 640 px column), beside the summary, the
+  // balances and the tiles, which write the same parties at the row size: tight only below sm (R9)
+  const size = useTightBelowSm();
   const list = (ends: FlowEnd[], which: 'from' | 'to') => (
     <ul data-flow-side={which} className="flex flex-col gap-1.5">
       {ends.map((end, i) => (
@@ -469,7 +473,7 @@ function ListStrip({
             end={end}
             lockCodeHashes={lockCodeHashes}
             align="left"
-            size="tight"
+            size={size}
             onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
           />
         </li>
@@ -481,7 +485,7 @@ function ListStrip({
   return (
     <div
       role="group"
-      aria-label={`${assetName(flow.asset, 'tight')} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
+      aria-label={`${assetName(flow.asset, size)} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
       data-flow={flow.key}
       data-form="list"
       className="flex flex-col gap-2"
@@ -497,7 +501,7 @@ function ListStrip({
           onMouseEnter={() => onHover?.({ t: 'asset', asset: flow.asset })}
           onMouseLeave={() => onHover?.(null)}
         >
-          <Plate asset={flow.asset} flow={flow} size="tight" />
+          <Plate asset={flow.asset} flow={flow} size={size} />
         </div>
       </div>
       <span className="eyebrow text-text-dim text-meta">to</span>

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { render, screen, waitFor, fireEvent, within } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import FiberChannelsPage from '@/app/fiber/channels/client-page';
@@ -269,6 +270,7 @@ describe('Fiber channel phone row (board L8)', () => {
 
   it('labels the date and the duration and names the pair by address suffix at 358 px', async () => {
     atContainerWidth(358);
+    atViewportWidth(390);
     serve();
     render(<FiberChannelsPage />);
     const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
@@ -301,13 +303,16 @@ describe('Fiber channel phone row (board L8)', () => {
 
   it('folds into two lines at 608 px: id and pair with the capacity, then time and state', async () => {
     atContainerWidth(608);
+    atViewportWidth(640);
     serve();
     render(<FiberChannelsPage />);
     const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
+    // R9 (re-pinned): at 640 the row is drawn from sm, beside the network reading that writes the
+    // same parties at the row size: the row size (it was the tight size)
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       [
         'channel',
-        '0x0101…0101 · ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
+        '0x01010101…010101 · ckb1…qqpr3prn ⇄ 0xbbbbbbbb…bbbbbb Default Lock · unnamed lock',
         '3,000.00000000 CKB',
       ],
       ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],

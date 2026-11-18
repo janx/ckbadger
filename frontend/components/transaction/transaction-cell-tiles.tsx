@@ -68,9 +68,11 @@ export function cellTiles(
   const owner = (address: string | null | undefined, context: string) => {
     const a = required(address ?? undefined, tx.hash, `${context}.address`);
     return (
-      // a tile's text column is under 200 px (203 at 1024): tight (U-09)
+      // the row size, as the summary, the balances and What moved write the same party (R9): a
+      // tile's text column is 203 px at its narrowest (1024; 331 at 1280, 234 at 360), where the
+      // address, 13 characters at 12 px (93.6 px), stands whole, its lock wrapping under it
       <Link href={`/address/${a}`} className="text-text hover:text-jade">
-        <ShortId value={a} kind="address" size="tight" />
+        <ShortId value={a} kind="address" size="row" />
       </Link>
     );
   };
@@ -123,7 +125,7 @@ export function cellTiles(
               <TransactionCellContent
                 display={cell.display}
                 cellHref={`/cell/${out.txHash}-${out.index}`}
-                size="tight"
+                size="row"
               />
             ) : (
               content(cell)
@@ -164,7 +166,7 @@ export function cellTiles(
           <TransactionCellContent
             display={cell.display}
             cellHref={`/cell/${tx.hash}-${i}`}
-            size="tight"
+            size="row"
           />
         ) : cell.codeCell ? (
           <CodeCellContent codeCell={cell.codeCell} />

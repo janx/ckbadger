@@ -210,14 +210,14 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
         chain is{' '}
         <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
-          <Hash hash={uncle.canonicalAtHeight.hash} size="head" copyable={false} />
+          <Hash hash={uncle.canonicalAtHeight.hash} size="row" copyable={false} />
         </Link>
         {delay ? (
           <>
             , its sibling: both were mined on parent{' '}
             <Link href={`/blocks/${uncle.parentHash}`}>
               {formatBlockNumber(uncle.number - 1)}{' '}
-              <Hash hash={uncle.parentHash} size="head" copyable={false} />
+              <Hash hash={uncle.parentHash} size="row" copyable={false} />
             </Link>
             , and this uncle came {delay} it.
           </>
@@ -225,7 +225,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
           <>
             , which has another parent; this uncle was mined on parent{' '}
             <Link href={`/blocks/${uncle.parentHash}`}>
-              <Hash hash={uncle.parentHash} size="head" copyable={false} />
+              <Hash hash={uncle.parentHash} size="row" copyable={false} />
             </Link>
             .
           </>

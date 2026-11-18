@@ -180,16 +180,16 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         expect.stringMatching(/^\/mainnet\/script\/0x[0-9a-f]{64}\?hashType=type$/)
       )
     );
-    // Owner, then "tx 0x… · #block · day".
+    // Owner, then "tx 0x… · #block · day". R9 (re-pinned): an address's row size is 4…8.
     expect(
       within(row).getByRole('link', {
-        name: `${first.address!.slice(0, 10)}…${first.address!.slice(-6)}`,
+        name: `${first.address!.slice(0, 4)}…${first.address!.slice(-8)}`,
       })
     ).toHaveAttribute('href', `/mainnet/address/${first.address}`);
     // A shortened link keeps the full id in its title (lane L's rule).
     expect(
       within(row).getByRole('link', {
-        name: `${first.address!.slice(0, 10)}…${first.address!.slice(-6)}`,
+        name: `${first.address!.slice(0, 4)}…${first.address!.slice(-8)}`,
       })
     ).toHaveAttribute('title', first.address);
     expect(within(row).getByRole('link', { name: '0xfc79070b…5bcf91' })).toHaveAttribute(

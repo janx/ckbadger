@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
@@ -139,7 +140,9 @@ function ScopedCollectionHolders({
     !!distribution && !!holders.data && BigInt(holders.data.data.length) > totalHolders;
   const rank = (holder: CollectionHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(holder) + 1;
-  // the holder at the form's size (U-09): row in the table, tight in the phone row
+  // the holder at the form's size (U-09): row in the table and in a phone row from sm, tight in
+  // a phone row below it (R9)
+  const phoneSize = useTightBelowSm();
   const party = (holder: CollectionHolder, size: ShortSize) => (
     <DotCellParty
       party={{
@@ -254,12 +257,12 @@ function ScopedCollectionHolders({
                   return (
                     <HolderPhoneRow
                       rank={rank(holder)}
-                      party={party(holder, 'tight')}
+                      party={party(holder, phoneSize)}
                       lock={
                         <LockKind
                           lockKind={holder.lockKind}
                           lockCodeHash={holder.lockCodeHash}
-                          size="tight"
+                          size={phoneSize}
                         />
                       }
                       amount={

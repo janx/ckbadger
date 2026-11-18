@@ -332,8 +332,9 @@ describe('ForksPage', () => {
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(within(table()).getByText('same miner')).toBeInTheDocument();
-    // U-09 (re-pinned): the table's unnamed miners at the row size (it was the tail alone)
-    const miners = within(table()).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    // U-09 (re-pinned): the table's unnamed miners at the row size (it was the tail alone); R9
+    // (re-pinned): an address's row size is `ckb1…` and its last 8 characters
+    const miners = within(table()).getAllByRole('link', { name: 'ckb1…qw93hhsj' });
     expect(miners).toHaveLength(2);
     expect(miners[0]).toHaveAttribute('href', `/mainnet/address/${address}`);
   });
@@ -365,9 +366,9 @@ describe('ForksPage', () => {
       'href',
       `/mainnet/address/${address}`
     );
-    expect(within(table()).getByRole('link', { name: 'ckb1qzda0c…2cdyx8' })).toBeInTheDocument();
+    expect(within(table()).getByRole('link', { name: 'ckb1…qq2cdyx8' })).toBeInTheDocument();
     // T5: the fork point is the row's one bright thing; both miners read in body ink.
-    for (const name of ['Example Pool', 'ckb1qzda0c…2cdyx8'])
+    for (const name of ['Example Pool', 'ckb1…qq2cdyx8'])
       expect(within(table()).getByRole('link', { name })).not.toHaveClass('text-text-bright');
   });
 

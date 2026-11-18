@@ -153,7 +153,8 @@ it('names each identity owner by address, a .cell owner by its prefix when unres
   );
   render(<Page collectionId="dotbit" />);
   const region = await screen.findByRole('region', { name: 'Collection items' });
-  const alice = await within(region).findByRole('link', { name: 'ckb1qzowne…falice' });
+  // R9 (re-pinned): the owner at the row size, `ckb1…` and its last 8 characters
+  const alice = await within(region).findByRole('link', { name: 'ckb1…rofalice' });
   expect(alice).toHaveAttribute('href', '/mainnet/address/ckb1qzownerofalice');
   // A named prefix with no indexed lock is shown as exactly that, never "No live owner".
   const bob = within(region).getByText('bob.cell').closest('article')!;

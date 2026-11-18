@@ -206,7 +206,8 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const [mark, text] = Array.from(holder.children);
     expect(mark.children).toHaveLength(1);
     expect(mark.firstElementChild).toBe(stone);
-    const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ });
+    // R9 (re-pinned): the owner at the row size, 4…8 (it was 4…6)
+    const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{8}$/ });
     expect(address).toHaveAttribute('href', `/mainnet/address/${OWNER_ADDRESS}`);
     expect(text).toContainElement(address);
     // one line: the stone at the line's height (20 px, 1 px over above and below)
@@ -444,7 +445,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expectOwnerSealOf(owner.mark, LOCK, IN_MARK_COLUMN);
     const name = owner.text.firstElementChild as HTMLElement;
     expect(name).toHaveClass('whitespace-nowrap');
-    expect(within(name).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ })).toHaveAttribute(
+    expect(within(name).getByRole('link', { name: /^ckb1…[0-9a-z]{8}$/ })).toHaveAttribute(
       'href',
       `/mainnet/address/${ADDRESS}`
     );

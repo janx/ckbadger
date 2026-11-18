@@ -60,9 +60,10 @@ describe('Address writes an address at a size', () => {
       </>
     );
     const links = screen.getAllByRole('link');
+    // R9 (re-pinned): `ckb1…` and the last 8 at the head and row sizes (12…8 and 10…6 before)
     expect(links.map((link) => link.textContent)).toEqual([
-      'ckb1qzda0cr0…4c0cgwga',
-      'ckb1qzda0c…0cgwga',
+      'ckb1…4c0cgwga',
+      'ckb1…4c0cgwga',
       'ckb1…0cgwga',
     ]);
     for (const link of links) expect(link).toHaveAttribute('title', ADDRESS);
@@ -72,8 +73,7 @@ describe('Address writes an address at a size', () => {
     // @ts-expect-error a length is not a prop of Address
     render(<Address address={ADDRESS} size="row" startChars={8} endChars={6} />);
     render(<Address address={ADDRESS} size="row" {...LENGTHS} />);
-    for (const link of screen.getAllByRole('link'))
-      expect(link.textContent).toBe('ckb1qzda0c…0cgwga');
+    for (const link of screen.getAllByRole('link')) expect(link.textContent).toBe('ckb1…4c0cgwga');
   });
 });
 

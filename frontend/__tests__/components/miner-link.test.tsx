@@ -6,10 +6,10 @@ const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqw93hh
 
 describe('MinerLink', () => {
   // U-09 (re-pinned): an unnamed miner is its address at the caller's size, head and tail (it was
-  // the tail alone, "…93hhsj", a form of its own)
+  // the tail alone, "…93hhsj", a form of its own); R9 (re-pinned): the row size is `ckb1…` and 8
   it('names a miner by its address at its size and links the address', () => {
     render(<MinerLink size="row" address={address} pool={null} />);
-    const link = screen.getByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    const link = screen.getByRole('link', { name: 'ckb1…qw93hhsj' });
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
     expect(link).toHaveAttribute('title', address);
   });
@@ -43,7 +43,7 @@ describe('MinerLink', () => {
 
   it('has one naming rule for text-only places (tree tiles, the narrative)', () => {
     expect(minerName(address, null, 'tight')).toBe('ckb1…93hhsj');
-    expect(minerName(address, null, 'head')).toBe('ckb1qzda0cr0…qw93hhsj');
+    expect(minerName(address, null, 'head')).toBe('ckb1…qw93hhsj');
     expect(minerName(address, 'Example Pool', 'row')).toBe('Example Pool');
   });
 });

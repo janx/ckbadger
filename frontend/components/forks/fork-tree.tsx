@@ -66,8 +66,11 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
   const tile = (t: ForkTreeTile, y: number, dropped: boolean) => {
     const tx = x(t.number);
     const lit = !dropped && (t.number === model.main[0].number || targets.has(t.number));
-    // a label on the tree: the tight size, then cut to the tile's width (U-09)
-    const miner = t.minerAddress ? minerName(t.minerAddress, t.minerPool, 'tight') : null;
+    // a label on the tree at the row size, the narrative's and the tables' (R9), then cut to the
+    // tile's width (U-09): an address is 13 characters, 83.2 px at 10 px (CHAR_10), inside the
+    // wide tile's 88 px from its 8 px inset, and whole under a compact tile of at least 72 px
+    // (minerChars, 13); only a pool's longer name is cut
+    const miner = t.minerAddress ? minerName(t.minerAddress, t.minerPool, 'row') : null;
     return (
       <g key={t.hash} data-tile={t.number} data-dropped={dropped || undefined}>
         <title>
@@ -214,7 +217,7 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
         <g data-collapsed>
           <title>
             {`${collapsed.count} earlier heights, ${formatBlockNumber(collapsed.first)} to ${formatBlockNumber(collapsed.last)}: ${folded
-              .map((t) => `${formatBlockNumber(t.number)} ${shortenHash(t.hash, 'tight')}`)
+              .map((t) => `${formatBlockNumber(t.number)} ${shortenHash(t.hash, 'row')}`)
               .join(', ')}`}
           </title>
           <rect

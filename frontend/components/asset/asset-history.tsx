@@ -18,6 +18,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 const DAY = 86400000;
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
@@ -85,6 +86,8 @@ export function AssetHistory({
     throw new Error(`A token's history is drawn in the token class, not ${assetClass}`);
   const [range, setRange] = useState<'1W' | '1M' | '1Y' | 'All'>('All');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  // the supply events' phone rows are drawn at 1024 too, beside the holders' table (R9)
+  const phoneSize = useTightBelowSm();
   const end = time(completeThrough),
     from = range === 'All' ? null : end - { '1W': 6, '1M': 29, '1Y': 364 }[range] * DAY;
   let previous = -Infinity;
@@ -472,7 +475,9 @@ export function AssetHistory({
                   tx {e.txIndex} · sequence {e.transferSequence}
                 </AppLink>,
               ];
-              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome sweep)
+              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
+              // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
+              // below sm (R9).
               const party = (
                 <span>
                   {e.kind === 'mint' ? 'to ' : 'from '}
@@ -480,7 +485,7 @@ export function AssetHistory({
                     <Hash
                       hash={e.address ?? e.lockHash}
                       kind={e.address ? 'address' : 'hash'}
-                      size="tight"
+                      size={phoneSize}
                       copyable={false}
                       className="text-meta"
                     />
@@ -488,7 +493,7 @@ export function AssetHistory({
                   <LockKind
                     lockKind={e.lockKind}
                     lockCodeHash={e.lockCodeHash}
-                    size="tight"
+                    size={phoneSize}
                     className="text-text-dim text-meta"
                   />
                 </span>

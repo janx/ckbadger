@@ -171,7 +171,8 @@ it('says where the object went in the Transactions column (OB-13)', () => {
     />
   );
   expect(screen.getByText(/^to /)).toHaveTextContent('(output 1)');
-  expect(screen.getByRole('link', { name: /ckb1qpq5zs…/ })).toHaveAttribute(
+  // R9 (re-pinned): the owner at the row size, `ckb1…` and its last 8 characters
+  expect(screen.getByRole('link', { name: 'ckb1…qgutsyjq' })).toHaveAttribute(
     'href',
     expect.stringContaining(`/address/${created.ownerAddress}`)
   );
