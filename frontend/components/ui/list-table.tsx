@@ -3,6 +3,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 import { unitNode } from '@/components/ui/units';
+import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 
 export interface ListColumn<T> {
   key: string;
@@ -59,9 +60,26 @@ export interface ListTableProps<T> {
    * from the same measurement, never from a breakpoint of its own.
    */
   onForm?: (form: ListTableForm) => void;
+  /**
+   * Where the column heads stick while the rows scroll under them (readability B5): `page`, the
+   * default, right under the site header and its vitals strip, at the height the header publishes;
+   * `box`, at the top of a scroll box the caller draws around the list (raw data in a
+   * `max-h-* overflow-y-auto`). Stuck to the page inside a scroll box, a head would stand the
+   * header's height down into the box.
+   */
+  headSticksTo?: 'page' | 'box';
 }
 
 export type ListTableDensity = 'default' | 'row';
+
+/**
+ * A column head (B5): sticky, on the vitals strip's own opaque ground so no row shows through, one
+ * layer under the site header (z-40). Its rule is its own 1 px line in the row-rule ink: a
+ * collapsed table border is painted by the table and would stay behind where the head was.
+ */
+const HEAD_CLASS =
+  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 pr-4 font-normal last:pr-0 after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule';
+const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
 
 /** `td` classes per density; `th` is the same in both. */
 const CELL_CLASS: Record<ListTableDensity, string> = {
@@ -147,6 +165,7 @@ export function ListTable<T>({
   density = 'default',
   rowTitle,
   onForm,
+  headSticksTo = 'page',
 }: ListTableProps<T>) {
   const [minimum, narrowMinimum] = minimumWidths(label, columns, narrowColumns);
   const titleOf = (row: T): string | undefined => {
@@ -205,9 +224,10 @@ export function ListTable<T>({
                 <th
                   key={c.key}
                   scope="col"
-                  // Table-rows T5: column heads at meta (11 px), dim, in every table.
+                  // Table-rows T5: column heads at meta (11 px), dim, in every table; B5: in view.
                   className={cn(
-                    'border-row-rule text-text-dim text-meta border-b py-3 pr-4 font-normal last:pr-0',
+                    HEAD_CLASS,
+                    HEAD_TOP[headSticksTo],
                     c.numeric ? 'text-right' : 'text-left'
                   )}
                 >

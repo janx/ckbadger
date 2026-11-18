@@ -119,6 +119,13 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   // one); any other chart takes the value alone (re-pinned for CH-21: an unnamed companion fails,
   // where it was drawn as "Companion").
   const single = { ...simple, data: simple.data.map(({ date, value }) => ({ date, value })) };
+  // A numeric histogram's labels are buckets of its grid (0.1 s; a minute in hours); a date is
+  // none of them and fails (re-pinned for the readability review 2026-11-18: the model fills a
+  // histogram's regular run on its grid, so it reads each label, where only the axis did).
+  if (definition.slug === 'block-time-distribution')
+    return { ...single, data: single.data.map((p, i) => ({ ...p, date: ['7.8', '7.9'][i] })) };
+  if (definition.slug === 'epoch-time-distribution')
+    return { ...single, data: single.data.map((p, i) => ({ ...p, date: ['4.00', '4.02'][i] })) };
   if (definition.slug === 'uncle-rate')
     return { ...single, orphanRateTarget: { numerator: 1, denominator: 40 } };
   return definition.secondary || definition.seriesNames ? simple : single;

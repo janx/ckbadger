@@ -8,9 +8,7 @@ import {
   TokenTwoPlaces,
 } from '@/components/asset/inventory-table';
 import type { Asset } from '@/lib/api';
-import { resourceScale } from '@/components/blocks/block-visual';
-import { formatTick } from '@/lib/chart-ticks';
-import { CLASS_COLORS } from '@/lib/design-tokens';
+import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 const asset: Asset = {
   id: '0x' + 'ab'.repeat(32),
   assetType: 'token',
@@ -48,7 +46,6 @@ function cellUnder(table: HTMLElement, row: number, head: string): HTMLElement {
   if (i < 0) throw new Error(`no column ${head}`);
   return within(table).getAllByRole('row')[row].children[i] as HTMLElement;
 }
-const TRACK = 120;
 
 /** Every column head is its words in an inline box, never a bare text node filling the cell. */
 function expectWordHeads(table: HTMLElement) {
@@ -57,8 +54,6 @@ function expectWordHeads(table: HTMLElement) {
     expect(th.firstElementChild?.tagName).toBe('SPAN');
   }
 }
-const barWidth = (value: number, scale: number) =>
-  `${Math.max(Math.round((value / scale) * TRACK * 100) / 100, value > 0 ? 2 : 0)}px`;
 
 describe('Inventory rows', () => {
   it('rounds a long H-multiplier to 2 dp on its one line and keeps it exact in the hover (L2-1)', () => {
@@ -178,7 +173,7 @@ describe('Inventory rows', () => {
 
 // Table-rows round, lane L2-1 (board Lists.dc.html · tokens): one 40 px line of six fields — mark +
 // bright name + symbol tag (+ a set-back standard tag when not xUDT) · Holders · Transfers · Supply
-// (dim, 2 dp) · CKB held as an 8 px bar on the page's scale with its 2-dp amount · H-mult. "0 in
+// (dim, 2 dp) · CKB held, its 2-dp amount (its bar left with B5) · H-mult. "0 in
 // 24 h", Occupied, the standard and the exact digits are the row's title (and the token page's).
 describe('Tokens table on the row rules (table-rows L2-1)', () => {
   const seal: Asset = {
@@ -243,21 +238,13 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     expect(within(supply).getByTitle('16,063,603.56572848')).toBeInTheDocument();
   });
 
-  it('draws CKB held as an 8 px token-blue bar on the page’s scale with a 2-dp amount', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the 8 px token-blue bar on the page's scale
+  // left the list; CKB held is its 2-dp amount alone.
+  it('prints CKB held as its 2-dp amount', () => {
     const table = mount();
-    const scale = resourceScale([100, 400]);
-    const head = within(table).getByRole('columnheader', { name: 'CKB held in its cells' });
-    expect(
-      Array.from(head.querySelector('[data-scale-ticks]')!.children).map((t) => t.textContent)
-    ).toEqual(['0', formatTick(scale / 2, scale / 2), formatTick(scale, scale / 2)]);
     const first = cellUnder(table, 1, 'CKB held in its cells');
     const second = cellUnder(table, 2, 'CKB held in its cells');
-    expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px', width: '120px' });
-    expect(first.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(100, scale),
-      backgroundColor: CLASS_COLORS.tokens,
-    });
-    expect(second.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(400, scale) });
+    expect(first.querySelector('[data-track]')).toBeNull();
     expect(first).toHaveTextContent('100.00');
     expect(second).toHaveTextContent('400.00');
     expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent('×2.18');
@@ -274,7 +261,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
 
 // Table-rows round, lane L2-2 (board Lists.dc.html · objects): 24 px framed mark + bright name +
 // the standard and the composition as tags · Live items (a ghost "/ N" only when minted differs) ·
-// Holders · Activity · CKB held as a violet 8 px bar · H-mult. Occupied and the collection id go to
+// Holders · Activity · CKB held (its violet bar left with B5) · H-mult. Occupied and the collection id go to
 // the row's title (and the collection page).
 describe('Objects table on the row rules (table-rows L2-2)', () => {
   const spore: Asset = {
@@ -338,25 +325,49 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
         t.textContent,
         t.getAttribute('data-row-tag'),
       ]);
-    // Fully on-chain tiers are the accent tag; a centralized mix is a plain one.
-    expect(tags(pure)).toEqual([
-      ['Spore', 'default'],
-      ['Pure CKB', 'accent'],
-    ]);
+    // Re-pinned (readability 2026-11-18, one class one hue): a fully on-chain tier is the site's
+    // composition badge, 18 px as a tag is, in its class's frame and ink (was the accent tag, in
+    // jade for both on-chain tiers); a centralized mix is still a plain tag.
+    expect(tags(pure)).toEqual([['Spore', 'default']]);
+    const badge = pure.querySelector('[data-composition="pure_ckb"]')!;
+    expect(badge).toHaveTextContent('Pure CKB');
+    expect(badge).toHaveClass('h-[18px]', 'text-meta');
     expect(tags(central)).toEqual([
       ['m-NFT', 'default'],
       ['Centralized mix', 'default'],
     ]);
   });
 
-  it('shows "/ minted" only when it differs from live, and draws CKB held in violet', () => {
+  // Readability review 2026-11-18 (lane A): a "BTC+CKB" row chip was drawn in the "Pure CKB" hue
+  // (both an accent row tag, jade; sampled 149,194,183 on mainnet), while the filter chip of the
+  // same class above the list is in the copper ink. One class, one hue: the row draws the
+  // composition from the table that owns the classes' inks (COMPOSITION_BADGES), as the filter
+  // and every other page do.
+  it("draws each on-chain row's composition in its own class's ink, the filter's", () => {
+    const btc: Asset = {
+      ...spore,
+      id: '0x' + '7c'.repeat(32),
+      name: 'Nervape',
+      compositionTier: 'btc_ckb',
+    };
+    render(<InventoryRows assetType="object" rows={[spore, btc]} />);
+    const table = screen.getByRole('table', { name: 'Object collections' });
+    for (const [tier, label] of [
+      ['pure_ckb', 'Pure CKB'],
+      ['btc_ckb', 'BTC+CKB'],
+    ] as const) {
+      const words = within(table).getByText(label);
+      expect(words).toHaveStyle({ backgroundImage: COMPOSITION_BADGES[tier].ink });
+      expect(words).not.toHaveClass('text-jade');
+    }
+  });
+
+  // Re-pinned on purpose (readability B5, plan §7.6): the violet CKB held bar left the list.
+  it('shows "/ minted" only when it differs from live, and prints CKB held as its amount', () => {
     const table = mount();
     expect(cellUnder(table, 1, 'Live items')).toHaveTextContent(/^93$/);
     expect(cellUnder(table, 2, 'Live items')).toHaveTextContent('2,712 / 2,811');
-    const scale = resourceScale([100, 400]);
-    expect(
-      cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')
-    ).toHaveStyle({ width: barWidth(100, scale), backgroundColor: CLASS_COLORS.objects });
+    expect(cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
     expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent('400.00');
     expect(cellUnder(table, 2, 'Activity')).toHaveTextContent('3,014');
     expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.64');
@@ -372,8 +383,8 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
 });
 
 // Table-rows round, lane L2-3: the identity systems on the same rules — the name bright on one
-// line (the standard a tag when the name differs), counts, CKB held as a rose 8 px bar with its 2-dp
-// amount, occupied in whole CKB; every digit in the row title.
+// line (the standard a tag when the name differs), counts, CKB held as its 2-dp amount (its rose bar
+// left with B5), occupied in whole CKB; every digit in the row title.
 describe('Identity systems table on the row rules (table-rows L2-3)', () => {
   const dotbit: Asset = {
     ...asset,
@@ -427,12 +438,10 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     expect(first.querySelector('svg[data-class="identities"]')).not.toBeNull();
   });
 
-  it('draws CKB held as a rose bar with a 2-dp amount and keeps occupied on one line', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the rose CKB held bar left the list.
+  it('prints CKB held as its 2-dp amount and keeps occupied on one line', () => {
     const table = mount();
-    const scale = resourceScale([100, 400]);
-    expect(
-      cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')
-    ).toHaveStyle({ width: barWidth(400, scale), backgroundColor: CLASS_COLORS.identities });
+    expect(cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
     expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent('100.00');
     expect(cellUnder(table, 1, 'Occupied')).toHaveTextContent(/^61$/);
     const occupied = cellUnder(table, 2, 'Occupied');
@@ -447,6 +456,47 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
       'title',
       'Cellula .bit · .bit Cell · 541 live · 656 ever registered · 366 holders · 400 CKB held · 133.0000005 CKB occupied (33.25%)'
     );
+  });
+});
+
+// Readability 2026-11-18, lane B5 (§7.6, approved): on a linear scale to the page's largest
+// holding, the "CKB held" bar was a 1–3 px stub from about the twelfth row on, and its head stood
+// over the bar while the sorted figure had none. The bar leaves the three lists; the figure, right
+// aligned under its own head, shows the magnitude.
+describe('CKB held is a right-aligned figure under its head, with no bar (readability B5)', () => {
+  const rich: Asset = {
+    ...asset,
+    id: '0x' + 'ef'.repeat(32),
+    ownedCapacity: '40000000000',
+    ownedKnowledge: '18300000000',
+  };
+  const cases = [
+    ['token', 'Tokens'],
+    ['object', 'Object collections'],
+    ['identity', 'Identity systems'],
+  ] as const;
+  it.each(cases)('draws the %s list’s CKB held as its 2-dp figure alone', (assetType, label) => {
+    render(
+      <InventoryRows
+        assetType={assetType}
+        rows={[
+          { ...asset, assetType },
+          { ...rich, assetType },
+        ]}
+      />
+    );
+    const table = screen.getByRole('table', { name: label });
+    const head = within(table).getByRole('columnheader', { name: 'CKB held in its cells' });
+    expect(head).toHaveClass('text-right');
+    expect(head.querySelector('[data-scale-ticks]')).toBeNull();
+    for (const row of [1, 2]) {
+      const cell = cellUnder(table, row, 'CKB held in its cells');
+      expect(cell).toHaveClass('text-right', 'tabular-nums', 'whitespace-nowrap');
+      expect(cell.querySelector('[data-aligned-bar], [data-track], [data-segment]')).toBeNull();
+    }
+    // the figure as before (lane B2 owns its form): cut to 2 dp
+    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent(/^100\.00$/);
+    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent(/^400\.00$/);
   });
 });
 

@@ -54,8 +54,10 @@ describe('a row rule (R5, DY-01)', () => {
     const t = screen.getByRole('table', { name: 'Holdings' });
     for (const tr of t.querySelectorAll('tbody tr'))
       expect(tr).toHaveClass('border-b', 'border-row-rule');
+    // Re-pinned on purpose (readability B5): the head sticks under the site header, so its rule is
+    // its own 1 px line in the same row-rule ink (a collapsed border would stay behind).
     for (const th of t.querySelectorAll('thead th'))
-      expect(th).toHaveClass('border-b', 'border-row-rule');
+      expect(th).toHaveClass('after:h-px', 'after:bg-row-rule');
     expect(t.innerHTML).not.toContain('border-base-border-subtle');
   });
 

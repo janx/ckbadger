@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, screen, within } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
@@ -12,10 +12,11 @@ vi.mock('@/lib/api', () => ({
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 
-// Table-rows plan L1-2 (ruling D2): the list's bar shows the sort column's CKB by default; a
-// two-segment control beside "sorted by" switches it to the occupied share. The choice lives in the
-// URL (`?bar=occupied`), read on load, written by replace, followed when the URL changes (the
-// pattern D11 gave /transactions?kind=).
+// Table-rows plan L1-2 (ruling D2) drew the list's bar as the sort column's CKB, with a switch
+// beside "sorted by" (`?bar=occupied` in the URL) to the occupied share. Re-pinned on purpose with
+// readability lane B5 (plan §7.6, approved): the CKB bar, a stub on most rows, left the list; the
+// occupied share's bar (0–100 %) stays, in the Occupied column beside the share; with one bar left
+// the switch has one state and goes, and the page reads no `bar` from its URL.
 function family(name: string, capacity: string, occupied: string): KnownScript {
   return {
     codeHash: `family:${name}`,
@@ -66,8 +67,6 @@ function renderAt(url: string) {
   render(<RouterProvider router={router} />);
   return router;
 }
-const control = () => screen.getByRole('group', { name: 'Bar shows' });
-const option = (name: string) => within(control()).getByRole('button', { name });
 const fill = async (name: string) => {
   const table = await screen.findByRole('table', { name: 'Scripts' });
   const row = within(table).getByRole('link', { name }).closest('tr') as HTMLElement;
@@ -75,39 +74,35 @@ const fill = async (name: string) => {
   const segment = row.querySelector<HTMLElement>('[data-segment]')!;
   return Number.parseFloat(segment.style.width) / Number.parseFloat(track.style.width);
 };
+/** The ticks of every scale head in the table, by column index. */
 const ticks = async () => {
   const table = await screen.findByRole('table', { name: 'Scripts' });
-  const head = within(table).getAllByRole('columnheader')[3];
-  return [...head.querySelectorAll('[data-scale-ticks] > span')].map((n) => n.textContent);
+  return within(table)
+    .getAllByRole('columnheader')
+    .flatMap((head, i) => {
+      const scale = head.querySelector('[data-scale-ticks]');
+      return scale ? [[i, [...scale.children].map((n) => n.textContent)] as const] : [];
+    });
 };
 
-describe('Scripts bar: CKB or occupied share (table-rows L1-2, D2)', () => {
+describe('Scripts bar: the occupied share alone (readability B5; was the D2 switch)', () => {
   beforeEach(() => {
     vi.mocked(api.getScripts).mockResolvedValue(response);
   });
 
-  it('sits right of "sorted by" and shows CKB by default, on the page scale', async () => {
+  // was: 'sits right of "sorted by" and shows CKB by default, on the page scale'
+  it('draws no switch and no CKB bar; the one scale is the Occupied column’s 0 · 50 · 100 %', async () => {
     renderAt('/mainnet/scripts');
     await screen.findByRole('table', { name: 'Scripts' });
-    const sort = screen.getByRole('combobox', { name: 'Sort scripts' });
-    expect(sort.compareDocumentPosition(control()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(control()).toHaveTextContent(/^bar:\s*CKB\s*occupied$/);
-    expect(option('CKB')).toHaveAttribute('aria-pressed', 'true');
-    expect(option('occupied')).toHaveAttribute('aria-pressed', 'false');
-    expect(await ticks()).toEqual(['0', '20B', '40B']);
-    expect(await fill('Big')).toBeCloseTo(1, 3);
-    expect(await fill('Half')).toBeCloseTo(0.1, 3);
-    expect(await fill('None')).toBe(0);
+    expect(screen.queryByRole('group', { name: 'Bar shows' })).toBeNull();
+    expect(await ticks()).toEqual([[4, ['0', '50', '100%']]]);
   });
 
-  it('starts on the occupied share when the URL says ?bar=occupied: occupied ÷ CKB, 0 · 50 · 100 %', async () => {
-    renderAt('/mainnet/scripts?bar=occupied');
-    expect(await ticks()).toEqual(['0', '50', '100%']);
-    expect(option('occupied')).toHaveAttribute('aria-pressed', 'true');
+  // was: 'starts on the occupied share when the URL says ?bar=occupied: occupied ÷ CKB, 0 · 50 · 100 %'
+  it('draws occupied ÷ CKB in the cells, a 2 px mark under 2 px, and prints the CKB beside', async () => {
+    renderAt('/mainnet/scripts');
     const table = await screen.findByRole('table', { name: 'Scripts' });
-    expect(within(table).getAllByRole('columnheader')[3]).toHaveTextContent(
-      'CKB in its cells · bar: occupied share'
-    );
+    expect(within(table).getAllByRole('columnheader')[3]).toHaveTextContent(/^CKB in its cells$/);
     expect(await fill('Half')).toBeCloseTo(0.5, 3);
     // 0.14 % is under 2 px of the track: still a 2 px mark (T4); zero stays empty.
     const row = within(table).getByRole('link', { name: 'Big' }).closest('tr') as HTMLElement;
@@ -115,48 +110,28 @@ describe('Scripts bar: CKB or occupied share (table-rows L1-2, D2)', () => {
       2
     );
     expect(await fill('None')).toBe(0);
-    // The printed amount is still the CKB in the cells.
+    // The printed amount is the CKB in the cells, in its own column.
     expect(row.querySelector('[data-ckb-2dp]')).toHaveTextContent('40,000,000,000.00');
   });
 
-  it('writes the choice to the URL by replace, and CKB drops it', async () => {
-    const router = renderAt('/mainnet/scripts');
-    await screen.findByRole('table', { name: 'Scripts' });
-    fireEvent.click(option('occupied'));
-    await waitFor(() => expect(router.state.location.search).toBe('?bar=occupied'));
-    expect(router.state.location.pathname).toBe('/mainnet/scripts');
-    expect(router.state.historyAction).toBe('REPLACE');
-    expect(await ticks()).toEqual(['0', '50', '100%']);
-    fireEvent.click(option('CKB'));
-    await waitFor(() => expect(router.state.location.search).toBe(''));
-    expect(await ticks()).toEqual(['0', '20B', '40B']);
-  });
-
-  it('follows the URL when it changes under the mounted page, and ignores an unknown value', async () => {
+  // was: 'writes the choice to the URL by replace, and CKB drops it' and 'follows the URL when it
+  // changes under the mounted page, and ignores an unknown value'
+  it('reads no bar from the URL: an old ?bar= link draws the same table and is left as it is', async () => {
     const router = renderAt('/mainnet/scripts?bar=occupied');
-    expect(await ticks()).toEqual(['0', '50', '100%']);
+    expect(await ticks()).toEqual([[4, ['0', '50', '100%']]]);
+    expect(router.state.location.search).toBe('?bar=occupied');
     await act(async () => {
       await router.navigate('/mainnet/scripts?bar=ckb');
     });
-    expect(option('CKB')).toHaveAttribute('aria-pressed', 'true');
-    expect(await ticks()).toEqual(['0', '20B', '40B']);
-    await act(async () => {
-      await router.navigate('/mainnet/scripts?bar=occupied');
-    });
-    expect(option('occupied')).toHaveAttribute('aria-pressed', 'true');
-    await act(async () => {
-      await router.navigate('/mainnet/scripts?bar=nonsense');
-    });
-    expect(option('CKB')).toHaveAttribute('aria-pressed', 'true');
+    expect(await ticks()).toEqual([[4, ['0', '50', '100%']]]);
+    expect(screen.queryByRole('group', { name: 'Bar shows' })).toBeNull();
   });
 
-  it('keeps the sort and the table request when the bar changes (a view choice, not a query)', async () => {
-    renderAt('/mainnet/scripts');
+  // was: 'keeps the sort and the table request when the bar changes (a view choice, not a query)'
+  it('asks for the same page whatever ?bar= says (it was a view, never a query)', async () => {
+    renderAt('/mainnet/scripts?bar=occupied');
     await screen.findByRole('table', { name: 'Scripts' });
-    const calls = vi.mocked(api.getScripts).mock.calls.length;
-    fireEvent.click(option('occupied'));
-    expect(await ticks()).toEqual(['0', '50', '100%']);
-    expect(vi.mocked(api.getScripts).mock.calls.length).toBe(calls);
+    expect(vi.mocked(api.getScripts).mock.calls.every(([q]) => !('bar' in (q ?? {})))).toBe(true);
     expect(screen.getByRole('combobox', { name: 'Sort scripts' })).toHaveValue('capacity');
   });
 });

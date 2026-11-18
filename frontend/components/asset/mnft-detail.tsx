@@ -355,7 +355,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               label: 'CKB held in its cell',
               value: history ? (
                 current ? (
-                  <ExactCkb shannons={BigInt(current.capacity)} signed={false} tone="plain" wrap />
+                  <ExactCkb shannons={BigInt(current.capacity)} signed={false} tone="plain" />
                 ) : (
                   'No live cell'
                 )

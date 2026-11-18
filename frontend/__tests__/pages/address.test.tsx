@@ -666,7 +666,9 @@ describe('Address v3', () => {
     // A filtered page declares no total; the tab keeps the address's count, the range has none.
     fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
-    expect(screen.getByText('Showing 0–0 activities · 20 per page')).toBeInTheDocument();
+    // Re-pinned on purpose (readability B5): this filtered page is the only one, and one page
+    // draws no pager (it said "Showing 0–0 activities · 20 per page").
+    expect(screen.queryByText(/^Showing /)).toBeNull();
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
@@ -879,8 +881,12 @@ describe('Address v3', () => {
     ).toBe(false);
   });
   it('counts only committed activity rows in the page range', async () => {
+    // Re-pinned on purpose (readability B5): one page draws no pager, so the fixture has an older
+    // page; the range it asserts is unchanged.
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       ...pageFixture([poolActivity(), ...addressActivitiesFixture]),
+      hasMore: true,
+      nextCursor: 'next',
       pool,
     });
     render(<AddressDetailPage />);

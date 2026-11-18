@@ -39,6 +39,9 @@ import { unitNode } from '@/components/ui/units';
 /** The holders-per-range bar of "Holders by balance", and the share bar of the holder list. */
 const BUCKET_TRACK = 40;
 const SHARE_TRACK = 48;
+/** The figures right of those bars: a range's holder count, a holder's share ("41.23%"). */
+const BUCKET_FIGURE = 44;
+const SHARE_FIGURE = 48;
 /** "Under 1", "1 – under 10", "100,000 and above": exact bounds, trailing zeros dropped. */
 function bucketRange(lowerBound: string, upperBound: string | null, decimals: number | null) {
   const bound = (amount: string) => formatTokenBalanceWithRawMarker(amount, decimals);
@@ -99,13 +102,14 @@ export function TokenDistributionView({
     {
       key: 'holders',
       label: 'Holders',
-      minWidth: BUCKET_TRACK + 10 + 44 + 16,
+      minWidth: BUCKET_TRACK + 10 + BUCKET_FIGURE + 16,
       header: (
         <ScaleHeader
           label="Holders"
           scale={holderScale}
           trackWidth={BUCKET_TRACK}
           format={(n) => formatTick(n, n)}
+          figureWidth={BUCKET_FIGURE}
         />
       ),
       render: (b) => (
@@ -120,7 +124,7 @@ export function TokenDistributionView({
               <AssetCount value={b.holdersCount} />
             </span>
           }
-          displayWidth={44}
+          displayWidth={BUCKET_FIGURE}
         />
       ),
     },
@@ -143,58 +147,67 @@ export function TokenDistributionView({
           groups={groups.map(([label], i) => ({ label, value: groupAmounts[i] }))}
         />
       )}
+      {/* Two tables, never one row grid (readability B5): from xl, where they stand side by side
+          on rows of one height, a 32 px gutter, a rule in the row-rule ink and 32 px more lie
+          between them (a column gap inside a table is 16 px), so a holder's row does not read on
+          into a band's. Below xl they stack. The bands list sits in a column of its own, so it
+          measures its own width without the gutter. */}
       <div
         className={
-          holders ? 'grid min-w-0 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]' : 'min-w-0'
+          holders
+            ? 'grid min-w-0 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] xl:gap-x-8'
+            : 'min-w-0'
         }
       >
         {holders}
-        <ListTable
-          label="Holders by balance"
-          columns={columns}
-          rows={d.buckets}
-          rowKey={(b) => b.lowerBound}
-          empty="No holders."
-          density="row"
-          mobileRow={(b) => (
-            <PhoneRow
-              testId="holder-bucket-row-mobile"
-              lines={[
-                {
-                  key: 'range',
-                  tone: 'body',
-                  left: columns[0].render(b),
-                  right: (
-                    <span className="whitespace-nowrap">
-                      <AssetCount value={b.holdersCount} />{' '}
-                      <span className="text-text-dim">
-                        {countNoun(b.holdersCount, 'holder', 'holders')}
+        <div className={holders ? 'xl:border-row-rule min-w-0 xl:border-l xl:pl-8' : 'min-w-0'}>
+          <ListTable
+            label="Holders by balance"
+            columns={columns}
+            rows={d.buckets}
+            rowKey={(b) => b.lowerBound}
+            empty="No holders."
+            density="row"
+            mobileRow={(b) => (
+              <PhoneRow
+                testId="holder-bucket-row-mobile"
+                lines={[
+                  {
+                    key: 'range',
+                    tone: 'body',
+                    left: columns[0].render(b),
+                    right: (
+                      <span className="whitespace-nowrap">
+                        <AssetCount value={b.holdersCount} />{' '}
+                        <span className="text-text-dim">
+                          {countNoun(b.holdersCount, 'holder', 'holders')}
+                        </span>
                       </span>
-                    </span>
-                  ),
-                },
-                {
-                  key: 'share',
-                  tone: 'quiet',
-                  left: (
-                    <span aria-hidden="true" className="bg-bar-track inline-block h-1.5 w-10">
-                      <span
-                        className="bg-token block h-full"
-                        style={{
-                          width:
-                            d.holdersCount === 0
-                              ? '0%'
-                              : `${(b.holdersCount / d.holdersCount) * 100}%`,
-                        }}
-                      />
-                    </span>
-                  ),
-                  right: <>{share(BigInt(b.balance))} of supply</>,
-                },
-              ]}
-            />
-          )}
-        />
+                    ),
+                  },
+                  {
+                    key: 'share',
+                    tone: 'quiet',
+                    left: (
+                      <span aria-hidden="true" className="bg-bar-track inline-block h-1.5 w-10">
+                        <span
+                          className="bg-token block h-full"
+                          style={{
+                            width:
+                              d.holdersCount === 0
+                                ? '0%'
+                                : `${(b.holdersCount / d.holdersCount) * 100}%`,
+                          }}
+                        />
+                      </span>
+                    ),
+                    right: <>{share(BigInt(b.balance))} of supply</>,
+                  },
+                ]}
+              />
+            )}
+          />
+        </div>
       </div>
     </div>
   );
@@ -306,13 +319,14 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'share',
         label: 'Share',
-        minWidth: SHARE_TRACK + 10 + 48 + 16,
+        minWidth: SHARE_TRACK + 10 + SHARE_FIGURE + 16,
         header: (
           <ScaleHeader
             label="Share"
             scale={shareScale}
             trackWidth={SHARE_TRACK}
             format={formatShareTick}
+            figureWidth={SHARE_FIGURE}
           />
         ),
         render: (h) => {
@@ -325,7 +339,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               minFill={2}
               segments={[{ key: 'share', label: 'share', value: share.hundredths, tone: 'tokens' }]}
               display={<span>{share.text}</span>}
-              displayWidth={48}
+              displayWidth={SHARE_FIGURE}
             />
           );
         },

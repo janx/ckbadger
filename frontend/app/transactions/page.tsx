@@ -668,11 +668,12 @@ export default function TransactionsPage() {
           )}
           {tab === 'committed' && committed.data && (
             <>
-              <TransactionListTable transactions={committed.data.data} />
+              {/* B5: how to read the Value column, above the table, not after its last row. */}
               <p className="text-text-dim text-small">
                 Value is what the participants received. A cellbase row shows, grey, the reward it
                 pays; no total counts it.
               </p>
+              <TransactionListTable transactions={committed.data.data} />
               <CursorPagination
                 className="flex-col items-start gap-3 sm:flex-row sm:items-center"
                 total={committed.data.total ?? undefined}
@@ -720,14 +721,7 @@ export default function TransactionsPage() {
                   </dd>
                 </div>
               </dl>
-              <ListTable
-                label="Transactions in the pool"
-                columns={poolColumns}
-                rows={pool.data.data}
-                rowKey={(tx) => tx.hash}
-                empty="The node's pool is empty."
-                mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
-              />
+              {/* B5: how to read the list, above it, not after its last row. */}
               <p className="text-text-dim text-small">
                 Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
                 after its proposal.
@@ -737,6 +731,14 @@ export default function TransactionsPage() {
                   This node's tracked pool is truncated; more transactions may be present.
                 </p>
               )}
+              <ListTable
+                label="Transactions in the pool"
+                columns={poolColumns}
+                rows={pool.data.data}
+                rowKey={(tx) => tx.hash}
+                empty="The node's pool is empty."
+                mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
+              />
               <CursorPagination
                 className="flex-col items-start gap-3 sm:flex-row sm:items-center"
                 total={pool.data.total}

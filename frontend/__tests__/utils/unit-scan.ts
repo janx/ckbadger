@@ -90,7 +90,7 @@ function renderedAsUnits(node: ts.Node, child: ts.JsxExpression): boolean {
 }
 
 /** Whether an element around the child renders it as a unit (or as SVG text). */
-function insideUnit(child: ts.JsxExpression): boolean {
+function insideUnit(child: ts.JsxExpression | ts.JsxText): boolean {
   for (let n: ts.Node | undefined = child.parent; n; n = n.parent) {
     if (ts.isJsxElement(n)) {
       const el = n.openingElement;
@@ -103,8 +103,41 @@ function insideUnit(child: ts.JsxExpression): boolean {
 
 export interface UnitFinding {
   line: number;
-  kind: 'date' | 'id' | 'count' | 'field' | 'decoration';
+  kind: 'date' | 'id' | 'count' | 'field' | 'decoration' | 'range';
   text: string;
+}
+
+/** The dash of a range (`2–10`): a line may break after it, so a range is held as one unit. */
+const RANGE_DASH = '–';
+
+/** Whether a node is a JSX child expression that writes a value (`{a}`, not an empty `{}`). */
+const isValueChild = (node: ts.Node | undefined): node is ts.JsxExpression =>
+  node !== undefined && ts.isJsxExpression(node) && node.expression !== undefined;
+
+/**
+ * A range written as a child's text with nothing around it that renders a unit, its dash between
+ * two values: `{a}–{b}` in JSX, or `${a}–${b}` in a template literal the JSX renders as a child
+ * (readability review 2026-11-18: "window 2–" / "10" on the transaction page). `unitText` does not
+ * hold a range, so only an element around it that renders a unit does. Null when it is held.
+ */
+function writtenRange(node: ts.Node): { from: ts.Node; text: string } | null {
+  if (ts.isJsxText(node) && node.text === RANGE_DASH) {
+    const siblings = (node.parent as ts.JsxElement | ts.JsxFragment).children;
+    const at = siblings.indexOf(node);
+    const [low, high] = [siblings[at - 1], siblings[at + 1]];
+    if (!isValueChild(low) || !isValueChild(high) || insideUnit(node)) return null;
+    return { from: low, text: `${low.getText()}${RANGE_DASH}${high.getText()}` };
+  }
+  if (
+    ts.isTemplateExpression(node) &&
+    node.templateSpans.some(
+      (span, i) => span.literal.text === RANGE_DASH && i < node.templateSpans.length - 1
+    )
+  ) {
+    const child = renderingChild(node);
+    return child && !insideUnit(child) ? { from: node, text: node.getText() } : null;
+  }
+  return null;
 }
 
 /**
@@ -195,11 +228,11 @@ const DECORATION = /(^|[\s'"`:])(underline|line-through|overline)([\s'"`]|$)/;
 
 export function unprotectedUnits(file: ts.SourceFile): UnitFinding[] {
   const found: UnitFinding[] = [];
-  const push = (node: ts.Node, kind: UnitFinding['kind']) =>
+  const push = (node: ts.Node, kind: UnitFinding['kind'], text = node.getText()) =>
     found.push({
       line: file.getLineAndCharacterOfPosition(node.getStart()).line + 1,
       kind,
-      text: node.getText().replace(/\s+/g, ' ').slice(0, 90),
+      text: text.replace(/\s+/g, ' ').slice(0, 90),
     });
   const report = (node: ts.Node, kind: UnitFinding['kind']) => {
     const child = renderingChild(node);
@@ -207,6 +240,9 @@ export function unprotectedUnits(file: ts.SourceFile): UnitFinding[] {
     push(node, kind);
   };
   const visit = (node: ts.Node) => {
+    // a range of two values, in JSX text or in a template literal written as a child (2026-11-18)
+    const range = writtenRange(node);
+    if (range) push(range.from, 'range', range.text);
     if (ts.isCallExpression(node)) {
       const name = calleeName(node);
       if (DATE_FORMATTERS.has(name)) report(node, 'date');

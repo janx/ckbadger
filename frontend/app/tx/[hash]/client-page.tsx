@@ -616,7 +616,7 @@ function DepRow({
                 </Link>
                 {memberServes.length > 0
                   ? ` · ${memberServes.join(', ')} code, ${size(cell.codeSize)}`
-                  : ` · ${size(cell.codeSize)} no script here names`}
+                  : ` · a ${size(cell.codeSize)} cell no script here names`}
               </span>
             );
           })}
@@ -1718,7 +1718,10 @@ export default function TransactionDetailPage() {
                               {unitNode(formatCount(lifecycle.commitmentDistance, 'block'))} later
                             </>
                           )}{' '}
-                        · window {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
+                        · window{' '}
+                        <NoBreak>
+                          {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
+                        </NoBreak>
                       </span>
                     )}
                   </span>

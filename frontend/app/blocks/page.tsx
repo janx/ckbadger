@@ -16,7 +16,7 @@ import { MinerLink } from '@/components/forks/miner-link';
 import { ExactCkb } from '@/components/activity-event-row';
 import {
   BlockContents,
-  BlocksLimitsFootnote,
+  BlocksLimitsNote,
   ResourceBar,
   ScaleHeader,
   resourceScale,
@@ -198,6 +198,8 @@ export default function BlocksPage() {
           )}
           {data && (
             <>
+              {/* B5: the limits that give the Size and Cycles bars their meaning, above them. */}
+              <BlocksLimitsNote blocks={data.data} />
               <ListTable
                 label="Latest blocks"
                 columns={columns}
@@ -208,7 +210,6 @@ export default function BlocksPage() {
                 mobileRow={(block) => <BlockPhoneRow block={block} />}
                 onForm={setForm}
               />
-              <BlocksLimitsFootnote blocks={data.data} />
               <CursorPagination
                 summary={
                   <span className="text-small">{blocksRange(data.data, data.total, page)}</span>

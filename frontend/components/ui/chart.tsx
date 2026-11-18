@@ -86,8 +86,11 @@ export interface ChartProps {
   yDomain?: readonly [number, number];
   /** Dashed horizontal reference lines (a consensus target); the axis widens to hold them. */
   referenceLines?: readonly { value: number; label: string }[];
-  /** X-axis labels at these point indexes, replacing the first / last label pair. */
-  xTicks?: readonly { index: number; label: string }[];
+  /**
+   * X-axis labels at these point indexes, replacing the first / last label pair. `edge`: a
+   * histogram's open-ended outlier label, always kept (placeXTicks).
+   */
+  xTicks?: readonly { index: number; label: string; edge?: boolean }[];
   /**
    * The x axis names categories (a few labelled buckets, one slot bar each): `xTicks` names every
    * point, and every label is drawn, on extra rows under the plot when one row cannot hold them.
