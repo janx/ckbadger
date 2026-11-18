@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { act, cleanup, fireEvent, render as renderPlain } from '@testing-library/react';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   createTestQueryClient,
@@ -26,6 +27,10 @@ import {
 } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import type { PipelineSnapshot } from '@/lib/api';
 import { PipelineCanvas, PipelinePanel } from '@/components/pipeline/pipeline-panel';
+import Link from '@/components/ui/link';
+import { blockTip } from '@/components/pipeline/pipeline-tooltip';
+import { shortenHash } from '@/lib/shorten';
+import { formatCount } from '@/lib/format-count';
 import {
   CUT_FILL,
   PLATE_FILL,
@@ -64,6 +69,8 @@ import {
   flowPaths,
   inWindow,
   labelWidth,
+  pick,
+  pickTargets,
   rulerPath,
   side,
   tail4,
@@ -77,7 +84,7 @@ import {
 } from '@/lib/pipeline/layout';
 import { FRESH_MS } from '@/lib/pipeline/motion';
 import { drawSeal } from '@/lib/seal/stones';
-import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
+import { usePipelineHoverStore, type PipelinePin } from '@/hooks/usePipelineHoverStore';
 import { diffSnapshots } from '@/lib/pipeline/transitions';
 import {
   color,
@@ -159,6 +166,87 @@ async function renderPanel(snapshot: PipelineSnapshot = buildPipelineSnapshot())
   render(<PipelinePanel />);
   return screen.findByTestId('pipeline-svg');
 }
+
+/** The router's location, where a test can read where a click went. */
+function RouterLocation() {
+  return <output data-testid="router-location">{useLocation().pathname}</output>;
+}
+const routerLocation = () => screen.getByTestId('router-location').textContent;
+
+/**
+ * The panel on a network's home page, under a router (lane K): a click on the canvas navigates
+ * through it, so where the click went is the router's location.
+ */
+async function renderRoutedPanel(
+  snapshot: PipelineSnapshot = buildPipelineSnapshot(),
+  at = '/mainnet'
+) {
+  server.use(http.get('/api/:network/v1/pipeline', () => HttpResponse.json(snapshot)));
+  render(
+    <MemoryRouter initialEntries={[at]}>
+      <RouterLocation />
+      <PipelinePanel />
+    </MemoryRouter>
+  );
+  return screen.findByTestId('pipeline-svg');
+}
+
+type ClientPoint = { clientX: number; clientY: number };
+
+/** `(x, y)` as a pointer position, after checking that it picks no tx and no proposal dot. */
+function unpicked(sc: Scene, x: number, y: number): ClientPoint {
+  const hit = pick(pickTargets(sc), x, y);
+  if (hit !== null) throw new Error(`(${x}, ${y}) picks ${JSON.stringify(hit)}`);
+  return { clientX: x, clientY: y };
+}
+
+/** A point on block `n`'s plate that picks no tx and no proposal dot: the bare plate. */
+function bareSpot(sc: Scene, n: number): ClientPoint {
+  const c = sc.cards.find((k) => k.block.number === n);
+  if (!c) throw new Error(`#${n} is not on screen`);
+  const targets = pickTargets(sc);
+  const top = c.y + (sc.orientation === 'row' ? G.cardTop : 0);
+  for (let y = top + c.h - 3; y > top + 2; y--) {
+    for (let x = c.x + c.w - 3; x > c.x + 2; x--) {
+      if (pick(targets, x, y) === null) return { clientX: x, clientY: y };
+    }
+  }
+  throw new Error(`#${n} has no bare spot on its plate`);
+}
+
+/** A point in a pool well (its tray, as drawn) that picks no tx, and the tray it is on. */
+function bareWellSpot(
+  svg: Element,
+  sc: Scene,
+  which: 'pending' | 'proposed'
+): [Element, ClientPoint] {
+  const tray = svg.querySelector(`[data-pool-card="${which}"] [data-tray]`) as SVGRectElement;
+  const [x0, y0, w, h] = ['x', 'y', 'width', 'height'].map((a) => Number(tray.getAttribute(a)));
+  const targets = pickTargets(sc);
+  for (let y = y0 + h - 3; y > y0 + 2; y--) {
+    for (let x = x0 + w - 3; x > x0 + 2; x--) {
+      if (pick(targets, x, y) === null) return [tray, { clientX: x, clientY: y }];
+    }
+  }
+  throw new Error(`the ${which} well has no spot without a tx`);
+}
+
+/** jsdom has no PointerEvent: a MouseEvent that carries its pointer's type, as a browser's does. */
+class PointerEventStub extends MouseEvent {
+  readonly pointerType: string;
+  constructor(type: string, init: PointerEventInit = {}) {
+    super(type, init);
+    this.pointerType = init.pointerType ?? '';
+  }
+}
+
+/** A gesture that ends in a click, begun by a pointer of `type` (`touch`: a tap). */
+function press(el: Element, at: ClientPoint, type: 'touch' | 'mouse' | 'pen') {
+  fireEvent.pointerDown(el, { ...at, pointerType: type });
+  fireEvent.click(el, at);
+}
+/** A touch tap (lane K): the first on a mark pins what it opens, the second opens it. */
+const tap = (el: Element, at: ClientPoint) => press(el, at, 'touch');
 
 describe('the tip flares (material pass v2, move 4)', () => {
   it('lights the tip for a new block, not on mount', async () => {
@@ -1184,7 +1272,12 @@ describe('PipelinePanel static render', () => {
     const title = screen.getByText('?').getAttribute('title') ?? '';
     expect(title).toContain('proposed in one block and committed in a later block');
     expect(title).toContain('Square area = bytes; shade = cycles.');
-    expect(title).toMatch(/Tap or hover a tx or a proposal.*a tap on a tx pins it/);
+    // Lane K: a click, or a second tap (the first pins the readout), opens the page.
+    expect(title.split('\n')).toEqual([
+      'Two-step confirmation: a tx is proposed in one block and committed in a later block inside its proposal window.',
+      'Square area = bytes; shade = cycles.',
+      'Tap or hover a tx or a proposal to see how they connect; a click, or a second tap, opens the page of a block or a tx.',
+    ]);
   });
 
   // Rubbing × Song print, phase 5 (H1, the Main board): the head is the command line
@@ -1396,6 +1489,37 @@ describe('PipelineCanvas motion', () => {
     expect(svg.querySelectorAll('[data-card]')).toHaveLength(
       buildScene(s2, VIEW_W, 'settled').cards.length
     );
+  });
+
+  // Lane K: a block still landing is a mined block, so a click on it opens its page.
+  it('opens the page of a block that is still landing', () => {
+    const rect = vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: VIEW_W,
+      height: G.H,
+      right: VIEW_W,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
+    try {
+      const routed = (s: PipelineSnapshot) => (
+        <MemoryRouter initialEntries={['/mainnet']}>
+          <RouterLocation />
+          <PipelineCanvas snapshot={s} />
+        </MemoryRouter>
+      );
+      const { getByTestId, rerender } = renderPlain(routed(s1));
+      rerender(routed(s2));
+      const svg = getByTestId('pipeline-svg');
+      expect(svg.querySelector(`[data-card="${newHash}"]`)).toHaveAttribute('data-slot', 'landing');
+      fireEvent.click(landingBox(svg), bareSpot(buildScene(s2, VIEW_W, 'landing'), T + 1));
+      expect(routerLocation()).toBe(`/mainnet/blocks/${T + 1}`);
+    } finally {
+      rect.mockRestore();
+    }
   });
 
   // Direction F (Plate.dc.html, "a block lands"): until its commits land the block is NEXT's
@@ -1880,7 +2004,7 @@ describe('PipelinePanel interactions', () => {
     Object.defineProperty(window, 'PointerEvent', {
       configurable: true,
       writable: true,
-      value: class PointerEventStub extends MouseEvent {},
+      value: PointerEventStub,
     });
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0,
@@ -2383,27 +2507,34 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-window-label]')).toHaveAttribute('opacity', '0.15');
   });
 
+  // Lane K: the pin is a touch tap's now (a click opens the page); its ring is unchanged.
   it('rings a hovered and a pinned tx square with square corners (U-02, R1)', async () => {
     const svg = await renderPanel(snapshot);
     const id = poolTxHash('q1');
     const q = scene.pool?.pending.squares.find((k) => k.id === id);
-    fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
+    tap(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
     fireEvent.pointerMove(svg, squareCentre(T, committedTxHash(T, 2)));
     const rings = ['halo', 'ring', 'pin-ring'].map((h) => svg.querySelector(`[data-hover="${h}"]`));
     expect(rings.map((r) => r?.tagName)).toEqual(['rect', 'rect', 'rect']);
     expect(roundedOutsideStones(svg)).toEqual([]);
   });
 
-  it('pins a tx on click and lets Escape unpin it', async () => {
+  it('pins a tapped tx and lets Escape unpin it', async () => {
     const svg = await renderPanel(snapshot);
     const id = poolTxHash('q1');
     const q = scene.pool?.pending.squares.find((k) => k.id === id);
     const at = { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 };
-    fireEvent.click(svg, at);
-    expect(usePipelineHoverStore.getState().pinned).toBe(id);
+    tap(svg, at);
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: id });
     expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('Selected');
     expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('waiting to be proposed');
-    expect(svg.querySelector('[data-hover="pin-ring"]')).not.toBeNull();
+    const ring = svg.querySelector('[data-hover="pin-ring"]') as SVGRectElement;
+    expect(ring).toHaveAttribute('stroke-dasharray', '3 2');
+    expect([ring.getAttribute('x'), ring.getAttribute('y')].map(Number)).toEqual([
+      (q?.x as number) - 2.5,
+      (q?.y as number) - 2.5,
+    ]);
+    expect(Number(ring.getAttribute('width'))).toBe((q?.s as number) + 5);
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(usePipelineHoverStore.getState().pinned).toBeNull();
     expect(svg.querySelector('[data-hover="pin-ring"]')).toBeNull();
@@ -2415,7 +2546,7 @@ describe('PipelinePanel interactions', () => {
     expect(screen.queryByTestId('pipeline-selection')).toBeNull();
 
     const q = scene.pool?.pending.squares.find((k) => k.id === poolTxHash('q1'));
-    fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
+    tap(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
     expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('Selected');
     expect(screen.queryByTestId('pipeline-legend')).toBeNull();
 
@@ -2426,14 +2557,16 @@ describe('PipelinePanel interactions', () => {
   });
 
   it('lets either footer wrap to the available panel width', async () => {
-    // jsdom does not lay out, so check that neither state forces clipping at a breakpoint.
+    // jsdom does not lay out, so check that no state forces clipping at a breakpoint.
     const row = (el: HTMLElement) => el.className.split(/\s+/);
     const svg = await renderPanel(snapshot);
     const legend = row(screen.getByTestId('pipeline-legend'));
     const q = scene.pool?.pending.squares.find((k) => k.id === poolTxHash('q1'));
-    fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
-    const selection = row(screen.getByTestId('pipeline-selection'));
-    for (const classes of [legend, selection]) {
+    tap(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
+    const txLine = row(screen.getByTestId('pipeline-selection'));
+    tap(tile(svg, T - 3), bareSpot(scene, T - 3));
+    const blockLine = row(screen.getByTestId('pipeline-selection'));
+    for (const classes of [legend, txLine, blockLine]) {
       expect(classes).toContain('min-h-6');
       expect(classes).toContain('flex-wrap');
       expect(classes).not.toContain('overflow-hidden');
@@ -2481,9 +2614,9 @@ describe('PipelinePanel interactions', () => {
     expect(svg.querySelector('[data-hover="ghost-ring"]')).not.toBeNull();
     expect(tooltip()).toHaveTextContent('predicted');
     expect(tooltip()).toHaveTextContent(`#${fmt(T + 1)}`);
-    // Clicking the ghost pins the pool tx it predicts.
-    fireEvent.click(svg, ghostCentre(id));
-    expect(usePipelineHoverStore.getState().pinned).toBe(id);
+    // Tapping the ghost pins the pool tx it predicts.
+    tap(svg, ghostCentre(id));
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: id });
   });
 
   it('explains a ghost whose tx is not in the listed pool without failing', async () => {
@@ -2678,7 +2811,7 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
     Object.defineProperty(window, 'PointerEvent', {
       configurable: true,
       writable: true,
-      value: class PointerEventStub extends MouseEvent {},
+      value: PointerEventStub,
     });
     box(PHONE_W, scene.H);
   });
@@ -3306,12 +3439,133 @@ describe('PipelinePanel below 589 px: the pipeline stood on end', () => {
   it('pins a tapped tx and shows where it is now in the footer', async () => {
     const svg = await renderPanel(quiet);
     const q = scene.pool?.pending.squares.find((k) => k.id === poolTxHash('q1'));
-    fireEvent.click(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
-    expect(usePipelineHoverStore.getState().pinned).toBe(poolTxHash('q1'));
+    tap(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: poolTxHash('q1') });
     expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('waiting to be proposed');
     const pin = svg.querySelector('[data-hover="pin-ring"]') as SVGRectElement;
     expect(Number(pin.getAttribute('y'))).toBe((q?.y as number) - 2.5);
   });
+
+  /** Where a pointer lands on the phone canvas, and the page it opens (null: none). */
+  const COLUMN_SPOTS: [
+    string,
+    (svg: Element) => [Element, ClientPoint],
+    { href: string; pin: PipelinePin } | null,
+  ][] = [
+    [
+      'a pending tx in its well',
+      (svg) => {
+        const q = scene.pool?.pending.squares.find((k) => k.id === poolTxHash('q1'));
+        return [svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 }];
+      },
+      {
+        href: `/mainnet/tx/${poolTxHash('q1')}`,
+        pin: { kind: 'tx', hash: poolTxHash('q1') },
+      },
+    ],
+    [
+      'a committed tx on a row',
+      (svg) => {
+        const c = rowOf(T);
+        const q = c.squares.find((k) => k.id === committedTxHash(T, 2));
+        if (!q) throw new Error('the row of T does not draw its tx 2');
+        return [svg, { clientX: c.x + q.x + q.s / 2, clientY: c.y + q.y + q.s / 2 }];
+      },
+      {
+        href: `/mainnet/tx/${committedTxHash(T, 2)}`,
+        pin: { kind: 'tx', hash: committedTxHash(T, 2) },
+      },
+    ],
+    [
+      'the bare plate of a row',
+      (svg) => [tile(svg, T - 2), bareSpot(scene, T - 2)],
+      { href: `/mainnet/blocks/${T - 2}`, pin: { kind: 'block', number: T - 2 } },
+    ],
+    [
+      // the words let the pointer through to the plate
+      'the number of a row',
+      (svg) => {
+        const c = rowOf(T - 3);
+        return [tile(svg, T - 3), unpicked(scene, c.x + c.numberX + 10, c.y + columnHeadAt(c).y)];
+      },
+      { href: `/mainnet/blocks/${T - 3}`, pin: { kind: 'block', number: T - 3 } },
+    ],
+    [
+      'the word of an uncle on a row',
+      (svg) => {
+        const c = rowOf(T - 1);
+        const u = c.uncles[0];
+        const word = card(svg, T - 1).querySelector('[data-uncle="0"] text') as Element;
+        return [word, unpicked(scene, c.x + u.x + 10, c.y + u.y + 6)];
+      },
+      { href: `/mainnet/blocks/${T - 1}`, pin: { kind: 'block', number: T - 1 } },
+    ],
+    [
+      'the next block’s row',
+      (svg) => {
+        const n = scene.next as NonNullable<Scene['next']>;
+        return [
+          svg.querySelector('[data-next] [data-box]') as Element,
+          { clientX: n.x + n.w - 4, clientY: n.y + 4 },
+        ];
+      },
+      null,
+    ],
+    [
+      'the proposed well with no tx under the pointer',
+      (svg) => bareWellSpot(svg, scene, 'proposed'),
+      null,
+    ],
+    [
+      'the mempool well with no tx under the pointer',
+      (svg) => bareWellSpot(svg, scene, 'pending'),
+      null,
+    ],
+  ];
+
+  // Lane K: a pointer that hovers opens the page of what it clicks at once, below 589 px too.
+  it.each(COLUMN_SPOTS)('opens the page of %s on a click below 589 px', async (_, at, opens) => {
+    const svg = await renderRoutedPanel(quiet);
+    const [el, point] = at(svg);
+    press(el, point, 'mouse');
+    expect(routerLocation()).toBe(opens?.href ?? '/mainnet');
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+  });
+
+  // Lane K, the Touch rule: on a phone the first tap pins the readout of what it would open, the
+  // second opens it; a tap where nothing opens clears the pin.
+  it.each(COLUMN_SPOTS)(
+    'pins %s on a first tap below 589 px and opens it on the second',
+    async (_, at, opens) => {
+      const svg = await renderRoutedPanel(quiet);
+      const [el, point] = at(svg);
+      // something else pinned first: a tap where nothing opens clears it
+      tap(tile(svg, T), bareSpot(scene, T));
+      expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'block', number: T });
+      tap(el, point);
+      expect(routerLocation()).toBe('/mainnet');
+      if (opens === null) {
+        expect(usePipelineHoverStore.getState().pinned).toBeNull();
+        expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+        return;
+      }
+      expect(usePipelineHoverStore.getState().pinned).toEqual(opens.pin);
+      const line = screen.getByTestId('pipeline-selection');
+      expect(within(line).getByRole('link')).toHaveTextContent(
+        opens.pin.kind === 'tx' ? 'open tx ↗' : 'open block ↗'
+      );
+      if (opens.pin.kind === 'block') {
+        // its row has the hovered row's 1 px edge
+        expect(tile(svg, opens.pin.number).style.getPropertyValue('stroke')).toBe(
+          color('text-dim')
+        );
+      }
+      tap(el, point);
+      expect(routerLocation()).toBe(opens.href);
+      expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    }
+  );
 });
 
 describe('PipelineCanvas motion below 589 px', () => {
@@ -3527,5 +3781,536 @@ describe('PipelineCanvas motion below 589 px', () => {
     expect(rectOf(tile(svg, T))).toEqual(asRect(cardBox('column', PHONE_W, 44, false)));
     expect(svg.querySelector('[data-layer="exit"]')?.childElementCount).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
+  });
+});
+
+// Lane K ("点击 pipeline 中的 block/tx 应该跳转对应页面"): a click opens the page of what it hits,
+// read by the same decision the hover reads it by: a tx of any stage, a predicted tx and a dot whose
+// tx is known open the transaction; a dot whose tx is not known and anything else on a mined block
+// open the block; NEXT, the wells, the window lane and the empty canvas open nothing. The tip says
+// which page in one closing sentence, and the cursor is a pointer exactly there. On a touch screen
+// (the Touch rule) the first tap pins the readout of what it would open and the second opens it.
+describe('PipelinePanel: a click opens the page of what it hits', () => {
+  const snapshot = buildPipelineSnapshot();
+  const scene: Scene = buildScene(snapshot, VIEW_W, 'settled');
+  const cardOf = (sc: Scene, n: number) => {
+    const c = sc.cards.find((k) => k.block.number === n);
+    if (!c) throw new Error(`card ${n} not on screen`);
+    return c;
+  };
+  const squareAt = (n: number, id: string): ClientPoint => {
+    const c = cardOf(scene, n);
+    const q = c.squares.find((k) => k.id === id);
+    if (!q) throw new Error(`square ${id} not in card ${n}`);
+    return { clientX: c.x + q.x + q.s / 2, clientY: q.y + q.s / 2 };
+  };
+  const poolAt = (id: string): ClientPoint => {
+    const pool = scene.pool as NonNullable<Scene['pool']>;
+    const q = [...pool.pending.squares, ...pool.proposed.squares].find((k) => k.id === id);
+    if (!q) throw new Error(`square ${id} not in the pool`);
+    return { clientX: q.x + q.s / 2, clientY: q.y + q.s / 2 };
+  };
+  const ghostAt = (id: string): ClientPoint => {
+    const next = scene.next as NonNullable<Scene['next']>;
+    const g = next.ghosts.find((k) => k.id === id);
+    if (!g) throw new Error(`no ghost for ${id}`);
+    return { clientX: next.x + g.x + g.s / 2, clientY: g.y + g.s / 2 };
+  };
+  const chipAt = (sc: Scene, n: number, key: string): ClientPoint => {
+    const c = cardOf(sc, n);
+    const k = c.chips.find((x) => x.key === key);
+    if (!k) throw new Error(`chip ${key} not in card ${n}`);
+    return { clientX: c.x + k.x + G.chip / 2, clientY: c.y + k.y + G.chip / 2 };
+  };
+  const laneAt = (): ClientPoint => {
+    const ruler = windowRuler(
+      rulerSlots(scene),
+      T + 1,
+      snapshot.consensus,
+      VIEW_W,
+      windowLabel(T + 1, T, snapshot.consensus)
+    );
+    return { clientX: (ruler.ticks[0] as number) + 10, clientY: G.cardTop - 8 };
+  };
+  const txPage = (hash: string, net = 'mainnet') => `/${net}/tx/${hash}`;
+  const blockPage = (n: number, net = 'mainnet') => `/${net}/blocks/${n}`;
+  const tooltip = () => screen.getByTestId('pipeline-tooltip');
+  const tipFoot = () =>
+    screen.queryByTestId('pipeline-tooltip')?.lastElementChild?.textContent ?? null;
+  const auxClick = (el: Element, at: ClientPoint, button: number) =>
+    fireEvent(el, new MouseEvent('auxclick', { bubbles: true, cancelable: true, button, ...at }));
+
+  beforeEach(() => {
+    usePipelineHoverStore.getState().clear();
+    Object.defineProperty(window, 'PointerEvent', {
+      configurable: true,
+      writable: true,
+      value: PointerEventStub,
+    });
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 0,
+      left: 0,
+      top: 0,
+      width: VIEW_W,
+      height: G.H,
+      right: VIEW_W,
+      bottom: G.H,
+      toJSON: () => ({}),
+    } as DOMRect);
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window, 'PointerEvent');
+    vi.restoreAllMocks();
+    usePipelineHoverStore.getState().clear();
+  });
+
+  /** Where the pointer is: the element under it and its position. */
+  type Spot = (svg: Element) => [Element, ClientPoint];
+  const on =
+    (at: () => ClientPoint): Spot =>
+    (svg) => [svg, at()];
+  const T2 = committedTxHash(T, 2);
+
+  const OPENS: [string, Spot, string, 'transaction' | 'block'][] = [
+    [
+      'a pending tx in the mempool well',
+      on(() => poolAt(poolTxHash('q1'))),
+      txPage(poolTxHash('q1')),
+      'transaction',
+    ],
+    [
+      'a proposed tx in the proposed well',
+      on(() => poolAt(poolTxHash('w2'))),
+      txPage(poolTxHash('w2')),
+      'transaction',
+    ],
+    ['a committed tx on a plate', on(() => squareAt(T, T2)), txPage(T2), 'transaction'],
+    ['a cellbase', on(() => squareAt(T, cellbaseHash(T))), txPage(cellbaseHash(T)), 'transaction'],
+    [
+      'a predicted tx on NEXT',
+      on(() => ghostAt(poolTxHash('w2'))),
+      txPage(poolTxHash('w2')),
+      'transaction',
+    ],
+    [
+      'a proposal dot whose tx is known',
+      on(() => chipAt(scene, T - 2, `${shortIdOf(T2)}|`)),
+      txPage(T2),
+      'transaction',
+    ],
+    [
+      'the bare plate of a block',
+      (svg) => [tile(svg, T - 3), bareSpot(scene, T - 3)],
+      blockPage(T - 3),
+      'block',
+    ],
+    [
+      // the stone and the words let the pointer through to the plate
+      'the stone of a block',
+      (svg) => [tile(svg, T), unpicked(scene, cardOf(scene, T).x + G.stoneX + 7, G.stoneY + 7)],
+      blockPage(T),
+      'block',
+    ],
+    [
+      'the number of a block',
+      (svg) => [
+        tile(svg, T - 1),
+        unpicked(scene, cardOf(scene, T - 1).x + G.numberX + 12, G.stoneY + 7),
+      ],
+      blockPage(T - 1),
+      'block',
+    ],
+    [
+      'the word of an uncle (the block that carries it)',
+      (svg) => {
+        const c = cardOf(scene, T - 1);
+        const u = c.uncles[0];
+        const word = card(svg, T - 1).querySelector('[data-uncle="0"] text') as Element;
+        return [word, unpicked(scene, c.x + u.x + 10, u.y + 6)];
+      },
+      blockPage(T - 1),
+      'block',
+    ],
+  ];
+
+  it.each(OPENS)(
+    'opens the page of %s, as its tip says, under a pointer cursor',
+    async (_, spot, page, noun) => {
+      const svg = await renderRoutedPanel(snapshot);
+      const [el, at] = spot(svg);
+      fireEvent.pointerMove(el, at);
+      expect(svg.style.cursor).toBe('pointer');
+      const foot = tipFoot() as string;
+      expect(foot.match(/Click to open/g)).toHaveLength(1);
+      expect(foot.endsWith(`Click to open the ${noun}.`)).toBe(true);
+      expect(routerLocation()).toBe('/mainnet');
+      press(el, at, 'mouse');
+      expect(routerLocation()).toBe(page);
+      // A mouse pins nothing: no dashed ring, and the line under the canvas is still the legend.
+      expect(usePipelineHoverStore.getState().pinned).toBeNull();
+      expect(svg.querySelector('[data-hover="pin-ring"]')).toBeNull();
+      expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+      expect(screen.queryByTestId('pipeline-selection')).toBeNull();
+    }
+  );
+
+  it('opens the block of a proposal dot whose tx is not known, as its tip says', async () => {
+    const two = withTwoUncles(snapshot);
+    const sc = buildScene(two, VIEW_W, 'settled');
+    const dot = cardOf(sc, T - 1).chips.find(
+      (k) => k.proposal.uncleIndex === 1 && k.proposal.txHash === null
+    );
+    if (!dot) throw new Error('T−1 draws no dot of its second uncle');
+    const svg = await renderRoutedPanel(two);
+    const at = chipAt(sc, T - 1, dot.key);
+    fireEvent.pointerMove(svg, at);
+    expect(tooltip()).toHaveTextContent('Proposal');
+    expect(svg.style.cursor).toBe('pointer');
+    expect(tipFoot()?.endsWith('Click to open the block.')).toBe(true);
+    expect(tipFoot()?.match(/Click to open/g)).toHaveLength(1);
+    fireEvent.click(svg, at);
+    expect(routerLocation()).toBe(blockPage(T - 1));
+  });
+
+  /** A tx's square in the scene, in canvas coordinates: in a pool well or on a block. */
+  const squareOf = (id: string) => {
+    const pool = scene.pool as NonNullable<Scene['pool']>;
+    const inPool = [...pool.pending.squares, ...pool.proposed.squares].find((k) => k.id === id);
+    if (inPool) return { X: inPool.x, Y: inPool.y, s: inPool.s };
+    for (const c of scene.cards) {
+      const q = c.squares.find((k) => k.id === id);
+      if (q) return { X: c.x + q.x, Y: c.y + q.y, s: q.s };
+    }
+    throw new Error(`${id} has no square on screen`);
+  };
+
+  /** What a tap pins: what it would open, read back from the page it opens. */
+  const pinOf = (page: string): PipelinePin => {
+    const [, , kind, id] = page.split('/');
+    return kind === 'tx' ? { kind: 'tx', hash: id } : { kind: 'block', number: Number(id) };
+  };
+
+  it.each(OPENS)(
+    'pins %s on a first tap, marks it and shows its readout, and opens it on the second',
+    async (_, spot, page) => {
+      const svg = await renderRoutedPanel(snapshot);
+      const [el, at] = spot(svg);
+      const pin = pinOf(page);
+      tap(el, at);
+      expect(routerLocation()).toBe('/mainnet');
+      expect(usePipelineHoverStore.getState().pinned).toEqual(pin);
+      expect(screen.queryByTestId('pipeline-legend')).toBeNull();
+      const line = screen.getByTestId('pipeline-selection');
+      expect(line).toHaveTextContent(/^Selected/);
+      const link = within(line).getByRole('link');
+      expect(link).toHaveAttribute('href', page);
+      if (pin.kind === 'tx') {
+        expect(link).toHaveTextContent('open tx ↗');
+        // the dashed pin ring, 2.5 px around the tx's square wherever the scene draws it
+        const ring = svg.querySelector('[data-hover="pin-ring"]') as SVGRectElement;
+        const sq = squareOf(pin.hash);
+        expect(['x', 'y', 'width'].map((a) => Number(ring.getAttribute(a)))).toEqual([
+          sq.X - 2.5,
+          sq.Y - 2.5,
+          sq.s + 5,
+        ]);
+        expect(ring).toHaveAttribute('stroke-dasharray', '3 2');
+        for (const c of scene.cards) {
+          expect(tile(svg, c.block.number).style.getPropertyValue('stroke')).toBe('none');
+        }
+      } else {
+        expect(link).toHaveTextContent('open block ↗');
+        expect(svg.querySelector('[data-hover="pin-ring"]')).toBeNull();
+        // the pinned block has the hovered block's 1 px edge, and no other block has
+        for (const c of scene.cards) {
+          expect(tile(svg, c.block.number).style.getPropertyValue('stroke')).toBe(
+            c.block.number === pin.number ? color('text-dim') : 'none'
+          );
+        }
+      }
+      tap(el, at);
+      expect(routerLocation()).toBe(page);
+      expect(usePipelineHoverStore.getState().pinned).toBeNull();
+      expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+    }
+  );
+
+  it('pins the block of a tapped proposal dot whose tx is not known', async () => {
+    const two = withTwoUncles(snapshot);
+    const sc = buildScene(two, VIEW_W, 'settled');
+    const dot = cardOf(sc, T - 1).chips.find(
+      (k) => k.proposal.uncleIndex === 1 && k.proposal.txHash === null
+    );
+    if (!dot) throw new Error('T−1 draws no dot of its second uncle');
+    const svg = await renderRoutedPanel(two);
+    const at = chipAt(sc, T - 1, dot.key);
+    tap(svg, at);
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'block', number: T - 1 });
+    expect(within(screen.getByTestId('pipeline-selection')).getByRole('link')).toHaveTextContent(
+      'open block ↗'
+    );
+    expect(routerLocation()).toBe('/mainnet');
+    tap(svg, at);
+    expect(routerLocation()).toBe(blockPage(T - 1));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+  });
+
+  it('moves the pin to another tapped mark, the same mark of another kind included', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(svg, poolAt(poolTxHash('q1')));
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: poolTxHash('q1') });
+    tap(tile(svg, T - 3), bareSpot(scene, T - 3));
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'block', number: T - 3 });
+    expect(svg.querySelector('[data-hover="pin-ring"]')).toBeNull();
+    tap(svg, squareAt(T, T2));
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: T2 });
+    expect(tile(svg, T - 3).style.getPropertyValue('stroke')).toBe('none');
+    // The dot of the pinned tx opens what is pinned: its second tap.
+    tap(svg, chipAt(scene, T - 2, `${shortIdOf(T2)}|`));
+    expect(routerLocation()).toBe(txPage(T2));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    expect(screen.queryByTestId('pipeline-error')).toBeNull();
+  });
+
+  it('opens a pinned or an unpinned mark at once on a mouse or pen click, and clears the pin', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(svg, squareAt(T, T2));
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: T2 });
+    press(svg, squareAt(T, T2), 'mouse');
+    expect(routerLocation()).toBe(txPage(T2));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    tap(svg, poolAt(poolTxHash('q1')));
+    press(tile(svg, T - 3), bareSpot(scene, T - 3), 'pen');
+    expect(routerLocation()).toBe(blockPage(T - 3));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+  });
+
+  // The pointer's type is the gesture's own: what its pointerdown said, read by the click it ends.
+  it('takes a click no pointerdown began for a mouse, even right after a tap', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(svg, poolAt(poolTxHash('q1')));
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: poolTxHash('q1') });
+    fireEvent.click(tile(svg, T - 3), bareSpot(scene, T - 3));
+    expect(routerLocation()).toBe(blockPage(T - 3));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+  });
+
+  it('opens the pinned page from the readout’s link, and clears the pin', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(tile(svg, T - 3), bareSpot(scene, T - 3));
+    fireEvent.click(screen.getByRole('link', { name: 'open block ↗' }));
+    expect(routerLocation()).toBe(blockPage(T - 3));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    tap(svg, poolAt(poolTxHash('q1')));
+    fireEvent.click(screen.getByRole('link', { name: 'open tx ↗' }));
+    expect(routerLocation()).toBe(txPage(poolTxHash('q1')));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+  });
+
+  it('clears a pinned block with Escape and with the readout’s ×', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(tile(svg, T - 3), bareSpot(scene, T - 3));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    expect(tile(svg, T - 3).style.getPropertyValue('stroke')).toBe('none');
+    tap(tile(svg, T - 3), bareSpot(scene, T - 3));
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+    expect(routerLocation()).toBe('/mainnet');
+  });
+
+  // The block's readout: the same pieces as a tx's, its facts the tip's own (blockFacts).
+  it('reads a pinned block out in one line: its number, its tag, the facts its tip gives', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(tile(svg, T - 1), bareSpot(scene, T - 1));
+    const line = screen.getByTestId('pipeline-selection');
+    expect(line).toHaveAttribute('aria-live', 'polite');
+    const parts = [...line.children].map((el) => el.textContent);
+    expect(parts).toEqual([
+      'Selected',
+      `#${fmt(T - 1)}`,
+      'block',
+      `transactions cellbase + 2 · proposals 2 + 2 via uncle · uncles #${fmt(T - 2)}`,
+      'open block ↗',
+      '×',
+    ]);
+    const tag = line.children[2];
+    expect(tag.className).toBe(
+      'text-meta border px-1.5 py-[3px] leading-none text-jade border-jade/50'
+    );
+    // the tip says the same three facts, from the same function
+    const block = snapshot.blocks.find(
+      (b) => b.number === T - 1
+    ) as PipelineSnapshot['blocks'][number];
+    expect(blockTip(block, snapshot).rows.slice(0, 3)).toEqual([
+      ['transactions', 'cellbase + 2'],
+      ['proposals', '2 + 2 via uncle'],
+      ['uncles', `#${fmt(T - 2)}`],
+    ]);
+    // a block that has left the snapshot is no longer in view
+    act(() => usePipelineHoverStore.getState().pin({ kind: 'block', number: T - 40 }));
+    expect(
+      [...screen.getByTestId('pipeline-selection').children].map((el) => el.textContent)
+    ).toEqual(['Selected', `#${fmt(T - 40)}`, 'no longer in view', 'open block ↗', '×']);
+  });
+
+  it('reads a pinned tx out as it did: its short hash, its stage and where it is now', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(svg, squareAt(T, T2));
+    const parts = [...screen.getByTestId('pipeline-selection').children].map(
+      (el) => el.textContent
+    );
+    expect(parts).toEqual([
+      'Selected',
+      shortenHash(T2, 'row'),
+      'committed',
+      `committed in #${fmt(T)} · its proposal is in #${fmt(T - 2)}, ${formatCount(2, 'block')} earlier`,
+      'open tx ↗',
+      '×',
+    ]);
+  });
+
+  const OPENS_NOTHING: [string, Spot, string][] = [
+    [
+      'NEXT',
+      (svg) => [
+        svg.querySelector('[data-next] [data-box]') as Element,
+        unpicked(scene, G.nextX + 60, G.cardTop + 4),
+      ],
+      '',
+    ],
+    [
+      'the proposed well with no tx under the pointer',
+      (svg) => bareWellSpot(svg, scene, 'proposed'),
+      '',
+    ],
+    [
+      'the mempool well with no tx under the pointer',
+      (svg) => bareWellSpot(svg, scene, 'pending'),
+      '',
+    ],
+    ['the window lane', on(() => unpicked(scene, laneAt().clientX, laneAt().clientY)), 'help'],
+    ['the empty canvas', on(() => unpicked(scene, 5, 5)), ''],
+  ];
+
+  it.each(OPENS_NOTHING)(
+    'opens nothing on a click or a tap on %s, and its tip says nothing of clicking',
+    async (_, spot, cursor) => {
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      const svg = await renderRoutedPanel(snapshot);
+      const [el, at] = spot(svg);
+      fireEvent.pointerMove(el, at);
+      expect(svg.style.cursor).toBe(cursor);
+      expect(tipFoot() ?? '').not.toMatch(/click|tap|pin/i);
+      fireEvent.click(el, at);
+      fireEvent.click(el, { ...at, ctrlKey: true });
+      auxClick(el, at, 1);
+      expect(routerLocation()).toBe('/mainnet');
+      expect(open).not.toHaveBeenCalled();
+      // A tap there clears the pin, and a click leaves it.
+      tap(svg, squareAt(T, T2));
+      press(el, at, 'mouse');
+      expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: T2 });
+      tap(el, at);
+      expect(usePipelineHoverStore.getState().pinned).toBeNull();
+      expect(screen.getByTestId('pipeline-legend')).toBeInTheDocument();
+      expect(routerLocation()).toBe('/mainnet');
+    }
+  );
+
+  it('opens a new tab, and leaves this one where it is, on a Ctrl-click, a Meta-click or a middle click', async () => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    const svg = await renderRoutedPanel(snapshot);
+    tap(svg, poolAt(poolTxHash('q1')));
+    fireEvent.click(svg, { ...squareAt(T, T2), ctrlKey: true });
+    expect(open).toHaveBeenLastCalledWith(txPage(T2), '_blank', 'noopener,noreferrer');
+    // Opening a page from the pipeline, in a new tab too, clears the pin.
+    expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    fireEvent.click(tile(svg, T - 3), { ...bareSpot(scene, T - 3), metaKey: true });
+    expect(open).toHaveBeenLastCalledWith(blockPage(T - 3), '_blank', 'noopener,noreferrer');
+    auxClick(svg, poolAt(poolTxHash('q1')), 1);
+    expect(open).toHaveBeenLastCalledWith(
+      txPage(poolTxHash('q1')),
+      '_blank',
+      'noopener,noreferrer'
+    );
+    expect(open).toHaveBeenCalledTimes(3);
+    // A right button's auxclick is not a middle click: nothing opens.
+    auxClick(svg, squareAt(T, T2), 2);
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(routerLocation()).toBe('/mainnet');
+    // A plain click navigates here and opens no tab.
+    fireEvent.click(svg, squareAt(T, T2));
+    expect(open).toHaveBeenCalledTimes(3);
+    expect(routerLocation()).toBe(txPage(T2));
+  });
+
+  it('goes to the URL the site’s Link writes for the same href, on the network being browsed', async () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = {
+      networks: [{ name: 'mainnet' }, { name: 'testnet' }],
+      defaultNetwork: 'mainnet',
+    };
+    try {
+      const open = vi.spyOn(window, 'open').mockReturnValue(null);
+      server.use(http.get('/api/:network/v1/pipeline', () => HttpResponse.json(snapshot)));
+      render(
+        <MemoryRouter initialEntries={['/testnet']}>
+          <RouterLocation />
+          <Link href={`/tx/${T2}`}>tx link</Link>
+          <Link href={`/blocks/${T - 3}`}>block link</Link>
+          <PipelinePanel />
+        </MemoryRouter>
+      );
+      const svg = await screen.findByTestId('pipeline-svg');
+      const hrefOf = (name: string) => screen.getByRole('link', { name }).getAttribute('href');
+      expect(hrefOf('tx link')).toBe(txPage(T2, 'testnet'));
+      fireEvent.click(svg, { ...squareAt(T, T2), ctrlKey: true });
+      expect(open).toHaveBeenLastCalledWith(hrefOf('tx link'), '_blank', 'noopener,noreferrer');
+      fireEvent.click(tile(svg, T - 3), bareSpot(scene, T - 3));
+      expect(routerLocation()).toBe(hrefOf('block link'));
+      expect(routerLocation()).toBe(blockPage(T - 3, 'testnet'));
+    } finally {
+      delete window.__CKBADGER_RUNTIME_CONFIG__;
+    }
+  });
+
+  // A pointer exactly where a click opens a page. Every point of a mined block opens a page (its
+  // tx, its dot or the block), so a block's group carries the pointer itself; NEXT opens nothing,
+  // so it carries none (it did); elsewhere the hover sets it: a pointer over a pool tx or a
+  // predicted one, the help cursor over the window lane, the default over NEXT, a well, the canvas.
+  it('shows a pointer exactly where a click opens a page', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    const marked = [...svg.querySelectorAll('[class*="cursor-"]')].map((el) => [
+      el.getAttribute('data-number'),
+      el.getAttribute('class'),
+    ]);
+    expect(marked).toEqual(scene.cards.map((c) => [String(c.block.number), 'cursor-pointer']));
+    expect(svg.querySelector('[data-next]')).not.toHaveAttribute('class');
+    expect(svg.style.cursor).toBe('');
+    fireEvent.pointerMove(svg, poolAt(poolTxHash('q1')));
+    expect(svg.style.cursor).toBe('pointer');
+    fireEvent.pointerMove(svg, laneAt());
+    expect(svg.style.cursor).toBe('help');
+    fireEvent.pointerMove(svg, ghostAt(poolTxHash('w2')));
+    expect(svg.style.cursor).toBe('pointer');
+    const next = svg.querySelector('[data-next] [data-box]') as Element;
+    fireEvent.pointerMove(next, unpicked(scene, G.nextX + 60, G.cardTop + 4));
+    expect(svg.style.cursor).toBe('');
+    fireEvent.pointerMove(tile(svg, T - 3), bareSpot(scene, T - 3));
+    expect(svg.style.cursor).toBe('pointer');
+    fireEvent.pointerLeave(svg);
+    expect(svg.style.cursor).toBe('');
+  });
+
+  it('lets Escape clear the pin and nothing else', async () => {
+    const svg = await renderRoutedPanel(snapshot);
+    tap(svg, squareAt(T, T2));
+    fireEvent.pointerMove(svg, squareAt(T, T2));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(usePipelineHoverStore.getState()).toMatchObject({ pinned: null, hoverTx: T2 });
+    expect(routerLocation()).toBe('/mainnet');
   });
 });

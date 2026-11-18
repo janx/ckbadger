@@ -166,7 +166,7 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
   const pinned = usePipelineHoverStore((s) => s.pinned);
   const setHover = usePipelineHoverStore((s) => s.setHover);
   const clearHover = usePipelineHoverStore((s) => s.clearHover);
-  const highlighted = hoverTx === tx.hash || pinned === tx.hash;
+  const highlighted = hoverTx === tx.hash || (pinned?.kind === 'tx' && pinned.hash === tx.hash);
   const count = 'inline-block min-w-[3ch] text-right tabular-nums';
   return (
     <RowArticle

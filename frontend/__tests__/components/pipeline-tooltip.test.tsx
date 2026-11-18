@@ -4,6 +4,7 @@ import { T0, tick } from '@/__tests__/utils/still-clock';
 import {
   FIXTURE_TIP,
   buildPipelineSnapshot,
+  committedTxHash,
   pipelineSnapshot,
   poolTxHash,
 } from '@/__tests__/msw/fixtures/pipeline-snapshot';
@@ -11,10 +12,15 @@ import type { PipelineBlock, PipelineSnapshot } from '@/lib/api';
 import {
   PipelineTooltip,
   pct,
+  blockTip,
   cellbaseTip,
+  chipTip,
+  nextTip,
+  predictedTip,
   txTip,
   uncleTip,
   windowTip,
+  withOpen,
   type TipContent,
 } from '@/components/pipeline/pipeline-tooltip';
 
@@ -216,5 +222,82 @@ describe('the uncle tooltip', () => {
     expect(tip.tone).toBe('var(--c-text-dim)');
     const tag = within(renderTip(tip)).getByText('not on the chain');
     expect(tag.style.color).toBe('var(--c-text-dim)');
+  });
+});
+
+// Lane K: a click in the pipeline opens the page of what it hits. A tip whose mark opens a page
+// ends with one sentence that says which, written from the panel's own decision of what the click
+// opens (withOpen); the builders say nothing about clicking, so no tip can name a page the click
+// does not open, and the tip of a mark that opens nothing (NEXT, a well, the window) says nothing.
+describe('the sentence that closes a tip whose mark opens a page', () => {
+  const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
+  const blockAt = (n: number) => snapshot.blocks.find((b) => b.number === n) as PipelineBlock;
+  const w0 = pool.proposed.find((t) => t.hash === poolTxHash('w0'));
+  if (!w0) throw new Error('fixture: w0 is not proposed');
+  const tipCases: [string, TipContent][] = [
+    ['a pending tx', txTip({ kind: 'pending', tx: pool.pending[0] }, snapshot)],
+    ['a proposed tx', txTip({ kind: 'proposed', tx: w0, tooEarly: false }, snapshot)],
+    [
+      'a committed tx',
+      txTip(
+        {
+          kind: 'committed',
+          tx: blockAt(T).txs.find(
+            (t) => t.hash === committedTxHash(T, 2)
+          ) as PipelineBlock['txs'][number],
+          block: blockAt(T),
+        },
+        snapshot
+      ),
+    ],
+    ['a cellbase', txTip({ kind: 'cellbase', block: blockAt(T) }, snapshot)],
+    ['a proposal dot', chipTip(blockAt(T - 1), blockAt(T - 1).proposals[0], snapshot)],
+    ['a block', blockTip(blockAt(T), snapshot)],
+    ['an uncle', uncleTip(blockAt(T - 1), 0)],
+    ['a predicted tx', predictedTip({ hash: w0.hash, size: w0.size }, w0, snapshot)],
+    [
+      'a predicted tx not listed',
+      predictedTip({ hash: `0x${'ab'.repeat(32)}`, size: 900 }, null, snapshot),
+    ],
+    ['NEXT', nextTip(snapshot)],
+    ['the window', windowTip(T + 1, snapshot)],
+  ];
+
+  it.each(tipCases)('builds the tip of %s without a word about clicking or pinning', (_, tip) => {
+    expect(tip.foot ?? '').not.toMatch(/\b(click|tap|pin)/i);
+  });
+
+  it('closes a tip with exactly one sentence naming the page, after the foot it had', () => {
+    const block = withOpen(blockTip(blockAt(T), snapshot), 'block');
+    expect(block.foot).toBe('Click to open the block.');
+    const proposed = withOpen(
+      txTip({ kind: 'proposed', tx: w0, tooEarly: false }, snapshot),
+      'transaction'
+    );
+    expect(proposed.foot).toBe(
+      `The tx waits in the pool; its proposal sits in block #${(T - 1).toLocaleString('en-US')}. Click to open the transaction.`
+    );
+    const pending = withOpen(
+      txTip({ kind: 'pending', tx: pool.pending[0] }, snapshot),
+      'transaction'
+    );
+    expect(pending.foot).toBe('Click to open the transaction.');
+    for (const [, tip] of tipCases) {
+      for (const page of ['transaction', 'block'] as const) {
+        const foot = withOpen(tip, page).foot as string;
+        expect(foot.match(/Click to open/g)).toHaveLength(1);
+        expect(foot.endsWith(`Click to open the ${page}.`)).toBe(true);
+      }
+    }
+  });
+
+  it('leaves the tip of a mark that opens nothing as it is', () => {
+    const tip = windowTip(T + 1, snapshot);
+    expect(withOpen(tip, null)).toBe(tip);
+  });
+
+  it('renders the closing sentence as the last words of the footnote', () => {
+    const el = renderTip(withOpen(uncleTip(blockAt(T - 1), 0), 'block'));
+    expect(el.lastElementChild?.textContent).toMatch(/them\. Click to open the block\.$/);
   });
 });

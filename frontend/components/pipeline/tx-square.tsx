@@ -11,7 +11,7 @@ interface TxSquareProps {
    * not age.
    */
   age: number | null;
-  /** Hovered or pinned: kept bright while the rest steps back. */
+  /** Hovered: kept bright while the rest steps back. */
   on?: boolean;
 }
 

@@ -37,6 +37,21 @@ export interface TipContent {
   foot: string | null;
 }
 
+/** The page a click on a mark of the pipeline opens: its transaction's or its block's. */
+export type OpenPage = 'transaction' | 'block';
+
+/**
+ * A tip closed by the one sentence that says which page a click on its mark opens, after the
+ * footnote it has; a tip whose mark opens nothing (`null`: NEXT, a well, the window) is left as it
+ * is. The panel passes the page its click opens, so the tip cannot name another; the builders below
+ * say nothing about clicking.
+ */
+export function withOpen(tip: TipContent, page: OpenPage | null): TipContent {
+  if (page === null) return tip;
+  const close = `Click to open the ${page}.`;
+  return { ...tip, foot: tip.foot === null ? close : `${tip.foot} ${close}` };
+}
+
 export type TxInfo =
   | { kind: 'pending'; tx: PipelinePoolTx }
   | { kind: 'proposed'; tx: PipelinePoolTx; tooEarly: boolean }
@@ -93,7 +108,7 @@ export function txTip(info: TxInfo, s: PipelineSnapshot): TipContent {
     ]);
   }
   rows.push(['fee rate', feeRate(t.feeRate)], ['fee', `${fmtInt(BigInt(t.fee))} sh`]);
-  let foot = 'Click to pin it and follow it from the pool to the block that commits it.';
+  let foot: string | null = null;
   if (info.kind === 'pending') {
     const { arrivedAt } = info.tx;
     rows.push(['waiting', (now) => `${((now - arrivedAt) / 1000).toFixed(1)} s`]);
@@ -101,7 +116,7 @@ export function txTip(info: TxInfo, s: PipelineSnapshot): TipContent {
     const p = info.tx.proposedIn as NonNullable<PipelinePoolTx['proposedIn']>;
     rows.push(['proposal in', `${num(p.block)}${p.uncleIndex !== null ? ' · via uncle' : ''}`]);
     rows.push(['can commit next?', commitNote(p.block, info.tooEarly, s)]);
-    foot = `The tx waits in the pool; its proposal sits in block ${num(p.block)}. ${foot}`;
+    foot = `The tx waits in the pool; its proposal sits in block ${num(p.block)}.`;
   } else {
     const p = info.tx.proposedIn;
     rows.push(['committed in', num(info.block.number)]);
@@ -244,11 +259,23 @@ export function uncleTip(b: PipelineBlock, index: number): TipContent {
   };
 }
 
+/**
+ * A block's first facts: its transactions, its proposals (its own, then those its uncles carry) and
+ * its uncles. The block's tooltip opens with them and a pinned block's readout says them.
+ */
+export function blockFacts(b: PipelineBlock): [string, string][] {
+  const own = b.proposals.filter((p) => p.uncleIndex === null).length;
+  const viaUncle = b.proposals.length - own;
+  return [
+    ['transactions', `cellbase + ${fmtInt(b.txCount - 1)}`],
+    ['proposals', `${own}${viaUncle ? ` + ${viaUncle} via uncle` : ''}`],
+    ['uncles', b.uncles.length ? b.uncles.map((u) => num(u.number)).join(', ') : 'none'],
+  ];
+}
+
 export function blockTip(b: PipelineBlock, s: PipelineSnapshot): TipContent {
   const count = { waiting: 0, early: 0, committed: 0, expired: 0 };
   for (const p of b.proposals) count[p.state]++;
-  const own = b.proposals.filter((p) => p.uncleIndex === null).length;
-  const viaUncle = b.proposals.length - own;
   const { from, to } = windowRange(b.number, s.consensus);
   return {
     key: `block:${b.hash}`,
@@ -256,9 +283,7 @@ export function blockTip(b: PipelineBlock, s: PipelineSnapshot): TipContent {
     title: `Block ${num(b.number)}`,
     tag: 'mined',
     rows: [
-      ['transactions', `cellbase + ${fmtInt(b.txCount - 1)}`],
-      ['proposals', `${own}${viaUncle ? ` + ${viaUncle} via uncle` : ''}`],
-      ['uncles', b.uncles.length ? b.uncles.map((u) => num(u.number)).join(', ') : 'none'],
+      ...blockFacts(b),
       ['· waiting', String(count.waiting + count.early)],
       ['· committed later', String(count.committed)],
       ['· expired', String(count.expired)],

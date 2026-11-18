@@ -41,7 +41,7 @@ import { formatBlockNumber } from '@/lib/format-block';
  * PlatePhone.dc.html). The same pieces as the row, from the same library, at the same 17 px pitch:
  * a pool a square well, NEXT the one dashed outline, a block a solid plate with its stone, its
  * dots and its tx line cut into it. Every row carries the same data attributes as its card in a
- * row, so the motion layer, the hover and the pin treat both orientations alike; only the
+ * row, so the motion layer, the hover and the click treat both orientations alike; only the
  * arrangement differs. Every number is the scene's or the library's.
  */
 
@@ -204,7 +204,7 @@ export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
   const chipCount = columnChipCountAt(shape);
   const count = columnCountAt(shape);
   return (
-    <g data-next transform={`translate(${next.x},${next.y})`} className="cursor-pointer">
+    <g data-next transform={`translate(${next.x},${next.y})`}>
       <g data-dim={dim}>
         <rect
           data-box

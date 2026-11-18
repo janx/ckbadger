@@ -16,6 +16,21 @@ describe('usePipelineHoverStore', () => {
     });
   });
 
+  // Lane K: a touch tap pins what it would open, a tx or a block; a second tap opens it.
+  it('holds the hover and the pin, and nothing else', () => {
+    expect(Object.keys(usePipelineHoverStore.getState()).sort()).toEqual([
+      'clear',
+      'clearHover',
+      'clearPin',
+      'hoverBlock',
+      'hoverTx',
+      'pin',
+      'pinned',
+      'setHover',
+      'windowBlock',
+    ]);
+  });
+
   it('sets hover block, tx and window anchor together', () => {
     usePipelineHoverStore.getState().setHover({ block: 120, tx: '0xabc', window: 120 });
     expect(usePipelineHoverStore.getState()).toMatchObject({
@@ -31,24 +46,37 @@ describe('usePipelineHoverStore', () => {
     });
   });
 
-  it('toggles a pin and clears it', () => {
-    const { togglePin, clearPin } = usePipelineHoverStore.getState();
-    togglePin('0x1');
-    expect(usePipelineHoverStore.getState().pinned).toBe('0x1');
-    togglePin('0x2');
-    expect(usePipelineHoverStore.getState().pinned).toBe('0x2');
-    togglePin('0x2');
-    expect(usePipelineHoverStore.getState().pinned).toBeNull();
-    togglePin('0x3');
+  it('pins a tx or a block, moves the pin, and clears it', () => {
+    const { pin, clearPin } = usePipelineHoverStore.getState();
+    pin({ kind: 'tx', hash: '0x1' });
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: '0x1' });
+    pin({ kind: 'block', number: 7 });
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'block', number: 7 });
     clearPin();
     expect(usePipelineHoverStore.getState().pinned).toBeNull();
+    // clearing nothing notifies no one
+    const before = usePipelineHoverStore.getState();
+    clearPin();
+    expect(usePipelineHoverStore.getState()).toBe(before);
   });
 
   it('keeps the pin while the hover changes', () => {
-    usePipelineHoverStore.getState().togglePin('0xpin');
+    usePipelineHoverStore.getState().pin({ kind: 'tx', hash: '0xpin' });
     usePipelineHoverStore.getState().setHover({ block: 1, tx: '0xother', window: null });
     usePipelineHoverStore.getState().clearHover();
-    expect(usePipelineHoverStore.getState().pinned).toBe('0xpin');
+    expect(usePipelineHoverStore.getState().pinned).toEqual({ kind: 'tx', hash: '0xpin' });
+  });
+
+  it('clears the hover and the pin in one call', () => {
+    usePipelineHoverStore.getState().setHover({ block: 7, tx: '0x7', window: 7 });
+    usePipelineHoverStore.getState().pin({ kind: 'block', number: 7 });
+    usePipelineHoverStore.getState().clear();
+    expect(usePipelineHoverStore.getState()).toMatchObject({
+      hoverBlock: null,
+      hoverTx: null,
+      pinned: null,
+      windowBlock: null,
+    });
   });
 
   it('re-renders a subscriber only when its slice changes', () => {
