@@ -682,7 +682,9 @@ describe('the gels measure the creator’s text as an upper bound (review F-B, l
   });
 
   it('starts the wide gel’s bytes column after a CJK name’s bound', () => {
-    stubChartWidth(896);
+    // at 1232 px (at the 896 px plate the wider name column leaves too little for the widest
+    // value, and the gel takes its narrow form)
+    stubChartWidth(1232);
     // "颜色和图案", 5 CJK characters: 81.25 px at 13 px (it was counted 39)
     const { container } = render(
       <SequencingGel
@@ -734,11 +736,12 @@ describe('the gels measure the creator’s text as an upper bound (review F-B, l
 
   it('takes two-line gene rows under a narrow map when a CJK reading does not fit', () => {
     stubChartWidth(608);
-    // the reading "<raw> → <value>": 14 Latin glyphs (109.2 px) and 20 CJK characters (325),
-    // 434.2 px, more than the third column's 608 − 88 − 91 − 20 = 409 (it was counted 265.2)
+    // the reading "<raw> → <value>": Color's one byte and the arrow, 5 Latin glyphs (39 px), and
+    // 26 CJK characters (422.5), 461.5 px, more than the third column's 608 − 88 − 91 − 20 = 409
+    // (it was counted 241.8)
     render(
       <SequencingGel
-        layout={creators({ value: '猫'.repeat(20) })}
+        layout={creators({ value: '猫'.repeat(26) })}
         subject="Nervape 3x"
         active={null}
         onActive={() => {}}

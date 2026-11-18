@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ELLIPSIS,
   SHORT_FORMS,
+  clipForeignLabel,
   clipLabel,
   shortenAddress,
   shortenHash,
@@ -140,5 +141,46 @@ describe('a text label cut to a width takes the same ellipsis', () => {
   it('throws on a budget under two characters', () => {
     expect(() => clipLabel('Nervape', 1)).toThrow(/budget/);
     expect(() => clipLabel('Nervape', 2.5)).toThrow(/budget/);
+  });
+});
+
+// Review F-B (logic finding 5): a text that is not ours in a figure is cut to a room in px by the
+// upper bound of lib/type-metrics.ts, a grapheme of the served Latin subset 0.6 em and any other
+// 1.25 em (at 13 px: 7.8 and 16.25; at 12 px: 7.2 and 15), at whole graphemes.
+describe('a text that is not ours, cut to a room at whole graphemes', () => {
+  it('cuts a Latin label as clipLabel does at the same number of glyphs', () => {
+    for (const [text, chars] of [
+      ['Nervape 3x', 8],
+      ['Nervape', 8],
+      ['NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNN', 25],
+      ['prev.type', 11],
+    ] as const)
+      expect(clipForeignLabel(text, 13, chars * 7.8), text).toBe(clipLabel(text, chars));
+  });
+
+  it('keeps a CJK text whole where its bound fits, and cuts it to whole characters', () => {
+    expect(clipForeignLabel('颜色', 13, 32.5)).toBe('颜色');
+    // 25 Latin glyphs' room, 195 px: 11 CJK characters (178.75) and the ellipsis (7.8)
+    expect(clipForeignLabel('猫'.repeat(20), 13, 195)).toBe(`${'猫'.repeat(11)}…`);
+  });
+
+  it('never splits an emoji, whatever it is composed of', () => {
+    const family = '👨‍👩‍👧';
+    // 23 Latin glyphs (179.4 px), the family (16.25) and the ellipsis (7.8) need 203.45
+    expect(clipForeignLabel(`${'N'.repeat(23)}${family}tail`, 13, 195)).toBe(`${'N'.repeat(23)}…`);
+    expect(clipForeignLabel(`${'N'.repeat(23)}${family}tail`, 13, 203.45)).toBe(
+      `${'N'.repeat(23)}${family}…`
+    );
+    // a skin-tone modifier stays with its hand; eight ants in 88 px at 12 px: five and the ellipsis
+    expect(clipForeignLabel('👍🏽👍🏽👍🏽', 12, 40)).toBe('👍🏽👍🏽…');
+    expect(clipForeignLabel('🐜'.repeat(8), 12, 88)).toBe(`${'🐜'.repeat(5)}…`);
+  });
+
+  it('refuses a room that cannot hold the first grapheme and the ellipsis', () => {
+    // a CJK character and the ellipsis at 12 px: 22.2 px
+    expect(() => clipForeignLabel('猫猫', 12, 22)).toThrow(
+      /22 px at 12 px cannot hold "猫" and the ellipsis/
+    );
+    expect(clipForeignLabel('猫猫猫', 12, 22.2)).toBe('猫…');
   });
 });

@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import tailwindConfig from '@/tailwind.config';
 import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
-import { woff2Tables } from '@/__tests__/utils/woff2';
+import { cmapCodePoints, woff2Tables } from '@/__tests__/utils/woff2';
 import {
   LABEL_LINE_PX,
   MONO_ADVANCE_EM,
@@ -14,6 +14,8 @@ import {
   columnPx,
   descentPx,
   fontPx,
+  foreignGraphemes,
+  foreignTextPx,
   lineHeightPx,
   textPx,
   tightLinePx,
@@ -55,6 +57,72 @@ describe('the face (JetBrains Mono, public/fonts)', () => {
 
   it('gives a line’s descent at a size: 0.3 em', () => {
     expect([10, 12, 14].map(descentPx)).toEqual([3, 3.6, 4.2]);
+  });
+});
+
+// Review F-B (logic finding 5): text that is not ours is measured by an upper bound, a grapheme
+// of the served faces' shared (Latin) subset at 0.6 em and any other at 1.25 em; the bound is
+// checked here against the five files and against what each kind of string is.
+describe('text that is not ours: an upper bound by grapheme', () => {
+  const faces = readdirSync(FONTS).filter((name) => /^jetbrains-mono-.*\.woff2$/.test(name));
+
+  it('counts at 0.6 em exactly the code points all five served faces map', () => {
+    const maps = faces.map((face) => cmapCodePoints(woff2Tables(join(FONTS, face))));
+    const shared = [...maps[0]].filter((cp) => maps.every((m) => m.has(cp))).sort((a, b) => a - b);
+    // the semibold, light and italic subsets: 229 glyphs, all in the regular and medium faces
+    expect(shared).toHaveLength(229);
+    expect(Math.max(...shared)).toBeLessThan(0x10000);
+    // every other code point of the basic plane (a lone surrogate is not a character) at 1.25 em
+    const counted: number[] = [];
+    const neither: string[] = [];
+    for (let cp = 0; cp < 0x10000; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue;
+      const px = foreignTextPx(String.fromCodePoint(cp), 10);
+      if (px === 6) counted.push(cp);
+      else if (px !== 12.5) neither.push(`${cp.toString(16)}: ${px}`);
+    }
+    expect(counted).toEqual(shared);
+    expect(neither).toEqual([]);
+  });
+
+  it('measures a Latin text exactly as textPx does', () => {
+    for (const [text, px] of [
+      ['Nervape', 13],
+      ['bytes 51–52 · nervapeColor', 12.5],
+      ['Hetzner 50.00%', 13],
+      ['café', 12],
+    ] as const)
+      expect(foreignTextPx(text, px), text).toBe(textPx(Array.from(text).length, px));
+    expect(foreignTextPx('', 12)).toBe(0);
+  });
+
+  it('counts a CJK character, an emoji however composed and a symbol the subsets lack at 1.25 em', () => {
+    // two CJK characters at 13 px: 2 × 16.25
+    expect(foreignTextPx('颜色', 13)).toBe(32.5);
+    // a thumb with a skin-tone modifier, a family joined by ZWJ, a flag: one grapheme each, 15 px
+    // at 12 px
+    for (const emoji of ['👍🏽', '👨‍👩‍👧', '🇨🇳', '🐱'])
+      expect(foreignGraphemes(emoji), emoji).toEqual([{ grapheme: emoji, units: 1250 }]);
+    expect(foreignTextPx('👨‍👩‍👧', 12)).toBe(15);
+    // → is in the regular and medium faces only: a semibold label would fall back
+    expect(foreignTextPx('→', 12)).toBe(15);
+    // a full-width letter
+    expect(foreignTextPx('Ａ', 12)).toBe(15);
+  });
+
+  it('measures a mixed string grapheme by grapheme', () => {
+    // "Nervape " (8), 猫, " " (1), 🐱: 9 Latin glyphs and 2 others at 12 px: 64.8 + 30
+    expect(foreignTextPx('Nervape 猫 🐱', 12)).toBe(94.8);
+    expect(foreignGraphemes('a猫🐱').map((g) => g.units)).toEqual([600, 1250, 1250]);
+  });
+
+  it('counts a letter and its combining accent as one grapheme of the subset', () => {
+    // e and U+0301, both in the subset: one grapheme, 0.6 em; the precomposed é is too
+    expect(foreignGraphemes('é')).toEqual([{ grapheme: 'é', units: 600 }]);
+    expect(foreignTextPx('é', 12)).toBe(7.2);
+    expect(foreignTextPx('é', 12)).toBe(7.2);
+    // an accent the subset does not hold (U+0302) takes its letter to the fallback bound
+    expect(foreignTextPx('ê', 12)).toBe(15);
   });
 });
 

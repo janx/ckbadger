@@ -14,15 +14,13 @@ import {
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { minerName } from '@/components/forks/miner-link';
-import { clipLabel, shortenHash, type ShortSize } from '@/lib/shorten';
+import { clipForeignLabel, shortenHash, type ShortSize } from '@/lib/shorten';
 import { SVG_TEXT, centreShift } from '@/lib/chart-type';
-import { advancePx, descentPx, textPx } from '@/lib/type-metrics';
+import { descentPx, textPx } from '@/lib/type-metrics';
 
 const MARK = ['', '①', '②', '③'] as const;
 /** A later mark on a block that already carries one is drawn this far beside it. */
 const MARK_STEP = { wide: 22, compact: 18 } as const;
-/** One character of a miner's name, set at the tick size. */
-const MINER_CHAR = advancePx(SVG_TEXT.tick);
 /** A tip mark hangs this far over (or under) the tile corner it marks. */
 const MARK_OVERHANG = 2;
 
@@ -75,17 +73,18 @@ function Tree({ model, layout }: { model: ForkTreeModel; layout: ForkTreeLayout 
   // a miner's room (U-09): inside a wide tile, its width less the insets; under a compact one, its
   // column (the tile and the 16 px of the gap after it)
   const minerRoom = compact ? TW + C.labelRun : TW - 2 * W.inset;
-  const minerChars = Math.floor(minerRoom / MINER_CHAR);
   /**
-   * A miner on the tree (review F-B, logic finding 4): a pool by its name, a word, cut to the room
-   * with the one ellipsis; an unnamed one by its address in the id form the room holds, never cut
-   * again: the row form, the narrative's and the tables' (R9), where it stands whole (13
-   * characters, 93.6 px at 12 px: inside a wide tile's 94 px between its insets, and under a
-   * compact tile of at least 78 px), else the tight form (11 characters, 79.2 px: under a 72 px
-   * tile, whose column is 88 px; lib/fork-tree.ts holds that the narrowest column takes it).
+   * A miner on the tree (review F-B, logic finding 4): a pool by its name, a word in any script
+   * (the operator's pools.toml), measured as text that is not ours and cut to the room at whole
+   * graphemes with the one ellipsis (finding 5); an unnamed one by its address in the id form the
+   * room holds, never cut again: the row form, the narrative's and the tables' (R9), where it
+   * stands whole (13 characters, 93.6 px at 12 px: inside a wide tile's 94 px between its insets,
+   * and under a compact tile of at least 78 px), else the tight form (11 characters, 79.2 px:
+   * under a 72 px tile, whose column is 88 px; lib/fork-tree.ts holds that the narrowest column
+   * takes it).
    */
   const minerLabel = (pool: string | null, address: string): string => {
-    if (pool !== null) return clipLabel(pool, minerChars);
+    if (pool !== null) return clipForeignLabel(pool, SVG_TEXT.tick, minerRoom);
     const fits = (size: ShortSize) =>
       textPx(minerName(address, null, size).length, SVG_TEXT.tick) <= minerRoom;
     const size: ShortSize = fits('row') ? 'row' : 'tight';
