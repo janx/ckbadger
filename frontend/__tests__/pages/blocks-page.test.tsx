@@ -392,7 +392,7 @@ describe('BlocksPage · Blocks v3 board', () => {
     const [first] = Array.from(table.querySelectorAll('tbody tr'));
     const [blockCell, , contentsCell] = Array.from(first.querySelectorAll('td'));
     const number = within(blockCell).getByRole('link', { name: '#20,828,894' });
-    expect(number).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(number).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const hash = within(blockCell).getByTitle(page.data[0].hash);
     expect(hash).toHaveClass('text-meta', 'text-text-dim');
     expect(hash).not.toHaveClass('text-body');
@@ -816,7 +816,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(within(first as HTMLElement).getByRole('link', { name: '#20,828,894' })).toHaveClass(
         'text-body',
         'text-text-bright',
-        'leading-[18px]'
+        'leading-row'
       );
       expect(first).toHaveTextContent('0.05060000');
       expect(first).toHaveTextContent('3,917 B6,831,940');

@@ -352,7 +352,7 @@ function TokenName({ asset: a }: { asset: Asset }) {
       <ClassMark kind="tokens" size={16} />
       <AppLink
         href={assetHref(a)}
-        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+        className="text-body text-text-bright leading-row min-w-0 truncate"
       >
         {a.name ?? a.symbol ?? (
           <Hash hash={a.id} size="row" copyable={false} className="text-small" />
@@ -481,7 +481,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
       </span>
       <AppLink
         href={assetHref(a)}
-        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+        className="text-body text-text-bright leading-row min-w-0 truncate"
       >
         {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>
@@ -579,7 +579,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
       <ClassMark kind="identities" size={16} />
       <AppLink
         href={assetHref(a)}
-        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+        className="text-body text-text-bright leading-row min-w-0 truncate"
       >
         {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
       </AppLink>

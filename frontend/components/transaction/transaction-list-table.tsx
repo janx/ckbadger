@@ -282,7 +282,7 @@ export function TransactionListTable({
               hash={tx.hash}
               size="row"
               copyable={false}
-              className="text-body text-text-bright leading-[18px]"
+              className="text-body text-text-bright leading-row"
             />
           </Link>
         </span>

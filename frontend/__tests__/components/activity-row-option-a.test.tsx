@@ -146,7 +146,7 @@ describe('option A: the headline line', () => {
     );
     // The hash is in no visible text of the row.
     expect(article).not.toHaveTextContent(/0x8a39e8e3/);
-    expect(head(container)).toHaveClass('leading-[18px]');
+    expect(head(container)).toHaveClass('leading-row');
   });
 
   it("carries a script call's type names inline, dim, the args in each name's hover", () => {
@@ -288,7 +288,7 @@ describe('option A: every participant, one line each (D1)', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
     for (const line of lines(container)) {
       expect(line).toHaveClass('flex', 'flex-wrap', 'items-center', 'text-small');
-      expect(line).toHaveClass('leading-[18px]');
+      expect(line).toHaveClass('leading-row');
       // 18 px indent for the address; a line that wraps (phone) hangs 12 px further in, so its
       // continuation never reads as the next participant.
       expect(line).toHaveClass('pl-[30px]');
@@ -389,7 +389,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     expect(rows[0]).toHaveTextContent(/^100\.00000000 CKB · deposited at #6,000,000$/);
     expect(rows[50]).toHaveTextContent(/^5,100\.00000000 CKB · deposited at #6,000,050$/);
     for (const [n, r] of rows.entries()) {
-      expect(r).toHaveClass('leading-[18px]', 'text-small');
+      expect(r).toHaveClass('leading-row', 'text-small');
       const block = within(r).getByRole('link', {
         name: `#${(6_000_000 + n).toLocaleString('en-US')}`,
       });

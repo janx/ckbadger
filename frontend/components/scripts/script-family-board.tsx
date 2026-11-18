@@ -412,7 +412,7 @@ function UpgradeLabels({
           <span
             key={day}
             data-upgrade-label={day}
-            className={`text-meta text-text-dim absolute top-[5px] whitespace-nowrap leading-[14px] ${right ? 'pr-1' : 'pl-1'}`}
+            className={`text-meta text-text-dim leading-label absolute top-[5px] whitespace-nowrap ${right ? 'pr-1' : 'pl-1'}`}
             style={right ? { right: `${100 - at}%` } : { left: `${at}%` }}
           >
             {text}

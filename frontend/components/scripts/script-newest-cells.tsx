@@ -263,7 +263,7 @@ export function ScriptNewestCells({
     <Link
       href={`/cell/${cell.txHash}-${cell.outputIndex}`}
       title={outpoint(cell)}
-      className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
+      className="text-body text-text-bright hover:text-jade leading-row hover:underline"
     >
       <ShortId value={cell.txHash} kind="hash" size={size} />
       <OutpointIndex index={cell.outputIndex} />

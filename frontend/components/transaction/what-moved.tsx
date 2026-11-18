@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
 
 /** What the page lights in the cells diagram when a flow's party or asset is hovered. */
 export type WhatMovedHover =
@@ -39,9 +40,9 @@ export type WhatMovedHover =
 
 /** The ribbon form needs this much width; narrower, each flow is a list (RESPONSIVE_LAYOUT rule 4). */
 export const RIBBON_FORM_MIN_W = 700;
-/** A party end: two 18 px lines; the pitch leaves 10 px between neighbours. */
-const NODE_H = 40;
-const PITCH = 50;
+/** A party end: two row lines (lib/type-metrics.ts, 18 px) and 4 px; the pitch leaves 10 px between neighbours. */
+export const NODE_H = 2 * ROW_LINE_PX + 4;
+const PITCH = NODE_H + 10;
 /** The ribbons stack on the name plate 3 px apart. */
 const STACK_GAP = 3;
 
@@ -178,7 +179,7 @@ function EndText({
     const address = end.party.address;
     const codeHash = address === null ? null : (lockCodeHashes.get(address) ?? null);
     return (
-      <div className={cn('min-w-0 leading-[18px]', alignClass)}>
+      <div className={cn('leading-row min-w-0', alignClass)}>
         {/* One line, never two: the address whole, the lock kind truncated if the column is
             narrow (its hover carries the code hash). */}
         <div
@@ -224,12 +225,12 @@ function EndText({
         type="button"
         onClick={onExpand}
         aria-expanded={false}
-        className={cn('hover:text-jade block min-w-0 leading-[18px]', alignClass)}
+        className={cn('hover:text-jade leading-row block min-w-0', alignClass)}
       >
         {body}
       </button>
     );
-  return <div className={cn('min-w-0 leading-[18px]', alignClass)}>{body}</div>;
+  return <div className={cn('leading-row min-w-0', alignClass)}>{body}</div>;
 }
 
 /** The asset's name plate: its mark and name (a link to its page), an object's composition and id. */

@@ -84,7 +84,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
     key: 'depositor',
     label: 'Depositor',
     minWidth: 260,
-    render: (d) => <Depositor row={d} size="row" className="text-body leading-[18px]" />,
+    render: (d) => <Depositor row={d} size="row" className="text-body leading-row" />,
   },
   {
     key: 'deposits',

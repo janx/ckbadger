@@ -319,7 +319,7 @@ function BlockIdentity({ block }: { block: Block }) {
 }
 
 /** The key cell of a block row (table-rows T5): 13 px, bright, on the row's 18 px line. */
-const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
+const KEY = 'text-body text-text-bright leading-row hover:text-jade';
 
 /**
  * Who mined the block, linked to its address (the full address its title): the pool `pools.toml`

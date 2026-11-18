@@ -1,9 +1,7 @@
 import { Seal } from '@/components/ui/seal';
 import { assertSealId, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
 import { cn } from '@/lib/utils';
-
-/** The one line of a list row's key, in px: the line a row seal stands on. */
-export const ROW_LINE_PX = 18;
+import { ROW_LINE_PX } from '@/lib/type-metrics';
 
 /** The space between a row stone and the row's key (its number or hash): the seal's `mr-2`. */
 const GAP_PX = 8;
@@ -18,7 +16,7 @@ export interface RowSealMeasure {
   readonly gap: number;
   /** What it adds to the minimum width of the list column it leads: width + gap. */
   readonly footprint: number;
-  /** How far it overhangs a one-line row above and below: (height − the 18 px line) / 2. */
+  /** How far it overhangs a one-line row above and below: (height − the row line) / 2. */
   readonly overhang: number;
 }
 

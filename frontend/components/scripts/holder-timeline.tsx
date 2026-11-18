@@ -10,7 +10,7 @@ import { shortenHash } from '@/lib/shorten';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS } from '@/lib/design-tokens';
 import { unitNode } from '@/components/ui/units';
-import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
+import { LABEL_LINE_PX, fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 /**
  * "Who can change its code" as a picture (table-rows plan L1-3, rule T8; board ScriptDetail): one
@@ -41,7 +41,8 @@ const LABEL_PAD = 6;
 const TICK_PX = fontPx('meta');
 const TICK_PAD = 4;
 const TICK_GAP = 8;
-const TICK_ROW_PX = 14;
+/** Rows of version ticks stack a tight label line apart (`leading-label`). */
+const TICK_ROW_PX = LABEL_LINE_PX;
 
 function day(ms: number): string {
   return formatUtc8Date(ms);
@@ -207,7 +208,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
             data-version-tick={tick.date}
             data-row={tick.row}
             className={cn(
-              'absolute whitespace-nowrap leading-[14px]',
+              'leading-label absolute whitespace-nowrap',
               tick.anchorRight ? 'border-r pr-1' : 'border-l pl-1'
             )}
             style={{

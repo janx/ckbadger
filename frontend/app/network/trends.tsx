@@ -220,9 +220,7 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
       header: <span>Day</span>,
       minWidth: 96,
       render: (row) => (
-        <span className="text-body text-text-bright whitespace-nowrap leading-[18px]">
-          {row.day}
-        </span>
+        <span className="text-body text-text-bright leading-row whitespace-nowrap">{row.day}</span>
       ),
     },
     {

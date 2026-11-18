@@ -280,7 +280,7 @@ function ScriptName({ script }: { script: KnownScript }) {
       <AppLink
         href={scriptHref(script)}
         title={!hasName(script) ? `${script.hashType} ref:${script.codeHash}` : undefined}
-        className="text-body text-text-bright hover:text-emphasis min-w-0 truncate leading-[18px] hover:underline"
+        className="text-body text-text-bright hover:text-emphasis leading-row min-w-0 truncate hover:underline"
       >
         {name}
       </AppLink>

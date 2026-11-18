@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { MAP_CHAR_PX } from '@/lib/cell-byte-layout';
 import { LABEL_ADVANCE as UPGRADE_LABEL_ADVANCE } from '@/components/scripts/script-family-board';
+import { cn } from '@/lib/utils';
+import { NODE_H } from '@/components/transaction/what-moved';
 import {
+  LABEL_LINE_PX,
   MONO_ADVANCE_EM,
+  ROW_LINE_PX,
   OBSERVED_ADVANCE_EM,
   advancePx,
   charPx,
@@ -108,6 +112,14 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
   ['components/dao/dao-history.tsx', 'y={13} (the end label)', 13, SVG_TEXT.reading],
   ['components/home/mini-chart.tsx', 't.y + 3 (a tick label)', 3, centreShift(SVG_TEXT.tick)],
   ['components/home/mini-chart.tsx', 'text.length * 6 (a clip label)', 6, advancePx(SVG_TEXT.tick)],
+  // the row line and the tight label line
+  ['components/ui/row-seal.tsx', 'ROW_LINE_PX = 18', 18, ROW_LINE_PX],
+  ['components/activity/activity-row.tsx', 'HEAD_LINE_PX = 18', 18, ROW_LINE_PX],
+  ['tailwind.config.ts', 'leading-[18px] (37 sites) → leading-row', 18, ROW_LINE_PX],
+  ['tailwind.config.ts', 'leading-[14px] (2 sites) → leading-label', 14, LABEL_LINE_PX],
+  ['components/scripts/holder-timeline.tsx', 'TICK_ROW_PX = 14', 14, LABEL_LINE_PX],
+  ['components/transaction/what-moved.tsx', 'NODE_H = 40 (two 18 px lines)', 40, NODE_H],
+  ['components/transaction/what-moved.tsx', 'PITCH = 50', 50, NODE_H + 10],
 ];
 
 describe('every literal lane F3 replaced computes the number it was', () => {
@@ -129,6 +141,24 @@ describe('the snapped advance the six fit tests shared', () => {
     expect(old(12)).toBe(7.199999999999999);
     expect(snappedAdvancePx(12)).toBe(7.2);
     expect(snappedAdvancePx(12) - old(12)).toBeLessThan(1e-14);
+  });
+});
+
+describe('cn() reads the named lines as the arbitrary ones they replaced', () => {
+  const lists = [
+    ['text-body', 'leading-[18px]'],
+    ['leading-[18px]', 'text-body'],
+    ['leading-[18px]', 'leading-none'],
+    ['leading-none', 'leading-[18px]'],
+    ['text-meta', 'leading-[14px]', 'whitespace-nowrap'],
+    ['leading-[14px]', 'text-small'],
+    ['[&_a]:leading-[18px]', '[&_a]:leading-4'],
+  ];
+  const named = (c: string) =>
+    c.replace('leading-[18px]', 'leading-row').replace('leading-[14px]', 'leading-label');
+
+  it.each(lists)('keeps and drops them alike: %s', (...list) => {
+    expect(cn(...list.map(named))).toBe(named(cn(...list)));
   });
 });
 

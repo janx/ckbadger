@@ -480,7 +480,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               header: <span className="text-meta">gene</span>,
               render: (g) => (
                 <span
-                  className="block truncate leading-[18px]"
+                  className="leading-row block truncate"
                   style={{ color: g.owns ? g.color : undefined }}
                 >
                   {g.name}
@@ -493,7 +493,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: 110,
               header: <span className="text-meta">bytes</span>,
               render: (g) => (
-                <span className="text-text-dim block truncate tabular-nums leading-[18px]">
+                <span className="text-text-dim leading-row block truncate tabular-nums">
                   {span(g.offset, g.length)}
                   {g.truncated ? ' · clipped' : ''}
                 </span>
@@ -505,7 +505,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: 100,
               header: <span className="text-meta">rule</span>,
               render: (g) => (
-                <span className="text-text-dim block truncate leading-[18px]">{g.rule}</span>
+                <span className="text-text-dim leading-row block truncate">{g.rule}</span>
               ),
             },
             {
@@ -516,7 +516,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               render: (g) => (
                 // a cut value carries the whole of it in its title (the lead's finding)
                 <span
-                  className="text-text block truncate leading-[18px]"
+                  className="text-text leading-row block truncate"
                   title={g.value ?? `0x${g.raw}`}
                 >
                   {g.value ?? `0x${g.raw}`}
@@ -675,7 +675,7 @@ function PatternReading({
       .join(' · ');
   const steps = pattern.steps;
   const foundHead = genetics?.complete ? `found across ${count(genetics.eligibleItems)}` : 'found';
-  const cell = 'block truncate leading-[18px]';
+  const cell = 'block truncate leading-row';
   // Responsive R1: a table while its columns fit the measured column, else one phone row a gene.
   const geneTable = (shown: readonly GeneRow[], label: string) => (
     <ListTable

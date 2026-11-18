@@ -669,12 +669,12 @@ export function ScriptFamilyPage({
         return lead ? (
           <Link
             href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
-            className="text-body text-text-bright leading-[18px] hover:underline"
+            className="text-body text-text-bright leading-row hover:underline"
           >
             {label}
           </Link>
         ) : (
-          <span className="text-body text-text-bright leading-[18px]">{label}</span>
+          <span className="text-body text-text-bright leading-row">{label}</span>
         );
       },
     },
@@ -1126,7 +1126,7 @@ export function ScriptFamilyPage({
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                          className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
+                          className="text-body text-text-bright hover:text-jade leading-row hover:underline"
                         >
                           <ShortId value={cell.txHash} kind="hash" size="row" />
                           <OutpointIndex index={cell.outputIndex} />
