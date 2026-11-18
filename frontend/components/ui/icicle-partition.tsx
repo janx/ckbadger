@@ -4,6 +4,7 @@ import { partitionSpans } from '@/lib/partition-geometry';
 import { color, inkOnFill, type FillInk, type PaletteKey } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { snappedAdvancePx } from '@/lib/type-metrics';
+import { SVG_TEXT } from '@/lib/chart-type';
 
 export interface IcicleNode {
   key: string;
@@ -161,7 +162,7 @@ export function IciclePartition({
         const boxInk = FILL_INK_CLASS[inkOnFill(theme, paint.key, paint.opacity).ink];
         const h = boxH(d);
         // hierarchy v3: words inside the box at body (a ≥ 40 px row) or meta, where they fit.
-        const px = h >= 40 ? 13 : 11;
+        const px = h >= 40 ? SVG_TEXT.reading : SVG_TEXT.label;
         const pad = h >= 40 ? 12 : 6;
         const fitted =
           !hideLabels && node.boxLabel ? fittedLabel(node.boxLabel, width, px, pad) : null;
@@ -211,12 +212,12 @@ export function IciclePartition({
                 data-label={node.key}
                 x={x + 8}
                 y={rowY[d] + 19}
-                fontSize="12"
+                fontSize={SVG_TEXT.head}
                 className={boxInk}
               >
                 {node.label} <tspan>{formatValue(node.value)}</tspan>
                 {node.note && (
-                  <tspan fontSize="11">
+                  <tspan fontSize={SVG_TEXT.label}>
                     {' · '}
                     {node.note}
                   </tspan>
@@ -230,7 +231,7 @@ export function IciclePartition({
                   x={tx}
                   y={rowY[d] + BOX + 15}
                   textAnchor={anchor}
-                  fontSize="11"
+                  fontSize={SVG_TEXT.label}
                   className="fill-text"
                 >
                   {node.label}
@@ -239,7 +240,7 @@ export function IciclePartition({
                   x={tx}
                   y={rowY[d] + BOX + 30}
                   textAnchor={anchor}
-                  fontSize="11.5"
+                  fontSize={SVG_TEXT.value}
                   className="fill-text-bright"
                 >
                   {formatValue(node.value)}
@@ -250,7 +251,7 @@ export function IciclePartition({
                     x={tx}
                     y={rowY[d] + BOX + 44}
                     textAnchor={anchor}
-                    fontSize="10.5"
+                    fontSize={SVG_TEXT.note}
                     className="fill-text-dim"
                   >
                     {node.note}
@@ -270,7 +271,12 @@ export function IciclePartition({
                   strokeDasharray="2 3"
                 />
                 {!hideLabels && (
-                  <text x={x + 8} y={rowY[d + 1] + 19} fontSize="10.5" className="fill-text-dim">
+                  <text
+                    x={x + 8}
+                    y={rowY[d + 1] + 19}
+                    fontSize={SVG_TEXT.note}
+                    className="fill-text-dim"
+                  >
                     {node.placeholder}
                   </text>
                 )}

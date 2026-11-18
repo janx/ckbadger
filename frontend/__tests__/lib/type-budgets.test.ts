@@ -7,6 +7,7 @@ import { ROW_SEAL } from '@/components/ui/row-seal';
 import { CHAR_10 as FORK_CHAR_10 } from '@/components/forks/fork-tree';
 import { CHAR_12 as GEL_CHAR_12, CHAR_115 as GEL_CHAR_115 } from '@/components/ui/sequencing-gel';
 import { ALLELE_GEL } from '@/lib/allele-gel-layout';
+import { CHAR_10 as TENURE_CHAR_10, CHAR_11 as TENURE_CHAR_11 } from '@/components/ui/tenure-bar';
 import {
   CHAR_PX as VM_CHAR_PX,
   NAME_CHAR_PX as VM_NAME_CHAR_PX,
@@ -191,6 +192,17 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
     98,
     ALLELE_GEL.headRotated,
   ],
+  // the identity's term bar and the DAO's icicle
+  ['components/ui/tenure-bar.tsx', 'fontSize="11" (4 sites)', 11, SVG_TEXT.label],
+  ['components/ui/tenure-bar.tsx', 'fontSize="10.5" (2 sites)', 10.5, SVG_TEXT.note],
+  ['components/ui/tenure-bar.tsx', 'CHAR_11 = 6.7 (label +0.1, allowance)', 6.7, TENURE_CHAR_11],
+  ['components/ui/tenure-bar.tsx', 'CHAR_10 = 6.4 (note +0.1, allowance)', 6.4, TENURE_CHAR_10],
+  ['components/ui/icicle-partition.tsx', 'px = h >= 40 ? 13 : …', 13, SVG_TEXT.reading],
+  ['components/ui/icicle-partition.tsx', 'px = … : 11', 11, SVG_TEXT.label],
+  ['components/ui/icicle-partition.tsx', 'fontSize="12"', 12, SVG_TEXT.head],
+  ['components/ui/icicle-partition.tsx', 'fontSize="11" (2 sites)', 11, SVG_TEXT.label],
+  ['components/ui/icicle-partition.tsx', 'fontSize="11.5"', 11.5, SVG_TEXT.value],
+  ['components/ui/icicle-partition.tsx', 'fontSize="10.5" (2 sites)', 10.5, SVG_TEXT.note],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
   // transaction-list-table: 1,230 and 564 px as before)
