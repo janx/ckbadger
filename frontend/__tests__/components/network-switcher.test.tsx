@@ -102,6 +102,31 @@ describe('NetworkSwitcher', () => {
     expect(pushMock).toHaveBeenCalledWith('/testnet/activities?type=dao#row-7');
   });
 
+  // Readability F3-f: the header puts the switcher in its nav row or in its menu by the row's form,
+  // no longer by the md breakpoint, so the switcher is told where it stands. In the nav: the trigger
+  // set off from the links by a line, its list dropping below it; in the menu: a full-width row
+  // whose list opens in place — the two looks it had from md and below md.
+  it('stands in the nav as a trigger with a dropping list, in the menu as a row that opens in place', () => {
+    const { unmount } = render(<NetworkSwitcher />);
+    let switcher = screen.getByTestId('network-switcher');
+    expect(switcher).toHaveAttribute('data-placement', 'nav');
+    expect(switcher).toHaveClass('w-auto', 'border-r', 'pr-2', 'mr-1');
+    let list = screen.getByRole('menu', { name: 'CKB network' }).parentElement!.parentElement!;
+    expect(list).toHaveClass('absolute', 'top-full', 'invisible', 'group-hover:visible');
+    expect(switcher.className).not.toMatch(/\bmd:/);
+    unmount();
+
+    render(<NetworkSwitcher placement="menu" />);
+    switcher = screen.getByTestId('network-switcher');
+    expect(switcher).toHaveAttribute('data-placement', 'menu');
+    expect(switcher).toHaveClass('w-full');
+    expect(switcher).not.toHaveClass('border-r');
+    expect(screen.getByRole('button', { name: 'Select network' })).toHaveClass('w-full');
+    list = screen.getByRole('menu', { name: 'CKB network' }).parentElement!.parentElement!;
+    expect(list).toHaveClass('grid', 'grid-rows-[0fr]', 'group-hover:grid-rows-[1fr]');
+    expect(list).not.toHaveClass('absolute');
+  });
+
   it('renders nothing when only one network is live', () => {
     window.__CKBADGER_RUNTIME_CONFIG__ = { networks: [{ name: 'mainnet' }] };
 

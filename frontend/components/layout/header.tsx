@@ -16,6 +16,11 @@ import {
   NAVBAR_LINK_DEFAULT_CLASS,
 } from '@/components/layout/navbar-dropdown-styles';
 import { VitalsStrip } from '@/components/stats-bar';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { useFromLg, useFromMd } from '@/hooks/useFromMd';
+import { headerRowForm, type HeaderNavEntry } from '@/lib/header-fit';
+import { resolveNetworks } from '@/lib/runtime-config';
 import { cn } from '@/lib/utils';
 
 interface NavLink {
@@ -42,7 +47,8 @@ function isDropdown(item: NavItem): item is NavDropdown {
   return 'children' in item;
 }
 
-const navItems: NavItem[] = [
+/** The nav's entries, in order (the shell's budget, `__tests__/utils/shell-budget.ts`, reads them). */
+export const navItems: NavItem[] = [
   { href: '/dao', label: 'DAO' },
   // Review 2026-11-03, item 4 (Nav.dc.html): Activities opens as Inventory does — what happened,
   // the transactions that carry it, the blocks that order them, and the blocks that lost.
@@ -71,6 +77,12 @@ const navItems: NavItem[] = [
   { href: '/charts', label: 'Charts' },
 ];
 
+/** The nav's entries as the row's budget weighs them (lib/header-fit.ts). */
+const NAV_ENTRIES: HeaderNavEntry[] = navItems.map((item) => ({
+  label: item.label,
+  menu: isDropdown(item),
+}));
+
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -95,6 +107,25 @@ export function Header() {
     return null;
   })();
 
+  // The row's form (ruling on F3-f, option B; lib/header-fit.ts): from md the nav stands in the row
+  // while the search field keeps its floor beside it, and goes into the menu where it would not,
+  // the row then taking its form below md. Decided from the row's measured width and the budget of
+  // its parts, the switcher among them where two networks or more are configured; before the row
+  // is measured, the form of the breakpoint (the layout effect measures it before the first paint).
+  const fromMd = useFromMd();
+  const fromLg = useFromLg();
+  const [rowRef, rowWidth] = useElementWidth<HTMLDivElement>();
+  const network = useActiveNetwork();
+  const form = headerRowForm(
+    rowWidth,
+    {
+      nav: NAV_ENTRIES,
+      switcher: resolveNetworks().length > 1 ? network : null,
+      word: activeLabel,
+    },
+    { fromMd, fromLg }
+  );
+
   // From md up the header row and the vitals strip stick together (this wrapper is the sticky
   // block). Below md the wrapper is display: contents, so only the header row sticks — to the page —
   // and the strip scrolls away with the content.
@@ -106,103 +137,126 @@ export function Header() {
         ref={headerRef}
         className="border-base-border-subtle hairline-tube-header bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto"
       >
-        <div className="container relative mx-auto flex min-h-[52px] items-center gap-2 md:gap-8 lg:min-h-[60px]">
-          <Wordmark />
-
-          <nav
-            aria-label="Main"
-            className="relative z-10 hidden shrink-0 items-center gap-x-4 md:flex lg:gap-x-6"
+        {/* The container gives the page's gutter; the row inside it has none, so its width is the
+            room its parts share. */}
+        <div className="container mx-auto">
+          <div
+            ref={rowRef}
+            data-header-form={form}
+            data-measured={rowWidth !== null}
+            className={cn(
+              'relative flex min-h-[52px] items-center lg:min-h-[60px]',
+              form === 'nav' ? 'gap-8' : 'gap-2'
+            )}
           >
-            <NetworkSwitcher />
-            {/* TX-02 (Main.dc.html): five entries; the current one bright and aria-current.
+            <Wordmark />
+
+            <nav
+              aria-label="Main"
+              className={cn(
+                'relative z-10 shrink-0 items-center gap-x-4 lg:gap-x-6',
+                form === 'nav' ? 'flex' : 'hidden'
+              )}
+            >
+              <NetworkSwitcher />
+              {/* TX-02 (Main.dc.html): five entries; the current one bright and aria-current.
                 U-01 (R2): lowercase, by CSS (NAVBAR_LINK_CLASS), the labels as written.
                 U4: Inventory opens a menu of its index and its three views; review 2026-11-03
                 item 4: so does Activities (Activities · Transactions · Blocks · Forks). */}
-            {navItems.map((item) => {
-              if (isDropdown(item))
+              {navItems.map((item) => {
+                if (isDropdown(item))
+                  return (
+                    <NavMenu
+                      key={item.href}
+                      label={item.label}
+                      index={
+                        item.indexLabel === undefined
+                          ? undefined
+                          : { href: item.href, label: item.indexLabel }
+                      }
+                      items={item.children}
+                      current={isDropdownActive(item)}
+                      pathname={pathname}
+                    />
+                  );
+                const current = isLinkActive(item.href);
                 return (
-                  <NavMenu
+                  <Link
                     key={item.href}
-                    label={item.label}
-                    index={
-                      item.indexLabel === undefined
-                        ? undefined
-                        : { href: item.href, label: item.indexLabel }
-                    }
-                    items={item.children}
-                    current={isDropdownActive(item)}
-                    pathname={pathname}
-                  />
+                    href={item.href}
+                    aria-current={current ? 'page' : undefined}
+                    className={cn(
+                      NAVBAR_LINK_CLASS,
+                      current ? NAVBAR_LINK_ACTIVE_CLASS : NAVBAR_LINK_DEFAULT_CLASS
+                    )}
+                  >
+                    {item.label}
+                  </Link>
                 );
-              const current = isLinkActive(item.href);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  aria-current={current ? 'page' : undefined}
-                  className={cn(
-                    NAVBAR_LINK_CLASS,
-                    current ? NAVBAR_LINK_ACTIVE_CLASS : NAVBAR_LINK_DEFAULT_CLASS
-                  )}
-                >
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
+              })}
+            </nav>
 
-          <div className="flex items-center gap-2 md:hidden">
-            <button
-              type="button"
-              onClick={() => setIsMenuOpen(!isMenuOpen)}
-              className="text-text-dim hover:text-interactive hover:bg-base-elevated flex h-10 w-10 items-center justify-center transition-colors"
-              aria-label="Toggle menu"
-            >
-              {isMenuOpen ? (
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M6 18L18 6M6 6l12 12"
-                  />
-                </svg>
-              ) : (
-                <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 6h16M4 12h16M4 18h16"
-                  />
-                </svg>
-              )}
-            </button>
-            {/* PA-04, PB-26: the section word from 640 only. Below it the row cannot spare a slot
-                for it — the longest, "Transactions" (93.6 px and its 8 px gap), would leave the
-                field 78 px at 360 — so the field is what the row leaves, 180 px, on every page.
-                From 640 the field is its 288 px cap whatever the word (360 px are free). The word
+            <div className={cn('items-center gap-2', form === 'menu' ? 'flex' : 'hidden')}>
+              <button
+                type="button"
+                onClick={() => setIsMenuOpen(!isMenuOpen)}
+                className="text-text-dim hover:text-interactive hover:bg-base-elevated flex h-10 w-10 items-center justify-center transition-colors"
+                aria-label="Toggle menu"
+              >
+                {isMenuOpen ? (
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M6 18L18 6M6 6l12 12"
+                    />
+                  </svg>
+                ) : (
+                  <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M4 6h16M4 12h16M4 18h16"
+                    />
+                  </svg>
+                )}
+              </button>
+              {/* PA-04, PB-26: the section word from 640 only. Below it the row cannot spare a slot
+                for it — the longest, "Transactions" (100.8 px and its 8 px gap), would leave the
+                field 73.2 px at 360 — so the field is what the row leaves, 182 px, on every page.
+                From 640 the field is its 288 px cap whatever the word (353.2 px of room beside
+                the longest). The word
                 is lowercase as the nav is (U-01). */}
-            {activeLabel && (
-              <span className="text-jade text-body hidden truncate font-mono lowercase sm:inline">
-                {activeLabel}
-              </span>
-            )}
-          </div>
-
-          <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
-            <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
-              <SearchBar variant="compact" />
+              {activeLabel && (
+                <span className="text-jade text-body hidden truncate font-mono lowercase sm:inline">
+                  {activeLabel}
+                </span>
+              )}
             </div>
-            {/* The theme: dark (midnight, the default), light, or the system's; the phone menu
+
+            <div className="flex min-w-0 flex-1 items-center justify-end gap-3">
+              <div className="w-full max-w-[clamp(18rem,36vw,36rem)]">
+                <SearchBar variant="compact" />
+              </div>
+              {/* The theme: dark (midnight, the default), light, or the system's; the phone menu
                 carries the same choice as a row (ThemeSegments). */}
-            <ThemeSwitcher className="hidden md:block" />
+              <ThemeSwitcher className={form === 'nav' ? 'block' : 'hidden'} />
+            </div>
           </div>
         </div>
 
-        {/* The phone menu: the nav's entries, in its lowercase (U-01). */}
+        {/* The menu (the phone's, drawn in the menu form: below md, and from md wherever the row
+            cannot hold the nav beside the field's floor): the nav's entries, in its lowercase
+            (U-01). */}
         {isMenuOpen && (
-          <div className="border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm md:hidden">
+          <div
+            className={cn(
+              'border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm',
+              form === 'menu' ? 'block' : 'hidden'
+            )}
+          >
             <nav className="container mx-auto py-4">
               <div className="flex flex-col gap-1">
                 <Link
@@ -216,7 +270,11 @@ export function Header() {
                 >
                   Home
                 </Link>
-                <NetworkSwitcher className="mb-1 w-full" onSwitch={() => setIsMenuOpen(false)} />
+                <NetworkSwitcher
+                  placement="menu"
+                  className="mb-1"
+                  onSwitch={() => setIsMenuOpen(false)}
+                />
                 {navItems.map((item) =>
                   isDropdown(item) ? (
                     <div key={item.label} className="flex flex-col">

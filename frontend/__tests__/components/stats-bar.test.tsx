@@ -328,8 +328,10 @@ describe('VitalsStrip', () => {
 
   it('keeps every vital whole: each is one element, and the epoch never stacks', async () => {
     // Below md each vital owns its grid track or line, so nothing is squeezed by a neighbour. The
-    // epoch is a plain row whose text never wraps, its bar a fixed run of block characters (five
-    // cells on a phone), so its number, index and time left stay on one line instead of stacking.
+    // epoch is two groups whose text never wraps, its bar a fixed run of block characters (five
+    // cells on a phone): its number and bar stay on one line, its index and time left on one line,
+    // beside them where the line holds both and under them where it does not (readability F3-f;
+    // re-pinned from one nowrap row, which ran past the line at 360 px at the 12 / 14 px scale).
     useRealtimeStore.setState({ socketHeld: true });
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
@@ -338,8 +340,10 @@ describe('VitalsStrip', () => {
     const items = Array.from(strip.children) as HTMLElement[];
     expect(items).toHaveLength(6);
     const epoch = screen.getByTestId('vitals-epoch');
-    expect(epoch).toHaveClass('flex', 'whitespace-nowrap');
-    expect(epoch).not.toHaveClass('flex-wrap');
+    expect(epoch).toHaveClass('flex', 'flex-wrap');
+    const groups = Array.from(epoch.children) as HTMLElement[];
+    expect(groups).toHaveLength(2);
+    for (const group of groups) expect(group).toHaveClass('flex', 'whitespace-nowrap');
     expect(screen.getByTestId('vitals-epoch-bar')).toHaveClass('shrink-0');
   });
 
@@ -396,14 +400,19 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     act(() => useRealtimeStore.getState().reset());
   });
 
-  /** The three mining figures, the epoch's position and its time left. */
+  /**
+   * The three mining figures, and the epoch's position with its time left (one group since
+   * readability F3-f, so the home page's line can carry it under the bar; the group is what is
+   * the home page's below md, as each of the two was).
+   */
   function homeOnly() {
+    const position = screen.getByText('246 / 1,590').parentElement as HTMLElement;
+    expect(position).toContainElement(screen.getByText('≈ 3h 8m left'));
     return [
       screen.getByText('Block time').parentElement as HTMLElement,
       screen.getByRole('link', { name: /Hash rate/ }),
       screen.getByRole('link', { name: /Difficulty/ }),
-      screen.getByText('246 / 1,590'),
-      screen.getByText('≈ 3h 8m left'),
+      position,
     ];
   }
 
@@ -445,6 +454,32 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     expect(live.lastElementChild).toHaveClass('max-sm:sr-only');
     // the same items in the same order as the row from md
     expect(Array.from(strip.children)).toEqual([block, epoch, ...homeOnly().slice(0, 3), live]);
+  });
+
+  // Readability F3-f (the scale at 12 / 13 / 14 px): the home page's epoch line below md holds the
+  // number, the five-cell bar, `index / length` and the time left, 6 px apart. At its widest real
+  // content (`99,999`, `1,799 / 1,800`, `≈ 23h 59m left`) that is 340.8 px, and already 333.6 px
+  // with today's `≈ 3h 59m left`: past the 328 px line at 360 and the 288 px one at 320, where the
+  // nowrap epoch ran past the page. It breaks between its two groups, the epoch with its bar and
+  // its position with the time left, never inside either (each holds at 320: 134.4 and 200.4 px).
+  it('lets the epoch break between its bar and its position below md, never inside either (F3-f)', async () => {
+    nav.pathname = '/';
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+    const epoch = screen.getByTestId('vitals-epoch');
+    expect(epoch).toHaveClass('flex', 'flex-wrap');
+    expect(epoch).not.toHaveClass('whitespace-nowrap');
+    const groups = Array.from(epoch.children) as HTMLElement[];
+    expect(groups).toHaveLength(2);
+    const [barGroup, positionGroup] = groups;
+    for (const group of groups) expect(group).toHaveClass('flex', 'whitespace-nowrap');
+    expect(barGroup).toHaveTextContent(/^Epoch15,168/);
+    expect(barGroup).toContainElement(screen.getByTestId('vitals-epoch-bar'));
+    expect(positionGroup).toHaveTextContent(/^246 \/ 1,590≈ 3h 8m left$/);
+    // the home page's: drawn below md here, as before
+    expect(positionGroup.className).not.toMatch(/max-md:hidden/);
   });
 
   it('holds the one line while the figures load', () => {
