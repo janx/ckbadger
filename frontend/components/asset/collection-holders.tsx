@@ -213,10 +213,12 @@ function ScopedCollectionHolders({
       width: 'auto',
       render: (holder) => (
         <span className="flex min-w-0">
+          {/* a column headed "Lock" is never empty: the default lock by its name (B4) */}
           <LockKind
             lockKind={holder.lockKind}
             lockCodeHash={holder.lockCodeHash}
             size="row"
+            place="column"
             className={rowTagClass('default', 'min-w-0 truncate')}
           />
         </span>

@@ -9,6 +9,12 @@ import type { ShortSize } from '@/lib/shorten';
 
 /** A lock's name in its default form: plain words in the quiet ink, at the size of its line. */
 const LOCK_WORDS = 'text-text-dim';
+/**
+ * The default lock in a column headed "Lock": the words a column's tag holds, at its step and on
+ * its 16 px line, in the quiet ink and without its box (no badge's weight for the common case),
+ * ending in the one ellipsis where the column is narrower than the name.
+ */
+const COLUMN_DEFAULT = cn(LOCK_WORDS, 'text-meta min-w-0 truncate leading-4');
 
 /**
  * Round 3 (contracts R-A · R-2): an owner's lock kind as the API names it — the scripts registry's
@@ -24,12 +30,19 @@ const LOCK_WORDS = 'text-text-dim';
  * word and its code hash, shortened at the size of the place it stands in (U-09), linking to the
  * script page of that code hash (never "Lock kind unavailable", an internal state). The unregistered
  * form is one unit (`whitespace-nowrap`); a registered name is words.
+ *
+ * Where it stands decides the default lock (the lead's ruling, lane B4): beside a party
+ * (`place="inline"`, the default) it is silent; in a table column headed "Lock"
+ * (`place="column"`) a cell is never empty, so the default lock is its name in the quiet ink at
+ * the column's step without the column's tag (`COLUMN_DEFAULT`), and every other lock is drawn as
+ * `className` says (the column's tag).
  */
 export function LockKind({
   lockKind,
   lockCodeHash,
   size,
   className,
+  place = 'inline',
 }: {
   lockKind: string | null;
   lockCodeHash: string | null;
@@ -37,18 +50,22 @@ export function LockKind({
   size: ShortSize;
   /** Table-rows L2-4: e.g. `rowTagClass()` to draw it as a row's chip; default plain dim words. */
   className?: string;
+  /** Beside a party (silent for the default lock) or in a column headed "Lock" (never empty). */
+  place?: 'inline' | 'column';
 }) {
   if (lockCodeHash === null) {
     if (lockKind !== null) throw new Error(`lock kind ${lockKind} without its lock code hash`);
     return null;
   }
-  if (isDefaultLock(lockCodeHash)) return null;
+  const defaultLock = isDefaultLock(lockCodeHash);
+  if (defaultLock && place === 'inline') return null;
+  const own = defaultLock ? COLUMN_DEFAULT : (className ?? LOCK_WORDS);
   return (
     <span
       // A registered name is words, never kept whole (A4 Chrome sweep); the unregistered
       // "lock <code hash>" is a label with its id, one unit. The lock's kind is a label beside
       // its party: quiet by rule (R3)
-      className={cn(!className && LOCK_WORDS, lockKind === null && 'whitespace-nowrap', className)}
+      className={cn(own, lockKind === null && 'whitespace-nowrap')}
       title={lockCodeHash}
       data-lock-kind
     >
