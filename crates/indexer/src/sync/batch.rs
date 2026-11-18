@@ -3246,7 +3246,10 @@ impl Indexer {
                 )?;
 
                 for built in &built_list {
-                    let tx_actions = &built.actions;
+                    // The transaction's one classification: its bucket row
+                    // and its activity kind both take this value.
+                    let classified = ckbadger_store::ClassifiedTxActions::classify(&built.actions);
+                    let tx_actions = classified.actions();
                     // addr_txs rows follow the participants — the ONE derivation,
                     // shared with bulk build and the tx-pool mirror. Cellbase is
                     // included: it has participants (its output locks) even though
@@ -3350,7 +3353,7 @@ impl Indexer {
                         continue;
                     }
 
-                    put_tx_actions(&mut activity_batch, tx_actions.block_number, tx_actions);
+                    put_tx_actions(&mut activity_batch, tx_actions.block_number, classified);
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
@@ -14700,7 +14703,9 @@ mod tests {
                 .tx_actions_map
                 .values()
                 .filter_map(|actions| {
-                    ckbadger_store::tx_actions_bucket_key(actions).map(|k| k.to_vec())
+                    ckbadger_store::ClassifiedTxActions::classify(actions)
+                        .bucket_key()
+                        .map(|k| k.to_vec())
                 })
                 .collect();
             expected.sort();

@@ -162,14 +162,80 @@ fn classify_parts(
     GlobalBucket::Ckb
 }
 
-/// The `CF_TX_ACTIONS_BY_BUCKET` key a transaction's `TxActions` row owns, or
-/// `None` for a cellbase. The one place both sync paths derive it from.
-pub fn tx_actions_bucket_key(
-    actions: &TxActions,
-) -> Option<[u8; crate::keys::TX_ACTIONS_BY_BUCKET_KEY_SIZE]> {
-    classify_global_bucket(actions).map(|bucket| {
-        crate::keys::encode_tx_actions_by_bucket_key(bucket, actions.block_number, actions.tx_index)
-    })
+/// A transaction's `TxActions` with its global bucket, classified once.
+///
+/// Both sync paths classify a transaction exactly once, here, and hand the
+/// result to everything that needs its bucket: the `CF_TX_ACTIONS_BY_BUCKET`
+/// row it owns ([`Self::bucket_key`]). The only way to build one is
+/// [`Self::classify`], so a bucket never travels apart from the transaction it
+/// was computed from. `A` is the `TxActions` itself (bulk build keeps the
+/// classified list for its later stages) or a borrow of it (live sync, which
+/// classifies each transaction as it writes it); [`Self::view`] borrows an
+/// owned one.
+#[derive(Debug, Clone, Copy)]
+pub struct ClassifiedTxActions<A = TxActions> {
+    actions: A,
+    bucket: Option<GlobalBucket>,
+}
+
+impl<A: std::borrow::Borrow<TxActions>> ClassifiedTxActions<A> {
+    /// Classify `actions` ([`classify_global_bucket`]).
+    pub fn classify(actions: A) -> Self {
+        let bucket = classify_global_bucket(actions.borrow());
+        Self { actions, bucket }
+    }
+
+    pub fn actions(&self) -> &TxActions {
+        self.actions.borrow()
+    }
+
+    /// The transaction's global bucket; `None` for a cellbase.
+    pub fn bucket(&self) -> Option<GlobalBucket> {
+        self.bucket
+    }
+
+    /// The `CF_TX_ACTIONS_BY_BUCKET` key the transaction's `TxActions` row
+    /// owns, or `None` for a cellbase.
+    pub fn bucket_key(&self) -> Option<[u8; crate::keys::TX_ACTIONS_BY_BUCKET_KEY_SIZE]> {
+        let actions = self.actions();
+        self.bucket.map(|bucket| {
+            crate::keys::encode_tx_actions_by_bucket_key(
+                bucket,
+                actions.block_number,
+                actions.tx_index,
+            )
+        })
+    }
+
+    /// This classification, borrowing the transaction.
+    pub fn view(&self) -> ClassifiedTxActions<&TxActions> {
+        ClassifiedTxActions {
+            actions: self.actions.borrow(),
+            bucket: self.bucket,
+        }
+    }
+
+    pub fn into_actions(self) -> A {
+        self.actions
+    }
+}
+
+impl<A: std::borrow::Borrow<TxActions>> std::ops::Deref for ClassifiedTxActions<A> {
+    type Target = TxActions;
+
+    /// The transaction itself: a classified transaction reads as one.
+    fn deref(&self) -> &TxActions {
+        self.actions.borrow()
+    }
+}
+
+impl<'a> From<&'a TxActions> for ClassifiedTxActions<&'a TxActions> {
+    /// Classify a borrowed transaction: what a caller that holds a bare
+    /// `TxActions` (a test fixture, a one-off write) passes where a
+    /// classified one is taken.
+    fn from(actions: &'a TxActions) -> Self {
+        Self::classify(actions)
+    }
 }
 
 #[cfg(test)]
@@ -390,13 +456,19 @@ mod tests {
     #[test]
     fn bucket_key_is_derived_from_the_tx_actions_position() {
         let fixture = actions(&[TAG_TOKEN], &[]);
-        let key = tx_actions_bucket_key(&fixture).expect("non-cellbase tx has a key");
+        let classified = ClassifiedTxActions::classify(&fixture);
+        assert_eq!(classified.bucket(), Some(GlobalBucket::Token));
+        let key = classified.bucket_key().expect("non-cellbase tx has a key");
         assert_eq!(
             crate::keys::decode_tx_actions_by_bucket_key(&key).unwrap(),
             (GlobalBucket::Token, 100, 1)
         );
         let mut cellbase = fixture;
         cellbase.is_cellbase = true;
-        assert_eq!(tx_actions_bucket_key(&cellbase), None);
+        let owned = ClassifiedTxActions::classify(cellbase);
+        assert_eq!(owned.bucket(), None);
+        assert_eq!(owned.bucket_key(), None);
+        assert_eq!(owned.view().bucket_key(), None);
+        assert!(owned.into_actions().is_cellbase);
     }
 }
