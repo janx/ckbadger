@@ -6,7 +6,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import {
   ScriptCustodyEvidence,
   immutableHow,

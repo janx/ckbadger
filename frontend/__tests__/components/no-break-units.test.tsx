@@ -7,7 +7,7 @@ import { Address } from '@/components/ui/address';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { formatCount } from '@/lib/format-count';
 
 /**

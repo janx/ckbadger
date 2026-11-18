@@ -6,7 +6,7 @@ import { withFieldMeanings } from '@/lib/protocol-field-meanings';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { itemFeedHeadline, type ItemFeedSubject } from '@/lib/feed-headlines';

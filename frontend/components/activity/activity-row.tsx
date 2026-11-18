@@ -10,7 +10,6 @@ import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   ActivityReadError,
-  ExactCkb,
   ItemDeltaFact,
   activityClassMark,
   formatScriptRef,
@@ -20,6 +19,7 @@ import {
   protocolActionNoteFacts,
   type ProtocolNoteFact,
 } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';

@@ -1,6 +1,6 @@
 'use client';
 import { useState, type ReactNode } from 'react';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { percentOf } from '@/lib/format-unit';

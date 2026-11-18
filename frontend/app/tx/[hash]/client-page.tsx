@@ -15,7 +15,6 @@ import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   ActivityReadError,
-  ExactCkb,
   activityClassMark,
   activityHeadline,
   formatStandard,
@@ -23,6 +22,7 @@ import {
   protocolActionNoteParts,
   readable,
 } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';

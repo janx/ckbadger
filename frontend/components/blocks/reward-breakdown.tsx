@@ -3,7 +3,7 @@ import Link from '@/components/ui/link';
 import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
 import { Address } from '@/components/ui/address';
 import { Hash } from '@/components/ui/hash';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import type { Block, BlockProposalFees } from '@/lib/api';
 import { REWARD_COLORS } from '@/lib/design-tokens';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';

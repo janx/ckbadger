@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AMOUNT_INK } from '@/components/activity-event-row';
+import { AMOUNT_INK } from '@/components/ui/ckb-amount';
 import { STEP_W } from '@/lib/pipeline/encoding';
 import {
   alpha,

@@ -3,7 +3,7 @@ import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } fro
 import { AppLink } from '@/components/ui/app-link';
 import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
 import { describeIdentityRecords } from '@/lib/identity-records';

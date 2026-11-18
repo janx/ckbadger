@@ -30,7 +30,7 @@ import {
 } from '@/components/asset/object-hero';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { CompositionBadge } from '@/components/ui/composition-mark';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { BlockLink } from '@/components/ui/block-link';

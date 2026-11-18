@@ -9,7 +9,7 @@ import { sentenceText } from '@/components/ui/block-link';
 import { BlocksLimitsFootnote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { ListTable } from '@/components/ui/list-table';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { scriptLabel } from '@/components/address/address-history';

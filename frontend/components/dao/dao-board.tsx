@@ -21,7 +21,7 @@ import { formatCapacity, formatDurationMs } from '@/lib/utils';
 import type { ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
+import { AMOUNT_INK, amountSign } from '@/components/ui/ckb-amount';
 import {
   IciclePartition,
   icicleNodePaint,

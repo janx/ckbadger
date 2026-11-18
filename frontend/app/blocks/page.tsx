@@ -13,7 +13,7 @@ import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import type { SealId } from '@/lib/seal/stones';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import {
   BlockContents,
   BlocksLimitsFootnote,

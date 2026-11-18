@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { FIBER_COLORS } from '@/lib/design-tokens';
 import { unitNode } from '@/components/ui/units';
 

@@ -9,13 +9,13 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
-  ExactCkb,
   activityClassMark,
   activityHeadline,
   protocolActionNoteParts,
   formatScriptRef,
   ActivityReadError,
 } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';

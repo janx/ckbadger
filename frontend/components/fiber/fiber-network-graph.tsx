@@ -8,7 +8,7 @@ import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-pa
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import type { FiberNetwork, FiberParty } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';

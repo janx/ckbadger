@@ -25,7 +25,7 @@ import {
   scriptClassLabel,
 } from '@/components/scripts/script-code-evidence';
 import { HeroFigure } from '@/components/scripts/script-hero';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';

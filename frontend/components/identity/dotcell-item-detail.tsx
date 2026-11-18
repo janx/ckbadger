@@ -7,7 +7,7 @@ import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
 import { AppLink } from '@/components/ui/app-link';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';

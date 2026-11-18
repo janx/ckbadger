@@ -4,7 +4,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { CellBar, type CellAnatomy } from '@/components/ui/cell-bar';
 import { OwnerSeal } from '@/components/ui/owner-seal';
 import { RowSeal } from '@/components/ui/row-seal';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import type { CellSeal } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';

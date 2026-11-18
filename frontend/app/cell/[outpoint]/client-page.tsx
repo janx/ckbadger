@@ -11,7 +11,7 @@ import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { kindOf } from '@/components/transaction/transaction-cell-tiles';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';

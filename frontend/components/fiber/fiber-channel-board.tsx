@@ -3,7 +3,7 @@
 import { useId, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';

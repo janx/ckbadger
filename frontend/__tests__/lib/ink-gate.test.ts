@@ -81,7 +81,6 @@ const arrow = (anchor: string): Allowed => ({ reason: ARROW, anchor });
 const GHOST_ALLOWLIST: Allowlist = {
   'app/dao/depositors/page.tsx': [padding('{parts.ghost}')],
   'app/fiber/channels/[id]/client-page.tsx': [separator('>/</span>')],
-  'components/activity-event-row.tsx': [padding('data-ghost')],
   'components/address/address-holdings.tsx': [padding('data-ghost')],
   'components/asset/asset-feed.tsx': [separator('> · </span>')],
   'components/asset/detail-shell.tsx': [separator('>/</span>')],
@@ -100,6 +99,7 @@ const GHOST_ALLOWLIST: Allowlist = {
   'components/scripts/script-family-page.tsx': [separator('>/</span>')],
   'components/scripts/script-hero.tsx': [padding('{parts.ghost}')],
   'components/transaction/script-group-matrix.tsx': [arrow('aria-hidden="true"')],
+  'components/ui/ckb-amount.tsx': [padding('data-ghost')],
   'components/ui/script-byte-map.tsx': [arrow('aria-hidden="true"')],
 };
 

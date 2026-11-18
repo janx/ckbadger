@@ -9,7 +9,7 @@ import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import {
   ScriptCustodyEvidence,
   DEPRECATED_TITLE,

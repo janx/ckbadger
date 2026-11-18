@@ -1,4 +1,4 @@
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { formatAccumulatedRate, type DaoHeader } from '@/lib/dao-header';
 
 /**

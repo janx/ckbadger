@@ -11,7 +11,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { AppLink } from '@/components/ui/app-link';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { ShortId } from '@/components/ui/short-id';
 
 /**

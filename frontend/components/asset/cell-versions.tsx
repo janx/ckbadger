@@ -5,7 +5,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { CellBar } from '@/components/ui/cell-bar';
 import { Hash } from '@/components/ui/hash';
 import { DetailSection } from '@/components/ui/detail-layout';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { cn } from '@/lib/utils';

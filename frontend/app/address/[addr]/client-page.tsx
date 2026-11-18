@@ -24,7 +24,7 @@ import {
   AddressLiveCells,
 } from '@/components/address/address-history';
 import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';

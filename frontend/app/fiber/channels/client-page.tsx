@@ -23,7 +23,7 @@ import { formatCount, countNoun } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';

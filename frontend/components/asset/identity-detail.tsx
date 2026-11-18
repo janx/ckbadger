@@ -14,7 +14,7 @@ import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import { TenureBar } from '@/components/ui/tenure-bar';
 import { useClockTime } from '@/components/ui/utc8-date';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import {
   IdentityName,
   IdentityPositioning,

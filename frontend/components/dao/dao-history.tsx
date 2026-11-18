@@ -5,7 +5,7 @@ import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
-import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
+import { AMOUNT_INK, amountSign } from '@/components/ui/ckb-amount';
 import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';

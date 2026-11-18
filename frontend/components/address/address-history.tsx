@@ -2,7 +2,8 @@
 
 import type { ReactNode } from 'react';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
-import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
+import { activityHeadline } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';

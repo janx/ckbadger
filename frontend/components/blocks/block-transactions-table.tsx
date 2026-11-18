@@ -3,7 +3,7 @@ import { Hash } from '@/components/ui/hash';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';

@@ -9,7 +9,7 @@ import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { LockKind } from '@/components/ui/lock-kind';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';

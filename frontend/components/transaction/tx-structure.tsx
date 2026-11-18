@@ -2,7 +2,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import Link from '@/components/ui/link';
 import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT } from '@/components/ui/page-seal';
 import { Seal } from '@/components/ui/seal';

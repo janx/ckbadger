@@ -1,5 +1,6 @@
 'use client';
-import { ExactCkb, ItemDeltaFact, readable } from '@/components/activity-event-row';
+import { ItemDeltaFact, readable } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { DetailSection } from '@/components/ui/detail-layout';

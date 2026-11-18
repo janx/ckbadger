@@ -16,7 +16,7 @@ import { CellVersions } from '@/components/asset/cell-versions';
 import { MnftPermissions } from '@/components/asset/identity-document';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';

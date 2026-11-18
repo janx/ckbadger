@@ -5,7 +5,7 @@ import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
 import { NotFoundPage } from '@/components/not-found-page';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';

@@ -10,7 +10,7 @@ import type {
   StackedAreaChartResponse,
 } from '@/lib/api';
 import { formatCkbAmount } from '@/lib/utils';
-import { ExactCkb } from '@/components/activity-event-row';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
