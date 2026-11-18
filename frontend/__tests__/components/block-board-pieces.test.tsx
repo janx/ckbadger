@@ -91,6 +91,22 @@ describe('RewardBreakdown', () => {
     ]);
     expect(screen.getByText('Proposal fees, 40%')).toBeInTheDocument();
   });
+  // Readability R4 (lane B7, the fix round): a share's note is a sentence; at 1280 the secondary
+  // one ran 108 characters a line across the dl's last column. Each stands on the measure.
+  it('sets each share’s note on the measure', () => {
+    wrap(<RewardBreakdown block={rewardBlock} />);
+    const notes = [
+      screen.getByText('the whole primary issuance of this block'),
+      screen.getByText(
+        /^the miners' share of this block's .* secondary issuance; the rest goes to/
+      ),
+      screen.getByText(/in fees of the/),
+    ];
+    for (const note of notes) {
+      expect(note.tagName).toBe('DD');
+      expect(note).toHaveClass('max-w-measure');
+    }
+  });
   it('says where an unfinalized reward will be paid', () => {
     wrap(<RewardBreakdown block={{ ...rewardBlock, miningReward: null, rewardBreakdown: null }} />);
     expect(screen.getByText(/paid by the cellbase of/)).toHaveTextContent(
