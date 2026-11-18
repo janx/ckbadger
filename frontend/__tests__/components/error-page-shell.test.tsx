@@ -21,6 +21,8 @@ import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ERROR_PAGE_LAYOUT, ErrorPageShell } from '@/components/error-page-shell';
 import { inkOf } from '@/__tests__/utils/ink-role';
+import { textRunPx } from '@/__tests__/utils/tailwind-box';
+import { WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
@@ -551,5 +553,154 @@ describe('the pressed seal stands clear of the text column (readability R6)', ()
     expect(svg).toHaveAttribute('width', String(sealPx));
     expect(svg).toHaveAttribute('height', String(sealPx));
     expect(svg.getAttribute('style')).toBe(`transform: rotate(${sealTilt}deg)`);
+  });
+});
+
+// The coordinator's rule for the caption under the 404 seal: a line never starts with a separator.
+// When the caption wraps, its " · " is never the first thing drawn on a line. The site has one
+// owner for a separator between parts, Dotted (components/ui/phone-row.tsx: a separator belongs to
+// the item after it, a line breaks before it, never after it, and it is not drawn where its item
+// starts a line), so every "·" of the caption is a Dotted separator. jsdom lays nothing out: the
+// caption's units are read from the rendered DOM (its words, and every box a line does not break
+// inside: a nowrap run, an inline list), measured at the caption's own step (tailwind-box), and set
+// greedily on lines as wide as the caption's box at each window (ERROR_PAGE_LAYOUT: the stone's
+// 256 px column from 1280, the room between the gutters below). The block number is counted at
+// its widest (`WIDEST_BLOCK_NUMBER`), whatever the tip is.
+describe('the caption under the 404 seal never opens a line with a separator', () => {
+  const { gutters, besideFrom, sealPx } = ERROR_PAGE_LAYOUT;
+  const gutterAt = (width: number) => [...gutters].reverse().find((g) => width >= g.from)!.px;
+  /** The caption's box at a window: the stone's column from xl, else the column's whole width. */
+  const captionPx = (viewport: number) =>
+    viewport >= besideFrom ? sealPx : viewport - 2 * gutterAt(viewport);
+  /** The windows checked: the coordinator's four, and every width the caption wraps at today. */
+  const VIEWPORTS = [320, 360, 390, 640, 1024, 1280, 1440] as const;
+
+  interface Unit {
+    /** The text drawn, the block number at its widest. */
+    text: string;
+    /** A line may break before it (a space precedes it). */
+    breakBefore: boolean;
+    /** An inline Dotted list: one box on a line, its separators its own (hidden at a line start). */
+    dotted: boolean;
+  }
+  /** The text an element draws, a block number written at its widest. */
+  const drawn = (node: Node): string =>
+    node instanceof HTMLAnchorElement && /\/blocks\/\d+$/.test(node.getAttribute('href') ?? '')
+      ? WIDEST_BLOCK_NUMBER
+      : node.nodeType === 3
+        ? (node.textContent ?? '')
+        : Array.from(node.childNodes).map(drawn).join('');
+  /** The caption's units in order: words, and the boxes a line never breaks inside. */
+  function units(root: Element): Unit[] {
+    const out: Unit[] = [];
+    let space = false;
+    const walk = (node: Node) => {
+      if (node.nodeType === 3) {
+        for (const piece of (node.textContent ?? '').split(/(\s+)/)) {
+          if (piece === '') continue;
+          if (/^\s+$/.test(piece)) space = true;
+          else {
+            out.push({ text: piece, breakBefore: space, dotted: false });
+            space = false;
+          }
+        }
+        return;
+      }
+      const el = node as HTMLElement;
+      const dotted = el.hasAttribute('data-dotted');
+      if (dotted || el.classList.contains('whitespace-nowrap') || drawn(el) !== el.textContent) {
+        const text = drawn(el).replace(/\s+/g, ' ');
+        if (/^\s/.test(text)) space = true;
+        out.push({ text: text.trim(), breakBefore: space, dotted });
+        space = /\s$/.test(text);
+        return;
+      }
+      el.childNodes.forEach(walk);
+    };
+    root.childNodes.forEach(walk);
+    return out;
+  }
+  /** The caption's lines at a window, greedily filled, each line's units. */
+  function lines(caption: HTMLElement, viewport: number): Unit[][] {
+    const width = captionPx(viewport);
+    const px = (text: string) => textRunPx(text, caption, viewport);
+    const out: Unit[][] = [[]];
+    let x = 0;
+    for (const unit of units(caption)) {
+      const w = px(unit.text);
+      if (w > width)
+        throw new Error(`${viewport}: "${unit.text}" (${w} px) is wider than its ${width} px line`);
+      const line = out[out.length - 1];
+      const need = line.length === 0 ? w : (unit.breakBefore ? px(' ') : 0) + w;
+      if (line.length > 0 && x + need > width && unit.breakBefore) {
+        out.push([unit]);
+        x = w;
+      } else {
+        line.push(unit);
+        x += need;
+      }
+    }
+    return out;
+  }
+  const text = (line: Unit[]) =>
+    line.map((u, i) => (i > 0 && u.breakBefore ? ' ' : '') + u.text).join('');
+
+  async function caption(): Promise<HTMLElement> {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/nowhere']}>
+        <ErrorPageShell status="Not found · 404" path="/nowhere" verse={VERSE}>
+          <span>facts</span>
+        </ErrorPageShell>
+      </MemoryRouter>
+    );
+    await screen.findByTestId('error-seal');
+    return document.querySelector('[data-seal-caption]') as HTMLElement;
+  }
+
+  it.each(VIEWPORTS)('at %i px no line of the caption opens with a separator', async (viewport) => {
+    const node = await caption();
+    const opened = lines(node, viewport)
+      .slice(1)
+      .filter((line) => !line[0].dotted && line[0].text.startsWith('·'))
+      .map((line) => text(line));
+    expect(opened, `${viewport} px: a line opens with a separator`).toEqual([]);
+  });
+
+  it('draws every separator of the caption as Dotted’s, in the item after it', async () => {
+    const node = await caption();
+    const dots = Array.from(node.querySelectorAll('*')).filter((el) =>
+      Array.from(el.childNodes).some((c) => c.nodeType === 3 && c.textContent!.includes('·'))
+    );
+    expect(dots.length).toBeGreaterThan(0);
+    for (const dot of dots) {
+      expect(dot).toHaveAttribute('data-dotted-separator');
+      expect(dot.closest('[data-dotted-item]')).not.toBeNull();
+    }
+  });
+
+  // Where the caption breaks, at the widest block number: the words (29 glyphs at 12 px, 208.8),
+  // then "#99,999,999 · 0xabc123de…34abcd" (31 glyphs, 223.2) as one box; one line from 439.2 px.
+  it('breaks where the arithmetic says: before the block number, or nowhere', async () => {
+    const node = await caption();
+    const words = 'the seal of the newest block,';
+    const figures = `${WIDEST_BLOCK_NUMBER} · 0xabc123de…34abcd`;
+    expect(textRunPx(words, node, 1280)).toBeCloseTo(208.8, 10);
+    expect(textRunPx(figures, node, 1280)).toBeCloseTo(223.2, 10);
+    const table = VIEWPORTS.map((viewport) => ({
+      viewport,
+      box: captionPx(viewport),
+      lines: lines(node, viewport).map(text),
+    }));
+    const two = [words, figures];
+    const one = [`${words} ${figures}`];
+    expect(table).toEqual([
+      { viewport: 320, box: 288, lines: two },
+      { viewport: 360, box: 328, lines: two },
+      { viewport: 390, box: 358, lines: two },
+      { viewport: 640, box: 576, lines: one },
+      { viewport: 1024, box: 832, lines: one },
+      { viewport: 1280, box: 256, lines: two },
+      { viewport: 1440, box: 256, lines: two },
+    ]);
   });
 });
