@@ -97,12 +97,19 @@ it('writes decode coverage with thousands separators (OB-C11)', () => {
 });
 
 // Round 3 (contracts R-A · R-2, OB-C3): the owner's lock kind and the mint date on Newest rows.
+// Readability B4 (re-pinned on purpose): the default lock is named on no row (R9), so the named
+// row is a JoyID owner and the default-lock row says no lock.
 it('names the owner lock kind and dates the mint in UTC+8 on each Newest row', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
     emptyPage([
       // 1700000000100 ms = 2023-11-14 22:13:20 UTC = 2023-11-15 06:13:20 UTC+8.
-      { ...base, chainTime: '1700000000100', lockKind: 'SECP256K1/blake160' },
+      {
+        ...base,
+        chainTime: '1700000000100',
+        lockCodeHash: '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323',
+        lockKind: 'JoyID',
+      },
       {
         ...base,
         sporeId: `0x${'03'.repeat(32)}`,
@@ -110,12 +117,15 @@ it('names the owner lock kind and dates the mint in UTC+8 on each Newest row', a
         lockCodeHash: `0x${'43'.repeat(32)}`,
         lockKind: null,
       },
+      { ...base, sporeId: `0x${'04'.repeat(32)}`, chainTime: '1700000000100' },
     ])
   );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   const table = await screen.findByRole('table', { name: 'Newest objects' });
-  const [, named, unnamed] = within(table).getAllByRole('row');
-  expect(named).toHaveTextContent('SECP256K1/blake160');
+  const [, named, unnamed, defaultLock] = within(table).getAllByRole('row');
+  expect(named).toHaveTextContent('JoyID');
+  expect(defaultLock).not.toHaveTextContent('SECP256K1/blake160');
+  expect(defaultLock.querySelector('[data-lock-kind]')).toBeNull();
   // An unnamed lock shows its code hash, never a guessed kind.
   // U-09 (re-pinned): the row size
   expect(unnamed).toHaveTextContent('lock 0x43434343…434343');

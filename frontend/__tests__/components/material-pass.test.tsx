@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryRouter, useRoutes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { Atmosphere } from '@/components/layout/atmosphere';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
@@ -435,7 +436,7 @@ describe('move 4 on a home figure', () => {
 describe('move 5 on the activity row', () => {
   const TX = '0xa46efcd8' + 'ef'.repeat(26) + 'dac2e0';
   const party = (tail: string, over: Partial<ParticipantInfo> = {}): ParticipantInfo => ({
-    address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
+    address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
     lockKind: 'Default Lock',
@@ -462,17 +463,30 @@ describe('move 5 on the activity row', () => {
     ...c.querySelectorAll<HTMLElement>('[data-role="participant"]'),
   ];
 
-  it('writes the lock kind as dim small caps, never a chip', () => {
+  // Readability B4 (re-pinned on purpose): plain dim words, not small caps (at 12 px their capitals
+  // were under 10 px), and only for a lock that is not the default lock (R9).
+  it('writes the lock kind as dim words, never a chip, and none for the default lock', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
-    for (const line of lines(container)) {
-      const kind = line.querySelector('[data-role="lock-kind"]') as HTMLElement;
-      expect(kind).toHaveTextContent('Default Lock');
-      // re-pinned (A4 Chrome sweep): a lock name is words, never made one unit
-      expect(kind).toHaveClass('small-caps', 'lowercase', 'text-text-dim');
-      expect(kind).not.toHaveClass('whitespace-nowrap');
-      expect(kind).not.toHaveClass('border', 'text-meta');
-    }
+    for (const line of lines(container))
+      expect(line.querySelector('[data-role="lock-kind"]')).toBeNull();
+    const joy = party('joyid1', {
+      lockKind: 'JoyID',
+      address: seededAddress('joyid1', JOYID_CODE_HASH),
+      ckbDelta: '-1',
+    });
+    const { container: named } = render(
+      <ActivityRow activity={{ ...transfer, participants: [joy] }} />
+    );
+    const kind = lines(named)[0].querySelector(
+      '[data-role="lock-kind"] [data-lock-kind]'
+    ) as HTMLElement;
+    expect(kind).toHaveTextContent(/^JoyID$/);
+    // a lock name is words, never made one unit (A4 Chrome sweep)
+    expect(kind).toHaveClass('text-text-dim');
+    for (const gone of ['small-caps', 'lowercase', 'whitespace-nowrap', 'border', 'text-meta'])
+      expect(kind).not.toHaveClass(gone);
     expect(container.querySelector('[data-row-tag]')).toBeNull();
+    expect(named.querySelector('[data-row-tag]')).toBeNull();
   });
 
   it('underlines the party a page is about in jade, and says "this address" only to a reader', () => {
@@ -496,10 +510,13 @@ describe('move 5 on the activity row', () => {
     expect(screen.getByTitle(sender.address!)).toHaveClass('this-address', 'text-text-dim');
   });
 
-  it('LockKind: dim small caps by default; a row chip’s classes replace them', () => {
+  // Readability B4 (re-pinned on purpose): LockKind's default form is plain dim words.
+  it('LockKind: dim words by default; a row chip’s classes replace them', () => {
     const code = `0x${'9b'.repeat(32)}`;
     const { rerender } = render(<LockKind size="row" lockKind="JoyID" lockCodeHash={code} />);
-    expect(screen.getByText('JoyID')).toHaveClass('small-caps', 'lowercase', 'text-text-dim');
+    expect(screen.getByText('JoyID')).toHaveClass('text-text-dim');
+    expect(screen.getByText('JoyID')).not.toHaveClass('small-caps');
+    expect(screen.getByText('JoyID')).not.toHaveClass('lowercase');
     rerender(
       <LockKind size="row" lockKind="JoyID" lockCodeHash={code} className={rowTagClass()} />
     );

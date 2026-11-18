@@ -48,6 +48,9 @@ function codeHashes(a: GlobalActivity) {
   ]);
 }
 
+/** A sample party's address at the tight size's tail: its last 6 characters (R9). */
+const tight = (i: number) => activity().participants[i].address!.slice(-6);
+
 function renderAt(width: number) {
   stubChartWidth(width);
   const a = activity();
@@ -91,10 +94,14 @@ describe('BalanceChanges form by measured width', () => {
       'amounts',
       'items',
     ]);
-    // First line: the address and its lock, the lock never split ("Default / Lock").
-    // U-09 (re-pinned): the list forms are phone rows, their ids at the tight size
-    expect(lines[0]).toHaveTextContent('ckb1…cjk9lzDefault Lock');
-    expect(lines[0].querySelector('[data-role="lock"]')).toHaveClass('whitespace-nowrap');
+    // First line: the address and its lock, the lock never split. U-09 (re-pinned): the list
+    // forms are phone rows, their ids at the tight size. B4 (re-pinned): the sample's real
+    // address, and no lock beside it, the default lock (R9); the second party's lock is whole.
+    expect(lines[0]).toHaveTextContent(new RegExp(`^ckb1…${tight(0)}$`));
+    expect(lines[0].querySelector('[data-role="lock"]')).toBeNull();
+    expect(cards[1].querySelector(':scope > [data-line="party"] [data-role="lock"]')).toHaveClass(
+      'whitespace-nowrap'
+    );
     // Second line: the CKB change and the occupied change. The list forms are phone rows: the
     // summary form (readability R5, re-pinned on purpose: was "−528.00064119 CKB"), exact in its
     // title.
@@ -120,8 +127,9 @@ describe('BalanceChanges form by measured width', () => {
     expect(card).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)_auto]');
     // R9 (re-pinned): the two-line card is drawn at 1024 too, beside the tiles and the summary:
     // the row size, `ckb1…` and the last 8 (it was the tight size)
+    // B4 (re-pinned): the sample's real address
     expect(card.querySelector('[data-role="party"]')).toHaveTextContent(
-      'ckb1…sqshp3hrNervape Shadow Lock'
+      `ckb1…${activity().participants[1].address!.slice(-8)}Nervape Shadow Lock`
     );
     // a phone row's summary form (R5, re-pinned on purpose: was "+320.00000000 CKB")
     expect(card.querySelector('[data-role="ckb"]')).toHaveTextContent('+320 CKB');
@@ -145,12 +153,12 @@ describe('BalanceChanges form by measured width', () => {
       // U-09 (re-pinned): tight in the phone forms (358, 608), row in the table (912); R9
       // (re-pinned): tight only in the three-line card (358), the two-line card (608) at the row
       // size
+      // B4 (re-pinned): the default lock is named on no row (R9)
       expect(locks.map((l) => l.textContent)).toEqual([
-        'Default Lock',
         'Nervape Shadow Lock',
         width === 358 ? 'lock 0x43b2…895d' : 'lock 0x43b2924e…00895d',
       ]);
-      expect(locks[2]).toHaveAttribute('title', UNNAMED_LOCK);
+      expect(locks[1]).toHaveAttribute('title', UNNAMED_LOCK);
     }
   );
 });

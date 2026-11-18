@@ -4,6 +4,7 @@
  * group identity, resolved cell deps, the proposal ruler, the capacity equation, header deps,
  * the cellbase and DAO-withdrawal variants and the pending wording.
  */
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
@@ -362,6 +363,13 @@ beforeEach(() => {
   });
 });
 
+/**
+ * A feed sample's party at the row size, by the seed its fixture spells its args from: `ckb1…` and
+ * the last 8 characters (R9; B4 re-pinned: the samples carry real addresses, a row reads the lock
+ * off them, and their last characters are their checksum).
+ */
+const row = (seed: string) => `ckb1…${seededAddress(seed).slice(-8)}`;
+
 describe('Transaction board, tier 1', () => {
   it('heads the page with the action, a plain summary and a copy button (TX-11)', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -378,7 +386,7 @@ describe('Transaction board, tier 1', () => {
       // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size;
       // R9 (re-pinned): an address is `ckb1…` and its last 8 characters
       // R9 (re-pinned): prose takes the row form, the object's id 10…6
-      'Nervape 3x 0x51c75a00…0096f2 moved from ckb1…sqcjk9lz to ckb1…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
+      `Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}. The sender paid a 0.00064119 CKB fee.`
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
@@ -550,7 +558,7 @@ describe('Transaction board, tier 1', () => {
     expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
     expect(rail).toHaveTextContent('0.00064119 CKB');
-    expect(rail).toHaveTextContent('paid by ckb1…sqcjk9lz'); // R9 (re-pinned): 4…8
+    expect(rail).toHaveTextContent(`paid by ${row('cjk9lz')}`); // R9 (re-pinned): 4…8
   });
 
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
@@ -1098,7 +1106,7 @@ describe('Transaction board, R2b-a fields', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
       // R9 (re-pinned): the payer is `ckb1…` and its last 8 characters
-      'It ran .bit Time Index State and .bit Time Info. ckb1…sqcjk9lz paid a 0.00064119 CKB fee.'
+      `It ran .bit Time Index State and .bit Time Info. ${row('cjk9lz')} paid a 0.00064119 CKB fee.`
     );
   });
 });
@@ -1114,8 +1122,8 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
     ]);
     const [object, ckb] = groups;
     // U-09 (re-pinned): the ribbon's parties at the row size; R9 (re-pinned): 4…8
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sqcjk9lz');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…sqshp3hr');
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent(row('cjk9lz'));
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent(row('shp3hr'));
     expect(object.querySelector('[data-flow-plate]')).toHaveTextContent('Nervape 3x');
     expect(object.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     // the CKB flow: cjk9lz gave 528.00064119; shp3hr and 204m4g received; the miner the fee

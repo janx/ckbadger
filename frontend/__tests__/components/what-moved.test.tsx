@@ -14,7 +14,10 @@ import { lockCodeHashesByAddress } from '@/components/transaction/balance-change
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
 
 const HASH = `0x${'54'.repeat(32)}`;
-const DEFAULT_LOCK = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+/** JoyID's code hash, the lock these parties' addresses spell (`ckb1qrgqep…`). */
+const JOYID = '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323';
+/** A lock the registry does not name (the party whose `lockKind` is null). */
+const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}00895d`;
 const NERVAPE = `0x4a2237a7${'00'.repeat(26)}2abf1d`;
 const RGBPP = `0x${'2b'.repeat(32)}`;
 
@@ -75,7 +78,9 @@ const codeHashes = (a: GlobalActivity) =>
   lockCodeHashesByAddress(
     a.participants.map((p) => ({
       address: p.address!,
-      lock: { codeHash: DEFAULT_LOCK, hashType: 'type', args: '0x' },
+      // B4 (re-pinned): each party's lock as its fixture names it; they were all the default lock,
+      // which a row now leaves unnamed (R9), even beside "JoyID"
+      lock: { codeHash: p.lockKind === null ? UNNAMED_LOCK : JOYID, hashType: 'type', args: '0x' },
     }))
   );
 
@@ -150,7 +155,7 @@ describe('WhatMoved, the ribbon form', () => {
     // U-15 (re-pinned): a lock the registry does not name is 'lock <code hash>'
     expect(ends(from)).toEqual([
       ['party', '14', 'ckb1…qqay02wnJoyID638.00008888 CKB'],
-      ['party', '10', 'ckb1…qqsp7v9mlock 0x9bd7e06f…a3cce8432.00000000 CKB'],
+      ['party', '10', 'ckb1…qqsp7v9mlock 0x43b2924e…00895d432.00000000 CKB'],
     ]);
     expect(ends(to)).toEqual([
       ['party', '22', 'ckb1…qqct4hxvJoyID1,070.00000000 CKB'],

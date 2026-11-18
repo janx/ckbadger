@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
@@ -26,7 +27,7 @@ vi.mock('@/lib/api', () => ({
 
 function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantInfo {
   return {
-    address: overrides.address ?? 'ckb1qtest',
+    address: overrides.address ?? seededAddress('test'),
     lockHash: overrides.lockHash ?? '0xaa',
     lockHashPrefix: overrides.lockHashPrefix ?? null,
     roles: overrides.roles ?? [],
@@ -160,7 +161,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xall-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qall1111111111111111111111111111111111111111111',
+                address: seededAddress('all11111111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -177,7 +178,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xall-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qall1111111111111111111111111111111111111111111',
+                address: seededAddress('all11111111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -194,7 +195,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xall-older',
             participants: [
               makeParticipant({
-                address: 'ckb1qall2222222222222222222222222222222222222222222',
+                address: seededAddress('all22222222222222222'),
                 ckbDelta: '200000000',
               }),
             ],
@@ -211,7 +212,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xtoken-only',
             participants: [
               makeParticipant({
-                address: 'ckb1qtoken111111111111111111111111111111111111111111',
+                address: seededAddress('token111111111111111'),
                 itemDeltas: [
                   {
                     kind: 'token',
@@ -237,7 +238,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xtoken-only',
             participants: [
               makeParticipant({
-                address: 'ckb1qtoken111111111111111111111111111111111111111111',
+                address: seededAddress('token111111111111111'),
                 itemDeltas: [
                   {
                     kind: 'token',
@@ -316,12 +317,12 @@ describe('ActivitiesStreamExplorer', () => {
         makeActivity({
           txHash: '0xlate',
           timestamp: String(Date.parse('2026-11-14T15:59:40Z')),
-          participants: [makeParticipant({ address: 'ckb1qlate', ckbDelta: '-1' })],
+          participants: [makeParticipant({ address: seededAddress('late'), ckbDelta: '-1' })],
         }),
         makeActivity({
           txHash: '0xeve',
           timestamp: String(Date.parse('2026-11-13T15:00:00Z')),
-          participants: [makeParticipant({ address: 'ckb1qeve', ckbDelta: '-1' })],
+          participants: [makeParticipant({ address: seededAddress('eve'), ckbDelta: '-1' })],
         }),
       ],
       limit: DEFAULT_PAGE_SIZE,
@@ -360,7 +361,7 @@ describe('ActivitiesStreamExplorer', () => {
           ],
           participants: [
             makeParticipant({
-              address: 'ckb1qzdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq3q7ue',
+              address: seededAddress('zdaaaaaaaaaaaaaaaaaa'),
               ckbDelta: '-30000',
             }),
           ],
@@ -412,7 +413,8 @@ describe('ActivitiesStreamExplorer', () => {
           participants: [
             {
               ...makeParticipant({
-                address: 'ckb1qzdaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaq3q7ue',
+                // B4: a JoyID address; a row names no lock beside a default-lock address (R9)
+                address: seededAddress('zdaaaaaaaaaaaaaaaaaa', JOYID_CODE_HASH),
                 ckbDelta: '-30000',
               }),
               lockKind: 'JoyID',
@@ -451,7 +453,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xfresh-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qfresh111111111111111111111111111111111111111111',
+                address: seededAddress('fresh111111111111111'),
                 ckbDelta: '300000000',
               }),
             ],
@@ -547,7 +549,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xolder-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                address: seededAddress('old11111111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -564,7 +566,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xnew-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qnew11111111111111111111111111111111111111111111',
+                address: seededAddress('new11111111111111111'),
                 ckbDelta: '400000000',
               }),
             ],
@@ -574,7 +576,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xolder-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                address: seededAddress('old11111111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -616,7 +618,7 @@ describe('ActivitiesStreamExplorer', () => {
         txHash: `0xhead-page-one-${index}`,
         participants: [
           makeParticipant({
-            address: `ckb1qhead${String(index).padStart(2, '0')}111111111111111111111111111111111111`,
+            address: seededAddress(`head${String(index).padStart(2, '0')}`),
             ckbDelta: `${(index + 2) * 100000000}`,
           }),
         ],
@@ -631,7 +633,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xanchor-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qanchor111111111111111111111111111111111111111111',
+                address: seededAddress('anchor11111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -654,7 +656,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: `0xhead-page-two-${DEFAULT_PAGE_SIZE}`,
             participants: [
               makeParticipant({
-                address: `ckb1qhead${String(DEFAULT_PAGE_SIZE).padStart(2, '0')}111111111111111111111111111111111111`,
+                address: seededAddress(`head${String(DEFAULT_PAGE_SIZE).padStart(2, '0')}`),
                 ckbDelta: '2200000000',
               }),
             ],
@@ -664,7 +666,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xanchor-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qanchor111111111111111111111111111111111111111111',
+                address: seededAddress('anchor11111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -717,7 +719,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xolder-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                address: seededAddress('old11111111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -734,7 +736,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xnew-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qnew11111111111111111111111111111111111111111111',
+                address: seededAddress('new11111111111111111'),
                 ckbDelta: '400000000',
               }),
             ],
@@ -744,7 +746,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xolder-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qold11111111111111111111111111111111111111111111',
+                address: seededAddress('old11111111111111111'),
                 ckbDelta: '100000000',
               }),
             ],
@@ -780,7 +782,7 @@ describe('ActivitiesStreamExplorer', () => {
             txHash: '0xstable-head',
             participants: [
               makeParticipant({
-                address: 'ckb1qstable111111111111111111111111111111111111111111',
+                address: seededAddress('stable11111111111111'),
                 ckbDelta: '100000000',
               }),
             ],

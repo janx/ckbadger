@@ -8,6 +8,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
+import { isDefaultLock } from '@/lib/lock-script';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /**
@@ -59,7 +60,11 @@ function balanceForm(width: number | null): BalanceForm {
  * The participant's lock: its registry name, else its code hash (the transaction's cells carry
  * the script). A party with no cell here (a protocol-named party) or no known script has none.
  */
-/** A party's lock, its code hash at the form's size (U-09) when the registry names none. */
+/**
+ * A party's lock, its code hash at the form's size (U-09) when the registry names none; nothing for
+ * the default lock (readability R9, lane B4: a shortened address no longer says its lock, so a lock
+ * is named beside it only when it is not the default lock, as `LockKind` does).
+ */
 function LockLabel({
   participant,
   lockCodeHashes,
@@ -73,6 +78,7 @@ function LockLabel({
 }) {
   const codeHash =
     participant.address === null ? undefined : lockCodeHashes.get(participant.address);
+  if (codeHash !== undefined && isDefaultLock(codeHash)) return null;
   const name = participant.lockKind ?? (codeHash ? `lock ${shortenHash(codeHash, size)}` : null);
   if (name === null) return null;
   return (

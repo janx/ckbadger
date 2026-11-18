@@ -4,6 +4,10 @@ import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
 
+/** A real JoyID address (RFC 0021 full format): a row names its lock, the default lock it leaves unnamed (B4). */
+const JOYID_ADDRESS =
+  'ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqxeeh0qtxeeu05my2z7pfn7d45k4t8rvvsfavygk';
+
 function party(over: Partial<ParticipantInfo> = {}): ParticipantInfo {
   return {
     lockHash: '0x' + '01'.repeat(32),
@@ -92,7 +96,10 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
   }
 
   it('keeps the address, then its lock tag, then the amount, each whole', () => {
-    const row = plainRow(party({ ckbDelta: '67073483600000000' }));
+    // B4 (re-pinned): a JoyID party, since a default-lock party's line names no lock (R9)
+    const row = plainRow(
+      party({ ckbDelta: '67073483600000000', lockKind: 'JoyID', address: JOYID_ADDRESS })
+    );
     expect(row).toHaveClass('flex', 'flex-wrap');
     expect([...row.children].map((e) => e.getAttribute('data-role'))).toEqual([
       'party',
@@ -100,10 +107,10 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
       'ckb',
       'occupied',
     ]);
-    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1…jg3x8k26'); // R9 (re-pinned)
+    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1…vsfavygk'); // R9
     // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping row, so it moves to
     // the next line whole; its words are not made one unit
-    expect(within(row).getByText('Default Lock')).not.toHaveClass('whitespace-nowrap');
+    expect(within(row).getByText('JoyID')).not.toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');
     expect(row.querySelector('[data-role="occupied"]')).not.toHaveClass('basis-full');
@@ -131,10 +138,15 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
   // Report C#8: the Activities page dropped each participant's lock kind at 390 (its column was
   // `hidden` below the grid breakpoint). On the T7 line the tag is the item right after the
   // party, with no breakpoint class, so no width can hide it.
-  // Material pass v2 (move 5): the lock kind is dim small caps after the address, not a chip.
-  it('shows the lock kind in small caps right after the address, at every width', () => {
+  // Material pass v2 (move 5): the lock kind is dim words after the address, not a chip.
+  // Readability B4 (re-pinned on purpose): plain words, no small caps; a JoyID party, since the
+  // default lock is named on no line (R9).
+  it('shows the lock kind in plain words right after the address, at every width', () => {
     const { container } = render(
-      <ActivityRow lockColumn activity={activity([party({ lockKind: 'JoyID' })])} />
+      <ActivityRow
+        lockColumn
+        activity={activity([party({ lockKind: 'JoyID', address: JOYID_ADDRESS })])}
+      />
     );
     const kinds = container.querySelectorAll('[data-role="lock-kind"]');
     expect(kinds).toHaveLength(1);
@@ -143,8 +155,11 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     expect(kind.previousElementSibling).toHaveAttribute('data-party');
     expect([...kind.classList].filter((c) => /hidden|^(sm|md|lg):/.test(c))).toEqual([]);
     // re-pinned (A4 Chrome sweep): no nowrap; an item of the wrapping line moves whole
-    expect(kind).toHaveClass('small-caps', 'text-text-dim');
+    const words = kind.querySelector('[data-lock-kind]') as HTMLElement;
+    expect(words).toHaveClass('text-text-dim');
+    expect(words).not.toHaveClass('small-caps');
     expect(kind).not.toHaveClass('whitespace-nowrap');
+    expect(words).not.toHaveClass('whitespace-nowrap');
     expect(kind).not.toHaveClass('border');
     // Not repeated in the party cell.
     expect(container.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
@@ -159,7 +174,11 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
       <ActivityRow
         lockColumn
         activity={activity([
-          party({ roles: ['owner_to', 'manager_to'], lockKind: 'InputTypeProxyLock' }),
+          party({
+            roles: ['owner_to', 'manager_to'],
+            lockKind: 'InputTypeProxyLock',
+            address: JOYID_ADDRESS,
+          }),
         ])}
       />
     );

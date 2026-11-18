@@ -81,6 +81,28 @@ describe('the participant line names a lock only when it is not the default lock
   });
 });
 
+describe('a party written by its lock hash (no address) keeps the name the API sends', () => {
+  it('names its lock in the same words, with no code hash to hover', () => {
+    const noAddress = { ...party(JOYID_ADDRESS, 'Long Args Lock', `0x${'04'.repeat(32)}`) };
+    const { container } = render(<ActivityRow activity={row([{ ...noAddress, address: null }])} />);
+    const kind = lines(container)[0].querySelector(
+      '[data-role="lock-kind"] [data-lock-kind]'
+    ) as HTMLElement;
+    expect(kind).toHaveTextContent(/^Long Args Lock$/);
+    expect(kind).toHaveClass('text-text-dim');
+    expect(kind).not.toHaveAttribute('title');
+  });
+
+  it('writes nothing when neither its address nor its lock is known', () => {
+    const { container } = render(
+      <ActivityRow
+        activity={row([{ ...party(JOYID_ADDRESS, null, `0x${'05'.repeat(32)}`), address: null }])}
+      />
+    );
+    expect(lines(container)[0].querySelector('[data-role="lock-kind"]')).toBeNull();
+  });
+});
+
 describe('LockKind: plain words, and nothing for the default lock (B4 item 1)', () => {
   it('draws a name in plain words by default: no small capitals, no case change', () => {
     render(<LockKind size="row" lockKind="JoyID" lockCodeHash={JOYID_CODE} />);

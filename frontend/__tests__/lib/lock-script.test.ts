@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { ckbAddress, seededAddress } from '@/__tests__/utils/ckb-address';
 import { addressScript, DEFAULT_LOCK_CODE_HASH, isDefaultLock } from '@/lib/lock-script';
 
 // RFC 0021's own example: the default lock (SECP256K1/blake160 by type) over these args.
@@ -68,6 +69,18 @@ describe('addressScript (RFC 0021, full format)', () => {
     expect(() => addressScript('ckb1qzda0b')).toThrow(/"b" is not bech32/);
     expect(() => addressScript('ckb1qq')).toThrow(/shorter than its checksum/);
     expect(() => addressScript('ckb1qzda0')).toThrow('address ckb1qzda0');
+  });
+});
+
+describe('the fixtures’ encoder (__tests__/utils/ckb-address.ts) against the decoder', () => {
+  it('writes the RFC example, and every address it writes reads back', () => {
+    expect(ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args: ARGS })).toBe(RFC_FULL);
+    expect(addressScript(seededAddress('sendr1'))).toEqual({
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      hashType: 'type',
+      args: `0x${'00'.repeat(14)}73656e647231`,
+    });
+    expect(addressScript(seededAddress('q3q7ue', JOYID)).codeHash).toBe(JOYID);
   });
 });
 

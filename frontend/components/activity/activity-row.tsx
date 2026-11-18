@@ -21,6 +21,7 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
+import { PartyLockKind, partyLock } from '@/components/ui/lock-kind';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -643,11 +644,6 @@ function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
 }
 
-/**
- * The lock kind as dim small caps after the address (material pass v2, move 5: boxes stay on
- * controls; the words are LockKind's default form, `.small-caps`), never a chip.
- */
-const LOCK_KIND = 'text-text-dim small-caps lowercase';
 /** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
 const LINE_BUTTON =
   'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap border bg-transparent px-[5px] leading-4';
@@ -756,9 +752,10 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 
 /**
  * One participant, one 18 px line (T7 · option A, Feed.dc.html column A): the address (and any
- * roles), the lock kind in small caps, a note the API attaches, the signed exact CKB, each item change
- * with its mark (signed, by sign; symbol dim), and the occupied change last at 11 px in the
- * dim ink (a figure: never the ghost, never the dim thinned; R4). The line wraps between those items, in that order, when it cannot hold
+ * roles), its lock's name in plain words when it is not the default lock (`partyLock`, R9), a note
+ * the API attaches, the signed CKB, each item change with its mark (signed, by sign; symbol dim),
+ * and the occupied change last at the meta step in the dim ink (a figure: never the ghost, never
+ * the dim thinned; R4). The line wraps between those items, in that order, when it cannot hold
  * them — never inside one.
  *
  * Consistency C3: the participant a page is about (`focus`) writes its address as text, not a link
@@ -790,6 +787,7 @@ function ParticipantLine({
   const otherItems = p.itemDeltas.filter((i) => i.kind !== 'object');
   const lineTier = lineCompositionTier(p.itemDeltas);
   const showComposition = lineTier === null;
+  const lock = partyLock(p);
   return (
     <div
       data-role="participant"
@@ -806,9 +804,12 @@ function ParticipantLine({
         <ParticipantRefView participant={p} size="row" compact quiet linked={!focus} />
         {focus && <span className="sr-only">this address</span>}
       </span>
-      {p.lockKind && (
-        <span data-role="lock-kind" className={LOCK_KIND}>
-          {p.lockKind}
+      {lock && (
+        // LockKind's default form, never a chip (material pass v2, move 5: boxes stay on
+        // controls): plain words at the line's own size, only for a lock that is not the default
+        // (R9, lane B4)
+        <span data-role="lock-kind">
+          <PartyLockKind lock={lock} size="row" />
         </span>
       )}
       {p.lockHash !== null && notes?.has(p.lockHash) && (
