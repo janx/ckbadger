@@ -781,10 +781,22 @@ describe('the gels measure the creator’s text as an upper bound (review F-B, l
     ordered: true,
   }));
 
-  it('turns a CJK caption on end where its bound does not fit across its lane', () => {
+  /** A caption's bound at the tick size, its CJK characters wide and the rest Latin. */
+  const captionBound = (text: string) => {
+    const wide = [...text].filter((ch) => ch.codePointAt(0)! >= 0x2e80).length;
+    return bound([...text].length - wide, wide, 12);
+  };
+
+  // Re-pinned on purpose (review fb-tests NOTE-1, lane rd/fb-fixes-2 tN1): the test checked "if a
+  // caption is not turned, it fits", which every turned caption passed whatever its length. All six
+  // are turned (each 67.2 + 6 px across a 63 px lane), and a turned caption stands in the turned
+  // head: 109 px (14 Latin glyphs at 12 px, 100.8, rounded up, and its margin), less the 6 px under
+  // its foot and 2 px clear over its top, 101.
+  it('turns every CJK caption on end where its bound does not fit across its lane', () => {
     stubChartWidth(400);
     // "颜色和图0": 4 CJK characters and a digit at the tick size (12 px), 67.2 px, and 6 px
     // more than the 63 px lane (it was counted 36)
+    expect(bound(1, 4, 12) + 6).toBeGreaterThan(63);
     const { container } = render(<AlleleGel lanes={cjkLanes} total={6} subject="deeds" />);
     const captions = [...container.querySelectorAll('[data-gene-caption]')];
     expect(captions).toHaveLength(6);
@@ -792,8 +804,23 @@ describe('the gels measure the creator’s text as an upper bound (review F-B, l
       const lane = caption.closest('[data-lane]')!.querySelector('rect')!;
       const laneWidth = Number(lane.getAttribute('width')) + 2;
       expect(laneWidth).toBeCloseTo(63, 5);
-      if (!caption.hasAttribute('transform'))
-        expect(bound(1, 4, 12) + 6, caption.textContent!).toBeLessThanOrEqual(laneWidth);
+      expect(caption.getAttribute('transform'), caption.textContent!).toMatch(/rotate\(-90\)$/);
+      expect(captionBound(caption.textContent!), caption.textContent!).toBeLessThanOrEqual(109 - 8);
+    }
+  });
+
+  // tN1: a turned caption is cut to the turned head. A gene of ten CJK characters and a digit
+  // (161.4 px at 12 px) keeps six and the ellipsis, 97.2 px of its 100.8 px room.
+  it('cuts a long CJK caption to the turned head', () => {
+    stubChartWidth(400);
+    const long = cjkLanes.map((lane, i) => ({ ...lane, gene: `颜色和图案的名字很长${i}` }));
+    const { container } = render(<AlleleGel lanes={long} total={6} subject="deeds" />);
+    const captions = [...container.querySelectorAll('[data-gene-caption]')];
+    expect(captions.map((c) => c.textContent)).toEqual(Array(6).fill('颜色和图案的…'));
+    for (const caption of captions) {
+      expect(caption.getAttribute('transform')).toMatch(/rotate\(-90\)$/);
+      expect(captionBound(caption.textContent!)).toBeCloseTo(97.2, 9);
+      expect(captionBound(caption.textContent!)).toBeLessThanOrEqual(109 - 8);
     }
   });
 
