@@ -150,20 +150,22 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
       'Fee, CKB',
       'Cells',
       'Size, bytes01,000',
-      'Cycles02,000,000',
+      // re-pinned on purpose (readability B5): the Cycles ticks say the scale as a tick does
+      'Cycles02M',
     ]);
   });
 
   // Table-rows R2: the bar heads are the shared ScaleHeader, 2 px under the name, the tick row as
-  // long as the bar's track. Old issue C: the Size track is 56 px (was 80, as the Cycles one
-  // still is); its 24 px went to the transaction's hash.
-  it('heads its bars with the shared ScaleHeader: Size 56 px and Cycles 80 px ticks, 2 px under the name', () => {
+  // long as the bar's track. Old issue C: the Size track is 56 px (was 80); its 24 px went to the
+  // transaction's hash. Re-pinned on purpose (readability B5): the Cycles track is 56 px too (was
+  // 80), its ticks "0 … 2M"; its 24 px went to What it did, whose note was cut mid-word.
+  it('heads its bars with the shared ScaleHeader: Size and Cycles 56 px ticks, 2 px under the name', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table');
     const heads = within(table).getAllByRole('columnheader');
     for (const [i, end, track] of [
       [6, '1,000', '56px'],
-      [7, '2,000,000', '80px'],
+      [7, '2M', '56px'],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
       expect(ticks).toHaveAttribute('aria-hidden', 'true');
@@ -182,7 +184,8 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // Old issue C: each track holds its head's widest tick row (11 px, 6.6 px a character). A
   // transaction is no larger than a block (597,000 bytes), so a page's size scale is at most
   // 600,000: "0" … "600,000" in 52.8 of the 56 px. Any cycles scale under a billion (a page whose
-  // largest transaction takes up to 750,000,000 cycles), "0" … "750,000,000", in 79.2 of the 80.
+  // largest transaction takes up to 750,000,000 cycles): re-pinned on purpose (readability B5),
+  // "0" … "750M" in 33 of the 56 px (it was "750,000,000" in 79.2 of 80).
   it('holds the widest tick row of each bar head inside its track', () => {
     render(
       <TransactionListTable
@@ -192,7 +195,7 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
     for (const [i, end, used] of [
       [6, '600,000', 52.8],
-      [7, '750,000,000', 79.2],
+      [7, '750M', 33],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
       const text = Array.from(ticks.children).map((t) => t.textContent!);
@@ -205,10 +208,47 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   it('draws its row bars 8 px tall at their exact width, never widened to a minimum', () => {
     render(<TransactionListTable transactions={[{ ...transfer, cycles: 1000 }, scriptCall]} />);
     const row = within(screen.getByRole('table')).getAllByRole('row')[1];
-    // 1,000 of a 2,000,000-cycle scale on an 80 px track: 0.04 px.
+    // 1,000 of a 2,000,000-cycle scale on a 56 px track (re-pinned on purpose, readability B5: it
+    // was 80, 0.04 px): 0.028, drawn to the hundredth, 0.03 px.
     const fill = row.querySelector('td:nth-child(8) [data-segment="value"]') as HTMLElement;
-    expect(fill.style.width).toBe('0.04px');
+    expect(fill.style.width).toBe('0.03px');
     expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
+  });
+
+  // Readability 2026-11-18, lane B5: "What it did" was 215 px and its note was cut mid-word ("CKB
+  // Transfer 2 participa", "Cellbase pays #21,042,6…", capture transactions n-02). The note now
+  // wraps under the headline, part by part, and is never cut.
+  it('never cuts what a transaction did: the note wraps, whole parts (B5)', () => {
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    for (const row of within(screen.getByRole('table')).getAllByRole('row').slice(1)) {
+      const what = row.querySelectorAll('td')[2];
+      expect(what.querySelector('.truncate')).toBeNull();
+      // the headline and its note share one wrapping line box
+      const line = what.querySelector('.flex-wrap') as HTMLElement;
+      expect(line).not.toBeNull();
+      expect(line.children).toHaveLength(2);
+    }
+    const [, call] = within(screen.getByRole('table')).getAllByRole('row');
+    const note = call.querySelectorAll('td')[2].querySelector('[data-dotted]') as HTMLElement;
+    expect(note).not.toHaveClass('whitespace-nowrap');
+    expect(note).toHaveClass('flex-wrap');
+  });
+
+  // B5: it takes the width a common row needs from the hash (13 px of its 15.9 spare) and the
+  // Cycles bar (18 px: its ticks say "2M", so its track is 56 px like Size's), and the table keeps
+  // its 1,230 px. Headline + 8 px + note, beside the 16 px mark and its 8 px gap, and the 16 px
+  // gap: "CKB Transfer" and "12 participants", "Cellbase" and "pays #21,042,681", on one line.
+  it('gives What it did the width of a common row on one line, inside the 1,230 px (B5)', () => {
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const widths = Array.from(table.querySelectorAll('col')).map((c) =>
+      Number.parseFloat((c as HTMLElement).style.width)
+    );
+    const line = (headline: string, note: string) =>
+      16 + 8 + (headline.length + note.length) * 7.2 + 8 + 16;
+    expect(line('CKB Transfer', '12 participants')).toBeLessThanOrEqual(widths[2]);
+    expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(widths[2]);
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1230);
   });
 
   it('says what each transaction did: kind, mark and a quiet note', () => {
@@ -417,7 +457,9 @@ describe('TransactionListTable row stones', () => {
     const widths = Array.from(table.querySelectorAll('col')).map((c) =>
       Number.parseFloat((c as HTMLElement).style.width)
     );
-    expect(widths).toEqual([221, 175, 215, 160, 96, 62, 121, 180]);
+    // Re-pinned on purpose (readability B5): What it did 215 → 246, from the Transaction column's
+    // spare (221 → 208) and the Cycles bar (180 → 162, its track 80 → 56); 1,230 px as before.
+    expect(widths).toEqual([208, 175, 246, 160, 96, 62, 121, 162]);
     expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1230);
     expect(Number.parseFloat(table.style.minWidth)).toBe(1230);
     expect(ROW_SEAL.tx.footprint).toBe(56.5);
@@ -428,11 +470,14 @@ describe('TransactionListTable row stones', () => {
     expect(shown).toHaveTextContent(/^0x00de304b…25cbbc$/);
     const chars = shown.textContent!.length;
     expect(chars).toBe(17);
-    // the stone, the hash and the 16 px gap fit the 221 px with 15.9 px to spare; the column
-    // keeps its 221 so the table keeps its 1,230 px and changes form where it did
+    // the stone, the hash and the 16 px gap fit the column (re-pinned on purpose, B5: 208 px, 2.9
+    // px to spare; it was 221 with 15.9) and the table changes form where it did
     const used = ROW_SEAL.tx.footprint + chars * 7.8 + 16;
     expect(used).toBeCloseTo(205.1, 6);
-    expect(221 - used).toBeCloseTo(15.9, 6);
+    expect(widths[0] - used).toBeCloseTo(2.9, 6);
+    // Cycles: its 56 px track, the bar's 10 px gap, the figure of any scale under a billion
+    // ("750,000,000", 11 ch at 12 px) and the 16 px gap
+    expect(widths[7] - (56 + 10 + 11 * 7.2 + 16)).toBeCloseTo(0.8, 6);
     // What it did keeps the longest DAO headline whole beside its 16 px mark and two 8 px gaps
     expect(16 + 8 + 'DAO Withdraw Complete'.length * 7.2 + 8 + 16).toBeLessThanOrEqual(widths[2]);
     // Size: its 56 px track, the bar's 10 px gap, a 5-digit scale's figure (5 ch at 12 px) and the

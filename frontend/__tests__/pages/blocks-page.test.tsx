@@ -333,11 +333,12 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(glyph.querySelectorAll('[data-proposal-dot]')).toHaveLength(4);
   });
 
-  // U-09 (re-pinned): the table's unnamed miner at the row size, the one ellipsis
-  it('writes the miner on one line, ckb1qzda0c…93hhsj (BA-05)', async () => {
+  // U-09 (re-pinned): the table's unnamed miner at the row size, the one ellipsis; R9 (re-pinned):
+  // the row size of an address is `ckb1…` and its last 8 characters
+  it('writes the miner on one line, ckb1…4s93hhsj (BA-05)', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
-    const link = within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })[0];
+    const link = within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })[0];
     expect(link.closest('td')).toHaveClass('whitespace-nowrap');
   });
 
@@ -355,7 +356,7 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(pool).toHaveClass('text-text');
     expect(pool).not.toHaveClass('text-text-bright');
     // The unnamed miner keeps its address tail; nothing is guessed for it.
-    expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })).toHaveLength(1);
+    expect(within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })).toHaveLength(1);
   });
 
   it('pages as newest first: "2 newest of 20,828,902", Newer and Older (BA-06)', async () => {
@@ -514,6 +515,18 @@ describe('BlocksPage · Blocks v3 board', () => {
       `[seal timing] blocks list, 50 rows: rendered in ${elapsed.toFixed(0)} ms, ` +
         `${drawn.ms.toFixed(1)} ms of it drawing the 50 row seals`
     );
+  });
+
+  // Readability 2026-11-18, lane B5: the limits that give the Size and Cycles bars their meaning
+  // ("Fullest of these 50: … of the 597,000-byte limit") stood after the fiftieth row; they stand
+  // above the table, and the pager stays under it.
+  it('states the block limits above the table, the pager under it (B5)', async () => {
+    render(<BlocksPage />);
+    const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
+    const table = screen.getByRole('table', { name: 'Latest blocks' });
+    expect(note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const pager = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    expect(table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('reads the footnote figures in bright ink', async () => {
@@ -750,26 +763,27 @@ describe('BlocksPage · Blocks v3 board', () => {
         expect(seal.className).not.toMatch(/-my-/);
         expectBefore(seal, within(tr as HTMLElement).getAllByRole('link')[0]);
       });
-      expect(Number.parseFloat(table.style.minWidth)).toBe(608);
+      // R9 (re-pinned): Miner holds a 13-character address, 110 px (it was 154 for 17), so the
+      // table's minimum is 564 px (it was 608) and Size · cycles takes the rest
+      expect(Number.parseFloat(table.style.minWidth)).toBe(564);
       const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-      // Height takes the stone's 7 px more than the old hash seal's; Miner gives 2, Size · cycles 5
-      expect(cols.map((c) => c.width)).toEqual(['138px', '76px', '48px', '154px', '96px', 'auto']);
+      // Height takes the stone's 7 px more than the old hash seal's; Size · cycles gave 5
+      expect(cols.map((c) => c.width)).toEqual(['138px', '76px', '48px', '110px', '96px', 'auto']);
       expect(cols.map((c) => c.minWidth)).toEqual([
         '138px',
         '76px',
         '48px',
-        '154px',
+        '110px',
         '96px',
         '96px',
       ]);
       expect(cols[0].width).toBe(`${104 + ROW_SEAL.block.footprint}px`);
       // what each column holds at 0.6 em a character: Height, the stone, "#20,879,198" at 13 px
-      // and the gap, with 2 px of room; Miner, "ckb1qzda0c…93hhsj" (the row size) at 12 px and the
-      // gap; Size ·
-      // cycles, "3,500,000,000" at 12 px (the last column, no gap)
+      // and the gap, with 2 px of room; Miner, "ckb1…4s93hhsj" (the row size, 13 characters) at
+      // 12 px and the gap; Size · cycles, "3,500,000,000" at 12 px (the last column, no gap)
       const px = cols.map((c) => Number.parseFloat(c.minWidth));
       expect(ROW_SEAL.block.footprint + chars(11, 13) + 16 + 2).toBeLessThanOrEqual(px[0]);
-      expect(chars(17, 12) + 16).toBeLessThanOrEqual(px[3]);
+      expect(chars(13, 12) + 16).toBeLessThanOrEqual(px[3]);
       expect(chars(13, 12)).toBeLessThanOrEqual(px[5]);
     });
 

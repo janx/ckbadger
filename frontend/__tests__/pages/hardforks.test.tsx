@@ -311,9 +311,10 @@ describe('HardforksPage', () => {
     expect(marks.className).not.toMatch(/overflow-y-auto|max-h-/);
     const buttons = within(marks).getAllByRole('button');
     expect(buttons.map((b) => b.getAttribute('aria-label'))).toEqual([
-      // U-09 (re-pinned): a mark's name on the chart takes the tight size
-      expect.stringMatching(/^Known Lock v2 · Known Lock · version 0x[0-9a-f]{4}…[0-9a-f]{4},/),
-      expect.stringMatching(/^Known Lock v3 · Known Lock · version 0x[0-9a-f]{4}…[0-9a-f]{4},/),
+      // U-09 (re-pinned): a mark's name on the chart takes the tight size; R9 (re-pinned): an
+      // accessible name is words with no width to fit, at the row size the reading shows
+      expect.stringMatching(/^Known Lock v2 · Known Lock · version 0x[0-9a-f]{8}…[0-9a-f]{6},/),
+      expect.stringMatching(/^Known Lock v3 · Known Lock · version 0x[0-9a-f]{8}…[0-9a-f]{6},/),
     ]);
   });
 

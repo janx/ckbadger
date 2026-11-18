@@ -24,7 +24,6 @@ import { formatUtc8Date } from '@/lib/utils';
 import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
-import type { ShortSize } from '@/lib/shorten';
 import { unitNode } from '@/components/ui/units';
 
 type Party = FiberChannel['observedParties'][number];
@@ -56,14 +55,17 @@ export function formatEpochDelay(delay: FiberEpochDelay, raw: string): string {
 const LINK = inkStyle(BOARD_INKS.link);
 
 /**
- * A party by its address, else its lock hash, at a size (U-09; it was 10…6 here and the last six
- * characters alone on the split bar and the received lines).
+ * A party by its address, else its lock hash, at the row size, as the hero's pair and the story
+ * name it (R9; U-09: it was the last six characters alone on the split bar and the received
+ * lines, then the tight size on the split bar). A split bar's names stand in a line that wraps
+ * at the bar's full width, no tile: "ckb1…7sppedrr 1,000.00000569 CKB" is 32 characters, 249.6 px
+ * at 13 px.
  */
-const partyId = (party: Party, size: ShortSize) =>
+const partyId = (party: Party) =>
   party.address ? (
-    <ShortId value={party.address} kind="address" size={size} />
+    <ShortId value={party.address} kind="address" size="row" />
   ) : (
-    <ShortId value={party.lockScriptHash} kind="hash" size={size} />
+    <ShortId value={party.lockScriptHash} kind="hash" size="row" />
   );
 
 /** A party in a sentence or a row: the row size. */
@@ -210,7 +212,7 @@ const STEP_WORDS = ['no', 'one', 'two', 'three', 'four'];
 function receivedLines(channel: FiberChannelDetail, stage: Stage | undefined): ReactNode[] {
   return stageAmounts(channel, stage, 1).map(({ party, amount }) => (
     <span key={party.lockScriptHash}>
-      {partyId(party, 'row')} received {ckb(amount)} net
+      {partyId(party)} received {ckb(amount)} net
     </span>
   ));
 }
@@ -509,15 +511,15 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             <DetailSection title="What moved inside the channel">
               <div className="flex flex-col gap-4">
                 <FiberSplitBar
-                  left={{ name: partyId(atOpen[0].party, 'tight'), shannons: atOpen[0].amount }}
-                  right={{ name: partyId(atOpen[1].party, 'tight'), shannons: atOpen[1].amount }}
+                  left={{ name: partyId(atOpen[0].party), shannons: atOpen[0].amount }}
+                  right={{ name: partyId(atOpen[1].party), shannons: atOpen[1].amount }}
                   note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
                 />
                 {atClose && closing && (
                   <FiberSplitBar
-                    left={{ name: partyId(atClose[0].party, 'tight'), shannons: atClose[0].amount }}
+                    left={{ name: partyId(atClose[0].party), shannons: atClose[0].amount }}
                     right={{
-                      name: partyId(atClose[1].party, 'tight'),
+                      name: partyId(atClose[1].party),
                       shannons: atClose[1].amount,
                     }}
                     note={`at the close, ${formatUtc8Date(closing.timestamp)} · net received in the ${

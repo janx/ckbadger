@@ -196,7 +196,10 @@ describe('VmLaneTimeline', () => {
       />
     );
     const svg = screen.getByRole('img');
-    const xudt = screen.getByRole('button', { name: /^xUDT · xUDT · version 0xbbbb…bbbb, data1/ });
+    // R9 (re-pinned): the dot's accessible name at the row size, as the reading under it
+    const xudt = screen.getByRole('button', {
+      name: /^xUDT · xUDT · version 0xbbbbbbbb…bbbbbb, data1/,
+    });
     const readout = screen.getByRole('status', { name: 'Script version readout' });
     const evidence = screen.getByRole('complementary', {
       name: 'Selected script deployment evidence',

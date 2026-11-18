@@ -6,7 +6,7 @@ import { RewardBreakdown, RewardPaidBy } from '@/components/blocks/reward-breakd
 import { BlockTransactionsTable } from '@/components/blocks/block-transactions-table';
 import { positionParts } from '@/components/blocks/block-position';
 import { sentenceText } from '@/components/ui/block-link';
-import { BlocksLimitsFootnote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
+import { BlocksLimitsNote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -30,6 +30,7 @@ const rewardBlock = {
   rewardPaidAtBlock: 20_827_943,
   rewardFinalizesAt: 20_827_943,
   minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgp909qk',
+  minerPool: null as string | null,
   totalFees: '5060000',
   transactionsCount: 4,
 };
@@ -64,6 +65,22 @@ describe('RewardBreakdown', () => {
     expect(screen.getByText(/paid by the cellbase of/)).toHaveTextContent(
       'The reward is paid by the cellbase of #20,827,943; it is not indexed yet.'
     );
+  });
+  // B3 (readability 2026-11-18): the payee is the block's miner, named as every miner is
+  // (MinerLink): by the pool pools.toml names, else by its address at the row size, the address
+  // in the title either way.
+  it('names the payee by its pool where pools.toml names one, else by its address', () => {
+    const pooled = { ...rewardBlock, minerPool: 'Example Pool' };
+    const { unmount } = wrap(<RewardBreakdown block={pooled} />);
+    const pool = screen.getByRole('link', { name: 'Example Pool' });
+    expect(screen.getByTestId('reward-total')).toContainElement(pool);
+    expect(pool.getAttribute('href')).toMatch(new RegExp(`/address/${rewardBlock.minerAddress}$`));
+    expect(pool).toHaveAttribute('title', rewardBlock.minerAddress);
+    unmount();
+    const unnamed = { ...rewardBlock, minerPool: null };
+    wrap(<RewardBreakdown block={unnamed} />);
+    expect(screen.getByTestId('reward-total')).toHaveTextContent(/ to ckb1…qgp909qk$/);
+    expect(screen.queryByRole('link', { name: 'Example Pool' })).toBeNull();
   });
   it('names the paying cellbase and its tx', () => {
     wrap(<RewardPaidBy block={rewardBlock} />);
@@ -235,9 +252,9 @@ describe('Blocks list pieces', () => {
       maxBlockCycles: '3500000000',
     };
     expect(() =>
-      BlocksLimitsFootnote({ blocks: [row, { ...row, number: 2, maxBlockBytes: 1 }] })
+      BlocksLimitsNote({ blocks: [row, { ...row, number: 2, maxBlockBytes: 1 }] })
     ).toThrow('consensus limits differ');
-    render(<BlocksLimitsFootnote blocks={[row]} />);
+    render(<BlocksLimitsNote blocks={[row]} />);
     expect(screen.getByText(/cycles not run yet for these blocks/)).toBeInTheDocument();
   });
 });

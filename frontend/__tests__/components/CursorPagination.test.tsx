@@ -91,6 +91,52 @@ describe('CursorPagination', () => {
     expect(container).toBeEmptyDOMElement();
     expect(screen.queryByText(/of 0/)).toBeNull();
   });
+
+  // Readability 2026-11-18, lane B5: a list that fits on one page drew a pager anyway — the four
+  // identity systems drew "Showing 1–4 of 4 items · 50 per page" and "Previous · Page 1 of 1 ·
+  // Next", two disabled buttons. One page draws nothing.
+  it('draws nothing for one page: no buttons, no "Page 1 of 1", no sentence (B5)', () => {
+    const one = (props: Partial<Parameters<typeof CursorPagination>[0]> = {}) => (
+      <CursorPagination
+        hasMore={false}
+        hasPrevious={false}
+        onNext={vi.fn()}
+        onPrevious={vi.fn()}
+        total={4}
+        totalLabel="items"
+        page={1}
+        pageSize={50}
+        currentCount={4}
+        {...props}
+      />
+    );
+    const { container, rerender } = render(one());
+    expect(container).toBeEmptyDOMElement();
+    // a list's own range sentence too (the blocks list's "50 newest of …")
+    rerender(one({ summary: '4 newest of 4' }));
+    expect(container).toBeEmptyDOMElement();
+    // and a count the API does not know yet
+    rerender(one({ total: null }));
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('still refuses one page that holds more rows than its page size (B5)', () => {
+    expect(() =>
+      render(
+        <CursorPagination
+          hasMore={false}
+          hasPrevious={false}
+          onNext={vi.fn()}
+          onPrevious={vi.fn()}
+          total={21}
+          totalLabel="rows"
+          page={1}
+          pageSize={20}
+          currentCount={21}
+        />
+      )
+    ).toThrow(/21 rows on a page of 20/);
+  });
 });
 
 // F2-tx (TX-27): the Transactions board pages "Newer / Older →", and every count is grouped.

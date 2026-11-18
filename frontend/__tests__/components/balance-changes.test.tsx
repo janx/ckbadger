@@ -118,8 +118,10 @@ describe('BalanceChanges form by measured width', () => {
       [...card.querySelectorAll(':scope > [data-role]')].map((c) => c.getAttribute('data-role'))
     ).toEqual(['party', 'ckb', 'items', 'occupied']);
     expect(card).toHaveClass('grid', 'grid-cols-[minmax(0,1fr)_auto]');
+    // R9 (re-pinned): the two-line card is drawn at 1024 too, beside the tiles and the summary:
+    // the row size, `ckb1…` and the last 8 (it was the tight size)
     expect(card.querySelector('[data-role="party"]')).toHaveTextContent(
-      'ckb1…shp3hrNervape Shadow Lock'
+      'ckb1…sqshp3hrNervape Shadow Lock'
     );
     // a phone row's summary form (R5, re-pinned on purpose: was "+320.00000000 CKB")
     expect(card.querySelector('[data-role="ckb"]')).toHaveTextContent('+320 CKB');
@@ -140,11 +142,13 @@ describe('BalanceChanges form by measured width', () => {
     (width) => {
       renderAt(width);
       const locks = [...document.querySelectorAll('[data-role="lock"]')];
-      // U-09 (re-pinned): tight in the phone forms (358, 608), row in the table (912)
+      // U-09 (re-pinned): tight in the phone forms (358, 608), row in the table (912); R9
+      // (re-pinned): tight only in the three-line card (358), the two-line card (608) at the row
+      // size
       expect(locks.map((l) => l.textContent)).toEqual([
         'Default Lock',
         'Nervape Shadow Lock',
-        width === 912 ? 'lock 0x43b2924e…00895d' : 'lock 0x43b2…895d',
+        width === 358 ? 'lock 0x43b2…895d' : 'lock 0x43b2924e…00895d',
       ]);
       expect(locks[2]).toHaveAttribute('title', UNNAMED_LOCK);
     }

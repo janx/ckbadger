@@ -206,10 +206,11 @@ interface LimitRow {
 }
 
 /**
- * Blocks v3: the limits are a footnote, not a scale — the fullest block of the page and the
- * one with the most work, each as an exact share of the consensus limit the API reports.
+ * Blocks v3: the limits are a note, not a scale — the fullest block of the page and the one with
+ * the most work, each as an exact share of the consensus limit the API reports. It stands above
+ * the list, where a reader needs it to read the bars (readability B5; it was a footnote).
  */
-export function BlocksLimitsFootnote({ blocks }: { blocks: readonly LimitRow[] }) {
+export function BlocksLimitsNote({ blocks }: { blocks: readonly LimitRow[] }) {
   if (!blocks.length) return null;
   const [{ maxBlockBytes, maxBlockCycles }] = blocks;
   for (const b of blocks)

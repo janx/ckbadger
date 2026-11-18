@@ -238,12 +238,15 @@ export interface AssetMetric {
 /**
  * Consistency round C7: the facts rail as one row under the hero (R13: a meta label over a
  * section-size value and its inline dim note) — one column on a phone, two from sm, one grid row
- * from lg.
+ * from lg. In that row the columns share the width equally, but none falls under its content's
+ * min-content width (readability 2026-11-18: a seventh of the row, 148.6 px at 1280, broke a
+ * `.cell`'s 148.8 px "240.00000000 CKB" over two lines): a figure, one unit, keeps its column
+ * as wide as itself, and words and notes wrap inside it.
  */
 export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
   return (
     <section aria-label="Metrics" data-role="metrics" className="min-w-0">
-      <dl className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 lg:auto-cols-[minmax(0,1fr)] lg:grid-flow-col lg:grid-cols-none">
+      <dl className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 lg:auto-cols-[minmax(min-content,1fr)] lg:grid-flow-col lg:grid-cols-none">
         {items.map((m) => (
           <div key={m.label} className="min-w-0" title={m.title}>
             <dt className="text-text-dim text-meta">{m.label}</dt>

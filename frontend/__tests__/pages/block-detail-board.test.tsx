@@ -538,7 +538,8 @@ describe('Block board · second tier', () => {
     )!;
     expect(section).toHaveTextContent('paid by the cellbase of #20,827,943');
     expect(within(section).getByTestId('reward-total')).toHaveTextContent(
-      /^684\.32120795 CKB to ckb1qzda0c/
+      // R9 (re-pinned): the payee at the row size, `ckb1…` and its last 8 characters
+      /^684\.32120795 CKB to ckb1…qgp909qk/
     );
     const bar = within(section).getByRole('img', { name: /^Reward shares:/ });
     expect(bar).toHaveAccessibleName(

@@ -1,4 +1,5 @@
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   act,
@@ -357,6 +358,36 @@ describe('Collection holders phone rows (board L5)', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
+  // R9: a phone row is drawn wherever the holders' column is narrower than its 462 px table, a
+  // desktop column too: tight only below sm, the row size, the table's, from it.
+  it('names a holder at the tight size on a phone and at the row size from sm', async () => {
+    const address =
+      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfdwlcghv62qw704s93hhsj';
+    const load = vi
+      .fn()
+      .mockResolvedValue(
+        page([{ ...resolved, address, lockKind: 'JoyID', lockCodeHash: `0x${'9b'.repeat(32)}` }])
+      );
+    try {
+      atContainerWidth(358);
+      atViewportWidth(390);
+      const { unmount } = render(
+        <CollectionHolders assetClass="objects" load={load} queryKey="phone-size" />
+      );
+      const [phone] = await screen.findAllByTestId('holder-row-mobile');
+      expect(within(phone).getByRole('link', { name: 'ckb1…93hhsj' })).toBeInTheDocument();
+      unmount();
+      atContainerWidth(440);
+      atViewportWidth(1280);
+      render(<CollectionHolders assetClass="objects" load={load} queryKey="desktop-size" />);
+      const [column] = await screen.findAllByTestId('holder-row-mobile');
+      expect(within(column).getByRole('link', { name: 'ckb1…4s93hhsj' })).toBeInTheDocument();
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('gives each holder two lines at 358 px: rank inline, holder, lock, count · the bar', async () => {
     atContainerWidth(358);
     const load = vi

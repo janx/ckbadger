@@ -208,7 +208,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
     },
     {
       label: 'CKB held in its cell',
-      value: <CkbAmount form="summary" shannons={held} signed={false} tone="plain" wrap />,
+      value: <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />,
       // R11: tier 1's words stay uncoloured; the bars keep the occupied colour.
       note: (
         <>

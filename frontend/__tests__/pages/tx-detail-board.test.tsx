@@ -375,8 +375,10 @@ describe('Transaction board, tier 1', () => {
     expect(h1.querySelector('[data-class]')).toBeNull();
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
-      // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size
-      'Nervape 3x 0x51c75a0000…000096f2 moved from ckb1qzda0cr0…sqcjk9lz to ckb1qzda0cr0…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
+      // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size;
+      // R9 (re-pinned): an address is `ckb1…` and its last 8 characters
+      // R9 (re-pinned): prose takes the row form, the object's id 10…6
+      'Nervape 3x 0x51c75a00…0096f2 moved from ckb1…sqcjk9lz to ckb1…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
@@ -546,7 +548,7 @@ describe('Transaction board, tier 1', () => {
     expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
     expect(rail).toHaveTextContent('0.00064119 CKB');
-    expect(rail).toHaveTextContent('paid by ckb1qzda0c…cjk9lz');
+    expect(rail).toHaveTextContent('paid by ckb1…sqcjk9lz'); // R9 (re-pinned): 4…8
   });
 
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
@@ -624,6 +626,23 @@ describe('Transaction board, tier 2', () => {
     }
   });
 
+  // Readability review 2026-11-18 (lane A): a dep group's member that no script of the
+  // transaction names read "1,048,576 B no script here names": when its size was added (R2b-a,
+  // 63fabc55) the member lost "it" and became a size with no noun. The board's words are "a
+  // 70,320 B cell no script here names" (Main.dc.html, DEPS); a named member keeps "Default Lock
+  // code, 52,048 B".
+  it("says what a dep group's member no script here names is: a cell of its size", async () => {
+    render(<TransactionDetailPage />);
+    const dep0 = await waitFor(() => {
+      const el = document.querySelector('#tx-dep-0');
+      if (!el) throw new Error('no dep row yet');
+      return el as HTMLElement;
+    });
+    const [named, unnamed] = Array.from(dep0.querySelectorAll('.pl-3 > span'));
+    expect(named).toHaveTextContent(/^↳ 0xmember:0 · Default Lock code, 52,048 B$/);
+    expect(unnamed).toHaveTextContent(/^↳ 0xother:1 · a 1,048,576 B cell no script here names$/);
+  });
+
   it('says which script each cell dep supplies code for (TX-15)', async () => {
     render(<TransactionDetailPage />);
     const dep0 = await waitFor(() => {
@@ -635,7 +654,9 @@ describe('Transaction board, tier 2', () => {
     // beside "for X").
     expect(dep0).toHaveTextContent('dep group for Default Lock');
     expect(dep0).toHaveTextContent('↳ 0xmember:0 · Default Lock code, 52,048 B');
-    expect(dep0).toHaveTextContent('↳ 0xother:1 · 1,048,576 B no script here names');
+    // Re-pinned (readability 2026-11-18): the member is a cell of its size, in the board's words
+    // (was "1,048,576 B no script here names", a size with no noun).
+    expect(dep0).toHaveTextContent('↳ 0xother:1 · a 1,048,576 B cell no script here names');
     expect(document.querySelector('#tx-dep-1')).toHaveTextContent('code for Spore · 76,752 B');
     const dep2 = document.querySelector('#tx-dep-2') as HTMLElement;
     expect(dep2).toHaveTextContent('code of Default Lock, not run here · 122,552 B');
@@ -1074,7 +1095,8 @@ describe('Transaction board, R2b-a fields', () => {
     });
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
-      'It ran .bit Time Index State and .bit Time Info. ckb1qzda0cr0…sqcjk9lz paid a 0.00064119 CKB fee.'
+      // R9 (re-pinned): the payer is `ckb1…` and its last 8 characters
+      'It ran .bit Time Index State and .bit Time Info. ckb1…sqcjk9lz paid a 0.00064119 CKB fee.'
     );
   });
 });
@@ -1089,9 +1111,9 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
       'ckb',
     ]);
     const [object, ckb] = groups;
-    // U-09 (re-pinned): the ribbon's parties at the row size
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qzda0c…cjk9lz');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qzda0c…shp3hr');
+    // U-09 (re-pinned): the ribbon's parties at the row size; R9 (re-pinned): 4…8
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sqcjk9lz');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…sqshp3hr');
     expect(object.querySelector('[data-flow-plate]')).toHaveTextContent('Nervape 3x');
     expect(object.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     // the CKB flow: cjk9lz gave 528.00064119; shp3hr and 204m4g received; the miner the fee

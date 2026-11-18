@@ -50,7 +50,8 @@ describe('a shortened id is one unit', () => {
 
   it('Address keeps a shortened address whole', () => {
     render(<Address address={ADDRESS} size="head" />);
-    expect(nowrapOf(screen.getByText('ckb1qzda0cr0…4k6kmfrz'))).not.toBeNull();
+    // R9 (re-pinned): `ckb1…` and the last 8 at the head size
+    expect(nowrapOf(screen.getByText('ckb1…4k6kmfrz'))).not.toBeNull();
   });
 
   it('an out point keeps its index with its hash', () => {

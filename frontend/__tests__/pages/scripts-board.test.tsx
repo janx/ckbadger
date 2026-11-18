@@ -534,12 +534,12 @@ describe('Scripts list phone row (board L6)', () => {
     expect(within(rows[2]).getByText('deprecated')).toHaveAttribute('data-row-tag', 'warn');
   });
 
-  // PA-03 (UI review 2026-11-14): "bar: CKB | occupied" switches what the table's bar column
-  // draws; the rows the list takes below the table's 1,034 px minimum (a phone, 640, and the 976
-  // px of a 1024 window) draw no bar, so the switch goes with the table, chosen by the list's
-  // measured width like the table itself.
-  it('shows the bar switch only with the table that draws the bar (PA-03)', async () => {
-    for (const width of [358, 608, 976]) {
+  // PA-03 (UI review 2026-11-14) drew the "bar: CKB | occupied" switch with the table only.
+  // Re-pinned on purpose (readability B5, plan §7.6): the CKB bar left the list, so the switch had
+  // one state and went; the table now needs 851 px (it needed 1,034: the CKB column lost its
+  // 240 px track), so the 976 px of a 1024 window takes the table, a phone and 640 the rows.
+  it('draws no bar switch at any width; a 1024 window now takes the table (PA-03, B5)', async () => {
+    for (const width of [358, 608]) {
       atContainerWidth(width);
       const view = render(<ScriptsPage />);
       await screen.findAllByTestId('script-row-mobile');
@@ -548,12 +548,15 @@ describe('Scripts list phone row (board L6)', () => {
       vi.restoreAllMocks();
       vi.mocked(api.getScripts).mockResolvedValue(response);
     }
-    atContainerWidth(1232);
-    render(<ScriptsPage />);
-    await screen.findByRole('table', { name: 'Scripts' });
-    expect(await screen.findByRole('group', { name: 'Bar shows' })).toHaveTextContent(
-      'bar:CKBoccupied'
-    );
+    for (const width of [976, 1232]) {
+      atContainerWidth(width);
+      const view = render(<ScriptsPage />);
+      await screen.findByRole('table', { name: 'Scripts' });
+      expect(screen.queryByRole('group', { name: 'Bar shows' }), `${width} px`).toBeNull();
+      view.unmount();
+      vi.restoreAllMocks();
+      vi.mocked(api.getScripts).mockResolvedValue(response);
+    }
   });
 
   it('is two lines at 608 px: role and code beside the name, counts beside the description', async () => {

@@ -36,6 +36,7 @@ import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 import { percentOf } from '@/lib/format-unit';
 import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
 import { unitNode, unitText } from '@/components/ui/units';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -88,15 +89,15 @@ export function ScriptHeading({ family }: { family: ScriptFamilyDetail }) {
   );
 }
 
-/** The holder as the hero's sentence names it, the page's lede (U-09: head). */
+/** The holder as the hero's sentence names it, the page's lede: prose, the row size (R9). */
 function holderSentence(custody: ScriptCustodyApi): string {
   if (custody.class === 'multisig')
     return custody.witnessState === 'never_signed'
       ? 'a multisig that has never signed'
-      : `${holderName(custody, 'head')}`;
+      : `${holderName(custody, 'row')}`;
   if (custody.class === 'one_key') return 'a single key';
   if (custody.class === 'unspendable') return 'a lock that can never be unlocked';
-  return holderName(custody, 'head');
+  return holderName(custody, 'row');
 }
 
 /** The board's summary sentence: what the script guards, since when, and who can change it. */
@@ -207,8 +208,10 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
 /**
  * A code cell holder's name (A4 Chrome F2): its id is one unit, a line may break between the kind
  * and the id; a phrase ("an unspendable lock") is words a line may break between. In the hero
- * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 148 at 360): "multisig 0x6598…d696",
- * 204 px whole, is "multisig" over the 112.2 px id; it stands on one line from 640 (288 px).
+ * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 148 at 360), below sm the tight size:
+ * "multisig 0x6598…d696", 204 px whole, is "multisig" over the 112.2 px id. From sm the row size
+ * (R9): "multisig 0x65980a1b…31d696", 265.2 px whole, stands on one line in the 288 px tile at
+ * 640 and 284 at 1280, and is "multisig" over the 173.4 px id in the 220 px tile at 1024.
  */
 function HolderName({ custody, size }: { custody: ScriptCustodyApi; size: ShortSize }) {
   const { label, id } = holderParts(custody, size);
@@ -231,6 +234,10 @@ export function ScriptHeroMetrics({
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
   const deployment = firstDeployment(family);
+  // A tile is under 200 px only on a phone (163 px at 390); from sm it is 220 px at its narrowest
+  // (1024), where a holder's id at the row size, 17 characters at 17 px (173.4 px), stands on its
+  // own line, the size the lede and the tables write it in (R9).
+  const size = useTightBelowSm();
   return (
     <dl
       aria-label="Script figures"
@@ -262,8 +269,8 @@ export function ScriptHeroMetrics({
             href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
             className="hover:text-jade"
           >
-            {/* a hero tile, tight (U-09) */}
-            <HolderName custody={last.custody} size="tight" />
+            {/* a hero tile: tight below sm, the row size from it (R9) */}
+            <HolderName custody={last.custody} size={size} />
           </Link>
         </HeroMetric>
       )}
@@ -278,7 +285,7 @@ export function ScriptHeroMetrics({
                 title={deployment.codeCellTxHash}
                 className="hover:text-jade"
               >
-                <ShortId value={deployment.codeCellTxHash} kind="hash" size="tight" />
+                <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
               </Link>
             </>
           }
@@ -573,6 +580,8 @@ export function ScriptHistoryReading({
             <span className="flex items-baseline gap-1.5">
               <span>code</span>{' '}
               <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
+              {/* tight: the readout is tier 1's, within its 160-character budget
+                  (__tests__/utils/hierarchy.ts), which the row size passes (162 for JoyID) */}
               <span>held by {holderName(deployment.custody, 'tight')}</span>
             </span>
           )}

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { ChartDetail } from '@/components/charts/chart-detail';
-import { placeXTicks } from '@/lib/chart-ticks';
+import { placeXTicks, type PlacedXTick } from '@/lib/chart-ticks';
 import { api } from '@/lib/api';
 
 // UI review 2026-11-14, CH-12: Nominal APC's x axis skipped "year 10" (on a phone "year 0, year 5,
@@ -35,7 +35,7 @@ const ticksOf = (title: string) =>
   chartProps.filter((props) => props.title === title).at(-1)!.xTicks as Tick[];
 
 /** The ticks a plot `width` px wide keeps, for a line (`slot` false) or slot bars. */
-function kept(ticks: Tick[], points: number, width: number, slot: boolean): Tick[] {
+function kept(ticks: Tick[], points: number, width: number, slot: boolean): PlacedXTick[] {
   const left = 56;
   const right = width - 10;
   const at = (index: number) =>
@@ -102,6 +102,74 @@ describe('axis ticks (CH-12)', () => {
     expect(round.length).toBeGreaterThan(2);
     for (const label of round) expect(Number(label) % 0.25).toBe(0);
     assertRegular(round);
+  });
+
+  // Readability review 2026-11-18 (lane A): on mainnet the axis read "≤ 2.05 / 3.5 / 4.5 / 5.5",
+  // 3.5 → 4.5 h over 574 px and 4.5 → 5.5 h over 325, with no tick at the 4 h peak. The indexer
+  // counts epochs by the minute (one bucket a minute, even); the store and the API keep only the
+  // minutes some epoch took, and the axis gave each of those one slot, so a minute no epoch took
+  // had none and the hours ran unevenly; the labels were then thinned every k-th from "≤ 2.05",
+  // dropping 4.0 and the last label, which carries the unit. Mainnet's 120 buckets of 2026-11-18,
+  // as minute:epochs:
+  const MAINNET_EPOCH_MINUTES: [number, number][] = [
+    '123:1 163:1 177:1 187:1 192:3 193:1 194:3 195:3 196:2 198:1 199:4 201:1 202:3 203:1 ',
+    '204:2 205:10 206:5 207:8 208:9 209:10 210:20 211:10 212:11 213:28 214:26 215:26 216:42 ',
+    '217:40 218:49 219:62 220:72 221:95 222:113 223:132 224:164 225:187 226:231 227:240 ',
+    '228:266 229:327 230:339 231:383 232:414 233:450 234:523 235:538 236:584 237:596 238:557 ',
+    '239:623 240:608 241:628 242:613 243:609 244:536 245:550 246:486 247:479 248:435 249:403 ',
+    '250:407 251:299 252:303 253:208 254:233 255:176 256:153 257:158 258:121 259:103 260:88 ',
+    '261:83 262:60 263:53 264:40 265:25 266:30 267:27 268:26 269:16 270:14 271:20 272:12 ',
+    '273:12 274:4 275:8 276:1 277:7 278:7 279:3 280:3 281:3 282:5 283:2 285:3 286:3 287:3 ',
+    '288:2 289:3 290:2 291:2 293:1 294:1 296:2 299:1 300:1 302:1 303:1 306:1 307:1 308:2 ',
+    '310:2 313:1 319:1 340:1 460:1 505:1 523:1 1033:1 3030:1',
+  ]
+    .join('')
+    .split(' ')
+    .map((pair) => pair.split(':').map(Number) as [number, number]);
+  const mountMainnetEpochs = async () => {
+    vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue({
+      title: 'Epoch Time Distribution',
+      yAxisLabel: 'Epochs',
+      // the API's label: the minute in hours, two decimals, half up (no minute ties at .xx5)
+      data: MAINNET_EPOCH_MINUTES.map(([m, n]) => ({
+        date: (m / 60).toFixed(2),
+        value: String(n),
+      })),
+    });
+    render(<ChartDetail slug="epoch-time-distribution" />);
+    await screen.findByRole('img', { name: 'Epoch durations' });
+    const props = chartProps.filter((entry) => entry.title === 'Epoch durations').at(-1)!;
+    return { data: props.data as { label: string }[], ticks: props.xTicks as Tick[] };
+  };
+  const minute = (label: string) => Math.round(Number(label) * 60);
+  const isEdge = (label: string) => /^[≤≥] /.test(label);
+
+  it('gives every minute of Epoch durations its slot between the outliers marked open-ended', async () => {
+    const { data, ticks } = await mountMainnetEpochs();
+    const low = ticks.find((tick) => tick.label.startsWith('≤ '))!;
+    const high = ticks.find((tick) => tick.label.startsWith('≥ '))!;
+    expect([low.label, high.label]).toEqual(['≤ 2.05', '≥ 7.67 h']);
+    const run = data.slice(low.index + 1, high.index).map((point) => minute(point.label));
+    const strides = run.slice(1).map((m, i) => m - run[i]);
+    expect(strides.filter((stride) => stride !== 1)).toEqual([]);
+    expect([run[0], run.at(-1)]).toEqual([163, 340]);
+  });
+
+  it('marks 4 h, keeps the unit and steps evenly in hours at every width', async () => {
+    const { data, ticks } = await mountMainnetEpochs();
+    for (const width of [1232, 976, 608, 358, 326]) {
+      const shown = kept(ticks, data.length, width, true);
+      const labels = shown.map((tick) => tick.label);
+      expect(labels, `${width} px`).toContain('4.0');
+      expect(labels.at(-1), `${width} px`).toBe('≥ 7.67 h');
+      const round = shown.filter((tick) => !isEdge(tick.label));
+      assertRegular(round.map((tick) => tick.label));
+      // a linear axis: the same pixels for every hour between any two round ticks
+      const perHour = round
+        .slice(1)
+        .map((tick, i) => (tick.x - round[i].x) / (Number(tick.label) - Number(round[i].label)));
+      for (const step of perHour) expect(step, `${width} px`).toBeCloseTo(perHour[0], 6);
+    }
   });
 
   it('labels Block intervals at round seconds, the unit once', async () => {

@@ -174,7 +174,7 @@ function CopyHash({ hash }: { hash: string }) {
 
 /**
  * `A`, `A and B`, `A, B and 3 more`: the parties on one side of a movement, in the summary under
- * the headline, the page's lede (U-09: head).
+ * the headline, the page's lede: prose takes the row form (R9; U-09).
  */
 function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
   const shown = parties.slice(0, 2);
@@ -183,7 +183,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
       {shown.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && (parties.length > 2 ? ', ' : ' and ')}
-          <ParticipantRefView participant={p} size="head" compact quiet />
+          <ParticipantRefView participant={p} size="row" compact quiet />
         </Fragment>
       ))}
       {parties.length > 2 && ` and ${parties.length - 2} more`}
@@ -191,7 +191,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
   );
 }
 
-/** An item as the summary names it: its class mark and a link (`Nervape 3x 0x51c7a1b2c3…5e6f96f2`). */
+/** An item as the summary names it: its class mark and a link (`Nervape 3x 0x51c7a1b2…6f96f2`). */
 function ItemName({ item }: { item: ItemDelta }) {
   switch (item.kind) {
     case 'object':
@@ -203,7 +203,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             className="text-text-bright hover:text-jade"
           >
             {item.collection?.name ? `${item.collection.name} ` : 'Object '}
-            <ShortId value={item.objectId} kind="hash" size="head" />
+            <ShortId value={item.objectId} kind="hash" size="row" />
           </Link>
         </>
       );
@@ -215,7 +215,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             href={getTokenDetailHref(item.typeScriptHash)}
             className="text-text-bright hover:text-jade"
           >
-            {item.symbol?.trim() || <ShortId value={item.typeScriptHash} kind="hash" size="head" />}
+            {item.symbol?.trim() || <ShortId value={item.typeScriptHash} kind="hash" size="row" />}
           </Link>
         </>
       );
@@ -228,7 +228,7 @@ function ItemName({ item }: { item: ItemDelta }) {
             className="text-text-bright hover:text-jade"
           >
             {formatStandard(item.standard)}{' '}
-            <ShortId value={item.identityId} kind="hash" size="head" />
+            <ShortId value={item.identityId} kind="hash" size="row" />
           </Link>
         </>
       );
@@ -264,7 +264,7 @@ function FeePayer({
         lockHashPrefix: null,
         roles: [],
       }}
-      size="head"
+      size="row"
       compact
       quiet
     />
@@ -288,7 +288,7 @@ function TxSummary({
       ? [
           ...new Set(
             activity.typeCalls.map((sc) =>
-              formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'head')
+              formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'row')
             )
           ),
         ]
@@ -327,7 +327,7 @@ function TxSummary({
           <Fragment key={i}>
             {readable(activity.txHash, () => {
               // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
-              const parts = protocolActionNoteParts(pa, 'head');
+              const parts = protocolActionNoteParts(pa, 'row');
               return parts.length ? (
                 <>
                   {parts.map((part, j) => (
@@ -616,7 +616,7 @@ function DepRow({
                 </Link>
                 {memberServes.length > 0
                   ? ` · ${memberServes.join(', ')} code, ${size(cell.codeSize)}`
-                  : ` · ${size(cell.codeSize)} no script here names`}
+                  : ` · a ${size(cell.codeSize)} cell no script here names`}
               </span>
             );
           })}
@@ -1726,7 +1726,10 @@ export default function TransactionDetailPage() {
                               {unitNode(formatCount(lifecycle.commitmentDistance, 'block'))} later
                             </>
                           )}{' '}
-                        · window {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
+                        · window{' '}
+                        <NoBreak>
+                          {lifecycle.commitmentWindow.close}–{lifecycle.commitmentWindow.far}
+                        </NoBreak>
                       </span>
                     )}
                   </span>

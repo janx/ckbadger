@@ -360,7 +360,6 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     shannons={BigInt(current.capacity)}
                     signed={false}
                     tone="plain"
-                    wrap
                   />
                 ) : (
                   'No live cell'

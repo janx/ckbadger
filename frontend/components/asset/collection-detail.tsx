@@ -390,7 +390,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       label: 'CKB held',
       value:
         held !== null ? (
-          <CkbAmount form="summary" shannons={held} signed={false} tone="plain" wrap />
+          <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />
         ) : (
           'Not recorded'
         ),

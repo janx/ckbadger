@@ -191,9 +191,10 @@ describe('Address v3', () => {
     vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
     render(<AddressDetailPage />);
     expect(await screen.findByText('nothing at this address.')).toBeInTheDocument();
-    // U-18: the checked endpoint stands in the facts, the address shortened, once
+    // U-18: the checked endpoint stands in the facts, the address shortened, once; R9 (re-pinned):
+    // shortened as an address, `ckb1…` and its last 8 (it was cut as a hash, 10…6)
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/addresses/${addressText.slice(0, 10)}…${addressText.slice(-6)}`
+      `/addresses/${addressText.slice(0, 4)}…${addressText.slice(-8)}`
     );
   });
 
@@ -246,8 +247,9 @@ describe('Address v3', () => {
       'href',
       expect.stringContaining('/scripts/JoyID')
     );
+    // R9 (re-pinned): the h1's head size keeps the network and the last 8 characters
     expect(title).toHaveTextContent(
-      new RegExp(`^${addressText.slice(0, 12)}…${addressText.slice(-8)}$`)
+      new RegExp(`^${addressText.slice(0, 4)}…${addressText.slice(-8)}$`)
     );
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expect(nameBox.children).toHaveLength(2);
@@ -667,7 +669,9 @@ describe('Address v3', () => {
     // A filtered page declares no total; the tab keeps the address's count, the range has none.
     fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
-    expect(screen.getByText('Showing 0–0 activities · 20 per page')).toBeInTheDocument();
+    // Re-pinned on purpose (readability B5): this filtered page is the only one, and one page
+    // draws no pager (it said "Showing 0–0 activities · 20 per page").
+    expect(screen.queryByText(/^Showing /)).toBeNull();
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
@@ -885,8 +889,12 @@ describe('Address v3', () => {
     ).toBe(false);
   });
   it('counts only committed activity rows in the page range', async () => {
+    // Re-pinned on purpose (readability B5): one page draws no pager, so the fixture has an older
+    // page; the range it asserts is unchanged.
     vi.mocked(api.getAddressActivities).mockResolvedValue({
       ...pageFixture([poolActivity(), ...addressActivitiesFixture]),
+      hasMore: true,
+      nextCursor: 'next',
       pool,
     });
     render(<AddressDetailPage />);
@@ -1408,9 +1416,10 @@ describe('Address · consistency round (C13, C14)', () => {
   it('names the page by its short address, the full address and its copy button beneath (C13)', async () => {
     render(<AddressDetailPage />);
     await loaded();
+    // R9 (re-pinned): the head size of an address is `ckb1…` and its last 8 characters
     const h1 = screen.getByRole('heading', {
       level: 1,
-      name: `${addressText.slice(0, 12)}…${addressText.slice(-8)}`,
+      name: `${addressText.slice(0, 4)}…${addressText.slice(-8)}`,
     });
     expect(h1).toHaveClass('text-entity');
     const header = h1.closest('header')!;

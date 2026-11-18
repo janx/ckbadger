@@ -236,8 +236,9 @@ describe('option A: every participant, one line each (D1)', () => {
     const shown = lines(container);
     expect(shown).toHaveLength(activity.participants.length);
     expect(container.querySelectorAll('[data-party]')).toHaveLength(activity.participants.length);
+    // R9 (re-pinned): a row address is `ckb1…` and its last 8 characters
     for (const p of activity.participants)
-      expect(container).toHaveTextContent(`${p.address!.slice(0, 10)}…${p.address!.slice(-6)}`);
+      expect(container).toHaveTextContent(`${p.address!.slice(0, 4)}…${p.address!.slice(-8)}`);
   });
 
   it('puts CKB, every asset delta and occupied on the participant’s own line, in that order', () => {

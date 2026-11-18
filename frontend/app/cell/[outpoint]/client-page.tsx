@@ -344,16 +344,16 @@ function CodeCellOf({ cell }: { cell: Cell }) {
 
 /**
  * Lane U (U3): the transaction and the output index as one line under the full out point —
- * "output 0 of transaction 0x0361eb40ab…12b6518a · live since #14,965,803", the hash linking to
+ * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to
  * the transaction page and the block to its page; the line under the plate is the page's lede
- * (U-09: head).
+ * (prose: the row form, R9).
  */
 function CellOrigin({ cell }: { cell: Cell }) {
   return (
     <p data-testid="cell-origin">
       output {cell.outputIndex} of transaction{' '}
       <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        <ShortId value={cell.txHash} kind="hash" size="head" />
+        <ShortId value={cell.txHash} kind="hash" size="row" />
       </Link>{' '}
       ·{' '}
       {cell.status === 'dead' ? (

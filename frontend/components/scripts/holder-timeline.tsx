@@ -182,7 +182,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
   const rows = Math.max(...ticks.map((t) => t.row), 0) + 1;
   const described = holders
     .map((holder, i) => {
-      const name = holderName(holder.custody, 'tight');
+      const name = holderName(holder.custody, 'row');
       if (!holder.until)
         return i === 0 ? `${name} since ${day(holder.from.timestamp)}` : `${name} since then`;
       return i === 0
@@ -271,7 +271,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
       >
         <span>
           {isNow ? 'held now by' : 'held by'}{' '}
-          <span className="text-text-bright">{holderName(reading.custody, 'tight')}</span>
+          <span className="text-text-bright">{holderName(reading.custody, 'row')}</span>
         </span>
         {isNow ? (
           <span>

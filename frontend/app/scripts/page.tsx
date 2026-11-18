@@ -1,16 +1,14 @@
 'use client';
 
 import { TopicCharts } from '@/components/charts/topic-charts';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
-import { useInRouterContext } from 'react-router-dom';
-import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn, type ListTableForm } from '@/components/ui/list-table';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { RowTag } from '@/components/ui/row-tag';
@@ -35,7 +33,6 @@ import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { shortenHash } from '@/lib/shorten';
 import { formatCount } from '@/lib/format-count';
-import { formatTick, niceCeil } from '@/lib/chart-ticks';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { percentOf, withUnit } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
@@ -305,44 +302,19 @@ function Head({ label }: { label: string }) {
   return <span className="text-meta">{label}</span>;
 }
 
-/** The bar column's track (px): every row and the header ticks share it. */
-const CKB_TRACK = 240;
 /**
- * The printed amount right of the track: the board's 118 px plus the room "46,743,011,404.23" takes
- * at 12 px with its 11 px decimals, so the largest amount on the page never wraps.
+ * The printed amount: the board's 118 px plus the room "46,743,011,404.23" takes at 12 px with its
+ * 11 px decimals, so the largest amount on the page never wraps.
  */
 const CKB_DISPLAY = 128;
-const SHANNONS_PER_CKB = BigInt(100000000);
-
-/** Whole CKB, for the bar's geometry only (the printed amount and the title stay exact). */
-function wholeCkb(shannons: bigint): number {
-  return Number(shannons / SHANNONS_PER_CKB);
-}
 
 /**
- * The bar column's scale: the page's largest whole-CKB amount rounded up to a round 1 / 1.5 / 2 /
- * 2.5 / 3 / 4 / 5 / 6 / 8 × 10^k (board: 46.7B → "0 · 25B · 50B"). A page whose scripts hold
- * nothing draws empty tracks on a scale of 1.
+ * The list's one bar, the occupied share (readability B5: the CKB bar left and with it the "bar:"
+ * switch of ruling D2). Its track: the ticks "0 · 50 · 100%" (at most 4 characters at 11 px) fit
+ * with room between them. Its figure: "100.00%", 7 characters at 12 px (50.4 px).
  */
-function ckbBarScale(values: readonly number[]): number {
-  const max = values.length ? Math.max(...values) : 0;
-  if (max === 0) return 1;
-  const scale = Math.round(niceCeil(max));
-  if (!Number.isSafeInteger(scale) || scale < max)
-    throw new Error(`Scripts bar scale ${scale} does not cover ${max} CKB`);
-  return scale;
-}
-
-/** What the list's bar shows (ruling D2): the sort column's CKB, or the occupied share of it. */
-type BarField = 'ckb' | 'occupied';
-const BAR_FIELDS: readonly { value: BarField; label: string }[] = [
-  { value: 'ckb', label: 'CKB' },
-  { value: 'occupied', label: 'occupied' },
-];
-
-function barFromUrl(raw: string | null): BarField {
-  return raw === 'occupied' ? 'occupied' : 'ckb';
-}
+const SHARE_TRACK = 80;
+const SHARE_FIGURE = 51;
 
 /** The occupied share's bar runs on parts per million of the CKB in the cells. */
 const SHARE_SCALE = 1_000_000;
@@ -419,25 +391,6 @@ const SCRIPTS_TITLE = ['Scripts'] as const;
 
 export default function ScriptsPage() {
   useDocumentTitle(SCRIPTS_TITLE);
-  const searchParams = useSearchParams();
-  const pathname = usePathname();
-  const router = useRouter();
-  const inRouter = useInRouterContext();
-  const urlBar = barFromUrl(searchParams.get('bar'));
-  const [bar, setBar] = useState<BarField>(urlBar);
-  // D2: the bar follows its URL, also when a link or history entry changes it under this page.
-  useEffect(() => setBar(urlBar), [urlBar]);
-  const chooseBar = (value: BarField) => {
-    setBar(value);
-    // Replace: a view choice is not a step of history. Outside a router there is no address to
-    // keep in step, and leaving the page would reload it.
-    if (inRouter) {
-      const query = new URLSearchParams(searchParams);
-      if (value === 'ckb') query.delete('bar');
-      else query.set('bar', value);
-      router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
-    }
-  };
   const pagination = useCursorPagination();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>();
@@ -445,9 +398,6 @@ export default function ScriptsPage() {
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
-  // PA-03: the bar switch belongs to the table's bar column; the rows the list takes below the
-  // table's minimum width draw no bar, so the switch is drawn with the form the list chose.
-  const [listForm, setListForm] = useState<ListTableForm | null>(null);
   // The table's page (declared first: its request goes first).
   const read = useQuery({
     queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
@@ -479,8 +429,6 @@ export default function ScriptsPage() {
   }
 
   const rows = data?.data ?? [];
-  const ckbScale = ckbBarScale(rows.map((s) => wholeCkb(heldCapacity(s).total)));
-  const barScale = bar === 'occupied' ? SHARE_SCALE : ckbScale;
   const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
@@ -508,51 +456,48 @@ export default function ScriptsPage() {
     {
       key: 'capacity',
       label: 'CKB in its cells',
-      // track + 10 px + the printed amount + the cell's 16 px gutter
-      minWidth: CKB_TRACK + 10 + CKB_DISPLAY + 16,
-      header: (
-        <ScaleHeader
-          label={bar === 'occupied' ? 'CKB in its cells · bar: occupied share' : 'CKB in its cells'}
-          scale={barScale}
-          trackWidth={CKB_TRACK}
-          midpoint
-          format={bar === 'occupied' ? shareTick : (n) => formatTick(n, ckbScale / 2)}
+      // B5 (plan §7.6): the amount alone, right aligned under its head; its linear bar, scaled to
+      // the page's largest (50B), was a 1 px stub on most rows. The printed amount + the 16 px gap.
+      header: <Head label="CKB in its cells" />,
+      minWidth: CKB_DISPLAY + 16,
+      numeric: true,
+      render: (s) => (
+        <CkbAmount
+          form="summary"
+          shannons={heldCapacity(s).total}
+          signed={false}
+          tone="inherit"
+          unit={false}
         />
       ),
-      render: (s) => {
-        const { total } = heldCapacity(s);
-        return (
-          <AlignedBar
-            label={bar === 'occupied' ? 'Occupied share of CKB in its cells' : 'CKB in its cells'}
-            scale={barScale}
-            trackWidth={CKB_TRACK}
-            minFill={2}
-            segments={[
-              bar === 'occupied'
-                ? { key: 'occupied', label: 'occupied', value: occupiedPpm(s), tone: 'data' }
-                : { key: 'ckb', label: 'CKB', value: wholeCkb(total), tone: 'data' },
-            ]}
-            display={
-              <CkbAmount
-                form="summary"
-                shannons={total}
-                signed={false}
-                tone="inherit"
-                unit={false}
-              />
-            }
-            displayWidth={CKB_DISPLAY}
-          />
-        );
-      },
     },
     {
       key: 'occupied',
       label: 'Occupied',
-      header: <Head label="Occupied" />,
-      minWidth: 90,
-      numeric: true,
-      render: (s) => <span className="text-text-dim">{occupiedShare(s).share}</span>,
+      // The occupied share beside its bar on 0 · 50 · 100 %, the name over the share (B5): the
+      // track, the bar's 10 px gap, the share and the 16 px gap.
+      minWidth: SHARE_TRACK + 10 + SHARE_FIGURE + 16,
+      header: (
+        <ScaleHeader
+          label="Occupied"
+          scale={SHARE_SCALE}
+          trackWidth={SHARE_TRACK}
+          midpoint
+          format={shareTick}
+          figureWidth={SHARE_FIGURE}
+        />
+      ),
+      render: (s) => (
+        <AlignedBar
+          label="Occupied share of CKB in its cells"
+          scale={SHARE_SCALE}
+          trackWidth={SHARE_TRACK}
+          minFill={2}
+          segments={[{ key: 'occupied', label: 'occupied', value: occupiedPpm(s), tone: 'data' }]}
+          display={<span className="text-text-dim">{occupiedShare(s).share}</span>}
+          displayWidth={SHARE_FIGURE}
+        />
+      ),
     },
   ];
 
@@ -693,28 +638,6 @@ export default function ScriptsPage() {
                 >
                   {sortDirection === 'asc' ? '↑' : '↓'}
                 </button>
-                {/* D2: what the bar shows, beside the sort it pictures; written to the URL. Only
-                    with the table, the one form that draws the bar (PA-03). */}
-                {listForm === 'table' && (
-                  <span
-                    role="group"
-                    aria-label="Bar shows"
-                    className="ml-3 inline-flex items-center whitespace-nowrap"
-                  >
-                    <span className="mr-2">bar:</span>
-                    {BAR_FIELDS.map((field, i) => (
-                      <button
-                        key={field.value}
-                        type="button"
-                        aria-pressed={bar === field.value}
-                        onClick={() => chooseBar(field.value)}
-                        className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? '' : '-ml-px'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
-                      >
-                        {field.label}
-                      </button>
-                    ))}
-                  </span>
-                )}
                 {data?.total !== undefined && data.total !== null && (
                   <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
                 )}
@@ -738,7 +661,6 @@ export default function ScriptsPage() {
                   // T5: body ink for the row, the name alone bright.
                   rowClassName={() => 'text-text'}
                   mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
-                  onForm={setListForm}
                 />
               )}
               {data && data.data.length > 0 && (

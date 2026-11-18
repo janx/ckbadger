@@ -2,6 +2,7 @@ import { render, screen, fireEvent, within, cleanup } from '@/__tests__/utils/te
 import { AssetHistory } from '@/components/asset/asset-history';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { yTickLabels, plotLeftOf } from '@/__tests__/utils/y-ticks';
 const daily = [
   { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
@@ -259,6 +260,7 @@ describe('Asset history', () => {
   });
   it('writes a supply change as a phone row at 358 px: change and date · supply after · where and to whom', () => {
     atContainerWidth(358);
+    atViewportWidth(390);
     try {
       render(
         <AssetHistory
@@ -370,8 +372,27 @@ describe('Asset history', () => {
       expect(table).not.toHaveTextContent(/lock kind unavailable/i);
     });
 
+    // R9: the events fall to their phone rows at 1024 too (the token page's 676 px body, under the
+    // table's 815 px), beside the holders' table that writes the same addresses at the row size:
+    // tight only below sm, so from it a phone row writes the row size.
+    it('in a phone row drawn from sm, at the row size', () => {
+      atContainerWidth(676);
+      atViewportWidth(1024);
+      try {
+        mount();
+        const [unnamed, named] = screen.getAllByTestId('supply-event-row-mobile');
+        expect(phoneLines(unnamed).map((l) => l.key)).toEqual(['change', 'evidence']);
+        expect(phoneLines(unnamed)[1].right).toMatch(/^to ckb1…11111111 lock 0x43434343…434343$/);
+        expect(phoneLines(named)[1].right).toMatch(/^from ckb1…22222222 JoyID$/);
+      } finally {
+        vi.restoreAllMocks();
+        vi.unstubAllGlobals();
+      }
+    });
+
     it('in the phone row at 358 px', () => {
       atContainerWidth(358);
+      atViewportWidth(390);
       try {
         mount();
         const [unnamed, named, notIndexed] = screen.getAllByTestId('supply-event-row-mobile');

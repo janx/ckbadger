@@ -17,6 +17,7 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
+import { formatTick } from '@/lib/chart-ticks';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -26,10 +27,12 @@ import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 
 /**
- * The Cycles bar's track: its head's tick row for any scale under a billion cycles, "0" …
- * "200,000,000" (12 characters at 11 px, 79.2 px), fits it.
+ * The Cycles bar's track, as long as the Size one: its head's ticks say the scale as a tick does
+ * ("2M", "750M"), so any scale under a billion cycles, "0" … "750M" (5 characters at 11 px,
+ * 33 px), fits it. It was 80 for "0" … "750,000,000" (79.2 px); its 24 px went to What it did
+ * (readability B5), whose note was cut mid-word. The figure beside each bar stays exact.
  */
-const CYCLES_TRACK = 80;
+const CYCLES_TRACK = 56;
 
 /**
  * The Size bar's track, shorter than the Cycles one: its head's widest tick row, "0" … "600,000"
@@ -266,11 +269,9 @@ export function TransactionListTable({
       label: 'Transaction',
       // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
       // characters at 13 px (132.6 px; it was 19 with three dots, 148.2 px), and the 16 px gap:
-      // 205.1 of its 221 px. The 29 px it gained over 192 came
-      // from the Size bar's track (24, SIZE_TRACK) and What it did's note (5), so the table keeps
-      // its 1,230 px and changes form where it did (old issue C: the stone had taken them from
-      // the hash, 10 + 6 → 8 + 4).
-      minWidth: 221,
+      // 205.1 of its 208 px. It had 221 (old issue C: the 29 px it gained over 192 came from the
+      // Size bar's track and What it did); 13 of its 15.9 spare went back to What it did (B5).
+      minWidth: 208,
       // Table-rows T5: the hash is the row's key, 13 px bright on the row's 18 px line (a cellbase
       // row keeps its dim row class); its stone leads it, overhanging that line (RowSeal).
       render: (tx) => (
@@ -306,24 +307,34 @@ export function TransactionListTable({
     {
       key: 'what',
       label: 'What it did',
-      // The mark (16), two 8 px gaps and the 16 px gap leave the headline and its note 167 px:
-      // the longest DAO headline, "DAO Withdraw Complete" (21 characters at 12 px, 151.2 px),
-      // stays whole and the note, which truncates, takes the rest. It gave 5 px to the hash.
-      minWidth: 215,
+      // B5: the note is never cut (it was truncated mid-word, "2 participa"): it follows the
+      // headline on its line when it fits and wraps under it, part by part, when it does not. The
+      // mark (16), its 8 px gap, the 8 px between headline and note and the 16 px gap leave them
+      // 206 px: "CKB Transfer" and "12 participants" (27 characters at 12 px, 194.4 px) or
+      // "Cellbase" and "pays #21,042,681" (24, 172.8 px) on one line. Its 246 px are the 215 it
+      // had, 13 from the hash's spare and 18 from the Cycles bar (its track 80 → 56).
+      minWidth: 246,
       render: (tx) => {
         const mark = tx.activity ? activityClassMark(tx.activity) : null;
         return (
-          <span className="flex min-w-0 items-center gap-2">
-            <span className="flex h-4 w-4 flex-none">{mark && <ClassMark kind={mark} />}</span>
-            <span className={tx.isCellbase ? 'text-text flex-none' : 'text-text-bright flex-none'}>
-              {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
+          <span className="flex min-w-0 items-start gap-2">
+            {/* One line tall (1lh), so the mark stands centred on the headline's line. */}
+            <span className="flex h-[1lh] w-4 flex-none items-center">
+              {mark && <ClassMark kind={mark} />}
             </span>
-            <span className="text-text-dim text-small min-w-0 truncate">
-              {tx.isCellbase ? (
-                paysNote(tx)
-              ) : (
-                <Dotted oneLine parts={whatNote(tx.activity!, 'row')} />
-              )}
+            <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+              <span
+                className={
+                  tx.isCellbase
+                    ? 'text-text whitespace-nowrap'
+                    : 'text-text-bright whitespace-nowrap'
+                }
+              >
+                {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
+              </span>
+              <span className="text-text-dim text-small min-w-0">
+                {tx.isCellbase ? paysNote(tx) : <Dotted parts={whatNote(tx.activity!, 'row')} />}
+              </span>
             </span>
           </span>
         );
@@ -423,9 +434,18 @@ export function TransactionListTable({
     {
       key: 'cycles',
       label: 'Cycles',
-      minWidth: 180,
+      // The 56 px track, the bar's 10 px gap, the figure of any scale under a billion
+      // ("750,000,000", 11 characters at 12 px, 79.2 px) and the 16 px gap: 161.2. It was 180
+      // on an 80 px track, which a 9-digit scale overran (185.2).
+      minWidth: 162,
       header: (
-        <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={CYCLES_TRACK} tickGap={2} />
+        <ScaleHeader
+          label="Cycles"
+          scale={cycleScale}
+          trackWidth={CYCLES_TRACK}
+          tickGap={2}
+          format={(n) => formatTick(n, n)}
+        />
       ),
       render: (tx) =>
         tx.cycles === null ? (

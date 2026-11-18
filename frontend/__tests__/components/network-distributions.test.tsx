@@ -514,6 +514,34 @@ describe('NetworkTrends', () => {
     expect(empty).toHaveTextContent('No retained labels');
   });
 
+  // Readability B5: a list's head stays in view; this one scrolls inside its own 320 px box, so
+  // its head sticks to the box's top, never the site header's height down inside it.
+  it('keeps the daily head at the top of its own scroll box', async () => {
+    const ts = 1751299200;
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) =>
+        HttpResponse.json({
+          metric: new URL(request.url).searchParams.get('metric') ?? '',
+          granularity: 'day',
+          dailyCoverage: [{ ts, hasRetainedObservation: true, roundsPerDay: null }],
+          coverageFrom: ts,
+          coverageTo: ts,
+          roundCountAvailability: 'notRecorded',
+          points: [{ ts, scalar: 0, buckets: [{ label: '0.210.0', count: 3 }] }],
+        })
+      )
+    );
+    render(<NetworkShareHistory />);
+    const table = await screen.findByRole('table', {
+      name: 'Client Version Share daily observations',
+    });
+    expect(table.closest('.overflow-y-auto')).not.toBeNull();
+    for (const head of within(table).getAllByRole('columnheader')) {
+      expect(head).toHaveClass('sticky', 'top-0');
+      expect(head.className).not.toContain('--sticky-header-h');
+    }
+  });
+
   // A title is no hover on a touch screen: the phone row also says every label, quietly, last.
   it('keeps every column of a day on its phone row, and every label in a quiet last line', async () => {
     const days = [1751299200, 1751385600];

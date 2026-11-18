@@ -100,7 +100,7 @@ describe('activity participant line (A3 → T7: party, tag, amount wrap as whole
       'ckb',
       'occupied',
     ]);
-    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1qzda0c…3x8k26');
+    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1…jg3x8k26'); // R9 (re-pinned)
     // re-pinned (A4 Chrome sweep): the lock kind is an item of the wrapping row, so it moves to
     // the next line whole; its words are not made one unit
     expect(within(row).getByText('Default Lock')).not.toHaveClass('whitespace-nowrap');
