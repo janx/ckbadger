@@ -1,6 +1,6 @@
 import { cn } from '@/lib/utils';
 import { MINUS } from '@/lib/chart-ticks';
-import { splitCkbAmount } from '@/lib/ckb-decimal';
+import { splitCkbAmount, type CkbAmountParts } from '@/lib/ckb-decimal';
 import type { PaletteKey } from '@/lib/palette';
 
 /**
@@ -30,11 +30,32 @@ export function amountSign(sign: string): AmountSign {
 }
 
 /**
+ * The look of an amount the hand-rolled CKB renderers drew before they came here (lane B2 of the
+ * readability plan, step 1: routed through this renderer with their output unchanged; the forms
+ * of step 2 replace it).
+ */
+interface HandRolledLook {
+  /** Zero as any amount ("0.00000000", the padding ghosted), not the datum "0" of C4. */
+  zero?: 'padded';
+  /**
+   * The point and the decimals as one run with these classes (a display figure's smaller step and
+   * its ink, a row's 11 px dim decimals): the fraction takes the run's ink, not `AMOUNT_INK`'s.
+   */
+  decimals?: string;
+  /** The padding zeros in the run's ink, not the ghost (the decimals read as one run). */
+  padding?: 'run';
+  /** Two decimals, cut (never rounded): the row form of `CkbTwoPlaces`. */
+  places?: 2;
+}
+
+/**
  * Exact CKB, all 8 decimals: integer, the significant decimals, then the trailing zeros ghosted,
  * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign, the
- * fraction in the sign's quieter ink (`AMOUNT_INK`). Zero is "0 CKB" with no fraction, for every
- * caller (consistency plan C4): nothing moved, so there are no decimals to read. That 0 is a
- * datum, in the dim ink; the ghost is only for the padding zeros of a non-zero amount (R4).
+ * fraction in the sign's quieter ink (`AMOUNT_INK`); `tone="inherit"` leaves the integer in its
+ * parent's ink (a display figure, a value inside a brighter line), the fraction in the neutral
+ * quieter ink. Zero is "0 CKB" with no fraction, for every caller (consistency plan C4): nothing
+ * moved, so there are no decimals to read. That 0 is a datum, in the dim ink; the ghost is only
+ * for the padding zeros of a non-zero amount (R4).
  */
 export function ExactCkb({
   shannons,
@@ -42,10 +63,11 @@ export function ExactCkb({
   tone = 'sign',
   wrap = false,
   unit = true,
+  look,
 }: {
   shannons: bigint;
   signed?: boolean;
-  tone?: 'sign' | 'plain';
+  tone?: 'sign' | 'plain' | 'inherit';
   /**
    * Allow a line break before the decimal, preserving every digit. The unit stays with the last
    * digits: a number never parts from its unit (U-16).
@@ -53,9 +75,10 @@ export function ExactCkb({
   wrap?: boolean;
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
+  look?: HandRolledLook;
 }) {
   const unitEl = unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>;
-  if (shannons === BigInt(0))
+  if (shannons === BigInt(0) && look?.zero !== 'padded')
     return (
       <span data-ckb-amount className="whitespace-nowrap tabular-nums">
         <span data-zero className="text-text-dim">
@@ -64,8 +87,29 @@ export function ExactCkb({
         {unitEl}
       </span>
     );
-  const parts = splitCkbAmount(shannons);
-  const ink = AMOUNT_INK[tone === 'plain' ? 'neutral' : amountSign(parts.sign)];
+  const parts = cutTo(splitCkbAmount(shannons), look?.places);
+  const ink = AMOUNT_INK[tone === 'sign' ? amountSign(parts.sign) : 'neutral'];
+  const run = look?.decimals;
+  const ghost = (
+    <span data-ghost className="text-text-ghost">
+      {parts.ghost}
+    </span>
+  );
+  // A hand-rolled run holds its digits as its own text, the padding after them (step 1 only).
+  const decimals =
+    run === undefined ? (
+      <>
+        <span data-fraction className={ink.fraction}>
+          {parts.fraction}
+        </span>
+        {ghost}
+      </>
+    ) : (
+      <span className={run || undefined}>
+        {parts.fraction}
+        {look?.padding === 'run' ? parts.ghost : ghost}
+      </span>
+    );
   return (
     <span
       data-ckb-amount
@@ -73,7 +117,7 @@ export function ExactCkb({
         wrap
           ? 'inline-flex max-w-full flex-wrap justify-end tabular-nums'
           : 'whitespace-nowrap tabular-nums',
-        ink.integer
+        tone !== 'inherit' && ink.integer
       )}
     >
       <span className="whitespace-nowrap">
@@ -81,14 +125,21 @@ export function ExactCkb({
         {parts.integer}
       </span>
       <span className="whitespace-nowrap">
-        <span data-fraction className={ink.fraction}>
-          {parts.fraction}
-        </span>
-        <span data-ghost className="text-text-ghost">
-          {parts.ghost}
-        </span>
+        {decimals}
         {unitEl}
       </span>
     </span>
   );
+}
+
+/** A split amount cut (never rounded) to `places` decimals; all 8 when none is given. */
+function cutTo(parts: CkbAmountParts, places: 2 | undefined): CkbAmountParts {
+  if (places === undefined) return parts;
+  const digits = `${parts.fraction.slice(1)}${parts.ghost.replace('.', '')}`.slice(0, places);
+  const significant = digits.replace(/0+$/, '');
+  return {
+    ...parts,
+    fraction: significant === '' ? '' : `.${significant}`,
+    ghost: significant === '' ? `.${digits}` : digits.slice(significant.length),
+  };
 }

@@ -188,12 +188,14 @@ function collectionOrder(groups: AddressHoldings['objectCollections']) {
 
 /** An exact CKB amount in running text: the whole part, then the fraction dim (Address board). */
 function ExactParts({ shannons }: { shannons: bigint }) {
-  const { integer, decimal } = formatCkbAmount(shannons);
   return (
-    <span className="text-text tabular-nums">
-      {integer}
-      <span className="text-text-dim">.{decimal}</span>
-    </span>
+    <ExactCkb
+      shannons={shannons}
+      signed={false}
+      tone="plain"
+      unit={false}
+      look={{ zero: 'padded', decimals: 'text-text-dim', padding: 'run' }}
+    />
   );
 }
 

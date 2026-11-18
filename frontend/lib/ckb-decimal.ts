@@ -117,6 +117,12 @@ export function splitCkbAmount(shannons: bigint): CkbAmountParts {
   };
 }
 
+/** Exact CKB as text with its trailing zeros dropped (`0.0506`, `1,838`): no sign, no unit. */
+export function trimmedCkbText(shannons: bigint): string {
+  const { integer, fraction } = splitCkbAmount(shannons);
+  return `${integer}${fraction}`;
+}
+
 /**
  * The digits `ExactCkb` prints for an amount, as plain text without the unit: every decimal from
  * `splitCkbAmount` (`0.00001647`, `750.00000000`), the sign only when `signed`, and zero as `0`

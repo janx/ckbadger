@@ -7,7 +7,7 @@ import { formatStandard } from '@/components/activity-event-row';
 import { AMOUNT_INK, ExactCkb } from '@/components/ui/ckb-amount';
 import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { exactUnsignedInteger, formatDecimal } from '@/lib/exact-integer';
-import { splitCkbAmount } from '@/lib/ckb-decimal';
+import { trimmedCkbText } from '@/lib/ckb-decimal';
 import { formatTick } from '@/lib/chart-ticks';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
@@ -347,11 +347,16 @@ function twoPlaces(value: bigint, unitDecimals: number): { whole: string; fracti
 
 /** CKB to 2 dp, the 2 decimals 11 px dim (board: "2,885,438.81"). */
 export function CkbTwoPlaces({ shannons }: { shannons: bigint }) {
-  const { whole, fraction } = twoPlaces(shannons, 8);
+  if (shannons < BigInt(0)) throw new Error(`invalid amount ${shannons} with 8 decimals`);
   return (
-    <span data-ckb-two-places className="tabular-nums">
-      {whole}
-      <span className="text-text-dim text-meta">.{fraction}</span>
+    <span data-ckb-two-places>
+      <ExactCkb
+        shannons={shannons}
+        signed={false}
+        tone="inherit"
+        unit={false}
+        look={{ zero: 'padded', decimals: 'text-text-dim text-meta', padding: 'run', places: 2 }}
+      />
     </span>
   );
 }
@@ -373,12 +378,6 @@ export function TokenTwoPlaces({ amount, decimals }: { amount: string; decimals:
       {fraction && <span className="text-text-dim text-meta">.{fraction}</span>}
     </span>
   );
-}
-
-/** "2,885,438.81184468" / "1,838": every digit, for a row's title. */
-function exactCkbText(shannons: bigint): string {
-  const { integer, fraction } = splitCkbAmount(shannons);
-  return `${integer}${fraction}`;
 }
 
 /** CKB held and occupied, parsed once; occupied above held is an upstream bug. */
@@ -403,11 +402,11 @@ function wholeCkb(shannons: bigint, context: string): number {
 /** "100.00000001 CKB held · 61 CKB occupied (61.0%)" for a row's title. */
 function heldTitle(a: Asset): string {
   const { held, occupied } = heldAndOccupied(a);
-  const parts = [held === null ? 'CKB held unavailable' : `${exactCkbText(held)} CKB held`];
+  const parts = [held === null ? 'CKB held unavailable' : `${trimmedCkbText(held)} CKB held`];
   if (occupied === null) parts.push('occupied unavailable');
   else
     parts.push(
-      `${exactCkbText(occupied)} CKB occupied${held !== null && held > BigInt(0) ? ` (${percentOf(occupied, held)})` : ''}`
+      `${trimmedCkbText(occupied)} CKB occupied${held !== null && held > BigInt(0) ? ` (${percentOf(occupied, held)})` : ''}`
     );
   return parts.join(' · ');
 }

@@ -6,7 +6,7 @@ import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/ui/ckb-amount';
 import type { Block, BlockProposalFees } from '@/lib/api';
 import { REWARD_COLORS } from '@/lib/design-tokens';
-import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { parseShannons, trimmedCkbText } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { percentFigure } from '@/lib/format-unit';
@@ -23,12 +23,6 @@ type RewardBlock = Pick<
   | 'totalFees'
   | 'transactionsCount'
 >;
-
-/** `0.0506`: an exact CKB amount inside a sentence, trailing zeros dropped. */
-function plainCkb(shannons: bigint): string {
-  const { integer, fraction } = splitCkbAmount(shannons);
-  return `${integer}${fraction}`;
-}
 
 /**
  * What the 40% proposal share is paid from, as `/blocks/{id}/proposal-fees` reports it (R2b-a 2).
@@ -50,7 +44,8 @@ function proposalNote(fees: BlockProposalFees | undefined, error: Error | null):
         ]
       : ['none of the transactions it proposed first is committed yet; ', ...window];
   const basis: SentencePart[] = [
-    `of ${plainCkb(parseShannons(fees.fees, `block ${fees.number} proposal fees`))} in fees of the ${formatCount(fees.transactionsCount, 'transaction')} it proposed, committed in `,
+    // `0.0506`: an exact CKB amount inside a sentence, trailing zeros dropped.
+    `of ${trimmedCkbText(parseShannons(fees.fees, `block ${fees.number} proposal fees`))} in fees of the ${formatCount(fees.transactionsCount, 'transaction')} it proposed, committed in `,
     ...heightListParts(fees.committedIn),
   ];
   return fees.complete ? basis : [...basis, ' so far; ', ...window];
@@ -122,8 +117,8 @@ export function RewardBreakdown({
   const committedTxs = block.transactionsCount - 1;
   const notes: Record<(typeof parts)[number]['key'], ReactNode> = {
     primary: 'the whole primary issuance of this block',
-    secondary: `the miners' share of this block's ${plainCkb(secondaryIssuance)} secondary issuance; the rest goes to DAO depositors or is burnt`,
-    committed: `of ${plainCkb(fees)} in fees of the ${formatCount(committedTxs, 'transaction')} committed here`,
+    secondary: `the miners' share of this block's ${trimmedCkbText(secondaryIssuance)} secondary issuance; the rest goes to DAO depositors or is burnt`,
+    committed: `of ${trimmedCkbText(fees)} in fees of the ${formatCount(committedTxs, 'transaction')} committed here`,
     proposal: <SentenceNodes parts={proposalNote(proposalFees, proposalFeesError)} />,
   };
   const share = (value: bigint) => (total === BigInt(0) ? '0.00' : percentFigure(value, total));

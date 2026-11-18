@@ -12,7 +12,8 @@ import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
-import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
@@ -24,13 +25,14 @@ import type { ShortSize } from '@/lib/shorten';
 const PAGE = 50;
 
 function Ckb({ shannons }: { shannons: string }) {
-  const parts = splitCkbAmount(parseShannons(shannons, 'DAO depositor capacity'));
   return (
-    <span className="whitespace-nowrap tabular-nums">
-      {parts.integer}
-      <span className="text-text-dim">{parts.fraction}</span>
-      <span className="text-text-ghost">{parts.ghost}</span>
-    </span>
+    <ExactCkb
+      shannons={parseShannons(shannons, 'DAO depositor capacity')}
+      signed={false}
+      tone="inherit"
+      unit={false}
+      look={{ zero: 'padded' }}
+    />
   );
 }
 

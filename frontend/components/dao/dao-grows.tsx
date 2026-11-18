@@ -10,7 +10,7 @@ import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal'
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { AMOUNT_INK } from '@/components/ui/ckb-amount';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatUtc8Date } from '@/lib/utils';
 import { unitNode } from '@/components/ui/units';
@@ -224,14 +224,16 @@ function arAtFourPlaces(exact: string): string {
 }
 
 function OwedAmount({ shannons }: { shannons: bigint }) {
-  const parts = splitCkbAmount(shannons);
   return (
-    <span className="whitespace-nowrap font-mono tabular-nums">
-      +{parts.integer}
-      <span data-fraction className={AMOUNT_INK.neutral.fraction}>
-        {parts.fraction}
-      </span>
-      <span className="text-text-ghost">{parts.ghost}</span>
+    <span className="whitespace-nowrap">
+      +
+      <ExactCkb
+        shannons={shannons}
+        signed={false}
+        tone="inherit"
+        unit={false}
+        look={{ zero: 'padded' }}
+      />
     </span>
   );
 }

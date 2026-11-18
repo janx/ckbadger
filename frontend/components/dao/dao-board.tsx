@@ -21,7 +21,7 @@ import { formatCapacity, formatDurationMs } from '@/lib/utils';
 import type { ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { AMOUNT_INK, amountSign } from '@/components/ui/ckb-amount';
+import { AMOUNT_INK, ExactCkb } from '@/components/ui/ckb-amount';
 import {
   IciclePartition,
   icicleNodePaint,
@@ -66,23 +66,20 @@ interface Props {
 
 function Amount({
   value,
-  signed = false,
   plain = false,
 }: {
   value: string;
-  signed?: boolean;
   /** On a fill (DY-03): every digit in the fill's one ink, no dim fraction. */
   plain?: boolean;
 }) {
-  const amount = parseShannons(value, 'DAO amount');
-  const parts = splitCkbAmount(amount);
   return (
-    <span className="whitespace-nowrap font-mono tabular-nums">
-      {signed ? parts.sign : null}
-      {parts.integer}
-      <span className={plain ? undefined : 'text-text-dim'}>{parts.fraction}</span>
-      <span className={plain ? undefined : 'text-text-ghost'}>{parts.ghost}</span>
-    </span>
+    <ExactCkb
+      shannons={parseShannons(value, 'DAO amount')}
+      signed={false}
+      tone="inherit"
+      unit={false}
+      look={plain ? { zero: 'padded', decimals: '', padding: 'run' } : { zero: 'padded' }}
+    />
   );
 }
 
@@ -148,16 +145,15 @@ function Metric({
  * gold text in tier 1; the fraction hero in the dim gold, the unit body.
  */
 function DepositedFigure({ shannons }: { shannons: string }) {
-  const parts = splitCkbAmount(parseShannons(shannons, 'DAO deposited'));
   return (
     <div data-role="deposited" className="text-gold text-index sm:text-display">
-      <span className="whitespace-nowrap font-mono tabular-nums">
-        {parts.integer}
-        <span className="text-hero text-gold-dim font-normal">
-          {parts.fraction}
-          <span className="text-text-ghost">{parts.ghost}</span>
-        </span>
-      </span>
+      <ExactCkb
+        shannons={parseShannons(shannons, 'DAO deposited')}
+        signed={false}
+        tone="inherit"
+        unit={false}
+        look={{ zero: 'padded', decimals: 'text-hero text-gold-dim font-normal' }}
+      />
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
       <span className="text-body text-text-dim font-normal"> CKB</span>
     </div>
@@ -169,17 +165,7 @@ function DepositedFigure({ shannons }: { shannons: string }) {
  * named key at 4.5:1), the padding zeros ghost.
  */
 function SignedCkbDecimal({ value }: { value: string }) {
-  const parts = splitCkbAmount(parseCkbDecimal(value));
-  return (
-    <span className="whitespace-nowrap font-mono tabular-nums">
-      {parts.sign}
-      {parts.integer}
-      <span data-fraction className={AMOUNT_INK[amountSign(parts.sign)].fraction}>
-        {parts.fraction}
-      </span>
-      <span className="text-text-ghost">{parts.ghost}</span>
-    </span>
-  );
+  return <ExactCkb shannons={parseCkbDecimal(value)} unit={false} look={{ zero: 'padded' }} />;
 }
 
 /** A signed whole count: "+9", "−9" (U+2212), "0". */

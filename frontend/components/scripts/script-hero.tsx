@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { splitCkbAmount } from '@/lib/ckb-decimal';
+import { ExactCkb } from '@/components/ui/ckb-amount';
 import { Dotted } from '@/components/ui/phone-row';
 import { unitNode } from '@/components/ui/units';
 
@@ -16,15 +16,16 @@ import { unitNode } from '@/components/ui/units';
  */
 export function CkbFigure({ shannons }: { shannons: bigint }) {
   if (shannons < BigInt(0)) throw new Error(`Script hero figure: negative amount ${shannons}`);
-  const parts = splitCkbAmount(shannons);
   return (
     <div data-role="figure-amount" className="text-text-bright text-index sm:text-display">
-      <span className="whitespace-nowrap font-mono tabular-nums">
-        {parts.integer}
-        <span className="text-body sm:text-hero text-text font-normal">
-          {parts.fraction}
-          <span className="text-text-ghost">{parts.ghost}</span>
-        </span>
+      <span className="whitespace-nowrap">
+        <ExactCkb
+          shannons={shannons}
+          signed={false}
+          tone="inherit"
+          unit={false}
+          look={{ zero: 'padded', decimals: 'text-body sm:text-hero text-text font-normal' }}
+        />
         {/* The space takes the unit's size. */}
         <span className="text-body text-text-dim font-normal"> CKB</span>
       </span>

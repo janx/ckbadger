@@ -302,11 +302,15 @@ function ScriptName({ script }: { script: KnownScript }) {
 
 /** "454,352,694.86": an exact CKB amount cut (never rounded up) to 2 decimals; the exact one is the row's title. */
 function CkbTwoDp({ shannons }: { shannons: bigint }) {
-  const { integer, decimal } = formatCkbAmount(shannons);
   return (
     <span data-ckb-2dp className="whitespace-nowrap">
-      {integer}
-      <span className="text-text-dim text-meta">.{decimal.slice(0, 2)}</span>
+      <ExactCkb
+        shannons={shannons}
+        signed={false}
+        tone="inherit"
+        unit={false}
+        look={{ zero: 'padded', decimals: 'text-text-dim text-meta', padding: 'run', places: 2 }}
+      />
     </span>
   );
 }

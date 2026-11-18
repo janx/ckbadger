@@ -18,7 +18,7 @@ import {
   type FiberEpochDelay,
 } from '@/lib/api';
 import { FIBER_STATE_WORDS, epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
-import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
@@ -190,16 +190,15 @@ function ledeSentence(channel: FiberChannelDetail): string {
 
 /** The channel's capacity as the page's display figure (R4): exact, its decimals a step quieter. */
 function CapacityFigure({ channel }: { channel: FiberChannelDetail }) {
-  const parts = splitCkbAmount(parseShannons(channel.capacity, `${channel.channelId} capacity`));
   return (
     <div data-role="capacity" className="text-text-bright text-index sm:text-display">
-      <span className="whitespace-nowrap tabular-nums">
-        {parts.integer}
-        <span className="text-hero text-text-dim font-normal">
-          {parts.fraction}
-          <span className="text-text-ghost">{parts.ghost}</span>
-        </span>
-      </span>
+      <ExactCkb
+        shannons={parseShannons(channel.capacity, `${channel.channelId} capacity`)}
+        signed={false}
+        tone="inherit"
+        unit={false}
+        look={{ zero: 'padded', decimals: 'text-hero text-text-dim font-normal' }}
+      />
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
       <span className="text-body text-text-dim font-normal"> CKB</span>
     </div>
