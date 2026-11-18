@@ -261,6 +261,8 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
     <ListTable
       label={title + ' daily observations'}
       density="row"
+      // It scrolls inside its panel's 320 px box (below): its head sticks to that box's top.
+      headSticksTo="box"
       columns={columns}
       rows={days}
       rowKey={(row) => String(row.ts)}

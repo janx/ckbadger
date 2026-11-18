@@ -274,7 +274,6 @@ describe('ListTable keeps its head in view (readability B5)', () => {
     // Under the header inside a scroll box, the head would stand the header's height down into
     // the box at rest.
     stubChartWidth(608);
-    // @ts-expect-error the prop comes with the fix (red first: lane B5)
     render(table({ headSticksTo: 'box' }));
     for (const th of headsOf(screen.getByRole('table', { name: 'Holdings' }))) {
       expect(th).toHaveClass('sticky', 'top-0', 'bg-[var(--m-header-strip)]');
