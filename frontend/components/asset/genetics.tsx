@@ -16,7 +16,8 @@ import { PromptHeading } from '@/components/ui/prompt-heading';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { ByteScaleMap } from '@/components/ui/hex-map';
 import { ReadoutRow } from '@/components/ui/readout-row';
-import { ListTable } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
@@ -51,6 +52,19 @@ import { TraitText } from '@/components/asset/trait-text';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { unitText } from '@/components/ui/units';
+
+/**
+ * The gene tables' columns (readability F3-e), the 13 px cells at 0.6 em a glyph and the 16 px
+ * gap after every column but the last. A gene's name, its rule and what an object shows are
+ * pattern text that ends in the one ellipsis (the row's title holds it): each holds 12 characters
+ * at its minimum, the last column is the flexible one and takes what the container gives beyond
+ * the sum. A byte range is whole: a DNA under 1,000 bytes, "bytes 999–999".
+ */
+const GENE_TEXT_CHARS = 12;
+const geneText = (last = false) =>
+  columnPx(textPx(GENE_TEXT_CHARS, fontPx('small')) + (last ? 0 : CELL_GAP_PX));
+const WIDEST_SPAN = 'bytes 999–999';
+const geneSpanPx = (text: string) => columnPx(textPx(text.length, fontPx('small')) + CELL_GAP_PX);
 
 // ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
 export interface ObjectGeneticsViewProps {
@@ -493,7 +507,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
             {
               key: 'gene',
               label: 'gene',
-              minWidth: 100,
+              minWidth: geneText(),
               header: <span className="text-meta">gene</span>,
               render: (g) => (
                 <span
@@ -507,7 +521,8 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
             {
               key: 'bytes',
               label: 'bytes',
-              minWidth: 110,
+              // the widest range with its " · clipped" note
+              minWidth: geneSpanPx(`${WIDEST_SPAN} · clipped`),
               header: <span className="text-meta">bytes</span>,
               render: (g) => (
                 <span className="text-text-dim leading-row block truncate tabular-nums">
@@ -519,7 +534,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
             {
               key: 'rule',
               label: 'rule',
-              minWidth: 100,
+              minWidth: geneText(),
               header: <span className="text-meta">rule</span>,
               render: (g) => (
                 <span className="text-text-dim leading-row block truncate">{g.rule}</span>
@@ -528,7 +543,8 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
             {
               key: 'value',
               label: 'this object',
-              minWidth: 150,
+              minWidth: geneText(true),
+              width: 'auto',
               header: <span className="text-meta">this object</span>,
               render: (g) => (
                 // a cut value carries the whole of it in its title (the lead's finding)
@@ -708,14 +724,14 @@ function PatternReading({
         {
           key: 'gene',
           label: 'gene',
-          minWidth: 110,
+          minWidth: geneText(),
           header: <span className="text-meta">gene</span>,
           render: (row) => <span className={cn(cell, 'text-text-bright')}>{row.label}</span>,
         },
         {
           key: 'bytes',
           label: 'bytes',
-          minWidth: 130,
+          minWidth: geneSpanPx(WIDEST_SPAN),
           header: <span className="text-meta">bytes</span>,
           render: (row) => (
             <span className={cn(cell, 'text-text-dim tabular-nums')}>{row.span}</span>
@@ -724,14 +740,15 @@ function PatternReading({
         {
           key: 'rule',
           label: 'rule',
-          minWidth: 120,
+          minWidth: geneText(),
           header: <span className="text-meta">rule</span>,
           render: (row) => <span className={cn(cell, 'text-text-dim')}>{row.rule}</span>,
         },
         {
           key: 'found',
           label: foundHead,
-          minWidth: 140,
+          minWidth: geneText(true),
+          width: 'auto',
           header: <span className="text-meta">{foundHead}</span>,
           render: (row) => <span className={cn(cell, 'text-text-dim')}>{found(row) ?? '—'}</span>,
         },

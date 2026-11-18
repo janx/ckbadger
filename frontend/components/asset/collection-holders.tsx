@@ -12,17 +12,22 @@ import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DotCellParty } from '@/components/identity/dotcell-party';
 import { DetailSection } from '@/components/ui/detail-layout';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { countNoun } from '@/lib/format-count';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_COMPACT_TICK, shortChars } from '@/lib/list-bounds';
+
+/** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
 
 export interface CollectionHoldersProps {
   load: (params: {
@@ -38,9 +43,15 @@ export interface CollectionHoldersProps {
 /** The asset classes a row bar can be drawn in (`AlignedBar` tones). */
 type BarClass = Extract<AssetClass, 'tokens' | 'objects' | 'identities' | 'dao'>;
 
-/** The count bars' track; the exact count prints beside it (table-rows L2-4). */
-const TRACK = 48;
-const COUNT_WIDTH = 44;
+/**
+ * The count bars' track; the exact count prints beside it (table-rows L2-4). Readability F3-e:
+ * the track holds its head's ticks ("0" … "750M", the tick form) whole, under the 48 px a bar
+ * keeps at least, so 48; the count is a holder's items or a range's holders, under 100,000:
+ * "99,999" (6 characters at 13 px, 46.8; it was 44, five).
+ */
+const TRACK = trackPx(['0', WIDEST_COMPACT_TICK]);
+const WIDEST_COUNT = '99,999';
+const COUNT_WIDTH = columnPx(cell(WIDEST_COUNT.length));
 
 /**
  * F2 objects (OB-C7) on the row rules: a count as an 8 px bar in the class colour on the column's
@@ -51,13 +62,16 @@ function countColumn<T>(
   label: string,
   rows: readonly T[],
   value: (row: T) => number,
-  assetClass: BarClass
+  assetClass: BarClass,
+  /** The table's last column keeps no gap after it. */
+  last = false
 ): ListColumn<T> {
   const scale = resourceScale(rows.map(value));
   return {
     key,
     label,
-    minWidth: TRACK + 10 + COUNT_WIDTH + 16,
+    // the track, the bar's 10 px gap, the count and the gap, none after the last column
+    minWidth: columnPx(TRACK + BAR_FIGURE_GAP + COUNT_WIDTH + (last ? 0 : CELL_GAP_PX)),
     header: (
       <ScaleHeader
         label={label}
@@ -169,20 +183,36 @@ function ScopedCollectionHolders({
     {
       key: 'rank',
       label: '#',
-      minWidth: 32,
+      // A rank of five digits (a collection's holders under 100,000), "99999" (39 at 13 px), and
+      // the gap; it was 32, two digits.
+      minWidth: columnPx(cell('99999'.length) + CELL_GAP_PX),
       className: 'whitespace-nowrap',
       render: (holder) => <span className="text-text-bright">{rank(holder)}</span>,
     },
     {
       key: 'owner',
       label: 'Holder',
-      minWidth: 196,
+      // The widest holder: an owner known by its hash prefix alone, the prefix at the row size (17
+      // characters at 13 px, 132.6), its 8 px gap and the "unresolved" badge (78, 8 px sides and
+      // a 1 px border), and the gap: 252.6. It was 196, which held an address.
+      minWidth: columnPx(
+        cell(shortChars(SHORT_FORMS.row.hash)) +
+          8 +
+          cell('unresolved'.length) +
+          2 * 8 +
+          2 * 1 +
+          CELL_GAP_PX
+      ),
       render: (holder) => party(holder, 'row'),
     },
     {
       key: 'lock',
       label: 'Lock',
-      minWidth: 116,
+      // The flexible column (readability F3-e): its tag holds 12 characters of the kind at its
+      // minimum (its words at 12 px, 5 px sides, a 1 px border) and the gap, and takes what the
+      // container gives beyond the sum; a longer kind ends in the one ellipsis. It was 116.
+      minWidth: columnPx(textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1 + CELL_GAP_PX),
+      width: 'auto',
       render: (holder) => (
         <span className="flex min-w-0">
           <LockKind
@@ -194,13 +224,18 @@ function ScopedCollectionHolders({
         </span>
       ),
     },
-    countColumn('items', 'Items', listed, (holder) => holder.itemCount, assetClass),
+    countColumn('items', 'Items', listed, (holder) => holder.itemCount, assetClass, true),
   ];
   const bucketColumns: ListColumn<NonNullable<CollectionHoldersProps['distribution']>[number]>[] = [
     {
       key: 'range',
       label: 'Holds',
-      minWidth: 65,
+      // The head, "Holds" (36 at 12 px), wider than the widest range the API writes, "3–5" (25.2
+      // at 14 px), and the gap. It was 65.
+      minWidth: columnPx(
+        Math.max(textPx('Holds'.length, fontPx('meta')), textPx('3–5'.length, fontPx('body'))) +
+          CELL_GAP_PX
+      ),
       render: (bucket) => (
         <span className="text-body text-text-bright leading-row">{bucket.range}</span>
       ),
@@ -209,7 +244,9 @@ function ScopedCollectionHolders({
     {
       key: 'items',
       label: 'Items',
-      minWidth: 100,
+      // A range's items under a million, "999,999" (54.6 at 13 px); the last column, no gap after
+      // it. It was 100.
+      minWidth: columnPx(cell('999,999'.length)),
       numeric: true,
       render: (bucket) => (
         <span>

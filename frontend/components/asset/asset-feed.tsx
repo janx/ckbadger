@@ -17,7 +17,7 @@ import {
   type ItemFeedHeadline,
   type ItemFeedSubject,
 } from '@/lib/feed-headlines';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -36,6 +36,44 @@ import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
+import { amountDigits, amountText } from '@/lib/amount-form';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import {
+  WIDEST_AGE,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_POOL_VALUE_LINE,
+  WIDEST_TX_FEE,
+  shortChars,
+} from '@/lib/list-bounds';
+
+/** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+
+/**
+ * A feed's own words in a column of their own (an identity's action, a context the feed adds): 12
+ * characters at their minimum, and the gap; they wrap.
+ */
+const FEED_WORDS_PX = columnPx(cell(12) + CELL_GAP_PX);
+
+/** The track `ScaleHeader` draws a bar column's ticks on, its default (the stacked bars are 80). */
+const HEAD_TRACK_PX = 120;
+
+/**
+ * The widest token amount a list column holds on one line (the moved column here, a supply
+ * event's amounts), as TokenAmount's column form writes it: under a billion whole tokens at the
+ * token's decimals ("999,999,999.99999999" at 8), the raw integer and " (raw)" when they are
+ * unknown. A larger amount breaks after a thousands separator.
+ */
+export function widestTokenAmount(decimals: number | null): string {
+  if (decimals === null)
+    return `${amountText(amountDigits(BigInt(999_999_999), 0, 'exact'), false)} (raw)`;
+  return amountText(
+    amountDigits(BigInt(10) ** BigInt(9 + decimals) - BigInt(1), decimals, 'column'),
+    false
+  );
+}
 
 /** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
 export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject): ItemFeedHeadline {
@@ -103,11 +141,15 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
   }
   const sizeScale = resourceScale(rows.map((r) => r.txSize!)),
     cycleScale = resourceScale(rows.flatMap((r) => (r.cycles === null ? [] : [r.cycles])));
+  // Readability F3-e: every column budgeted from the widest value it holds (lib/list-bounds.ts),
+  // the 13 px cells and 12 px notes and units at 0.6 em a glyph, and the 16 px gap after every
+  // column; the gap after the last one shown is taken off below (`shown`).
   const columns: ListColumn<Transaction>[] = [
     {
       key: 'tx',
       label: 'Transaction',
-      minWidth: 178,
+      // the hash at the row size (17 characters, 132.6); it was 178
+      minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
       render: (r) => (
         <AppLink href={`/tx/${r.hash}`}>
           <Hash hash={r.hash} size="row" copyable={false} className="text-small" />
@@ -118,7 +160,14 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       key: 'block',
       // ID-C8: the identity boards date the block (UTC+8); the other asset boards age it.
       label: identity ? 'Block · date' : 'Block · age',
-      minWidth: 160,
+      // "#99,999,999 · 10y 364d ago" on its line (a date, "2026-10-22", on the identity boards),
+      // "tx 9999 in block" at 12 px under it; it was 160
+      minWidth: columnPx(
+        Math.max(
+          cell(`${WIDEST_BLOCK_NUMBER} · ${identity ? '2026-10-22' : WIDEST_AGE}`.length),
+          textPx(`tx ${WIDEST_COUNT_DIGITS} in block`.length, fontPx('meta'))
+        ) + CELL_GAP_PX
+      ),
       render: (r) => (
         <>
           <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
@@ -136,7 +185,8 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
           {
             key: 'action',
             label: identity.actionLabel,
-            minWidth: 150,
+            // the board's own words, 12 characters at the minimum; they wrap (it was 150)
+            minWidth: FEED_WORDS_PX,
             className: '!whitespace-normal',
             render: identity.action,
           } satisfies ListColumn<Transaction>,
@@ -145,7 +195,10 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 70,
+      // four digits a side as written, "9999 → 9999" (85.8); it was 70
+      minWidth: columnPx(
+        cell(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT_DIGITS}`.length) + CELL_GAP_PX
+      ),
       numeric: true,
       render: (r) => `${r.inputsCount} → ${r.outputsCount}`,
     },
@@ -154,7 +207,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     ? {
         key: 'context',
         label: context.label,
-        minWidth: context.placement === 'after-cells' ? 110 : 180,
+        // the feed's own words, 12 characters at the minimum; they wrap (it was 110 after the
+        // cells, 180 at the end)
+        minWidth: FEED_WORDS_PX,
         numeric: context.placement === 'after-cells',
         render: context.render,
       }
@@ -164,7 +219,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     columns.push({
       key: 'moved',
       label: `${token.symbol ?? 'Token'} moved`,
-      minWidth: 160,
+      // under a billion whole tokens at the token's decimals on one line; more breaks after a
+      // thousands separator (it was 160)
+      minWidth: columnPx(cell(widestTokenAmount(token.decimals).length) + CELL_GAP_PX),
       numeric: true,
       className: '!whitespace-normal',
       render: (r) => (
@@ -179,7 +236,11 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     {
       key: 'output',
       label: 'Output capacity',
-      minWidth: 180,
+      // under a million CKB on one line with its unit (124.8 and 28.8); more breaks before the
+      // decimals (it was 180)
+      minWidth: columnPx(
+        cell(WIDEST_POOL_VALUE_LINE.length) + textPx(' CKB'.length, fontPx('meta')) + CELL_GAP_PX
+      ),
       numeric: true,
       className: '!whitespace-normal',
       render: (r) => (
@@ -195,7 +256,10 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     {
       key: 'fee',
       label: 'Fee',
-      minWidth: 140,
+      // a fee under 100 CKB with its unit (85.8 and 28.8); it was 140
+      minWidth: columnPx(
+        cell(WIDEST_TX_FEE.length) + textPx(' CKB'.length, fontPx('meta')) + CELL_GAP_PX
+      ),
       numeric: true,
       className: '!whitespace-normal',
       render: (r) => (
@@ -207,7 +271,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       label: 'Size',
       // OB-13: the header carries the scale every bar in the column shares.
       header: sizeScale > 0 ? <ScaleHeader label="Size, bytes" scale={sizeScale} /> : undefined,
-      minWidth: 112,
+      // the head's tick row, as long as ScaleHeader's track (120 px; "0 … 600,000" in it), wider
+      // than the bar's 80 px and its count; it was 112
+      minWidth: columnPx(HEAD_TRACK_PX + CELL_GAP_PX),
       render: (r) => (
         <ResourceBar value={r.txSize!} scale={sizeScale} label="Serialized bytes" stacked />
       ),
@@ -216,7 +282,8 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       key: 'cycles',
       label: 'Cycles',
       header: cycleScale > 0 ? <ScaleHeader label="Cycles" scale={cycleScale} /> : undefined,
-      minWidth: 120,
+      // the head's 120 px tick row ("0 … 4,000,000,000", 108 px, in it), wider than the figure
+      minWidth: columnPx(HEAD_TRACK_PX + CELL_GAP_PX),
       render: (r) =>
         r.cycles === null ? (
           <span className="text-text-dim">
@@ -228,10 +295,14 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     }
   );
   // ID-C8: the identity boards carry no Output capacity or Cycles column.
-  const shown = identity
+  const kept = identity
     ? columns.filter((column) => column.key !== 'output' && column.key !== 'cycles')
     : columns;
-  if (contextColumn && context?.placement !== 'after-cells') shown.push(contextColumn);
+  if (contextColumn && context?.placement !== 'after-cells') kept.push(contextColumn);
+  // the last column keeps no gap after it (its cells' last:pr-0)
+  const shown = kept.map((column, i) =>
+    i === kept.length - 1 ? { ...column, minWidth: column.minWidth - CELL_GAP_PX } : column
+  );
   return (
     <ListTable
       label="Asset transactions"

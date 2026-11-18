@@ -4,7 +4,7 @@ import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -18,6 +18,14 @@ import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
+import { widestTokenAmount } from '@/components/asset/asset-feed';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_BLOCK_NUMBER, WIDEST_COUNT_DIGITS, shortChars } from '@/lib/list-bounds';
+
+/** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+
 const DAY = 86400000;
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
@@ -200,17 +208,26 @@ export function AssetHistory({
   const plotLeft = alignedPlotLeft(
     [capacityAxis, supplyAxis, weeklyAxis].filter((a): a is ChartValueAxisInput => a !== null)
   );
+  // Readability F3-e: every column budgeted from what it holds, the 13 px cells and 12 px notes at
+  // 0.6 em a glyph and the 16 px gap after every column but the last. The amounts hold one line
+  // under a billion whole units at the token's own decimals; a larger one breaks after a thousands
+  // separator (TokenAmount).
+  const eventAmount = token ? widestTokenAmount(token.decimals) : '';
   const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
       label: 'Date · UTC+8',
-      minWidth: 110,
+      // a date, "2024-01-02" (78 at 13 px), wider than the head's words, and the gap; it was 110
+      minWidth: columnPx(cell('2024-01-02'.length) + CELL_GAP_PX),
       render: (e) => formatUtc8Date(e.timestamp),
     },
     {
       key: 'kind',
       label: 'Change',
-      minWidth: 65,
+      // the head, "Change" (43.2 at 12 px), wider than "Mint" or "Burn", and the gap; it was 65
+      minWidth: columnPx(
+        Math.max(textPx('Change'.length, fontPx('meta')), cell('Burn'.length)) + CELL_GAP_PX
+      ),
       render: (e) => (
         <span className={e.kind === 'mint' ? 'text-positive' : 'text-negative'}>
           {e.kind === 'mint' ? 'Mint' : 'Burn'}
@@ -220,7 +237,17 @@ export function AssetHistory({
     {
       key: 'block',
       label: 'Block / transaction',
-      minWidth: 160,
+      // "#99,999,999" over "tx 9999 · sequence 9999" at 12 px (a block's transactions and a
+      // transaction's transfers under 10,000; 165.6, the wider), and the gap; it was 160
+      minWidth: columnPx(
+        Math.max(
+          cell(WIDEST_BLOCK_NUMBER.length),
+          textPx(
+            `tx ${WIDEST_COUNT_DIGITS} · sequence ${WIDEST_COUNT_DIGITS}`.length,
+            fontPx('meta')
+          )
+        ) + CELL_GAP_PX
+      ),
       render: (e) => (
         <>
           <AppLink href={`/blocks/${e.blockNumber}`}>{formatBlockNumber(e.blockNumber)}</AppLink>
@@ -233,7 +260,8 @@ export function AssetHistory({
     {
       key: 'amount',
       label: 'Amount',
-      minWidth: 160,
+      // its sign and the widest amount on one line, and the gap; it was 160
+      minWidth: columnPx(cell(`+${eventAmount}`.length) + CELL_GAP_PX),
       numeric: true,
       className: '!whitespace-normal',
       render: (e) => (
@@ -246,7 +274,8 @@ export function AssetHistory({
     {
       key: 'after',
       label: 'Supply after',
-      minWidth: 160,
+      // the widest amount on one line and the gap; it was 160
+      minWidth: columnPx(cell(eventAmount.length) + CELL_GAP_PX),
       numeric: true,
       className: '!whitespace-normal',
       render: (e) => (
@@ -256,7 +285,15 @@ export function AssetHistory({
     {
       key: 'party',
       label: 'To / from',
-      minWidth: 160,
+      // the party's lock hash at the row size (17 characters at 13 px; an address is 13) over its
+      // lock, "lock 0x43434343…434343" at 12 px (158.4, the wider); the last column, no gap after
+      // it. It was 160.
+      minWidth: columnPx(
+        Math.max(
+          cell(shortChars(SHORT_FORMS.row.hash)),
+          textPx('lock '.length + shortChars(SHORT_FORMS.row.hash), fontPx('meta'))
+        )
+      ),
       render: (e) => (
         <>
           <AppLink href={`/address/${e.address ?? e.lockHash}`}>

@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import { activityHeadline } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
@@ -27,7 +27,18 @@ import { classifyActivity } from '@/lib/activity-classify';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import {
+  MAX_BLOCK_BYTES,
+  MAX_BLOCK_CYCLES,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_TX_FEE,
+  WIDEST_TX_VALUE,
+  shortChars,
+} from '@/lib/list-bounds';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
@@ -146,18 +157,36 @@ function TxHash({ tx, size }: { tx: AddressTransaction; size: ShortSize }) {
   );
 }
 
+/** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+
+/**
+ * The address's transactions (readability F3-e): every column budgeted from the widest value it
+ * holds (lib/list-bounds.ts), the 13 px cells at 0.6 em a glyph and the 16 px gap after every
+ * column but the last. Scripts is the flexible column.
+ */
 const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'hash',
     label: 'Transaction',
-    minWidth: 172,
+    // the hash at the row size (17 characters, 132.6) and the gap; it was 172
+    minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
     render: (tx) => <TxHash tx={tx} size="row" />,
   },
-  { key: 'block', label: 'Block · date', minWidth: 136, render: (tx) => <TxPosition tx={tx} /> },
+  {
+    key: 'block',
+    label: 'Block · date',
+    // a pool transaction's wait on one line, "in pool for 99d" (waits under 100 days; 117), wider
+    // than "#99,999,999", a date or its status badge, and the gap; it was 136
+    minWidth: columnPx(cell('in pool for 99d'.length) + CELL_GAP_PX),
+    render: (tx) => <TxPosition tx={tx} />,
+  },
   {
     key: 'cells',
     label: 'Cells in → out',
-    minWidth: 100,
+    // four digits a side, the inputs as written and the outputs grouped, "9999 → 9,999" (93.6),
+    // and the gap; it was 100
+    minWidth: columnPx(cell(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT}`.length) + CELL_GAP_PX),
     render: (tx) => (
       <span>
         {tx.isCellbase ? 0 : tx.inputsCount} <span className="text-text-dim">→</span>{' '}
@@ -168,7 +197,8 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'change',
     label: 'This address, CKB',
-    minWidth: 180,
+    // a change under a billion CKB with its sign on one line (21 characters, 163.8) and the gap
+    minWidth: columnPx(cell(`+${WIDEST_TX_VALUE}`.length) + CELL_GAP_PX),
     numeric: true,
     className: 'whitespace-normal',
     render: (tx) => (
@@ -178,7 +208,8 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'fee',
     label: 'Fee, CKB',
-    minWidth: 136,
+    // a fee under 100 CKB (85.8) and the gap; it was 136
+    minWidth: columnPx(cell(WIDEST_TX_FEE.length) + CELL_GAP_PX),
     numeric: true,
     className: 'whitespace-normal',
     render: (tx) => (
@@ -195,14 +226,19 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'size',
     label: 'Size, B',
-    minWidth: 90,
+    // "Unavailable" (85.8), wider than a size of "597,000", and the gap; it was 90
+    minWidth: columnPx(
+      cell(Math.max('Unavailable'.length, MAX_BLOCK_BYTES.toLocaleString('en-US').length)) +
+        CELL_GAP_PX
+    ),
     numeric: true,
     render: (tx) => (tx.txSize === null ? 'Unavailable' : tx.txSize.toLocaleString('en-US')),
   },
   {
     key: 'cycles',
     label: 'Cycles',
-    minWidth: 120,
+    // the cycle limit, "3,500,000,000" (101.4), wider than "Not computed", and the gap; it was 120
+    minWidth: columnPx(cell(MAX_BLOCK_CYCLES.toLocaleString('en-US').length) + CELL_GAP_PX),
     numeric: true,
     render: (tx) =>
       tx.cycles === null ? (
@@ -216,7 +252,11 @@ const columns: ListColumn<AddressTransaction>[] = [
   {
     key: 'scripts',
     label: 'Scripts',
-    minWidth: 146,
+    // The flexible column: a script's 12 px mark, its 6 px gap and 12 characters of its name at
+    // its minimum (a longer list wraps between scripts); the last column, no gap after it. It was
+    // 146.
+    minWidth: columnPx(12 + 6 + cell(12)),
+    width: 'auto',
     render: (tx) => (
       <span className="flex flex-wrap gap-x-2.5 gap-y-1">
         {tx.scriptLabels.map((label) => {
@@ -304,24 +344,22 @@ function CellContains({ cell: c, size }: { cell: AddressCell; size: ShortSize })
 }
 
 /**
- * The live cells table's columns (12 px monospace, 7.2 px a character; 11 px, 6.6; 16 px between
- * columns, none after the last). Its minimum is 992 px, the width it changes form at. The seals
- * by kind (C4) lead the Cell column with the cell's 30 px row seal, its footprint (30 + 8 = 38 px)
- * taken from measured slack so the total and the form change stay 992:
- * - Cell 200 → 238: the out point at the row size with a four-digit index, 22 characters (158.4;
- *   it was 24 with three dots) + 16, and the seal's 38: 212.4.
- * - Occupied 196 → 178: a cell is at most a block's 597,000 bytes, so at most "597,000.00000000"
- *   (16 characters, 115.2) and " CKB" at 11 px (26.4) + 16: 157.6.
- * - Created at 120 → 100 (the last column): "#99,999,999" is 11 characters (79.2), and
- *   "#100,000,000" 12 (86.4).
- * Contains (280) and Capacity (196: every amount under a billion CKB on one line, 186.4) keep
- * theirs.
+ * The live cells table's columns (readability F3-e: each budgeted from the widest value it holds,
+ * the 13 px cells and 12 px units at 0.6 em a glyph, 16 px between columns, none after the last):
+ * 965 px, the width it changes form at (it was 992). The seals by kind (C4) lead the Cell column
+ * with the cell's 30 px row seal and its 8 px gap. Contains is the flexible column.
  */
 const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'outpoint',
     label: 'Cell',
-    minWidth: 200 + ROW_SEAL.cell.footprint,
+    // the stone, the out point at the row size with a four-digit index (22 characters, 171.6) and
+    // the gap: 225.6 (it was 238, 12.4 of it spare)
+    minWidth: columnPx(
+      ROW_SEAL.cell.footprint +
+        cell(shortChars(SHORT_FORMS.row.hash) + `:${WIDEST_COUNT_DIGITS}`.length) +
+        CELL_GAP_PX
+    ),
     // The cell's seal leads the row, overhanging the out point's 18 px line (RowSeal), so a row
     // keeps its height; the out point stays the row's link (the seal is an image, not a link).
     render: (c) => (
@@ -334,13 +372,27 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'content',
     label: 'Contains',
-    minWidth: 280,
+    // The flexible column: what a cell holds in its class form whole at its minimum, the 16 px
+    // mark, "Other scripts" and the type script's hash at the row size, 8 px apart, and the gap:
+    // 281.8 (it was 280); a cell's content takes what the container gives beyond the sum.
+    minWidth: columnPx(
+      16 +
+        8 +
+        cell('Other scripts'.length) +
+        8 +
+        cell(shortChars(SHORT_FORMS.row.hash)) +
+        CELL_GAP_PX
+    ),
+    width: 'auto',
     render: (c) => <CellContains cell={c} size="row" />,
   },
   {
     key: 'capacity',
     label: 'Capacity, CKB',
-    minWidth: 196,
+    // every amount under a billion CKB on one line (156) and its unit at 12 px (28.8), and the gap
+    minWidth: columnPx(
+      cell(WIDEST_TX_VALUE.length) + textPx(' CKB'.length, fontPx('meta')) + CELL_GAP_PX
+    ),
     numeric: true,
     className: 'whitespace-normal',
     render: (c) => (
@@ -350,7 +402,13 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'occupied',
     label: 'Occupied, CKB',
-    minWidth: 178,
+    // a cell is at most a block's 597,000 bytes, so at most "597,000.00000000" (124.8) and its
+    // unit (28.8), and the gap
+    minWidth: columnPx(
+      cell(`${MAX_BLOCK_BYTES.toLocaleString('en-US')}.00000000`.length) +
+        textPx(' CKB'.length, fontPx('meta')) +
+        CELL_GAP_PX
+    ),
     numeric: true,
     className: 'whitespace-normal',
     render: (c) => (
@@ -379,7 +437,8 @@ const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'created',
     label: 'Created at',
-    minWidth: 100,
+    // "#99,999,999" (85.8); the last column, no gap after it
+    minWidth: columnPx(cell(WIDEST_BLOCK_NUMBER.length)),
     render: (c) => (
       <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
     ),
