@@ -1,4 +1,3 @@
-import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import {
   ClusterCellEvidence,
@@ -31,7 +30,7 @@ describe('ClusterCellEvidence', () => {
     expect(facts).toHaveTextContent(
       // U-09 (re-pinned): the evidence's rows at the row size; R9 (re-pinned): `ckb1…` and 8
       // B4 fix round (re-pinned): the producer's owner is a real address now, its tail read off it
-      `live cell0xa5c53484…1f3261:0 · created in #99 · 2023-11-15held byckb1…${seededAddress('owner1').slice(-8)} · Unregistered locktype0x7366a615…030075 · the cluster id is this cell’s type args`
+      `live cell0xa5c53484…1f3261:0 · created in #99 · 2023-11-15held byckb1…${current.cell.ownerAddress.slice(-8)} · Unregistered locktype0x7366a615…030075 · the cluster id is this cell’s type args`
     );
     expect(within(facts).getAllByRole('link')[0]).toHaveAttribute(
       'href',

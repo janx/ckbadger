@@ -425,7 +425,9 @@ describe('TokenDetailPage', () => {
     expect(metrics).toHaveTextContent('lock 0x43434343…434343 · owner lock proven by token script');
     expect(within(metrics).getByRole('link', { name: '0x43434343…434343' })).toHaveAttribute(
       'href',
-      expect.stringMatching(new RegExp(`/script/${unregistered}$`))
+      // B4 second fix round (re-pinned on purpose): that lock's page, by the hash type its address
+      // spells, as a lock
+      expect.stringMatching(new RegExp(`/script/${unregistered}\\?hashType=type&kind=lock$`))
     );
     expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
   });
