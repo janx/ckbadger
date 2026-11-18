@@ -616,7 +616,7 @@ function DepRow({
                 </Link>
                 {memberServes.length > 0
                   ? ` · ${memberServes.join(', ')} code, ${size(cell.codeSize)}`
-                  : ` · ${size(cell.codeSize)} no script here names`}
+                  : ` · a ${size(cell.codeSize)} cell no script here names`}
               </span>
             );
           })}
