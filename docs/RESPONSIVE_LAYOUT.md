@@ -173,7 +173,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
   sizes; an out point is its hash and `:N`; a value no longer than its shortened form is written
   whole. The ellipsis is the one character `…`, never `...`. A renderer takes a size, never a
   length, and `head` and `tight` are chosen only where the gate lists them with their reason
-  (`__tests__/lib/shorten-gate.test.ts`). A
+  (`__tests__/lib/shorten-gate.test.ts`). Text that is not ours in a figure (a gene's name, rule
+  and trait value, a pool's name, an organisation) is measured by an upper bound, not by its
+  length: a grapheme of the served Latin subset is 0.6 em, any other 1.25 em (the fallback faces
+  measured on the development machine draw CJK at up to 1.2 em and emoji at 1.245 em), and it
+  is cut at whole graphemes with the one ellipsis (`foreignTextPx`, `clipForeignLabel`). A
   percentage has two decimals and its sign with no space (`24.79%`); a compact count or CKB amount
   takes a lowercase `k` for thousands, then `M`, `B`, `T`; a physical quantity keeps its SI prefix
   with its symbol (`PH/s`, `kB`); a figure writes the symbol (`s`, `h`, `d`, `B`), prose the word.
