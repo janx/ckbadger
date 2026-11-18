@@ -49,9 +49,17 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 - **Header search field**: the long placeholder `search block / tx / address / cell` (285.6 px at
   the 14 px body step, `lib/type-metrics.ts`) only when the field's measured text box holds it
-  whole, `search` otherwise, chosen before paint (principle 4; a field 351.6 px wide from `md`:
-  the header gives about 169 px at 768–1023, 368.6 px at 1024 with one network but less beside the
-  network switcher, 460.8 px at 1280). The `/` key is drawn from `md`.
+  whole, `search` otherwise, chosen before paint (principle 4; a field 351.6 px wide from `md`,
+  the text box being the field less 29 px on the left and 37 on the right). The `/` key is drawn
+  from `md`. The field's floor is a field that holds `search` and, from `md`, the `/` key's room:
+  116.4 px from `md`, 92.4 below it. With one network the row leaves the field 460.8 px at 1280
+  (its 36vw cap), 352 at 1024 (the long placeholder with 0.4 px to spare), 144 at 768–1023, its
+  288 px cap at 640–767 whatever the section word beside the menu, and 212, 182 and 142 at 390,
+  360 and 320. Beside the network switcher (two networks; 117.5 px with its margin from `md`, the
+  name in the tracked eyebrow) it leaves 460.8 at 1280 and 210.5 at 1024, but 10.5 at 768–1023,
+  under the floor: which part of the row yields there is not ruled yet. Below `md` the switcher
+  is a row of the phone menu and the header row is the same as with one network
+  (`__tests__/components/shell-budget.test.tsx` states each width).
 - **Vitals strip** (every page, under the header): one wrapping row from `md` up, the same on
   every page. Below `md` the home page keeps the whole strip in three groups on their own lines —
   block number with the live mark, the epoch with its bar, `index / length` and the time left, the
@@ -90,8 +98,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
   quiet row, then the empty prompt (the cinnabar square and the cursor), the last thing before the
   status line. The footer's "keyboard shortcuts" is drawn from `md` only; below `md` the footer
   ends instead on a line of its own with the release and the clock's zone, as in
-  `ckbadger 0.8.2 · asia/shanghai`: each unbreakable, the line breaking only between them (at 360
-  the links take two lines, 256.0 and 263.2 of 328 px, and this one 216.0).
+  `ckbadger 0.8.2 · asia/shanghai`: each unbreakable, the line breaking only between them (at 13
+  px the links take two lines at 390, 360 and 320, 274.0 and 281.8 px, one at 640, 575.8 of 608,
+  and this one 234.0, breaking for a zone of more than 25 characters at 360). From `md`, with
+  "keyboard shortcuts", the links need 736.2 px: one line from 1024, two at 768, where the last
+  takes a line of its own.
 - **Transaction pipeline** (homepage): a block is a plate 99 px wide; one row down to a 589 px
   canvas (two whole plates); below that a vertical timeline (the mempool and proposed wells, the
   dashed next block and the plates as rows 44 px tall, taller only for a 3×3 or 4×4 square or a

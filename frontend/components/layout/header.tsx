@@ -180,9 +180,10 @@ export function Header() {
               )}
             </button>
             {/* PA-04, PB-26: the section word from 640 only. Below it the row cannot spare a slot
-                for it — the longest, "Transactions" (93.6 px and its 8 px gap), would leave the
-                field 78 px at 360 — so the field is what the row leaves, 180 px, on every page.
-                From 640 the field is its 288 px cap whatever the word (360 px are free). The word
+                for it — the longest, "Transactions" (100.8 px and its 8 px gap), would leave the
+                field 73.2 px at 360 — so the field is what the row leaves, 182 px, on every page.
+                From 640 the field is its 288 px cap whatever the word (353.2 px of room beside
+                the longest). The word
                 is lowercase as the nav is (U-01). */}
             {activeLabel && (
               <span className="text-jade text-body hidden truncate font-mono lowercase sm:inline">

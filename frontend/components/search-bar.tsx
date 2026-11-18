@@ -18,18 +18,19 @@ interface SearchBarProps {
 
 /** The boards' placeholder (lib.js `header()`, U-01): lowercase, as a command is typed; no dots. */
 const SEARCH_PLACEHOLDER = 'search block / tx / address / cell';
-/** The placeholder of a field whose text box cannot hold the long one: 6 characters, 46.8 px. */
+/** The placeholder of a field whose text box cannot hold the long one: 6 characters, 50.4 px. */
 const SEARCH_PLACEHOLDER_SHORT = 'search';
 /**
  * The long placeholder's width in the field's font, the body step (`text-body`): 34 characters,
- * 265.2 px at 13 px (lib/type-metrics.ts). The field draws it
+ * 285.6 px at 14 px (lib/type-metrics.ts). The field draws it
  * only when its measured text box holds all of it (PA-04 follow-up; RESPONSIVE_LAYOUT principle
  * 4, the measured width decides, not the breakpoint). In the header's field that box is the
  * input's width less 1 + 28 px on the left (the border, the prompt square's inset) and 36 + 1 px
  * on the right from md (the `/` key's room), 12 + 1 px below it: the long one needs a field
- * 331.2 px wide from md, and a phone's field (180 px at 360, capped at 288 px) never holds it.
- * At 768–1023 the header leaves the field about 169 px, at 1024 368.6 px (36vw) with one network
- * and about 281 px beside the network switcher, at 1280 460.8 px.
+ * 351.6 px wide from md, and a phone's field (182 px at 360, capped at 288 px) never holds it.
+ * With one network the header leaves the field 144 px at 768–1023, 352 px at 1024 (the long one
+ * with 0.4 px to spare) and 460.8 px at 1280; beside the network switcher 210.5 px at 1024
+ * (`__tests__/components/shell-budget.test.tsx` states each width).
  */
 const LONG_PLACEHOLDER_PX = textPx(SEARCH_PLACEHOLDER.length, fontPx('body'));
 
