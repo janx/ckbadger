@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
-import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, lineAscentPx, wrapPhrases } from '@/lib/chart-type';
 import { descentPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
 /**
@@ -282,13 +282,17 @@ function DepositedPlot({
   const ckb = (v: bigint) => Number(v) / 1e8;
   const ticks = niceTicks(0, Math.max(...days.map((d) => ckb(d.shannons))), 4);
   const top = ticks.values[ticks.values.length - 1];
-  const name = `CKB deposited · every complete day since ${days[0].date}`;
   // The values' gutter is measured before the band (it is as wide as the widest of the round
-  // values the plot can write); the name wraps after "CKB deposited" where one line does not fit
-  // the plot (390 px), and the plot grows by its second line.
+  // values the plot can write); the name, 8 px in from the plot's sides, takes one line where it
+  // fits, else breaks after "CKB deposited" (390 px) and then between words (a 320 px window: its
+  // date on a third line; review F-B, logic finding 1), and the plot grows a line at a time.
   const left = tickGutter(ticks.values.filter((v) => v > 0).map((v) => formatTick(v, ticks.step)));
-  const oneLine = textWidth(name.length, NAME_PX) + 16 <= width - left;
-  const band = mainNameBand(oneLine ? 1 : 2);
+  const nameLines = wrapPhrases(
+    ['CKB deposited', `every complete day since ${days[0].date}`],
+    NAME_PX,
+    width - left - 16
+  );
+  const band = mainNameBand(nameLines.length);
   // the foot of a plot whose name takes one line, and a line lower where it takes two
   const bottom = MAIN_PLOT_H + (band - mainNameBand(1));
   const y = (v: number) => bottom - (v / top) * MAIN_DATA_H;
@@ -346,16 +350,12 @@ function DepositedPlot({
         fontSize={NAME_PX}
         className="fill-text-dim"
       >
-        {oneLine ? (
-          name
-        ) : (
-          <>
-            CKB deposited
-            <tspan x={left + 8} dy={LINE}>
-              every complete day since {days[0].date}
-            </tspan>
-          </>
-        )}
+        {nameLines[0]}
+        {nameLines.slice(1).map((line, i) => (
+          <tspan key={`${i}:${line}`} x={left + 8} dy={LINE}>
+            {line}
+          </tspan>
+        ))}
       </text>
       {timeTicks(days, x).map((t) => {
         // A label that would run past the plot's right edge ends at its tick instead.
