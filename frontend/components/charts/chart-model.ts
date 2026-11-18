@@ -286,10 +286,12 @@ const COUNT_UNITS = new Set([
 const CKB_UNITS = new Set(['CKB', 'CKB/day']);
 
 /**
- * The chart readout of a card headline, card "Last change" and the hover readout (CH-02): rates
- * at two decimals, exact whole counts as integers, a CKB amount in the compact form (R5, cut),
- * everything else compact at two decimals. A leading `+` (an exact delta) is kept. The exact value
- * is `formatChartExact`.
+ * The compact readout of a chart (CH-02): an index card's headline figure (`summary` below), an
+ * index tile's in-plot hover reading (`chart-small-multiple.tsx`), and the rates of a detail
+ * page's readouts (`formatChartHover` takes a rate from here). Rates at two decimals, exact whole
+ * counts as integers, a CKB amount in the compact form (R5, cut), everything else compact at two
+ * decimals; a leading `+` (an exact delta) is kept. A detail page's readouts are
+ * `formatChartHover`, its head figure `formatChartHead`, the exact value `formatChartExact`.
  */
 export function formatChartReadout(value: string, unit: string): string {
   if (CKB_UNITS.has(unit)) return decimalAmountText(value, 'compact');
