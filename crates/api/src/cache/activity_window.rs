@@ -398,6 +398,138 @@ mod tests {
         }
     }
 
+    /// A block as the indexer leaves it: its header with `transactions`
+    /// transactions, a `tx_index` row for each (position 0 the cellbase), and
+    /// an `activities` row for every transaction but the cellbase, which
+    /// production never writes.
+    fn seed_production_block(
+        store: &CkbadgerStore,
+        number: i64,
+        time: i64,
+        hash_byte: u8,
+        transactions: i32,
+    ) {
+        let mut batch = StoreBatch::new(store);
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![hash_byte; 32],
+                timestamp: time,
+                chain_time_ms: time,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: transactions,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+        for index in 0..transactions {
+            batch.put_tx_index(
+                number,
+                index,
+                &ckbadger_store::types::TxIndexEntry {
+                    tx_hash: [hash_byte.wrapping_add(index as u8); 32],
+                    is_cellbase: index == 0,
+                    timestamp: time,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 1,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            if index > 0 {
+                batch.put_tx_actions(&TxActions {
+                    block_number: number,
+                    block_hash: vec![hash_byte; 32],
+                    tx_hash: vec![hash_byte.wrapping_add(index as u8); 32],
+                    tx_index: index,
+                    timestamp: time,
+                    is_cellbase: false,
+                    protocol_actions: vec![],
+                    type_calls: vec![],
+                    lock_calls: vec![],
+                    participants: vec![ParticipantDelta {
+                        id: ParticipantId::Lock([hash_byte; 32]),
+                        ckb_delta: 7,
+                        used_delta: 0,
+                        item_deltas: vec![],
+                        tags: 0,
+                        roles: 0,
+                    }],
+                });
+            }
+        }
+        batch.commit().unwrap();
+    }
+
+    /// F-6 follow-up: the window's cellbases. A cellbase has no `activities`
+    /// row, so the window counts it from the canonical block that holds it,
+    /// one per block — blocks with only their cellbase included — and the
+    /// window's kinds plus its cellbases are its blocks' transactions. A
+    /// block leaving the window takes its cellbase with it, and a reorg's
+    /// rebuilt window equals a fresh one.
+    #[test]
+    fn the_window_counts_one_cellbase_per_block_and_kinds_plus_cellbases_are_its_transactions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let summary = |cache: &ActivityWindowCache| {
+            cache
+                .summary(&store, store.get_sync_tip_block().unwrap())
+                .unwrap()
+                .0
+        };
+        // (block, its transactions with the cellbase); blocks 1 and 3 hold
+        // only their cellbase.
+        let blocks = [(0i64, 3i32), (1, 1), (2, 4), (3, 1), (4, 2), (5, 2)];
+        for (number, transactions) in blocks {
+            seed_production_block(
+                &store,
+                number,
+                DAY_MS + number * 1000,
+                number as u8 * 16,
+                transactions,
+            );
+        }
+        let cache = ActivityWindowCache::default();
+        let window = summary(&cache);
+        assert_eq!(
+            window.coinbase_count, 6,
+            "one cellbase per block of the window"
+        );
+        assert_eq!(
+            window.kind_counts.total() + u64::from(window.coinbase_count),
+            blocks.iter().map(|(_, t)| *t as u64).sum::<u64>(),
+            "kinds plus cellbases are the window's transactions"
+        );
+
+        // Block 6 moves the cutoff past blocks 0..=3: their cellbases leave.
+        seed_production_block(&store, 6, 2 * DAY_MS + 3_500, 0x60, 3);
+        let window = summary(&cache);
+        assert_eq!(window.coinbase_count, 3, "blocks 4, 5 and 6");
+        assert_eq!(
+            window.kind_counts.total() + u64::from(window.coinbase_count),
+            2 + 2 + 3
+        );
+
+        // A same-height reorg: block 6 replaced (a new hash, an earlier time
+        // that reopens the window to block 3): the rebuilt window is a fresh one.
+        seed_production_block(&store, 6, 2 * DAY_MS + 2_500, 0x61, 3);
+        let reorged = summary(&cache);
+        assert_eq!(reorged, summary(&ActivityWindowCache::default()));
+        assert_eq!(reorged.coinbase_count, 4, "blocks 3, 4, 5 and the new 6");
+        assert_eq!(
+            reorged.kind_counts.total() + u64::from(reorged.coinbase_count),
+            1 + 2 + 2 + 3
+        );
+    }
+
     #[test]
     fn invalid_new_row_is_an_error_and_discards_partial_memory() {
         let dir = tempfile::tempdir().unwrap();

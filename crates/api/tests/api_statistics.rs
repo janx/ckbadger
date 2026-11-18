@@ -2786,10 +2786,23 @@ async fn daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all(
         // day's counts from that one classification.
         let classified = ClassifiedTxActions::classify(actions);
         BatchWriter::accumulate_tx_activity_stats(classified, &mut day);
+        // A cellbase has its `tx_index` row and no `activities` row.
+        index_tx_of_actions(&mut batch, actions);
         if !actions.is_cellbase {
             batch.put_tx_actions(classified);
-            index_tx_of_actions(&mut batch, actions);
         }
+    }
+    // The cellbases of blocks 0 and 2, at their positions 0.
+    for (block, time) in [(0, times[0]), (2, times[2])] {
+        index_tx_of_actions(
+            &mut batch,
+            &TxActions {
+                tx_hash: vec![0x30 + block as u8; 32],
+                block_number: block,
+                timestamp: time,
+                ..tx(0, 0, &[], false, false)
+            },
+        );
     }
     // Block 0's cellbase, on the same day.
     BatchWriter::accumulate_tx_activity_stats(
@@ -2860,6 +2873,9 @@ async fn daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all(
     assert_eq!(window["kindCounts"], expected, "{window}");
     assert_eq!(window["activityCount"], 9);
     assert_eq!(window["protocolActionCounts"]["dao:deposit"], 2);
+    // The window holds blocks 0, 1 and 2: one cellbase each, from their
+    // `tx_index` rows, though no cellbase has an `activities` row.
+    assert_eq!(window["coinbaseCount"], 3, "{window}");
 }
 
 // ============================================================
