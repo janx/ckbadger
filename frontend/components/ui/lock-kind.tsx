@@ -207,7 +207,8 @@ export function lockWordsText(words: LockWords, size: ShortSize): string {
 /**
  * A lock's words drawn (Round 3 R-2, U-15; R9): the registry's name, its code hash in the hover; a
  * lock the registry does not name, "lock 0x9b9b…9b9b", its code hash a link to its script page and
- * one unit (`whitespace-nowrap`), a registered name being words (A4 Chrome sweep). The default form
+ * one unit (`whitespace-nowrap`), a registered name being words (A4 Chrome sweep); "by <hash type>"
+ * after either is words a line may break before. The default form
  * is plain words in the quiet ink at the size of its line (a lock's kind is a label: R3);
  * `className` replaces it for a lock (a column's tag); a column's default lock and "not indexed"
  * are its plain words without the tag.
@@ -238,7 +239,10 @@ export function LockWordsView({
       data-lock-kind
     >
       {name !== null ? (
-        `${name}${by}`
+        <>
+          {name}
+          {by && <span className="whitespace-normal">{by}</span>}
+        </>
       ) : (
         <>
           lock{' '}
@@ -257,7 +261,9 @@ export function LockWordsView({
           >
             <ShortId value={codeHash!} kind="hash" size={size} />
           </Link>
-          {by}
+          {/* "by <hash type>" is words after the unit, a line may break before it (B4 second fix
+              round: held with "lock 0x…" it passed the columns' budgets) */}
+          {by && <span className="whitespace-normal">{by}</span>}
         </>
       )}
     </span>

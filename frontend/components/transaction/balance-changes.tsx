@@ -168,7 +168,9 @@ export function BalanceChanges({
                 >
                   <span role="cell" className="min-w-0">
                     <ParticipantRefView participant={p} size="row" compact quiet />
-                    <LockLabel participant={p} size="row" className="ml-2" />
+                    {/* a space between the party and its lock: two units, a line between them
+                        where they do not fit the track together (B4 second fix round) */}{' '}
+                    <LockLabel participant={p} size="row" />
                   </span>
                   <span role="cell" className="text-right">
                     <CkbAmount form="column" shannons={BigInt(p.ckbDelta)} />
