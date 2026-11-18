@@ -50,7 +50,8 @@ export function StoreCatchingUpBanner() {
       <div className="text-small container mx-auto flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono">
         <span className="text-emphasis">Catching up</span>
         <span>Catching up with the indexer. Retrying automatically.</span>
-        <span className="text-text-dim min-w-0 truncate">{detail}</span>
+        {/* the API's own sentence: it explains, the reading ink (R3) */}
+        <span className="text-text min-w-0 truncate">{detail}</span>
       </div>
     </div>
   );
@@ -70,7 +71,8 @@ export function DerivePendingBanner() {
         <span className="text-emphasis">Being derived</span>
         {/* Without the optional `derive` field the API's own message is the whole statement. */}
         <span>{error.derive ? derivationSentence(error.derive) : error.apiMessage}</span>
-        <span className="text-text-dim">Retrying automatically.</span>
+        {/* a sentence that explains: the reading ink (R3) */}
+        <span className="text-text">Retrying automatically.</span>
       </div>
     </div>
   );

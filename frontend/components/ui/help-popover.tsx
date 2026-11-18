@@ -141,7 +141,8 @@ export function HelpPopover({
             role="dialog"
             aria-label={title ?? label}
             className={cn(
-              'border-base-border/80 bg-base-surface/95 text-text-dim fixed z-[10000] w-[22rem] max-w-[min(24rem,calc(100vw-1rem))] border p-3 shadow-2xl backdrop-blur-sm',
+              // the body explains: the reading ink (R3); the title, a label, is quiet
+              'border-base-border/80 bg-base-surface/95 text-text fixed z-[10000] w-[22rem] max-w-[min(24rem,calc(100vw-1rem))] border p-3 shadow-2xl backdrop-blur-sm',
               contentClassName
             )}
             style={position ?? undefined}

@@ -60,8 +60,11 @@ export function ReadoutRow({ label, pinned, idle, hint = true, children }: Reado
         style={{ overflowWrap: 'anywhere' }}
       >
         <span className="[grid-area:1/1]">
+          {/* The idle line is a reading or a sentence that says what the figure reads: the
+              reading ink of the row (R3). "selected", a label before a pinned reading, and the
+              hint, a note, stay quiet. */}
           {empty ? (
-            <span className="text-text-dim">{unitNode(idleWords)}</span>
+            <span>{unitNode(idleWords)}</span>
           ) : (
             <>
               {pinned && <span className="text-text-dim">{pinWord} </span>}

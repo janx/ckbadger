@@ -21,7 +21,8 @@ export function WarmupPendingBanner() {
       <div className="text-small container mx-auto flex items-center gap-3 font-mono">
         <span className="eyebrow text-emphasis text-meta">Warmup</span>
         <span>{WARMUP_PENDING_BANNER_TEXT}</span>
-        <span className="text-text-dim truncate">{detail}</span>
+        {/* the API's own sentence: it explains, the reading ink (R3) */}
+        <span className="text-text truncate">{detail}</span>
       </div>
     </div>
   );

@@ -11,13 +11,13 @@ describe('HexCode', () => {
     Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
   });
 
-  it('sets its ink by variant: the text ink by default, bright, dim', () => {
+  // Re-pinned with readability ruling R3: an id is a value, so the quiet variant is gone (it had
+  // no caller); a quiet hash is a set-back row's (the `quiet` class), never the renderer's.
+  it('sets its ink by variant: the reading ink by default, or bright', () => {
     const { rerender } = render(<HexCode value={HASH} truncate={false} />);
     expect(screen.getByText(HASH)).toHaveClass('font-mono', 'text-text');
     rerender(<HexCode value={HASH} truncate={false} variant="bright" />);
     expect(screen.getByText(HASH)).toHaveClass('text-text-bright');
-    rerender(<HexCode value={HASH} truncate={false} variant="dim" />);
-    expect(screen.getByText(HASH)).toHaveClass('text-text-dim');
   });
 
   // Seals by kind, C10 round 2: a name plate's id line sets the voice once (text-small in

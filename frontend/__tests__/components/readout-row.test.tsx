@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -63,7 +64,9 @@ describe('ReadoutRow (the line under a figure that a tap pins, R6)', () => {
         {null}
       </ReadoutRow>
     );
-    expect(screen.getByText('Tap or hover a party or a pair.')).toHaveClass('text-text-dim');
+    // re-pinned with readability ruling R3: the idle line says what the figure reads, the
+    // reading ink of the row (it was dim)
+    expect(inkOf(screen.getByText('Tap or hover a party or a pair.'))).toBe('text-text');
   });
 
   // Lane U follow-up: hover never moves layout. A row with no idle words and no hint used to be an

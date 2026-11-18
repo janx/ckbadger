@@ -222,6 +222,8 @@ export function Header() {
                     <div key={item.label} className="flex flex-col">
                       {/* U4: the section row is the index's link, as the desktop menu's first item;
                           a section with no index (Inventory) heads its views as text. */}
+                      {/* R3: a section with no page of its own is the label of its views, quiet;
+                          every view under it is a link, the reading ink. */}
                       {item.indexLabel === undefined ? (
                         <span
                           className={`text-body block px-3 py-2.5 font-mono lowercase ${
@@ -252,7 +254,7 @@ export function Header() {
                             className={`text-small block px-3 py-2 font-mono lowercase transition ${
                               isLinkActive(child.href)
                                 ? 'text-jade bg-jade/8'
-                                : 'text-text-dim hover:text-jade'
+                                : 'text-text hover:text-jade'
                             }`}
                           >
                             {child.label}

@@ -37,9 +37,10 @@ describe('ForksPage', () => {
     expect(within(hero).getByRole('heading', { level: 1, name: 'Forks' })).toHaveClass(
       'text-index'
     );
-    // R13: one short lede, dim, ≤ 90 characters, with the way down to tier 2
+    // R13: one short lede, ≤ 90 characters, with the way down to tier 2; in the reading ink, a
+    // sentence that explains (re-pinned with readability ruling R3; it was dim)
     const lede = within(hero).getByText(/^Two blocks, one height: one stays, one is an uncle\./);
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-[560px]');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
