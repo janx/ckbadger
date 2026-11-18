@@ -3,6 +3,7 @@ import { MAP_CHAR_PX } from '@/lib/cell-byte-layout';
 import { LABEL_ADVANCE as UPGRADE_LABEL_ADVANCE } from '@/components/scripts/script-family-board';
 import { cn } from '@/lib/utils';
 import { NODE_H } from '@/components/transaction/what-moved';
+import { ROW_SEAL } from '@/components/ui/row-seal';
 import {
   LABEL_LINE_PX,
   MONO_ADVANCE_EM,
@@ -10,6 +11,7 @@ import {
   OBSERVED_ADVANCE_EM,
   advancePx,
   charPx,
+  columnPx,
   fontPx,
   snappedAdvancePx,
   textPx,
@@ -120,6 +122,121 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
   ['components/scripts/holder-timeline.tsx', 'TICK_ROW_PX = 14', 14, LABEL_LINE_PX],
   ['components/transaction/what-moved.tsx', 'NODE_H = 40 (two 18 px lines)', 40, NODE_H],
   ['components/transaction/what-moved.tsx', 'PITCH = 50', 50, NODE_H + 10],
+  // the hand-computed minimum widths of the ListTable columns whose comment records what they
+  // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
+  // transaction-list-table: 1,230 and 564 px as before)
+  [
+    'app/blocks/page.tsx',
+    'Block: 195 + ROW_SEAL.block.footprint',
+    195 + ROW_SEAL.block.footprint,
+    columnPx(
+      ROW_SEAL.block.footprint +
+        textPx(11, fontPx('body')) +
+        charPx('small') +
+        textPx(11, fontPx('meta')) +
+        16,
+      13
+    ),
+  ],
+  ['app/blocks/page.tsx', 'Reward: 118', 118, columnPx(textPx(14, fontPx('small')) + 16, 1)],
+  ['app/blocks/page.tsx', 'Fees: 105', 105, columnPx(textPx(12, fontPx('small')) + 16, 2)],
+  [
+    'app/blocks/page.tsx',
+    'Height (608 px table): 104 + ROW_SEAL.block.footprint',
+    104 + ROW_SEAL.block.footprint,
+    columnPx(
+      ROW_SEAL.block.footprint +
+        Math.max(textPx(11, fontPx('body')), textPx(11, fontPx('meta'))) +
+        16,
+      2
+    ),
+  ],
+  [
+    'app/blocks/page.tsx',
+    'Miner (608 px table): 110',
+    110,
+    columnPx(textPx(13, fontPx('small')) + 16),
+  ],
+  [
+    'app/blocks/page.tsx',
+    'Size · cycles (608 px table): 96',
+    96,
+    columnPx(textPx(13, fontPx('small')), 2),
+  ],
+  [
+    'app/transactions/page.tsx',
+    'Transaction (pool): 237',
+    237,
+    columnPx(ROW_SEAL.tx.footprint + textPx(17, fontPx('body')) + 16, 31),
+  ],
+  [
+    'app/transactions/page.tsx',
+    'Status · waiting: 172',
+    172,
+    columnPx(7 + 6 + textPx(10, fontPx('small')) + 6 + textPx(9, fontPx('small')) + 16),
+  ],
+  [
+    'app/transactions/page.tsx',
+    'Fee rate: 123',
+    123,
+    columnPx(Math.max(textPx(10, fontPx('meta')), textPx(13, fontPx('small'))) + 16, 13),
+  ],
+  [
+    'app/transactions/page.tsx',
+    'Size (pool): 68',
+    68,
+    columnPx(textPx(7, fontPx('small')) + 16, 1),
+  ],
+  ['app/transactions/page.tsx', 'Cycles (pool): 94', 94, columnPx(textPx(13, fontPx('small')))],
+  [
+    'components/transaction/transaction-list-table.tsx',
+    'Transaction: 208',
+    208,
+    columnPx(ROW_SEAL.tx.footprint + textPx(17, fontPx('body')) + 16, 2),
+  ],
+  [
+    'components/transaction/transaction-list-table.tsx',
+    'What it did: 246',
+    246,
+    columnPx(16 + 8 + 8 + 16 + textPx(27, fontPx('small')), 3),
+  ],
+  [
+    'components/transaction/transaction-list-table.tsx',
+    'Value: 160',
+    160,
+    columnPx(textPx(20, fontPx('small')) + 16),
+  ],
+  [
+    'components/transaction/transaction-list-table.tsx',
+    'Fee: 96',
+    96,
+    columnPx(textPx(11, fontPx('small')) + 16),
+  ],
+  [
+    'components/transaction/transaction-list-table.tsx',
+    'Cells: 62',
+    62,
+    columnPx(textPx(6, fontPx('small')) + 16, 2),
+  ],
+  [
+    'components/transaction/transaction-list-table.tsx',
+    'Size: 121 (SIZE_TRACK 56)',
+    121,
+    columnPx(56 + 10 + textPx(5, fontPx('small')) + 16, 3),
+  ],
+  [
+    'components/transaction/transaction-list-table.tsx',
+    'Cycles: 162 (CYCLES_TRACK 56)',
+    162,
+    columnPx(56 + 10 + textPx(11, fontPx('small')) + 16),
+  ],
+  [
+    'components/asset/inventory-table.tsx',
+    'CKB held in its cells: 155',
+    155,
+    columnPx(textPx('CKB held in its cells'.length, fontPx('meta')) + 16),
+  ],
+  ['app/scripts/page.tsx', 'SHARE_FIGURE = 51', 51, columnPx(textPx(7, fontPx('small')))],
 ];
 
 describe('every literal lane F3 replaced computes the number it was', () => {

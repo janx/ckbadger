@@ -11,6 +11,7 @@ import {
   ROW_LINE_PX,
   advancePx,
   charPx,
+  columnPx,
   fontPx,
   lineHeightPx,
   snappedAdvancePx,
@@ -198,6 +199,15 @@ describe('lines', () => {
       row: `${ROW_LINE_PX}px`,
       label: `${LABEL_LINE_PX}px`,
     });
+  });
+});
+
+describe('column budgets', () => {
+  it('rounds what a column holds up to a whole pixel and adds its spare', () => {
+    expect(columnPx(textPx(13, 12))).toBe(94); // 93.6
+    expect(columnPx(textPx(20, 12) + 16)).toBe(160); // exactly 160 stays 160
+    expect(columnPx(56.5 + textPx(17, 13) + 16, 2)).toBe(208); // 205.1 → 206, and 2 spare
+    expect(columnPx(160.00000000000003)).toBe(160); // a sum a hair over a whole pixel is that pixel
   });
 });
 

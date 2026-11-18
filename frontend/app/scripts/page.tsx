@@ -36,6 +36,7 @@ import { formatCount } from '@/lib/format-count';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { percentOf, withUnit } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -314,7 +315,7 @@ const CKB_DISPLAY = 128;
  * with room between them. Its figure: "100.00%", 7 characters at 12 px (50.4 px).
  */
 const SHARE_TRACK = 80;
-const SHARE_FIGURE = 51;
+const SHARE_FIGURE = columnPx(textPx(7, fontPx('small')));
 
 /** The occupied share's bar runs on parts per million of the CKB in the cells. */
 const SHARE_SCALE = 1_000_000;

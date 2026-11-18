@@ -99,3 +99,13 @@ export const LABEL_LINE_PX = tightLinePx(fontPx('meta'));
 export function withAllowance(px: number, allowance: number): number {
   return Math.round((px + allowance) * 100) / 100;
 }
+
+/**
+ * A list column's minimum width (`ListTable`): what it must hold — its widest text measured here,
+ * the marks and gaps beside it — rounded up to a whole pixel, and the whole pixels it keeps spare
+ * on top. A table budgeted to its container hands its spare to the columns that need it; each
+ * column's comment records what it holds and why it keeps any spare.
+ */
+export function columnPx(content: number, spare = 0): number {
+  return Math.ceil(withAllowance(content, 0)) + spare;
+}
