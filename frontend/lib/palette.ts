@@ -176,7 +176,14 @@ const dark = {
   'reward-secondary': '#647e77',
   // "who can change the code" swatches
   'code-fixed-fill': '#c5bbac',
-  'code-unspendable-fill': '#8a8175',
+  /**
+   * The darker of the two greys, set by what it carries: the bar on /scripts writes its class's
+   * name and share in it, and the fill-ink rule gives those words the bright ink, which reads on
+   * it at Lc 70 (4.94:1). By night it is the neutral of the mix it was (dim and ghost) moved in
+   * OKLCH lightness only to that grade; a mix of two inks drifts with them (#8a8175 held a word
+   * in neither ink: the bright one 3.11:1 and Lc 56, the dark one Lc 38).
+   */
+  'code-unspendable-fill': '#6a6155',
   // an ELF file's regions
   'elf-header': '#97b9c4',
   'elf-program-headers': '#abd0dc',

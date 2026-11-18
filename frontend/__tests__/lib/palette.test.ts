@@ -120,6 +120,9 @@ const RUBBING = {
   token: '#9ec6fe',
   object: '#d0b8fe',
   identity: '#fcaec2',
+  // The darker code-class grey, set by its words (readability F1 follow-up): the bright ink at Lc
+  // 70 on it. It was the mix dim ghost 0.4, #8a8175 since the ruling (#665d53 before), unpinned.
+  codeUnspendableFill: '#6a6155',
 };
 
 /** The alpha of an `rgba(r, g, b, a)` material. */
@@ -169,6 +172,7 @@ describe('the palette: one source for both themes', () => {
     expect(dark.token).toBe(RUBBING.token);
     expect(dark.object).toBe(RUBBING.object);
     expect(dark.identity).toBe(RUBBING.identity);
+    expect(dark['code-unspendable-fill']).toBe(RUBBING.codeUnspendableFill);
     expect(MATERIALS.dark.glow).toBe('1');
   });
 

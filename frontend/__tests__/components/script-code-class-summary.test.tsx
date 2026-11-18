@@ -193,7 +193,10 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
       '',
       '',
     ]);
-    expect(segments[0]).toHaveClass('text-base-bg', 'px-2.5');
+    // re-pinned on purpose (readability F1 follow-up): the dark ink is the fill-ink rule's, the
+    // well, set as the segment's colour; it was the class text-base-bg, named by hand
+    expect(segments[0]).toHaveClass('px-2.5');
+    expect(segments[0].style.color).toBe('var(--c-base-void)');
     // An unlabelled sliver is not widened by padding: 0.075 % stays a sliver.
     expect(segments[2]).not.toHaveClass('px-2.5');
     expect(segments[2]).toHaveClass('min-w-[3px]');
@@ -216,7 +219,9 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
       'Immutable · code cell unspendable 40.00%',
       'A multisig can replace 60.00%',
     ]);
-    for (const s of segments) expect(s).toHaveClass('text-text-bright');
+    // re-pinned on purpose (readability F1 follow-up): the bright ink comes from the fill-ink rule
+    // as the segment's colour; it was the class text-text-bright, named by hand
+    for (const s of segments) expect(s.style.color).toBe('var(--c-text-bright)');
   });
 
   it('keeps the words of the wide segment at 358 px and holds none at 240 px', () => {
