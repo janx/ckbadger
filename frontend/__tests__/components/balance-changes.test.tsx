@@ -155,6 +155,18 @@ describe('BalanceChanges form by measured width', () => {
   );
 });
 
+// Readability B4 (R9): a shortened address no longer says its lock, so the lock is named beside it
+// only when it is not the default lock; no name means the default lock.
+describe('BalanceChanges names no lock for a party on the default lock (B4 item 1)', () => {
+  it.each([358, 608, 912])('leaves the default-lock party unnamed at %i px', (width) => {
+    renderAt(width);
+    const locks = [...document.querySelectorAll('[data-role="lock"]')];
+    expect(locks.map((l) => l.textContent)).not.toContain('Default Lock');
+    expect(document.body).not.toHaveTextContent('Default Lock');
+    expect(locks).toHaveLength(2);
+  });
+});
+
 describe('lockCodeHashesByAddress', () => {
   it('reads each address its lock code hash from the transaction cells', () => {
     const map = lockCodeHashesByAddress([
