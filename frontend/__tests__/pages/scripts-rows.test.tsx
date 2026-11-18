@@ -166,8 +166,11 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
   it('heads its columns at 11 px (T5)', async () => {
     render(<ScriptsPage />);
     const t = await table();
+    // Re-pinned on purpose (B5): the one bar column is now Occupied (index 4, was CKB at 3); its
+    // name is the first line of its scale head.
     for (const [i, h] of within(t).getAllByRole('columnheader').entries())
-      if (i !== 3) expect(h.firstElementChild).toHaveClass('text-meta');
+      if (i !== 4) expect(h.firstElementChild).toHaveClass('text-meta');
+      else expect(h.firstElementChild?.firstElementChild).toHaveClass('text-meta');
   });
 
   it('is one 40 px line a row: row density, every cell centred (T1, T2)', async () => {
@@ -251,34 +254,16 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     );
   });
 
-  it('draws CKB in its cells as the page one 8 px bar on the page scale, the amount to 2 dp (T4)', async () => {
+  // Re-pinned on purpose (B5, plan §7.6): the CKB column's 8 px bar on the page scale (50B, "0 ·
+  // 25B · 50B") left the list, a 2 px stub on most rows; the amount to 2 dp stays.
+  it('prints CKB in its cells as the amount to 2 dp, with no bar (T4, B5)', async () => {
     render(<ScriptsPage />);
     const t = await table();
-    // The page's largest, 46,743,236,111 CKB, rounded up to a round 1 / 1.5 / 2 / 2.5 / 3 / 4 / 5 /
-    // 6 / 8 × 10^k: 50B, its middle marked (board: "0 · 25B · 50B").
     const head = within(t).getAllByRole('columnheader')[3];
-    expect(
-      [...head.querySelectorAll('[data-scale-ticks] > span')].map((n) => n.textContent)
-    ).toEqual(['0', '25B', '50B']);
-    const bars = t.querySelectorAll('tbody [data-aligned-bar]');
-    expect(bars).toHaveLength(rows.length);
+    expect(head.querySelector('[data-scale-ticks]')).toBeNull();
+    for (const row of within(t).getAllByRole('row').slice(1))
+      expect(cells(row)[3].querySelector('[data-track]')).toBeNull();
     const ckb = cells(rowOf(t, 'JoyID'))[3];
-    const track = ckb.querySelector<HTMLElement>('[data-track]')!;
-    expect(track.style.height).toBe('8px');
-    const width = Number.parseFloat(track.style.width);
-    // 281,900,260 of 50,000,000,000 CKB is under 2 px of the track: the 2 px minimum mark.
-    const pw = cells(rowOf(t, 'PW Lock'))[3].querySelector<HTMLElement>('[data-segment]')!;
-    expect((281900260 / 50e9) * width).toBeLessThan(2);
-    expect(Number.parseFloat(pw.style.width)).toBe(2);
-    const dl = cells(rowOf(t, 'Default Lock'))[3].querySelector<HTMLElement>('[data-segment]')!;
-    expect(Number.parseFloat(dl.style.width)).toBeCloseTo((46743236111 / 50e9) * width, 1);
-    // Zero stays empty.
-    expect(
-      Number.parseFloat(
-        cells(rowOf(t, 'AlwaysSuccess'))[3].querySelector<HTMLElement>('[data-segment]')!.style
-          .width
-      )
-    ).toBe(0);
     expect(ckb).toHaveTextContent(/^454,352,694\.86$/);
     expect(cells(rowOf(t, 'AlwaysSuccess'))[3]).toHaveTextContent(/^0\.00$/);
     // 2 dp by truncation: .23594289 is .23, never rounded up to .24.
@@ -288,12 +273,14 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     expect(ckb.textContent).not.toMatch(/\d\.\d{8}/);
   });
 
+  // Re-pinned on purpose (B5): the share now stands right of its bar, so the dim share is the bar's
+  // figure, not the cell's first element.
   it('keeps the occupied share in the last column, dim', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const occupied = cells(rowOf(t, 'JoyID'))[4];
     expect(occupied).toHaveTextContent(/^4\.20%$/);
-    expect(occupied.firstElementChild).toHaveClass('text-text-dim');
+    expect(within(occupied).getByText('4.20%')).toHaveClass('text-text-dim');
   });
 
   it('puts every field that left the row in its title (D3: nothing deleted)', async () => {

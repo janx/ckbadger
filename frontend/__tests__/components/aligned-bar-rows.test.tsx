@@ -57,7 +57,6 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
   // figure ends (right of the track and the bar's 10 px gap); the ticks stay over the track.
   it('stands its name over the figure when it is told the figure’s width (B5)', () => {
     const { container } = render(
-      // @ts-expect-error the prop comes with the fix (red first: lane B5)
       <ScaleHeader label="Occupied" scale={1_000_000} trackWidth={80} figureWidth={51} />
     );
     const bar = render(
@@ -86,7 +85,6 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
   });
 
   it('refuses a figure width it cannot draw', () => {
-    // @ts-expect-error the prop comes with the fix (red first: lane B5)
     expect(() => ScaleHeader({ label: 'x', scale: 10, figureWidth: 0 })).toThrow(
       'x: invalid figure width 0'
     );
