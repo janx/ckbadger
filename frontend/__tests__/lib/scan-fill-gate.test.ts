@@ -283,11 +283,16 @@ function sourceFiles(root: string): string[] {
   return files;
 }
 
-/** The selectors of the CSS rules (inside an at-rule too) whose declarations read `variable`. */
+/**
+ * The selectors of the CSS rules (inside an at-rule too) whose declarations read `variable`: a
+ * `var(` of it, with or without spaces after the paren and with or without a fallback.
+ */
 function cssRulesReading(css: string, variable: string): string[] {
   const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  const name = variable.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const reads = new RegExp(`var\\(\\s*${name}(?![\\w-])`);
   return [...code.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-    .filter(([, , body]) => body.includes(`var(${variable})`))
+    .filter(([, , body]) => reads.test(body))
     .map(([, selector]) => selector.trim().replace(/\s+/g, ' '));
 }
 
