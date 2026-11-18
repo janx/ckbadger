@@ -417,7 +417,7 @@ const POOL_MIN_PX = minimumWidth('Transactions in the pool', poolColumns(0));
 const TRANSACTIONS_FORM_PX = Math.max(TRANSACTION_LIST_MIN_PX, POOL_MIN_PX);
 
 /** The pool list's columns as drawn, changing form at TRANSACTIONS_FORM_PX. */
-const POOL_COLUMNS = poolColumns(TRANSACTIONS_FORM_PX - POOL_MIN_PX);
+export const POOL_COLUMNS = poolColumns(TRANSACTIONS_FORM_PX - POOL_MIN_PX);
 
 export default function TransactionsPage() {
   const searchParams = useSearchParams();

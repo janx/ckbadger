@@ -558,7 +558,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
  * the height's and the cycles the size's, so each row stays two lines. The reward is not a column
  * (it is paid eleven blocks later). 595 px: a table from a 595 px container, rows below.
  */
-const NARROW_COLUMNS: ListColumn<Block>[] = [
+export const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'height',
     label: 'Height',

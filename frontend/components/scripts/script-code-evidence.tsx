@@ -135,7 +135,7 @@ export function codeClassTotals(classes: readonly ScriptCodeClassTotalApi[]): {
  * The in-segment words: the small step (`text-small`, 12 px) with 10 px padding each side (the DAO
  * concentration bar's).
  */
-const SEGMENT_LABEL_PX = fontPx('small');
+export const SEGMENT_LABEL_PX = fontPx('small');
 const SEGMENT_LABEL_PAD = 10;
 
 /**

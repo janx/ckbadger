@@ -1,5 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { containerContentPx, insetsPx } from '@/__tests__/utils/tailwind-box';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
@@ -1199,38 +1204,104 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     );
   });
 
-  it('writes the group names and shares inside a 28 px concentration bar, with no legend row (R15)', () => {
-    stubCalculator();
-    // re-pinned (readability R4): the words are text-small, 13 px since R4 (7.8 px a glyph, was
-    // 7 px snapped at 12): "largest 8.3%"'s 13 characters and 20 px padding need 121.4 px, 8.3 %
-    // of a 1,463 px bar (was 1,338), so the bar is drawn 1,480 px wide here (was 1,408)
-    stubChartWidth(1480);
-    const many = {
-      ...evidence,
-      phase0: { capacity: '10000', count: 20000 },
-      concentration: {
-        ...evidence.concentration,
-        currentDepositors: 16641,
-        top1Capacity: '827',
-        top10Capacity: '2620',
-        top100Capacity: '5727',
-      },
-    };
-    const { container } = render(
-      <DaoBoard statistics={{ ...stats, totalDeposited: '10000' }} evidence={many} />
+  // Review-fb-tests finding 3 (its last part): this test drew the bar 1,480 px wide (1,408 before
+  // R4) so that every group's words fit inside it, a width no page gives the bar: the DAO page's
+  // column is the container's content box, at most 1,232 px. It now draws the bar at the widths the
+  // page gives it and pins where each group's words stand there. The bar's column, from the page's
+  // classes: app/dao/page.tsx's `<main className="container mx-auto pb-16 pt-6">` holds the board,
+  // and from the board's root down to the bar nothing adds a horizontal inset (read below), so the
+  // column is the container's content width (tailwind.config.ts: 1280 − 2 × 24 = 1232,
+  // 1024 − 2 × 24 = 976, 640 − 2 × 16 = 608, 390 − 2 × 16 = 358, 360 − 2 × 16 = 328). A group's
+  // words fit where its share of the column holds them at 13 px (7.8 px a glyph) and 2 × 10 px of
+  // padding: "largest 8.27%" 121.4 px (a column of 1,468 or more), "next 9 · 17.93%" 137 (764),
+  // "next 90 · 31.07%" 144.8 (466), "the other 16,541 · 42.73%" 215 (504). So at mainnet's
+  // distribution the largest group's words stand in the legend row at every width the page has, and
+  // the legend row is drawn at every width (R15's "no legend row" is never met on the page).
+  it('is set by the DAO page straight in the container, with no inset of the page’s own', () => {
+    const file = resolve(__dirname, '../../app/dao/page.tsx');
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, 'utf8'),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX
     );
-    const bar = within(who()).getByRole('img', { name: /^Share of deposits/ });
-    expect(bar).toHaveClass('h-[28px]');
-    expect(Array.from(bar.children).map((s) => s.textContent)).toEqual([
-      'largest 8.27%',
-      'next 9 · 17.93%',
-      'next 90 · 31.07%',
-      'the other 16,541 · 42.73%',
-    ]);
-    expect(container.querySelector('[data-role="concentration-legend"]')).toBeNull();
-    vi.unstubAllGlobals();
-    vi.restoreAllMocks();
+    let board: ts.Node | undefined;
+    const find = (node: ts.Node) => {
+      if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(source) === 'DaoBoard')
+        board = node;
+      ts.forEachChild(node, find);
+    };
+    find(source);
+    // the board's nearest element is <main>, through expression containers only
+    let parent = board!.parent;
+    while (parent && !ts.isJsxElement(parent)) {
+      expect(
+        ts.isJsxExpression(parent) ||
+          ts.isBinaryExpression(parent) ||
+          ts.isParenthesizedExpression(parent),
+        ts.SyntaxKind[parent.kind]
+      ).toBe(true);
+      parent = parent.parent;
+    }
+    const main = (parent as ts.JsxElement).openingElement;
+    expect(main.tagName.getText(source)).toBe('main');
+    const classes = main.attributes.properties
+      .find((a) => ts.isJsxAttribute(a) && a.name.getText(source) === 'className')!
+      .getText(source);
+    expect(classes).toBe('className="container mx-auto pb-16 pt-6"');
+    const el = document.createElement('main');
+    el.className = 'container mx-auto pb-16 pt-6';
+    for (const viewport of [1280, 1024, 640, 390, 360])
+      expect(insetsPx(el, viewport)).toEqual({ box: 0, margin: 0 });
   });
+
+  it.each([
+    [1280, 1232, ['', 'next 9 · 17.93%', 'next 90 · 31.07%', 'the other 16,541 · 42.73%']],
+    [1024, 976, ['', 'next 9 · 17.93%', 'next 90 · 31.07%', 'the other 16,541 · 42.73%']],
+    [640, 608, ['', '', 'next 90 · 31.07%', 'the other 16,541 · 42.73%']],
+    [390, 358, ['', '', '', '']],
+    [360, 328, ['', '', '', '']],
+  ] as const)(
+    'at %i px (the column %i px) writes inside its 28 px bar the groups it holds; the largest in the legend row',
+    (viewport, column, inside) => {
+      stubCalculator();
+      atViewportWidth(viewport);
+      expect(containerContentPx(viewport)).toBe(column);
+      stubChartWidth(column);
+      const many = {
+        ...evidence,
+        phase0: { capacity: '10000', count: 20000 },
+        concentration: {
+          ...evidence.concentration,
+          currentDepositors: 16641,
+          top1Capacity: '827',
+          top10Capacity: '2620',
+          top100Capacity: '5727',
+        },
+      };
+      const { container } = render(
+        <DaoBoard statistics={{ ...stats, totalDeposited: '10000' }} evidence={many} />
+      );
+      const bar = within(who()).getByRole('img', { name: /^Share of deposits/ });
+      // from the board's root to the box the bar measures, no horizontal inset of its own
+      for (
+        let el: HTMLElement | null = bar.parentElement;
+        el && el !== container;
+        el = el.parentElement
+      ) {
+        expect(insetsPx(el, viewport), el.className).toEqual({ box: 0, margin: 0 });
+        expect(el.className).not.toMatch(/(?:^|\s)(?:max-w-|w-\[|grid-cols-)/);
+      }
+      expect(bar).toHaveClass('h-[28px]', 'w-full');
+      expect(Array.from(bar.children).map((s) => s.textContent)).toEqual(inside);
+      const legend = container.querySelector('[data-role="concentration-legend"]');
+      expect(legend).not.toBeNull();
+      expect(legend).toHaveTextContent('largest 8.27%');
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  );
 
   it('names only the groups that exist when there are few depositors', () => {
     stubCalculator();

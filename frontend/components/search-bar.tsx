@@ -34,7 +34,7 @@ interface SearchBarProps {
  * across 768–1023, where the nav goes into the menu, its cap: the long one from 977 px
  * (`__tests__/components/shell-budget.test.tsx` states each width).
  */
-const LONG_PLACEHOLDER_PX = textPx(SEARCH_PLACEHOLDER.length, fontPx('body'));
+export const LONG_PLACEHOLDER_PX = textPx(SEARCH_PLACEHOLDER.length, fontPx('body'));
 
 /** The input's horizontal insets, read from its computed style: borders and paddings. */
 const INSETS = ['borderLeftWidth', 'paddingLeft', 'paddingRight', 'borderRightWidth'] as const;

@@ -324,7 +324,7 @@ const SHARE_SCALE = 1_000_000;
  * (54.6).
  */
 const SHARE_TRACK = trackPx(['0', shareTick(SHARE_SCALE / 2), shareTick(SHARE_SCALE)]);
-const SHARE_FIGURE = columnPx(textPx('100.00%'.length, fontPx('small')));
+export const SHARE_FIGURE = columnPx(textPx('100.00%'.length, fontPx('small')));
 
 /**
  * Occupied ÷ CKB in the cells, in ppm, for the bar's geometry: rounded up, so a nonzero share is

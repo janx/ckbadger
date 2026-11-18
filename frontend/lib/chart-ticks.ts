@@ -310,7 +310,7 @@ export function placeXTicks(
 }
 
 /** The advance of one glyph of a y-axis tick label, set at the tick size (6 px at 10 px). */
-const TICK_CHAR_PX = advancePx(SVG_TEXT.tick);
+export const TICK_CHAR_PX = advancePx(SVG_TEXT.tick);
 /** Clear space between a y tick label's end and the plot. */
 const TICK_TO_PLOT = 8;
 
