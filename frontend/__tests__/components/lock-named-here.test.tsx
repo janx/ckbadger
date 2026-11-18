@@ -10,6 +10,7 @@
 //   hash and hash type, "lock 0x9bd7e06f…a3cce8 by data".
 // - In a column headed "Lock" no cell is empty: the default lock by its name, a lock that is not
 //   indexed as "not indexed", both in quiet words without the column's tag.
+import { lineRuns } from '@/__tests__/utils/line-runs';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
@@ -267,6 +268,30 @@ describe('a place that may name no lock leaves the part out', () => {
     const table = screen.getByRole('table', { name: 'Balance changes by participant' });
     expect(within(table).getAllByRole('row')).toHaveLength(base.participants.length + 3);
     expect(table).toHaveTextContent(`ckb1…${DEFAULT_ADDRESS.slice(-8)}`);
+  });
+});
+
+// B4 second fix round (review-rules-fixes-logic NOTE 5, the coordinator's item 11): the words a
+// lock on the default code hash by data is written in are in the budget of the column that can
+// write them. In Balance changes' participant track the party and its lock are two units with a
+// line between them where they do not fit together, and "lock 0x…" and "by data" are two: every
+// run of the cell fits the track the grid gives it.
+describe('the by-data words fit the columns that write them', () => {
+  it('in Balance changes’ participant track', () => {
+    stubChartWidth(912);
+    const base = feedSamples.objectTransfer;
+    const a: GlobalActivity = {
+      ...base,
+      participants: [...base.participants, party(BY_DATA_ADDRESS, 'Default Lock', '0d')],
+    };
+    render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
+    const table = screen.getByRole('table', { name: 'Balance changes by participant' });
+    const rows = within(table).getAllByRole('row');
+    const track = Number.parseFloat(rows[0].style.gridTemplateColumns.split(' ')[0]);
+    const cell = within(rows[rows.length - 2]).getAllByRole('cell')[0];
+    expect(cell).toHaveTextContent(BY_DATA_WORDS);
+    const past = lineRuns(cell, 1280).filter((r) => r.px > track + 1e-9);
+    expect(past.map((r) => `${r.text} ${r.px.toFixed(1)}`)).toEqual([]);
   });
 });
 
