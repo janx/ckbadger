@@ -11,45 +11,55 @@ import { MEASURE_CHARS } from '@/lib/type-metrics';
  * lib/type-metrics.ts; 638.4 px at the body step). A line of 171 characters (the cell page's out
  * point sentence across 1,232 px) is read with the eye running back across the whole page.
  *
- * What it counts as a paragraph of running text, read from the source:
+ * What it reads as running text, from the source:
  *
- * - `p`: every `<p>`;
- * - `block`: any other element that holds text as a block (a `div`, `li`, `dd`, `dt`,
- *   `figcaption`, `blockquote`, `section`, …, a `span` set `block`) whose own text is longer than
- *   110 characters (the reading probe's threshold, the review's `read.cjs`): the text the source
- *   writes in it and in its inline children (a link, a `<span>`, an `<em>`, any component's JSX
- *   children).
+ * - `p`: every `<p>`, unless every word of it is written in the source and it is no longer than
+ *   the measure ("Loading transactions…" cannot run past 76 characters);
+ * - `block`: any other intrinsic element that holds text as a block (a `div`, `li`, `dd`, `dt`,
+ *   `figcaption`, `blockquote`, `section`, …, a `span` set `block`) whose written text — the text
+ *   the source writes in it and in its inline children (a link, a `<span>`, an `<em>`, the children
+ *   of a component, but a component the file declares stands as the one element it returns) — is
+ *   longer than the measure;
+ * - `tag`: a tag it cannot read (a constant it cannot resolve to strings, a call that is not a
+ *   component factory, a component passed as a value), refused by name. A tag held in a constant
+ *   (`inline ? 'span' : 'p'`) or in a destructured prop (`as: Tag = 'div'`, its declared string
+ *   union) is read as every tag it can be.
  *
- * It stands inside the measure when it or a JSX ancestor in its file carries `max-w-measure` at
- * rest (no variant); when it is a `<p>` inside `<Prose>` (`.prose-tier2 p` applies the class in
- * app/globals.css, checked below); or when it is handed to a slot that sets its content in the
- * measure (`MEASURED_SLOTS`: a page's lede, checked below in each component's own source). The
- * walk up goes through props and render callbacks to the element that receives them, since what a
- * component renders stands inside that element.
+ * A class is read through `?:`, `&&`, `||`, `??`, templates, `cn` and `clsx` (an object's keys each
+ * there or not), the file's constants and the string constants it imports from the app's own
+ * modules; any other call, a prop or a property is not read and proves nothing. A class counts only
+ * when every way the expression can evaluate holds it, an exemption too.
  *
- * Not a paragraph, so not counted:
+ * It stands inside the measure when an intrinsic element, it or one around it in its file, holds
+ * `max-w-measure` at rest (no variant) in every branch; when it is a `<p>` inside `<Prose>`
+ * (`.prose-tier2 p` applies the class in app/globals.css, checked below); or when it is handed to a
+ * slot that sets its content in the measure (`MEASURED_SLOTS`: a page's lede, checked below in
+ * each component's own source). The class on a component proves nothing (what the component does
+ * with it is in its own file). The walk up goes through props and render callbacks to the element
+ * that receives them, since what a component renders stands inside that element.
  *
- * - a `<p>` whose whole text the source fixes and that is no longer than the measure ("Loading
- *   transactions…"): it cannot run past 76 characters;
+ * Not running text, so not counted:
+ *
  * - an element in a table cell (a `<td>`, a `<th>`, a `ListTable` column's `render`): `ListTable`
  *   owns every horizontal pixel of a cell, and no measure is put inside one;
  * - an element set on one line (`truncate`, `whitespace-nowrap`) or laid out as a row of items
- *   (`flex`, `grid`): a line or a row, not running text;
+ *   (`flex`, `inline-flex`, `grid`), in every branch of its class: a line or a row;
  * - `<pre>`, SVG text, headings, controls.
  *
- * What it cannot see, because it reads source and not layout:
+ * What it does not read, and so cannot hold:
  *
+ * - a block other than a `<p>` whose text an expression builds: a list item, a definition, a
+ *   note or a `<div>` that writes `{note}` is read only by the text written beside it. A `dd` or an
+ *   `li` holds a value or a row as often as a sentence, and the source cannot tell which; such a
+ *   block takes the class where it holds a sentence (the reward notes, the calculation scope's
+ *   items), by hand.
  * - the width a paragraph is given. A paragraph in a column narrower than the measure (a 260 px
  *   rail, a grid cell, a phone's 358 px) is already narrower, and the class does nothing there;
  *   the gate still asks for it, since the source cannot prove a column narrow at every width.
- * - text an expression builds (a variable, a function, a prop, a formatted number): it has no
- *   length here. Such a block is counted only when it is a `<p>`, or when its written text alone
- *   passes 110 characters.
  * - the step a paragraph is set at under a measured ancestor: `76ch` is the ancestor's own
  *   characters, so text a step smaller inside it runs a few more per line (a 12 px note inside a
  *   14 px measure holds 88). Where a paragraph's step is smaller, the class goes on it.
- * - a component that inks or wraps its children: the walk sees only the elements of the file; a
- *   paragraph rendered by a component is counted in that component's own file.
+ * - a paragraph a component renders into another file's Prose (listed below with that reason).
  * - a `max-width` set any other way (a stylesheet rule, an inline style, an arbitrary
  *   `max-w-[…]` class): only the class is the measure.
  *
@@ -58,8 +68,8 @@ import { MEASURE_CHARS } from '@/lib/type-metrics';
  * (its count must be lowered), so the list only shrinks; its length is pinned.
  */
 
-type Kind = 'p' | 'block';
-const KINDS: readonly Kind[] = ['p', 'block'];
+type Kind = 'p' | 'block' | 'tag';
+const KINDS: readonly Kind[] = ['p', 'block', 'tag'];
 
 interface Tolerated {
   /** The sites of each kind in the file, today. */
@@ -198,8 +208,55 @@ function unwrap(e: ts.Expression): ts.Expression {
 /** A class token with no variant (`max-w-measure`, not `md:max-w-measure` or `hover:…`). */
 const atRest = (token: string) => !token.includes(':');
 
-/** Every element of a TSX source that is a paragraph of running text outside the measure. */
-function measureSites(code: string): Site[] {
+/** A part of a class the scan cannot read: a token that proves nothing. */
+const UNREAD = '\u0000unread';
+/** The calls whose arguments are a class list (`lib/utils.ts` `cn`, and `clsx` under it). */
+const CLASS_CALLS = new Set(['cn', 'clsx']);
+/** More ways than this for one class to evaluate, and it is not read. */
+const MAX_ALTERNATIVES = 64;
+
+/** What a JSX tag is: the intrinsic tags it can be, a component, or a tag the scan cannot read. */
+type TagRead = { tags: readonly string[] } | 'component' | 'unread';
+
+/** The app's own modules, parsed once: an imported class constant is read from its source. */
+const MODULES = new Map<string, ts.SourceFile | null>();
+const FRONTEND = join(__dirname, '..', '..');
+function moduleSource(from: string | undefined, specifier: string): ts.SourceFile | null {
+  const base = specifier.startsWith('@/')
+    ? join(FRONTEND, specifier.slice(2))
+    : specifier.startsWith('.') && from
+      ? join(from, '..', specifier)
+      : null;
+  if (base === null) return null;
+  for (const path of [`${base}.ts`, `${base}.tsx`, join(base, 'index.ts')]) {
+    if (!MODULES.has(path)) {
+      let text: string | null = null;
+      try {
+        text = readFileSync(path, 'utf8');
+      } catch {
+        text = null;
+      }
+      MODULES.set(
+        path,
+        text === null
+          ? null
+          : ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+      );
+    }
+    const found = MODULES.get(path);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** The calls that make a component of a function (`memo(…)`, `forwardRef(…)`, `lazy`, `dynamic`). */
+const COMPONENT_FACTORIES = new Set(['memo', 'forwardRef', 'lazy', 'dynamic']);
+
+/**
+ * One file's scan: its paragraphs outside the measure, and whether a prop is set in it. `path` is
+ * the file's own, to read the class constants it imports from the app's modules.
+ */
+function scanFile(code: string, path?: string) {
   const source = ts.createSourceFile(
     'scan.tsx',
     code,
@@ -210,50 +267,303 @@ function measureSites(code: string): Site[] {
   const lineOf = (n: ts.Node) => source.getLineAndCharacterOfPosition(n.getStart(source)).line + 1;
 
   const locals = new Map<string, ts.Expression[]>();
+  const components = new Set<string>();
+  const bindings = new Map<string, ts.BindingElement[]>();
+  const types = new Map<string, ts.Node>();
+  const imports = new Map<string, { specifier: string; name: string }>();
+  const parameters = new Set<string>();
+  /** A component the file declares, by the one element it returns, when it returns one. */
+  const roots = new Map<string, ts.JsxOpeningLikeElement | null>();
+  const rootOf = (fn: ts.FunctionLikeDeclaration): ts.JsxOpeningLikeElement | null => {
+    const returned: ts.Expression[] = [];
+    if (fn.body && !ts.isBlock(fn.body)) returned.push(fn.body);
+    else if (fn.body) {
+      const walk = (n: ts.Node) => {
+        if (ts.isFunctionLike(n) && n !== fn) return;
+        if (ts.isReturnStatement(n) && n.expression) returned.push(n.expression);
+        ts.forEachChild(n, walk);
+      };
+      walk(fn.body);
+    }
+    if (returned.length !== 1) return null;
+    const e = unwrap(returned[0]);
+    return ts.isJsxElement(e) ? e.openingElement : ts.isJsxSelfClosingElement(e) ? e : null;
+  };
   const collect = (node: ts.Node) => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer)
       locals.set(node.name.text, [...(locals.get(node.name.text) ?? []), node.initializer]);
+    if (ts.isImportDeclaration(node) && node.importClause) {
+      const clause = node.importClause;
+      const specifier = (node.moduleSpecifier as ts.StringLiteral).text;
+      if (clause.name) components.add(clause.name.text);
+      const named = clause.namedBindings;
+      if (named && ts.isNamedImports(named))
+        for (const e of named.elements) {
+          components.add(e.name.text);
+          imports.set(e.name.text, { specifier, name: (e.propertyName ?? e.name).text });
+        }
+      if (named && ts.isNamespaceImport(named)) components.add(named.name.text);
+    }
+    if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name)
+      components.add(node.name.text);
+    if (ts.isFunctionDeclaration(node) && node.name) roots.set(node.name.text, rootOf(node));
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) &&
+      /^[A-Z]/.test(node.name.text)
+    )
+      roots.set(node.name.text, rootOf(node.initializer));
+    if (ts.isParameter(node) && ts.isIdentifier(node.name)) parameters.add(node.name.text);
+    if (ts.isBindingElement(node) && ts.isIdentifier(node.name))
+      bindings.set(node.name.text, [...(bindings.get(node.name.text) ?? []), node]);
+    if (ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node))
+      types.set(node.name.text, node);
     ts.forEachChild(node, collect);
   };
   collect(source);
 
-  /** The strings a class expression can reach: literals, branches, `cn(…)`, the file's constants. */
-  const leaves = (e0: ts.Expression, depth = 0): string[] => {
-    if (depth > 12) return [];
+  const space = (parts: readonly string[]) => parts.join(' ');
+  /** Every combination of one string from each list, joined by a space; null past the cap. */
+  const product = (lists: readonly (readonly string[])[]): string[] | null => {
+    let out: string[] = [''];
+    for (const list of lists) {
+      out = out.flatMap((a) => list.map((b) => space([a, b])));
+      if (out.length > MAX_ALTERNATIVES) return null;
+    }
+    return out;
+  };
+
+  /**
+   * The ways a class expression can evaluate, each as one string of classes: a literal; each
+   * branch of `?:`; `a && b` as nothing or `b`; `a || b` and `a ?? b` as either side; a template
+   * with each of its parts; `cn` and `clsx` with every argument (an object's keys each there or
+   * not); the file's constants. Anything else is UNREAD, which proves nothing.
+   */
+  const classes = (e0: ts.Expression | undefined, depth = 0): string[] => {
+    if (e0 === undefined) return [''];
+    if (depth > 12) return [UNREAD];
     const e = unwrap(e0);
-    const next = (x: ts.Expression) => leaves(x, depth + 1);
+    const next = (x: ts.Expression) => classes(x, depth + 1);
     if (ts.isStringLiteralLike(e)) return [e.text];
-    if (ts.isTemplateExpression(e))
-      return [
-        e.head.text,
-        ...e.templateSpans.flatMap((s) => [s.literal.text, ...next(s.expression)]),
-      ];
+    if (
+      e.kind === ts.SyntaxKind.NullKeyword ||
+      e.kind === ts.SyntaxKind.FalseKeyword ||
+      e.kind === ts.SyntaxKind.TrueKeyword ||
+      (ts.isIdentifier(e) && e.text === 'undefined')
+    )
+      return [''];
+    if (ts.isTemplateExpression(e)) {
+      let out: string[] = [e.head.text];
+      for (const span of e.templateSpans) {
+        out = out.flatMap((a) => next(span.expression).map((b) => a + b + span.literal.text));
+        if (out.length > MAX_ALTERNATIVES) return [UNREAD];
+      }
+      return out;
+    }
     if (ts.isConditionalExpression(e)) return [...next(e.whenTrue), ...next(e.whenFalse)];
-    if (ts.isBinaryExpression(e)) return [...next(e.left), ...next(e.right)];
-    if (ts.isCallExpression(e)) return e.arguments.flatMap(next);
+    if (ts.isBinaryExpression(e)) {
+      const op = e.operatorToken.kind;
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken) return ['', ...next(e.right)];
+      if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken)
+        return [...next(e.left), ...next(e.right)];
+      return [UNREAD];
+    }
+    if (
+      ts.isCallExpression(e) &&
+      ts.isIdentifier(e.expression) &&
+      CLASS_CALLS.has(e.expression.text)
+    )
+      return product(e.arguments.map((a) => argClasses(a, depth + 1))) ?? [UNREAD];
+    if (ts.isIdentifier(e)) {
+      const values = locals.get(e.text);
+      if (values) return values.flatMap(next);
+      const imported = imports.get(e.text);
+      return imported ? importedClasses(imported.specifier, imported.name) : [UNREAD];
+    }
+    return [UNREAD];
+  };
+  /** An imported class constant: a string the module exports as a `const`, else UNREAD. */
+  const importedClasses = (specifier: string, name: string): string[] => {
+    const module = moduleSource(path, specifier);
+    if (!module) return [UNREAD];
+    for (const statement of module.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      const exported = statement.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword);
+      if (!exported || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue;
+      for (const d of statement.declarationList.declarations)
+        if (ts.isIdentifier(d.name) && d.name.text === name && d.initializer) {
+          const value = unwrap(d.initializer);
+          return ts.isStringLiteralLike(value) ? [value.text] : [UNREAD];
+        }
+    }
+    return [UNREAD];
+  };
+  /** A `cn` / `clsx` argument: a class expression, an array of them, or an object of conditions. */
+  const argClasses = (e0: ts.Expression, depth: number): string[] => {
+    const e = unwrap(e0);
     if (ts.isArrayLiteralExpression(e))
-      return e.elements.flatMap((el) => next(ts.isSpreadElement(el) ? el.expression : el));
-    if (ts.isIdentifier(e)) return (locals.get(e.text) ?? []).flatMap(next);
-    return [];
+      return (
+        product(
+          e.elements.map((el) => (ts.isSpreadElement(el) ? [UNREAD] : argClasses(el, depth + 1)))
+        ) ?? [UNREAD]
+      );
+    if (ts.isObjectLiteralExpression(e))
+      return (
+        product(
+          e.properties.map((p) => {
+            if (!ts.isPropertyAssignment(p)) return [UNREAD];
+            const key =
+              ts.isIdentifier(p.name) || ts.isStringLiteralLike(p.name) ? p.name.text : null;
+            return key === null ? [UNREAD] : ['', key];
+          })
+        ) ?? [UNREAD]
+      );
+    return classes(e, depth);
   };
 
   type El = ts.JsxElement | ts.JsxSelfClosingElement;
   const opening = (n: El): ts.JsxOpeningLikeElement => (ts.isJsxElement(n) ? n.openingElement : n);
-  const tagOf = (n: ts.JsxOpeningLikeElement) => n.tagName.getText(source);
-  const classTokens = (n: ts.JsxOpeningLikeElement): string[] => {
+  const tagName = (n: ts.JsxOpeningLikeElement) => n.tagName.getText(source);
+  const classAttr = (n: ts.JsxOpeningLikeElement): ts.Expression | undefined => {
     for (const a of n.attributes.properties) {
-      if (!ts.isJsxAttribute(a) || a.name.getText(source) !== 'className' || !a.initializer)
-        continue;
-      const init = a.initializer;
-      const e = ts.isJsxExpression(init) ? init.expression : init;
-      return e ? leaves(e).flatMap((s) => s.split(/\s+/).filter(Boolean)) : [];
+      if (!ts.isJsxAttribute(a) || a.name.getText(source) !== 'className') continue;
+      if (!a.initializer) return undefined;
+      return ts.isJsxExpression(a.initializer) ? a.initializer.expression : a.initializer;
     }
-    return [];
+    return undefined;
   };
-  /** A class that holds in some branch of the expression: a conditional measure counts too. */
-  const has = (n: ts.JsxOpeningLikeElement, set: ReadonlySet<string>) =>
-    classTokens(n).some((t) => atRest(t) && set.has(t));
+  const tokens = (classList: string) => classList.split(/\s+/).filter((t) => t && atRest(t));
+  /** Whether every way the element's class can evaluate holds one of the classes. */
+  const every = (n: ts.JsxOpeningLikeElement, set: ReadonlySet<string>) =>
+    classes(classAttr(n)).every((c) => tokens(c).some((t) => set.has(t)));
+  /** Whether some way the element's class can evaluate holds one of the classes. */
+  const some = (n: ts.JsxOpeningLikeElement, set: ReadonlySet<string>) =>
+    classes(classAttr(n)).some((c) => tokens(c).some((t) => set.has(t)));
   const MEASURE = new Set([MEASURE_CLASS]);
+
+  /** The string-literal union a prop's declared type names, or null where it names anything else. */
+  const declaredStrings = (
+    type: ts.TypeNode | undefined,
+    prop: string,
+    depth = 0
+  ): string[] | null => {
+    if (!type || depth > 6) return null;
+    const member = (members: ts.NodeArray<ts.TypeElement>) => {
+      const m = members.find(
+        (x) => ts.isPropertySignature(x) && x.name.getText(source) === prop
+      ) as ts.PropertySignature | undefined;
+      return m ? literalUnion(m.type) : undefined;
+    };
+    if (ts.isTypeLiteralNode(type)) return member(type.members) ?? null;
+    if (ts.isIntersectionTypeNode(type)) {
+      for (const t of type.types) {
+        const found = declaredStrings(t, prop, depth + 1);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (ts.isTypeReferenceNode(type) && ts.isIdentifier(type.typeName)) {
+      const decl = types.get(type.typeName.text);
+      if (decl && ts.isInterfaceDeclaration(decl)) {
+        const own = member(decl.members);
+        if (own !== undefined) return own;
+        for (const clause of decl.heritageClauses ?? [])
+          for (const t of clause.types)
+            if (ts.isIdentifier(t.expression)) {
+              const found = declaredStrings(
+                ts.factory.createTypeReferenceNode(t.expression.text),
+                prop,
+                depth + 1
+              );
+              if (found) return found;
+            }
+        return null;
+      }
+      if (decl && ts.isTypeAliasDeclaration(decl))
+        return declaredStrings(decl.type, prop, depth + 1);
+    }
+    return null;
+  };
+  const literalUnion = (type: ts.TypeNode | undefined): string[] | null => {
+    if (!type) return null;
+    const parts = ts.isUnionTypeNode(type) ? type.types : [type];
+    const out: string[] = [];
+    for (const t of parts) {
+      if (ts.isLiteralTypeNode(t) && ts.isStringLiteral(t.literal)) out.push(t.literal.text);
+      else return null;
+    }
+    return out;
+  };
+
+  /**
+   * What a JSX tag is. A lowercase name is that intrinsic tag. A capitalised one is a component
+   * when the file imports or declares it as one; a constant is every tag its value can be (`'span'
+   * or 'p'`) or a component when every value is one; a destructured prop is the string union its
+   * declared type names, with its default. Anything else is a tag the scan cannot read.
+   */
+  const readTag = (name: ts.JsxTagNameExpression, depth = 0): TagRead => {
+    if (!ts.isIdentifier(name)) return 'component'; // `motion.div`, `Foo.Bar`
+    const text = name.text;
+    if (/^[a-z]/.test(text)) return { tags: [text] };
+    return readTagName(text, depth);
+  };
+  const readTagName = (text: string, depth: number): TagRead => {
+    if (depth > 8) return 'unread';
+    if (components.has(text)) return 'component';
+    const values = locals.get(text);
+    if (values) {
+      const reads = values.map((v) => readTagValue(v, depth + 1));
+      if (reads.every((r) => r === 'component')) return 'component';
+      if (reads.some((r) => r === 'unread' || r === 'component')) return 'unread';
+      return { tags: reads.flatMap((r) => (r as { tags: readonly string[] }).tags) };
+    }
+    const bound = bindings.get(text);
+    if (!bound && !parameters.has(text)) return 'component'; // a global, as TypeScript resolves it
+    if (bound && bound.length === 1) {
+      const b = bound[0];
+      const prop = b.propertyName
+        ? b.propertyName.getText(source)
+        : ts.isIdentifier(b.name)
+          ? b.name.text
+          : null;
+      const param = b.parent.parent;
+      if (prop !== null && ts.isParameter(param)) {
+        const declared = declaredStrings(param.type, prop);
+        const fallback =
+          b.initializer && ts.isStringLiteralLike(b.initializer) ? [b.initializer.text] : [];
+        if (declared) return { tags: [...new Set([...declared, ...fallback])] };
+      }
+    }
+    return 'unread';
+  };
+  const readTagValue = (e0: ts.Expression, depth: number): TagRead => {
+    const e = unwrap(e0);
+    if (ts.isStringLiteralLike(e)) return { tags: [e.text] };
+    if (ts.isArrowFunction(e) || ts.isFunctionExpression(e)) return 'component';
+    if (ts.isCallExpression(e)) {
+      const callee = unwrap(e.expression);
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : null;
+      return name !== null && COMPONENT_FACTORIES.has(name) ? 'component' : 'unread';
+    }
+    if (ts.isIdentifier(e)) return readTagName(e.text, depth);
+    if (ts.isConditionalExpression(e)) {
+      const a = readTagValue(e.whenTrue, depth + 1);
+      const b = readTagValue(e.whenFalse, depth + 1);
+      if (a === 'component' && b === 'component') return 'component';
+      if (a === 'unread' || b === 'unread' || a === 'component' || b === 'component')
+        return 'unread';
+      return { tags: [...a.tags, ...b.tags] };
+    }
+    return 'unread';
+  };
+  const intrinsic = (read: TagRead): readonly string[] | null =>
+    typeof read === 'object' ? read.tags : null;
 
   /** The text an element writes as its own, and whether any of it is built by an expression. */
   const ownText = (n: El): { text: string; built: boolean } => {
@@ -270,10 +580,18 @@ function measureSites(code: string): Site[] {
           else built = true;
         } else if (ts.isJsxFragment(c)) add(c.children);
         else if (ts.isJsxElement(c) || ts.isJsxSelfClosingElement(c)) {
-          const tag = tagOf(opening(c));
-          const component = /^[A-Z]/.test(tag) || tag.includes('.');
-          if (component) built = true;
-          if (component || (INLINE.has(tag) && !(tag === 'span' && has(opening(c), SPAN_BLOCK)))) {
+          const o = opening(c);
+          // a component the file declares stands as the one element it returns (its class read
+          // where it is written); another component's or an unread tag's children are counted as
+          // this element's text, and it builds more
+          const root = ts.isIdentifier(o.tagName) ? roots.get(o.tagName.text) : undefined;
+          const as = root ?? o;
+          const tags = intrinsic(readTag(as.tagName));
+          const inline =
+            tags === null ||
+            tags.every((t) => INLINE.has(t) && !(t === 'span' && some(as, SPAN_BLOCK)));
+          if (tags === null || root) built = true;
+          if (inline) {
             const inner = ownText(c);
             text += inner.text;
             built ||= inner.built;
@@ -286,20 +604,24 @@ function measureSites(code: string): Site[] {
   };
 
   /**
-   * Where an element stands: `measured` (the class, a Prose paragraph, a measured slot), `cell`
-   * (a table cell's content) or `open`. The walk goes up through props and callbacks.
+   * Where an element stands: `measured` (an intrinsic element around it holds the class in every
+   * branch, it is a Prose paragraph, or it is handed to a measured slot), `cell` (a table cell's
+   * content) or `open`. The walk goes up through props and callbacks. A component given the class
+   * proves nothing: what it does with a class is in its own file.
    */
-  const standing = (node: El, isP: boolean): 'measured' | 'cell' | 'open' => {
+  const standing = (node: El, paragraph: boolean): 'measured' | 'cell' | 'open' => {
     for (let p: ts.Node | undefined = node.parent; p; p = p.parent) {
       if (ts.isJsxElement(p) || ts.isJsxSelfClosingElement(p)) {
         const o = opening(p);
-        const tag = tagOf(o);
-        if (has(o, MEASURE)) return 'measured';
-        if (isP && tag === 'Prose') return 'measured';
-        if (tag === 'td' || tag === 'th') return 'cell';
+        const name = tagName(o);
+        const tags = intrinsic(readTag(o.tagName));
+        if (tags !== null && every(o, MEASURE)) return 'measured';
+        if (paragraph && name === 'Prose') return 'measured';
+        if (tags !== null && tags.every((t) => t === 'td' || t === 'th')) return 'cell';
       } else if (ts.isJsxAttribute(p)) {
         const owner = p.parent.parent;
-        if (MEASURED_SLOTS[tagOf(owner)]?.props.includes(p.name.getText(source))) return 'measured';
+        if (MEASURED_SLOTS[tagName(owner)]?.props.includes(p.name.getText(source)))
+          return 'measured';
       } else if (ts.isObjectLiteralExpression(p)) {
         const names = new Set(
           p.properties.map((x) => {
@@ -317,70 +639,73 @@ function measureSites(code: string): Site[] {
   const visit = (node: ts.Node) => {
     if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
       const o = opening(node);
-      const tag = tagOf(o);
-      const candidate =
-        tag === 'p' || TEXT_BLOCKS.has(tag) || (tag === 'span' && has(o, SPAN_BLOCK));
-      if (candidate && !has(o, MEASURE) && !has(o, NOT_RUNNING)) {
-        const { text, built } = ownText(node);
-        const kind: Kind | null =
-          tag === 'p'
-            ? built || text.length > MEASURE_CHARS
-              ? 'p'
-              : null
-            : text.length > 110
-              ? 'block'
+      const read = readTag(o.tagName);
+      const what = `<${tagName(o)}>`;
+      if (read === 'unread') sites.push({ kind: 'tag', line: lineOf(node), what });
+      const tags = intrinsic(read);
+      if (tags !== null) {
+        const paragraph = tags.includes('p');
+        const block =
+          paragraph ||
+          tags.some((t) => TEXT_BLOCKS.has(t)) ||
+          (tags.includes('span') && some(o, SPAN_BLOCK));
+        if (block && !every(o, MEASURE) && !every(o, NOT_RUNNING)) {
+          const { text, built } = ownText(node);
+          const kind: Kind | null =
+            (paragraph && built) || text.length > MEASURE_CHARS
+              ? paragraph
+                ? 'p'
+                : 'block'
               : null;
-        if (kind !== null && standing(node, tag === 'p') === 'open')
-          sites.push({ kind, line: lineOf(node), what: `<${tag}>` });
+          if (kind !== null && standing(node, paragraph) === 'open')
+            sites.push({ kind, line: lineOf(node), what });
+        }
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return sites;
+
+  /**
+   * Whether the file sets the content of a prop in the measure: every element that writes `{prop}`
+   * among its children stands in an element that holds the class in every branch.
+   */
+  const slotMeasured = (prop: string): boolean => {
+    const uses: ts.JsxExpression[] = [];
+    const find = (node: ts.Node) => {
+      if (
+        ts.isJsxExpression(node) &&
+        node.expression &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === prop &&
+        ts.isJsxElement(node.parent)
+      )
+        uses.push(node);
+      ts.forEachChild(node, find);
+    };
+    find(source);
+    const measured = (use: ts.Node) => {
+      for (let p: ts.Node | undefined = use.parent; p; p = p.parent)
+        if (ts.isJsxElement(p) || ts.isJsxSelfClosingElement(p)) {
+          const o = opening(p);
+          if (intrinsic(readTag(o.tagName)) !== null && every(o, MEASURE)) return true;
+        }
+      return false;
+    };
+    return uses.length > 0 && uses.every(measured);
+  };
+
+  return { sites, slotMeasured };
 }
 
-/**
- * Whether a component's own source sets the content of a prop in the measure: the element that
- * writes `{prop}` among its children, or one of its ancestors in the file, carries the class.
- */
+/** Every element of a TSX source that is a paragraph of running text outside the measure. */
+function measureSites(code: string, path?: string): Site[] {
+  return scanFile(code, path).sites;
+}
+
+/** Whether a component's own source sets the content of a prop in the measure. */
 function slotMeasured(code: string, prop: string): boolean {
-  const source = ts.createSourceFile(
-    'slot.tsx',
-    code,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
-  const uses: ts.JsxExpression[] = [];
-  const visit = (node: ts.Node) => {
-    if (
-      ts.isJsxExpression(node) &&
-      node.expression &&
-      ts.isIdentifier(node.expression) &&
-      node.expression.text === prop &&
-      ts.isJsxElement(node.parent)
-    )
-      uses.push(node);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  const measured = (use: ts.Node) => {
-    for (let p: ts.Node | undefined = use.parent; p; p = p.parent)
-      if (ts.isJsxElement(p) || ts.isJsxSelfClosingElement(p)) {
-        const o = ts.isJsxElement(p) ? p.openingElement : p;
-        const cls = o.attributes.properties.find(
-          (a) => ts.isJsxAttribute(a) && a.name.getText(source) === 'className'
-        );
-        if (
-          cls &&
-          new RegExp(`(^|[\\s'"\`])${MEASURE_CLASS}($|[\\s'"\`])`).test(cls.getText(source))
-        )
-          return true;
-      }
-    return false;
-  };
-  return uses.length > 0 && uses.every(measured);
+  return scanFile(code).slotMeasured(prop);
 }
 
 function sourceFiles(root: string): string[] {
@@ -567,6 +892,32 @@ describe('the measure scan finds what it must, and only that', () => {
       ])
     ).toEqual(['1 block <li>']);
   });
+
+  it('reads a component the file declares as the element it returns, a factory’s call as one', () => {
+    expect(
+      sitesOf([
+        'function Grid({ children }) { return <div className="grid gap-2">{children}</div>; }',
+        `<div><Grid><span>${'w'.repeat(80)}</span></Grid></div>;`,
+        `<div><Row><span>${'w'.repeat(80)}</span></Row></div>;`,
+        'const Badge = memo(function Badge() { return null; });',
+        '<p><Badge /> new</p>;',
+      ])
+    ).toEqual(['3 block <div>', '5 p <p>']);
+  });
+
+  it('reads a class constant the file imports from the app’s own modules, and only those', () => {
+    const at = join(__dirname, '..', '..', 'components', 'pipeline', 'probe.tsx');
+    const legend = (from: string) =>
+      [
+        `import { FOOTER_ROW } from '${from}';`,
+        `<div className={\`\${FOOTER_ROW} text-meta\`}>${'w '.repeat(50)}</div>;`,
+      ].join('\n');
+    // svg-text.ts: FOOTER_ROW = 'flex min-h-6 flex-wrap …', a row of items
+    expect(measureSites(legend('@/components/pipeline/svg-text'), at)).toEqual([]);
+    expect(measureSites(legend('./svg-text'), at)).toEqual([]);
+    // a package's or an unknown module's constant is not read: it proves nothing
+    expect(measureSites(legend('some-package'), at).map((s) => s.kind)).toEqual(['block']);
+  });
 });
 
 describe('a slot is measured where its component writes it', () => {
@@ -637,7 +988,7 @@ describe('running text stands inside the measure (R4, lane B7)', () => {
   const files = sourceFiles(root);
   const found = new Map<string, Site[]>();
   for (const file of files) {
-    const sites = measureSites(readFileSync(file, 'utf8'));
+    const sites = measureSites(readFileSync(file, 'utf8'), file);
     if (sites.length) found.set(relative(root, file), sites);
   }
 

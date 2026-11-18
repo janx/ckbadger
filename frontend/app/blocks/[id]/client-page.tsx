@@ -337,7 +337,10 @@ export default function BlockDetailPage() {
                   </dd>
                   {genesisEpoch && (
                     // What the header says, and why it reads 0 / 0: no length is invented for it.
-                    <dd data-testid="block-epoch-genesis" className="text-text-dim mt-1">
+                    <dd
+                      data-testid="block-epoch-genesis"
+                      className="text-text-dim max-w-measure mt-1"
+                    >
                       the genesis header’s epoch field is {block.rawHeader.epoch}, so it states no
                       epoch length; <Link href="/blocks/1">{formatBlockNumber(1)}</Link> is the
                       first header to state epoch 0’s

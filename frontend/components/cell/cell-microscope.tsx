@@ -699,7 +699,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               </div>
             ))}
             {hidden > 0 && (
-              <div className="text-text-dim text-meta sm:pl-20">
+              <div className="text-text-dim text-meta max-w-measure sm:pl-20">
                 + {hidden} more ELF header fields and program headers, named in the line under their
                 bytes
               </div>

@@ -75,7 +75,7 @@ function InscriptionReading({
 }
 
 const NO_EXPLORER = (
-  <span className="text-text-dim text-meta block">
+  <span className="text-text-dim text-meta max-w-measure block">
     The Bitcoin network of testnet inscriptions is not established, so no explorer link is given.
   </span>
 );
@@ -153,7 +153,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
             <BtcfsReading uri={firstReference.uri} network={network} />
           </div>
           {omigaLink && omiga && <ViewImage href={omiga} />}
-          <figcaption className="text-text-dim text-meta">
+          <figcaption className="text-text-dim text-meta max-w-measure">
             CKBadger reads CKB only. This object points to Bitcoin; its inscription is not fetched
             here.
           </figcaption>
