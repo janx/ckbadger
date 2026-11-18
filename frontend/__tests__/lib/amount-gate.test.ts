@@ -12,7 +12,8 @@ import { describe, expect, it } from 'vitest';
  * In `app/`, `components/`, `hooks/` and `lib/` (but the modules that own the digits, and
  * `lib/seal/`, which no lane edits), no call splits an amount for display:
  *
- * - `splitCkbAmount(` and `splitTokenAmount(` (the parts every form is cut from);
+ * - `splitCkbAmount(` and `splitTokenAmount(` (an amount's parts for a hand-drawn form; the CKB
+ *   one is gone, folded into the column form, and the gate keeps it from coming back);
  * - `formatCkbCompact(` (the rounded compact form the module's `compact` replaced);
  * - `formatCkbAmount(…)`'s integer or decimal read apart: destructured (`{ integer, decimal } =
  *   formatCkbAmount(…)`, in any order beside other parts), read off the call
