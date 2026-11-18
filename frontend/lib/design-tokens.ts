@@ -69,8 +69,8 @@ export const ACTIVITY_KIND_COLORS = {
   object: CLASS_COLORS.objects,
   identity: CLASS_COLORS.identities,
   scriptCall: SCRIPT_CALL_COLOR,
-  // The Activities board's Protocols chip has no class: its bar segment takes the other-class ink.
-  protocol: CLASS_COLORS.other,
+  // Protocols are no asset class: a neutral ink, apart from the cellbases' slate on one bar.
+  protocol: color('ink-muted'),
 } as const;
 /** Ended states (an expired identity term): neutral grey, never gold or the class colour. */
 export const EXPIRED_COLOR = color('text-dim');

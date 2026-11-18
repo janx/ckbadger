@@ -381,13 +381,22 @@ pub(crate) fn transaction_response(
     })
 }
 
+/// The kinds `/transactions` and `/transactions/pool` list by: every global
+/// activity bucket (the classification the daily kind counts use, so each kind
+/// a page names lists what its count counts) and `cellbase`.
 pub(crate) fn transaction_activity_filter(
     filter: Option<&str>,
 ) -> Result<Option<&str>, ApiRouteError> {
     match filter {
         None | Some("") | Some("all") => Ok(None),
-        Some(value @ ("ckb" | "script" | "cellbase" | "dao" | "token" | "object" | "identity")) => Ok(Some(value)),
-        Some(value) => Err(ApiError::bad_request(format!("invalid activity_type '{value}'; expected ckb, script, cellbase, dao, token, object, or identity"))),
+        Some(
+            value @ ("ckb" | "script" | "cellbase" | "dao" | "token" | "object" | "identity"
+            | "protocol"),
+        ) => Ok(Some(value)),
+        Some(value) => Err(ApiError::bad_request(format!(
+            "invalid activity_type '{value}'; expected ckb, script, cellbase, dao, token, object, \
+             identity, or protocol"
+        ))),
     }
 }
 

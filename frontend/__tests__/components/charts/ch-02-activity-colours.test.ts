@@ -36,7 +36,7 @@ const CLASS_INK: Record<(typeof KEYS)[number], string> = {
   object: CLASS_COLORS.objects,
   identity: CLASS_COLORS.identities,
   scriptCall: color('amber'),
-  protocol: CLASS_COLORS.other,
+  protocol: color('ink-muted'),
 };
 
 describe('Activity by type in the class colours (CH-02)', () => {

@@ -846,7 +846,17 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
       within(select)
         .getAllByRole('option')
         .map((o) => o.getAttribute('value'))
-    ).toEqual(['all', 'ckb', 'script', 'cellbase', 'dao', 'token', 'object', 'identity']);
+    ).toEqual([
+      'all',
+      'ckb',
+      'script',
+      'cellbase',
+      'dao',
+      'token',
+      'object',
+      'identity',
+      'protocol',
+    ]);
     expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^All kinds/);
     // From sm the chips, the pool banner and the view tabs; below it the line replaces them.
     expect(

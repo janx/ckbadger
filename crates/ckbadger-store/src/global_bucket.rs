@@ -81,7 +81,9 @@ impl GlobalBucket {
 /// `dotbit`, `dotcell`: every `.bit` / `.cell` action is about one name (an
 /// identity standard of this site), so those transactions sit in Identity —
 /// including in-place edits and renewals that move no item — rather than in
-/// the generic Protocol bucket, which the Transactions page cannot filter.
+/// the generic Protocol bucket, which keeps the cross-user protocols. (Every
+/// bucket, Protocol included, is a kind of both the Activities and the
+/// Transactions filters.)
 fn protocol_item_bucket(protocol: &str) -> Option<GlobalBucket> {
     match protocol {
         "dao" => Some(GlobalBucket::Dao),

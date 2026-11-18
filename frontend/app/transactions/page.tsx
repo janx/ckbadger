@@ -25,7 +25,7 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { cn } from '@/lib/utils';
 import { ClassMark } from '@/components/ui/class-mark';
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { ACTIVITY_KIND_COLORS, CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
   activityFilterCounts,
   completedYesterdayActivities,
@@ -43,7 +43,8 @@ type TransactionKind =
   | 'dao'
   | 'token'
   | 'object'
-  | 'identity';
+  | 'identity'
+  | 'protocol';
 const KINDS: { value: TransactionKind; label: string; mark?: AssetClass; color: string }[] = [
   { value: 'all', label: 'All', color: 'var(--c-text-dim)' },
   { value: 'ckb', label: 'CKB transfers', color: 'var(--c-jade)' },
@@ -53,6 +54,8 @@ const KINDS: { value: TransactionKind; label: string; mark?: AssetClass; color: 
   { value: 'token', label: 'Tokens', mark: 'tokens', color: CLASS_COLORS.tokens },
   { value: 'object', label: 'Objects', mark: 'objects', color: CLASS_COLORS.objects },
   { value: 'identity', label: 'Identities', mark: 'identities', color: CLASS_COLORS.identities },
+  // One kind per transaction (F-6): the protocols' own chip, so the chips and the cellbases are All.
+  { value: 'protocol', label: 'Protocols', color: ACTIVITY_KIND_COLORS.protocol },
 ];
 /**
  * The kind a URL names (`/transactions?kind=dao`, the DAO page's "DAO transactions →"): a known

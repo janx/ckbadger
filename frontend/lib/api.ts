@@ -303,7 +303,8 @@ type TransactionActivityType =
   | 'dao'
   | 'token'
   | 'object'
-  | 'identity';
+  | 'identity'
+  | 'protocol';
 
 interface Transaction {
   value: string;
@@ -5347,7 +5348,7 @@ export const api = {
         { key: 'object', label: 'Object', color: color('object') },
         { key: 'identity', label: 'Identity', color: color('identity') },
         { key: 'scriptCall', label: 'Script Call', color: color('amber') },
-        { key: 'protocol', label: 'Protocol', color: color('slate-other') },
+        { key: 'protocol', label: 'Protocol', color: color('ink-muted') },
       ],
       title: 'Activity Type Breakdown',
     };

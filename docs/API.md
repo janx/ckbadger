@@ -277,7 +277,10 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 
 **Params**
 
-- `ListParams` — `limit`, `block_number`, `cursor`
+- `ListParams` — `limit`, `block_number`, `cursor`, `activity_type` (one of `ckb`, `script`,
+  `cellbase`, `dao`, `token`, `object`, `identity`, `protocol`; any other value is `400`): the
+  transactions of one global activity bucket — the classification the daily `kindCounts` count —
+  or the cellbases. `/transactions/pool` takes the same values
 - `Path(hash): Path<String>` — tx hash (with or without `0x`)
 
 **Responses**

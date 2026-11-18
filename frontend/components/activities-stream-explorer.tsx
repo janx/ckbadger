@@ -4,6 +4,7 @@ import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
+  ACTIVITY_KIND_COLORS,
   CLASS_COLORS,
   cssVars,
   DATA_COLOR,
@@ -47,7 +48,7 @@ const FILTER_OPTIONS: Array<{
   { label: 'Tokens', value: 'token', mark: 'tokens' },
   { label: 'Objects', value: 'object', mark: 'objects' },
   { label: 'Identities', value: 'identity', mark: 'identities' },
-  { label: 'Protocols', value: 'protocol' },
+  { label: 'Protocols', value: 'protocol', swatch: ACTIVITY_KIND_COLORS.protocol },
 ];
 
 /**
