@@ -5,6 +5,7 @@ import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import type { TokenDistribution } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
+import { formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 
 /** A column head's name: its text, or the name over a bar column's scale ticks. */
@@ -251,6 +252,36 @@ describe('Token holders (board L5)', () => {
     render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
   };
 
+  // Review fb-logic 7 (the lead's ruling): the share head writes "0" and its scale in hundredths
+  // of a percent; the widest tick it writes for any page is five glyphs ("0.75%" where the top
+  // ten hold under 1 % each), wider than the "100%" the track was measured from: "0" and five
+  // glyphs a glyph apart at 12 px is 50.4 px.
+  it('measures the share track from the widest tick its head writes, "0.75%": 50.4 px', async () => {
+    const ticks = new Set<string>();
+    for (let v = 0; v <= 10_000; v++) ticks.add(formatShareTick(resourceScale([v])));
+    const widest = Math.max(...[...ticks].map((t) => t.length));
+    expect([widest, ticks.has('0.75%')]).toEqual([5, true]);
+    const track = (1 + 1 + widest) * 7.2;
+    atContainerWidth(1248);
+    // 0.72 % and 0.5 % of the supply: the page's scale is 0.75 %
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
+      ...holders,
+      data: [
+        { ...holders.data[0], balance: '72000000' },
+        { ...holders.data[1], balance: '50000000' },
+      ],
+      totalSupply: '10000000000',
+    });
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const ticksRow = within(table)
+      .getAllByRole('columnheader')[4]
+      .querySelector<HTMLElement>('[data-scale-ticks]')!;
+    expect(Array.from(ticksRow.children).map((t) => t.textContent)).toEqual(['0', '0.75%']);
+    expect(Number.parseFloat(ticksRow.style.width)).toBeCloseTo(track, 10);
+  });
+
   it('draws the five-column table in the token page’s 554 px column at 1280 and the 608 px band', async () => {
     atContainerWidth(554);
     mount();
@@ -267,23 +298,28 @@ describe('Token holders (board L5)', () => {
     expect(first).toHaveTextContent('JoyID');
     expect(first).toHaveTextContent('2.32%');
     // Table-rows L2-4: the share is an 8 px bar on the page's own scale (the largest share here
-    // is 41.23 %), not a 10 %-is-full hairline.
+    // is 41.23 %), not a 10 %-is-full hairline. Re-pinned on purpose (review fb-logic 7): on the
+    // 50.4 px share track, "0" and the widest share tick, "0.75%" (it was 48)
     const scale = resourceScale([232, 4123]);
     expect(first.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(232, scale, 48),
+      width: barWidth(232, scale, 50.4),
       backgroundColor: CLASS_COLORS.tokens,
     });
     const second = within(table).getAllByRole('row')[2];
     expect(second.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(4123, scale, 48),
+      width: barWidth(4123, scale, 50.4),
     });
   });
 
   // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (the address
   // 14 px, the cells 13, tags and ticks 12) and the 16 px gap after every column but the last.
   // Lock is the flexible column (a name that ends in the ellipsis): its tag holds 12 characters at
-  // its minimum. The table still holds in the token page's 554 px column at 1280.
-  it('budgets every holder column from what it holds: 552 px, a table from it (F3-e)', async () => {
+  // its minimum. The table still holds in the token page's 554 px column at 1280. Re-pinned on
+  // purpose (review fb-logic 7, the lead's ruling): the share's track is 50.4 px, "0" and the
+  // widest tick its head writes, "0.75%" (it was measured from "100%", 48), and the column rounds
+  // once, track, gap and figure together (the figure's box was rounded to 55 first, which would
+  // have made it 116 and the table 555): 115, 554 px (renamed: "552 px").
+  it('budgets every holder column from what it holds: 554 px, a table from it (F3-e)', async () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5;
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
@@ -295,18 +331,19 @@ describe('Token holders (board L5)', () => {
       ceil(at('x'.repeat(12), 12) + 12 + 16),
       // 12 characters of the balance; a longer one ends in the ellipsis, exact in its title
       ceil(at('x'.repeat(12), 13) + 16),
-      // the 48 px track (its ticks "0 100%" are 43.2), the 10 px gap, "100.00%"; the last column
-      48 + 10 + ceil(at('100.00%', 13)),
+      // the track (its widest tick row, "0 0.75%", 7 glyphs at 12 px), the 10 px gap, "100.00%";
+      // the last column
+      ceil(at('0 0.75%', 12) + 10 + at('100.00%', 13)),
     ];
-    expect(budgets).toEqual([55, 159, 115, 110, 113]);
-    expect(budgets.reduce((s, w) => s + w, 0)).toBe(552);
+    expect(budgets).toEqual([55, 159, 115, 110, 115]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(554);
     atContainerWidth(554);
     mount();
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
     const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
     expect(cols[2].width).toBe('auto');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(552);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(554);
   });
 
   // Readability B5: the Share head stands over the share, not over its bar.

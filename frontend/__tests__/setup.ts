@@ -1,7 +1,12 @@
 import '@testing-library/jest-dom';
+// Imported here, before the check below registers its afterEach, so Testing Library's own cleanup
+// (an afterEach it registers when first imported) runs after the check: vitest runs after-hooks
+// last-registered first, and the check reads the page the test left.
+import { cleanup } from '@testing-library/react';
 import { configure } from '@testing-library/dom';
 import { vi } from 'vitest';
 import { server } from './msw/server';
+import { cellFaults, faultLines, listTables } from './utils/list-table-cells';
 
 // How long a findBy* / waitFor waits before it fails: 10 s, not Testing Library's default 1 s.
 // Measured with two full suites running at once (load average 50-60 on 24 cores, 7,212 waits):
@@ -111,3 +116,21 @@ vi.mock('@/src/navigation', () => ({
   usePathname: () => '/',
   useParams: () => ({}),
 }));
+
+// A list table's cells hold their content (components/ui/list-table.tsx, "A cell holds its
+// content"; review fb-tests 5, the lead's rulings): after every test, every ListTable table the test
+// left on the page is read by its classes — each head and cell has exactly the table's horizontal
+// padding, no figure can break inside itself, no phrase stands in a run it cannot break — so each
+// rule is held on every table of the site, with its real columns and the data each test gives it,
+// not on one fixture. A fault fails the test that drew the table, naming the table, the row and
+// the column.
+afterEach(() => {
+  if (typeof document === 'undefined') return;
+  const faults = listTables().flatMap(cellFaults);
+  if (!faults.length) return;
+  // a failing hook stops the hooks after it: unmount here, so the next test starts on an empty page
+  cleanup();
+  throw new Error(
+    `A list table's cells break its rules (components/ui/list-table.tsx, "A cell holds its content"):\n${faultLines(faults).join('\n')}`
+  );
+});

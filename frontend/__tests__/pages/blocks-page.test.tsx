@@ -15,6 +15,8 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import type { SealId } from '@/lib/seal/stones';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
+import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
+import { CLOCK_BEHIND } from '@/lib/format-age';
 
 // Time and record the seals' drawing without changing what it draws (a plain wrapper, not a mock
 // function: the phone describe's restoreAllMocks would reset one).
@@ -434,7 +436,9 @@ describe('BlocksPage · Blocks v3 board', () => {
   // The seal's footprint comes out of other columns' slack, so each table keeps the minimum width
   // it switches form at: the full table 1,230 px (Reward gave the old hash seal 22; Fees gives the
   // block stone's 7 more, 34 against 27), the 608 px table (Size · cycles gave 19 and gives 5,
-  // Miner 2; Height keeps its 2 px of room so its number never breaks).
+  // Miner 2). Corrected (review fb-tests 3): Height's 2 px of room went in F3-e (34a545c8), as
+  // every spare did; its number stays one unit by the table's rule, not by a spare (ListTable: no
+  // cell lets a figure break), and its budget is exact to the tenth (the 608 px table's test).
   // re-pinned with readability R4 (lane F3, step 2): the key at 14 px, the table text 13, the hash 12: the derived columns grow with their text and the table needs
   // 1,260 px (was 1,230), so the widest 1,232 px container draws the 608 px table.
   // Re-pinned on purpose (readability F3-e): every column is its content (Block's 13 px spare and
@@ -779,6 +783,84 @@ describe('BlocksPage · Blocks v3 board', () => {
     });
   });
 
+  // A cell holds its content (components/ui/list-table.tsx; review fb-logic 3, the lead's ruling):
+  // an age is a figure, one unit; "this device's clock is behind" (29 characters, 226.2 px at 13
+  // px) is words and breaks between them in the 94 px Age column and the 106 px Age · txs column,
+  // where it stood on one line and drew some 130 px over the next column.
+  describe('a cell holds its content (the lead’s rulings on the fb reviews)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('lets the clock-behind sentence break between its words in both tables', async () => {
+      const ahead = new Date(Date.now() + 10 * 60_000).toISOString();
+      for (const width of [1232, 608]) {
+        atContainerWidth(width);
+        vi.mocked(api.getBlocks).mockResolvedValue({
+          ...page,
+          data: [{ ...page.data[0], timestamp: ahead }, page.data[1]],
+        });
+        const { unmount } = render(<BlocksPage />);
+        const table = await screen.findByRole('table', { name: 'Latest blocks' });
+        const [first] = Array.from(table.querySelectorAll('tbody tr'));
+        const age = within(first.querySelectorAll('td')[1] as HTMLElement).getByText(CLOCK_BEHIND);
+        expect(age.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
+        expect(faultLines(cellFaults(table))).toEqual([]);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    });
+
+    // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the table
+    // does with it today, for the lists page lane to rule on (no mechanism is built here). The
+    // nine-digit height "#100,000,000" (12 glyphs at 14 px, 100.8; the bound's 11 are 92.4) stays
+    // one figure on its line, as a figure does in every cell, and runs past its column's content
+    // box: in the wide table the Block column's box is 230 − 16 = 214 px, its line the stone (34),
+    // the number, a space (7.8) and the tight hash (79.2), 221.8: 7.8 px into its own 16 px gap;
+    // in the 608 px table the Height box is 143 − 16 = 127, the stone and the number 134.8: 7.8 px
+    // into its gap. Neither reaches the next column (it would from 16 px, a second glyph past).
+    it('holds a height one glyph past its bound on one line, 7.8 px into its gap', async () => {
+      const at = (chars: number, px: number) => (chars * px * 3) / 5;
+      for (const [width, column, line] of [
+        [1232, 230, 34 + at(12, 14) + at(1, 13) + at(11, 12)],
+        [608, 143, 34 + at(12, 14)],
+      ] as const) {
+        atContainerWidth(width);
+        vi.mocked(api.getBlocks).mockResolvedValue({
+          ...page,
+          data: [
+            row(100_000_000, {
+              size: 641,
+              overheadSize: 641,
+              userTransactionsSize: 0,
+              cycles: '0',
+              transactionSizes: [355],
+              proposalsCount: 0,
+            }),
+            page.data[1],
+          ],
+        });
+        const { unmount } = render(<BlocksPage />);
+        const table = await screen.findByRole('table', { name: 'Latest blocks' });
+        const cols = Array.from(table.querySelectorAll('col')).map((c) =>
+          Number.parseFloat((c as HTMLElement).style.minWidth)
+        );
+        expect(cols[0]).toBe(column);
+        const number = within(table).getByRole('link', { name: '#100,000,000' });
+        expect(number.closest('td')).toBe(table.querySelector('tbody td'));
+        expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+        const past = line - (column - 16);
+        expect(past).toBeCloseTo(7.8, 10);
+        expect(past).toBeLessThan(16);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    });
+  });
+
   // Board L1 (2026-11-01 responsive plan): the phone row is three lines and 640 is a table.
   describe('at phone and 640 widths (board L1)', () => {
     afterEach(() => {
@@ -1021,7 +1103,16 @@ describe('BlocksPage · Blocks v3 board', () => {
       // and the gap; Miner, "ckb1…4s93hhsj" (the row size, 13 characters) at 13 px and the gap;
       // Size · cycles, "3,500,000,000" at 13 px (the last column, no gap)
       const px = cols.map((c) => Number.parseFloat(c.minWidth));
-      expect(ROW_SEAL.block.footprint + chars(11, 14) + 16).toBeLessThanOrEqual(px[0]);
+      // Height to the tenth (review fb-tests 3: the test, the comment and the budget say one
+      // thing): with pl-0 the content box is the column less its 16 px gap, 143 − 16 = 127.0; it
+      // holds the stone's 34 and "#99,999,999", 11 × 8.4 = 92.4, 126.4 in all, so 0.6 px stays
+      // free; the tight hash under the number, 11 × 7.2 = 79.2, is narrower. The column is that
+      // content and its gap rounded up, no spare: ceil(34 + 92.4 + 16) = ceil(142.4) = 143.
+      expect(ROW_SEAL.block.footprint).toBe(34);
+      expect(chars(11, 14)).toBeCloseTo(92.4, 10);
+      expect(px[0]).toBe(Math.ceil(ROW_SEAL.block.footprint + chars(11, 14) + 16));
+      expect(px[0] - 16 - (ROW_SEAL.block.footprint + chars(11, 14))).toBeCloseTo(0.6, 10);
+      expect(chars(11, 12)).toBeLessThan(chars(11, 14));
       expect(chars(13, 13) + 16).toBeLessThanOrEqual(px[2]);
       expect(chars(13, 13)).toBeLessThanOrEqual(px[4]);
     });
@@ -1059,10 +1150,14 @@ describe('BlocksPage · Blocks v3 board', () => {
         'leading-row'
       );
       // Regression (the lead's Chrome check, 2026-11-18): a block number is one figure and never
-      // breaks inside itself ("#21,045,84" over "5" in a Height cell 0.4 px short).
-      expect(within(first as HTMLElement).getByRole('link', { name: '#20,828,894' })).toHaveClass(
-        'whitespace-nowrap'
-      );
+      // breaks inside itself ("#21,045,84" over "5" in a Height cell 0.4 px short). Re-pinned on
+      // purpose (the lead's ruling on review fb-tests 5: a rule of the table, not of one link): the
+      // link's own whitespace-nowrap went; no cell of a list table lets a word or a figure break
+      // where it overflows, so nothing on the number's path to its cell can cut it.
+      const height = within(first as HTMLElement).getByRole('link', { name: '#20,828,894' });
+      for (let el: HTMLElement | null = height; el && el.tagName !== 'TR'; el = el.parentElement)
+        expect(el.className).not.toMatch(/break-words|break-all|overflow-wrap:anywhere/);
+      expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
       expect(first).toHaveTextContent('0.05060000');
       expect(first).toHaveTextContent('3,917 B6,831,940');
       expect(screen.queryByTestId('block-row-mobile')).toBeNull();

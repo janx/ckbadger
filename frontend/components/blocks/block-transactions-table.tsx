@@ -17,7 +17,8 @@ import { formatCount } from '@/lib/format-count';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import {
-  GENESIS_BLOCK_BYTES,
+  LARGEST_TX_BYTES,
+  MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_BLOCK_NUMBER,
   WIDEST_COUNT,
@@ -39,10 +40,11 @@ const cell = (text: string) => textPx(text.length, fontPx('small'));
 
 /**
  * The widest scales the bars' figures write: a transaction is no larger than its block, and the
- * largest block is genesis's 1,236,271 bytes (a 1,500,000 scale); a transaction's cycles under a
- * billion, as the committed list's (a 750,000,000 scale).
+ * largest block is genesis's 1,236,271 bytes (LARGEST_TX_BYTES, the committed list's bound too: a
+ * 1,500,000 scale); a transaction's cycles under a billion, as the committed list's (a 750,000,000
+ * scale).
  */
-const SIZE_SCALE = resourceScale([GENESIS_BLOCK_BYTES]).toLocaleString('en-US');
+const SIZE_SCALE = resourceScale([LARGEST_TX_BYTES]).toLocaleString('en-US');
 const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
 
 /** Output capacity with its unit, for the phone row. */
@@ -173,10 +175,11 @@ export function BlockTransactionsTable({
     {
       key: 'cells',
       label: 'Cells',
-      // Four digits a side as written, "9999", the arrow between its 6 px margins, "9,999"
-      // (90 px), and the gap. It was 70.
+      // The most inputs a transaction holds as written, "13568" (review fb-tests 6: it counted four
+      // digits while 13,568 44-byte inputs fit a block), the arrow between its 6 px margins, four
+      // digits of outputs, "9,999" (97.8 px), and the gap. It was 70.
       minWidth: columnPx(
-        cell(WIDEST_COUNT_DIGITS) + 6 + cell('→') + 6 + cell(WIDEST_COUNT) + CELL_GAP_PX
+        cell(String(MAX_TX_INPUTS)) + 6 + cell('→') + 6 + cell(WIDEST_COUNT) + CELL_GAP_PX
       ),
       render: (tx) => (
         <span className="whitespace-nowrap">

@@ -8,8 +8,8 @@ import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-ta
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
-import { formatShareTick, percentHundredths } from '@/components/ui/share-bar';
-import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
+import { SHARE_TRACK_PX, formatShareTick, percentHundredths } from '@/components/ui/share-bar';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader } from '@/components/ui/aligned-bar';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
@@ -69,11 +69,13 @@ function Depositor({
 
 /**
  * The share column's bar track and the width of its number (readability F3-e): the track holds its
- * head's ticks, "0" and at most "100%", under the 48 px a bar keeps at least, so 48; the number,
+ * head's ticks, "0" and the widest share tick the head writes, "0.75%" (a page of depositors under
+ * 1 % each), whole: 50.4 px (review fb-logic 7: it was measured from "100%", 48); the number,
  * "100.00%" (7 characters at 13 px, 54.6; it was 48, which held "12.34%").
  */
-const SHARE_TRACK = trackPx(['0', formatShareTick(10_000)]);
-const SHARE_TEXT = columnPx(textPx('100.00%'.length, fontPx('small')));
+const SHARE_TRACK = SHARE_TRACK_PX;
+// the figure's box is its text exactly: the column rounds once, its track, gap and figure together
+const SHARE_TEXT = textPx('100.00%'.length, fontPx('small'));
 
 /** R7: the one scale of the page's share bars — its rounded maximum — in both forms. */
 const shareScale = (rows: readonly DaoDepositorRow[]) =>

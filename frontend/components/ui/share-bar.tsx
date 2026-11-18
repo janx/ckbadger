@@ -1,4 +1,6 @@
 import { cn } from '@/lib/utils';
+import { trackPx } from '@/components/ui/aligned-bar';
+import { resourceScale } from '@/components/blocks/block-visual';
 
 /**
  * Ruling R7 (UI review 2026-11-14): a holder list draws its bars on one scale in both forms — the
@@ -27,6 +29,29 @@ export function formatShareTick(hundredths: number): string {
     throw new Error(`Share bar: invalid scale ${hundredths}`);
   return `${hundredths / 100}%`;
 }
+
+/**
+ * The widest tick a share head writes (review fb-logic 7, the lead's ruling): `formatShareTick`
+ * of every scale `resourceScale` gives a page's shares, in hundredths of a percent from 0 to 100 %,
+ * each scale read once (the next value read is one past it). Five glyphs, "0.01%" … "0.75%" for a
+ * page whose shares are all under 1 %: wider than the "100%" the track was measured from.
+ */
+function widestShareTick(): string {
+  let widest = '';
+  for (let value = 0; value <= 10_000; ) {
+    const scale = resourceScale([value]);
+    const tick = formatShareTick(scale);
+    if (tick.length > widest.length) widest = tick;
+    value = Math.max(scale, value) + 1;
+  }
+  return widest;
+}
+
+/**
+ * A share column's bar track (the DAO depositors, a token's holders): its head's tick row, "0" and
+ * the widest share tick, whole over it a glyph apart (`trackPx`): 50.4 px at 12 px.
+ */
+export const SHARE_TRACK_PX = trackPx(['0', widestShareTick()]);
 
 /** The fill of `value` on `scale`, in % of the track, to 0.01. */
 export function shareBarWidth(value: number, scale: number): string {

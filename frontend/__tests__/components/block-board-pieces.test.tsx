@@ -16,6 +16,7 @@ import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { scriptLabel } from '@/components/address/address-history';
 import type { Transaction } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { cellFaults } from '@/__tests__/utils/list-table-cells';
 
 const rewardBlock = {
   number: 20_827_932,
@@ -145,7 +146,9 @@ describe('BlockTransactionsTable', () => {
   // heads in the tick form on 48 px tracks, no spare, the hash alone at the row size), the table
   // needs 1,086 px; the block page gives it 968 at 1440, so there it is its rows, by ListTable's
   // rule (whether the page gives it its full width is the chain page lane's call).
-  it('budgets every column from what it holds: 1,086 px, its rows at the 968 px column', () => {
+  // Re-pinned on purpose (review fb-tests 6, the lead's ruling): Cells holds the most inputs a
+  // transaction holds, "13568" (106 → 114): 1,094 px (renamed: "1,086 px").
+  it('budgets every column from what it holds: 1,094 px, its rows at the 968 px column', () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
@@ -155,8 +158,9 @@ describe('BlockTransactionsTable', () => {
       ceil(at('0x01010101…010101', 13) + 16),
       // "#99,999,999" and " +10 · uncle" (the proposal window is 2 to 10 blocks)
       ceil(at('#99,999,999 +10 · uncle', 13) + 16),
-      // "9999", the arrow between its 6 px margins, "9,999"
-      ceil(at('9999', 13) + 6 + at('→', 13) + 6 + at('9,999', 13) + 16),
+      // the most inputs a transaction holds (597,000 bytes of 44-byte inputs: 13,568), "13568",
+      // the arrow between its 6 px margins, four digits of outputs, "9,999"
+      ceil(at('13568', 13) + 6 + at('→', 13) + 6 + at('9,999', 13) + 16),
       // the genesis transactions' 33.6 billion CKB: eleven whole digits, every decimal
       ceil(at('99,999,999,999.99999999', 13) + 16),
       // a fee under 100 CKB
@@ -166,9 +170,9 @@ describe('BlockTransactionsTable', () => {
       // a 48 px track and a scale under a billion cycles, "750,000,000"; the last column
       ceil(48 + 10 + at('750,000,000', 13)),
     ];
-    expect(budgets).toEqual([48, 149, 196, 106, 196, 102, 145, 144]);
+    expect(budgets).toEqual([48, 149, 196, 114, 196, 102, 145, 144]);
     const sum = budgets.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(1086);
+    expect(sum).toBe(1094);
     const { unmount } = wrap(
       <BlockTransactionsTable
         transactions={[tx(0), tx(1, { cycles: 1000, txSize: 700 })]}
@@ -195,8 +199,8 @@ describe('BlockTransactionsTable', () => {
     unmount();
     for (const [width, form] of [
       [1232, 'table'],
-      [1086, 'table'],
-      [1085, 'rows'],
+      [1094, 'table'],
+      [1093, 'rows'],
       [968, 'rows'],
     ] as const) {
       atContainerWidth(width);
@@ -215,11 +219,50 @@ describe('BlockTransactionsTable', () => {
   // 172 = 938 px, which the 968 px main column at 1440 held); budgeted from what they hold they are
   // 1,086 px, so in that column the table takes its rows, by ListTable's rule, 118 px short
   // (renamed: it was "fits the block page main column at 1440").
-  it('takes its rows in the block page main column at 1440, 118 px short of its 1,086 px', () => {
-    wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
-    const minWidth = screen.getByRole('table').style.minWidth;
-    expect(minWidth).toBe('1086px');
-    expect(parseFloat(minWidth) - 968).toBe(118);
+  // Restored as the property (review fb-tests 3, the lead's ruling: a property that no longer
+  // holds is not rewritten into a number that passes): the table fits the block page's main column
+  // at 1440 and at 1280; where it does not, the case runs and pins its shortfall in KNOWN_FAULTS,
+  // the chain page lane's (P1) to fix. 1,094 px since this lane counts 13,568 inputs (review
+  // fb-tests 6); the table is not re-budgeted here and the page's layout is not this lane's.
+  const BLOCK_PAGE_COLUMN = [
+    { window: 1440, column: 968 },
+    { window: 1280, column: 968 },
+  ] as const;
+  const KNOWN_FAULTS = [
+    {
+      case: 'the block page’s transactions table in its 968 px main column, at 1440 and 1280',
+      column: 968,
+      shortfall: 126,
+      lane: 'P1 (the chain pages)',
+      why: 'every column holds what it holds (1,094 px: the bar heads in the tick form on 48 px tracks, no spare, the hash alone at the row size, 13,568 inputs); the page gives the table its 968 px main column, and whether it gives it the full 1,232 is the page’s layout, the chain page lane’s; the lead ruled the table is not re-budgeted to fit',
+    },
+  ] as const;
+  it('fits the block page’s main column at 1440 and 1280, but for its pinned known fault', () => {
+    expect(KNOWN_FAULTS).toHaveLength(1);
+    for (const { column } of BLOCK_PAGE_COLUMN) {
+      atContainerWidth(column);
+      const { container, unmount } = wrap(
+        <BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />
+      );
+      const form = container.querySelector('[data-list-form]')!.getAttribute('data-list-form');
+      const known = KNOWN_FAULTS.find((f) => f.column === column);
+      if (known) {
+        // the property fails by exactly the pinned shortfall: the rows, 126 px short
+        expect(form).toBe('rows');
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        const drawn = wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
+        const minWidth = Number.parseFloat(drawn.container.querySelector('table')!.style.minWidth);
+        expect(minWidth - column).toBe(known.shortfall);
+        drawn.unmount();
+      } else {
+        expect([column, form]).toEqual([column, 'table']);
+        unmount();
+      }
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
   // Table-rows R2: the bar heads are the shared ScaleHeader, at the geometry this table has always
   // drawn (a 96 px tick row 3 px under the name), so the lift changes no pixel.
@@ -264,6 +307,26 @@ describe('BlockTransactionsTable', () => {
       `${Math.round((300 / resourceScale([300, 700])) * 48 * 100) / 100}px`
     );
     expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
+  });
+  // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the table
+  // does with it today, for the lists page lane to rule on. A fee of 100 CKB, "100.00000000" (12
+  // glyphs at 13 px, 93.6; the bound "99.99999999", 85.8), in the Fee column (102 px, its box 86):
+  // one figure on one line, 7.6 px wider than its box, start-aligned past its right edge (CSS Text
+  // 3) into its own 16 px gap, short of the Size column.
+  it('holds a fee one glyph past its bound on one line, 7.6 px into its gap', () => {
+    wrap(<BlockTransactionsTable transactions={[tx(0, { fee: '10000000000' })]} blockNumber={7} />);
+    const table = screen.getByRole('table');
+    const column = Number.parseFloat(
+      (table.querySelectorAll('col')[5] as HTMLElement).style.minWidth
+    );
+    expect(column).toBe(102);
+    const fee = table.querySelectorAll('tbody td')[5] as HTMLElement;
+    expect(fee).toHaveTextContent(/^100\.00000000$/);
+    expect(fee).toHaveClass('whitespace-nowrap', 'text-right');
+    expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+    const past = '100.00000000'.length * 7.8 - (column - 16);
+    expect(past).toBeCloseTo(7.6, 10);
+    expect(past).toBeLessThan(16);
   });
   it('writes "+distance" beside the proposing block', () => {
     wrap(

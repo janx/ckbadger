@@ -15,6 +15,8 @@ import { api } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { TRANSACTION_LIST_MIN_PX } from '@/components/transaction/transaction-list-table';
+import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
+import { CLOCK_BEHIND } from '@/lib/format-age';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -186,7 +188,8 @@ describe('Transactions pool view', () => {
     // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the table is drawn from 1,272 px (was within 1,248)
     // re-pinned on purpose (readability F3-e): every column its content, 1,220 px, which the
     // widest 1,232 px container holds
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    // re-pinned on purpose (review fb-tests 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13568 → 9999" (102 → 110): 1,228 px
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1228);
     expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
     expect(table).toHaveTextContent('0.00012345 CKB');
     expect(table).toHaveTextContent('3,500,000,000');
@@ -206,9 +209,10 @@ describe('Transactions pool view', () => {
     // re-pinned on purpose (readability F3-e): every column its content (the spares gone; What it
     // does, Cells, Value and Fee hold their widest values; What it does is the flexible column,
     // its minimum read from minWidth): 1,220 px
-    expect(cols).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
-    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1220);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    // re-pinned on purpose (review fb-tests 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13568 → 9999" (102 → 110): 1,228 px
+    expect(cols).toEqual([216, 126, 184, 110, 170, 131, 118, 71, 102]);
+    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1228);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1228);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at 14 px since R4 (8.4; 7.8 at 13 px; it was 21, 12 + 6 with
     // three dots)
@@ -322,12 +326,106 @@ describe('Transactions pool view', () => {
     expect('Fee rate, shannon/KB'.length * 7.2).toBeGreaterThan(colWidth(rate) - 16);
   });
 
+  // Review fb-logic 3 (the lead's ruling): the wait is a figure; the clock-behind sentence is
+  // words. In the Status column (168 px of content: the dot, "Confirming" and their gaps leave 71
+  // px for the wait) it was one NoBreak 233.4 px wide ("· " and 29 characters) in a flex row that
+  // does not wrap; it breaks between its words, and the comment that said it did is now true.
+  it('lets the clock-behind sentence break between its words in the Status column', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 0, proposed: 0, awaitingIndex: 1 },
+      data: [
+        {
+          hash: `0x${'7'.repeat(64)}`,
+          status: 'committed_awaiting_index' as const,
+          value: '100000000',
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 597000,
+          cycles: '3500000000',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: String(Date.now() + 10 * 60_000),
+          interpretation: { status: 'complete' as const, reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const sentence = within(table).getByText(CLOCK_BEHIND);
+    expect(sentence.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
+    expect(faultLines(cellFaults(table))).toEqual([]);
+  });
+
+  // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the pool's
+  // table does with it today, for the lists page lane to rule on. A fee rate of 10,000,000,000
+  // shannons a KB, "10,000,000,000" (14 glyphs at 13 px, 109.2; the bound of record,
+  // "1,000,000,000", is 13, 101.4), in the Fee rate column (118 px, its box 102): one figure on
+  // one line, 7.2 px wider than its box, start-aligned past its right edge (CSS Text 3) into its
+  // own 16 px gap, short of the Size column.
+  it('holds a fee rate one glyph past its bound on one line, 7.2 px into its gap', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+      data: [
+        {
+          hash: `0x${'8'.repeat(64)}`,
+          status: 'pending' as const,
+          value: '100000000',
+          fee: '12345',
+          feeRate: '10000000000',
+          txSize: 597000,
+          cycles: '3500000000',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: String(Date.now() - 30_000),
+          interpretation: { status: 'complete' as const, reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const at = within(table)
+      .getAllByRole('columnheader')
+      .findIndex((th) => th.textContent === 'Fee rate, shannon/KB');
+    const column = Number.parseFloat(
+      (table.querySelectorAll('col')[at] as HTMLElement).style.minWidth
+    );
+    expect(column).toBe(118);
+    const rate = within(table).getAllByRole('row')[1].querySelectorAll('td')[at] as HTMLElement;
+    expect(rate).toHaveTextContent(/^10,000,000,000$/);
+    expect(rate).toHaveClass('whitespace-nowrap', 'text-right');
+    expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+    const past = '10,000,000,000'.length * 7.8 - (column - 16);
+    expect(past).toBeCloseTo(7.2, 10);
+    expect(past).toBeLessThan(16);
+  });
+
   // Old issue C: the pool's table changed form at 1,230 px, where the committed one did, and the
   // widest container (1,232 px from 1280) held both. re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the pool's table is
   // drawn from 1,272 px, the committed one from 1,286; the widest container holds neither.
   // Re-pinned on purpose (readability F3-e): the pool's table is drawn from 1,220 px, as the
   // committed one is, so the widest container draws both.
-  it('lays the pool out as a table from 1,220 px, phone rows below', async () => {
+  // re-pinned on purpose (review fb-tests 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13568 → 9999" (102 → 110): 1,228 px, still inside the widest 1,232 (renamed: "1,220 px").
+  it('lays the pool out as a table from 1,228 px, phone rows below', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -361,8 +459,8 @@ describe('Transactions pool view', () => {
     });
     for (const [width, form] of [
       [1232, 'table'],
-      [1220, 'table'],
-      [1219, 'rows'],
+      [1228, 'table'],
+      [1227, 'rows'],
       [976, 'rows'],
     ] as const) {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
@@ -385,7 +483,10 @@ describe('Transactions pool view', () => {
   // The coordinator's ruling (F3-e): with its Size head in the tick form the committed list's own
   // sum is 1,203 px, the pool's 1,220; the page's two lists change form at the larger, so the
   // committed list's What it did keeps the 17 px between them.
-  it('changes both lists’ form at the larger sum: the committed What it did keeps 17 px', async () => {
+  // Re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): the committed
+  // list holds 13,568 inputs and genesis's cellbase, 1,227 px; the pool 13,568 inputs, 1,228;
+  // What it did keeps the 1 px between them (renamed: "keeps 17 px").
+  it('changes both lists’ form at the larger sum: the committed What it did keeps 1 px', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
         {
@@ -411,9 +512,9 @@ describe('Transactions pool view', () => {
     });
     render(<TransactionsPage />);
     const table = await screen.findByRole('table', { name: 'Committed transactions' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1228);
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-    expect(Number.parseFloat(cols[2].minWidth)).toBe(204 + 17);
+    expect(Number.parseFloat(cols[2].minWidth)).toBe(204 + 1);
   });
 
   // Readability F3-e: every pool column budgeted from the widest value its formatter writes
@@ -421,7 +522,8 @@ describe('Transactions pool view', () => {
   // and the 16 px gap after every column but the last. What it does is the flexible column: its
   // longest word whole, the rest of the container beyond the sum. The pool and the committed list
   // are one page and change form at one width, the larger of their sums: both are 1,220 px.
-  it('budgets every pool column from what it holds; both lists change form at 1,220 px', async () => {
+  // re-pinned on purpose (review fb-tests 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13568 → 9999" (102 → 110): 1,228 px (renamed: "1,220 px").
+  it('budgets every pool column from what it holds; both lists change form at 1,228 px', async () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
@@ -431,8 +533,9 @@ describe('Transactions pool view', () => {
       ceil(at('Interpretation', 13) + 16),
       // the dot, its gap, "Confirming", the gap and the longest wait under 100 days
       ceil(7 + 6 + at('Confirming', 13) + 6 + at('· 99d ago', 13) + 16),
-      // four digits a side, as the pool writes them (ungrouped)
-      ceil(at('9999 → 9999', 13) + 16),
+      // the most inputs a transaction holds (597,000 bytes of 44-byte inputs: 13,568) and four
+      // digits of outputs, as the pool writes them (ungrouped)
+      ceil(at('13568 → 9999', 13) + 16),
       // a value under a million CKB on one line with its unit; a larger one breaks before its
       // decimals
       ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
@@ -445,12 +548,13 @@ describe('Transactions pool view', () => {
       // the most a transaction may take, the last column
       ceil(at('3,500,000,000', 13)),
     ];
-    expect(budgets).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
-    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    expect(budgets).toEqual([216, 126, 184, 110, 170, 131, 118, 71, 102]);
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1228);
     // re-pinned on purpose (the coordinator's ruling: the committed Size head in the tick form):
     // the committed list's own sum is 1,203, the pool's 1,220 the larger, so both change form at
-    // the pool's (the committed What it did keeps the 17 px between them)
-    expect(TRANSACTION_LIST_MIN_PX).toBe(1203);
+    // the pool's (the committed What it did keeps the 17 px between them); re-pinned on purpose
+    // (reviews fb-tests 6, fb-logic 6): 1,227 and 1,228, What it did keeps 1 px
+    expect(TRANSACTION_LIST_MIN_PX).toBe(1227);
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -485,7 +589,7 @@ describe('Transactions pool view', () => {
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
     expect(cols[1].width).toBe('auto');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1228);
     unmount();
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -493,8 +597,8 @@ describe('Transactions pool view', () => {
     });
     for (const [width, form] of [
       [1232, 'table'],
-      [1220, 'table'],
-      [1219, 'rows'],
+      [1228, 'table'],
+      [1227, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {

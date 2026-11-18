@@ -18,7 +18,7 @@ import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
-import { formatShareTick } from '@/components/ui/share-bar';
+import { SHARE_TRACK_PX, formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { LockKind } from '@/components/ui/lock-kind';
@@ -32,7 +32,6 @@ import {
   BAR_FIGURE_GAP,
   COUNT_TRACK_PX,
   ScaleHeader,
-  trackPx,
 } from '@/components/ui/aligned-bar';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
@@ -55,17 +54,21 @@ const cell = (chars: number) => textPx(chars, fontPx('small'));
 const tag = (chars: number) => textPx(chars, fontPx('meta')) + 2 * 5 + 2 * 1;
 /**
  * The holders-per-range bar of "Holders by balance", and the share bar of the holder list: each
- * track holds its head's ticks ("0" … "750M", the tick form; "0" … "100%") whole, under the 48 px a
- * bar keeps at least, so 48 (the bands' was 40).
+ * track holds its head's ticks whole. The count's ("0" … "750M", the tick form) are under the 48 px
+ * a bar keeps at least, so 48 (the bands' was 40); the share's widest is "0" … "0.75%" (a top ten
+ * under 1 % each), 50.4 px (review fb-logic 7: it was measured from "100%", 48).
  */
 const BUCKET_TRACK = COUNT_TRACK_PX;
-const SHARE_TRACK = trackPx(['0', formatShareTick(10_000)]);
+const SHARE_TRACK = SHARE_TRACK_PX;
 /**
  * The figures right of those bars: a range's holder count, "99,999" (it was 44, five
  * characters), and a holder's share, "100.00%" (it was 48, "41.23%").
  */
 const BUCKET_FIGURE = columnPx(cell(WIDEST_HOLDERS.length));
-const SHARE_FIGURE = columnPx(cell('100.00%'.length));
+// the share's box is its text exactly (54.6): its column rounds once, the 50.4 px track, the gap
+// and the figure together, 115 px (two roundings, 55 and then 116, made the table 555 px, a pixel
+// wider than the token page's 554 px column at 1280)
+const SHARE_FIGURE = cell('100.00%'.length);
 /** "Under 1", "1 – under 10", "100,000 and above": exact bounds, trailing zeros dropped. */
 function bucketRange(lowerBound: string, upperBound: string | null, decimals: number | null) {
   const bound = (amount: string) => formatTokenBalanceWithRawMarker(amount, decimals);

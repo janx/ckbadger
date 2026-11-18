@@ -3,6 +3,7 @@
 import { useSyncExternalStore } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
 import { clockNow, subscribeClock } from '@/lib/clock';
+import { CLOCK_BEHIND } from '@/lib/format-age';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 
 /**
@@ -59,17 +60,18 @@ export function Utc8DateTime({
  * A chain time as its age on a row of a live list (PA-22: blocks, transactions, activities, the
  * pool): `20s ago` in the one age form (`formatTimeAgo`), the full date-time on the site's clock its
  * hover. A list that is historical by nature (an address's history, a block's transactions) keeps
- * `Utc8Date`. One unit, as every time is.
+ * `Utc8Date`. An age is a figure, one unit, as every time is; "this device's clock is behind" is
+ * not an age but a sentence, words that break between them wherever it stands (review fb-logic 3,
+ * the lead's ruling: in an Age column it stood 226 px on one line and drew over the next column).
  */
 export function Utc8Age({ timestamp, className }: { timestamp: string; className?: string }) {
   const age = useAge(timestamp);
-  return (
-    <NoBreak>
-      <time className={className} title={formatUtc8DateTime(timestamp)}>
-        {age}
-      </time>
-    </NoBreak>
+  const time = (
+    <time className={className} title={formatUtc8DateTime(timestamp)}>
+      {age}
+    </time>
   );
+  return age === CLOCK_BEHIND ? time : <NoBreak>{time}</NoBreak>;
 }
 
 /**

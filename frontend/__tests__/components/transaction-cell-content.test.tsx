@@ -70,7 +70,11 @@ describe('transaction cell semantics', () => {
     const { rerender } = render(
       <TransactionCellContent size="row" display={token} cellHref="/cell/x-0" />
     );
-    expect(screen.getByText(/9,007,199,254,740,993,123 \(raw\) USDI/)).toBeInTheDocument();
+    // Re-pinned on purpose (a list table's rule, the lead's ruling on review fb-tests 5): the
+    // amount is a figure, one unit (NoBreak) the line's [overflow-wrap:anywhere] never cuts, so its
+    // text is no longer one text node with the symbol
+    expect(screen.getByRole('link')).toHaveTextContent('9,007,199,254,740,993,123 (raw) USDI');
+    expect(screen.getByText('9,007,199,254,740,993,123 (raw)')).toHaveAttribute('data-nobreak');
     // Lane B (B3): a token cell whose data holds no amount (mainnet 0xfbe2…c11c output 11, 0
     // bytes) says so, with the API's reason in the title — never an invented 0.
     const reason = 'xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)';

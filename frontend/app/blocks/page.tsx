@@ -107,8 +107,8 @@ export default function BlocksPage() {
       // The widest age, "10y 364d ago" (12 characters at 13 px, 93.6), and the gap: it was 70,
       // which held "59m ago" and not an older page's "6y 363d ago".
       minWidth: columnPx(textPx(WIDEST_AGE.length, fontPx('small')) + CELL_GAP_PX),
-      className: 'whitespace-nowrap',
-      // the age reads the page's one clock (the review's item H), the date-time its hover
+      // the age reads the page's one clock (the review's item H), the date-time its hover; an age
+      // is one unit (Utc8Age), "this device's clock is behind" words that break in the column
       render: (block) => <Utc8Age timestamp={block.timestamp} className="text-text-dim" />,
     },
     {
@@ -578,8 +578,8 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
       <div className="flex items-start">
         <RowSeal id={blockSeal(block)} />
         <div className="min-w-0">
-          {/* a block number is one figure: it never breaks inside itself */}
-          <Link href={`/blocks/${block.number}`} className={`${KEY} whitespace-nowrap`}>
+          {/* a block number is one figure: no table cell breaks inside it (ListTable) */}
+          <Link href={`/blocks/${block.number}`} className={KEY}>
             {formatBlockNumber(block.number)}
           </Link>
           <Hash
@@ -614,7 +614,7 @@ export const NARROW_COLUMNS: ListColumn<Block>[] = [
     ),
     render: (block) => (
       <span className="block">
-        <span className="block whitespace-nowrap">
+        <span className="block">
           <Utc8Age timestamp={block.timestamp} className="text-text-dim" />
         </span>
         <span className="block">

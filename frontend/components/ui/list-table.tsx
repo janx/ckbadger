@@ -13,6 +13,11 @@ export interface ListColumn<T> {
   minWidth: number;
   width?: string;
   numeric?: boolean;
+  /**
+   * The cells' own classes: ink, size, vertical padding, white-space, truncation. Never a class that
+   * takes a horizontal pixel (a padding, a margin, a width, a side border): the table owns those
+   * (`CELL_HORIZONTAL_CLASSES`), and a mark a column draws beside its content is in its minWidth.
+   */
   className?: string;
   /** F2 blocks: a richer column header (e.g. a bar column's 0 … scale ticks); `label` stays the plain name. */
   header?: ReactNode;
@@ -73,15 +78,6 @@ export interface ListTableProps<T> {
 export type ListTableDensity = 'default' | 'row';
 
 /**
- * A column head (B5; a label, so quiet by R3): sticky, on the vitals strip's own opaque ground so no row shows through, one
- * layer under the site header (z-40). Its rule is its own 1 px line in the row-rule ink: a
- * collapsed table border is painted by the table and would stay behind where the head was.
- */
-const HEAD_CLASS =
-  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 pl-0 pr-4 font-normal last:pr-0 after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule';
-const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
-
-/**
  * The gap a column keeps after its content, its cells' `pr-4` (the last column keeps none,
  * `last:pr-0`): every column but the last budgets it in its minimum width. It is a cell's ONLY
  * horizontal padding: `pl-0` is written out because a browser gives a table cell 1 px of padding
@@ -90,19 +86,90 @@ const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
  */
 export const CELL_GAP_PX = 16;
 
+/**
+ * The gap as the class that draws it: Tailwind's `pr-4`, four of its 0.25 rem steps, 16 px at the
+ * root's 16 px (`__tests__/components/list-table.test.tsx` reads the step from the config, so the
+ * class and CELL_GAP_PX cannot move apart).
+ */
+export const CELL_GAP_CLASS = 'pr-4';
+
+/**
+ * Every horizontal class a head and a cell carry, and the only ones: no left padding, the gap,
+ * none after the last column.
+ */
+export const CELL_HORIZONTAL_CLASSES: readonly string[] = ['pl-0', CELL_GAP_CLASS, 'last:pr-0'];
+
+/**
+ * A column head (B5; a label, so quiet by R3): sticky, on the vitals strip's own opaque ground so no row shows through, one
+ * layer under the site header (z-40). Its rule is its own 1 px line in the row-rule ink: a
+ * collapsed table border is painted by the table and would stay behind where the head was.
+ */
+const HEAD_CLASS = [
+  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 font-normal after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule',
+  ...CELL_HORIZONTAL_CLASSES,
+].join(' ');
+const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
+
 /** `td` classes per density; `th` is the same in both. */
 const CELL_CLASS: Record<ListTableDensity, string> = {
-  default: 'min-w-0 py-3 pl-0 pr-4 align-top last:pr-0',
-  row: 'min-w-0 py-[11px] pl-0 pr-4 align-middle last:pr-0',
+  default: ['min-w-0 py-3 align-top', ...CELL_HORIZONTAL_CLASSES].join(' '),
+  row: ['min-w-0 py-[11px] align-middle', ...CELL_HORIZONTAL_CLASSES].join(' '),
 };
 
+/**
+ * A cell holds its content (readability 2026-11-18, the lead's rulings on the fb reviews): nothing
+ * in a cell draws outside it, and how its content may break is the table's rule, not a page's.
+ *
+ * - A figure — a number with its sign, its `#`, its decimals — is one unbreakable unit. No cell
+ *   lets a word break where it overflows (no `overflow-wrap: break-word` here, as a non-numeric
+ *   cell once had), so nothing in a table can cut a figure: a column budgeted to the pixel holds
+ *   its figure on one line, and a figure past its column's bound shows the shortfall past the
+ *   figure's edge, never "#21,045,84" over "5". A numeric column's cell is one figure with its
+ *   label and is held on one line whole (`NUMERIC_CELL`).
+ * - Words break between them, never inside one: a phrase is never one unbreakable run in a cell
+ *   (a headline, "this device's clock is behind"), so it makes its row taller, never its column
+ *   wider; a separated list breaks between its parts first (`Dotted`). A column holds its longest
+ *   word at its minimum.
+ * - A chip (a row tag, a composition badge) is one unit as a figure is, budgeted whole.
+ *
+ * `__tests__/utils/list-table-cells.ts` reads every table the suite renders against these.
+ */
+const NUMERIC_CELL = 'whitespace-nowrap text-right tabular-nums';
+
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';
+
+/**
+ * A class that takes a horizontal pixel of a cell, read without its variant (`md:`, `last:`) and
+ * its `!`: a padding or a margin on a horizontal side (`p-*` sets all four), a width, a border of
+ * a horizontal side (`border` and `border-2` set all four), or the same written as an arbitrary
+ * property.
+ */
+const HORIZONTAL_SPACE =
+  /^-?(p|px|pl|pr|ps|pe|m|mx|ml|mr|ms|me|w|min-w|max-w|size)-|^border(-[xlrse])?(-(\d+|\[\d[^\]]*\]))?$|^\[(padding|margin|width|min-width|max-width|border)(-(left|right|inline|inline-start|inline-end))?(-width)?:/;
+
+/**
+ * A column's own classes take no horizontal pixel of its cells (review fb-tests 5, the lead's
+ * ruling): the table writes `pl-0` and the gap on every cell, and a column's `px-2` would replace
+ * both through cn() and draw its content in pixels its minWidth never counted.
+ */
+function refuseHorizontalSpace<T>(label: string, column: ListColumn<T>): void {
+  for (const cls of column.className?.split(/\s+/) ?? []) {
+    const bare = cls.replace(/^([a-z0-9-]+:)*/, '').replace(/^!/, '');
+    if (HORIZONTAL_SPACE.test(bare))
+      throw new Error(
+        `${label}: column ${column.key} sets its own horizontal space (${cls}); a cell's ` +
+          `horizontal space is the table's, its ${CELL_GAP_PX} px gap, and a column budgets what ` +
+          'it draws beside its content in minWidth'
+      );
+  }
+}
 
 export function minimumWidth<T>(label: string, columns: readonly ListColumn<T>[]): number {
   let sum = 0;
   for (const c of columns) {
     if (!Number.isFinite(c.minWidth) || c.minWidth <= 0)
       throw new Error(`${label}: invalid minimum width for ${c.key}`);
+    refuseHorizontalSpace(label, c);
     sum += c.minWidth;
   }
   return sum;
@@ -260,11 +327,7 @@ export function ListTable<T>({
                 {shown.map((c) => (
                   <td
                     key={c.key}
-                    className={cn(
-                      CELL_CLASS[density],
-                      c.numeric ? 'whitespace-nowrap text-right tabular-nums' : 'break-words',
-                      c.className
-                    )}
+                    className={cn(CELL_CLASS[density], c.numeric && NUMERIC_CELL, c.className)}
                   >
                     {unitNode(c.render(row))}
                   </td>

@@ -16,6 +16,8 @@ import {
 } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { drawSeal, type SealId } from '@/lib/seal/stones';
+import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
+import { CLOCK_BEHIND } from '@/lib/format-age';
 
 const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
   blockNumber: 20829775,
@@ -259,21 +261,168 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // Re-pinned on purpose (the coordinator's ruling): with the Size bar on a 48 px track the list's
   // own sum is 1,203 px, so a common row is one line from a container of 1,258 px, and at 1,232
   // What it did has 233 (renamed: "from 1,275 px, beyond the 1,220").
-  it('gives What it did a common row on one line from 1,258 px, beyond the 1,203 (B5, F3-e)', () => {
+  // Rewritten (review fb-tests 3, the lead's ruling): that test had become a threshold no page
+  // gives (the list is never wider than 1,232) and a bare number. Two tests now: what jsdom can
+  // state of the cell (the headline and its note may break, and where), and the property itself,
+  // "a common row stands on one line", at every width the page gives the list, with the width
+  // where it does not hold pinned as a known fault by its shortfall.
+  it('lets a headline break between its parts and its words, and its note go under it', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
-    const widths = Array.from(table.querySelectorAll('col')).map((c) =>
-      Number.parseFloat((c as HTMLElement).style.minWidth)
-    );
-    const sum = widths.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(1203);
-    const what = (container: number) => container - (sum - widths[2]);
+    for (const row of within(table).getAllByRole('row').slice(1)) {
+      const what = row.querySelectorAll('td')[2] as HTMLElement;
+      expect(what.className).not.toMatch(/whitespace-nowrap|truncate|break-words/);
+      // the headline and its note: two items of one wrapping line (the note goes under the
+      // headline where the line is full), neither one unbreakable
+      const line = what.querySelector('.flex-wrap') as HTMLElement;
+      expect(line).toHaveClass('flex', 'min-w-0', 'flex-wrap');
+      const [headline, note] = Array.from(line.children) as HTMLElement[];
+      for (const part of [headline, note]) {
+        expect(part).toHaveClass('min-w-0');
+        expect(part).not.toHaveClass('whitespace-nowrap');
+      }
+      // the headline's separated parts (a protocol's name and its action) break between them first,
+      // the separator with the part after it, then between the words of a part (Dotted's items)
+      for (const item of headline.querySelectorAll('[data-dotted-item]'))
+        expect(item).toHaveClass('min-w-0');
+    }
+    expect(faultLines(cellFaults(table))).toEqual([]);
+  });
+
+  // The page's real widths (app/transactions/page.tsx's `main.container`: Tailwind's container at
+  // sm 640 / md 768 / lg 1024 / xl 1280 less its gutters, 16 px a side, 24 from lg): the list stands
+  // in 1,232 px from a 1280 window, 976 from 1024, 736 from 768, 608 from 640, and the window less
+  // 32 below (358 at 390, 328 at 360). The page changes both its lists' form at 1,228 px, its
+  // pool's sum (transactions-page.test.tsx pins it), so only 1,232 draws the table, What it did
+  // taking its 205 px minimum and the 4 px beyond; every narrower width draws the phone rows, whose
+  // what-line wraps by design.
+  const PAGE_FORM_PX = 1228;
+  const PAGE_WIDTHS = [1232, 976, 736, 608, 358, 328] as const;
+  /** Where "a common row stands on one line" does not hold: pinned, so the list can only shrink. */
+  const KNOWN_FAULTS = [
+    {
+      case: 'a common row, "CKB Transfer" and "12 participants", on one line in What it did at 1,232 px',
+      width: 1232,
+      shortfall: 49.6,
+      lane: 'P3 (the lists pages)',
+      why: 'What it did, the flexible column, has 209 px at 1,232 (its 205 px minimum and the 4 px the container gives beyond the 1,228) and the row needs 258.6 (the mark, its gap, 27 glyphs at 7.8 px, the 8 px between headline and note, the cell gap); the other columns are budgeted to what they hold, honestly since this lane (13,568 inputs, genesis’s cellbase), and the lead ruled the column budgets do not change here: where the list gets its width is the page’s layout',
+    },
+  ] as const;
+  it('keeps a common row on one line at the page’s widths, but for its pinned known fault', () => {
+    expect(KNOWN_FAULTS).toHaveLength(1);
     const line = (headline: string, note: string) =>
       16 + 8 + (headline.length + note.length) * 7.8 + 8 + 16;
-    expect(line('CKB Transfer', '12 participants')).toBeLessThanOrEqual(what(1258));
-    expect(line('CKB Transfer', '12 participants')).toBeGreaterThan(what(1257));
-    expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(what(1258));
-    expect(what(1232)).toBe(233);
+    expect(line('CKB Transfer', '12 participants')).toBeCloseTo(258.6, 10);
+    for (const width of PAGE_WIDTHS) {
+      atContainerWidth(width);
+      const { container, unmount } = render(
+        <TransactionListTable
+          transactions={[scriptCall, transfer, cellbase]}
+          formWidth={PAGE_FORM_PX}
+        />
+      );
+      const form = container.querySelector('[data-list-form]')!.getAttribute('data-list-form');
+      if (width < PAGE_FORM_PX) {
+        // the phone rows: the property is the table's
+        expect([width, form]).toEqual([width, 'rows']);
+      } else {
+        expect(form).toBe('table');
+        const cols = Array.from(container.querySelectorAll('col')).map((c) =>
+          Number.parseFloat((c as HTMLElement).style.minWidth)
+        );
+        const sum = cols.reduce((s, w) => s + w, 0);
+        expect([sum, cols[2]]).toEqual([PAGE_FORM_PX, 205]);
+        const what = width - (sum - cols[2]);
+        const shortfall = line('CKB Transfer', '12 participants') - what;
+        const known = KNOWN_FAULTS.find((f) => f.width === width);
+        if (known) expect(shortfall).toBeCloseTo(known.shortfall, 10);
+        else expect(shortfall).toBeLessThanOrEqual(0);
+      }
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  // A cell holds its content (components/ui/list-table.tsx). The lead's Chrome reading of
+  // /transactions at 1280 (2026-11-18): ".bit · recycle expired account", one nowrap run 234 px
+  // wide in What it did's 193 px line beside its mark, drew 41 px past its content box and 25 px
+  // over Value, on 3 of 20 live rows. The ruling: a headline is words; it breaks first between its
+  // separated parts (the " · " belongs to the part after it), then between the words of a part
+  // still too long, and the row grows taller.
+  it('breaks a headline between its parts, then between its words, never past its cell', () => {
+    const recycle: Transaction = {
+      ...scriptCall,
+      hash: `0x0bb1${'00'.repeat(29)}1e`,
+      activity: {
+        ...scriptCall.activity!,
+        txHash: `0x0bb1${'00'.repeat(29)}1e`,
+        protocolActions: [
+          {
+            protocol: 'dotbit',
+            protocolName: '.bit',
+            action: 'recycle_expired_account',
+            metadata: { accountId: '0x' + 'da'.repeat(20) },
+          },
+        ],
+      },
+    };
+    render(<TransactionListTable transactions={[recycle, transfer]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const [, first, second] = within(table).getAllByRole('row');
+    const headline = (row: HTMLElement) =>
+      row.querySelectorAll('td')[2].querySelector('.flex-wrap')!.firstElementChild as HTMLElement;
+    expect(headline(first)).toHaveTextContent('.bit · recycle expired account');
+    expect(
+      Array.from(headline(first).querySelectorAll('[data-dotted-item]')).map((p) => p.textContent)
+    ).toEqual(['.bit', ' · recycle expired account']);
+    expect(headline(second)).toHaveTextContent('CKB Transfer');
+    for (const row of [first, second]) {
+      expect(headline(row)).not.toHaveClass('whitespace-nowrap');
+      expect(
+        headline(row).querySelector('.whitespace-nowrap:not([data-dotted-separator])')
+      ).toBeNull();
+    }
+    expect(faultLines(cellFaults(table))).toEqual([]);
+  });
+
+  // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the table
+  // does with it today, for the lists page lane to rule on (no mechanism is built here). A fee of
+  // 100 CKB, "100.00000000" (12 glyphs at 13 px, 93.6; the bound "99.99999999" is 11, 85.8), in
+  // the Fee column (102 px, its content box 102 − 16 = 86): one figure on one line, the cell
+  // nowrap, 7.6 px wider than its box. A right-aligned line too long for its box is start-aligned
+  // (CSS Text 3, text-align), so the figure stands from the box's left edge and runs 7.6 px into
+  // its own 16 px gap, short of the Cells column (it would reach it from a second glyph past).
+  it('holds a fee one glyph past its bound on one line, 7.6 px into its gap', () => {
+    render(<TransactionListTable transactions={[{ ...transfer, fee: '10000000000' }]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const at = within(table)
+      .getAllByRole('columnheader')
+      .findIndex((th) => th.textContent === 'Fee, CKB');
+    const column = Number.parseFloat(
+      (table.querySelectorAll('col')[at] as HTMLElement).style.minWidth
+    );
+    expect(column).toBe(102);
+    const fee = within(table).getAllByRole('row')[1].querySelectorAll('td')[at] as HTMLElement;
+    expect(fee).toHaveTextContent(/^100\.00000000$/);
+    expect(fee).toHaveClass('whitespace-nowrap', 'text-right');
+    expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+    const past = '100.00000000'.length * 7.8 - (column - 16);
+    expect(past).toBeCloseTo(7.6, 10);
+    expect(past).toBeLessThan(16);
+  });
+
+  // Review fb-logic 3: the age under the block is a figure; the clock-behind sentence is words
+  // and breaks under the block in Block · date's 110 px, where it stood on one 226 px line.
+  it('lets the clock-behind sentence break under its block', () => {
+    const ahead = new Date(Date.now() + 10 * 60_000).toISOString();
+    render(<TransactionListTable transactions={[{ ...transfer, timestamp: ahead }]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const block = within(table).getAllByRole('row')[1].querySelectorAll('td')[1] as HTMLElement;
+    expect(
+      within(block).getByText(CLOCK_BEHIND).closest('[data-nobreak], .whitespace-nowrap')
+    ).toBeNull();
+    expect(faultLines(cellFaults(table))).toEqual([]);
   });
 
   it('says what each transaction did: kind, mark and a quiet note', () => {
@@ -334,14 +483,20 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   // Re-pinned on purpose (readability F3-e): the table is drawn from 1,220 px, and the block and
   // its age are the cell's two lines (they were one, "#… · age"), each whole on its line.
   // Re-pinned on purpose (the coordinator's ruling): 1,203 px on its own (renamed: "1,220").
-  it('is drawn from its 1,203 px minimum, keeps the block and its age each on one line and drops the per-cell unit', () => {
+  // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px (renamed: "1,203").
+  it('is drawn from its 1,227 px minimum, keeps the block and its age each on one line and drops the per-cell unit', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
     const row = within(table).getAllByRole('row')[2];
     const lines = row.querySelectorAll('td:nth-child(2) > span > *');
     expect(lines).toHaveLength(2);
-    for (const line of lines) expect(line).toHaveClass('whitespace-nowrap');
+    // Re-pinned on purpose (review fb-logic 3, the lead's ruling): the block is one nowrap line;
+    // the age line is not nowrap, its age one unit of its own (Utc8Age's NoBreak), so "this
+    // device's clock is behind" in its place breaks between its words
+    expect(lines[0]).toHaveClass('whitespace-nowrap');
+    expect(lines[1]).not.toHaveClass('whitespace-nowrap');
+    expect(lines[1].querySelector('[data-nobreak]')).toHaveTextContent(/^\d+[smhdy].* ago$/);
     expect(row.querySelector('td:nth-child(4)')).toHaveTextContent(/^767\.29874184$/);
     expect(row.querySelector('td:nth-child(5)')).toHaveTextContent(/^0\.00030000$/);
   });
@@ -356,20 +511,24 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   // 62 px wide and never wraps (coordinator ruling on lane M's report). Re-pinned with readability
   // R4: "10 → 2" at 13 px is 46.8 px, and the gap and 2 spare make the column 65 px.
   // Re-pinned on purpose (readability F3-e): the column holds four digits a side, "9,999 →
-  // 9,999" (101.4 px), and the gap: 118 px.
-  it('keeps a two-digit cells count on one line (118 px, nowrap)', () => {
+  // 9,999" (101.4 px), and the gap: 118 px. Re-pinned on purpose (review fb-tests 6): the most
+  // inputs a transaction holds, 13,568 (a block of 597,000 bytes holds that many 44-byte
+  // inputs), and four digits of outputs, "13,568 → 9,999" (109.2 px), and the gap: 126 px
+  // (renamed: "118 px").
+  it('keeps a two-digit cells count on one line (126 px, nowrap)', () => {
     render(
       <TransactionListTable transactions={[{ ...transfer, inputsCount: 10, outputsCount: 2 }]} />
     );
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const heads = within(table).getAllByRole('columnheader');
     const at = heads.findIndex((th) => th.textContent === 'Cells');
-    expect((table.querySelectorAll('col')[at] as HTMLElement).style.width).toBe('118px');
+    expect((table.querySelectorAll('col')[at] as HTMLElement).style.width).toBe('126px');
     const cell = within(table).getAllByRole('row')[1].querySelectorAll('td')[at];
     expect(cell).toHaveTextContent(/^10 → 2$/);
     expect(cell).toHaveClass('whitespace-nowrap');
     // re-pinned on purpose (the coordinator's ruling): the list is 1,203 px on its own
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
+    // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
   });
 
   // CH-14 (the thousands hunt): a count of four digits or more is grouped, as every count is
@@ -500,9 +659,10 @@ describe('TransactionListTable row stones', () => {
     // Re-pinned on purpose (readability F3-e): every column its content, the spares gone, the
     // block over its age, What it did the flexible column (its minimum read from minWidth): 1,220.
     // Re-pinned on purpose (the coordinator's ruling): Size on a 48 px track, 146 → 129: 1,203.
-    expect(widths).toEqual([216, 110, 204, 180, 102, 118, 129, 144]);
-    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1203);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
+    // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px.
+    expect(widths).toEqual([216, 110, 204, 180, 102, 126, 145, 144]);
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1227);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
     expect(ROW_SEAL.tx.footprint).toBe(56.5);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at the body step, 14 px since R4 (8.4; 7.8 at 13 px; it was 19
@@ -531,7 +691,9 @@ describe('TransactionListTable row stones', () => {
     // a 5-digit "2,000") and the gap; 0.6 of rounding up to a whole pixel
     // Re-pinned on purpose (the coordinator's ruling): the track is 48 px under its head's tick-form
     // "0 … 600k" (it was 64.8 for the exact "0 600,000"); 0.4 of rounding up to a whole pixel
-    expect(widths[6] - (48 + 10 + 7 * 7.8 + 16)).toBeCloseTo(0.4, 6);
+    // Re-pinned on purpose (review fb-logic 6): the scale's figure is genesis's cellbase's,
+    // "1,500,000" (9 ch at 13 px), under "0 … 1.5M"; 0.8 of rounding up to a whole pixel
+    expect(widths[6] - (48 + 10 + 9 * 7.8 + 16)).toBeCloseTo(0.8, 6);
   });
 
   // U-09 (re-pinned; old issue C had the table and the phone row alike at 10 + 6): the size is
@@ -540,13 +702,14 @@ describe('TransactionListTable row stones', () => {
     // re-pinned (readability R4): the table is drawn from 1,286 px (was 1,230)
     // re-pinned (readability F3-e): the table is drawn from 1,220 px, so at 1,232 too
     // re-pinned (the coordinator's ruling): on its own from 1,203 px
-    for (const width of [1232, 1203, 1202, 608, 358]) {
+    // re-pinned (reviews fb-tests 6, fb-logic 6): on its own from 1,227 px
+    for (const width of [1232, 1227, 1226, 608, 358]) {
       atContainerWidth(width);
       const { unmount } = render(<TransactionListTable transactions={[scriptCall]} />);
       expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(
-        width >= 1203 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
+        width >= 1227 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
       );
-      expect(screen.queryByRole('table') === null).toBe(width < 1203);
+      expect(screen.queryByRole('table') === null).toBe(width < 1227);
       unmount();
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
@@ -558,11 +721,12 @@ describe('TransactionListTable row stones', () => {
   // Re-pinned on purpose (readability F3-e): a table from 1,220 px, so the widest content box,
   // 1,232, draws it.
   // Re-pinned on purpose (the coordinator's ruling): on its own from 1,203 px (renamed: "1,220").
-  it('changes form at its 1,203 px minimum', () => {
+  // Re-pinned on purpose (reviews fb-tests 6, fb-logic 6): from 1,227 px (renamed: "1,203").
+  it('changes form at its 1,227 px minimum', () => {
     for (const [width, form] of [
       [1232, 'table'],
-      [1203, 'table'],
-      [1202, 'rows'],
+      [1227, 'table'],
+      [1226, 'rows'],
     ] as const) {
       atContainerWidth(width);
       const { container, unmount } = render(<TransactionListTable transactions={txs} />);
@@ -627,31 +791,34 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     ceil(Math.max(at('999,999,999.99999999', 13), at('reward 9,999.99999999', 13)) + 16),
     // a fee under 100 CKB
     ceil(at('99.99999999', 13) + 16),
-    // four digits a side
-    ceil(at('9,999 → 9,999', 13) + 16),
-    // a transaction is no larger than a block: "0 … 600,000" over the track, "600,000" beside it
-    // (re-pinned on purpose, the coordinator's ruling: its head in the tick form, "0 600k", so the
-    // 48 px track; it held the exact "0 600,000", 64.8)
-    ceil(tickRow('0', '600k') + 10 + at('600,000', 13) + 16),
+    // the most inputs a transaction holds, 13,568 (597,000 bytes of 44-byte inputs), and four
+    // digits of outputs (re-pinned on purpose, review fb-tests 6: it was four digits a side)
+    ceil(at('13,568 → 9,999', 13) + 16),
+    // a transaction is no larger than its block, and the largest block is genesis: its 1,235,438
+    // byte cellbase on a 1,500,000 scale, "0 1.5M" over the 48 px track (the tick form, the
+    // coordinator's ruling), "1,500,000" beside it (re-pinned on purpose, review fb-logic 6: it
+    // was the 597,000-byte limit's "0 600k" and "600,000")
+    ceil(tickRow('0', '1.5M') + 10 + at('1,500,000', 13) + 16),
     // a scale under a billion cycles: its ticks in the tick form ("1.5k" the widest), the exact
     // "750,000,000" beside the bar; the last column
     ceil(tickRow('0', '1.5k') + 10 + at('750,000,000', 13)),
   ];
 
   // re-pinned on purpose (the coordinator's ruling): 1,203 px on its own (renamed: "1,220 px")
-  it('pins each column to its content and the table to their sum, 1,203 px', () => {
+  // re-pinned on purpose (reviews fb-tests 6 and fb-logic 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13,568 → 9,999" (118 → 126), and Size genesis's cellbase on a 1,500,000 scale, "1,500,000" (129 → 145): 1,227 px (renamed: "1,203 px")
+  it('pins each column to its content and the table to their sum, 1,227 px', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-    expect(budgets).toEqual([216, 110, 204, 180, 102, 118, 129, 144]);
+    expect(budgets).toEqual([216, 110, 204, 180, 102, 126, 145, 144]);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
     expect(cols[2].width).toBe('auto');
-    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1203);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1227);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
     // each bar's track holds its head's widest tick row
     const heads = within(table).getAllByRole('columnheader');
     expect((heads[6].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe(
-      `${tickRow('0', '600k')}px`
+      `${tickRow('0', '1.5M')}px`
     );
     expect((heads[7].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe('48px');
   });
@@ -659,7 +826,9 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
   // The coordinator's ruling: a head's ticks are in the tick form, so the Size head writes
   // "0 … 600k" (43.2 px) and its track is the 48 px a bar keeps at least, as the Cycles one is;
   // on its own the list is 1,203 px (the page changes both its lists' form at the larger sum).
-  it('heads Size in the tick form on a 48 px track: 1,203 px on its own', () => {
+  // Re-pinned on purpose (reviews fb-tests 6, fb-logic 6): the column is budgeted for genesis's
+  // cellbase, "1,500,000" (145), Cells for 13,568 inputs (126): 1,227 px (renamed: "1,203").
+  it('heads Size in the tick form on a 48 px track: 1,227 px on its own', () => {
     render(
       <TransactionListTable
         transactions={[{ ...transfer, txSize: 597000, cycles: 750_000_000 }, scriptCall]}
@@ -671,11 +840,11 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '600k']);
     expect(ticks.style.width).toBe('48px');
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-    expect(ceil(48 + 10 + at('600,000', 13) + 16)).toBe(129);
+    expect(ceil(48 + 10 + at('1,500,000', 13) + 16)).toBe(145);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual([
-      216, 110, 204, 180, 102, 118, 129, 144,
+      216, 110, 204, 180, 102, 126, 145, 144,
     ]);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1227);
   });
 
   it('writes the block over its age, two lines with no separator', () => {
@@ -686,16 +855,23 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toHaveTextContent(/^#20,829,775$/);
     expect(lines[1]).toHaveTextContent(/^\d+[smhdy].* ago$/);
-    for (const line of lines) expect(line).toHaveClass('block', 'whitespace-nowrap');
+    // Re-pinned on purpose (review fb-logic 3, the lead's ruling): both are block lines; the
+    // block number's line is nowrap, the age's is not (its age is one unit, Utc8Age's NoBreak; the
+    // clock-behind sentence in its place breaks between its words)
+    for (const line of lines) expect(line).toHaveClass('block');
+    expect(lines[0]).toHaveClass('whitespace-nowrap');
+    expect(lines[1]).not.toHaveClass('whitespace-nowrap');
+    expect(lines[1].querySelector('[data-nobreak]')).toHaveTextContent(/^\d+[smhdy].* ago$/);
     expect(cell).not.toHaveTextContent('·');
   });
 
   // re-pinned on purpose (the coordinator's ruling): on its own from 1,203 px (renamed: "1,220")
-  it('changes form where the sum stops fitting: a table at 1,232 and 1,203, rows below', () => {
+  // re-pinned on purpose (reviews fb-tests 6, fb-logic 6): from 1,227 px (renamed: "1,203")
+  it('changes form where the sum stops fitting: a table at 1,232 and 1,227, rows below', () => {
     for (const [width, form] of [
       [1232, 'table'],
-      [1203, 'table'],
-      [1202, 'rows'],
+      [1227, 'table'],
+      [1226, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {

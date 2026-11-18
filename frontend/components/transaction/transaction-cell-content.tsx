@@ -2,6 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
+import { NoBreak } from '@/components/ui/no-break';
 import { formatStandard } from '@/components/activity-event-row';
 import type { TransactionCellDisplay } from '@/lib/api';
 import { formatCompositionTier } from '@/lib/asset-utils';
@@ -67,10 +68,13 @@ export function TransactionCellContent({ display, cellHref, size }: TransactionC
                 no readable amount of
               </span>
             ) : (
-              formatTokenBalanceWithRawMarker(
-                exactUnsignedInteger(display.amount, `${display.id}: token amount`).toString(),
-                display.decimals
-              )
+              // a figure: one unit the line's [overflow-wrap:anywhere] (for a long name) never cuts
+              <NoBreak>
+                {formatTokenBalanceWithRawMarker(
+                  exactUnsignedInteger(display.amount, `${display.id}: token amount`).toString(),
+                  display.decimals
+                )}
+              </NoBreak>
             )}{' '}
             {display.symbol ?? display.name ?? (
               <Hash hash={display.id} size={size} copyable={false} className="text-small" />
