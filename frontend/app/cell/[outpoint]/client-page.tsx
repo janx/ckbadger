@@ -79,6 +79,27 @@ function depGroupItems(cell: Cell): NonNullable<Cell['depGroupItems']> {
   return cell.depGroupItems;
 }
 
+/**
+ * Where a DAO cell's compensation stands and the block the API read it at (F-9): still accruing
+ * (the tip), fixed at the withdrawal request's block, or claimed at the completion's. The API sends
+ * the state with every DAO cell, so any other value is a broken read.
+ */
+function DaoCompensationAt({ cell, dao }: { cell: Cell; dao: NonNullable<Cell['daoInfo']> }) {
+  const block = <BlockLink number={dao.compensationAtBlock} />;
+  switch (dao.compensationState) {
+    case 'accruing':
+      return <>, at block {block}</>;
+    case 'frozen':
+      return <>, fixed at the withdrawal request {block}</>;
+    case 'claimed':
+      return <>, claimed at block {block}</>;
+    default:
+      throw new Error(
+        `DAO cell ${cell.txHash}:${cell.outputIndex} has compensation state ${String(dao.compensationState)}`
+      );
+  }
+}
+
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
 
 /** Registry names of the cell's lock and type, the way the transaction page names its tiles. */
@@ -476,12 +497,13 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
               {cell.daoInfo.compensationCkb != null ? (
                 <>
                   {' '}
-                  · compensation{' '}
+                  · {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
                   <ExactCkb
                     shannons={parseCkbDecimal(cell.daoInfo.compensationCkb)}
                     signed={false}
                     tone="plain"
                   />
+                  <DaoCompensationAt cell={cell} dao={cell.daoInfo} />
                 </>
               ) : cell.daoInfo.compensation != null ? (
                 (() => {

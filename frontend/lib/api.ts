@@ -868,8 +868,16 @@ interface CellDaoInfo {
   withdrawRequestTimestamp?: string;
   withdrawBlock?: number;
   withdrawTimestamp?: string;
-  compensation?: string;
-  compensationCkb?: string;
+  /** The deposit's exact compensation (shannons), sent with every DAO cell. */
+  compensation: string;
+  compensationCkb: string;
+  /**
+   * Where the figure stands, one state per `daoStatus`: `accruing` (deposited, unclaimed, read at
+   * the tip `compensationAtBlock`), `frozen` (withdrawing, fixed at the request's block) or
+   * `claimed` (withdrawn, by the completion's block).
+   */
+  compensationState: 'accruing' | 'frozen' | 'claimed';
+  compensationAtBlock: number;
   estimatedApc?: string;
 }
 
