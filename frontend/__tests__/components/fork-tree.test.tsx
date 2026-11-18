@@ -428,3 +428,36 @@ describe('ForkTree: a pool’s name in any script (review F-B, logic finding 5)'
     expect(px).toBeLessThanOrEqual(width === 358 ? 88 : 94);
   });
 });
+
+// Review fb-logic 1 (lane rd/fb-fixes-2, L1): in Chrome on /forks/21022666/07c5ad4e and
+// /forks/21006834/7b4ee8ae the last two miners overlapped by 11.2 / 5.2 / 3.2 px at 414 / 428 /
+// 430 px windows (containers 382 / 396 / 398). The last column's labels end at its tile's right
+// edge and run back into the gap before it, while the column before it runs its labels into the
+// same gap: each claimed 16 of its 20 px, and the id form was chosen against that claim, so from a
+// 78 px tile both wrote the row form (93.6 px) where 2 × 93.6 > 2 × TW + 20 (below 83.6). Every
+// width a phone or a narrow window gives the tree, 1 px apart, for #21,022,666's shape (today's +1
+// to +3 with unnamed miners, the dropped +1): no two miners meet.
+describe('ForkTree: the miners of the last two columns never meet (review fb-logic 1)', () => {
+  it('keeps every miner clear of every other at each container width from 326 to 460 px', () => {
+    const met: string[] = [];
+    for (let width = 326; width <= 460; width++) {
+      stubChartWidth(width);
+      const { container, unmount } = render(<ForkTree model={full} />);
+      const svg = container.querySelector('svg[data-fork-tree]')!;
+      // the last two main tiles name their miners at every width
+      for (const n of [FP + 2, FP + 3]) {
+        const tile = svg.querySelector(`[data-tile="${n}"]:not([data-dropped])`)!;
+        expect(
+          [...tile.querySelectorAll('text')].filter((t) => t.textContent!.startsWith('ckb1')),
+          `${n} at ${width}`
+        ).toHaveLength(1);
+      }
+      const miners = allTextLines(svg).filter((line) => line.text.startsWith('ckb1'));
+      for (const m of meetings(miners)) met.push(`${width} px: ${m.a} and ${m.b} by ${m.by}`);
+      unmount();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+    expect(met).toEqual([]);
+  });
+});
