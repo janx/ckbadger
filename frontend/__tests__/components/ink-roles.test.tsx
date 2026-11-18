@@ -16,6 +16,9 @@ import { Hash } from '@/components/ui/hash';
 import { TintedJson } from '@/components/ui/tinted-json';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Header } from '@/components/layout/header';
+import { SealedHead } from '@/components/ui/page-seal';
+import { DetailLayout } from '@/components/ui/detail-layout';
+import { SEAL_IDS } from '@/__tests__/utils/seals';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import { fullText } from '@/__tests__/utils/full-text';
 import { BRIGHT, QUIET, READING, inkOf } from '@/__tests__/utils/ink-role';
@@ -299,6 +302,31 @@ describe('TintedJson: values read, punctuation is a separator', () => {
       .join('');
     expect(rest.replace(/[\s{}[\],:]/g, '')).toBe('');
     expect(inkOf(pre)).toBe(QUIET);
+  });
+});
+
+describe('the id line under an h1: the full id is a value', () => {
+  it('reads a name plate’s id line in the reading ink; its kind word is a label, quiet', () => {
+    render(
+      <SealedHead
+        id={SEAL_IDS.cell}
+        kind="Cell"
+        identity={<span data-testid="outpoint">{SEAL_IDS.cell.tx}:1</span>}
+      >
+        <h1>0xabcdef01…234567:1</h1>
+      </SealedHead>
+    );
+    expect(inkOf(screen.getByTestId('outpoint'))).toBe(READING);
+    expect(inkOf(screen.getByText('Cell'))).toBe(QUIET);
+  });
+
+  it('reads an unsealed head’s identity line (an id or the page’s subtitle) in the reading ink', () => {
+    render(
+      <DetailLayout title="Inventory" kind="index" identity="Everything people hold on CKB">
+        <p>content</p>
+      </DetailLayout>
+    );
+    expect(inkOf(screen.getByText('Everything people hold on CKB'))).toBe(READING);
   });
 });
 
