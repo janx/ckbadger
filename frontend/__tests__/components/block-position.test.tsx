@@ -5,6 +5,13 @@ import { BlockPosition } from '@/components/blocks/block-position';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import { fullText } from '@/__tests__/utils/full-text';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  rectBox,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 const parent = `0x${'a'.repeat(64)}`;
 const uncle = `0x${'b'.repeat(64)}`;
@@ -193,5 +200,118 @@ describe('BlockPosition', () => {
         />
       )
     ).toThrow('Block 932: missing proposal origin for 0xmissing');
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): every word of the position
+// diagram stands whole inside its tile or box and clear of every other word, measured by the type
+// modules (0.6 em a glyph; a tight line over its baseline, its descent under it) at the 12 px
+// floor. The diagram is drawn at its own width from md up (below md the list above it reads the
+// same evidence), so one width is every width it is drawn at. The real case: an 8-digit height,
+// two uncles (one forked from the tile beside it, one whose parent is off the strip), proposals
+// from 2 and from 10 blocks back, one committed 2 blocks on, and 1,500 transactions in one arc.
+describe('BlockPosition: every word inside its tile (readability F3)', () => {
+  const at = 21_016_902;
+  const hex = (n: number) => `0x${n.toString(16).padStart(64, 'e')}`;
+  const neighbour = (number: number) => ({
+    number,
+    hash: hex(number),
+    timestamp: '2026-11-18T08:55:37Z',
+    transactionSizes: [635, 226, 1_200, 400],
+    proposalsCount: 3,
+    unclesCount: 0,
+  });
+  const many = Array.from({ length: 1_500 }, (_, i) => ({
+    hash: `0x${i.toString(16).padStart(64, '0')}`,
+    isCellbase: false,
+    proposalOrigin: { blockNumber: at - 2, distance: 2 },
+  }));
+  const real = {
+    ...blockEvidence,
+    number: at,
+    hash: hex(at),
+    parentHash: hex(at - 1),
+    timestamp: '2026-11-18T08:55:37Z',
+    parentTimestamp: '2026-11-18T08:55:26Z',
+    confirmations: 30,
+    proposalsCount: 1,
+    unclesCount: 2,
+    uncles: [
+      {
+        number: at - 1,
+        hash: `0x${'b'.repeat(64)}`,
+        parentHash: hex(at - 2),
+        timestamp: '2026-11-18T08:55:30Z',
+        proposalIds: [],
+      },
+      {
+        number: at - 1,
+        hash: `0x${'f'.repeat(64)}`,
+        parentHash: `0x${'1'.repeat(64)}`,
+        timestamp: '2026-11-18T08:55:31Z',
+        proposalIds: [],
+      },
+    ],
+  };
+  const svgOf = () => {
+    const { container } = render(
+      <BlockPosition
+        block={real}
+        transactions={[
+          ...many,
+          {
+            hash: '0xfar',
+            isCellbase: false,
+            proposalOrigin: { blockNumber: at - 10, distance: 10 },
+          },
+        ]}
+        proposals={[{ ...outgoing, committedBlockNumber: at + 2 }]}
+        neighbours={[at - 2, at - 1, at, at + 1, at + 2].map(neighbour)}
+        page={1}
+        hasMore={false}
+      />
+    );
+    return container.querySelector('[aria-label="Chain position diagram"] svg')!;
+  };
+
+  it('writes a block tile’s number, time and contents inside the tile, apart', () => {
+    const svg = svgOf();
+    const tiles = [...svg.querySelectorAll('g[transform]')];
+    expect(tiles.length).toBeGreaterThanOrEqual(6);
+    for (const tile of tiles) {
+      const box = rectBox(tile.querySelector('rect')!);
+      // a height no list row reached (a proposal 10 blocks back) has its number only
+      const lines = allTextLines(tile);
+      expect(lines.length).toBeGreaterThanOrEqual(1);
+      const contents = tile.querySelector('foreignObject');
+      const glyph = contents && { ...rectBox(contents), text: 'the contents glyph', size: 0 };
+      const all = glyph ? [...lines, glyph] : lines;
+      for (const line of all) expectInside(line, box, `tile ${tile.getAttribute('transform')}`);
+      expectApart(all, `tile ${tile.getAttribute('transform')}`);
+    }
+    // the 8-digit height at the head size: "#21,016,902" is 11 × 7.8 = 85.8 px
+    expect(allTextLines(svg).some((l) => l.text === '#21,016,902')).toBe(true);
+  });
+
+  it('writes an uncle’s and its parent’s words inside their boxes', () => {
+    const svg = svgOf();
+    const uncles = [...svg.querySelectorAll('[data-uncle-hash]')];
+    expect(uncles).toHaveLength(2);
+    for (const uncle of uncles)
+      for (const link of [...uncle.querySelectorAll('a')]) {
+        const box = rectBox(link.querySelector('rect')!);
+        const lines = allTextLines(link);
+        expect(lines.length).toBeGreaterThanOrEqual(2);
+        for (const line of lines) expectInside(line, box, link.getAttribute('aria-label')!);
+        expectApart(lines, link.getAttribute('aria-label')!);
+      }
+  });
+
+  it('keeps every word inside the svg and clear of every other word', () => {
+    const svg = svgOf();
+    const lines = allTextLines(svg);
+    expect(lines.some((l) => l.text === '1500 proposed → committed +2')).toBe(true);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the diagram', 'flush');
+    expectApart(lines, 'the diagram');
   });
 });
