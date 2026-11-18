@@ -352,6 +352,9 @@ describe('CellDetailPage', () => {
         depositTimestamp: '2024-01-01T00:00:00Z',
         compensation: '1234523456789',
         compensationCkb: '12345.23456789',
+        // F-9: the API sends every DAO cell's figure with its state and the block it is read at.
+        compensationState: 'accruing',
+        compensationAtBlock: 21016902,
       },
     } as Cell);
     view();
@@ -365,6 +368,69 @@ describe('CellDetailPage', () => {
     // Exact CKB in the site's one amount form, thousands grouped (SC-C3, #16).
     expect(line).toHaveTextContent('compensation 12,345.23456789 CKB');
     expect(screen.queryByText(/shannons/)).not.toBeInTheDocument();
+    // F-9 (readability review 2026-11-18): a live deposit's compensation is unclaimed and still
+    // accruing; the line says so and names the block the figure was read at.
+    expect(line).toHaveTextContent(
+      /^deposit block #123 · unclaimed compensation 12,345\.23456789 CKB, at block #21,016,902$/
+    );
+    expect(within(line).getByRole('link', { name: '#21,016,902' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/21016902'
+    );
+  });
+  // F-9: a withdraw request fixes the figure at its own block; a completion claims it.
+  it('says a DAO compensation is fixed at the withdrawal request, or claimed, at its block', async () => {
+    const dao = {
+      isDaoCell: true,
+      depositBlockNumber: 123,
+      depositTimestamp: '2024-01-01T00:00:00Z',
+      withdrawRequestBlock: 150,
+      withdrawRequestTimestamp: '2024-01-01T00:25:00Z',
+      compensation: '898000001',
+      compensationCkb: '8.98000001',
+    };
+    getCell.mockResolvedValue({
+      ...base,
+      daoInfo: {
+        ...dao,
+        daoStatus: 'withdrawing',
+        compensationState: 'frozen',
+        compensationAtBlock: 150,
+      },
+    } as Cell);
+    const { unmount } = view();
+    const frozen = (await screen.findByText(/^deposit block/)).closest('p') as HTMLElement;
+    expect(frozen).toHaveTextContent(
+      /^deposit block #123 · compensation 8\.98000001 CKB, fixed at the withdrawal request #150$/
+    );
+    expect(within(frozen).getByRole('link', { name: '#150' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/150'
+    );
+    unmount();
+
+    getCell.mockResolvedValue({
+      ...base,
+      status: 'dead',
+      consumedAtBlock: 180,
+      daoInfo: {
+        ...dao,
+        daoStatus: 'withdrawn',
+        withdrawBlock: 180,
+        withdrawTimestamp: '2024-01-01T00:55:00Z',
+        compensationState: 'claimed',
+        compensationAtBlock: 180,
+      },
+    } as Cell);
+    view();
+    const claimed = (await screen.findByText(/^deposit block/)).closest('p') as HTMLElement;
+    expect(claimed).toHaveTextContent(
+      /^deposit block #123 · compensation 8\.98000001 CKB, claimed at block #180$/
+    );
+    expect(within(claimed).getByRole('link', { name: '#180' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/180'
+    );
   });
   // Rubbing × Song print, phase 5 (D2): the dep group's command runs on its member count.
   it('counts a dep group’s members in its heading, one item or more', async () => {
