@@ -54,7 +54,10 @@ describe('Atmosphere by theme (readability R1)', () => {
 
   it('lays no scan over the content by night: every line of the layer over the page is transparent', () => {
     const { container } = renderIn('dark');
-    for (const layer of scansOverTheContent(container)) {
+    const layers = scansOverTheContent(container);
+    // the loop below asserts nothing on no layer (review of main..fix/readability, test finding 7)
+    expect(layers).not.toHaveLength(0);
+    for (const layer of layers) {
       const stops = stopsOf(inTheme('dark', declaration(ruleOf(layer), 'background')!));
       expect(stops.length, layer).toBeGreaterThan(0);
       for (const stop of stops) expect(alphaOf(stop.colour), `${layer} ${stop.colour}`).toBe(0);
