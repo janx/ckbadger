@@ -65,7 +65,7 @@ interface DetailLayoutBaseProps {
  * Without a seal the head is the title row (the h1 and `status`, then `actions`), the identity and
  * the lede. With one it is the name plate (SealedHead, the seals by kind C10): the stone of
  * `seal.id` in its state, the kind line (`seal.kind`, the kind word, then `status`), the h1 and the
- * identity — the id line, which the plate sets in its quiet voice — beside the stone, the lede
+ * identity — the id line, which the plate sets in its one voice — beside the stone, the lede
  * below both. The plate always has its id line, and no place for actions.
  */
 type DetailHeadProps =
@@ -128,10 +128,10 @@ export function DetailLayout({
         </div>
         {actions}
       </div>
+      {/* the identity line, an id or the page's subtitle: a value or a sentence that explains,
+          the reading ink (R3) */}
       {identity && (
-        <div className="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">
-          {identity}
-        </div>
+        <div className="text-text text-small mt-2 min-w-0 [overflow-wrap:anywhere]">{identity}</div>
       )}
       {lede && (
         <div data-detail-lede="" className="mt-4 min-w-0">
@@ -157,6 +157,7 @@ export function DetailLayout({
                 key={label}
                 className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
               >
+                {/* a fact's name is a label: quiet (R3) */}
                 <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
                 <dd className="text-text-bright min-w-0 break-words tabular-nums">
                   {unitNode(value)}
@@ -215,6 +216,7 @@ export function DetailSection({
         {tier === 2 ? (
           <h2 className="text-body text-text font-medium">
             {title}
+            {/* the args name what the command runs on, a label: quiet (R3) */}
             {args !== undefined && <span className="text-text-dim ml-2.5 font-normal">{args}</span>}
           </h2>
         ) : (

@@ -57,13 +57,15 @@ describe('DetailLayout seal', () => {
     expect(kindLine.lastElementChild).toBe(screen.getByRole('link'));
     expect(kindLine).toHaveTextContent(/^BlockHARDFORK ACTIVATION · MIRANA$/);
     // the name and the identity, nothing else: the h1 (no status beside it) and the id line, in
-    // the plate's one quiet voice (C10 round 2), set by the plate around `identity`
+    // the plate's one voice (C10 round 2), set by the plate around `identity`
     expect(title).toHaveTextContent(/^#20,914,858$/);
     expect(nameBox.children).toHaveLength(2);
     expect(nameBox.lastElementChild).toBe(idLine);
     expect(idLine.children).toHaveLength(1);
     expect(idLine.firstElementChild).toBe(screen.getByTestId('identity'));
-    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    // re-pinned with readability ruling R3: one voice still, in the reading ink (the id is a
+    // value; it was text-text-dim)
+    expect(idLine.className).toBe('text-text text-small min-w-0 [overflow-wrap:anywhere]');
     // the plate's gap spaces it, so the identity carries no margin of its own
     expect(idLine).not.toHaveClass('mt-2');
     // the lede is what is below, with no holder of its own
@@ -179,7 +181,8 @@ describe('DetailLayout seal', () => {
   // Every page without a seal (indexes, topics, the entity pages that press none) keeps the head as
   // it was before the name plate: the title row (h1 and status, then actions), the identity, the
   // lede, then the facts. Pinned as the markup itself, taken from the code before C10. Re-pinned on
-  // purpose for PB-06 / PA-32: an unsealed entity's h1 now takes the phone step too.
+  // purpose for PB-06 / PA-32: an unsealed entity's h1 now takes the phone step too; and for
+  // readability ruling R3: the identity line (an id or a subtitle sentence) is text-text, not dim.
   it('renders an unsealed head exactly as before the name plate', () => {
     const { container, unmount } = render(
       <DetailLayout
@@ -199,7 +202,7 @@ describe('DetailLayout seal', () => {
         '<div class="flex min-w-0 flex-wrap items-baseline gap-3">' +
         '<h1 class="text-text-bright break-words text-index">Network</h1><span>3 sources</span>' +
         '</div><span>legend</span></div>' +
-        '<div class="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">' +
+        '<div class="text-text text-small mt-2 min-w-0 [overflow-wrap:anywhere]">' +
         'Reachability and sessions.</div>' +
         '<div data-detail-lede="" class="mt-4 min-w-0"><p>Two cells became one.</p></div>' +
         '<dl class="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2">' +
@@ -223,7 +226,7 @@ describe('DetailLayout seal', () => {
         '<h1 class="text-text-bright break-words text-entity max-md:text-index">' +
         '<span>Transaction</span></h1>' +
         '</div></div>' +
-        '<div class="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">' +
+        '<div class="text-text text-small mt-2 min-w-0 [overflow-wrap:anywhere]">' +
         '<span>0xabc</span></div></header>'
     );
   });
