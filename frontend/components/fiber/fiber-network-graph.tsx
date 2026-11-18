@@ -29,6 +29,7 @@ import {
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
+import { SVG_TEXT } from '@/lib/chart-type';
 
 /** A party (node) or a pair (edge) of the graph: what a hover shows and a tap pins. */
 export type FiberGraphTarget = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
@@ -362,7 +363,13 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                 aria-label={`The Fiber network on chain: ${formatCount(model.nodes.length, 'party', 'parties')} and the ${formatCount(model.edges.length, 'pair')} that opened channels`}
                 className="block"
               >
-                <text data-role="chart-name" x="8" y="14" fontSize="11" fill={FIBER_COLORS.note}>
+                <text
+                  data-role="chart-name"
+                  x="8"
+                  y="14"
+                  fontSize={SVG_TEXT.label}
+                  fill={FIBER_COLORS.note}
+                >
                   the network, as the chain sees it
                 </text>
                 <g data-role="drawing" transform={`translate(0 ${shift})`}>
@@ -371,7 +378,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                       x={model.islandsNote.x}
                       y={model.islandsNote.y}
                       textAnchor={model.islandsNote.anchor}
-                      fontSize="11"
+                      fontSize={SVG_TEXT.label}
                       fill={FIBER_COLORS.note}
                     >
                       not linked to the rest
@@ -466,7 +473,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                           x={node.x}
                           y={node.y + node.r + 14}
                           textAnchor="middle"
-                          fontSize="11"
+                          fontSize={SVG_TEXT.label}
                           fill={FIBER_COLORS.label}
                           stroke={FIBER_COLORS.halo}
                           strokeWidth="3"
@@ -479,7 +486,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                             x={node.x}
                             y={node.y + 4}
                             textAnchor="middle"
-                            fontSize="11"
+                            fontSize={SVG_TEXT.label}
                             fill={FIBER_COLORS.count}
                           >
                             {node.channels}

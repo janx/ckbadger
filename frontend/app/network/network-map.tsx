@@ -14,6 +14,7 @@ import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { ShortId } from '@/components/ui/short-id';
+import { SVG_TEXT, labelAdvancePx } from '@/lib/chart-type';
 
 type Point = NetworkMap['points'][number];
 
@@ -88,7 +89,9 @@ export function layoutCountryClusters(
   const extent = (country: string) => {
     const r = radius(byCountry.get(country)!.length);
     if (!labelled(country)) return { r, half: r, below: r };
-    const half = Math.max(r, (`${country} ${byCountry.get(country)!.length}`.length * 6.2) / 2);
+    // a place's label, at the tick size, measured as a label kept clear of its neighbours
+    const label = `${country} ${byCountry.get(country)!.length}`;
+    const half = Math.max(r, (label.length * labelAdvancePx(SVG_TEXT.tick)) / 2);
     return { r, half, below: r + 14 };
   };
   for (let round = 0; round < 400; round++) {
@@ -217,7 +220,7 @@ function Legend({
       {rows.map(([glyph, words], i) => (
         <g key={words} transform={`translate(0 ${i * ROW + ROW / 2})`}>
           {glyph}
-          <text x="22" y="4" fontSize="12" fill="var(--c-text)">
+          <text x="22" y="4" fontSize={SVG_TEXT.head} fill="var(--c-text)">
             {words}
           </text>
         </g>
@@ -397,7 +400,13 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       stroke={k === 3 ? 'var(--c-base-border-subtle)' : 'var(--c-grid-faint)'}
                     />
                   ))}
-                  <text data-role="chart-name" x="8" y="14" fontSize="11" fill="var(--c-text-dim)">
+                  <text
+                    data-role="chart-name"
+                    x="8"
+                    y="14"
+                    fontSize={SVG_TEXT.label}
+                    fill="var(--c-text-dim)"
+                  >
                     verified nodes · approximate GeoIP place
                   </text>
                   {countryLabels.map(({ country, count, x, y }) => (
@@ -407,7 +416,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                       x={x}
                       y={y + NAME_BAND}
                       textAnchor="middle"
-                      fontSize="10"
+                      fontSize={SVG_TEXT.tick}
                       fill="var(--c-text-dim)"
                       stroke="var(--c-base-bg)"
                       strokeWidth="3"

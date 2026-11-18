@@ -30,10 +30,7 @@ const ALLOWLIST: Record<string, string> = {
  * shrinks; the lane ends with it empty and removed.
  */
 const PENDING: Record<string, number> = {
-  'app/network/network-map.tsx': 3,
   'components/blocks/block-position.tsx': 11,
-  'components/fiber/fiber-channel-timeline.tsx': 7,
-  'components/fiber/fiber-network-graph.tsx': 4,
   'components/transaction/proposal-ruler.tsx': 1,
 };
 

@@ -25,7 +25,8 @@ import {
   textPx,
   tightLinePx,
 } from '@/lib/type-metrics';
-import { SVG_TEXT, centreShift } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, labelAdvancePx } from '@/lib/chart-type';
+import { FIBER_GRAPH } from '@/lib/fiber-network-model';
 import { AXIS_CHAR_PX } from '@/lib/chart-ticks';
 import {
   HOVER_HEAD_Y,
@@ -203,6 +204,26 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
   ['components/ui/icicle-partition.tsx', 'fontSize="11" (2 sites)', 11, SVG_TEXT.label],
   ['components/ui/icicle-partition.tsx', 'fontSize="11.5"', 11.5, SVG_TEXT.value],
   ['components/ui/icicle-partition.tsx', 'fontSize="10.5" (2 sites)', 10.5, SVG_TEXT.note],
+  // the network map and the Fiber figures
+  ['app/network/network-map.tsx', 'fontSize="12" (the key)', 12, SVG_TEXT.head],
+  ['app/network/network-map.tsx', 'fontSize="11" (the name)', 11, SVG_TEXT.label],
+  ['app/network/network-map.tsx', 'fontSize="10" (a place)', 10, SVG_TEXT.tick],
+  [
+    'app/network/network-map.tsx',
+    '× 6.2 (a place, kept clear)',
+    6.2,
+    labelAdvancePx(SVG_TEXT.tick),
+  ],
+  ['components/fiber/fiber-channel-timeline.tsx', 'fontSize="11" (4 sites)', 11, SVG_TEXT.label],
+  ['components/fiber/fiber-channel-timeline.tsx', 'fontSize="10.5"', 10.5, SVG_TEXT.note],
+  [
+    'components/fiber/fiber-channel-timeline.tsx',
+    'fontSize="11.5" (2 sites)',
+    11.5,
+    SVG_TEXT.value,
+  ],
+  ['components/fiber/fiber-network-graph.tsx', 'fontSize="11" (4 sites)', 11, SVG_TEXT.label],
+  ['lib/fiber-network-model.ts', 'labelHalf: 23', 23, FIBER_GRAPH.labelHalf],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
   // transaction-list-table: 1,230 and 564 px as before)
