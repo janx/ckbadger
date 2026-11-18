@@ -97,16 +97,18 @@ describe.each([390, 360, 320])(
       atViewportWidth(viewport);
       const { container } = render(<ActivityRow activity={row()} age />);
       const { texts, past } = runsOf(container, viewport);
-      expect(texts).toEqual(['#21,047,791', '·', ...SENTENCE]);
+      // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
+      expect(texts).toEqual(['#21,047,791', '·', ...SENTENCE]);
     });
 
     it('the pool row: the status one unit, the sentence words', () => {
       atViewportWidth(viewport);
       const { container } = render(<ActivityRow activity={pool()} age />);
       const { texts, past } = runsOf(container, viewport);
-      expect(texts).toEqual(['Confirming', '·', ...SENTENCE]);
+      // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
+      expect(texts).toEqual(['Confirming', '·', ...SENTENCE]);
     });
 
     it('the folded row: "newest" and the sentence, words', () => {
@@ -126,8 +128,9 @@ describe.each([390, 360, 320])(
       );
       const run = container.querySelector('[data-role="activity-run"]') as HTMLElement;
       const { texts, past } = runsOf(run, viewport);
-      expect(texts).toEqual(['newest', ...SENTENCE]);
+      // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
+      expect(texts).toEqual(['newest', ...SENTENCE]);
     });
   }
 );

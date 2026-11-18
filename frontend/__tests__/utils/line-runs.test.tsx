@@ -94,6 +94,15 @@ describe('line-runs reads the runs a line cannot break inside', () => {
         // "cd ef " and "gh", the inner row's 8 px gap, "ij"
         ['cd ef ghij', 10 * 7.8 + 8],
       ]);
+    // read alone, it is still its parent's item
+    const { container } = render(
+      <span className="text-small flex flex-wrap gap-2">
+        <span className="shrink-0">cd ef</span>
+      </span>
+    );
+    expect(lineRuns(container.querySelector('.shrink-0')!, 390).map((r) => [r.text, r.px])).toEqual(
+      [['cd ef', 5 * 7.8]]
+    );
     // a block inside it is a line of its own, at its max-content width too
     expect(
       runs(
@@ -123,6 +132,17 @@ describe('line-runs reads the runs a line cannot break inside', () => {
       runs(
         <span className="text-small flex flex-col">
           <span className="shrink-0">cd ef</span>
+        </span>
+      )
+    ).toEqual([
+      ['cd', 15.6],
+      ['ef', 15.6],
+    ]);
+    // capped at its container (`max-w-full`), it never stands wider than its line: it breaks
+    expect(
+      runs(
+        <span className="text-small flex flex-wrap gap-2">
+          <span className="max-w-full shrink-0">cd ef</span>
         </span>
       )
     ).toEqual([
