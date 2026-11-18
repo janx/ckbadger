@@ -250,7 +250,7 @@ export function BlocksLimitsNote({ blocks }: { blocks: readonly LimitRow[] }) {
   const bytesLimit = BigInt(maxBlockBytes);
   const cyclesLimit = BigInt(maxBlockCycles);
   return (
-    <p className="text-text-dim text-small">
+    <p className="text-text-dim text-small max-w-measure">
       Size and cycles · Fullest of these {blocks.length.toLocaleString('en-US')}:{' '}
       <span className="text-text-bright">{fullest.size.toLocaleString('en-US')}</span> bytes,{' '}
       {percentOf(BigInt(fullest.size), bytesLimit)} of the {maxBlockBytes.toLocaleString('en-US')}

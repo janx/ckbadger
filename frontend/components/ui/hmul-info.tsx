@@ -20,7 +20,7 @@ export function HMulHelpPopover({ align = 'start', className }: HMulHelpPopoverP
       className={className}
       contentClassName="w-[24rem] max-w-[min(24rem,calc(100vw-1rem))]"
     >
-      <p>{HMUL_EXPLANATION}</p>
+      <p className="max-w-measure">{HMUL_EXPLANATION}</p>
     </HelpPopover>
   );
 }

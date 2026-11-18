@@ -64,7 +64,7 @@ export default function FiberChannelDetailPage() {
             <h1 className="text-text-bright text-entity max-md:text-index mt-2.5 font-medium">
               Fiber channel
             </h1>
-            <p className="text-text-dim text-small mt-1.5 break-all">{channelId}</p>
+            <p className="text-text-dim text-small max-w-measure mt-1.5 break-all">{channelId}</p>
           </>
         )}
         {isAwaited(channel) && (
@@ -72,7 +72,7 @@ export default function FiberChannelDetailPage() {
         )}
         {channel.error && <ReadFailure what="channel" error={channel.error} />}
         {token.isError && (
-          <p role="alert" className="text-rouge text-small mt-2">
+          <p role="alert" className="text-rouge text-small max-w-measure mt-2">
             Funding token could not be loaded: {readErrorText(token.error)}
           </p>
         )}

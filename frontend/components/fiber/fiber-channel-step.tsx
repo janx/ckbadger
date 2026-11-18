@@ -99,11 +99,13 @@ export function FiberChannelStep({
   let body: ReactNode;
   if (isAwaited(transaction) || isAwaited(lookup)) {
     body = (
-      <p className="text-text-dim text-small">Loading the {title.toLowerCase()} transaction…</p>
+      <p className="text-text-dim text-small max-w-measure">
+        Loading the {title.toLowerCase()} transaction…
+      </p>
     );
   } else if (transaction.error || lookup.error) {
     body = (
-      <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
+      <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
         {title} transaction unavailable: {String(transaction.error ?? lookup.error)}
       </p>
     );
@@ -121,14 +123,14 @@ export function FiberChannelStep({
       : -1;
     if (consumes && spentIndex < 0) {
       body = (
-        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
+        <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
           {title} transaction {txHash} does not spend the {consumes.role} cell {consumes.txHash}:
           {consumes.index}
         </p>
       );
     } else if (carries && carries.index >= tiles.outputs.length) {
       body = (
-        <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
+        <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
           {title} transaction {txHash} has no output {carries.index} to carry the channel
         </p>
       );

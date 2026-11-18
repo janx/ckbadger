@@ -54,7 +54,7 @@ export default function UncleDetailPage() {
         {isAwaited(query) && <p role="status">Loading uncle…</p>}
         {query.error && !query.data && <ReadFailure what="uncle" error={query.error} />}
         {query.error && query.data && (
-          <p role="alert">
+          <p className="max-w-measure" role="alert">
             Unable to refresh uncle: {query.error.message}. Showing previously loaded data.
           </p>
         )}

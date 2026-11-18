@@ -31,7 +31,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
     return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
   if (error)
     return (
-      <p role="alert" className="text-negative text-small">
+      <p role="alert" className="text-negative text-small max-w-measure">
         Advertisement evidence unavailable: {String(error)}
       </p>
     );

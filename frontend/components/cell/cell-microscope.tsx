@@ -279,7 +279,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const outOccupied = outParts.filter((p) => p.occupied).reduce((n, p) => n + p.end - p.start, 0);
   if (!breakdown || (molecule && outOccupied + dataBytes.length !== breakdown.totalBytes))
     return (
-      <p role="alert" className="text-rouge text-small">
+      <p role="alert" className="text-rouge text-small max-w-measure">
         Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied.toLocaleString('en-US')}{' '}
         occupied CellOutput + {dataBytes.length.toLocaleString('en-US')} data) disagree with its
         occupied size{' '}
@@ -431,7 +431,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail={part.id}>
         <DetailHead name={part.label} figure={span(part.start, part.end)} />
-        <p className="text-small text-text mt-1.5 leading-relaxed">{part.meaning}</p>
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">{part.meaning}</p>
         <DetailRows
           rows={[
             [
@@ -473,7 +473,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           name={`${g}${name ? ` · ${name}` : ''}`}
           figure={`${fmt(groupBytes[g])} B occupied`}
         />
-        <p className="text-small text-text mt-1.5 leading-relaxed">
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">
           {g === 'capacity'
             ? 'The capacity field takes 8 bytes of the capacity it states.'
             : g === 'lock'
@@ -504,7 +504,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail={activeRegion.id}>
         <DetailHead name={activeRegion.label} figure={span(activeRegion.start, activeRegion.end)} />
-        <p className="text-small text-text mt-1.5 leading-relaxed">
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">
           {activeRegion.partIds.length > 1
             ? `${activeRegion.partIds.length} parts: ${activeRegion.partIds.map((id) => byId.get(id)!.label).join(' · ')}.`
             : byId.get(activeRegion.partIds[0])!.meaning}
@@ -519,7 +519,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           name="Where each byte belongs"
           figure={`${fmt(outBytes.length)} + ${fmt(dataBytes.length)} bytes`}
         />
-        <p className="text-small text-text mt-1.5 leading-relaxed">
+        <p className="text-small text-text max-w-measure mt-1.5 leading-relaxed">
           Each byte belongs to exactly one {elf ? 'part' : 'field'}. Colours follow the four parts
           of the cell; grey bytes are CellOutput framing that the cell does not pay for.
         </p>

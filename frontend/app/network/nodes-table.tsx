@@ -229,7 +229,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
             ))}
           </ul>
         )}
-        <p className="text-text-dim mt-1">
+        <p className="text-text-dim max-w-measure mt-1">
           Direction is from the configured observer&apos;s vantage. Session addresses are not used
           as crawler dial aliases.
         </p>
@@ -240,7 +240,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <h4 className="text-text-bright mb-1 font-bold">
             Last completed round #{detail.lastCompleted.roundId}
           </h4>
-          <p className="text-text-dim mb-1">
+          <p className="text-text-dim max-w-measure mb-1">
             <span>{outcomeLabel(detail.lastCompleted.outcome)}</span>
             {detail.lastCompleted.outcome === 'exhausted' && (
               <>
@@ -261,7 +261,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       {detail.active && (
         <div>
           <h4 className="text-text-bright mb-1 font-bold">Active round #{detail.active.roundId}</h4>
-          <p className="text-text-dim">State: {detail.active.state}</p>
+          <p className="text-text-dim max-w-measure">State: {detail.active.state}</p>
           <ObservationList observations={detail.active.observations} />
         </div>
       )}
@@ -269,7 +269,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       {detail.verified && (
         <div>
           <h4 className="text-text-bright mb-1 font-bold">Retained verification</h4>
-          <p className="text-text-dim">
+          <p className="text-text-dim max-w-measure">
             {detail.verified.clientVersion} · last same-network Identify{' '}
             {ago(detail.verified.lastReachableAt)} · protocols{' '}
             {detail.verified.protocols.join(', ') || '—'}

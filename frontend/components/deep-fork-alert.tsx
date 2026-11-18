@@ -39,7 +39,7 @@ export function DeepForkAlert({ status }: DeepForkAlertProps) {
                   at the body step, so h2.text-section's cinnabar square and lowercase stay off
                   the red banner. */}
               <h2 className="text-body font-bold">Chain Fork Detected - Sync Paused</h2>
-              <p className="text-body">
+              <p className="text-body max-w-measure">
                 The local database is on a forked chain. Syncing has been paused to prevent data
                 corruption.
               </p>

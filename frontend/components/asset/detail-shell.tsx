@@ -311,7 +311,7 @@ export function AssetReadState({
     // proxy's internal URL, and the line breaks anywhere so no long token widens a 390 px page.
     <p
       role={error ? 'alert' : 'status'}
-      className="text-text-dim text-small py-3 [overflow-wrap:anywhere]"
+      className="text-text-dim text-small max-w-measure py-3 [overflow-wrap:anywhere]"
     >
       {sentence}
     </p>

@@ -248,7 +248,7 @@ function Hero({
           <div className="eyebrow text-text-dim text-meta mb-1.5">deposited</div>
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
             <DepositedFigure shannons={evidence.phase0.capacity} />
-            <p className="text-body">
+            <p className="text-body max-w-measure">
               {changeShannons === null ? (
                 <span className="text-text-dim">—</span>
               ) : (
@@ -1259,7 +1259,7 @@ function RawEvidence({
         share.
       </p>
       {evidence.ar.year365 && (
-        <div className="text-text-dim text-meta mt-2 font-mono">
+        <div className="text-text-dim text-meta max-w-measure mt-2 font-mono">
           365-day anchor: block <BlockLink number={evidence.ar.year365.anchorBlockNumber} /> · chain
           time <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}
           {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}

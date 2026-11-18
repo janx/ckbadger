@@ -230,7 +230,7 @@ export default function BlockDetailPage() {
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
         {error && (
-          <p role="alert">
+          <p className="max-w-measure" role="alert">
             Unable to refresh block: {error.message}. Showing previously loaded data.
           </p>
         )}
@@ -467,7 +467,7 @@ export default function BlockDetailPage() {
                     <p
                       role="alert"
                       data-testid="block-proposals-error"
-                      className="text-text-dim text-small"
+                      className="text-text-dim text-small max-w-measure"
                     >
                       Failed to load proposals: {proposalsError.message}
                     </p>
@@ -499,7 +499,7 @@ export default function BlockDetailPage() {
                             ))}
                         </p>
                         {proposal.committedTxHash ? (
-                          <p className="text-text-dim">
+                          <p className="text-text-dim max-w-measure">
                             →{' '}
                             <Link href={`/tx/${proposal.committedTxHash}`}>
                               <Hash
@@ -645,7 +645,9 @@ export default function BlockDetailPage() {
                 <>
                   {isAwaited(activities) && <p role="status">Loading activities…</p>}
                   {activities.error && (
-                    <p role="alert">Unable to read activities: {activities.error.message}</p>
+                    <p className="max-w-measure" role="alert">
+                      Unable to read activities: {activities.error.message}
+                    </p>
                   )}
                   {activities.data && activityRows && (
                     <>
@@ -691,7 +693,9 @@ export default function BlockDetailPage() {
                 <>
                   {isAwaited(transactions) && <p role="status">Loading transactions…</p>}
                   {transactions.error && (
-                    <p role="alert">Unable to read transactions: {transactions.error.message}</p>
+                    <p className="max-w-measure" role="alert">
+                      Unable to read transactions: {transactions.error.message}
+                    </p>
                   )}
                   {transactions.data && (
                     <>
@@ -718,7 +722,7 @@ export default function BlockDetailPage() {
               )}
             </div>
             <aside aria-label="Block facts" className="text-small min-w-0">
-              <p className="text-jade mb-5">
+              <p className="text-jade max-w-measure mb-5">
                 Canonical · {block.confirmations.toLocaleString('en-US')} confirmations
               </p>
               <dl className="space-y-5">

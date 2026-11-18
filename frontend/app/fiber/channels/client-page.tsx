@@ -335,7 +335,7 @@ export default function FiberChannelsPage() {
               network.data ? (
                 <FiberNetworkPicture network={network.data} pin={pin} />
               ) : network.isError ? (
-                <p role="alert" className="text-rouge text-body">
+                <p role="alert" className="text-rouge text-body max-w-measure">
                   Fiber network evidence could not be loaded: {String(network.error)}
                 </p>
               ) : (
@@ -393,7 +393,7 @@ export default function FiberChannelsPage() {
               })}
             </div>
             {channels.isError && (
-              <p role="alert" className="text-rouge text-body py-7">
+              <p role="alert" className="text-rouge text-body max-w-measure py-7">
                 Channel list could not be loaded: {String(channels.error)}
               </p>
             )}

@@ -68,7 +68,7 @@ function PeersOnboarding({
     <div className="space-y-4">
       {enabled && (
         <div className="border-info/30 bg-info/10 border px-4 py-3">
-          <p className="text-info text-body font-mono">
+          <p className="text-info text-body max-w-measure font-mono">
             {activeRound?.blockedReason
               ? `Crawler round #${activeRound.roundId} blocked — ${activeRound.blockedReason}`
               : activeRound
@@ -232,7 +232,7 @@ function Hero({
       <section aria-label={PAGE_TITLE} className="min-w-0">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
           <NetworkHeading />
-          <p className="text-text-dim text-small">
+          <p className="text-text-dim text-small max-w-measure">
             Round #{lastRound.roundId} · updated {updatedAgo}
             {activeRound &&
               (activeRound.blockedReason
@@ -247,9 +247,12 @@ function Hero({
           </p>
         )}
         {activeRound?.blockedReason && (
-          <p className="border-negative/30 bg-negative/10 text-negative text-small mt-3 border px-3 py-2 font-mono">
-            Active crawler round blocked: {activeRound.blockedReason}
-          </p>
+          // the banner's frame spans the column; its sentence stands on the measure (R4)
+          <div className="border-negative/30 bg-negative/10 text-negative text-small mt-3 border px-3 py-2 font-mono">
+            <p className="max-w-measure">
+              Active crawler round blocked: {activeRound.blockedReason}
+            </p>
+          </div>
         )}
         <div data-role="figure" className="mt-9 min-w-0">
           <div className="text-text-dim text-meta mb-1.5">Reachable now</div>
@@ -339,7 +342,7 @@ function PeersDashboard({
           <div className="flex min-w-0 flex-col gap-8">
             <HowTheCrawlerSees />
             <DetailSection title="Crawler round evidence">
-              <p className="text-text-dim text-small leading-relaxed">
+              <p className="text-text-dim text-small max-w-measure leading-relaxed">
                 Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
                 attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
                 observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates
@@ -386,7 +389,7 @@ export function NetworkClientPage() {
   if (error) {
     content = (
       <DetailLayout title={PAGE_TITLE} kind="topic">
-        <p role="alert" className="text-negative">
+        <p role="alert" className="text-negative max-w-measure">
           Crawler summary unavailable: {String(error)}
         </p>
       </DetailLayout>

@@ -107,7 +107,7 @@ function BtcfsReading({ uri, network }: { uri: string; network: string }) {
     return linked ? (
       readings[0]
     ) : (
-      <p className="space-y-1">
+      <p className="max-w-measure space-y-1">
         {readings[0]}
         {NO_EXPLORER}
       </p>
@@ -176,7 +176,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
           className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 border p-6 text-center"
         >
           <ClassMark kind="objects" size={24} />
-          <p className="text-text-dim text-meta">
+          <p className="text-text-dim text-meta max-w-measure">
             {profile?.tier === 'decode_pending'
               ? 'Decode pending · awaiting DOB execution.'
               : 'No renderable media available.'}
@@ -207,7 +207,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
             ))}
           </ul>
           {profile.issues.map((issue) => (
-            <p key={issue} className="mt-2">
+            <p key={issue} className="max-w-measure mt-2">
               {issue}
             </p>
           ))}

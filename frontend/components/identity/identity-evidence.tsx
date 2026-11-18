@@ -241,7 +241,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           </div>
         ))}
       </div>
-      <p className="text-text-dim text-meta">
+      <p className="text-text-dim text-meta max-w-measure">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
           <Hash hash={v.cell.txHash} size="row" copyable={false} className="text-meta" />

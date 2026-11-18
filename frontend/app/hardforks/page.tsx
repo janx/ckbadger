@@ -126,7 +126,7 @@ function EditionCard({
         args={event.status}
         className="text-section self-start font-medium"
       />
-      <p className="text-text-dim text-meta self-start">
+      <p className="text-text-dim text-meta max-w-measure self-start">
         epoch {event.activationEpoch.toLocaleString()} ·{' '}
         {event.activationBlock !== null && (
           <>
@@ -335,7 +335,7 @@ export default function HardforksPage() {
               {/* isAwaited: the read is waited for while paused offline too (A1 round 2) */}
               {isAwaited(read) && <p className="text-text-dim mt-8">Loading hardfork timeline…</p>}
               {error && (
-                <p role="alert" className="text-negative mt-8">
+                <p role="alert" className="text-negative max-w-measure mt-8">
                   Failed to load hardfork timeline: {String(error)}
                 </p>
               )}
@@ -345,13 +345,13 @@ export default function HardforksPage() {
                 </p>
               )}
               {data && !lanesValid && (
-                <p role="alert" className="text-negative mt-8">
+                <p role="alert" className="text-negative max-w-measure mt-8">
                   The hardfork timeline has no hash-type lanes in VM order (type, data1, data2,
                   data); the live references per hash type cannot be shown.
                 </p>
               )}
               {data && unlaned && (
-                <p role="alert" className="text-negative mt-8">
+                <p role="alert" className="text-negative max-w-measure mt-8">
                   Script deployment {unlaned.versionHash} has no registered hash types; the versions
                   cannot be placed on their lanes.
                 </p>
@@ -363,7 +363,7 @@ export default function HardforksPage() {
                       The index holds no block header yet; the timeline draws once it does.
                     </p>
                   ) : ready.span.tipMs <= dayStartMs(ready.meepo.activationDate) ? (
-                    <p className="text-text-dim text-small">
+                    <p className="text-text-dim text-small max-w-measure">
                       The index has not reached the latest edition yet; the timeline draws once it
                       has.
                     </p>
@@ -414,7 +414,7 @@ export default function HardforksPage() {
                 args={`${ready.data.network} · epoch ${ready.data.tipEpoch.toLocaleString()}`}
                 className="mt-[72px]"
               >
-                <p className="text-text-dim text-small mb-3 w-fit">
+                <p className="text-text-dim text-small max-w-measure mb-3 w-fit">
                   get_consensus · hardfork_features · {ready.data.network}
                 </p>
                 <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">

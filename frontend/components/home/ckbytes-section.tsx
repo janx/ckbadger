@@ -223,7 +223,7 @@ function SupplyNote({ view }: { view: AllocationView }) {
       <Comment lines={supplyComment(view)} />
       <p
         data-testid="ckbytes-formula"
-        className="text-text-dim text-meta m-0 mt-3 pl-[18px] font-mono"
+        className="text-text-dim text-meta max-w-measure m-0 mt-3 pl-[18px] font-mono"
       >
         {supplyFormula(view)}
       </p>

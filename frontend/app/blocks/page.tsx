@@ -259,7 +259,7 @@ export default function BlocksPage() {
             </p>
           )}
           {error && (
-            <p role="alert" className="text-text-dim">
+            <p role="alert" className="text-text-dim max-w-measure">
               Unable to read blocks: {error.message}
             </p>
           )}

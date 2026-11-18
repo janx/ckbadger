@@ -1735,7 +1735,7 @@ export default function ScriptDetailPage({
           }
         >
           <DetailSection title="Capacity history">
-            <p className="text-text-dim text-small mb-3">
+            <p className="text-text-dim text-small max-w-measure mb-3">
               Live capacity and common knowledge across{' '}
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
@@ -1751,7 +1751,7 @@ export default function ScriptDetailPage({
               <p className="text-text-dim text-small py-6">No capacity history.</p>
             )}
             {!isCodeHashMode && familyCapacityChartError && (
-              <p role="alert" className="text-negative text-small">
+              <p role="alert" className="text-negative text-small max-w-measure">
                 Capacity history unavailable: {String(familyCapacityChartError)}
               </p>
             )}

@@ -11,7 +11,7 @@ import { readErrorText } from '@/lib/read-error';
 export function ReadFailure({ what, error }: { what: string; error: Error }) {
   return (
     // a sentence that explains what is missing and why: the reading ink (R3)
-    <p role="alert" className="text-text text-small py-3 [overflow-wrap:anywhere]">
+    <p role="alert" className="text-text text-small max-w-measure py-3 [overflow-wrap:anywhere]">
       Could not read this {what}: {readErrorText(error)}
     </p>
   );

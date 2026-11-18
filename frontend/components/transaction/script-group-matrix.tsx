@@ -395,7 +395,7 @@ function GroupList({
                 {g.ran || g.status ? cyclesLine(g, 'cycles not available') : 'not run'}
               </span>
             </div>
-            <p data-line="runs" className="text-meta">
+            <p data-line="runs" className="text-meta max-w-measure">
               <span
                 aria-hidden="true"
                 data-dot={g.ran ? 'ran' : 'attached'}

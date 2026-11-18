@@ -122,7 +122,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
         })}
       </dl>
       {current.unreadable.length > 0 && (
-        <p className="text-text-dim text-small">
+        <p className="text-text-dim text-small max-w-measure">
           Not read here: {current.unreadable.join(', ')} — the document as stored is in the raw
           evidence below.
         </p>
@@ -178,7 +178,7 @@ export function AmongDidCkb({
         command="Among did:ckb"
         note={<AppLink href={collectionHref}>All {total.toLocaleString('en-US')} →</AppLink>}
       />
-      <p>
+      <p className="max-w-measure">
         {total.toLocaleString('en-US')} did:ckb identities live on CKB. By the personal data server
         their documents name:
       </p>
@@ -210,7 +210,7 @@ export function AmongDidCkb({
         ))}
       </ul>
       {named !== total && (
-        <p className="text-text-dim text-small">
+        <p className="text-text-dim text-small max-w-measure">
           An identity can name more than one server, so the servers add up to{' '}
           {named.toLocaleString('en-US')}.
         </p>

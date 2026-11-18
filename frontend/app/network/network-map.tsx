@@ -296,7 +296,7 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
   ];
   return (
     <>
-      <p className="text-text-bright text-body [overflow-wrap:anywhere]">
+      <p className="text-text-bright text-body max-w-measure [overflow-wrap:anywhere]">
         {point.alias ? (
           point.alias.address
         ) : (
@@ -389,7 +389,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
               {awaited ? (
                 <p className="text-text-dim text-small">Loading crawler locations…</p>
               ) : !ready ? (
-                <p role="alert" className="text-negative text-small">
+                <p role="alert" className="text-negative text-small max-w-measure">
                   Crawler locations unavailable: {String(error)}
                 </p>
               ) : (
@@ -550,7 +550,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
       {listedCountries.length > 0 && (
         <p
           aria-label="Countries with one verified node"
-          className="text-text-dim text-small leading-relaxed"
+          className="text-text-dim text-small max-w-measure leading-relaxed"
         >
           One verified node each, not labelled on the map:{' '}
           {listedCountries.map(({ country, count }, i) => (
@@ -613,7 +613,7 @@ export function NetworkMapNotes() {
   if (isAwaited(read)) return null;
   if (error || !data)
     return (
-      <p role="alert" className="text-negative text-small">
+      <p role="alert" className="text-negative text-small max-w-measure">
         Crawler locations unavailable: {String(error)}
       </p>
     );

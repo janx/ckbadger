@@ -145,7 +145,7 @@ export function HostingBar() {
   const total = [...byOrg.values()].reduce((sum, count) => sum + count, 0);
   if (total !== data.verifiedRetained)
     return (
-      <p role="alert" className="text-negative text-small">
+      <p role="alert" className="text-negative text-small max-w-measure">
         Hosting networks cover {unitNode(formatCount(total, 'peer'))}, not the{' '}
         {data.verifiedRetained} verified.
       </p>
@@ -224,7 +224,7 @@ function HostingSection({
         ))}
       </div>
       {/* R12: the exact counts leave the bar for one quiet line, which also names every segment. */}
-      <p data-role="exact-amounts" className="text-text-dim text-small mt-2.5">
+      <p data-role="exact-amounts" className="text-text-dim text-small max-w-measure mt-2.5">
         {segments.map(([org, count], i) => (
           <span key={org}>
             {i > 0 && ' · '}

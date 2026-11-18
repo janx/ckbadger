@@ -194,19 +194,19 @@ export function BlockPosition({
   }, [currentX, block.number]);
   return (
     <div className="min-w-0 space-y-3">
-      <p data-testid="block-position-sentence" className="text-text-dim text-small">
+      <p data-testid="block-position-sentence" className="text-text-dim text-small max-w-measure">
         <SentenceNodes parts={positionParts(block, links)} />
         {(page > 1 || hasMore) && `. Incoming relationships cover transaction page ${page} only.`}
       </p>
       {transactionsError ? (
-        <p role="alert" className="text-text-dim text-small">
+        <p role="alert" className="text-text-dim text-small max-w-measure">
           Proposal origins unavailable: {transactionsError}
         </p>
       ) : transactions === undefined ? (
         <p className="text-text-dim text-small">Reading transaction proposal origins…</p>
       ) : null}
       {proposalsError && (
-        <p role="alert" className="text-text-dim text-small">
+        <p role="alert" className="text-text-dim text-small max-w-measure">
           Outgoing commitments unavailable: {proposalsError}
         </p>
       )}
@@ -241,7 +241,7 @@ export function BlockPosition({
             key={`${arc.from}:${arc.to}`}
             className="border-row-rule text-small space-y-2 border-t pt-3"
           >
-            <p className="text-gold">
+            <p className="text-gold max-w-measure">
               {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +
               {unitNode(formatCount(arc.to - arc.from, 'block'))}
             </p>
@@ -253,7 +253,7 @@ export function BlockPosition({
               <Link href={`/blocks/${arc.to}`}>{formatBlockNumber(arc.to)}</Link>
             </p>
             {arc.uncles.size > 0 && (
-              <p className="text-text-dim">
+              <p className="text-text-dim max-w-measure">
                 Includes proposals carried by {unitNode(formatCount(arc.uncles.size, 'uncle'))}.
               </p>
             )}
@@ -289,7 +289,7 @@ export function BlockPosition({
                 ]}
               />
             </Link>
-            <p className="text-text-dim">
+            <p className="text-text-dim max-w-measure">
               Included by{' '}
               <Link href={`/blocks/${block.hash}`}>{formatBlockNumber(block.number)}</Link>
             </p>

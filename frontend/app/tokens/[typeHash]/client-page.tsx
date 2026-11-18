@@ -170,7 +170,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         <div className="text-small space-y-3">
           <AssetReadState error={token.error} label="token" retained />
           {t.description && (
-            <p className="text-text-dim">
+            <p className="text-text-dim max-w-measure">
               {t.description}
               {t.operatorWebsite && (
                 <>
@@ -194,7 +194,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             <>
               <AssetReadState error={latest.error} label="last token movement" retained />
               {latest.data.data[0] ? (
-                <p>
+                <p className="max-w-measure">
                   {/* Lane P: the day it moved; how long ago is the date's hover. */}
                   It last moved on{' '}
                   <AppLink href={`/tx/${latest.data.data[0].txHash}`}>
@@ -211,7 +211,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           )}
           {t.metadata?.conflict && t.metadata.chain && (
             // F2 objects (IV-26): a relabelled token says what the chain calls it.
-            <p className="text-text-dim">
+            <p className="text-text-dim max-w-measure">
               Its name comes from a CKBadger label. On chain it calls itself{' '}
               <span className="text-text-bright">
                 {t.metadata.chain.symbol ?? t.metadata.chain.name ?? 'nothing'}
@@ -223,7 +223,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             <p className="text-text-dim">Same-symbol comparison unavailable.</p>
           ) : (
             t.sameSymbolTokens.length > 0 && (
-              <p className="border-token/40 border-l-2 pl-3">
+              <p className="border-token/40 max-w-measure border-l-2 pl-3">
                 {t.sameSymbolTokens.length === 1
                   ? `Another token also calls itself ${t.symbol}: `
                   : `Other tokens also call themselves ${t.symbol}: `}

@@ -486,7 +486,7 @@ export function AssetHistory({
           >
             No complete daily history in this range.
           </p>
-          {peakItem && <p className="text-text-dim text-small">{peakItem}</p>}
+          {peakItem && <p className="text-text-dim text-small max-w-measure">{peakItem}</p>}
         </>
       )}
       {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
@@ -496,11 +496,11 @@ export function AssetHistory({
             Every change to the supply ({supplyEvents.total.toLocaleString('en-US')})
           </summary>
           {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
-            <p className="text-text-dim text-meta mt-2">
+            <p className="text-text-dim text-meta max-w-measure mt-2">
               The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
             </p>
           )}
-          <p className="text-text-dim text-meta my-3">
+          <p className="text-text-dim text-meta max-w-measure my-3">
             Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
             which preserves time through backward block timestamps.
           </p>

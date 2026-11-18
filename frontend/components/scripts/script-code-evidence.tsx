@@ -569,7 +569,7 @@ export function ScriptCapacityEvidenceChart({
                 </div>
               )}
               {consumedCandidates.length > 1 && (
-                <div className="text-text-dim sm:col-span-2">
+                <div className="text-text-dim max-w-measure sm:col-span-2">
                   Multiple previous code cells under this reference were consumed in the same
                   transaction; previous holder is ambiguous.
                 </div>

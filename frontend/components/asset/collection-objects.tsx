@@ -250,7 +250,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               This collection has no DOB objects to compare.
             </p>
           ) : (
-            <p role="status" className="text-text-dim text-small">
+            <p role="status" className="text-text-dim text-small max-w-measure">
               Allele frequencies and filtering await complete decoding:{' '}
               {genetics.decodedItems.toLocaleString('en-US')} of{' '}
               {genetics.eligibleItems.toLocaleString('en-US')} decoded.
@@ -484,7 +484,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
 export function DecodeCoverage({ genetics }: { genetics: CollectionInsights['genetics'] }) {
   const n = (v: number) => v.toLocaleString('en-US');
   return (
-    <p className="text-text-dim text-meta">
+    <p className="text-text-dim text-meta max-w-measure">
       {n(genetics.decodedItems)} of {n(genetics.eligibleItems)} DOB objects decoded ·{' '}
       {n(genetics.pendingItems)} pending · {n(genetics.failedItems)} failed ·{' '}
       {n(genetics.nonDobItems)} non-DOB objects · {n(genetics.liveItems)} live

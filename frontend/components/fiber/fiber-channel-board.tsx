@@ -464,7 +464,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </h1>
             <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.state]}</span>
           </div>
-          <p className="text-text-dim text-small mt-1.5 w-fit max-w-full break-all">
+          <p className="text-text-dim text-small max-w-measure mt-1.5 w-fit break-all">
             {channel.channelId}
           </p>
           <p className="text-text text-body max-w-measure mt-1.5">{ledeSentence(channel)}</p>
@@ -472,7 +472,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">capacity</div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
               <CapacityFigure channel={channel} />
-              <p data-testid="channel-pair" className="text-body min-w-0">
+              <p data-testid="channel-pair" className="text-body max-w-measure min-w-0">
                 {first && <PartyLink party={first} />}
                 {second && (
                   <>
@@ -499,7 +499,10 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </div>
           </div>
           {evidenceError && (
-            <p role="alert" className="text-rouge text-small mt-3 [overflow-wrap:anywhere]">
+            <p
+              role="alert"
+              className="text-rouge text-small max-w-measure mt-3 [overflow-wrap:anywhere]"
+            >
               Local node evidence unavailable: {evidenceError}
             </p>
           )}

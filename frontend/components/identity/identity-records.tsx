@@ -156,7 +156,7 @@ export function IdentityRecords({
               ))}
             </dl>
           )}
-          <p className="text-text-dim text-small">
+          <p className="text-text-dim text-small max-w-measure">
             {records.length.toLocaleString('en-US')} {countNoun(records.length, 'record')} · each
             cached for {view.ttls.map((t) => `${t.toLocaleString('en-US')} s`).join(' or ')}
           </p>

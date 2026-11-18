@@ -469,7 +469,7 @@ function Gel({
         </ReadoutRow>
       </div>
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
-      <p className="text-text-dim text-meta mt-1">
+      <p className="text-text-dim text-meta max-w-measure mt-1">
         variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
         {unitText(formatCount(total, 'object'))}, common at the top, rare below
       </p>
@@ -619,7 +619,7 @@ function GeneList({
           {moreGenes(rest)} ▾
         </button>
       )}
-      <p className="text-text-dim text-meta mt-1">
+      <p className="text-text-dim text-meta max-w-measure mt-1">
         genes ranked by how many variants they have · most common = how many of all{' '}
         {unitText(formatCount(total, 'object'))} carry the commonest variant · open a gene for every
         variant
@@ -637,7 +637,7 @@ export function NotGenesNote({ traits }: { traits: readonly string[] }) {
   const names =
     traits.length > 1 ? `${traits.slice(0, -1).join(', ')} and ${traits.at(-1)}` : traits[0];
   return (
-    <p className="text-text-dim text-meta [overflow-wrap:anywhere]">
+    <p className="text-text-dim text-meta max-w-measure [overflow-wrap:anywhere]">
       Not drawn: {names}, {traits.length > 1 ? 'outputs' : 'an output'} of the decoder that the
       pattern does not declare as {traits.length > 1 ? 'genes' : 'a gene'}.
     </p>

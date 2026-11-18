@@ -232,7 +232,9 @@ export function ObjectGeneticsView({
           </p>
         )}
         {cached.status === 'failed' && (
-          <p role="alert">DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}</p>
+          <p className="max-w-measure" role="alert">
+            DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}
+          </p>
         )}
         <GelPlate tier={tier} className="space-y-4 px-4 py-4 sm:px-5">
           {layout.genes.length ? (
@@ -248,7 +250,12 @@ export function ObjectGeneticsView({
             <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
           )}
           {layout.unsupported.map((u) => (
-            <p key={u.step} role="status" title={u.reason} className="text-text-dim text-meta">
+            <p
+              key={u.step}
+              role="status"
+              title={u.reason}
+              className="text-text-dim text-meta max-w-measure"
+            >
               Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern alone
               is used.
             </p>
@@ -302,7 +309,7 @@ export function ObjectGeneticsView({
                   )}
                 />
                 {own3.absent.length > 0 && (
-                  <p role="status" className="text-text-dim text-meta">
+                  <p role="status" className="text-text-dim text-meta max-w-measure">
                     Its {own3.absent.join(', ')} variant is not among the collection’s counted
                     variants.
                   </p>
@@ -355,7 +362,7 @@ export function ObjectGeneticsEvidence({
       >
         DNA evidence
       </h2>
-      <p className="text-text-dim text-meta">
+      <p className="text-text-dim text-meta max-w-measure">
         The byte map describes the current decoder. Trait values are cached VM results
         {cached.decodedAt !== null
           ? unitText(`, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}`)
@@ -577,19 +584,19 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
         />
       )}
       {declaredOnly && (
-        <p className="text-text-dim text-meta">
+        <p className="text-text-dim text-meta max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
       )}
       {clipped.length > 0 && (
-        <p className="text-text-dim text-meta">
+        <p className="text-text-dim text-meta max-w-measure">
           Clipped to the actual DNA shown: {clipped.map((g) => g.name).join(', ')} declare
           {clipped.length === 1 ? 's' : ''} bytes past its {count(layout.bytes.length)}.
         </p>
       )}
       {layout.unmapped.map((u) => (
-        <p key={u.name} className="text-text-dim text-meta">
+        <p key={u.name} className="text-text-dim text-meta max-w-measure">
           {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this DNA
           fall in the declared range.
         </p>
@@ -966,7 +973,7 @@ function PatternReading({
       )}
       {genes.length > 0 && geneTable(rows, 'DOB blueprint')}
       {declared && (
-        <p className="text-text-dim text-meta">
+        <p className="text-text-dim text-meta max-w-measure">
           These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
           binary names no byte mapping to check them against.
         </p>
@@ -995,7 +1002,7 @@ function PatternReading({
             {dna && <span>{unitText(formatCount(dna.length, 'byte'))}</span>}
           </div>
           {sample.decodeStatus !== 'decoded' ? (
-            <p className="text-text-dim text-small mt-2">
+            <p className="text-text-dim text-small max-w-measure mt-2">
               Not decoded yet ({sample.decodeStatus}); its values appear once the decoder has run.
             </p>
           ) : (
@@ -1017,7 +1024,7 @@ function PatternReading({
             </dl>
           )}
           {outside.length > 0 && (
-            <p className="text-text-dim text-meta mt-2 [overflow-wrap:anywhere]">
+            <p className="text-text-dim text-meta max-w-measure mt-2 [overflow-wrap:anywhere]">
               Also from the decoder, outside the pattern:{' '}
               <TraitText
                 text={outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}

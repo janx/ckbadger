@@ -689,7 +689,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           {pds.data ? (
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
-              <p className="text-text-dim text-meta">
+              <p className="text-text-dim text-meta max-w-measure">
                 {unitNode(
                   formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')
                 )}{' '}

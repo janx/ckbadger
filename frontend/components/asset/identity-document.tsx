@@ -58,7 +58,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
       >
         What its configuration permits
       </h2>
-      <p className="text-text-dim text-meta">
+      <p className="text-text-dim text-meta max-w-measure">
         Configure 0x{configure.toString(16).padStart(2, '0')} · zero permission bits allow the
         operation.
       </p>
@@ -77,7 +77,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
         ))}
       </dl>
       {state && (
-        <p className="text-meta">
+        <p className="text-meta max-w-measure">
           State 0x{state.value.toString(16).padStart(2, '0')} ·{' '}
           {state.claimed ? 'claimed' : 'unclaimed'} · {state.locked ? 'locked' : 'unlocked'}.{' '}
           {state.locked

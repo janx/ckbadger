@@ -514,7 +514,7 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
         ?.filter((name) => name.outputIndex === witness.index)
         .map((name) => (
           <div key={name.identityId} data-testid="tx-witness-dotcell-records">
-            <p className="text-text-dim text-small mb-3">
+            <p className="text-text-dim text-small max-w-measure mb-3">
               records payload of{' '}
               <Link
                 href={getIdentityItemDetailHref('dotcell', name.label)}
@@ -739,11 +739,11 @@ export default function TransactionDetailPage() {
           data-testid="tx-inputs-not-yet-resolvable"
           className="text-text-dim text-small space-y-3"
         >
-          <p>
+          <p className="max-w-measure">
             waiting for the node… the inputs of this unconfirmed transaction cannot be resolved yet.
             Retrying automatically.
           </p>
-          <p className="[overflow-wrap:anywhere]">{error.apiMessage}</p>
+          <p className="max-w-measure [overflow-wrap:anywhere]">{error.apiMessage}</p>
         </div>
       </DetailLayout>
     );
@@ -1009,7 +1009,7 @@ export default function TransactionDetailPage() {
         ? activityHeadline(activity)
         : 'Transaction';
   const summary = isProvisional ? (
-    <p className="text-text-dim text-small">
+    <p className="text-text-dim text-small max-w-measure">
       Activity and canonical cell structure are available once this transaction is committed and
       indexed.
     </p>
@@ -1046,13 +1046,13 @@ export default function TransactionDetailPage() {
       .
     </p>
   ) : activityError ? (
-    <p role="alert" className="text-small">
+    <p role="alert" className="text-small max-w-measure">
       Cannot read activity for {hash}: {activityError.message}
     </p>
   ) : activity === undefined ? (
     <div className="bg-base-surface h-5 w-96 max-w-full animate-pulse" />
   ) : activity === null ? (
-    <p role="alert" className="text-small">
+    <p role="alert" className="text-small max-w-measure">
       Transaction {hash} has no indexed activity.
     </p>
   ) : (
@@ -1160,7 +1160,7 @@ export default function TransactionDetailPage() {
 
   const raw = (
     <div className="space-y-5">
-      <p>
+      <p className="max-w-measure">
         <Link
           href={`/tx/${hash}.md`}
           target="_blank"
@@ -1221,7 +1221,9 @@ export default function TransactionDetailPage() {
         {isProvisional ? (
           <PendingValue />
         ) : graphError ? (
-          <p role="alert">{graphError.message}</p>
+          <p className="max-w-measure" role="alert">
+            {graphError.message}
+          </p>
         ) : graph ? (
           <DeferredCellGraph
             nodes={graph.nodes}
@@ -1252,7 +1254,7 @@ export default function TransactionDetailPage() {
   return shell(
     <div className="text-body min-w-0 font-mono">
       {error && (
-        <p role="alert" className="text-small mb-4">
+        <p role="alert" className="text-small max-w-measure mb-4">
           Unable to refresh transaction: {error.message}. Showing previously loaded data.
         </p>
       )}
@@ -1464,7 +1466,7 @@ export default function TransactionDetailPage() {
                 )
               }
             >
-              <p className="text-text-dim text-small -mt-2 mb-4">
+              <p className="text-text-dim text-small max-w-measure -mt-2 mb-4">
                 {tx.isCellbase
                   ? 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
                   : compensation
@@ -1556,7 +1558,7 @@ export default function TransactionDetailPage() {
                   {selectedGroup && (
                     <p
                       data-testid="tx-witness-focused-group"
-                      className="text-text-dim mt-3 [overflow-wrap:anywhere]"
+                      className="text-text-dim max-w-measure mt-3 [overflow-wrap:anywhere]"
                     >
                       Focused script group: {selectedGroup}{' '}
                       <button
@@ -1589,11 +1591,11 @@ export default function TransactionDetailPage() {
                 note={deps ? `${deps.length} · read, not consumed` : 'read, not consumed'}
               />
               {isProvisional ? (
-                <p className="py-3">
+                <p className="max-w-measure py-3">
                   <PendingValue />
                 </p>
               ) : depsError ? (
-                <p role="alert" className="py-3">
+                <p role="alert" className="max-w-measure py-3">
                   {depsError.message}
                 </p>
               ) : deps && deps.length === 0 ? (

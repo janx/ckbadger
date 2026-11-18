@@ -230,7 +230,7 @@ function ReferenceFacts({
       {reference.hashType === 'type' && version && (
         <>
           <dt className={term}>pin instead</dt>
-          <dd className={cn(value, 'text-text-dim')}>
+          <dd className={cn(value, 'text-text-dim', 'max-w-measure')}>
             its data hash with hash type data1 or data2 pins this exact binary; an upgrade will not
             reach cells that pin it
           </dd>
@@ -404,7 +404,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
   ];
   return (
     <div className="text-small min-w-0 space-y-4">
-      <p className="m-0 min-w-0 [overflow-wrap:anywhere]">
+      <p className="max-w-measure m-0 min-w-0 [overflow-wrap:anywhere]">
         <ScriptCellsSummary family={family} />
       </p>
       <ScriptByteMap kind={kind} script={null} />
@@ -439,7 +439,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
             )}
           />
           {references.some((r) => r.hashType === 'type') && (
-            <p className="text-text-dim m-0">
+            <p className="text-text-dim max-w-measure m-0">
               A type reference follows every upgrade; its data hash with hash type data1 or data2
               pins this exact binary; an upgrade will not reach cells that pin it.
             </p>
@@ -1071,7 +1071,7 @@ export function ScriptFamilyPage({
               {chartLoading ? (
                 <p className="text-text-dim text-small mt-[18px] py-6">Loading capacity history…</p>
               ) : chartError ? (
-                <p role="alert" className="text-negative text-small mt-[18px]">
+                <p role="alert" className="text-negative text-small max-w-measure mt-[18px]">
                   Capacity history unavailable: {chartError.message}
                 </p>
               ) : chart?.data.length ? (
@@ -1314,7 +1314,7 @@ export function ScriptFamilyPage({
                 />
               )}
               {cells.rows.length > 0 && (
-                <p className="text-text-dim text-small mt-2">
+                <p className="text-text-dim text-small max-w-measure mt-2">
                   Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
                   {family.liveCellsCount.toLocaleString('en-US')}
                 </p>

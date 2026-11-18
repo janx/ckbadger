@@ -388,7 +388,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               names.data.data.length > 0 && (
                 <DetailSection title=".cell named rights">
                   <div data-testid="address-dotcell-names">
-                    <p className="text-text-dim text-small mb-3">
+                    <p className="text-text-dim text-small max-w-measure mb-3">
                       Names this protocol assigns to the address. These rights do not add the name
                       cell’s capacity to this address’s physical holdings.
                     </p>
@@ -611,7 +611,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         <AddressActivity key={row.txHash} activity={row} address={a} />
                       ))
                     ) : (
-                      <p className="text-text-dim text-small py-6">
+                      <p className="text-text-dim text-small max-w-measure py-6">
                         {filter === 'all'
                           ? 'No activities.'
                           : `No ${activityFilters.find((f) => f[0] === filter)![1]} activities on this page.`}

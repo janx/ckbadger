@@ -132,7 +132,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
             codeCell.typeIdVersions.map((item) => (
               <p
                 key={`${item.typeScriptHash}:${item.codeCellTxHash}:${item.codeCellOutputIndex}`}
-                className="[overflow-wrap:anywhere]"
+                className="max-w-measure [overflow-wrap:anywhere]"
               >
                 <span className={item.thisBinary ? 'text-text-bright' : 'text-text-dim'}>
                   Version {item.ordinal}
@@ -156,7 +156,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
           {codeCell.upgradeCohort.map((item) => (
             <p
               key={`${item.currentTxHash}:${item.currentOutputIndex}`}
-              className="[overflow-wrap:anywhere]"
+              className="max-w-measure [overflow-wrap:anywhere]"
             >
               <Link
                 href={`/cell/${item.previousTxHash}-${item.previousOutputIndex}`}

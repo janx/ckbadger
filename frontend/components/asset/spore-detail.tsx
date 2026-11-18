@@ -502,7 +502,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   </div>
                 )}
               {cluster.data && (
-                <p className="text-text-dim text-small">
+                <p className="text-text-dim text-small max-w-measure">
                   Its cluster cell is held by{' '}
                   {cluster.data.ownerAddress || cluster.data.ownerLockHash ? (
                     <Address

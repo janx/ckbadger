@@ -340,11 +340,11 @@ export function ScriptNewestCells({
         <PromptHeading command="Cells" args={`--newest ${NEWEST_CELLS_COUNT}`} />
       </div>
       {newest.kind === null ? (
-        <p role="alert" className="text-negative text-small">
+        <p role="alert" className="text-negative text-small max-w-measure">
           {family.name} has no registered lock or type role, so its newest cells cannot be read
         </p>
       ) : newest.error ? (
-        <p role="alert" className="text-negative text-small [overflow-wrap:anywhere]">
+        <p role="alert" className="text-negative text-small max-w-measure [overflow-wrap:anywhere]">
           Newest cells unavailable: {readErrorText(newest.error)}
         </p>
       ) : newest.loading ? (
@@ -385,7 +385,7 @@ export function ScriptNewestCells({
       )}
       {newest.kind && (
         // The section's one caption, under its evidence (as the custody timeline's is).
-        <p data-role="caption" className="text-text-dim text-small mt-2">
+        <p data-role="caption" className="text-text-dim text-small max-w-measure mt-2">
           {/* The words' own box (R16 measures a text node's parent: a bare <p> is full width). */}
           <span>
             The newest live cells this script {verb}, newest block first · it is not a list of

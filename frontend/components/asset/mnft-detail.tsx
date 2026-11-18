@@ -92,7 +92,7 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
           <div className="text-text-bright text-body">
             {where ? `Its image is ${where}` : 'Its class names a renderer'}
           </div>
-          <p className="text-text-dim text-small break-all">{renderer}</p>
+          <p className="text-text-dim text-small max-w-measure break-all">{renderer}</p>
           {where && (
             <a href={renderer} rel="noreferrer" target="_blank" className="text-aqua text-small">
               Open the file ↗
@@ -407,12 +407,12 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             state={{ claimed: item.claimed, locked: item.locked, value: item.state }}
           />
           <DetailSection title="Issuer record">
-            <p className="text-meta">Name · {item.issuer.name ?? 'not recorded'}</p>
-            <p className="text-meta">
+            <p className="text-meta max-w-measure">Name · {item.issuer.name ?? 'not recorded'}</p>
+            <p className="text-meta max-w-measure">
               Issuer ID ·{' '}
               <Hash hash={item.issuer.issuerId} truncate={false} className="text-meta break-all" />
             </p>
-            <p className="text-text-dim text-meta mt-2">
+            <p className="text-text-dim text-meta max-w-measure mt-2">
               <AssetCount value={item.issuer.classCount} /> classes ·{' '}
               <AssetCount value={item.issuer.setCount} /> sets
             </p>
@@ -461,14 +461,16 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             }
             intro={
               history.data.length > 0 && (
-                <p className="text-body mb-4 leading-relaxed">
+                <p className="text-body max-w-measure mb-4 leading-relaxed">
                   {cellLifeSentence(history.data, 'token')}
                 </p>
               )
             }
           />
           {lockFootnote(history.data, 'token') && (
-            <p className="text-text-dim text-small">{lockFootnote(history.data, 'token')}</p>
+            <p className="text-text-dim text-small max-w-measure">
+              {lockFootnote(history.data, 'token')}
+            </p>
           )}
         </div>
       )}

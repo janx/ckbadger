@@ -98,10 +98,13 @@ export function PoolTruncatedNotice() {
  */
 export function PoolUnavailableNotice() {
   return (
-    // a sentence that explains why the list is short: the reading ink (R3)
+    // a sentence that explains why the list is short: the reading ink (R3); the strip spans the
+    // list, its sentence stands on the measure (R4)
     <div className="border-base-border bg-base-surface/50 text-text text-small border-b px-4 py-2 font-mono">
-      Pool view unavailable — the node could not be reached, so unconfirmed transactions are not
-      shown. Confirmed history below is unaffected.
+      <p className="max-w-measure">
+        Pool view unavailable — the node could not be reached, so unconfirmed transactions are not
+        shown. Confirmed history below is unaffected.
+      </p>
     </div>
   );
 }

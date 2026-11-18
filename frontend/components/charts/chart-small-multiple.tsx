@@ -153,7 +153,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         </div>
       )}
       {modelError && (
-        <p role="alert" className="text-negative text-small break-words">
+        <p role="alert" className="text-negative text-small max-w-measure break-words">
           {modelError}
         </p>
       )}

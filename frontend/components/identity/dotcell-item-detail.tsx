@@ -144,7 +144,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
         <section aria-label="Name relationships" className="text-small min-w-0 space-y-3">
           <h2 className="text-text text-body font-medium">Name relationships</h2>
           {item.parent ? (
-            <p>
+            <p className="max-w-measure">
               Parent <AppLink href={nameHref(item.parent.identityId)}>{item.parent.name}</AppLink>
             </p>
           ) : (

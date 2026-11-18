@@ -187,7 +187,7 @@ export function SequencingGel({ layout, subject, active, onActive, idle }: Seque
       {width !== null && form === 'narrow' && (
         <NarrowGel layout={layout} subject={subject} width={width} lit={lit} bind={readout.bind} />
       )}
-      <p className="text-text-dim text-meta">
+      <p className="text-text-dim text-meta max-w-measure">
         read top to bottom: each band is one hex digit in the lane of its value · {n} digits ={' '}
         {unitText(formatCount(bytes.length, 'byte'))}
         {form === 'narrow' ? ' · dashed rules mark the gene boundaries' : ''}

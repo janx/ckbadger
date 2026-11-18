@@ -64,14 +64,14 @@ export function AddressLoadState({
         : null;
   if (sentence === null) return null;
   return (
-    <p className="text-text-dim text-small py-3" role={error ? 'alert' : 'status'}>
+    <p className="text-text-dim text-small max-w-measure py-3" role={error ? 'alert' : 'status'}>
       {sentence}
     </p>
   );
 }
 export function AddressStaleNotice({ error, label }: { error: Error | null; label: string }) {
   return error ? (
-    <p role="alert" className="text-warning text-small py-2">
+    <p role="alert" className="text-warning text-small max-w-measure py-2">
       Could not refresh {label}: {error.message}. Showing previously loaded data.
     </p>
   ) : null;
@@ -257,7 +257,10 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
               );
             })}
           </div>
-          <p data-testid="balance-parts" className="text-text-dim text-small mt-2 tabular-nums">
+          <p
+            data-testid="balance-parts"
+            className="text-text-dim text-small max-w-measure mt-2 tabular-nums"
+          >
             occupied <ExactParts shannons={occupied} /> pays for the bytes its cells keep · free{' '}
             <ExactParts shannons={free} /> ·{' '}
             {daoFree === BigInt(0) ? (
@@ -654,7 +657,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               <p className="text-text-dim text-small py-4">No live DAO holdings.</p>
             ) : (
               <>
-                <p className="text-text-dim text-small pt-3">
+                <p className="text-text-dim text-small max-w-measure pt-3">
                   {unitNode(formatCount(holdings.depositCellsCount, 'deposit'))} ·{' '}
                   {unitNode(
                     formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')

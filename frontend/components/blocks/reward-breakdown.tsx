@@ -71,7 +71,7 @@ export function RewardBreakdown({
   const context = `Block ${block.number} reward`;
   if (!block.rewardBreakdown || block.miningReward === null) {
     return (
-      <p className="text-text-dim text-small">
+      <p className="text-text-dim text-small max-w-measure">
         {block.number === 0 ? (
           'Genesis has no mining reward.'
         ) : (

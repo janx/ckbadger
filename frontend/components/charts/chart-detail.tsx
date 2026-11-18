@@ -633,13 +633,13 @@ export function ChartDetail({ slug }: { slug: string }) {
         )}
         {modelError && (
           <DetailLayout title={definition.title} documentTitle={[definition.title, 'chart']}>
-            <p role="alert" className="text-negative break-words">
+            <p role="alert" className="text-negative max-w-measure break-words">
               Invalid {definition.title} chart data: {modelError}
             </p>
           </DetailLayout>
         )}
         {data.error && model && (
-          <p role="alert" className="text-negative text-small mb-5 break-words">
+          <p role="alert" className="text-negative text-small max-w-measure mb-5 break-words">
             Could not refresh {definition.title}: {data.error.message}. Showing previously loaded
             data.
             <button
@@ -655,7 +655,7 @@ export function ChartDetail({ slug }: { slug: string }) {
           <DetailBody definition={definition} model={model} events={hardforks.data?.events ?? []} />
         )}
         {hardforks.error && (
-          <p role="alert" className="text-negative text-small mt-4">
+          <p role="alert" className="text-negative text-small max-w-measure mt-4">
             Hardfork markers unavailable: {hardforks.error.message}
           </p>
         )}

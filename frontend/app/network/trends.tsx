@@ -341,7 +341,7 @@ function ShareTrend({
   return (
     <TrendPanel title={title}>
       {error ? (
-        <p role="alert" className="text-negative text-small">
+        <p role="alert" className="text-negative text-small max-w-measure">
           Failed to load {title.toLowerCase()}.
         </p>
       ) : !history ? (
@@ -423,7 +423,7 @@ export function NetworkTrends() {
       args={peerHistoryError || peerHistoryLoading ? undefined : formatCount(days.length, 'day')}
     >
       {peerHistoryError ? (
-        <p role="alert" className="text-negative text-small font-mono">
+        <p role="alert" className="text-negative text-small max-w-measure font-mono">
           {peerHistoryError}
         </p>
       ) : peerHistoryLoading ? (

@@ -43,7 +43,7 @@ export default function ChartsPage() {
             </p>
           )}
           {network.error && (
-            <p role="alert" className="text-negative text-small">
+            <p role="alert" className="text-negative text-small max-w-measure">
               Network sync status unavailable: {network.error.message}
             </p>
           )}
@@ -62,7 +62,7 @@ export default function ChartsPage() {
               </div>
             );
           })}
-          <p className="text-text-dim text-small">
+          <p className="text-text-dim text-small max-w-measure">
             Every chart stops at the last complete day. Open a chart for its full resolution and
             source; there, <TapOrHoverHint what="the chart" /> to read any point.
           </p>

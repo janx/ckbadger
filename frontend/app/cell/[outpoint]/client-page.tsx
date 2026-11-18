@@ -211,7 +211,11 @@ function CellFacts({
     amounts = checkedCapacity(cell);
   } catch (error) {
     return (
-      <p role="alert" data-testid="cell-capacity-error" className="text-rouge text-small">
+      <p
+        role="alert"
+        data-testid="cell-capacity-error"
+        className="text-rouge text-small max-w-measure"
+      >
         {String(error)}
       </p>
     );
@@ -371,7 +375,7 @@ function CodeCellOf({ cell }: { cell: Cell }) {
  */
 function CellOrigin({ cell }: { cell: Cell }) {
   return (
-    <p data-testid="cell-origin">
+    <p className="max-w-measure" data-testid="cell-origin">
       output {cell.outputIndex} of transaction{' '}
       <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
         <ShortId value={cell.txHash} kind="hash" size="row" />
@@ -484,7 +488,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         }
       >
         {refreshError && (
-          <p role="alert">
+          <p className="max-w-measure" role="alert">
             Unable to refresh cell: {refreshError.message}. Showing previously loaded data.
           </p>
         )}
@@ -495,7 +499,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
             {/* F-9: the API sends every DAO cell's exact compensation (shannons) with its state
                 and block; an answer without them is a broken read and fails here, by name. */}
-            <p className="text-text-dim text-small">
+            <p className="text-text-dim text-small max-w-measure">
               deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} /> ·{' '}
               {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
               <CkbAmount

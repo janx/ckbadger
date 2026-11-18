@@ -113,7 +113,9 @@ describe('FiberChannelBoard', () => {
       'text-entity'
     );
     expect(within(hero).getByText('force-closed · settled')).toBeInTheDocument();
-    expect(within(hero).getByText(channel.channelId)).toHaveClass('w-fit', 'max-w-full');
+    // re-pinned with readability R4 (lane B7): the id line stands on the measure, a 66-character id
+    // one line of it (was max-w-full)
+    expect(within(hero).getByText(channel.channelId)).toHaveClass('w-fit', 'max-w-measure');
     expect(within(hero).getByText('capacity')).toHaveClass('w-fit');
     // R13: one lede, dim, ≤ 90 characters — the channel's story in one line
     const lede = within(hero).getByText(

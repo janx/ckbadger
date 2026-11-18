@@ -14,12 +14,12 @@ export function InventorySummaryNotice({ summary, assetType }: InventorySummaryN
     <section aria-label="Inventory totals" className="text-text-dim text-small space-y-2">
       {assetType === 'identity' && (
         // F2 objects (IV-12): the Identities board's one line.
-        <p>
+        <p className="max-w-measure">
           {summary.counts.identity.toLocaleString('en-US')} naming systems · every identity’s record
           lives in its cell on CKB
         </p>
       )}
-      <p className="text-meta">
+      <p className="text-meta max-w-measure">
         Canonical asset totals
         {summary.anchor ? (
           <>

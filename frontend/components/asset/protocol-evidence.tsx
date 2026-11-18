@@ -317,7 +317,9 @@ function FieldDetail({
           [{fmt(reading.start)}..{fmt(reading.end)}) · {fmt(n)} B
         </span>
       </div>
-      <p className="text-text-dim text-small mt-1 [overflow-wrap:anywhere]">{reading.words}</p>
+      <p className="text-text-dim text-small max-w-measure mt-1 [overflow-wrap:anywhere]">
+        {reading.words}
+      </p>
       {rows.map((row) => {
         const words = hexWords(row.bytes);
         return (
@@ -349,7 +351,9 @@ function FieldDetail({
       })}
       {n > WHOLE_LIMIT && (
         <>
-          <p className="text-text-dim text-meta mt-1.5">… {fmt(n - shown)} more bytes</p>
+          <p className="text-text-dim text-meta max-w-measure mt-1.5">
+            … {fmt(n - shown)} more bytes
+          </p>
           <details className="mt-1.5 min-w-0">
             <summary className="text-text-dim text-meta cursor-pointer">
               All {unitNode(formatCount(n, 'byte'))} of {reading.name}
@@ -361,7 +365,7 @@ function FieldDetail({
         </>
       )}
       {hint && (
-        <p className="text-text-dim text-meta mt-2 text-right">
+        <p className="text-text-dim text-meta max-w-measure ml-auto mt-2 text-right">
           <TapOrHoverHint what="a field" />
         </p>
       )}

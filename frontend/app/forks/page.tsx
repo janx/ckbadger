@@ -411,7 +411,7 @@ export default function ForksPage() {
                   Loading fork history…
                 </p>
               ) : overview.error ? (
-                <p role="alert" className="text-rouge text-small">
+                <p role="alert" className="text-rouge text-small max-w-measure">
                   Fork history unavailable: {(overview.error as Error).message}
                 </p>
               ) : data && data.days.length ? (
@@ -448,7 +448,7 @@ export default function ForksPage() {
             </div>
             {isAwaited(events) && <p role="status">Loading branch switches…</p>}
             {events.error && (
-              <p role="alert" className="text-rouge text-small">
+              <p role="alert" className="text-rouge text-small max-w-measure">
                 Branch switches unavailable: {(events.error as Error).message}
               </p>
             )}

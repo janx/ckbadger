@@ -45,7 +45,7 @@ export default function ActivitiesPage() {
           }
         >
           {summary && count !== undefined ? (
-            <p className="text-text text-body">
+            <p className="text-text text-body max-w-measure">
               <span className="text-text-bright">{count.toLocaleString('en-US')}</span> yesterday
               (UTC+8) ·{' '}
               <NoBreak>
@@ -57,11 +57,11 @@ export default function ActivitiesPage() {
               took part
             </p>
           ) : error || txStatsError ? (
-            <p role="alert" className="text-text-dim text-small">
+            <p role="alert" className="text-text-dim text-small max-w-measure">
               Could not load yesterday’s activity: {(error ?? txStatsError)!.message}
             </p>
           ) : data && txStats ? (
-            <p className="text-text-dim text-small">
+            <p className="text-text-dim text-small max-w-measure">
               No complete activity statistics for {yesterday} (UTC+8).
             </p>
           ) : (

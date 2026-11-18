@@ -40,7 +40,7 @@ function Line({
   return (
     <p
       data-testid="cell-inventory"
-      className="text-section text-text min-w-0 font-normal [overflow-wrap:anywhere]"
+      className="text-section text-text max-w-measure min-w-0 font-normal [overflow-wrap:anywhere]"
     >
       <ClassMark kind={mark} size={16} className="mr-2 align-[-1px]" />
       {lead}{' '}
@@ -248,7 +248,11 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
     item = cellInventoryItem(cell, 'row');
   } catch (error) {
     return (
-      <p role="alert" data-testid="cell-inventory-error" className="text-rouge text-small">
+      <p
+        role="alert"
+        data-testid="cell-inventory-error"
+        className="text-rouge text-small max-w-measure"
+      >
         {(error as Error).message}
       </p>
     );

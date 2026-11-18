@@ -519,7 +519,7 @@ export default function TransactionsPage() {
           }
         >
           <section className="space-y-4" aria-label="Yesterday and the pool">
-            <p className="text-text text-body">
+            <p className="text-text text-body max-w-measure">
               {total === undefined ? (
                 <span className="text-text-dim">Yesterday’s total unavailable</span>
               ) : (
@@ -542,17 +542,17 @@ export default function TransactionsPage() {
               )}
             </p>
             {(dailyError || txStatsError) && (
-              <p role="alert" className="text-text-dim text-small">
+              <p role="alert" className="text-text-dim text-small max-w-measure">
                 Could not read yesterday’s statistics: {(dailyError ?? txStatsError)!.message}
               </p>
             )}
             {daily && !day && (
-              <p className="text-text-dim text-small">
+              <p className="text-text-dim text-small max-w-measure">
                 No complete activity statistics for {yesterday} (UTC+8).
               </p>
             )}
             {txStats && total === undefined && (
-              <p className="text-text-dim text-small">
+              <p className="text-text-dim text-small max-w-measure">
                 No complete transaction count for {yesterday} (UTC+8).
               </p>
             )}
@@ -632,7 +632,7 @@ export default function TransactionsPage() {
               ))}
             </div>
             {day && (
-              <p className="text-text-dim text-meta">
+              <p className="text-text-dim text-meta max-w-measure">
                 Kind occurrences may overlap; DAO counts actions. “All” counts unique transactions.
               </p>
             )}
@@ -660,7 +660,7 @@ export default function TransactionsPage() {
               </div>
             )}
             {poolHead.error ? (
-              <p role="alert" className="text-text-dim text-small">
+              <p role="alert" className="text-text-dim text-small max-w-measure">
                 Could not read the pool: {poolHead.error.message}
               </p>
             ) : poolHead.data ? (
@@ -759,14 +759,14 @@ export default function TransactionsPage() {
             </p>
           )}
           {active.error && (
-            <p role="alert" className="text-text-dim">
+            <p role="alert" className="text-text-dim max-w-measure">
               Unable to read transactions: {active.error.message}
             </p>
           )}
           {tab === 'committed' && committed.data && (
             <>
               {/* B5: how to read the Value column, above the table, not after its last row. */}
-              <p className="text-text-dim text-small">
+              <p className="text-text-dim text-small max-w-measure">
                 Value is what the participants received. A cellbase row shows, grey, the reward it
                 pays; no total counts it.
               </p>
@@ -822,7 +822,7 @@ export default function TransactionsPage() {
                 </div>
               </dl>
               {/* B5: how to read the list, above it, not after its last row. */}
-              <p className="text-text-dim text-small">
+              <p className="text-text-dim text-small max-w-measure">
                 Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
                 after its proposal.
               </p>

@@ -133,7 +133,7 @@ export default function ForkDetailPage() {
         {isAwaited(query) && <p role="status">Loading fork evidence…</p>}
         {query.error && <ReadFailure what="fork" error={query.error} />}
         {mismatch && (
-          <p role="alert" className="text-rouge text-body [overflow-wrap:anywhere]">
+          <p role="alert" className="text-rouge text-body max-w-measure [overflow-wrap:anywhere]">
             {mismatch}
           </p>
         )}
@@ -697,7 +697,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               />
             )}
           />
-          <p className="text-text-dim text-small mt-2">
+          <p className="text-text-dim text-small max-w-measure mt-2">
             An uncle earns its miner nothing; it counts toward the uncle rate that sets the
             difficulty.
           </p>

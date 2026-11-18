@@ -61,13 +61,13 @@ export function TransactionEvidence({
   });
   if (isAwaited(transaction) || isAwaited(dependencies))
     return (
-      <p className="text-text-dim text-small">
+      <p className="text-text-dim text-small max-w-measure">
         Loading {label.toLowerCase()} transaction evidence…
       </p>
     );
   if (transaction.error || dependencies.error)
     return (
-      <p role="alert" className="text-rouge text-small [overflow-wrap:anywhere]">
+      <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
         {label} transaction evidence unavailable: {String(transaction.error ?? dependencies.error)}
       </p>
     );

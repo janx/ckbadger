@@ -223,7 +223,9 @@ export function CanonicalIdentityDetail({
         note={termNote(term, kind)}
       />
     ) : term?.kind === 'unrecorded' ? (
-      <p className="text-text-dim">Version {term.version} of its cell records no expiry.</p>
+      <p className="text-text-dim max-w-measure">
+        Version {term.version} of its cell records no expiry.
+      </p>
     ) : null;
   return (
     <AssetDetailShell
@@ -368,7 +370,7 @@ export function CanonicalIdentityDetail({
       <section aria-label="CKB held in its cell" className="space-y-4">
         <PromptHeading command="CKB held" note="1 CKB per byte" />
         {held !== null && occupied !== null && current?.isLive && (
-          <p>
+          <p className="max-w-measure">
             The cell holds{' '}
             <span className="text-text-bright">
               <CkbAmount form="column" shannons={BigInt(held)} signed={false} tone="plain" />

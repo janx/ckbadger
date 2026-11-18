@@ -46,7 +46,7 @@ export function HeroFigure({
       <div className="eyebrow text-text-dim text-meta mb-1.5">{label}</div>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <CkbFigure shannons={shannons} />
-        <p className="text-body text-text-dim">
+        <p className="text-body text-text-dim max-w-measure">
           <Dotted parts={companion} />
         </p>
       </div>
