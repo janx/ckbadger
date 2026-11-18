@@ -188,12 +188,13 @@ operand.
 
 Where each form stands:
 
-| Place                                                                                                                     | Form      |
-| ------------------------------------------------------------------------------------------------------------------------- | --------- |
-| The amount a page is about (a cell's capacity, a transaction's fee in its balance)                                        | `exact`   |
-| A numeric table column of subject amounts, whose points align                                                             | `column`  |
-| A hero or display figure, a stat tile, a list column, a chart's head figure and readouts, a feed line, a phone row, prose | `summary` |
-| A tile of the chart index or the home page, an axis                                                                       | `compact` |
+| Place                                                                                                                          | Form      |
+| ------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| The amount a page is about (a cell's capacity, a transaction's fee in its balance)                                             | `exact`   |
+| A chart's readout (hover, in-plot, legend, Last change): where a point's value is read, which nothing else on the page carries | `exact`   |
+| A numeric table column of subject amounts, whose points align                                                                  | `column`  |
+| A hero or display figure, a stat tile, a list column, a chart's head figure, a feed line, a phone row, prose                   | `summary` |
+| A tile of the chart index or the home page, an axis                                                                            | `compact` |
 
 One ink per amount: the integer and the decimals take the same ink — the sign's with
 `tone="sign"`, the reading ink (`text-text`) with `tone="plain"`, the parent's with

@@ -316,13 +316,24 @@ export function formatChartExact(value: string, unit: string): string {
 }
 
 /**
- * The detail page's head figure, readouts and "Last change": rates at the design's two decimals, a
- * CKB amount in the summary form (R5: whole CKB from 1,000 up, cut; the head's title carries the
- * exact value), every other value exact.
+ * The text of a detail page's readout — the hover readout, the in-plot reading, the legend readout
+ * and "Last change" — the one function that builds it. A readout is where a point's value is read,
+ * and nothing else on the page carries it, so a CKB amount is exact (R5's exact form: its trailing
+ * zeros dropped, never padded, never cut); rates at the design's two decimals; every other value
+ * exact.
  */
 export function formatChartHover(value: string, unit: string): string {
-  if (CKB_UNITS.has(unit)) return chartCkb(value, 'summary');
+  if (CKB_UNITS.has(unit)) return chartCkb(value, 'exact');
   return RATE_UNITS.has(unit) ? formatChartReadout(value, unit) : formatChartExact(value, unit);
+}
+
+/**
+ * The detail page's head figure (the latest or main reading, the peak, a sub-chart's figure): a
+ * CKB amount in the summary form (R5: whole CKB from 1,000 up, cut, never rounded), with the exact
+ * value in the figure's title (`chart-detail.tsx`); every other unit as its readout reads.
+ */
+export function formatChartHead(value: string, unit: string): string {
+  return CKB_UNITS.has(unit) ? chartCkb(value, 'summary') : formatChartHover(value, unit);
 }
 
 function summary(value: string, unit: string): string {
