@@ -38,8 +38,9 @@ vi.mock('@/components/layout/header', () => ({
  * The property, read from each rendered row: every run of the identity line's right part that a
  * line cannot break inside fits the row's line. The line is the list's container (the page's
  * content width, 358 at 390 and 328 at 360, Tailwind's container less its 16 px gutters) less the
- * row stone's footprint where the row has one (a transaction's slab, 48.5 px and its 8 px gap:
- * 301.5 at 390, 271.5 at 360); the token feed's row has no stone (358, 328).
+ * row stone's footprint where the row has one (a transaction's slab, 32.3 px and its 8 px gap:
+ * 317.7 at 390, 287.7 at 360; re-pinned on purpose, readability R6: beside the 24 px slab, 48.5
+ * and its gap, they were 301.5 and 271.5); the token feed's row has no stone (358, 328).
  *
  * Before the fix, at 13 px (7.8 a glyph), the committed row's right part was one run,
  * "#21,045,845 · this device's clock is behind", 43 glyphs, 335.4 px; the pool's "● Confirming ·
@@ -141,8 +142,10 @@ const VIEWPORTS = [390, 360] as const;
 describe('"this device\'s clock is behind" breaks between its words in a phone row (L2)', () => {
   it('holds the line in the 358 / 328 px content widths the arithmetic uses', () => {
     expect(VIEWPORTS.map(containerContentPx)).toEqual([358, 328]);
+    // re-pinned on purpose (readability R6): the slab's footprint 56.5 → 40.3 (301.5, 271.5)
+    expect(ROW_SEAL.tx.footprint).toBe(40.3);
     expect(VIEWPORTS.map((v) => containerContentPx(v) - ROW_SEAL.tx.footprint)).toEqual([
-      301.5, 271.5,
+      317.7, 287.7,
     ]);
   });
 
