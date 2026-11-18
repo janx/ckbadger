@@ -26,6 +26,8 @@ import {
   WIDEST_COUNT_DIGITS,
   WIDEST_DAO_DEPOSIT,
   WIDEST_FEE_RATE,
+  WIDEST_OCCUPIED,
+  WIDEST_OCCUPIED_CHANGE,
   WIDEST_POOL_VALUE_LINE,
   WIDEST_PROPOSALS,
   WIDEST_RANK,
@@ -162,6 +164,9 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_RANK',
         'WIDEST_CKB_HELD',
         'WIDEST_ROW_COUNT',
+        // lane B4 fix round (review-rules-logic NOTE 4, tests NOTE-4): occupied bytes
+        'WIDEST_OCCUPIED',
+        'WIDEST_OCCUPIED_CHANGE',
       ].sort(),
     });
   });
@@ -207,6 +212,25 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
   // Review fb-logic 6: one bound for one quantity. A transaction is no larger than its block, and
   // the largest block is genesis (1,236,271 bytes, its cellbase 1,235,438): the block page's table
   // budgeted for it, /transactions' Size column for 597,000, while its oldest page lists block 0.
+  // Lane B4 fix round (review-rules-logic NOTE 4, tests NOTE-4): a cell's occupied bytes (its
+  // capacity field, its scripts, its data) are fewer than its output's serialized bytes in the
+  // transaction that made it, so no more than LARGEST_TX_BYTES: genesis's cellbase, past the block
+  // limit, made cells MAX_BLOCK_BYTES does not hold. A party's change in one transaction grows by
+  // no more than that transaction's bytes and shrinks by no more than its inputs, MAX_TX_INPUTS
+  // cells of WIDEST_OCCUPIED each. Written as the one writer writes them, with the unit.
+  it('bounds occupied bytes by the largest transaction, and a change by its inputs too', () => {
+    expect(genesisTransactions[0].txSize).toBeGreaterThan(blockBytes);
+    expect(WIDEST_OCCUPIED).toBe(`${LARGEST_TX_BYTES.toLocaleString('en-US')} B`);
+    expect(WIDEST_OCCUPIED).toBe('1,236,271 B');
+    expect(13_568 * 1_236_271).toBe(16_773_724_928);
+    expect(WIDEST_OCCUPIED_CHANGE).toBe(
+      `−${(MAX_TX_INPUTS * LARGEST_TX_BYTES).toLocaleString('en-US')} B`
+    );
+    expect(WIDEST_OCCUPIED_CHANGE).toBe('−16,773,724,928 B');
+    // the shrinking side is the wider: the growing side is at most one transaction's bytes
+    expect(`+${WIDEST_OCCUPIED}`.length).toBeLessThan(WIDEST_OCCUPIED_CHANGE.length);
+  });
+
   it('bounds a transaction’s size by the largest block, genesis', () => {
     expect(GENESIS_BLOCK_BYTES).toBe(genesisBlock.size);
     expect(LARGEST_TX_BYTES).toBe(Math.max(blockBytes, genesisBlock.size));

@@ -11,6 +11,8 @@ import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { BalanceChanges } from '@/components/transaction/balance-changes';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type { GlobalActivity } from '@/lib/api';
+import { WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}895d`;
 /** A lock the registry names (made up: the fixture names it "Nervape Shadow Lock"). */
@@ -70,6 +72,35 @@ describe('BalanceChanges form by measured width', () => {
     expect(within(table).getAllByRole('row')).toHaveLength(5);
     // The table is drawn only where it fits, so nothing around it scrolls sideways.
     expect(document.querySelector('.overflow-x-auto')).toBeNull();
+  });
+
+  // Lane B4 fix round (review-rules-logic NOTE 4, the coordinator's item 14): the Occupied
+  // column holds the widest change a party can make in one transaction, with its unit
+  // (WIDEST_OCCUPIED_CHANGE, "−16,773,724,928 B", 17 glyphs), at the step its cells inherit
+  // from the transaction page, the body step (8.4 px a glyph): 142.8 px. It was a 100 px literal,
+  // which "−1,234,567 B" (100.8 px) already passed. The column is a grid track, read from the
+  // rows the table draws (each row is its own grid, so every row is read).
+  it('budgets the Occupied column at the widest change, with its unit, in every row', () => {
+    renderAt(912);
+    const table = screen.getByRole('table', { name: 'Balance changes by participant' });
+    const tracks = (row: HTMLElement) => {
+      const style = row.style.gridTemplateColumns;
+      if (style) return style.split(' ');
+      const cls = [...row.classList].find((c) => c.startsWith('grid-cols-['));
+      return cls!.slice('grid-cols-['.length, -1).split('_');
+    };
+    const widest = textPx(WIDEST_OCCUPIED_CHANGE.length, fontPx('body'));
+    expect(widest).toBeCloseTo(142.8, 10);
+    const rows = within(table).getAllByRole('row');
+    expect(rows).toHaveLength(5);
+    for (const row of rows) {
+      const occupied = tracks(row)[2];
+      expect(occupied).toMatch(/^\d+px$/);
+      expect(parseFloat(occupied)).toBeGreaterThanOrEqual(widest);
+      // the cells inherit the page's body step: no step of their own
+      const cell = row.children[2] as HTMLElement;
+      expect(cell.className).not.toMatch(/\btext-(meta|small|body|lede)\b/);
+    }
   });
 
   it('renders one three-line card per participant at 358 px, and no sideways scroller', () => {
