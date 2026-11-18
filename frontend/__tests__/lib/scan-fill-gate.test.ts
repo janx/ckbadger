@@ -299,6 +299,37 @@ describe('the scan gate finds what it must, and only that', () => {
     ]);
   });
 
+  // Review of main..fix/readability (2026-11-18, test finding 7): the gate read only the `mask`
+  // and `className` attributes, so the scan's mask passed by a JSX spread, held in another name,
+  // or handed to a component under another prop was not seen, nor the scan's CSS variable named in
+  // the source.
+  it('reads the scan’s mask through a spread, another name and another prop', () => {
+    const { masks } = sites([
+      'const scan = useScanFill();',
+      'const m = scan?.mask;',
+      '<g {...{ mask: scan?.mask }}><text>{v}</text></g>;',
+      '<path d={d} {...{ mask: m }} />;',
+      '<g mask={m}>{label}</g>;',
+      '<Bars fill={scan} />;',
+      '<rect width={w} {...rest} />;',
+    ]);
+    expect(masks.map((s) => [s.line, s.words, s.scan])).toEqual([
+      [3, true, true],
+      [4, false, true],
+      [5, true, true],
+      [6, true, true],
+    ]);
+  });
+
+  it('flags the scan’s CSS variable named anywhere in the source', () => {
+    const { stray } = sites([
+      "<div style={{ maskImage: 'var(--m-fill-scan)' }}>{label}</div>;",
+      "const FADE = 'var(--m-fill-scan)';",
+      "const key = materials['fill-scan'];",
+    ]);
+    expect(stray).toEqual([1, 2]);
+  });
+
   it('flags the class name where the gate cannot see its element: a constant, a helper, a call', () => {
     const { stray } = sites([
       "const FILL = 'scan-fill h-1';",
