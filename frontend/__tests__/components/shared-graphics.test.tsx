@@ -9,6 +9,7 @@ import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { SharedGraphicsDemo } from '@/__tests__/fixtures/shared-graphics-demo';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import { allTextLines, expectApart, expectInside, viewBox } from '@/__tests__/utils/svg-text-boxes';
 
 describe('AlignedBar (BA-01)', () => {
   it('starts every bar at one left baseline: fixed track first, value in a fixed column after', () => {
@@ -592,6 +593,75 @@ describe('TenureBar at any width (ID-C7, visual pass)', () => {
     expect(container.querySelector('[data-role="tenure-now"] title')).toHaveTextContent(
       /^3,900 days left$/
     );
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the term bar stands whole in its row — a period's name, the grace and the lapse over the
+// bar and clear of the now mark's line, the dates under the bar and clear of that line, the now
+// mark's date under them — touches no other word, and stays inside the svg, measured by the type
+// modules (0.6 em a glyph; a tight line over its baseline, its descent under it). The real cases:
+// a .bit held three years and renewed twice, a .cell in its first year with its 30-day grace, a
+// .cell inside its grace, a .bit lapsed and not renewed, at the identity column at 1280 (1232),
+// the default 900, at 640 (608) and on phones (358, 326).
+describe('TenureBar: every word in its row (readability F3)', () => {
+  const day = 86_400_000;
+  const reg = Date.parse('2024-02-20T00:00:00Z');
+  const cases = [
+    {
+      name: 'valar.bit',
+      periods: [
+        { label: 'paid at registration', start: reg, end: reg + 365 * day },
+        { label: 'renewed 2025-02-04', start: reg + 365 * day, end: reg + 730 * day },
+        { label: 'renewed 2025-02-18', start: reg + 730 * day, end: reg + 1095 * day },
+      ],
+      now: reg + 979 * day,
+    },
+    {
+      name: 'apt.cell',
+      periods: [{ label: 'registered, one year', start: reg, end: reg + 365 * day }],
+      graceEnd: reg + 395 * day,
+      now: reg + 100 * day,
+    },
+    {
+      name: 'late.cell',
+      periods: [{ label: 'registered, one year', start: reg, end: reg + 365 * day }],
+      graceEnd: reg + 395 * day,
+      now: reg + 380 * day,
+    },
+    {
+      name: '888899.bit',
+      periods: [{ label: 'from minting', start: reg, end: reg + 365 * day }],
+      now: reg + 549 * day,
+    },
+  ];
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each(
+    [1232, 900, 608, 358, 326].flatMap((width) => cases.map((c) => [width, c.name, c] as const))
+  )('at %i px: %s', (width, _name, c) => {
+    stubChartWidth(width);
+    const { container } = render(<TenureBar {...c} />);
+    const svg = container.querySelector('svg')!;
+    const lines = allTextLines(svg);
+    for (const line of lines) expectInside(line, viewBox(svg), c.name, 'flush');
+    expectApart(lines, `${c.name} at ${width}`);
+    // the bar, and the now mark's line through it
+    const bar = Number(svg.querySelector('[data-elapsed], [data-remaining]')!.getAttribute('y'));
+    const barFoot =
+      bar + Number(svg.querySelector('[data-elapsed], [data-remaining]')!.getAttribute('height'));
+    const mark = svg.querySelector('line')!;
+    const [markTop, markFoot] = [Number(mark.getAttribute('y1')), Number(mark.getAttribute('y2'))];
+    for (const line of lines)
+      if (line.bottom <= bar)
+        expect(line.bottom, `"${line.text}" clears the now mark`).toBeLessThan(markTop);
+      else {
+        expect(line.top, `"${line.text}" clears the bar`).toBeGreaterThan(barFoot);
+        expect(line.top, `"${line.text}" clears the now mark`).toBeGreaterThan(markFoot);
+      }
   });
 });
 
