@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
 import { FoldedActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import { foldRuns, runKey, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
@@ -48,6 +48,18 @@ export function runSubject(
  * `lib/activity-runs.ts`): a run of two or more rows that say the same thing is one
  * `FoldedActivityRow`, opened in place to the ordinary rows; every other row is itself. A run
  * folds within the rows given: a paged feed folds within its page.
+ *
+ * A live feed adds rows above (a poll) and below (an older page) and never remounts or folds what
+ * the reader has in front of them (lane B4 fix round):
+ *
+ * - each part is keyed by what it is, in one flat list: a row by its transaction (`key`), so a row
+ *   that joins a run or leaves one keeps its own state; a run's head by the first of its rows it was
+ *   drawn with, which a row arriving above or below it does not change, so its toggle keeps the
+ *   focus;
+ * - a run is open while any of its rows is one the reader has before them whole: in a run they
+ *   opened, or drawn alone. A row arriving above or below an open run joins it open; a row drawn
+ *   whole that an older page's first row continues starts a run drawn open, never folded under the
+ *   reader; a folded run takes the rows in and stays folded. Folding a run puts all its rows away.
  */
 export function ActivityRuns({
   rows,
@@ -60,39 +72,63 @@ export function ActivityRuns({
   showScriptDetails?: boolean;
   focusLockHash?: string;
 }) {
-  // which runs are open, by the key of the row that leads each
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  // the rows of the runs the reader opened, by their keys
+  const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
+  // the rows drawn alone, whole, as the last render committed them
+  const drawn = useRef(new Set<string>());
+  // a row's run's head, by the row's key: the first of its rows the run was drawn with
+  const heads = useRef(new Map<string, string>());
+  const taken = new Set<string>();
   const runs = foldRuns(rows, (r) =>
     r.subject === null ? JSON.stringify(['unread', r.key]) : runKey(r.subject)
-  );
-  const toggle = (key: string) =>
-    setOpen((was) => {
+  ).map((run) => {
+    if (run.length === 1) return { run, head: null, isOpen: true };
+    const head =
+      run.map((r) => heads.current.get(r.key)).find((h) => h !== undefined && !taken.has(h)) ??
+      run[0].key;
+    taken.add(head);
+    const isOpen = run.some((r) => opened.has(r.key) || drawn.current.has(r.key));
+    return { run, head, isOpen };
+  });
+  useEffect(() => {
+    for (const { run, head } of runs) {
+      if (head === null) drawn.current.add(run[0].key);
+      else for (const r of run) heads.current.set(r.key, head);
+    }
+  });
+  const toggle = (run: readonly FeedRow[], isOpen: boolean) => {
+    if (isOpen) for (const r of run) drawn.current.delete(r.key);
+    setOpened((was) => {
       const next = new Set(was);
-      if (!next.delete(key)) next.add(key);
+      for (const r of run) {
+        if (isOpen) next.delete(r.key);
+        else next.add(r.key);
+      }
       return next;
     });
+  };
   return (
     <>
-      {runs.map((run) => {
+      {runs.flatMap(({ run, head, isOpen }) => {
         const [lead] = run;
-        if (run.length === 1) return <Fragment key={lead.key}>{lead.row}</Fragment>;
-        const isOpen = open.has(lead.key);
-        return (
-          <Fragment key={`run:${lead.key}`}>
-            <FoldedActivityRow
-              rows={run.map((r) => r.activity)}
-              title={lead.title}
-              showScriptDetails={showScriptDetails}
-              age={age}
-              focusLockHash={focusLockHash}
-              className={lead.className}
-              fresh={run.some((r) => r.fresh)}
-              open={isOpen}
-              onToggle={() => toggle(lead.key)}
-            />
-            {isOpen && run.map((r) => <Fragment key={r.key}>{r.row}</Fragment>)}
-          </Fragment>
+        if (head === null) return [<Fragment key={lead.key}>{lead.row}</Fragment>];
+        const folded = (
+          <FoldedActivityRow
+            key={`run:${head}`}
+            rows={run.map((r) => r.activity)}
+            title={lead.title}
+            showScriptDetails={showScriptDetails}
+            age={age}
+            focusLockHash={focusLockHash}
+            className={lead.className}
+            fresh={run.some((r) => r.fresh)}
+            open={isOpen}
+            onToggle={() => toggle(run, isOpen)}
+          />
         );
+        return isOpen
+          ? [folded, ...run.map((r) => <Fragment key={r.key}>{r.row}</Fragment>)]
+          : [folded];
       })}
     </>
   );
