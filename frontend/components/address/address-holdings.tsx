@@ -173,9 +173,10 @@ function ExactParts({ shannons }: { shannons: bigint }) {
 /**
  * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, in
  * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — with its live
- * cells at the right; the 18 px partition with each share
- * inside its part (a share its part cannot hold is in the part's title, never cut); and one quiet
- * line of the exact parts. A DAO part is drawn only when the address has CKB in the Nervos DAO.
+ * cells at the right; the 18 px partition with each share inside its part (a share its part cannot
+ * hold is in the part's title, never cut); and the exact parts as three labelled facts
+ * (`DetailFacts`: occupied, free, and DAO free, which says so when there is none). A DAO part of
+ * the partition is drawn only when the address has CKB in the Nervos DAO.
  */
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const [barRef, barWidth] = useElementWidth<HTMLDivElement>();

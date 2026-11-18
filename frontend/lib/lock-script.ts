@@ -101,9 +101,10 @@ export function addressScript(address: string): AddressScript {
   if (polymod([...hrpExpand(hrp), ...words]) !== BECH32M)
     throw new Error(`address ${address}: its bech32m checksum does not match`);
   const payload = bytesOf(words.slice(0, -6), address);
+  if (payload.length === 0) throw new Error(`address ${address}: its payload is empty`);
   if (payload[0] !== FULL_FORMAT)
     throw new Error(
-      `address ${address}: format 0x${(payload[0] ?? 0).toString(16).padStart(2, '0')} is not the full format`
+      `address ${address}: format 0x${payload[0].toString(16).padStart(2, '0')} is not the full format`
     );
   if (payload.length < 34)
     throw new Error(`address ${address}: its payload is too short for a code hash and hash type`);
