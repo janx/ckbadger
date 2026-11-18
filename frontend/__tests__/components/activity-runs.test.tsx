@@ -324,6 +324,39 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
   });
 });
 
+// Lane B4 second fix round (review-rules-fixes-logic NOTE 2, the coordinator's item 9): a filter
+// change shows a new set of rows, and the runs' state starts anew. On All two oracle updates
+// stand apart, each drawn whole; under Script calls they stand together and fold. Back on a
+// filter read before, its rows come from the cache with no loading in between, and the run must
+// still be drawn folded: the reader never opened it.
+describe('a filter change starts the runs anew (B4 second fix round)', () => {
+  it('folds a run the reader never opened, though its rows were drawn whole under another filter', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const a = oracle(1, 'q3q7ue', '0x00', 49);
+    const b = oracle(2, 'q3q7ue', '0x00', 98);
+    vi.mocked(api.getGlobalActivities).mockImplementation(async (params) =>
+      page(params?.filter === 'script' ? [a, b] : [a, transfer, b])
+    );
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    const chip = (name: RegExp) =>
+      within(screen.getByRole('group', { name: 'Filter by kind' })).getByRole('button', { name });
+    const runShown = () =>
+      waitFor(() => expect(document.querySelector('[data-role="activity-run"]')).not.toBeNull());
+    // Script calls (read), All (read before: from the cache), Script calls again (from the cache)
+    await user.click(chip(/^Script calls/));
+    await runShown();
+    await user.click(chip(/^All/));
+    await waitFor(() => expect(document.querySelector('[data-role="activity-run"]')).toBeNull());
+    expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(3);
+    await user.click(chip(/^Script calls/));
+    await runShown();
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(within(folded).getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
+  });
+});
+
 describe('an older page that continues the last run (B4 fix round)', () => {
   /** The stream's first page (more after it), then the older page; the head poll finds nothing. */
   function pages(first: GlobalActivity[], older: GlobalActivity[]) {
