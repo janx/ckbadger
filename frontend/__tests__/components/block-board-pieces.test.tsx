@@ -7,6 +7,7 @@ import { BlockTransactionsTable } from '@/components/blocks/block-transactions-t
 import { positionParts } from '@/components/blocks/block-position';
 import { sentenceText } from '@/components/ui/block-link';
 import { BlocksLimitsNote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
+import { formatTick } from '@/lib/chart-ticks';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -140,6 +141,75 @@ describe('BlockTransactionsTable', () => {
       wrap(<BlockTransactionsTable transactions={[tx(0, { blockNumber: 8 })]} blockNumber={7} />)
     ).toThrow('is not in block 7');
   });
+  // Readability F3-e, the coordinator's ruling: budgeted honestly with the lane's levers (the bar
+  // heads in the tick form on 48 px tracks, no spare, the hash alone at the row size), the table
+  // needs 1,086 px; the block page gives it 968 at 1440, so there it is its rows, by ListTable's
+  // rule (whether the page gives it its full width is the chain page lane's call).
+  it('budgets every column from what it holds: 1,086 px, its rows at the 968 px column', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // a block's index, four digits as written
+      ceil(at('9999', 13) + 16),
+      // the hash at the row size
+      ceil(at('0x01010101…010101', 13) + 16),
+      // "#99,999,999" and " +10 · uncle" (the proposal window is 2 to 10 blocks)
+      ceil(at('#99,999,999 +10 · uncle', 13) + 16),
+      // "9999", the arrow between its 6 px margins, "9,999"
+      ceil(at('9999', 13) + 6 + at('→', 13) + 6 + at('9,999', 13) + 16),
+      // the genesis transactions' 33.6 billion CKB: eleven whole digits, every decimal
+      ceil(at('99,999,999,999.99999999', 13) + 16),
+      // a fee under 100 CKB
+      ceil(at('99.99999999', 13) + 16),
+      // a 48 px track, the bar's 10 px gap and genesis's scale, "1,500,000"
+      ceil(48 + 10 + at('1,500,000', 13) + 16),
+      // a 48 px track and a scale under a billion cycles, "750,000,000"; the last column
+      ceil(48 + 10 + at('750,000,000', 13)),
+    ];
+    expect(budgets).toEqual([48, 149, 196, 106, 196, 102, 145, 144]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(1086);
+    const { unmount } = wrap(
+      <BlockTransactionsTable
+        transactions={[tx(0), tx(1, { cycles: 1000, txSize: 700 })]}
+        blockNumber={7}
+      />
+    );
+    const table = screen.getByRole('table');
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    const heads = Array.from(table.querySelectorAll('thead th'));
+    for (const [i, values] of [
+      [6, [300, 700]],
+      [7, [0, 1000]],
+    ] as const) {
+      const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
+      const scale = resourceScale([...values]);
+      expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual([
+        '0',
+        formatTick(scale, scale),
+      ]);
+      expect(ticks.style.width).toBe('48px');
+    }
+    unmount();
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1086, 'table'],
+      [1085, 'rows'],
+      [968, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount: drop } = wrap(
+        <BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />
+      );
+      expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('fits the block page main column at 1440 (visual pass: the Cycles column was cut off)', () => {
     wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
     // the columns' minimums, 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172 = 938 px (re-pinned by

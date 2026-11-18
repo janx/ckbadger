@@ -382,6 +382,40 @@ describe('Transactions pool view', () => {
     }
   });
 
+  // The coordinator's ruling (F3-e): with its Size head in the tick form the committed list's own
+  // sum is 1,203 px, the pool's 1,220; the page's two lists change form at the larger, so the
+  // committed list's What it did keeps the 17 px between them.
+  it('changes both lists’ form at the larger sum: the committed What it did keeps 17 px', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [
+        {
+          hash: `0x${'cd'.repeat(32)}`,
+          blockNumber: 123456,
+          blockHash: `0x${'ef'.repeat(32)}`,
+          index: 1,
+          inputsCount: 1,
+          outputsCount: 2,
+          fee: '1000',
+          value: '123456789',
+          txSize: 500,
+          cycles: 1000,
+          cyclesStatus: 'complete',
+          timestamp: '2026-10-25T00:00:00Z',
+          isCellbase: false,
+          activity: feedSamples.eightParties,
+        },
+      ],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<TransactionsPage />);
+    const table = await screen.findByRole('table', { name: 'Committed transactions' });
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(Number.parseFloat(cols[2].minWidth)).toBe(204 + 17);
+  });
+
   // Readability F3-e: every pool column budgeted from the widest value its formatter writes
   // (lib/list-bounds.ts), at 0.6 em a glyph (the hash 14 px, the cells 13, the units and heads 12)
   // and the 16 px gap after every column but the last. What it does is the flexible column: its

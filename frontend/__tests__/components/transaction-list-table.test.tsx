@@ -637,6 +637,28 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     expect((heads[7].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe('48px');
   });
 
+  // The coordinator's ruling: a head's ticks are in the tick form, so the Size head writes
+  // "0 … 600k" (43.2 px) and its track is the 48 px a bar keeps at least, as the Cycles one is;
+  // on its own the list is 1,203 px (the page changes both its lists' form at the larger sum).
+  it('heads Size in the tick form on a 48 px track: 1,203 px on its own', () => {
+    render(
+      <TransactionListTable
+        transactions={[{ ...transfer, txSize: 597000, cycles: 750_000_000 }, scriptCall]}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const heads = within(table).getAllByRole('columnheader');
+    const ticks = heads[6].querySelector('[data-scale-ticks]') as HTMLElement;
+    expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '600k']);
+    expect(ticks.style.width).toBe('48px');
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(ceil(48 + 10 + at('600,000', 13) + 16)).toBe(129);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual([
+      216, 110, 204, 180, 102, 118, 129, 144,
+    ]);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
+  });
+
   it('writes the block over its age, two lines with no separator', () => {
     render(<TransactionListTable transactions={[transfer]} />);
     const [, row] = within(screen.getByRole('table')).getAllByRole('row');

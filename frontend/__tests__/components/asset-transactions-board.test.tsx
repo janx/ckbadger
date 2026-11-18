@@ -33,6 +33,36 @@ describe('AssetTransactions board columns', () => {
     expect(cycles.querySelector('[data-scale-ticks]')).toHaveTextContent('02,000,000');
   });
 
+  // The coordinator's ruling (F3-e): a head's tick row is in the tick form and stands whole over
+  // its track; the stacked bars drew 80 px under heads with 120 px of ticks. Head and bars share one
+  // 48 px track, and each column holds its head's name, its figure and the track: Size the name
+  // "Size, bytes" (79.2), Cycles the figure "750,000,000" (85.8), the last column.
+  it('draws Size and Cycles on the 48 px track their tick-form heads stand over', () => {
+    render(<AssetTransactions rows={[tx(1, 1930, 1_923_713), tx(2, 640, 0)]} />);
+    const table = screen.getByRole('table', { name: 'Asset transactions' });
+    for (const [name, end] of [
+      [/Size/, '2k'],
+      [/Cycles/, '2M'],
+    ] as const) {
+      const ticks = within(table)
+        .getByRole('columnheader', { name })
+        .querySelector('[data-scale-ticks]') as HTMLElement;
+      expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', end]);
+      expect(ticks.style.width).toBe('48px');
+    }
+    const tracks = table.querySelectorAll<HTMLElement>('tbody [role="img"]');
+    expect(tracks.length).toBeGreaterThan(0);
+    for (const track of tracks) expect(track.style.width).toBe('48px');
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const cols = [...table.querySelectorAll('col')].map((c) =>
+      Number.parseFloat((c as HTMLElement).style.minWidth)
+    );
+    expect(cols.slice(-2)).toEqual([
+      Math.ceil(at('Size, bytes', 12) + 16),
+      Math.ceil(at('750,000,000', 13)),
+    ]);
+  });
+
   it('puts the collection column, titled by the collection, right after Cells (OB-C9)', () => {
     render(
       <AssetTransactions

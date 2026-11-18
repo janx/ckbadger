@@ -7,6 +7,7 @@ import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
+import { formatTick } from '@/lib/chart-ticks';
 import { render } from '../utils/test-utils';
 import BlocksPage from '@/app/blocks/page';
 import { api, type Block } from '@/lib/api';
@@ -547,6 +548,120 @@ describe('BlocksPage · Blocks v3 board', () => {
     const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
     expect(within(note).getByText('3,917')).toHaveClass('text-text-bright');
     expect(within(note).getByText('6,831,940')).toHaveClass('text-text-bright');
+  });
+
+  // Readability F3-e, the coordinator's rulings on the blocks tables: (1) the bar heads write their
+  // ticks in the tick form, as every axis on the site does, so each track is the 48 px a bar keeps
+  // at least and the wide table is 1,193 px, a table at 1,232; (2) the 608 px table writes a
+  // block's transaction count under its age, the second line of one cell headed "Age · txs" (the
+  // row already has two lines: the hash under the height, cycles under size), every column at its
+  // honest budget.
+  describe('the rulings: tick-form heads and the 608 px table (readability F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('draws the wide table from 1,193 px, its bars on 48 px tracks under tick-form heads', async () => {
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      const size = ceil(48 + 10 + at('1,500,000', 13) + 16);
+      const cycles = ceil(48 + 10 + at('4,000,000,000', 13));
+      expect([size, cycles]).toEqual([145, 160]);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual([
+        230,
+        110,
+        194,
+        118,
+        126,
+        110,
+        size,
+        cycles,
+      ]);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(1193);
+      const ths = Array.from(table.querySelectorAll('th'));
+      for (const [head, values] of [
+        ['Size, bytes', [3917, 641]],
+        ['Cycles', [6831940, 0]],
+      ] as const) {
+        const th = ths.find((h) => h.textContent?.startsWith(head))!;
+        const ticks = th.querySelector('[data-scale-ticks]') as HTMLElement;
+        const scale = resourceScale([...values]);
+        expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual([
+          '0',
+          formatTick(scale, scale),
+        ]);
+        expect(ticks.style.width).toBe('48px');
+      }
+      for (const track of table.querySelectorAll<HTMLElement>('tbody [data-track]'))
+        expect(track.style.width).toBe('48px');
+    });
+
+    it('changes form where each table stops fitting: 1,193, then 595, then rows', async () => {
+      for (const [width, form] of [
+        [1232, 'table'],
+        [1193, 'table'],
+        [1192, 'narrow-table'],
+        [608, 'narrow-table'],
+        [595, 'narrow-table'],
+        [594, 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        const { container, unmount } = render(<BlocksPage />);
+        await waitFor(() =>
+          expect(container.querySelector('[data-list-form]')).toHaveAttribute(
+            'data-list-form',
+            form
+          )
+        );
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        vi.mocked(api.getBlocks).mockResolvedValue(page);
+      }
+    });
+
+    it('writes the count under the age in the 608 px table: five columns, 595 px', async () => {
+      atContainerWidth(608);
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      expect(Array.from(table.querySelectorAll('th')).map((th) => th.textContent)).toEqual([
+        'Height',
+        'Age · txs',
+        'Miner',
+        'Fees, CKB',
+        'Size · cycles',
+      ]);
+      const budgets = [
+        // the stone and its gap beside "#99,999,999" at 14 px (its hash under it is narrower)
+        ceil(ROW_SEAL.block.footprint + at('#99,999,999', 14) + 16),
+        // "10y 364d ago" over the widest count and proposals, "9,999 · 1,500p" (the count at 13
+        // px, the separator, the proposals at 12): 105.6, the wider line
+        ceil(Math.max(at('10y 364d ago', 13), at('9,999 · ', 13) + at('1,500p', 12)) + 16),
+        // the flexible column: an unnamed miner whole
+        ceil(at('ckb1…4s93hhsj', 13) + 16),
+        // fees under 1,000 CKB
+        ceil(at('999.99999999', 13) + 16),
+        // "3,500,000,000" (the cycle limit; genesis's "1,236,271 B" is narrower); the last column
+        ceil(at('3,500,000,000', 13)),
+      ];
+      expect(budgets).toEqual([143, 122, 118, 110, 102]);
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+      expect(cols.map((c) => c.width)).toEqual(['143px', '122px', 'auto', '110px', '102px']);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(595);
+      // the age, then the count with its proposals: two lines, as the height and hash beside them
+      const [first, second] = Array.from(table.querySelectorAll('tbody tr'));
+      const lines = (tr: Element) =>
+        Array.from(tr.querySelectorAll('td')[1].querySelectorAll(':scope > * > *')).map(
+          (l) => l.textContent
+        );
+      expect(lines(first)).toEqual([expect.stringMatching(/ ago$/), '5 · 4p']);
+      expect(lines(second)).toEqual([expect.stringMatching(/ ago$/), '1']);
+    });
   });
 
   // Readability F3-e: every column of the wide table is budgeted from the widest value its

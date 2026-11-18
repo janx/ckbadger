@@ -13,6 +13,31 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     expect(BlockVisualScaleHeader).toBe(ScaleHeader);
   });
 
+  // Readability F3-e, the coordinator's ruling: a head's ticks are axis labels, and an axis label
+  // is written in the tick form everywhere on the site (formatTick); the head's unit stays in its
+  // label. So the widest tick row of a count scale up to the cycle limit, "0 4B" or "0 1.5M" (at
+  // most 6 characters at 12 px, 43.2 px), stands whole over the 48 px a bar keeps at least.
+  it('writes its ticks in the tick form, whole over a 48 px track, its unit in its label', () => {
+    for (const [scale, end] of [
+      [4_000, '4k'],
+      [600_000, '600k'],
+      [1_500_000, '1.5M'],
+      [4_000_000_000, '4B'],
+      [10, '10'],
+    ] as const) {
+      const { container, unmount } = render(
+        <ScaleHeader label="Size, bytes" scale={scale} trackWidth={48} />
+      );
+      const head = container.firstElementChild as HTMLElement;
+      expect(head.firstElementChild).toHaveTextContent(/^Size, bytes$/);
+      const ticks = Array.from(ticksOf(head).children).map((t) => t.textContent!);
+      expect(ticks).toEqual(['0', end]);
+      // "0", a glyph, the end tick, at 7.2 px a glyph, inside the track
+      expect((ticks.join(' ').length * 12 * 3) / 5 <= 48).toBe(true);
+      unmount();
+    }
+  });
+
   it('draws the name over 0 … scale, as wide as the track, 3 px apart by default (Blocks)', () => {
     const { container } = render(<ScaleHeader label="Size, bytes" scale={4000} />);
     const head = container.firstElementChild as HTMLElement;
