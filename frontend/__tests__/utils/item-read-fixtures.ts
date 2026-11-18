@@ -105,6 +105,7 @@ export function mockItemReads() {
     dnaHex: producer.objectGeneticsProducer.dnaHex,
     traits: producer.objectGeneticsProducer.cachedVmTraits.traits,
     media: [],
+    render: null,
     issues: [],
   };
   vi.spyOn(api, 'getSporeObjectDecoded').mockResolvedValue(decoded);

@@ -12,6 +12,7 @@ import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { expectHeadId } from '@/__tests__/utils/head-id';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { dob1SvgDecoded } from '@/__tests__/fixtures/objects/dob1-svg-trait';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import {
   sporeDetailProducer,
@@ -201,6 +202,34 @@ it('presents BTCFS as link-only media even when a decoded image URL exists', asy
   ).toHaveLength(1);
   expect(container.querySelector('img')).toBeNull();
 });
+// The owner's report (2026-11-18): the page of 0x707532f6…c7ba, a DOB/1 object whose IMAGE trait
+// holds its SVG, threw "shorten: an empty hash" from its decoder output list.
+it('renders a DOB/1 object whose picture is drawn from its traits', async () => {
+  vi.mocked(api.getSporeObject).mockResolvedValue({ ...sporeDetailProducer, contentType: 'dob/1' });
+  vi.mocked(api.getSporeObjectDecoded).mockResolvedValue(dob1SvgDecoded(id));
+  const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const { container } = render(
+    <Boundary>
+      <SporeDetailPage sporeId={id} />
+    </Boundary>
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole('list', { name: 'Decoder output' }) ?? screen.queryByRole('alert')
+    ).not.toBeNull()
+  );
+  expect(screen.queryByRole('alert')?.textContent ?? null).toBeNull();
+  expect(screen.getByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
+  expect(screen.getByRole('list', { name: 'Decoder output' })).toHaveTextContent(
+    'image/svg+xml · drawn from the traits on request, not a stored file'
+  );
+  // The media frame shows the picture /render draws.
+  expect(container.querySelector('[data-hero-media] img')).toHaveAttribute(
+    'src',
+    expect.stringMatching(new RegExp(`/spore/objects/${id}/render$`))
+  );
+  error.mockRestore();
+});
 it('does not repair unavailable raw data with transaction/getCell or client-side protocol parsing', async () => {
   vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('local CKB reader unavailable'));
   const tx = vi.spyOn(api, 'getTransactionDetail'),
@@ -223,6 +252,7 @@ it('refreshes media classification when pending VM work completes, then stops po
     dnaHex: '0x01',
     traits: [{ name: 'Face', value: 'Blue' }],
     media: [],
+    render: null,
     issues: [],
   };
   vi.mocked(api.getSporeObjectDecoded)

@@ -836,13 +836,125 @@ async fn test_spore_decode_endpoint_returns_decoded_from_cache() {
     assert_eq!(traits[1]["name"], "Level");
     assert_eq!(traits[1]["value"], "11");
     let media = json["media"].as_array().unwrap();
-    // 1 step output + render URL (SVG detected in media type)
-    assert!(!media.is_empty());
+    // The one step output is the picture: nothing is drawn beside it.
+    assert_eq!(media.len(), 1);
     assert_eq!(media[0]["mediaType"], "image/svg+xml");
     assert_eq!(media[0]["size"], 29);
     assert_eq!(media[0]["hash"], "abc123");
     assert_eq!(media[0]["step"], 0);
+    assert_eq!(json.get("render"), Some(&serde_json::Value::Null), "{json}");
     assert!(json["issues"].as_array().unwrap().is_empty());
+}
+
+/// The owner's report (2026-11-18): `/objects/0x7075…c7ba`, a DOB/1 object whose
+/// traits hold its picture as an SVG, did not render. `/decode` listed the picture
+/// `/render` draws among the decoder's stored outputs, with `size: 0` and `hash: ""`:
+/// values the API does not have, since the picture is drawn on request and no byte of
+/// it is stored. The page refused the empty hash. Every `media` entry is a stored
+/// output with its sha256, size, step and blob URL; the drawn picture is `render`,
+/// with its media type and URL and nothing else.
+#[tokio::test]
+async fn test_decode_of_a_dob1_object_names_its_drawn_picture_apart_from_its_stored_outputs() {
+    let store = test_store();
+    let spore_id = [0x70u8; 32];
+    let spore_id_hex = format!("0x{}", hex::encode(spore_id));
+    let spore_entry = ObjectEntry {
+        standard: ObjectStandard::Spore,
+        collection_id: None,
+        token_id: None,
+        owner_lock_hash: Some(vec![0xAA; 32]),
+        name: None,
+        description: None,
+        is_live: true,
+        created_at_block: 321,
+        created_at_tx: vec![0xBB; 32],
+        extra: ObjectExtra::Spore {
+            content_type: "dob/1".to_string(),
+            content_length: 128,
+            media_profile: SporeMediaProfile::default(),
+        },
+    };
+    store.put_spore_direct(&spore_id, &spore_entry).unwrap();
+    // The two steps of the reported object, as the worker stored them: the DOB/0
+    // traits, then the DOB/1 step whose IMAGE trait is the SVG.
+    let dob0_hash = "d0111ca8e5ef2f8c740252b8b9b7f72774561a3db8466556f1ccd56b7de0d606";
+    let dob1_hash = "7a8245b77f07febc016d2520e46ee499da9a499f1c10dc7964ac2d56f7af37b0";
+    store
+        .put_dob_decoded_direct(
+            &spore_id,
+            &DobDecodedEntry {
+                steps: vec![
+                    ckbadger_store::DobDecodedStep {
+                        step: 0,
+                        media_type: "application/json".to_string(),
+                        size: 456,
+                        hash: dob0_hash.to_string(),
+                        traits: vec![DobDecodedTrait {
+                            name: "CellNumber".to_string(),
+                            value: "5".to_string(),
+                        }],
+                    },
+                    ckbadger_store::DobDecodedStep {
+                        step: 1,
+                        media_type: "application/json".to_string(),
+                        size: 22953,
+                        hash: dob1_hash.to_string(),
+                        traits: vec![DobDecodedTrait {
+                            name: "IMAGE".to_string(),
+                            value: "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 300 300'></svg>"
+                                .to_string(),
+                        }],
+                    },
+                ],
+                media_sources: vec![],
+                decoded_at: 1700000000,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, &format!("/spore/objects/{spore_id_hex}/decode")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["status"], "decoded");
+    let media = json["media"].as_array().unwrap();
+    for (i, entry) in media.iter().enumerate() {
+        let hash = entry["hash"].as_str().unwrap_or_default();
+        assert!(
+            hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()),
+            "media[{i}] is no stored output: it has no sha256 the API holds: {entry}"
+        );
+        assert_eq!(
+            entry["url"],
+            format!("/spore/objects/{spore_id_hex}/media/{hash}"),
+            "media[{i}]: {entry}"
+        );
+    }
+    assert_eq!(
+        json["media"],
+        serde_json::json!([
+            {
+                "mediaType": "application/json",
+                "size": 456,
+                "hash": dob0_hash,
+                "step": 0,
+                "url": format!("/spore/objects/{spore_id_hex}/media/{dob0_hash}"),
+            },
+            {
+                "mediaType": "application/json",
+                "size": 22953,
+                "hash": dob1_hash,
+                "step": 1,
+                "url": format!("/spore/objects/{spore_id_hex}/media/{dob1_hash}"),
+            },
+        ])
+    );
+    assert_eq!(
+        json["render"],
+        serde_json::json!({
+            "mediaType": "image/svg+xml",
+            "url": format!("/spore/objects/{spore_id_hex}/render"),
+        })
+    );
 }
 
 #[tokio::test]

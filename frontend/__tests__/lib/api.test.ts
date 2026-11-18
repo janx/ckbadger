@@ -804,6 +804,7 @@ describe('api', () => {
             dnaHex: '0a01ff00',
             traits: [{ name: 'Background', value: 'red' }],
             media: [],
+            render: null,
             issues: [],
           });
         })
