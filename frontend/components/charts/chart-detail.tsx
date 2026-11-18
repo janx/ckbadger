@@ -464,7 +464,7 @@ function DetailBody({
               reading={model.reading ?? model.today}
               formatValue={(value) => formatChartHover(value, model.unit)}
               // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
-              xTicks={axisTicks(points, style, 8, xUnit)}
+              xTicks={axisTicks(points, style, 8, xUnit, model.bucketRun)}
               formatAxis={chartAxisFormat(model.unit)}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
