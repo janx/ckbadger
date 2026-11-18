@@ -1305,6 +1305,12 @@ export function chartModel(definition: ChartDefinition, payload: ChartPayload): 
       legend: [],
     };
   }
+  // A histogram's run indexes the points it draws (`model.points`); a tile draws a card's points
+  // where it has one, so a histogram has none (N1).
+  if (model.bucketRun && model.card)
+    throw new Error(
+      `${definition.slug}: a histogram has no card: its bucket run indexes the points it draws`
+    );
   if ('orphanRateTarget' in payload) {
     const { numerator, denominator } = payload.orphanRateTarget;
     if (
