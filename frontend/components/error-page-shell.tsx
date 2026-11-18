@@ -163,11 +163,13 @@ function TipSeal() {
           />
         </Suspense>
       </div>
+      {/* a note under the seal, quiet; the block's link and its hash in it read (R3) */}
       <p data-seal-caption="" className="text-text-dim text-meta m-0 mt-8 min-w-0">
-        behind: the seal of the newest block, <BlockLink number={block.number} />{' '}
+        behind: the seal of the newest block,{' '}
+        <BlockLink number={block.number} className="text-text" />{' '}
         {/* U-16: the shortened hash is one unit, and the dot goes with it to a new line */}
         <NoBreak>
-          · <ShortId value={block.hash} kind="hash" size="row" />
+          · <ShortId value={block.hash} kind="hash" size="row" className="text-text" />
         </NoBreak>
       </p>
     </>
