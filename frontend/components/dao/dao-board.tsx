@@ -48,6 +48,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -327,11 +328,6 @@ function exactSafeMs(value: string, context: string): number {
 const ICICLE_LABEL_MIN_PX = 1000;
 /** Hierarchy v3 (board): the icicle's rows — the whole, its three parts, compensation's two. */
 const ICICLE_ROWS = { heights: [48, 48, 32], gap: 3 } as const;
-/**
- * A monospace advance in px: Chromium snaps JetBrains Mono to whole pixels (11 and 12 px → 7,
- * 13 px → 8); a browser that does not uses 0.6 em. Fit tests use whichever is wider.
- */
-const monoAdvance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
 /** The claimable part of the requested withdrawals: the DAO gold at this alpha (R12). */
 const CLAIMABLE_FILL = 0.45;
 /** The capacity-use bar's segments sit 3 px apart. */
@@ -711,7 +707,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
           // R9: a share is written inside its segment only where it fits (padding included).
           const segmentPx =
             width === null ? 0 : ((width - BAR_GAP_PX * (use.length - 1)) * Number(percent)) / 100;
-          const fits = segmentPx >= label.length * monoAdvance(11) + 16;
+          const fits = segmentPx >= label.length * snappedAdvancePx(fontPx('meta')) + 16;
           return (
             <div
               key={part.key}
@@ -804,13 +800,14 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
       <span className={onFill ? undefined : 'text-text-dim'}>· {plural(ready.count, 'cell')}</span>
     </>
   );
-  // R12: the claimable words sit inside their segment where they fit (12 px, 12 px padding).
+  // R12: the claimable words sit inside their segment where they fit (text-small, 12 px padding).
   const readyPercent = requested > BigInt(0) ? formatPercent(readyShannons, requested, 4) : '0';
   const claimableChars =
     `claimable now ${formatCapacity(readyShannons)} · ${plural(ready.count, 'cell')}`.length;
   const claimableInside =
     barWidth !== null &&
-    ((barWidth - 2) * Number(readyPercent)) / 100 >= claimableChars * monoAdvance(12) + 24;
+    ((barWidth - 2) * Number(readyPercent)) / 100 >=
+      claimableChars * snappedAdvancePx(fontPx('small')) + 24;
   return (
     <Section
       title="When deposits can leave"

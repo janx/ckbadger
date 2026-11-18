@@ -4,8 +4,10 @@
  * at full size; a narrower box shows fewer bytes a row, never smaller ones.
  */
 
-/** The advance of one 12 px JetBrains Mono glyph (the dump's text-small). */
-const DUMP_CHAR_PX = 7.2;
+import { charPx, withAllowance } from '@/lib/type-metrics';
+
+/** The advance of one glyph of the dump, set at the small step (`text-small`). */
+const DUMP_CHAR_PX = charPx('small');
 /** One hex byte: two glyphs plus its 1 px padding on each side (`px-px`). */
 const HEX_CELL_PX = 2 * DUMP_CHAR_PX + 2;
 /** The gap between two hex bytes (`gap-1`). */
@@ -37,8 +39,14 @@ export function hexRowBytes(boxWidth: number, digits: 4 | 5): HexRowBytes {
   return ROW_BYTES.find((n) => hexRowWidth(n, digits) + HEX_BOX_INSET_PX <= boxWidth) ?? 8;
 }
 
-/** The advance of one 10.5 px glyph of a capacity-map label, and the label's side padding. */
-const MAP_CHAR_PX = 6.3;
+/**
+ * The capacity map labels' allowance: the advance below was measured for the 10.5 px label the map
+ * had before the type scale (6.3 px a glyph), and the label is `text-meta` (11 px, 6.6) since; the
+ * budget kept its number, so it counts 0.3 px a glyph under the label it holds.
+ */
+const MAP_LABEL_ALLOWANCE = -0.3;
+/** The advance a capacity-map label's minimum width is measured at, and the label's side padding. */
+export const MAP_CHAR_PX = withAllowance(charPx('meta'), MAP_LABEL_ALLOWANCE);
 export const MAP_PAD_PX = 4;
 
 /**

@@ -37,6 +37,7 @@ import { percentOf } from '@/lib/format-unit';
 import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
 import { unitNode, unitText } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
+import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -355,8 +356,8 @@ function UpgradeLines({
   );
 }
 
-/** A monospace advance at 11 px: whole pixels where Chromium snaps them. */
-const LABEL_ADVANCE = Math.max(Math.round(0.6 * 11), 0.6 * 11);
+/** A version label's advance at the meta step (`text-meta`): whole pixels where Chromium snaps them. */
+export const LABEL_ADVANCE = snappedAdvancePx(fontPx('meta'));
 /** px between a version label and its dashed line, and between two labels or a label and the name. */
 const LABEL_PAD = 4;
 const LABEL_GAP = 8;

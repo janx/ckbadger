@@ -24,6 +24,7 @@ import { usePhosphor } from '@/hooks/usePhosphor';
 import { sparkline } from '@/lib/blocks-text';
 import { cn } from '@/lib/utils';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
+import { MONO_ADVANCE_EM } from '@/lib/type-metrics';
 
 /**
  * The homepage small multiples: one figure frame (caption + headline + chart) and four SVG chart
@@ -643,9 +644,10 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
 // A sparkline of eighth blocks
 // ---------------------------------------------------------------------------
 
-/** JetBrains Mono's advance: a glyph is 0.6 em wide. */
-const GLYPH_ADVANCE = 0.6;
-/** Its block elements stand on the descender, 0.3 em under the baseline, and are 1.32 em tall. */
+/**
+ * JetBrains Mono's block elements are a glyph wide (MONO_ADVANCE_EM), stand on the descender, 0.3 em
+ * under the baseline, and are 1.32 em tall.
+ */
 const GLYPH_DESCENT = 0.3;
 const GLYPH_HEIGHT = 1.32;
 
@@ -680,7 +682,7 @@ export function SparkChart({ bars, ariaLabel, formatValue }: BarChartProps) {
       {(width, hovered) => {
         const { right, bw, centre } = slots(width, n, 1);
         // one glyph a slot wide, never taller than the plot
-        const size = Math.min(bw / GLYPH_ADVANCE, PLOT_H / GLYPH_HEIGHT);
+        const size = Math.min(bw / MONO_ADVANCE_EM, PLOT_H / GLYPH_HEIGHT);
         const mid = Math.floor(n / 2);
         return (
           <>

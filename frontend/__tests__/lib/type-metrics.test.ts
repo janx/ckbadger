@@ -1,0 +1,205 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { brotliDecompressSync } from 'node:zlib';
+import { describe, expect, it } from 'vitest';
+import tailwindConfig from '@/tailwind.config';
+import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
+import {
+  LABEL_LINE_PX,
+  MONO_ADVANCE_EM,
+  ROW_LINE_PX,
+  advancePx,
+  charPx,
+  fontPx,
+  lineHeightPx,
+  snappedAdvancePx,
+  textPx,
+  tightLinePx,
+  withAllowance,
+} from '@/lib/type-metrics';
+
+/**
+ * The metrics every text budget is computed from (readability plan 2026-11-18, lane F3, step 1):
+ * the face's advance read from the font files the site serves, and each size and line read from
+ * the type scale, so a change of the scale moves every budget with it.
+ */
+
+const FONTS = join(__dirname, '..', '..', 'public', 'fonts');
+
+/**
+ * The WOFF2 known-table tags, by the index a table directory entry's flags carry (WOFF2 §5.1),
+ * through `glyf` and `loca`, whose transform the version bits mark the other way round.
+ */
+const KNOWN_TAGS = [
+  'cmap',
+  'head',
+  'hhea',
+  'hmtx',
+  'maxp',
+  'name',
+  'OS/2',
+  'post',
+  'cvt ',
+  'fpgm',
+  'glyf',
+  'loca',
+  'prep',
+  'CFF ',
+  'VORG',
+  'EBDT',
+  'EBLC',
+  'gasp',
+  'hdmx',
+  'kern',
+  'LTSH',
+  'PCLT',
+  'VDMX',
+  'vhea',
+  'vmtx',
+  'BASE',
+  'GDEF',
+  'GPOS',
+  'GSUB',
+];
+
+/**
+ * The untransformed tables of a WOFF2 file, by tag (WOFF2 §5–6): the table directory, then one
+ * Brotli stream holding every table end to end in directory order. `head`, `hhea`, `OS/2` and
+ * `post` are never transformed, so they are read as stored.
+ */
+function woff2Tables(path: string): Map<string, Buffer> {
+  const b = readFileSync(path);
+  expect(b.toString('latin1', 0, 4), path).toBe('wOF2');
+  const numTables = b.readUInt16BE(12);
+  const compressedLength = b.readUInt32BE(20);
+  let p = 48;
+  const base128 = () => {
+    let v = 0;
+    for (let i = 0; i < 5; i++) {
+      const c = b[p++];
+      v = v * 128 + (c & 0x7f);
+      if (!(c & 0x80)) return v;
+    }
+    throw new Error(`${path}: a UIntBase128 longer than 5 bytes`);
+  };
+  const entries: { tag: string; length: number }[] = [];
+  for (let i = 0; i < numTables; i++) {
+    const flags = b[p++];
+    let tag: string;
+    if ((flags & 0x3f) === 0x3f) {
+      tag = b.toString('latin1', p, p + 4);
+      p += 4;
+    } else tag = KNOWN_TAGS[flags & 0x3f] ?? `#${flags & 0x3f}`;
+    const version = (flags >> 6) & 3;
+    const origLength = base128();
+    const transformed = tag === 'glyf' || tag === 'loca' ? version !== 3 : version !== 0;
+    entries.push({ tag, length: transformed ? base128() : origLength });
+  }
+  const data = brotliDecompressSync(b.subarray(p, p + compressedLength));
+  const tables = new Map<string, Buffer>();
+  let offset = 0;
+  for (const { tag, length } of entries) {
+    tables.set(tag, data.subarray(offset, offset + length));
+    offset += length;
+  }
+  return tables;
+}
+
+describe('the face (JetBrains Mono, public/fonts)', () => {
+  const faces = readdirSync(FONTS).filter((name) => /^jetbrains-mono-.*\.woff2$/.test(name));
+
+  it('serves the five JetBrains Mono faces the stylesheet declares', () => {
+    expect(faces.sort()).toEqual([
+      'jetbrains-mono-italic.woff2',
+      'jetbrains-mono-light.woff2',
+      'jetbrains-mono-medium.woff2',
+      'jetbrains-mono-regular.woff2',
+      'jetbrains-mono-semibold.woff2',
+    ]);
+  });
+
+  it.each(faces)('%s advances every glyph 0.6 em: MONO_ADVANCE_EM is the font’s', (face) => {
+    const t = woff2Tables(join(FONTS, face));
+    const unitsPerEm = t.get('head')!.readUInt16BE(18);
+    const advanceWidthMax = t.get('hhea')!.readUInt16BE(10);
+    const xAvgCharWidth = t.get('OS/2')!.readInt16BE(2);
+    const isFixedPitch = t.get('post')!.readUInt32BE(12);
+    expect(isFixedPitch, 'post.isFixedPitch').not.toBe(0);
+    expect(xAvgCharWidth, 'OS/2.xAvgCharWidth').toBe(advanceWidthMax);
+    expect(advanceWidthMax / unitsPerEm).toBe(MONO_ADVANCE_EM);
+  });
+});
+
+describe('sizes and advances', () => {
+  it('reads every step’s size from the type scale', () => {
+    for (const step of TYPE_STEPS) expect(fontPx(step), step).toBe(parseFloat(TYPE_SCALE[step][0]));
+    expect([fontPx('meta'), fontPx('small'), fontPx('body')]).toEqual([11, 12, 13]);
+  });
+
+  it('gives a glyph’s advance at a size as the nearest double of 0.6 em', () => {
+    // 0.6 × 12 is 7.199999999999999 in binary floating point; 600 × 12 / 1000 is 7.2
+    expect([10, 10.5, 11, 11.5, 12, 12.5, 13].map(advancePx)).toEqual([
+      6, 6.3, 6.6, 6.9, 7.2, 7.5, 7.8,
+    ]);
+  });
+
+  it('gives a step’s advance as the advance at its size', () => {
+    for (const step of TYPE_STEPS) expect(charPx(step), step).toBe(advancePx(fontPx(step)));
+    expect([charPx('meta'), charPx('small'), charPx('body')]).toEqual([6.6, 7.2, 7.8]);
+  });
+
+  it('gives a run of glyphs as one product, exact for a whole count', () => {
+    expect(textPx(13, 12)).toBe(93.6); // "3,500,000,000" at text-small (13 × 7.2 adds to 93.60000000000001)
+    expect(textPx(11, 13)).toBe(85.8);
+    expect(textPx(34, 13)).toBe(265.2);
+    expect(textPx(0, 11)).toBe(0);
+    for (let n = 1; n <= 80; n++) expect(textPx(n, 11)).toBeCloseTo(n * charPx('meta'), 10);
+  });
+
+  it('snaps an advance up to a whole pixel where Chromium does, never under 0.6 em', () => {
+    expect([10, 10.5, 11, 12, 13].map(snappedAdvancePx)).toEqual([6, 6.3, 7, 7.2, 8]);
+    for (const px of [9, 10, 10.5, 11, 11.5, 12, 12.5, 13, 14, 17])
+      expect(snappedAdvancePx(px)).toBeGreaterThanOrEqual(advancePx(px));
+  });
+});
+
+describe('lines', () => {
+  it('reads every step’s line from the type scale', () => {
+    for (const step of TYPE_STEPS)
+      expect(lineHeightPx(step), step).toBe(fontPx(step) * parseFloat(TYPE_SCALE[step][1]));
+    expect([lineHeightPx('meta'), lineHeightPx('small'), lineHeightPx('body')]).toEqual([
+      16.5, 18, 20.8,
+    ]);
+  });
+
+  it('stands a list row on the small step’s line, in whole pixels: 18 px', () => {
+    expect(ROW_LINE_PX).toBe(Math.ceil(lineHeightPx('small')));
+    expect(Number.isInteger(ROW_LINE_PX)).toBe(true);
+    expect(ROW_LINE_PX).toBe(18);
+  });
+
+  it('sets a line tight with 3 px of leading, and a label at the meta step so: 14 px', () => {
+    expect([11, 12, 13].map(tightLinePx)).toEqual([14, 15, 16]);
+    expect(LABEL_LINE_PX).toBe(tightLinePx(fontPx('meta')));
+    expect(LABEL_LINE_PX).toBe(14);
+  });
+
+  it('emits both lines as Tailwind line heights: leading-row and leading-label', () => {
+    const theme = tailwindConfig.theme as { extend: { lineHeight?: Record<string, string> } };
+    expect(theme.extend.lineHeight).toEqual({
+      row: `${ROW_LINE_PX}px`,
+      label: `${LABEL_LINE_PX}px`,
+    });
+  });
+});
+
+describe('allowances', () => {
+  it('adds an allowance to a budget and keeps the sum to the hundredth it was written in', () => {
+    expect(6.6 + 0.1).not.toBe(6.7); // why the hundredth: 6.699999999999999
+    expect(withAllowance(6.6, 0.1)).toBe(6.7);
+    expect(withAllowance(6.3, 0.1)).toBe(6.4);
+    expect(withAllowance(7.2, 0.44)).toBe(7.64);
+    expect(withAllowance(6.6, -0.3)).toBe(6.3);
+    expect(withAllowance(7.8, 0)).toBe(7.8);
+  });
+});

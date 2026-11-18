@@ -2,12 +2,10 @@
 
 import { useLayoutEffect, useRef, useState } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
+import { MONO_ADVANCE_EM } from '@/lib/type-metrics';
 
 /** The two sizes an h1 id takes (U-09): the head where it fits, the row otherwise. */
 export type TitleIdSize = 'head' | 'row';
-
-/** JetBrains Mono's advance before tracking: 0.6 em. */
-const ADVANCE_EM = 0.6;
 
 /**
  * An id as a page's h1 (U-09; `docs/RESPONSIVE_LAYOUT.md` principle 4, the measured width
@@ -36,7 +34,7 @@ export function TitleId({ form }: { form: (size: TitleIdSize) => string }) {
       const tracking = style.letterSpacing === 'normal' ? 0 : parseFloat(style.letterSpacing);
       // not laid out (no width, or no type to read) is no measurement: keep what there was
       if (!(line > 0) || !(fontSize > 0) || Number.isNaN(tracking)) return;
-      const needed = head.length * (ADVANCE_EM * fontSize + tracking);
+      const needed = head.length * (MONO_ADVANCE_EM * fontSize + tracking);
       setSize(line >= needed ? 'head' : 'row');
     };
     read();

@@ -3,6 +3,7 @@ import { CLASS_KEYS, type AssetClass } from '@/lib/design-tokens';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { color, inkOnFill, type FillInk, type PaletteKey } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
+import { snappedAdvancePx } from '@/lib/type-metrics';
 
 export interface IcicleNode {
   key: string;
@@ -97,12 +98,6 @@ function place(node: IcicleNode, depth: number, x: number, width: number, out: P
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/**
- * A monospace advance in px: browsers that snap glyph advances to whole pixels (Chromium: 11 and
- * 12 px → 7, 13 px → 8) and those that do not (0.6 em) both fit inside this.
- */
-const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
-
 /** The words of a `boxLabel` that fit a box `width` wide at `px`, padded `pad` on each side. */
 function fittedLabel(
   label: NonNullable<IcicleNode['boxLabel']>,
@@ -110,7 +105,7 @@ function fittedLabel(
   px: number,
   pad: number
 ): { name: boolean; note: boolean } | 'share' | null {
-  const fits = (text: string) => text.length * advance(px) + 2 * pad <= width;
+  const fits = (text: string) => text.length * snappedAdvancePx(px) + 2 * pad <= width;
   const share = `${label.share}${label.unit ? ` ${label.unit}` : ''}`;
   const core = `${label.name} ${share}`;
   if (label.note && fits(`${core} · ${label.note}`)) return { name: true, note: true };
