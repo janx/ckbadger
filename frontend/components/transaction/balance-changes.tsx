@@ -187,7 +187,7 @@ export function BalanceChanges({
                   <span role="cell" className="text-right">
                     <CkbAmount form="column" shannons={BigInt(p.ckbDelta)} />
                   </span>
-                  <span role="cell" className="text-right tabular-nums">
+                  <span role="cell" className="whitespace-nowrap text-right tabular-nums">
                     {formatOccupiedDelta(p.usedDelta)}
                   </span>
                   <span role="cell" className="flex min-w-0 flex-wrap gap-x-3.5 gap-y-0.5">
@@ -208,7 +208,7 @@ export function BalanceChanges({
                       <span role="cell" className="text-right">
                         <CkbAmount form="column" shannons={n.ckb} tone="plain" />
                       </span>
-                      <span role="cell" className="text-right tabular-nums">
+                      <span role="cell" className="whitespace-nowrap text-right tabular-nums">
                         {formatOccupiedDelta(n.occupied.toString())}
                       </span>
                       <span role="cell">{netNote(n.note)}</span>
@@ -305,7 +305,7 @@ export function BalanceChanges({
                     <>
                       <span>
                         Net <CkbAmount form="summary" shannons={n.ckb} tone="plain" /> · occupied{' '}
-                        <span className="text-text tabular-nums">
+                        <span className="text-text whitespace-nowrap tabular-nums">
                           {formatOccupiedDelta(n.occupied.toString())}
                         </span>
                       </span>

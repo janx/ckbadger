@@ -582,10 +582,11 @@ describe('Transaction board, tier 1', () => {
     const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
     await waitFor(() => expect(table).toHaveTextContent('Nervape 3x 0x51c75a00…0096f2 departed'));
     expect(table.querySelectorAll('[data-composition="btc_ckb"]')).toHaveLength(2);
-    expect(table).toHaveTextContent('−502');
+    // B4 item 2 (re-pinned on purpose): occupied bytes carry their unit (it was "−502", "+26")
+    expect(table).toHaveTextContent('−502 B');
     expect(table).not.toHaveTextContent('502.00000000');
     expect(screen.getByTestId('tx-balance-net')).toHaveTextContent(
-      'Net−0.00064119 CKB+26the fee, paid to the miner'
+      'Net−0.00064119 CKB+26 Bthe fee, paid to the miner'
     );
   });
 });
@@ -738,8 +739,9 @@ describe('Transaction board, tier 2', () => {
     expect(await screen.findByTestId('tx-capacity-equation')).toHaveTextContent(
       '555.00000000 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
     );
+    // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
     expect(screen.getByText(/^occupied 563 → 589/)).toHaveTextContent(
-      'occupied 563 → 589 · common knowledge +26'
+      /^occupied 563 → 589 · common knowledge \+26 B$/
     );
   });
 

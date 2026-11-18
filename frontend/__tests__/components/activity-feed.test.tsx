@@ -219,10 +219,11 @@ describe('ActivityFeed', () => {
       '+412.3248675 CKB',
       null,
     ]);
-    // Occupied only where it changed: two of three.
+    // Occupied only where it changed: two of three, in bytes with their unit (B4 item 2,
+    // re-pinned on purpose: was "occupied −61" with no unit).
     expect([...row.querySelectorAll('[data-role="occupied"]')].map((e) => e.textContent)).toEqual([
-      `occupied ${MINUS}61`,
-      'occupied +61',
+      `occupied ${MINUS}61 B`,
+      'occupied +61 B',
     ]);
     expect(row).not.toHaveTextContent('+1 more');
   });
@@ -558,10 +559,13 @@ describe('ActivityFeed', () => {
   });
 });
 
+// B4 item 2 (re-pinned on purpose): occupied capacity is bytes, written with its unit, and a
+// change that is not whole bytes is refused (it was written as exact CKB, "+1.50000001");
+// __tests__/components/occupied-unit.test.tsx holds the rest.
 describe('formatOccupiedDelta', () => {
-  it('prints occupied capacity in whole CKB (it is bytes), and exactly if it ever is not', () => {
-    expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61`);
-    expect(formatOccupiedDelta('32000000000')).toBe('+320');
-    expect(formatOccupiedDelta('150000001')).toBe('+1.50000001');
+  it('prints occupied capacity in whole bytes with their unit, and refuses what is not whole', () => {
+    expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61 B`);
+    expect(formatOccupiedDelta('32000000000')).toBe('+320 B');
+    expect(() => formatOccupiedDelta('150000001')).toThrow('not a whole number of bytes');
   });
 });

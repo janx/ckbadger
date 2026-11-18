@@ -25,7 +25,8 @@ import { PartyLockKind, partyLock } from '@/components/ui/lock-kind';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
-import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { withUnit } from '@/lib/format-unit';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
@@ -632,12 +633,19 @@ function activityDetails(
   };
 }
 
-/** The change in occupied capacity, whole CKB (it is bytes), exact otherwise. */
+/**
+ * A change in occupied capacity as the figure it is: bytes, signed and grouped, with their unit
+ * ("−61 B"; readability lane B4, docs/RESPONSIVE_LAYOUT.md "Formats": a figure writes the symbol).
+ * Occupied capacity is bytes, 1 CKB (10^8 shannons) of capacity for each: a change that is not a
+ * whole number of bytes is not one the chain can make, and is refused with its value.
+ */
 export function formatOccupiedDelta(usedDelta: string): string {
   const shannons = BigInt(usedDelta);
-  return shannons % SHANNONS_PER_CKB === BigInt(0)
-    ? formatSignedCkbInteger(shannons)
-    : formatSignedCkbExact(shannons);
+  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
+    throw new Error(
+      `occupied change ${usedDelta} shannons is not a whole number of bytes (10^8 shannons each)`
+    );
+  return withUnit(formatSignedCkbInteger(shannons), 'B');
 }
 
 function partyKey(p: ParticipantInfo, i: number): string {
