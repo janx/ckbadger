@@ -45,6 +45,7 @@ import { LockWordsView, lockWordsText, rowLock, type LockWords } from '@/compone
 import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { PartReadBoundary } from '@/components/read-failure';
 
 // Consistency round C11 (Main.dc.html): twenty objects a page.
 const NEWEST = 20;
@@ -134,7 +135,12 @@ export interface CollectionObjectsProps {
 }
 
 export function CollectionObjects(props: CollectionObjectsProps) {
-  return <ScopedCollectionObjects key={props.id} {...props} />;
+  // a refusal while the objects are drawn fails this section in its place (D7)
+  return (
+    <PartReadBoundary key={props.id} what="the newest objects">
+      <ScopedCollectionObjects {...props} />
+    </PartReadBoundary>
+  );
 }
 
 function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObjectsProps) {

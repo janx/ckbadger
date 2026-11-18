@@ -234,16 +234,19 @@ describe('Collection holders', () => {
   ])('rejects invalid full-scope counts or repeated buckets %#', (...buckets) => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect(() =>
-        render(
-          <CollectionHolders
-            assetClass="objects"
-            load={vi.fn().mockResolvedValue(page([]))}
-            queryKey="bad-distribution"
-            distribution={buckets}
-          />
-        )
-      ).toThrow(/collection|Collection/);
+      // B4 second fix round (re-pinned on purpose, ruling D7): the refusal fails the section in
+      // its place, saying why, where it took the page
+      render(
+        <CollectionHolders
+          assetClass="objects"
+          load={vi.fn().mockResolvedValue(page([]))}
+          queryKey="bad-distribution"
+          distribution={buckets}
+        />
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /^Could not read the collection holders: .*(collection|Collection)/
+      );
     } finally {
       error.mockRestore();
     }

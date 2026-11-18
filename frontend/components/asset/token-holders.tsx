@@ -36,6 +36,7 @@ import {
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { shortChars } from '@/lib/list-bounds';
+import { PartReadBoundary } from '@/components/read-failure';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
@@ -253,7 +254,16 @@ export interface TokenHoldersProps {
   symbol: string | null;
   decimals: number | null;
 }
-export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) {
+/** The token's holders; a refusal while they are drawn fails this section in its place (D7). */
+export function TokenHolders(props: TokenHoldersProps) {
+  return (
+    <PartReadBoundary what="the holders">
+      <TokenHoldersSection {...props} />
+    </PartReadBoundary>
+  );
+}
+
+function TokenHoldersSection({ typeHash, symbol, decimals }: TokenHoldersProps) {
   const distributionSource = `holder distribution from /tokens/${typeHash}/distribution`;
   const [all, setAll] = useState(false),
     pagination = useCursorPagination();

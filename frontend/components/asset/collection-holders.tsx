@@ -30,6 +30,7 @@ import { countNoun } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { shortChars } from '@/lib/list-bounds';
+import { PartReadBoundary } from '@/components/read-failure';
 
 /** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
 const cell = (chars: number) => textPx(chars, fontPx('small'));
@@ -109,8 +110,13 @@ function holderKey(holder: CollectionHolder): string {
 }
 
 export function CollectionHolders(props: CollectionHoldersProps) {
-  // A different collection starts a new cursor scope and Top 10 view.
-  return <ScopedCollectionHolders key={props.queryKey} {...props} />;
+  // A different collection starts a new cursor scope and Top 10 view; a refusal while its holders
+  // are drawn fails this section in its place (D7).
+  return (
+    <PartReadBoundary key={props.queryKey} what="the collection holders">
+      <ScopedCollectionHolders {...props} />
+    </PartReadBoundary>
+  );
 }
 
 function ScopedCollectionHolders({
