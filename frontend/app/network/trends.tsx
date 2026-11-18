@@ -4,8 +4,9 @@ import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type LabelCount, type NetworkHistory } from '@/lib/api';
 import { Chart, type ChartGap, type ChartPoint, type ChartSeries } from '@/components/ui/chart';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { DATA_COLOR } from '@/lib/design-tokens';
@@ -173,7 +174,16 @@ function shareDayWords(row: ShareDay): string {
     .join(' · ');
 }
 
-const SHARE_TRACK = 80;
+/**
+ * The widest scale a day's count bar writes (readability F3-e): a day retains under 10,000
+ * observations (the crawler sees a few thousand nodes), whose scale is at most 10,000. The bar's
+ * track holds its head's ticks, "0" and "10,000", whole (57.6 px; it was 80).
+ */
+const COUNT_SCALE = resourceScale([9_999]).toLocaleString('en-US');
+const SHARE_TRACK = trackPx(['0', COUNT_SCALE]);
+/** The day's columns at the cells' small step (13 px); a head or a quiet sentence at 12. */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+const meta = (chars: number) => textPx(chars, fontPx('meta'));
 
 /**
  * Table-rows T8: a share history is one line a day — the day (the row's key), a count
@@ -218,7 +228,8 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
       label: 'Day',
       // Each head holds its words in a span, so its text box is its words (R16), not the cell.
       header: <span>Day</span>,
-      minWidth: 96,
+      // the day at the key's 14 px (10 characters, 84) and the gap; it was 96
+      minWidth: columnPx(textPx(formatUtc8Date(0).length, fontPx('body')) + CELL_GAP_PX),
       render: (row) => (
         <span className="text-body text-text-bright leading-row whitespace-nowrap">{row.day}</span>
       ),
@@ -232,14 +243,18 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
         ) : (
           <ScaleHeader label="Retained count" scale={scale} trackWidth={SHARE_TRACK} />
         ),
-      minWidth: 136,
+      // the track, the bar's 10 px gap, the scale's figure ("10,000", 6 characters, 46.8) and
+      // the gap; it was 136
+      minWidth: columnPx(SHARE_TRACK + BAR_FIGURE_GAP + cell(COUNT_SCALE.length) + CELL_GAP_PX),
       render: bar,
     },
     {
       key: 'labels',
       label: 'Labels',
       header: <span>Labels</span>,
-      minWidth: 64,
+      // under 1,000 labels a day, "999" (23.4), under the head "Labels" (43.2), and the gap; it
+      // was 64
+      minWidth: columnPx(Math.max(cell('999'.length), meta('Labels'.length)) + CELL_GAP_PX),
       numeric: true,
       render: (row) =>
         row.buckets?.length ? (
@@ -250,7 +265,15 @@ function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }
       key: 'leader',
       label: 'Most common',
       header: <span>Most common</span>,
-      minWidth: 200,
+      // The flexible column: at its minimum the widest quiet sentence whole, "No retained round
+      // observation" (29 characters at 12 px, 208.8), wider than 12 characters of a label, its 8
+      // px gap and a count ("9,999"); the last column, no gap. It was 200.
+      minWidth: columnPx(
+        Math.max(
+          meta('No retained round observation'.length),
+          cell(12) + 8 + cell((9_999).toLocaleString('en-US').length)
+        )
+      ),
       width: 'auto',
       render: leader,
     },

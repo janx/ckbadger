@@ -6,7 +6,7 @@ import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { PromptHeading } from '@/components/ui/prompt-heading';
@@ -20,7 +20,9 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_BLOCK_NUMBER, shortChars } from '@/lib/list-bounds';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
@@ -43,6 +45,21 @@ function spanHeads<T>(columns: ListColumn<T>[]): ListColumn<T>[] {
     header: column.header ?? <span>{column.label}</span>,
   }));
 }
+
+/**
+ * The branch switches' columns, each budgeted from the widest value it holds (readability F3-e) at
+ * the row's body step (14 px), a meta line at 12 and the gap after every column but the last.
+ */
+const body = (chars: number) => textPx(chars, fontPx('body'));
+/** The fork glyph's width (components/forks/fork-glyph.tsx draws it on a 210 px viewBox). */
+const FORK_GLYPH_PX = 210;
+/** A time on the UTC+8 clock to the second, "2026-10-22 22:43:55": 19 characters at every time. */
+const SEEN_CHARS = formatUtc8DateTime(0).slice(0, 19).length;
+/**
+ * A sibling found apart from its rival: six digits of milliseconds, "999,999 ms" (under 1,000 s;
+ * a sibling is found while its parent is the tip, blocks some ten seconds apart).
+ */
+const WIDEST_APART = '999,999 ms';
 
 /** R15: a topic page shows a list's first rows; the rest expand in place (there is no list page). */
 const PREVIEW_ROWS = 5;
@@ -448,37 +465,51 @@ export default function ForksPage() {
                       key: 'seen',
                       className: ROW,
                       label: 'Seen (UTC+8)',
-                      minWidth: 160,
+                      // the time to the second (19 characters at 14 px, 159.6) and the gap; it
+                      // was 160, the gap uncounted
+                      minWidth: columnPx(body(SEEN_CHARS) + CELL_GAP_PX),
                       render: (e) => <Seen event={e} compact />,
                     },
                     {
                       key: 'fork',
                       className: ROW,
                       label: 'Fork point',
-                      minWidth: 120,
+                      // the fork point, "#99,999,999" (92.4; its depth a meta line under it), and
+                      // the gap; it was 120
+                      minWidth: columnPx(body(WIDEST_BLOCK_NUMBER.length) + CELL_GAP_PX),
                       render: (e) => <ForkPoint event={e} />,
                     },
                     {
                       key: 'shape',
                       className: ROW,
                       label: 'Shape',
-                      minWidth: 226,
+                      // the 210 px glyph and the gap
+                      minWidth: columnPx(FORK_GLYPH_PX + CELL_GAP_PX),
                       render: (e) => <Shape event={e} />,
                     },
                     {
                       key: 'miners',
                       className: ROW,
                       label: 'Dropped block’s miner vs winner’s',
-                      // two unnamed miners at the row size: 13 + 4 + 13 characters at 13 px
-                      // (234 px; R9, it was 17 + 4 + 17, 296 px, in 312) and the padding
-                      minWidth: 250,
+                      // The flexible column (readability F3-e: a pool name has no bound): two
+                      // unnamed miners at the row size, 13 + " vs " + 13 characters at the row's
+                      // 14 px (252), and the gap; it takes what the container gives beyond the
+                      // sum. It was 250, budgeted at 13 px.
+                      minWidth: columnPx(
+                        body(2 * shortChars(SHORT_FORMS.row.address) + ' vs '.length) + CELL_GAP_PX
+                      ),
+                      width: 'auto',
                       render: (e) => <Miners event={e} size="row" />,
                     },
                     {
                       key: 'apart',
                       className: ROW,
                       label: 'Found apart',
-                      minWidth: 100,
+                      // "999,999 ms" at 13 px (78), wider than the head's words, and the gap; it
+                      // was 100
+                      minWidth: columnPx(
+                        textPx(WIDEST_APART.length, fontPx('small')) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (e) => <FoundApart event={e} />,
                     },
@@ -486,7 +517,19 @@ export default function ForksPage() {
                       key: 'fate',
                       className: ROW,
                       label: 'What became of it',
-                      minWidth: 210,
+                      // The widest of its two lines: the fate "uncle inclusion still possible"
+                      // (252 at 14 px), or a deep switch's "indexed #99,999,999 → node
+                      // #99,999,999" on its meta line (38 characters at 12 px, 273.6, the wider);
+                      // the last column, no gap. It was 210, which broke both lines.
+                      minWidth: columnPx(
+                        Math.max(
+                          body('uncle inclusion still possible'.length),
+                          textPx(
+                            `indexed ${WIDEST_BLOCK_NUMBER} → node ${WIDEST_BLOCK_NUMBER}`.length,
+                            fontPx('meta')
+                          )
+                        )
+                      ),
                       render: (e) => <Fate event={e} />,
                     },
                   ])}

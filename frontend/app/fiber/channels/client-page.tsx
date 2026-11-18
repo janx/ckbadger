@@ -24,11 +24,13 @@ import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_TX_VALUE, shortChars } from '@/lib/list-bounds';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ShortId } from '@/components/ui/short-id';
-import { shortenHash } from '@/lib/shorten';
+import { SHORT_FORMS, shortenHash } from '@/lib/shorten';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { Utc8Date } from '@/components/ui/utc8-date';
 
@@ -64,6 +66,18 @@ const filters: {
 ];
 /** R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), 6 px above and below. */
 const ROW = 'text-body py-1.5';
+
+/**
+ * The channel list's columns, each budgeted from the widest value it holds (readability F3-e) at
+ * the row's body step (14 px), a meta line or a unit at 12 and the gap after every column but the
+ * last.
+ */
+const body = (chars: number) => textPx(chars, fontPx('body'));
+const meta = (chars: number) => textPx(chars, fontPx('meta'));
+/**
+ * The longest a channel lives on its duration form: under 10,000 days (some 27 years), "9999d 23h".
+ */
+const WIDEST_LIFETIME = fiberDuration(String((9999 * 86_400 + 23 * 3600) * 1000), 'bound');
 
 /**
  * A party in the table, by its address or lock hash at the row size (U-09; it was the last six
@@ -398,7 +412,15 @@ export default function FiberChannelsPage() {
                       key: 'channel',
                       className: ROW,
                       label: 'Channel',
-                      minWidth: 200,
+                      // The channel id at the row size (17 characters, 142.8), or the widest
+                      // state "All" writes under it, "force-closed · not settled" (26 at 12 px,
+                      // 187.2, the wider), and the gap. It was 200.
+                      minWidth: columnPx(
+                        Math.max(
+                          body(shortChars(SHORT_FORMS.row.hash)),
+                          meta(Math.max(...Object.values(FIBER_STATE_WORDS).map((w) => w.length)))
+                        ) + CELL_GAP_PX
+                      ),
                       // Table-rows T5: the channel id is the row's one bright thing.
                       render: (channel) => (
                         <>
@@ -421,8 +443,11 @@ export default function FiberChannelsPage() {
                       key: 'parties',
                       className: ROW,
                       label: 'Parties',
-                      minWidth: 180,
-                      // The column that takes the free width, as the grid's 1fr did.
+                      // The flexible column (readability F3-e), as the grid's 1fr was: one party
+                      // whole at its minimum, its lock hash at the row size (17 characters, 142.8;
+                      // an address is 13), and the gap; the pair joins on one line where the
+                      // container gives more. It was 180.
+                      minWidth: columnPx(body(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
                       width: 'auto',
                       render: (channel) => (
                         <span className="flex min-w-0 flex-wrap gap-x-1.5">
@@ -446,7 +471,11 @@ export default function FiberChannelsPage() {
                       key: 'capacity',
                       className: ROW,
                       label: 'Capacity',
-                      minWidth: 210,
+                      // A capacity under a billion CKB, every decimal (20 characters, 168), its
+                      // unit " CKB" at 12 px (28.8) and the gap. It was 210.
+                      minWidth: columnPx(
+                        body(WIDEST_TX_VALUE.length) + meta(' CKB'.length) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (channel) => (
                         <CkbAmount
@@ -460,7 +489,8 @@ export default function FiberChannelsPage() {
                     {
                       key: 'opened',
                       label: 'Opened',
-                      minWidth: 120,
+                      // the date (10 characters, 84) and the gap; it was 120
+                      minWidth: columnPx(body(formatUtc8Date(0).length) + CELL_GAP_PX),
                       className: cn(ROW, 'text-text-dim'),
                       render: (channel) => (
                         <span>
@@ -472,7 +502,9 @@ export default function FiberChannelsPage() {
                       key: 'lifetime',
                       className: ROW,
                       label: lastColumn,
-                      minWidth: 110,
+                      // "9999d 23h" (9 characters, 75.6), wider than the head ("Lifetime" at 12
+                      // px); the last column, no gap. It was 110.
+                      minWidth: columnPx(body(WIDEST_LIFETIME.length)),
                       numeric: true,
                       render: (channel) => <span>{lifetime(channel)}</span>,
                     },

@@ -134,6 +134,74 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(screen.queryByText(fullText('1 blocks'))).toBeNull();
   });
 
+  // Readability F3-e: both tables budgeted from the widest value each column holds, at 0.6 em a
+  // glyph (the cells' 13 px, the heads' and units' 12) and the 16 px gap after every column but the
+  // last. The miner is the Blocks table's flexible column (a pool name has no bound), the full hash
+  // the dropped transactions' (it breaks anywhere: two lines of 33 characters at its minimum).
+  it('budgets both tables from what they hold and changes form at their sums (F3-e)', async () => {
+    const w = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const blocks = [
+      // a dropped height and its prime, eight digits
+      ceil(w('#99,999,999′', 13) + 16),
+      // the hash at the row size
+      ceil(w('0x12345678…abcdef', 13) + 16),
+      // the block's clock to the millisecond, wider than the head's "(UTC+8)"
+      ceil(Math.max(w('09:12:32.761', 13), w('(UTC+8)', 12)) + 16),
+      // an unnamed miner at the row size
+      ceil(w('ckb1…4s93hhsj', 13) + 16),
+      // four digits of transactions
+      ceil(Math.max(w('9,999', 13), w('Txs', 12)) + 16),
+      // the widest fate on its line; the last column
+      ceil(w('uncle inclusion still possible', 13)),
+    ];
+    const dropped = [
+      // half a full hash a line
+      ceil(w('x'.repeat(33), 13) + 16),
+      ceil(w('#99,999,999′', 13) + 16),
+      // the widest fate on its line
+      ceil(w('committed on canonical branch', 13) + 16),
+      ceil(w('#99,999,999', 13) + 16),
+      // an output under a billion CKB with its unit, or "Unavailable"; the last column
+      ceil(Math.max(w('999,999,999.99999999', 13) + w(' CKB', 12), w('Unavailable', 13))),
+    ];
+    expect(blocks).toEqual([110, 149, 110, 118, 55, 234]);
+    expect(dropped).toEqual([274, 110, 243, 102, 185]);
+    const sum = (budgets: number[]) => budgets.reduce((s, x) => s + x, 0);
+    expect([sum(blocks), sum(dropped)]).toEqual([776, 914]);
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { unmount } = render(<ForkDetailPage />);
+    for (const [label, budgets, flexible] of [
+      ['Blocks', blocks, 3],
+      ['Dropped branch transactions', dropped, 0],
+    ] as const) {
+      const table = await screen.findByRole('table', { name: label });
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+      expect(cols[flexible].width).toBe('auto');
+      expect(Number.parseFloat(table.style.minWidth)).toBe(sum([...budgets]));
+    }
+    unmount();
+    for (const width of [1232, 914, 913, 776, 775, 608, 358]) {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+      atContainerWidth(width);
+      const { unmount: drop } = render(<ForkDetailPage />);
+      for (const [label, min] of [
+        ['Blocks', 776],
+        ['Dropped branch transactions', 914],
+      ] as const) {
+        const form = width >= min ? 'table' : 'rows';
+        const shown = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+          name: form === 'table' ? label : `${label}, compact`,
+        });
+        expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      }
+      drop();
+    }
+  });
+
   it('folds the blocks and the dropped transactions into phone rows at 358 px (no board: L1 rules)', async () => {
     at('10', '36bac5b4');
     atContainerWidth(358);

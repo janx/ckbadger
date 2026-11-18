@@ -515,6 +515,78 @@ describe('ForksPage: a switch’s age reads the one clock (E4)', () => {
   });
 });
 
+// Readability F3-e: every column of the branch switches budgeted from the widest value it holds,
+// at 0.6 em a glyph (the row's 14 px, the gap's 13, a meta line's 12) and the 16 px gap after
+// every column but the last. The miners are the flexible column (a pool name has no bound): two
+// unnamed miners on one line at its minimum, the rest of the container beyond the sum.
+describe('ForksPage · branch switches budgeted from what they hold (readability F3-e)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+  const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+  const budgets = [
+    // when this node saw it, to the second on the UTC+8 clock
+    ceil(at('2026-10-22 22:43:55', 14) + 16),
+    // the fork point, eight digits (its depth on a meta line under it)
+    ceil(at('#99,999,999', 14) + 16),
+    // the fork glyph's 210 px (components/forks/fork-glyph.tsx)
+    ceil(210 + 16),
+    // two unnamed miners at the row size and "vs"
+    ceil(at('ckb1…4s93hhsj vs ckb1…4s93hhsj', 14) + 16),
+    // six digits of milliseconds, wider than the head's words
+    ceil(Math.max(at('999,999 ms', 13), at('apart', 12)) + 16),
+    // the widest fate on its line, or a deep switch's tips on its meta line; the last column
+    ceil(
+      Math.max(
+        at('uncle inclusion still possible', 14),
+        at('indexed #99,999,999 → node #99,999,999', 12)
+      )
+    ),
+  ];
+
+  it('pins every column to its content and changes form at their sum, 1,147 px', async () => {
+    expect(budgets).toEqual([176, 109, 226, 268, 94, 274]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(1147);
+    const { unmount } = render(<ForksPage />);
+    const shown = await screen.findByRole('table', { name: 'Branch switches on this node' });
+    const cols = Array.from(shown.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[3].width).toBe('auto');
+    expect(Number.parseFloat(shown.style.minWidth)).toBe(sum);
+    unmount();
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1147, 'table'],
+      [1146, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      vi.mocked(api.getForks).mockResolvedValue(list());
+      vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+      atContainerWidth(width);
+      const { unmount: drop } = render(<ForksPage />);
+      const listed = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name:
+          form === 'table'
+            ? 'Branch switches on this node'
+            : 'Branch switches on this node, compact',
+      });
+      expect(listed.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
 // awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
 describe('ForksPage while its reads are paused', () => {
