@@ -192,9 +192,14 @@ function readEpoch(raw: string, block: number): { epoch: EpochInfo } | { error: 
 
 /**
  * Epoch number, its progress in block characters, `index / length` and the time left — or why it
- * can't. Its text never wraps: the parts never stack into a column. With the tip at genesis (a
- * fresh chain that has mined nothing) the header states the zero epoch, `0 / 0`: no length, so no
- * bar, and in the bar's place the reason.
+ * can't. Two groups, each one unbroken line: the epoch with its bar, and its position with the
+ * time left. On the home page below md the line holds both only where it is wide enough (readability
+ * F3-f: at its widest, `99,999`, `1,799 / 1,800` and `≈ 23h 59m left`, 340.8 px, past the 328 px
+ * line at 360), and there the position and the time left take the next line, never broken inside;
+ * the parts never stack into a column. From md the strip's row puts the epoch on a line that holds
+ * it whole (410 px at its widest). With the tip at genesis (a fresh chain that has mined nothing)
+ * the header states the zero epoch, `0 / 0`: no length, so no bar, and in the bar's place the
+ * reason.
  */
 function EpochVital({
   raw,
@@ -234,34 +239,40 @@ function EpochVital({
       data-testid="vitals-epoch"
       aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, ${position}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
       className={cn(
-        'group flex items-center gap-x-1.5 whitespace-nowrap md:gap-x-2',
+        'group flex flex-wrap items-center gap-x-1.5 gap-y-1 md:gap-x-2',
         PLACE[form].line
       )}
     >
-      <span className={LABEL}>Epoch</span>
-      <span className={cn(VALUE, flare)}>{epoch.number.toLocaleString('en-US')}</span>
-      {genesis ? (
-        <span data-testid="vitals-epoch-genesis" className={LABEL}>
-          genesis: no length
-        </span>
-      ) : (
-        <EpochBar fraction={epoch.index / epoch.length} />
-      )}
+      <span className={EPOCH_GROUP}>
+        <span className={LABEL}>Epoch</span>
+        <span className={cn(VALUE, flare)}>{epoch.number.toLocaleString('en-US')}</span>
+        {genesis ? (
+          <span data-testid="vitals-epoch-genesis" className={LABEL}>
+            genesis: no length
+          </span>
+        ) : (
+          <EpochBar fraction={epoch.index / epoch.length} />
+        )}
+      </span>
       {/* the epoch's position and time left: the home page's below md (the link's label says
           them on every page) */}
-      <span className={cn('text-text text-meta md:text-small tabular-nums', PLACE[form].homeOnly)}>
-        {index} / {length}
-      </span>
-      <span className={cn(LABEL, PLACE[form].homeOnly)}>
-        {estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}
+      <span className={cn(EPOCH_GROUP, PLACE[form].homeOnly)}>
+        <span className="text-text text-meta md:text-small tabular-nums">
+          {index} / {length}
+        </span>
+        <span className={LABEL}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
       </span>
     </Link>
   );
 }
 
-/** The epoch bar's cells: ten from 640 px; five on a phone, whose line also holds the number,
- * `index / length` and the time left at 360 px (a ten-cell bar there pushes the line past the
- * width once the index has four digits). */
+/** One of the epoch's two groups: never broken inside, its parts as far apart as the epoch's. */
+const EPOCH_GROUP = 'flex items-center gap-x-1.5 whitespace-nowrap md:gap-x-2';
+
+/** The epoch bar's cells: ten from 640 px; five on a phone, where the epoch with its bar is 134.4
+ * px at its widest (170.4 with ten), so the home page's epoch line holds the bar, the position and
+ * the time left at 390 px (340.8 of 358; ten cells would make it 376.8). Where that line cannot
+ * hold them all, at 360 and below, the position and the time left take the next (EpochVital). */
 const EPOCH_CELLS = { narrow: 5, wide: 10 } as const;
 
 /**
@@ -346,9 +357,10 @@ function VitalsLoading({ form }: { form: PhoneForm }) {
  * Whether the page's realtime socket is up (Main.dc.html "● Live", TX-01): a jade dot and "Live"
  * when it is, a dim dot and "Not live" while it is not yet or no longer connected. Only a page
  * that holds the socket shows it. On the one line below 640 (PA-14) it is its dot: at 360 the line
- * holds the block (124.8 px), the epoch and its bar (124.8 px) and the dot with two 12 px gaps,
- * 280.6 of 328 px, where "Not live" (72.6 px with its dot) would make it 346.2. The word stays for a
- * screen reader and in the title, and the status line's mode block says it on every page.
+ * holds the block (134.4 px with eight digits, 142.8 with nine), the epoch and its bar (134.4 px)
+ * and the dot with two 12 px gaps, 299.8 of 328 px (308.2), where "Not live" (77.4 px with its dot)
+ * would make it 370.2. The word stays for a screen reader and in the title, and the status line's
+ * mode block says it on every page.
  */
 function LiveMark({ connected, form }: { connected: boolean; form: PhoneForm }) {
   return (

@@ -47,11 +47,34 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 ## Rules for the shared pieces
 
+- **Header** (every page; `components/layout/header.tsx`): the nav yields to the search field's
+  floor, measured (principle 4; `lib/header-fit.ts`). The nav stands in the row — the wordmark,
+  the nav (the network switcher first where two networks or more are configured), the search
+  field, the theme switcher — while the field keeps at least its floor beside it; where it would
+  not, the nav goes into the menu and the row takes its phone form: the wordmark, the menu button,
+  the section word (from 640), the field, with the network switcher and the theme as rows of the
+  menu, which is the phone menu as it is. The row is measured (its width less the page's gutter)
+  and its parts are budgeted from what they write, so a nav entry, a longer label or a second
+  network is weighed by the same rule, not by a breakpoint or a count. Below `md` the row has its
+  phone form (at 608 px the nav would leave the field 16 px).
+  Before the row is measured it draws the form of its breakpoint (the nav from `md`), and the
+  layout effect measures it before the first paint. Both forms are 52 px tall (60 from `lg`), so
+  nothing below moves when the form changes. At the 12 / 13 / 14 px steps one network keeps the
+  nav from 768; with two, the switcher (117.5 px with its margin, its name in the tracked
+  eyebrow) would leave the field 10.5 px across 768–1023, so there the nav is in the menu, and
+  from 1024 it stands (210.5 px).
 - **Header search field**: the long placeholder `search block / tx / address / cell` (285.6 px at
   the 14 px body step, `lib/type-metrics.ts`) only when the field's measured text box holds it
-  whole, `search` otherwise, chosen before paint (principle 4; a field 351.6 px wide from `md`:
-  the header gives about 169 px at 768–1023, 368.6 px at 1024 with one network but less beside the
-  network switcher, 460.8 px at 1280). The `/` key is drawn from `md`.
+  whole, `search` otherwise, chosen before paint (principle 4; a field 351.6 px wide from `md`,
+  the text box being the field less 29 px on the left and 37 on the right). The `/` key is drawn
+  from `md`. The field's floor is a field that holds `search` and, from `md`, the `/` key's room:
+  116.4 px from `md`, 92.4 below it. With one network the row leaves the field 460.8 px at 1280
+  (its 36vw cap), 352 at 1024 (the long placeholder with 0.4 px to spare), 144 at 768–1023, its
+  288 px cap at 640–767 whatever the section word beside the menu, and 212, 182 and 142 at 390,
+  360 and 320. With two networks it leaves 460.8 at 1280 and 210.5 at 1024 beside the switcher,
+  and across 768–1023, where the nav is in the menu (the header's rule, above), its cap: 288 at
+  768, 36vw above it, the long placeholder from 977 px
+  (`__tests__/components/shell-budget.test.tsx` states each width).
 - **Vitals strip** (every page, under the header): one wrapping row from `md` up, the same on
   every page. Below `md` the home page keeps the whole strip in three groups on their own lines —
   block number with the live mark, the epoch with its bar, `index / length` and the time left, the
@@ -60,25 +83,41 @@ The 640–767 band has one content width to design for. Below 640 the container 
   reader, and the status line's mode block says it). The mining figures and the epoch's position
   and time left are the home page's below `md` — a ruled exception to principle 2 (UI review
   2026-11-14, PA-14): with the 52 px header and the 26 px status line the three lines took 212 of
-  an 844 px first screen on every page. At 360 the line was 280.6 of 328 px at the 11 / 13 px
-  steps (readability R4 moved them to 12 / 14 px: about 8 % wider, re-measured at the gate); page
-  content starts at about y = 111 at 390 (53 px header, 42 px strip, its 16 px margin).
+  an 844 px first screen on every page. At the 12 / 13 / 14 px steps (readability R4) that line is
+  280.8 of 328 px at 360 (289.2 with a nine-digit block) and 280.8 of 288 at 320, where a ninth
+  digit puts the epoch under the block; it is 44 px tall at 390. On the home page the epoch's line
+  breaks between its two groups, the epoch with its bar and its position with the time left, never
+  inside either, where the line cannot hold both (340.8 px at the widest content: at 360 and
+  below). From `md` the row wraps by whole items: one line at 1280 (1,223.8 of 1,232 px at the
+  widest), the difficulty and the live mark on a second line at 1024, the block and the epoch on
+  the first and the mining figures and the live mark on the second at 768.
 - **Status line** (every page; `components/layout/status-line.tsx`): the terminal session's last
   row, fixed at the foot of the window, 26 px on the elevated ground under a 1 px line; `body`
   keeps 26 px of bottom padding so no page ends under it. From `md` up it is one row — the mode
   block (`LIVE` / `SYNCING` / `OFFLINE`), the network, the tip, the release, the key hints, the
-  clock — and it must fit at 768 px (measured: 753 of 753 px with 26 px to spare, so a release
-  string five or more characters longer than `0.8.2` would clip the clock). Below `md` it is one
-  row of the mode, the network, the tip and the clock; the release and the hints are the wide
-  form's only (a touch screen has no keys). From `md` the release is in the status line and the
-  clock's zone in the `?` help; below `md` the footer's last row says both — designed, not
-  dropped. Never two rows, never a sideways scroller, never over the page's last prompt.
+  clock. Below `md` it is one row of the mode, the network, the tip and the clock; the release and
+  the hints are the wide form's only (a touch screen has no keys). From `md` the release is in the
+  status line and the clock's zone in the `?` help; below `md` the footer's last row says both —
+  designed, not dropped. Within its form the line draws a part only where its measured width
+  holds it (principle 4; `lib/status-line-fit.ts`: the meta step's 12 px, each part measured from
+  what it writes) and gives its parts up in one order: the key hints from the last (`g b blocks`,
+  `/ search`, `? help`: the help lists them all), the tip's word (the number stays: its `#` says it
+  is a block), the tip (the vitals strip's first figure), the network, the release; the mode and
+  the clock never. At the widest real content (a nine-digit tip, `SYNCING`, `· syncing`) the wide
+  form holds every part from 810 px and gives up `g b blocks` at 768 (713.6 of 768 px: room for a
+  release seven characters longer); the narrow form holds every part down to 390, the tip's
+  number without its word at 360 while the mode is `SYNCING` or `OFFLINE`, and at 320 the number
+  alone while `LIVE`, no tip otherwise. Never two rows, never a part cut at the edge, never a
+  sideways scroller, never over the page's last prompt.
 - **Page end** (every page, the not-found and error pages too): the footer is the page's last
   quiet row, then the empty prompt (the cinnabar square and the cursor), the last thing before the
   status line. The footer's "keyboard shortcuts" is drawn from `md` only; below `md` the footer
   ends instead on a line of its own with the release and the clock's zone, as in
-  `ckbadger 0.8.2 · asia/shanghai`: each unbreakable, the line breaking only between them (at 360
-  the links take two lines, 256.0 and 263.2 of 328 px, and this one 216.0).
+  `ckbadger 0.8.2 · asia/shanghai`: each unbreakable, the line breaking only between them (at 13
+  px the links take two lines at 390, 360 and 320, 274.0 and 281.8 px, one at 640, 575.8 of 608,
+  and this one 234.0, breaking for a zone of more than 25 characters at 360). From `md`, with
+  "keyboard shortcuts", the links need 736.2 px: one line from 1024, two at 768, where the last
+  takes a line of its own.
 - **Transaction pipeline** (homepage): a block is a plate 99 px wide; one row down to a 589 px
   canvas (two whole plates); below that a vertical timeline (the mempool and proposed wells, the
   dashed next block and the plates as rows 44 px tall, taller only for a 3×3 or 4×4 square or a

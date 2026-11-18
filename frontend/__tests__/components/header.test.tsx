@@ -134,7 +134,12 @@ describe('Header', () => {
       const { unmount } = render(<Header />);
       const span = screen.getByText(word, { selector: 'span' });
       expect(span, path).toHaveClass('hidden', 'sm:inline', 'text-jade');
-      expect(span.parentElement, path).toHaveClass('md:hidden');
+      // beside the menu button, in the row's menu form (below md, and from md where the row cannot
+      // hold the nav: readability F3-f); unmeasured at jsdom's 1024 px the row draws the nav
+      const group = span.parentElement as HTMLElement;
+      expect(group, path).toContainElement(screen.getByRole('button', { name: 'Toggle menu' }));
+      expect(group, path).toHaveClass('hidden');
+      expect(group.className, path).not.toMatch(/\bmd:/);
       unmount();
     }
   });
@@ -479,7 +484,10 @@ describe('Header · the theme control', () => {
     render(<Header />);
     const banner = screen.getByRole('banner');
     const switcher = within(banner).getByTestId('theme-switcher');
-    expect(switcher).toHaveClass('hidden', 'md:block');
+    // drawn in the row's nav form (from md where the row holds the nav: readability F3-f), which
+    // the row has unmeasured at jsdom's 1024 px; in the menu form the menu's row carries the choice
+    expect(switcher).toHaveClass('block');
+    expect(switcher).not.toHaveClass('hidden');
     expect(within(switcher).getByRole('button', { name: 'Theme: Dark' })).toHaveAttribute(
       'aria-haspopup',
       'menu'
