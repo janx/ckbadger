@@ -70,6 +70,75 @@ describe('line-runs reads the runs a line cannot break inside', () => {
     ).toEqual([['▯Pending', 7 + 6 + 54.6]]);
   });
 
+  // Lane B4 fix round (review-rules-tests, the coordinator's item 5): a flex item that cannot
+  // shrink (`shrink-0`, `flex-none`) stands at its max-content width, so a line breaks nowhere
+  // inside it, its spaces and its own wrapping rows included: one run (a block inside it still
+  // starts a line of its own). The reader split it at its spaces, a run narrower than the browser's.
+  it('reads a flex item that cannot shrink as one run', () => {
+    for (const rigid of ['shrink-0', 'flex-shrink-0', 'flex-none'])
+      expect(
+        runs(
+          <span className="text-small flex flex-wrap gap-2">
+            <span>ab</span>
+            <span className={rigid}>
+              cd ef{' '}
+              <span className="inline-flex flex-wrap gap-2">
+                <span>gh</span>
+                <span>ij</span>
+              </span>
+            </span>
+          </span>
+        )
+      ).toEqual([
+        ['ab', 15.6],
+        // "cd ef " and "gh", the inner row's 8 px gap, "ij"
+        ['cd ef ghij', 10 * 7.8 + 8],
+      ]);
+    // a block inside it is a line of its own, at its max-content width too
+    expect(
+      runs(
+        <span className="text-small flex flex-wrap gap-2">
+          <span className="shrink-0">
+            one two<div>three four</div>
+          </span>
+        </span>
+      )
+    ).toEqual([
+      ['one two', 7 * 7.8],
+      ['three four', 10 * 7.8],
+    ]);
+    // an item that may shrink (the default, `shrink`) breaks at its spaces; in a column, an item's
+    // shrink is along the column and its width is the column's
+    expect(
+      runs(
+        <span className="text-small flex flex-wrap gap-2">
+          <span className="shrink">cd ef</span>
+        </span>
+      )
+    ).toEqual([
+      ['cd', 15.6],
+      ['ef', 15.6],
+    ]);
+    expect(
+      runs(
+        <span className="text-small flex flex-col">
+          <span className="shrink-0">cd ef</span>
+        </span>
+      )
+    ).toEqual([
+      ['cd', 15.6],
+      ['ef', 15.6],
+    ]);
+    // a rigid item of a set width: its box, not its text, stands in the line; not read
+    expect(() =>
+      runs(
+        <span className="text-small flex">
+          <span className="w-14 shrink-0">cd ef</span>
+        </span>
+      )
+    ).toThrow(/cannot shrink and has a set width/);
+  });
+
   it('starts a run at a block, and leaves out what is not drawn', () => {
     expect(
       runs(
