@@ -37,7 +37,7 @@ import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
-import { amountDigits, amountText } from '@/lib/amount-form';
+import { tokenAmountText } from '@/lib/amount-form';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { COUNT_TRACK_PX } from '@/components/ui/aligned-bar';
@@ -75,12 +75,8 @@ const TRACK_PX = COUNT_TRACK_PX;
  * unknown. A larger amount breaks after a thousands separator.
  */
 export function widestTokenAmount(decimals: number | null): string {
-  if (decimals === null)
-    return `${amountText(amountDigits(BigInt(999_999_999), 0, 'exact'), false)} (raw)`;
-  return amountText(
-    amountDigits(BigInt(10) ** BigInt(9 + decimals) - BigInt(1), decimals, 'column'),
-    false
-  );
+  if (decimals === null) return `${tokenAmountText(BigInt(999_999_999), 0, 'exact')} (raw)`;
+  return tokenAmountText(BigInt(10) ** BigInt(9 + decimals) - BigInt(1), decimals, 'column');
 }
 
 /** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
