@@ -338,11 +338,13 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
         t.textContent,
         t.getAttribute('data-row-tag'),
       ]);
-    // Fully on-chain tiers are the accent tag; a centralized mix is a plain one.
-    expect(tags(pure)).toEqual([
-      ['Spore', 'default'],
-      ['Pure CKB', 'accent'],
-    ]);
+    // Re-pinned (readability 2026-11-18, one class one hue): a fully on-chain tier is the site's
+    // composition badge, 18 px as a tag is, in its class's frame and ink (was the accent tag, in
+    // jade for both on-chain tiers); a centralized mix is still a plain tag.
+    expect(tags(pure)).toEqual([['Spore', 'default']]);
+    const badge = pure.querySelector('[data-composition="pure_ckb"]')!;
+    expect(badge).toHaveTextContent('Pure CKB');
+    expect(badge).toHaveClass('h-[18px]', 'text-meta');
     expect(tags(central)).toEqual([
       ['m-NFT', 'default'],
       ['Centralized mix', 'default'],
