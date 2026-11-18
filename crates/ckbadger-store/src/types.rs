@@ -3647,6 +3647,179 @@ mod tests {
         );
     }
 
+    // ── F-6: every non-cellbase transaction is counted in exactly one kind ──
+
+    /// The activity kinds (the global filter's names) one transaction's
+    /// accumulation put it in, once per counter that moved.
+    fn counted_kinds(stats: &DailyActivityStats) -> Vec<&'static str> {
+        let mut kinds = Vec::new();
+        for (kind, count) in [
+            ("ckb", stats.transfer_count),
+            (
+                "dao",
+                stats.dao_deposit_count
+                    + stats.dao_withdraw_request_count
+                    + stats.dao_withdraw_complete_count,
+            ),
+            ("token", stats.token_count),
+            ("object", stats.object_count),
+            ("identity", stats.identity_count),
+            ("script", stats.script_call_count),
+            ("unknown", stats.unknown_count),
+        ] {
+            kinds.extend(std::iter::repeat_n(kind, count as usize));
+        }
+        kinds
+    }
+
+    /// One transaction from its signals: `tags` spread over two participants
+    /// (bit by bit, so a signal on either party counts), protocol actions as
+    /// `protocol:action`, and one unrecognized type / lock call when asked.
+    fn signal_tx(
+        tags: u16,
+        protocols: &[&str],
+        type_call: bool,
+        lock_call: bool,
+        is_cellbase: bool,
+    ) -> TxActions {
+        let first = tags & 0b0101_0101_0101_0101;
+        let second = tags & !first;
+        TxActions {
+            tx_hash: vec![0x61; 32],
+            block_hash: vec![0x62; 32],
+            block_number: 9,
+            tx_index: if is_cellbase { 0 } else { 1 },
+            timestamp: 0,
+            is_cellbase,
+            protocol_actions: protocols
+                .iter()
+                .map(|key| {
+                    let (protocol, action) = key.split_once(':').expect("protocol:action");
+                    ProtocolAction::new(protocol, action, serde_json::json!({}))
+                })
+                .collect(),
+            type_calls: if type_call {
+                vec![TypeCallEntry {
+                    type_code_hash: vec![0x63; 32],
+                    type_hash_type: 1,
+                    type_args: vec![],
+                }]
+            } else {
+                vec![]
+            },
+            lock_calls: if lock_call {
+                vec![LockCallEntry {
+                    lock_code_hash: vec![0x64; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                }]
+            } else {
+                vec![]
+            },
+            participants: [first, second]
+                .into_iter()
+                .enumerate()
+                .map(|(i, tags)| ParticipantDelta {
+                    id: ParticipantId::Lock([0x70 + i as u8; 32]),
+                    ckb_delta: if i == 0 { -100 } else { 99 },
+                    used_delta: 0,
+                    item_deltas: vec![],
+                    tags,
+                    roles: 0,
+                })
+                .collect(),
+        }
+    }
+
+    /// F-6 (mainnet, 2026-11-16 and 17: 56 and 6 transactions): a CKB-only
+    /// Fiber channel open — a protocol action, no item delta, no
+    /// unrecognized type script — was counted in no kind, and not in
+    /// `unknown` either, so "All 7,847" stood beside kinds summing to 7,841.
+    /// The global filter lists it under Protocol; its day counts it there.
+    #[test]
+    fn a_fiber_channel_open_alone_is_counted_in_the_protocol_kind() {
+        let tx = signal_tx(TAG_PROTOCOL, &["fiber:channel_open"], false, false, false);
+        assert_eq!(
+            crate::global_bucket::classify_global_bucket(&tx).map(|b| b.as_filter()),
+            Some("protocol")
+        );
+        let mut stats = DailyActivityStats::default();
+        stats.accumulate_from_tx_actions(&tx);
+        assert_eq!(counted_kinds(&stats), vec!["protocol"]);
+    }
+
+    /// The invariant over every combination of signals: a non-cellbase
+    /// transaction raises exactly one kind, the bucket the global filter
+    /// lists it under (`classify_global_bucket`); a cellbase raises only the
+    /// coinbase counter.
+    #[test]
+    fn every_transaction_is_counted_in_exactly_the_kind_its_filter_lists() {
+        const TAG_BITS: [u16; 7] = [
+            TAG_TOKEN,
+            TAG_OBJECT,
+            TAG_IDENTITY,
+            TAG_DAO,
+            TAG_TYPE_CALL,
+            TAG_LOCK_CALL,
+            TAG_PROTOCOL,
+        ];
+        let protocol_sets: [&[&str]; 9] = [
+            &[],
+            &["dao:deposit"],
+            &["dao:withdraw_request", "dao:withdraw_complete"],
+            &["fiber:channel_close"],
+            &["rgbpp:leap_to_ckb"],
+            &["dotbit:renew_account"],
+            &["dotcell:update"],
+            &["utxoswap:swap_exact_input_settled", "dao:deposit"],
+            &["stablepp:mint", "dotbit:edit_records"],
+        ];
+        let mut failures = Vec::new();
+        let mut cases = 0;
+        for mask in 0u16..(1 << TAG_BITS.len()) {
+            let tags = TAG_BITS
+                .iter()
+                .enumerate()
+                .filter(|(bit, _)| mask & (1 << bit) != 0)
+                .fold(0u16, |acc, (_, tag)| acc | tag);
+            for protocols in protocol_sets {
+                for (type_call, lock_call) in
+                    [(false, false), (true, false), (false, true), (true, true)]
+                {
+                    for is_cellbase in [false, true] {
+                        cases += 1;
+                        let tx = signal_tx(tags, protocols, type_call, lock_call, is_cellbase);
+                        let mut stats = DailyActivityStats::default();
+                        stats.accumulate_from_tx_actions(&tx);
+                        let got = counted_kinds(&stats);
+                        let ok = match crate::global_bucket::classify_global_bucket(&tx) {
+                            None => got.is_empty() && stats.coinbase_count == 1,
+                            Some(bucket) => {
+                                got == vec![bucket.as_filter()] && stats.coinbase_count == 0
+                            }
+                        };
+                        if !ok {
+                            failures.push(format!(
+                                "tags=0b{tags:08b} protocols={protocols:?} type_call={type_call} \
+                                 lock_call={lock_call} cellbase={is_cellbase}: filter lists it \
+                                 under {:?}, counted in {got:?} (coinbase {})",
+                                crate::global_bucket::classify_global_bucket(&tx)
+                                    .map(|b| b.as_filter()),
+                                stats.coinbase_count
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {cases} transactions not counted in exactly their filter's kind; first: {:#?}",
+            failures.len(),
+            &failures[..failures.len().min(5)]
+        );
+    }
+
     /// Every semantic tag owns one bit of `TxIndexEntry.semantic_tags`. A
     /// duplicated bit would make one protocol's cells report as another's on
     /// every transaction row.

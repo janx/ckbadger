@@ -4243,6 +4243,81 @@ mod activity_stats_tests {
         assert_eq!(stats.unknown_count, 0);
     }
 
+    /// The kinds (global filter names) one transaction's accumulation put it
+    /// in, once per counter that moved.
+    fn counted_kinds(stats: &DailyActivityStats) -> Vec<&'static str> {
+        let mut kinds = Vec::new();
+        for (kind, count) in [
+            ("ckb", stats.transfer_count),
+            (
+                "dao",
+                stats.dao_deposit_count
+                    + stats.dao_withdraw_request_count
+                    + stats.dao_withdraw_complete_count,
+            ),
+            ("token", stats.token_count),
+            ("object", stats.object_count),
+            ("identity", stats.identity_count),
+            ("script", stats.script_call_count),
+            ("unknown", stats.unknown_count),
+        ] {
+            kinds.extend(std::iter::repeat_n(kind, count as usize));
+        }
+        kinds
+    }
+
+    /// F-6: every protocol the production detectors know (both networks),
+    /// and the DAO, may act on CKB alone — no item delta, no unrecognized
+    /// type script (a Fiber channel open, a `.bit` renewal, a UTXOSwap
+    /// intent). Each such transaction is counted in exactly one kind: the
+    /// one the global filter lists it under.
+    #[test]
+    fn a_ckb_only_action_of_every_known_protocol_lands_in_its_filter_kind() {
+        let mut protocols: Vec<&'static str> = [true, false]
+            .into_iter()
+            .flat_map(|mainnet| {
+                crate::db::writer::activities::production_detectors(mainnet)
+                    .iter()
+                    .map(|detector| detector.protocol())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        protocols.push("dao");
+        protocols.sort_unstable();
+        protocols.dedup();
+        assert!(protocols.len() >= 7, "{protocols:?}");
+        let mut failures = Vec::new();
+        for protocol in &protocols {
+            let (tags, action) = if *protocol == "dao" {
+                (ckbadger_store::types::TAG_PROTOCOL | TAG_DAO, "deposit")
+            } else {
+                (ckbadger_store::types::TAG_PROTOCOL, "probe")
+            };
+            let actions = make_tx_actions(
+                false,
+                vec![make_participant(-61_00000000, tags)],
+                vec![ProtocolAction::new(
+                    *protocol,
+                    action,
+                    serde_json::json!({}),
+                )],
+                vec![],
+            );
+            let expected = ckbadger_store::classify_global_bucket(&actions)
+                .expect("a non-cellbase transaction has a bucket")
+                .as_filter();
+            let mut stats = DailyActivityStats::default();
+            accumulate_tx_actions_stats(&actions, &mut stats);
+            let got = counted_kinds(&stats);
+            if got != vec![expected] {
+                failures.push(format!(
+                    "{protocol}: filter lists it under {expected}, counted in {got:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     #[test]
     fn test_accumulate_protocol_action_counts() {
         let mut stats = DailyActivityStats::default();
