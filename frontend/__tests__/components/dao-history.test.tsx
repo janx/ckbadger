@@ -97,7 +97,7 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('draws deposited large with its name and values inside the plot, the share and the weeks as two 72 px multiples under it', () => {
+  it('draws deposited large with its name and values inside the plot, the share and the weeks as two 73 px multiples under it', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
@@ -113,7 +113,10 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(MAIN_PLOT_H);
     expect(share).toHaveAttribute('height', String(MULTIPLE_H));
     expect(weekly).toHaveAttribute('height', String(MULTIPLE_H));
-    expect(MULTIPLE_H).toBe(72);
+    // re-pinned (readability F3): a multiple is its band and 54 px of data; the band is its top
+    // row, the 14 px end value's tight line (17) and 1 px over and under it: 19 + 54 = 73 (was
+    // 18 + 54 = 72, where the end value reached 0.2 px under the band)
+    expect(MULTIPLE_H).toBe(73);
     // Names inside the plots, no caption, no separate heading.
     expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
       `CKB deposited · every complete day since ${date(0)}`
@@ -431,7 +434,9 @@ describe('DaoHistory at phone width (DAO-22)', () => {
     // the week of −12.34567891 moves p95, so the scale is ±20 (the note keeps its 21 characters)
     expect(note).toHaveTextContent('±20 scale, 1 week cut');
     expect(note).toHaveAttribute('x', '8');
-    expect(note).toHaveAttribute('dy', '12');
+    // re-pinned (readability F3): the note's line stands under the row's 17 px line, 1 + 17 +
+    // 11.4 = 29.4 under the top, 15.6 under the row's baseline at 13.8 (was 12, meeting the name)
+    expect(note).toHaveAttribute('dy', '15.6');
     const name = container.querySelector('[data-panel="deposited"] [data-role="chart-name"]')!;
     expect(name.querySelector('tspan')).toHaveTextContent(`every complete day since ${date(0)}`);
   });
@@ -545,10 +550,9 @@ describe('DaoHistory: every word in its band (readability F3)', () => {
     };
   }
 
-  /** A panel's words, its band over the data (where the day cursor starts) and its frame. */
+  /** A panel's svg, its band over the data (where the pinned day's cursor starts) and its frame. */
   function panel(container: HTMLElement, name: string) {
     const svg = container.querySelector(`[data-panel="${name}"]`)!;
-    fireEvent.click(svg, { clientX: 40 });
     const cursor = svg.querySelector('[data-cursor]')!;
     return { svg, band: Number(cursor.getAttribute('y1')), frame: viewBox(svg) };
   }
@@ -558,6 +562,8 @@ describe('DaoHistory: every word in its band (readability F3)', () => {
     stubSvgWidth(width);
     const { deposited, ratio } = mainnet();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    // a tap pins a day: its cursor is drawn in every panel, from the top of the panel's data
+    fireEvent.click(container.querySelector('[data-panel="share"]')!, { clientX: 40 });
     const multiples = [604, 292, 358].includes(width);
     const panels = [
       ...([1232, 608, 358].includes(width) ? ['deposited'] : []),
