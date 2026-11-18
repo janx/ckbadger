@@ -126,7 +126,8 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       rerender(<ParticipantRefView participant={party} size="row" compact={compact} />);
       const link = screen.getByRole('link');
       expectNoAquaLink(container);
-      expect(link).toHaveClass('text-text-dim', 'hover:text-jade');
+      // re-pinned with readability ruling R3: a link reads in the reading ink (it was dim)
+      expect(link).toHaveClass('text-text', 'hover:text-jade');
     }
   });
 

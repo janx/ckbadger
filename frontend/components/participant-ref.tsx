@@ -25,7 +25,10 @@ import { cn } from '@/lib/utils';
  * `linked={false}` (consistency C3, compact only) writes the address or lock hash
  * as dim text with the whole value in its hover, underlined jade (`.this-address`,
  * material pass v2 move 5): the party a page is about is never a link to that
- * same page.
+ * same page. It stays quiet under readability ruling R3 as a unit that repeats
+ * down a column does: it is the page's own party, written on every row. Every
+ * other party is a value or a link, the reading ink (or jade-dim, a CKB address
+ * in a row); its roles and "unresolved" are labels, quiet.
  * In a column too narrow for the address and its roles, the roles wrap under the
  * address rather than being clipped ("ow" for owner_from in a 136 px track).
  * `size` is the size of the row the party stands in (U-09), for its address or lock hash alike.
@@ -71,7 +74,7 @@ export function ParticipantRefView({
                 ? 'text-text hover:text-jade'
                 : isCkbAddr
                   ? 'text-jade-dim hover:text-jade'
-                  : 'text-text-dim hover:text-jade'
+                  : 'text-text hover:text-jade'
             )}
             title={address}
             onClick={(e) => e.stopPropagation()}
@@ -105,7 +108,7 @@ export function ParticipantRefView({
         <Link
           href={`/address/${lockHash}`}
           className={cn(
-            'text-text-dim hover:text-jade font-mono transition-colors',
+            'text-text hover:text-jade font-mono transition-colors',
             compact ? 'text-small shrink-0' : 'text-body'
           )}
           title={lockHash}
@@ -127,7 +130,7 @@ export function ParticipantRefView({
   return (
     <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
       <span
-        className={cn('text-text-dim font-mono', compact ? 'text-small' : 'text-body')}
+        className={cn('text-text font-mono', compact ? 'text-small' : 'text-body')}
         title={prefix}
       >
         <ShortId value={prefix} kind="hash" size={size} />

@@ -363,7 +363,7 @@ describe('CapacityPartition and CellBar: their numbers read, their labels and un
       />
     );
     expect(inkOf(screen.getByText('30.50%'))).toBe(READING);
-    expect(inkOf(screen.getByText('Occupied'))).toBe(QUIET);
+    expect(inkOf(screen.getByText('occupied'))).toBe(QUIET);
   });
 
   it('reads a part’s bytes in the reading ink; the unit after them is quiet', () => {

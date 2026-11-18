@@ -73,7 +73,7 @@ export interface ListTableProps<T> {
 export type ListTableDensity = 'default' | 'row';
 
 /**
- * A column head (B5): sticky, on the vitals strip's own opaque ground so no row shows through, one
+ * A column head (B5; a label, so quiet by R3): sticky, on the vitals strip's own opaque ground so no row shows through, one
  * layer under the site header (z-40). Its rule is its own 1 px line in the row-rule ink: a
  * collapsed table border is painted by the table and would stay behind where the head was.
  */
@@ -190,7 +190,8 @@ export function ListTable<T>({
       className={cn('min-w-0 [contain:inline-size]', className)}
     >
       {!rows.length ? (
-        <p className="text-text-dim text-small py-6">{empty}</p>
+        // the empty list's sentence says what is (not) there: the reading ink (R3)
+        <p className="text-text text-small py-6">{empty}</p>
       ) : form === 'rows' ? (
         <div role="list" aria-label={`${label}, compact`}>
           {rows.map((row) => (
