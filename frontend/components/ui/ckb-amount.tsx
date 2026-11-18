@@ -53,7 +53,9 @@ function Padding({ d }: { d: AmountDigits }) {
  * A CKB amount in the form its context names (`lib/amount-form.ts`: exact, column, summary,
  * compact), in one ink. A shortened figure carries its exact value and unit in `title`, and is
  * never an operand. Zero is "0 CKB" in every form (consistency plan C4): nothing moved, so there
- * are no decimals to read, and that 0 is a datum in the dim ink (R4).
+ * are no decimals to read, and that 0 is a datum in the dim ink (R4). Where no sign is written
+ * (`signed={false}`) the amount is never negative: one that is fails, as a `TokenAmount` does,
+ * rather than read as its absolute value.
  */
 export function CkbAmount({
   shannons,
@@ -76,6 +78,8 @@ export function CkbAmount({
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
 }) {
+  if (!signed && shannons < BigInt(0))
+    throw new Error(`CKB amount ${shannons} shannons is negative where a sign is not written`);
   const unitEl = unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>;
   if (shannons === BigInt(0))
     return (

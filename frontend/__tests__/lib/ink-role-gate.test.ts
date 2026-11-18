@@ -20,12 +20,16 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  * - `prose`: a paragraph, `<p>`.
  *
  * An element carries the quiet ink by its own class (`text-text-dim` at rest: with no variant, or a
- * responsive one; `hover:text-text-dim` is a pointer's state) or, when it sets no ink of its own,
- * by the nearest ink its JSX ancestors in the same file set around it (a link in a dim note). A
- * class is read through `?:`, `&&`, `cn(…)`, template literals and the file's own constants, so a
- * class that is quiet in one branch counts. An element handed to a component as a prop is the
- * component's to ink, and is not followed into it; a `quiet` class on the element or an ancestor
- * exempts it (the set-back row draws every word quiet on purpose).
+ * responsive one; `hover:text-text-dim` is a pointer's state; an arbitrary value naming the quiet
+ * ink's variable, `text-[color:var(--c-text-dim)]`), by its own `style` colour (`color('text-dim')`
+ * or a string naming that variable; `alpha(…)` and `fade(…)` are other inks) or, when it sets no
+ * ink of its own, by the nearest ink its JSX ancestors in the same file set around it (a link in a
+ * dim note). A class or a colour is read through `?:`, `&&`, `cn(…)`, template literals and the
+ * file's own constants, so one that is quiet in one branch counts. An element handed to a
+ * component as a prop is the component's to ink, and is not followed into it; a `quiet` class on
+ * the element or an ancestor exempts it (the set-back row draws every word quiet on purpose), and
+ * every element that carries that class is pinned by file in QUIET_SITES, so an exemption is a
+ * decision too.
  *
  * The sites tolerated today are listed per file, with their count per kind and a reason: this is
  * the work list of the page lanes (P1 chain, P2 assets, P3 lists, P4 topics), B7 (prose) and the
@@ -33,6 +37,14 @@ import { TYPE_STEPS } from '@/lib/type-scale';
  * does a site that went (its count must be lowered), so the list only shrinks. A paragraph that is
  * a note under a figure is quiet by rule: when a lane decides that a `<p>` is such a note, it keeps
  * its count here with the reason saying so, or draws the note as something other than a `<p>`.
+ *
+ * Limits, the routes a source gate cannot see: a class or a colour imported from another module
+ * (only the file's own constants are read; `BOARD_INKS`, `inkStyle(…)` and a `--ink` set through
+ * them are not followed); a component that inks its children (the ancestor walk sees only the
+ * elements of the file that carry a `className` or a `style`); ink set in CSS (`.prose-tier2 p`,
+ * `.comment` in app/globals.css; lane F3 step 2 takes them, and a CSS check should then hold
+ * them); a `style` that is not an object literal; and, because the list counts sites per kind and
+ * not by name, a new site that replaces a fixed one of the same kind in the same file.
  */
 
 type Kind = 'link' | 'amount' | 'td' | 'prose';
@@ -598,9 +610,13 @@ function inkOfClass(token: string): 'dim' | 'ink' | null {
   const key = utility.slice('text-'.length);
   if (key === 'text-dim') return 'dim';
   if (NOT_INK.has(key)) return null;
-  if (key.startsWith('[')) return key.includes('color:') ? 'ink' : null;
+  // an arbitrary value: the quiet ink's variable, by name or by its channels, is the quiet ink
+  if (key.startsWith('['))
+    return QUIET_VAR.test(key) ? 'dim' : key.includes('color:') ? 'ink' : null;
   return 'ink';
 }
+/** The quiet ink's CSS variables (`lib/palette.ts`): its colour and its channels. */
+const QUIET_VAR = /--(?:c|rgb)-text-dim\b/;
 
 const LINK = (tag: string) => tag === 'a' || tag === 'Address' || /^(?:[A-Z]\w*)?Link$/.test(tag);
 const AMOUNT_DEFAULT_TONE: Readonly<Record<string, string>> = {
@@ -627,6 +643,17 @@ function unwrap(e: ts.Expression): ts.Expression {
 
 /** Every site of the four kinds in a TSX source. */
 function inkRoleSites(code: string): Site[] {
+  return scanInkRoles(code).sites;
+}
+
+/** An element that carries the `quiet` class: every word under it is exempt from the gate. */
+interface QuietSite {
+  line: number;
+  what: string;
+}
+
+/** Every site of the four kinds in a TSX source, and every element that exempts its subtree. */
+function scanInkRoles(code: string): { sites: Site[]; quiet: QuietSite[] } {
   const source = ts.createSourceFile(
     'scan.tsx',
     code,
@@ -703,22 +730,58 @@ function inkRoleSites(code: string): Site[] {
     }
     return undefined;
   };
-  /** The element's own classes: is it quiet (the set-back class), dim, inked otherwise, or neither. */
+  /**
+   * Whether a style's colour can be the quiet ink: `color('text-dim')` (`lib/palette.ts`) or a
+   * string naming its variable, through `?:`, `&&`, `||`, `??` and the file's own constants. Any
+   * other call (`alpha('text-dim', …)`, `fade(…)`) is another ink.
+   */
+  const quietColour = (e0: ts.Expression, depth = 0): boolean => {
+    if (depth > 12) return false;
+    const e = unwrap(e0);
+    const next = (x: ts.Expression) => quietColour(x, depth + 1);
+    if (ts.isConditionalExpression(e)) return next(e.whenTrue) || next(e.whenFalse);
+    if (ts.isBinaryExpression(e)) {
+      const op = e.operatorToken.kind;
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken) return next(e.right);
+      if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken)
+        return next(e.left) || next(e.right);
+      return false;
+    }
+    if (ts.isCallExpression(e))
+      return (
+        text(e.expression) === 'color' &&
+        e.arguments.length > 0 &&
+        leaves(e.arguments[0]).includes('text-dim')
+      );
+    if (ts.isIdentifier(e)) return (locals.get(e.text) ?? []).some(next);
+    if (ts.isStringLiteralLike(e) || ts.isTemplateExpression(e))
+      return leaves(e).some((s) => QUIET_VAR.test(s));
+    return false;
+  };
+  /** The colour an element's own `style` object sets, if it sets one. */
+  const styleColour = (n: El): ts.Expression | undefined => {
+    const style = attr(n, 'style');
+    if (style === undefined || !ts.isObjectLiteralExpression(unwrap(style))) return undefined;
+    for (const p of (unwrap(style) as ts.ObjectLiteralExpression).properties) {
+      if (ts.isPropertyAssignment(p) && ts.isIdentifier(p.name) && p.name.text === 'color')
+        return p.initializer;
+      if (ts.isShorthandPropertyAssignment(p) && p.name.text === 'color') return p.name;
+    }
+    return undefined;
+  };
+  /**
+   * The element's own ink: is it quiet (the set-back class), dim (by its class, an arbitrary-value
+   * class or its style's colour), inked otherwise, or neither.
+   */
   const classes = (n: El) => {
     const value = attr(n, 'className');
     const tokens = value ? tokensOf(value) : [];
     const inks = tokens.map(inkOfClass);
-    const style = attr(n, 'style');
-    const styled =
-      style !== undefined &&
-      ts.isObjectLiteralExpression(unwrap(style)) &&
-      (unwrap(style) as ts.ObjectLiteralExpression).properties.some(
-        (p) => p.name !== undefined && ts.isIdentifier(p.name) && p.name.text === 'color'
-      );
+    const colour = styleColour(n);
     return {
       quiet: tokens.includes('quiet'),
-      dim: inks.includes('dim'),
-      inked: styled || inks.some((i) => i !== null),
+      dim: inks.includes('dim') || (colour !== undefined && quietColour(colour)),
+      inked: colour !== undefined || inks.some((i) => i !== null),
     };
   };
 
@@ -776,9 +839,11 @@ function inkRoleSites(code: string): Site[] {
   };
 
   const sites: Site[] = [];
+  const quiet: QuietSite[] = [];
   const visit = (node: ts.Node) => {
     if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
       const tag = tagOf(node);
+      if (classes(node).quiet) quiet.push({ line: lineOf(node), what: `<${tag}>` });
       const kind: Kind | null = LINK(tag)
         ? 'link'
         : tag in AMOUNT_DEFAULT_TONE
@@ -824,7 +889,7 @@ function inkRoleSites(code: string): Site[] {
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return sites;
+  return { sites, quiet };
 }
 
 function sourceFiles(root: string): string[] {
@@ -871,6 +936,94 @@ function toleratedFailures(
   }
   return out;
 }
+
+/**
+ * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
+ * purpose, so the gate does not count them), by file, with their count and why. The exemption is
+ * a decision: a new one fails, and one that went leaves a count behind, as in TOLERATED.
+ */
+const QUIET_SITES: Readonly<Record<string, { count: number; reason: string }>> = {
+  'components/asset/asset-feed.tsx': {
+    count: 1,
+    reason: "a neighbour's activity row in an asset's feed, set back (R4): every word dim",
+  },
+  'components/asset/item-evidence.tsx': {
+    count: 1,
+    reason: "a neighbour's row in an item's evidence, set back (R4): every word dim",
+  },
+  'components/ui/cell-tile.tsx': {
+    count: 1,
+    reason: 'a dimmed cell tile, set back (R4): every word dim, its stones in their own ink',
+  },
+};
+
+/** The `quiet` exemptions found against QUIET_SITES: every file's count must equal its pin. */
+function quietFailures(
+  found: ReadonlyMap<string, readonly QuietSite[]>,
+  pinned: Readonly<Record<string, { count: number; reason: string }>>
+): string[] {
+  const out: string[] = [];
+  for (const path of [...new Set([...found.keys(), ...Object.keys(pinned)])].sort()) {
+    const sites = found.get(path) ?? [];
+    const entry = pinned[path];
+    const allowed = entry?.count ?? 0;
+    if (sites.length > allowed)
+      out.push(
+        `${path}: ${sites.length} element(s) set back with the quiet class, ${allowed} pinned — a new one: ${sites
+          .map((s) => `${s.line} ${s.what}`)
+          .join(', ')} (it exempts every word under it from the ink rule: a decision, list it)`
+      );
+    if (sites.length < allowed)
+      out.push(
+        `${path}: ${sites.length} element(s) set back with the quiet class, ${allowed} pinned — lower its count to ${sites.length}`
+      );
+    if (entry && entry.reason.trim().length <= 10)
+      out.push(`${path}: a reason too short to say why: "${entry.reason}"`);
+  }
+  return out;
+}
+
+describe('the quiet exemption is counted (review of main..fix/readability, test finding 6)', () => {
+  it('finds every element that carries the quiet class, whatever its tag', () => {
+    expect(
+      scanInkRoles(
+        [
+          '<tr className="quiet"><td className="text-text-dim">1</td></tr>;',
+          "<li className={cn('text-meta', neighbour && 'quiet')}>{row}</li>;",
+          "const SET_BACK = 'quiet text-small';",
+          '<Row className={SET_BACK} />;',
+          '<div className="quieter text-text">not the class</div>;',
+        ].join('\n')
+      ).quiet.map((s) => `${s.line} ${s.what}`)
+    ).toEqual(['1 <tr>', '2 <li>', '4 <Row>']);
+  });
+
+  it('fails a new exemption and one that went', () => {
+    const pinned = { 'app/a.tsx': { count: 1, reason: 'a neighbour row set back' } };
+    expect(quietFailures(new Map([['app/a.tsx', [{ line: 3, what: '<tr>' }]]]), pinned)).toEqual(
+      []
+    );
+    expect(
+      quietFailures(
+        new Map([
+          [
+            'app/a.tsx',
+            [
+              { line: 3, what: '<tr>' },
+              { line: 9, what: '<li>' },
+            ],
+          ],
+        ]),
+        pinned
+      )
+    ).toEqual([
+      expect.stringMatching(/^app\/a\.tsx: 2 element\(s\) .* 1 pinned — a new one: 3 <tr>, 9 <li>/),
+    ]);
+    expect(quietFailures(new Map(), pinned)).toEqual([
+      'app/a.tsx: 0 element(s) set back with the quiet class, 1 pinned — lower its count to 0',
+    ]);
+  });
+});
 
 describe('the ink-role scan finds what it must, and only that', () => {
   const sitesOf = (lines: string[]) =>
@@ -920,6 +1073,41 @@ describe('the ink-role scan finds what it must, and only that', () => {
         '];',
       ])
     ).toEqual(['2 td column className', '3 td column render <span>', '4 td column render <span>']);
+  });
+
+  // Review of main..fix/readability (2026-11-18, test finding 6): the quiet ink reached a link, a
+  // cell or a paragraph uncounted through an arbitrary-value class and through an inline style
+  // colour, both read as "another ink".
+  it('finds the quiet ink set by an arbitrary-value class or an inline style colour', () => {
+    expect(
+      sitesOf([
+        '<p className="text-[color:var(--c-text-dim)] text-small">a sentence</p>;',
+        '<td className="md:text-[var(--c-text-dim)]">1,234</td>;',
+        '<Link href="/x" style={{ color: \'var(--c-text-dim)\' }}>x</Link>;',
+        "<p style={{ color: color('text-dim') }}>explains</p>;",
+        "<div style={{ color: on ? color('text') : color('text-dim') }}><BlockLink number={1} /></div>;",
+        "const ink = color('text-dim');",
+        '<p style={{ color: ink }}>held in a name</p>;',
+      ])
+    ).toEqual([
+      '1 prose <p>',
+      '2 td <td>',
+      '3 link <Link>',
+      '4 prose <p>',
+      '5 link <BlockLink>',
+      '7 prose <p>',
+    ]);
+  });
+
+  it('passes another arbitrary or inline ink, and a quiet ink at an alpha', () => {
+    expect(
+      sitesOf([
+        '<p className="text-[color:var(--c-text)]">reads</p>;',
+        "<p style={{ color: color('text') }}>reads</p>;",
+        '<div style={{ color: color(\'text-dim\') }}><Link href="/l" className="text-text">l</Link></div>;',
+        "<p style={{ color: alpha('text-dim', 0.6) }}>alpha is the other gate’s</p>;",
+      ])
+    ).toEqual([]);
   });
 
   it('passes a set-back row, a state variant, a prop handed to a component and a label', () => {
@@ -984,9 +1172,11 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   const root = join(__dirname, '..', '..');
   const files = sourceFiles(root);
   const found = new Map<string, Site[]>();
+  const quiet = new Map<string, QuietSite[]>();
   for (const file of files) {
-    const sites = inkRoleSites(readFileSync(file, 'utf8'));
-    if (sites.length) found.set(relative(root, file), sites);
+    const scanned = scanInkRoles(readFileSync(file, 'utf8'));
+    if (scanned.sites.length) found.set(relative(root, file), scanned.sites);
+    if (scanned.quiet.length) quiet.set(relative(root, file), scanned.quiet);
   }
 
   it('scans the page source', () => {
@@ -995,5 +1185,9 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
 
   it('draws no link, amount, table cell or paragraph in the quiet ink but the tolerated list’s', () => {
     expect(toleratedFailures(found, TOLERATED)).toEqual([]);
+  });
+
+  it('sets back no element with the quiet class but the pinned list’s', () => {
+    expect(quietFailures(quiet, QUIET_SITES)).toEqual([]);
   });
 });

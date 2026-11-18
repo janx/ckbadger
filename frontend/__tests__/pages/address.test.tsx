@@ -658,7 +658,8 @@ describe('Address v3', () => {
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.filter === 'all'
         ? { ...pageFixture(addressActivitiesFixture, 1682), hasMore: true, nextCursor: 'next' }
-        : pageFixture([])
+        : // a filtered page with an older one after it, so its pager and its range are drawn
+          { ...pageFixture([]), hasMore: true, nextCursor: 'next' }
     );
     render(<AddressDetailPage />);
     await loaded();
@@ -671,9 +672,10 @@ describe('Address v3', () => {
     // A filtered page declares no total; the tab keeps the address's count, the range has none.
     fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
-    // Re-pinned on purpose (readability B5): this filtered page is the only one, and one page
-    // draws no pager (it said "Showing 0–0 activities · 20 per page").
-    expect(screen.queryByText(/^Showing /)).toBeNull();
+    // Restored (review of main..fix/readability, test finding 3): readability B5 drew no pager for
+    // one page, and the re-pin of this test dropped the range check with it; the filtered mock now
+    // has an older page, so the range is drawn and must carry no unfiltered total ("of 1,682").
+    expect(screen.getByText('Showing 0–0 activities · 20 per page')).toBeInTheDocument();
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);

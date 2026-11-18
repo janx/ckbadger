@@ -204,6 +204,18 @@ export interface ChartModel {
   reading?: ChartPoint;
   /** The API's peak of the drawn series, in display units (CH-21); absent where none applies. */
   peak?: { label: string; raw: string } | null;
+  /**
+   * A numeric histogram's regular run, the buckets the model filled (indexes into `points`): every
+   * axis of the chart, the detail's or a tile's, reads its round values over this run and chooses
+   * only its step by its own tick budget (`axisTicks`). Absent on every other chart.
+   */
+  bucketRun?: BucketRun;
+}
+
+/** A stretch of a histogram's points, `lo` to `hi` inclusive. */
+export interface BucketRun {
+  lo: number;
+  hi: number;
 }
 
 function decimalByPower(value: string, power: number, context: string): string {
@@ -316,13 +328,24 @@ export function formatChartExact(value: string, unit: string): string {
 }
 
 /**
- * The detail page's head figure, readouts and "Last change": rates at the design's two decimals, a
- * CKB amount in the summary form (R5: whole CKB from 1,000 up, cut; the head's title carries the
- * exact value), every other value exact.
+ * The text of a detail page's readout — the hover readout, the in-plot reading, the legend readout
+ * and "Last change" — the one function that builds it. A readout is where a point's value is read,
+ * and nothing else on the page carries it, so a CKB amount is exact (R5's exact form: its trailing
+ * zeros dropped, never padded, never cut); rates at the design's two decimals; every other value
+ * exact.
  */
 export function formatChartHover(value: string, unit: string): string {
-  if (CKB_UNITS.has(unit)) return chartCkb(value, 'summary');
+  if (CKB_UNITS.has(unit)) return chartCkb(value, 'exact');
   return RATE_UNITS.has(unit) ? formatChartReadout(value, unit) : formatChartExact(value, unit);
+}
+
+/**
+ * The detail page's head figure (the latest or main reading, the peak, a sub-chart's figure): a
+ * CKB amount in the summary form (R5: whole CKB from 1,000 up, cut, never rounded), with the exact
+ * value in the figure's title (`chart-detail.tsx`); every other unit as its readout reads.
+ */
+export function formatChartHead(value: string, unit: string): string {
+  return CKB_UNITS.has(unit) ? chartCkb(value, 'summary') : formatChartHover(value, unit);
 }
 
 function summary(value: string, unit: string): string {
@@ -377,7 +400,7 @@ function singleChart(
     return { label: pointLabel(point.date), values };
   });
   // A histogram's regular run has every bucket of its grid, an empty one its 0 (2026-11-18).
-  const points = fillBucketRun(definition.slug, returned, definition.scale);
+  const { points, run: bucketRun } = fillBucketRun(definition.slug, returned, definition.scale);
   const currentIndex = timelineMarkers ? timelineCurrentIndex(definition.slug, payload.data) : null;
   // Two series of one unit are named in the page's words (CH-21); a companion with no names fails.
   const companionNames = hasSecond && !definition.secondary ? definition.seriesNames : undefined;
@@ -505,6 +528,7 @@ function singleChart(
               label: apiPeak.date,
               raw: chartUnitValue(apiPeak.value, definition.scale, `${definition.slug} peak`),
             },
+    bucketRun,
   };
   // A figure under the main chart reads where the head does, labelled alike; a distribution's
   // at its own largest bucket, by name, never its last (CH-05).
@@ -1602,12 +1626,10 @@ function bucketValues(points: readonly ChartPoint[]): number[] {
 
 /**
  * A numeric histogram's regular run of buckets (CH-12): the longest stretch with no gap wider than
- * one tick step, and that step, the round values over the run being at most `max`.
+ * one tick step, the round values over the run being at most `max`. The model finds it once, when
+ * it fills the run ({@link fillBucketRun}); an axis reads it from the model.
  */
-function bucketRun(
-  values: readonly number[],
-  max: number
-): { lo: number; hi: number; step: number } {
+function findBucketRun(values: readonly number[], max: number): BucketRun {
   let lo = 0;
   let hi = values.length - 1;
   let step = values[hi] > values[lo] ? tickStep(values[lo], values[hi], max) : 1;
@@ -1625,17 +1647,29 @@ function bucketRun(
     hi = best.hi;
     if (values[hi] > values[lo]) step = tickStep(values[lo], values[hi], max);
   }
-  return { lo, hi, step };
+  return { lo, hi };
 }
 
 /**
- * A numeric histogram's ticks (CH-12): round values over its regular run of buckets
- * ({@link bucketRun}) and, beyond the run at either end, the outlying buckets marked open-ended on
- * the run's side (`≤ 2.05`, `≥ 50.50`). `max` bounds the round values.
+ * A numeric histogram's ticks (CH-12): round values over the regular run its model filled
+ * (`ChartModel.bucketRun`), at the step `max` allows over that run, and, beyond the run at either
+ * end, the outlying buckets marked open-ended on the run's side (`≤ 2.05`, `≥ 50.50`). The budget
+ * chooses the step only: the run is the model's, so every axis of the chart reads the same buckets
+ * as regular.
  */
-function numericBucketTicks(points: readonly ChartPoint[], max: number): AxisTick[] {
+function numericBucketTicks(
+  points: readonly ChartPoint[],
+  max: number,
+  run: BucketRun | undefined
+): AxisTick[] {
+  if (!run) throw new Error('bucket axis: a numeric histogram has no regular run from its model');
+  const { lo, hi } = run;
+  if (!(Number.isSafeInteger(lo) && Number.isSafeInteger(hi) && 0 <= lo && lo <= hi))
+    throw new Error(`bucket axis: run ${lo}..${hi} is not a run`);
+  if (hi >= points.length)
+    throw new Error(`bucket axis: run ${lo}..${hi} is past the ${points.length} points drawn`);
   const values = bucketValues(points);
-  const { lo, hi, step } = bucketRun(values, max);
+  const step = values[hi] > values[lo] ? tickStep(values[lo], values[hi], max) : 1;
   const decimals = stepDecimals(step);
   const ticks =
     values[hi] > values[lo]
@@ -1663,8 +1697,9 @@ const BUCKET_GRIDS: Readonly<Record<string, { perUnit: number; decimals: number 
 };
 
 /**
- * The tick budget a histogram's regular run is read with when the model fills it: the detail
- * page's. Filled, the run has no gap, so an axis of fewer ticks (a chart tile's 6) reads it the same.
+ * The tick budget the model finds a histogram's regular run with, when it fills it: the detail
+ * page's. The run is found once and kept on the model (`bucketRun`); an axis of another budget (a
+ * chart tile's 6) does not look for it again, it chooses only its step over that run.
  */
 const BUCKET_RUN_TICKS = 8;
 
@@ -1674,15 +1709,17 @@ const BUCKET_RUN_TICKS = 8;
  * a slot axis gave each of those one slot, so the axis ran unevenly in its own unit (3.5 → 4.5 h
  * over 574 px, 4.5 → 5.5 h over 325, at 1280). Inside the run each empty bucket of the grid is
  * drawn as the 0 it is; the outlying buckets beyond it keep a slot each, their labels open-ended
- * (`≤ 2.05`, `≥ 7.67 h`). A label off its grid fails: the grid is the API's, not a guess.
+ * (`≤ 2.05`, `≥ 7.67 h`). A label off its grid fails: the grid is the API's, not a guess. The run
+ * comes back with the points (indexes into them), for every axis of the chart to read.
  */
 function fillBucketRun(
   slug: string,
   points: readonly ChartPoint[],
   scale: ChartScale
-): ChartPoint[] {
+): { points: ChartPoint[]; run?: BucketRun } {
   const grid = BUCKET_GRIDS[slug];
-  if (!grid || points.length < 2) return [...points];
+  if (!grid || points.length === 0) return { points: [...points] };
+  if (points.length === 1) return { points: [...points], run: { lo: 0, hi: 0 } };
   if (points.some((point) => Object.keys(point.values).join() !== 'primary'))
     throw new Error(
       `${slug}: a filled histogram has one series; an empty bucket has no other value`
@@ -1698,7 +1735,7 @@ function fillBucketRun(
       throw new Error(`${slug}: bucket ${label} is not one of 1/${grid.perUnit} of its unit`);
     return n;
   };
-  const { lo, hi } = bucketRun(bucketValues(points), BUCKET_RUN_TICKS);
+  const { lo, hi } = findBucketRun(bucketValues(points), BUCKET_RUN_TICKS);
   const filled: ChartPoint[] = points.slice(0, lo);
   let next = bucketOf(points[lo].label);
   for (const point of points.slice(lo, hi + 1)) {
@@ -1711,26 +1748,29 @@ function fillBucketRun(
     filled.push(point);
     next = at + BigInt(1);
   }
-  return [...filled, ...points.slice(hi + 1)];
+  return { points: [...filled, ...points.slice(hi + 1)], run: { lo, hi: filled.length - 1 } };
 }
 
 /**
  * X-axis ticks (CH-24, CH-09, CH-12): where a calendar unit starts (years, else months), at round
  * epoch numbers or model years, or at a histogram's round values — a regular sequence, every k-th
  * kept so that at most `max` remain and none in between is skipped. A bucket axis writes its
- * `unit` once, on its last label; named buckets (Cell size) are all kept, each a category.
+ * `unit` once, on its last label; named buckets (Cell size) are all kept, each a category; a
+ * numeric histogram reads its round values over `run`, the regular run its model filled
+ * (`ChartModel.bucketRun`, required there).
  */
 export function axisTicks(
   points: readonly ChartPoint[],
   style: AxisStyle,
   max: number,
-  unit?: string
+  unit?: string,
+  run?: BucketRun
 ): AxisTick[] {
   if (!points.length) return [];
   if (style === 'bucket') {
     const numeric = points.every((point) => NUMERIC_BUCKET.test(point.label));
     const ticks: AxisTick[] = numeric
-      ? numericBucketTicks(points, max)
+      ? numericBucketTicks(points, max, run)
       : points.map((point, index) => ({
           index,
           label:

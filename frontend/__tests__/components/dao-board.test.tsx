@@ -8,6 +8,8 @@ import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
 import { expectTicksInGutter, yTickLabels } from '@/__tests__/utils/y-ticks';
+import { formatPercent } from '@/lib/ckb-decimal';
+import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -1138,6 +1140,28 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     const waiting = bar.nextElementSibling!;
     expect(waiting).toHaveTextContent(/^waiting for its window 500 CKB · 1 cell$/);
     expect(waiting).toHaveClass('text-meta', 'text-right');
+  });
+
+  // Review of main..fix/readability (2026-11-18, logic finding 3): the fit measured
+  // 'claimable now 400.00000000 CKB · 1 cell' (39 characters, every decimal) while the segment
+  // draws the exact form, 'claimable now 400 CKB · 1 cell' (30), so words that fit were put
+  // under the bar. The fit measures what is drawn.
+  it('measures the claimable words it draws when it decides they fit inside their segment', () => {
+    stubCalculator();
+    const drawn = 'claimable now 400 CKB · 1 cell';
+    const measuredBefore = 'claimable now 400.00000000 CKB · 1 cell';
+    const advance = snappedAdvancePx(fontPx('small'));
+    // the ready part's share of the bar, as the board reads it: 400 of 900 to four decimals
+    const share = Number(formatPercent(BigInt(40000000000), BigInt(90000000000), 4)) / 100;
+    // the narrowest bar (its 2 px gap apart) whose segment holds the drawn words and 24 px padding
+    const width = Math.ceil((drawn.length * advance + 24) / share) + 2;
+    // …where the 39 characters once measured do not fit: the test tells the two apart
+    expect((width - 2) * share).toBeLessThan(measuredBefore.length * advance + 24);
+    stubChartWidth(width);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(bar.firstElementChild).toHaveTextContent(drawn);
+    expect(bar.nextElementSibling).toHaveTextContent(/^waiting for its window 500 CKB · 1 cell$/);
   });
 
   it('writes the claimable amount under the bar where its segment is too narrow for it', () => {

@@ -84,12 +84,14 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   if (data) {
     try {
       model = chartModel(definition, data);
-      // The bucket unit once, on the axis' last label (CH-12).
+      // The bucket unit once, on the axis' last label (CH-12); a histogram's round values over the
+      // run its model filled, at the tile's own step.
       ticks = axisTicks(
         model.card?.points ?? model.points,
         style,
         style === 'bucket' ? 6 : 3,
-        bucketUnit(definition)
+        bucketUnit(definition),
+        model.bucketRun
       );
     } catch (cause) {
       model = null;

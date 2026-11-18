@@ -432,6 +432,58 @@ describe('CellDetailPage', () => {
       '/mainnet/blocks/180'
     );
   });
+  // Review of main..fix/readability (2026-11-18, test finding 2 and logic finding 4): the API sends
+  // a DAO cell's compensation with its state and block (F-9); the page drew the DAO line with no
+  // compensation, and no error, when an answer came without it (an older API binary behind a
+  // preview). A DAO answer without its figure, or with a state the page does not know, is a broken
+  // read: it fails, naming the out point and the field, and never draws an empty line.
+  describe('a DAO cell read without its compensation', () => {
+    const dao = {
+      isDaoCell: true,
+      daoStatus: 'deposited',
+      depositBlockNumber: 123,
+      depositTimestamp: '2024-01-01T00:00:00Z',
+      compensation: '898000001',
+      compensationCkb: '8.98000001',
+      compensationState: 'accruing',
+      compensationAtBlock: 150,
+    };
+    /** The page under a boundary, and what it threw. */
+    async function failure(daoInfo: Record<string, unknown>): Promise<string> {
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        getCell.mockResolvedValue({ ...base, daoInfo } as unknown as Cell);
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        render(
+          <QueryClientProvider client={client}>
+            <ErrorBoundary fallback={<p>page-level boundary</p>}>
+              <CellDetailPage />
+            </ErrorBoundary>
+          </QueryClientProvider>
+        );
+        expect(await screen.findByText('page-level boundary')).toBeInTheDocument();
+        expect(screen.queryByText(/^deposit block/)).toBeNull();
+        return quiet.mock.calls.flat().map(String).join(' ');
+      } finally {
+        quiet.mockRestore();
+      }
+    }
+
+    it('fails, naming the out point and the field, where the compensation is missing', async () => {
+      const { compensation: _c, compensationCkb: _ckb, ...without } = dao;
+      void _c;
+      void _ckb;
+      expect(await failure(without)).toContain(
+        `DAO cell ${hash}:0 compensation "undefined" is not an integer shannon amount`
+      );
+    });
+
+    it('fails on a compensation state it does not know', async () => {
+      expect(await failure({ ...dao, compensationState: 'pending' })).toContain(
+        `DAO cell ${hash}:0 has compensation state pending`
+      );
+    });
+  });
   // Rubbing × Song print, phase 5 (D2): the dep group's command runs on its member count.
   it('counts a dep group’s members in its heading, one item or more', async () => {
     const member = (index: number) => ({ txHash: `0x${'cd'.repeat(32)}`, outputIndex: index });
