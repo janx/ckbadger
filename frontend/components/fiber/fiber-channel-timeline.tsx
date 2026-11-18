@@ -65,7 +65,10 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
       t: ms(required(channel.closeTimestamp, 'a close time', id), 'close time'),
       block: required(channel.closeBlock, 'a close block', id),
       label: forced ? 'force-closed' : 'closed together',
-      place: channel.state === 'settled' ? 'below-end' : 'above-end',
+      // A force close starts the wait, and above the line at the wait's right end stands its own
+      // label ("settled", or "not settled · wait …" while it runs): the close goes under the line,
+      // settled or not (readability 2026-11-18: above it, "force-closed" met the wait's words).
+      place: forced ? 'below-end' : 'above-end',
     });
   }
   if (channel.state === 'settled')
