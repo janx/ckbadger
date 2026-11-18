@@ -807,6 +807,7 @@ function ParticipantLine({
   fee,
   foldObjects,
   focusItemId,
+  focusTokenTypeHash,
   itemTone,
   notes,
 }: {
@@ -816,12 +817,20 @@ function ParticipantLine({
   fee: boolean;
   foldObjects: boolean;
   focusItemId?: string;
+  /** The token the page is about: its amount leads the line, before the CKB (B4). */
+  focusTokenTypeHash?: string;
   itemTone: 'plain' | 'sign';
   notes?: ReadonlyMap<string, string>;
 }) {
   const [objectsOpen, setObjectsOpen] = useState(false);
+  const leads = (i: ItemDelta) =>
+    focusTokenTypeHash !== undefined &&
+    i.kind === 'token' &&
+    i.typeScriptHash === focusTokenTypeHash;
+  const lead = p.itemDeltas.filter(leads);
+  const rest = p.itemDeltas.filter((i) => !leads(i));
   const phoneObjects = foldObjects && p.itemDeltas.some((i) => i.kind === 'object');
-  const otherItems = p.itemDeltas.filter((i) => i.kind !== 'object');
+  const otherItems = rest.filter((i) => i.kind !== 'object');
   const lineTier = lineCompositionTier(p.itemDeltas);
   const showComposition = lineTier === null;
   const lock = partyLock(p);
@@ -854,6 +863,15 @@ function ParticipantLine({
           {notes.get(p.lockHash)}
         </span>
       )}
+      {lead.map((item, i) => (
+        // the page's own token, before the CKB that holds it (B4)
+        <ItemOnLine
+          key={`lead${i}`}
+          item={item}
+          tone={itemTone}
+          showComposition={showComposition}
+        />
+      ))}
       <span data-role="ckb" data-fee={fee || undefined}>
         {/* A feed line: the summary form (R5), the exact change in its title. A fee is no loss to
             mark in the cinnabar: the word says where it went, its amount is unsigned (B4). */}
@@ -888,7 +906,7 @@ function ParticipantLine({
         </span>
       )}
       <ItemsOnLine
-        items={p.itemDeltas}
+        items={rest}
         foldObjects={foldObjects}
         focusItemId={focusItemId}
         itemTone={itemTone}
@@ -957,12 +975,14 @@ function Participants({
   itemTone,
   notes,
   feePayer,
+  focusTokenTypeHash,
 }: {
   participants: ActivityParticipant[];
   txHash: string;
   focusLockHash?: string;
   /** The index of the party whose only movement is the fee (`feeOnlyParty`), or null. */
   feePayer: number | null;
+  focusTokenTypeHash?: string;
   foldObjects?: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
@@ -986,6 +1006,7 @@ function Participants({
           fee={feePayer !== null && p.key === indexed[feePayer].key}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
+          focusTokenTypeHash={focusTokenTypeHash}
           itemTone={itemTone}
           notes={notes}
         />
@@ -1036,6 +1057,11 @@ export type ActivityRowProps = {
   foldObjects?: boolean;
   focusItemId?: string;
   /**
+   * Readability B4: the token the page is about (a token page's feed). Its amount leads each
+   * participant line that moved it, the CKB after it; any other item keeps its place.
+   */
+  focusTokenTypeHash?: string;
+  /**
    * Token amounts: by sign (jade +, rouge −) by default — an asset delta is a signed delta, like
    * the CKB beside it (T7 ruling, 2026-11-02; was the Address board only, BA-35). `plain` draws
    * them bright.
@@ -1075,6 +1101,7 @@ export function ActivityRow({
   evidence,
   foldObjects = false,
   focusItemId,
+  focusTokenTypeHash,
   itemTone = 'sign',
   participantNotes,
   focusLockHash,
@@ -1160,6 +1187,7 @@ export function ActivityRow({
           itemTone={itemTone}
           notes={participantNotes}
           feePayer={mode === 'cross-user' && unlistedParties === 0 ? feeOnlyParty(activity) : null}
+          focusTokenTypeHash={focusTokenTypeHash}
         />
       )}
     </RowArticle>

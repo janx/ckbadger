@@ -509,6 +509,7 @@ function RecentAssetFeed({
   plain = false,
   focusItemId,
   mark,
+  token,
   recent,
   onOpen,
 }: AssetFeedProps & {
@@ -568,6 +569,7 @@ function RecentAssetFeed({
                     plain={plain}
                     focusItemId={focusItemId}
                     mark={mark}
+                    focusTokenTypeHash={token?.typeHash}
                   />
                 ))
             ) : (
@@ -590,6 +592,7 @@ function FeedActivityRow({
   plain,
   focusItemId,
   mark,
+  focusTokenTypeHash,
 }: {
   activity: GlobalActivity;
   item?: ItemFeedSubject;
@@ -597,6 +600,8 @@ function FeedActivityRow({
   plain: boolean;
   focusItemId?: string;
   mark?: AssetClass;
+  /** A token page's token (`AssetFeedProps.token`): its amount leads each line (B4). */
+  focusTokenTypeHash?: string;
 }) {
   let headline: ItemFeedHeadline | undefined;
   let notes: ReadonlyMap<string, string> | undefined;
@@ -630,6 +635,7 @@ function FeedActivityRow({
       lockColumn={plain}
       foldObjects={plain}
       focusItemId={focusItemId}
+      focusTokenTypeHash={focusTokenTypeHash}
       participantNotes={notes}
     />
   );
@@ -706,6 +712,7 @@ function FullAssetFeed({
                   plain={plain}
                   focusItemId={focusItemId}
                   mark={mark}
+                  focusTokenTypeHash={token?.typeHash}
                 />
               ))
             ) : (
