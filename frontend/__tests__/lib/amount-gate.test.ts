@@ -45,7 +45,7 @@ const HAND_SPLITS: readonly { what: string; re: RegExp }[] = [
   { what: 'formatCkbCompact', re: /\bformatCkbCompact\(/g },
   {
     what: 'formatCkbAmount parts',
-    re: /\{\s*(?:integer|decimal)\b[^}]*\}\s*=\s*formatCkbAmount\(|formatCkbAmount\([^()]*(?:\([^()]*\))?[^()]*\)\.(?:integer|decimal)\b/g,
+    re: /\{[^}]*\b(?:integer|decimal)\b[^}]*\}\s*=\s*formatCkbAmount\(|formatCkbAmount\([^()]*(?:\([^()]*\))?[^()]*\)\.(?:integer|decimal)\b/g,
   },
 ];
 /** A name bound to `formatCkbAmount(…)`'s result, whose parts a later line may read apart. */
@@ -65,7 +65,9 @@ function handSplits(code: string): Split[] {
   const lines = code.split('\n');
   const isComment = (line: string) => /^\s*(\/\/|\*|\/\*)/.test(line);
   const names = new Set<string>();
-  void BOUND;
+  lines.forEach((line) => {
+    if (!isComment(line)) for (const m of line.matchAll(BOUND)) names.add(m[1]);
+  });
   const parts = names.size
     ? new RegExp(`\\b(${[...names].join('|')})\\.(?:integer|decimal)\\b`, 'g')
     : null;
@@ -85,7 +87,20 @@ function handSplits(code: string): Split[] {
  * The splits that stand: a file, the name it binds to `formatCkbAmount(…)`, its reads of that
  * name's parts (exact), and why. The list only shrinks; a new entry is a decision of its own.
  */
-const EXCEPTIONS: readonly { path: string; name: string; reads: number; why: string }[] = [];
+const EXCEPTIONS: readonly { path: string; name: string; reads: number; why: string }[] = [
+  {
+    path: 'components/home/ckbytes-section.tsx',
+    name: 'total',
+    reads: 2,
+    why: "the home page's circulating figure, its display figure: set in two sizes by an approved board (the integer at the display step, the decimals and the unit small), exact to the shannon on purpose, not a row amount; the home page's lane decides its form",
+  },
+  {
+    path: 'components/home/ckbytes-section.tsx',
+    name: 'deposited',
+    reads: 2,
+    why: "the home page's DAO deposited figure, drawn as the circulating one: the integer at its step, the decimals small, exact to the shannon on purpose; the home page's lane decides its form",
+  },
+];
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {

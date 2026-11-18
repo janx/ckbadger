@@ -205,7 +205,9 @@ only. SVG text writes an amount from `ckbAmountText` in the text's one fill, a s
 its exact value in a `<title>` (the DAO history's weekly end label). A display figure is one run at
 its size; its unit beside it is the body step in the dim ink. `__tests__/lib/amount-gate.test.ts`
 fails on an amount split for display outside the module (`splitCkbAmount`, `splitTokenAmount`,
-`formatCkbAmount`'s parts).
+`formatCkbAmount`'s parts, read off the call or off a name bound to it). Its listed exceptions are
+the home page's circulating and DAO deposited figures, set in two sizes by their board and exact
+to the shannon; the home page's lane decides their form.
 
 ## Named accent colors (rubbing × Song print)
 
