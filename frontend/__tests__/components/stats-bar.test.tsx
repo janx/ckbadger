@@ -328,8 +328,10 @@ describe('VitalsStrip', () => {
 
   it('keeps every vital whole: each is one element, and the epoch never stacks', async () => {
     // Below md each vital owns its grid track or line, so nothing is squeezed by a neighbour. The
-    // epoch is a plain row whose text never wraps, its bar a fixed run of block characters (five
-    // cells on a phone), so its number, index and time left stay on one line instead of stacking.
+    // epoch is two groups whose text never wraps, its bar a fixed run of block characters (five
+    // cells on a phone): its number and bar stay on one line, its index and time left on one line,
+    // beside them where the line holds both and under them where it does not (readability F3-f;
+    // re-pinned from one nowrap row, which ran past the line at 360 px at the 12 / 14 px scale).
     useRealtimeStore.setState({ socketHeld: true });
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
@@ -338,8 +340,10 @@ describe('VitalsStrip', () => {
     const items = Array.from(strip.children) as HTMLElement[];
     expect(items).toHaveLength(6);
     const epoch = screen.getByTestId('vitals-epoch');
-    expect(epoch).toHaveClass('flex', 'whitespace-nowrap');
-    expect(epoch).not.toHaveClass('flex-wrap');
+    expect(epoch).toHaveClass('flex', 'flex-wrap');
+    const groups = Array.from(epoch.children) as HTMLElement[];
+    expect(groups).toHaveLength(2);
+    for (const group of groups) expect(group).toHaveClass('flex', 'whitespace-nowrap');
     expect(screen.getByTestId('vitals-epoch-bar')).toHaveClass('shrink-0');
   });
 
@@ -396,14 +400,19 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     act(() => useRealtimeStore.getState().reset());
   });
 
-  /** The three mining figures, the epoch's position and its time left. */
+  /**
+   * The three mining figures, and the epoch's position with its time left (one group since
+   * readability F3-f, so the home page's line can carry it under the bar; the group is what is
+   * the home page's below md, as each of the two was).
+   */
   function homeOnly() {
+    const position = screen.getByText('246 / 1,590').parentElement as HTMLElement;
+    expect(position).toContainElement(screen.getByText('≈ 3h 8m left'));
     return [
       screen.getByText('Block time').parentElement as HTMLElement,
       screen.getByRole('link', { name: /Hash rate/ }),
       screen.getByRole('link', { name: /Difficulty/ }),
-      screen.getByText('246 / 1,590'),
-      screen.getByText('≈ 3h 8m left'),
+      position,
     ];
   }
 

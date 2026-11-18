@@ -60,9 +60,14 @@ The 640–767 band has one content width to design for. Below 640 the container 
   reader, and the status line's mode block says it). The mining figures and the epoch's position
   and time left are the home page's below `md` — a ruled exception to principle 2 (UI review
   2026-11-14, PA-14): with the 52 px header and the 26 px status line the three lines took 212 of
-  an 844 px first screen on every page. At 360 the line was 280.6 of 328 px at the 11 / 13 px
-  steps (readability R4 moved them to 12 / 14 px: about 8 % wider, re-measured at the gate); page
-  content starts at about y = 111 at 390 (53 px header, 42 px strip, its 16 px margin).
+  an 844 px first screen on every page. At the 12 / 13 / 14 px steps (readability R4) that line is
+  280.8 of 328 px at 360 (289.2 with a nine-digit block) and 280.8 of 288 at 320, where a ninth
+  digit puts the epoch under the block; it is 44 px tall at 390. On the home page the epoch's line
+  breaks between its two groups, the epoch with its bar and its position with the time left, never
+  inside either, where the line cannot hold both (340.8 px at the widest content: at 360 and
+  below). From `md` the row wraps by whole items: one line at 1280 (1,223.8 of 1,232 px at the
+  widest), the difficulty and the live mark on a second line at 1024, the block and the epoch on
+  the first and the mining figures and the live mark on the second at 768.
 - **Status line** (every page; `components/layout/status-line.tsx`): the terminal session's last
   row, fixed at the foot of the window, 26 px on the elevated ground under a 1 px line; `body`
   keeps 26 px of bottom padding so no page ends under it. From `md` up it is one row — the mode
