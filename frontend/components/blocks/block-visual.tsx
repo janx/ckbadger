@@ -6,6 +6,8 @@ import { percentOf } from '@/lib/format-unit';
 
 const PROPOSAL_COLOR = CLASS_COLORS.dao;
 const GLYPH_WIDTH = 112;
+/** The contents glyph's height: the cellbase diamond, the squares and the dots on its 9 px middle. */
+export const BLOCK_GLYPH_HEIGHT = 18;
 const DOT_STEP = 6;
 const DOT_R = 2.4;
 
@@ -46,9 +48,9 @@ export function BlockContents({
         <svg
           role="img"
           aria-label={label}
-          viewBox={`0 0 ${GLYPH_WIDTH} 18`}
+          viewBox={`0 0 ${GLYPH_WIDTH} ${BLOCK_GLYPH_HEIGHT}`}
           width={GLYPH_WIDTH}
-          height="18"
+          height={BLOCK_GLYPH_HEIGHT}
           className="shrink-0"
         >
           <path d="M5 4.5 9.5 9 5 13.5.5 9z" fill={DATA_COLOR} />
@@ -59,7 +61,7 @@ export function BlockContents({
                 key={index}
                 data-transaction-size={size}
                 x={14 + index * 13}
-                y={(18 - side) / 2}
+                y={(BLOCK_GLYPH_HEIGHT - side) / 2}
                 width={side}
                 height={side}
                 fill={DATA_COLOR}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
-import { BlockPosition } from '@/components/blocks/block-position';
+import { BLOCK_TILE_HEIGHT, BlockPosition } from '@/components/blocks/block-position';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import { fullText } from '@/__tests__/utils/full-text';
@@ -291,6 +291,9 @@ describe('BlockPosition: every word inside its tile (readability F3)', () => {
     }
     // the 8-digit height at the head size: "#21,016,902" is 11 × 7.8 = 85.8 px
     expect(allTextLines(svg).some((l) => l.text === '#21,016,902')).toBe(true);
+    // re-pinned on purpose (F3): the tile is the sum of its bands, 10 + 16 (the number) + 4 + 15
+    // (the time) + 4 + 18 (the contents glyph) + 10 = 77 px; it was 88, a 40 px box for the glyph
+    expect(BLOCK_TILE_HEIGHT).toBe(77);
   });
 
   it('writes an uncle’s and its parent’s words inside their boxes', () => {

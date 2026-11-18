@@ -1,5 +1,6 @@
 import { expect } from 'vitest';
-import { descentPx, textPx, tightLinePx } from '@/lib/type-metrics';
+import { lineAscentPx } from '@/lib/chart-type';
+import { descentPx, textPx } from '@/lib/type-metrics';
 
 /**
  * Where a figure's SVG text stands, by arithmetic from its own attributes (readability plan
@@ -9,7 +10,7 @@ import { descentPx, textPx, tightLinePx } from '@/lib/type-metrics';
  * - across, its glyphs at 0.6 em of their own size (`textPx`), from its x by its text-anchor;
  * - down, the tight line it occupies (`tightLinePx`: its size and 3 px of leading), standing on
  *   its baseline: its descent (`descentPx`, 0.3 em) under the baseline, the rest of the line over
- *   it (11.4 px at 12 px).
+ *   it (`lineAscentPx`: 11.4 px at 12 px).
  *
  * Each `<tspan>` with its own x starts a line of its own; a tspan's font size counts for its own
  * glyphs. Every `translate` and `rotate` on the text and its ancestors is applied, so a box is in
@@ -99,9 +100,6 @@ function fontSizeOf(el: Element): number {
   throw new Error(`svg-text-boxes: no font size for "${el.textContent}"`);
 }
 
-/** How far a tight line set at `px` stands over its baseline: the line less its descent. */
-export const lineAscent = (px: number) => tightLinePx(px) - descentPx(px);
-
 interface Run {
   text: string;
   size: number;
@@ -165,7 +163,7 @@ export function textLines(text: Element): TextLine[] {
     const box = mapBox(m, {
       left,
       right: left + width,
-      top: chunk.y - Math.max(...shown.map((r) => lineAscent(r.size))),
+      top: chunk.y - Math.max(...shown.map((r) => lineAscentPx(r.size))),
       bottom: chunk.y + Math.max(...shown.map((r) => descentPx(r.size))),
     });
     lines.push({ ...box, text: shown.map((r) => r.text).join(''), size });
