@@ -83,33 +83,40 @@ const UI_GRADE: PaletteKey[] = [
 ];
 
 // The hex below are values, not colours a page draws: the palette is the one place they live.
-// RUBBING is the night theme as the design boards set it (docs/superpowers/design/
-// 2026-11-10-rubbing-song/src/lib.js THEMES.dark), dim lightened from #8a8073 to body contrast.
+// RUBBING is the night theme as the boards set it: the rubbing of 2026-11-10 (docs/superpowers/
+// design/2026-11-10-rubbing-song/src/lib.js THEMES.dark), its inks and structure re-graded by the
+// boards' ruling of 2026-11-18 (readability plan, ruling R2, Gate F0), which replaces them: the
+// prototype's ladder (reading ink Lc 75, quiet 60, muted 45, quiet slate 30, ghost 20; accents and
+// classes at Lc 70; rules 1.25:1, frames 1.40:1 to the page ground), moved in OKLCH lightness only
+// where a pin asked for more: Lc 75 and 60 on the surface as on the page (text, text-dim, four
+// -dim steps, rouge-dim and rouge kept over it, data-framing, elf-meta), the ELF program headers a
+// step over their header, and text-bright for the labelled bars' 4.5:1 (fill-ink.test). The mark,
+// the page ground and the well are the boards' as before.
 const RUBBING = {
-  jade: '#93c1b6',
-  jadeDim: '#6f9a90',
-  jadeBright: '#b7d9d0',
-  aqua: '#7fa3c9',
-  gold: '#c9a45c',
-  rouge: '#d9634a',
-  lavender: '#a797c4',
-  amber: '#a3bf7a',
+  jade: '#9ecdc2',
+  jadeDim: '#90bdb2',
+  jadeBright: '#b9dcd2',
+  aqua: '#a2c8ef',
+  gold: '#e4bf76',
+  rouge: '#ff9e88',
+  lavender: '#cdbceb',
+  amber: '#b1ce88',
   mark: '#c2452d',
-  textBright: '#e8e2d6',
-  text: '#b9b0a2',
-  textDim: '#908679',
-  textGhost: '#4a4139',
-  quiet: '#60574d',
+  textBright: '#ede7db',
+  text: '#d6cdbe',
+  textDim: '#bdb3a4',
+  textGhost: '#685f56',
+  quiet: '#7f766b',
   void: '#0f0d0b',
   bg: '#15120f',
-  surface: '#1b1714',
-  elevated: '#241f1a',
-  border: '#2a231d',
-  borderSubtle: '#221c17',
-  copper: '#cc8a5e',
-  token: '#6f9ad6',
-  object: '#a58ad6',
-  identity: '#c97f93',
+  surface: '#1e1a17',
+  elevated: '#26211c',
+  border: '#362e28',
+  borderSubtle: '#2d2621',
+  copper: '#fab487',
+  token: '#9ec6fe',
+  object: '#d0b8fe',
+  identity: '#fcaec2',
 };
 
 /** The alpha of an `rgba(r, g, b, a)` material. */
@@ -207,15 +214,22 @@ describe('the palette: one source for both themes', () => {
   // swatches, frames, the padding zeros of a number and pure decoration, never for a word or a
   // figure; the muted's 3:1 pin above is a mark's, not a text pin. The ink gate refuses all three
   // on words (__tests__/lib/ink-gate.test.ts); a quieter word is the dim ink.
+  // Re-pinned on purpose by night (readability ruling R2): the night's text grade is perceptual,
+  // so "under text grade" is measured there in Lc, under the word floor of 60 on every ground (the
+  // muted ink is Lc 45 and 5.4–6.6:1, the quiet slate Lc 30: marks by the grade the night is read
+  // at; the rising order and the day's side are pinned in "the text grade by perceptual
+  // contrast"). By day the WCAG measure stands as it was.
   it('keeps the inks under text grade (ghost, quiet, muted) out of the text grade: marks, never words', () => {
     for (const key of ['text-ghost', 'ink-quiet', 'ink-muted'] as const) {
       expect(TEXT_GRADE).not.toContain(key);
-      for (const theme of THEMES) {
-        const worst = Math.min(
-          ...GROUNDS.map((g) => contrastRatio(PALETTE[theme][key], PALETTE[theme][g]))
-        );
-        expect(worst, `${theme} ${key}`).toBeLessThan(4.5);
-      }
+      const worstDay = Math.min(
+        ...GROUNDS.map((g) => contrastRatio(PALETTE.light[key], PALETTE.light[g]))
+      );
+      expect(worstDay, `light ${key}`).toBeLessThan(4.5);
+      const bestNight = Math.max(
+        ...GROUNDS.map((g) => Math.abs(apcaLc(PALETTE.dark[key], PALETTE.dark[g])))
+      );
+      expect(bestNight, `dark ${key}`).toBeLessThan(60);
     }
   });
 
@@ -349,8 +363,9 @@ describe('the pipeline gilt (direction G)', () => {
         const ratio = contrastRatio(PALETTE[theme][key], PALETTE[theme]['pipeline-gilt']);
         expect(ratio, `${theme} ${key} on the gilt`).toBeGreaterThanOrEqual(4.5);
       }
-    // measured for the ruling: text at 4.58 by night and 4.77 by day
-    expect(contrastRatio(PALETTE.dark.text, PALETTE.dark['pipeline-gilt'])).toBeCloseTo(4.58, 2);
+    // measured for the ruling: text at 4.77 by day, and by night 6.24 (re-pinned on purpose: 4.58
+    // before the night's reading ink was re-graded, readability ruling R2)
+    expect(contrastRatio(PALETTE.dark.text, PALETTE.dark['pipeline-gilt'])).toBeCloseTo(6.24, 2);
     expect(contrastRatio(PALETTE.light.text, PALETTE.light['pipeline-gilt'])).toBeCloseTo(4.77, 2);
   });
 
@@ -358,7 +373,9 @@ describe('the pipeline gilt (direction G)', () => {
   it('measures the number and the counts on the gilt perceptually, by night and by day', () => {
     const on = (theme: (typeof THEMES)[number], key: 'text-bright' | 'text') =>
       Math.abs(apcaLc(PALETTE[theme][key], PALETTE[theme]['pipeline-gilt']));
-    expect(on('dark', 'text-bright')).toBeCloseTo(78.39, 1);
+    // text-bright 81.54 (78.39 with the bright ink of 2026-11-10, before it moved for the
+    // labelled bars' 4.5:1; re-pinned with the values)
+    expect(on('dark', 'text-bright')).toBeCloseTo(81.54, 1);
     expect(on('dark', 'text')).toBeCloseTo(65.79, 1);
     expect(on('light', 'text-bright')).toBeCloseTo(62.2, 1);
     expect(on('light', 'text')).toBeCloseTo(50.78, 1);
@@ -415,7 +432,9 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
   it('measures the number and the counts on the plate perceptually, by night and by day', () => {
     const on = (theme: (typeof THEMES)[number], key: 'text-bright' | 'text') =>
       Math.abs(apcaLc(PALETTE[theme][key], ink(theme, 'pipeline-plate')));
-    expect(on('dark', 'text-bright')).toBeCloseTo(85.75, 1);
+    // text-bright 88.91 (85.75 with the bright ink of 2026-11-10, before it moved for the
+    // labelled bars' 4.5:1; re-pinned with the values)
+    expect(on('dark', 'text-bright')).toBeCloseTo(88.91, 1);
     expect(on('dark', 'text')).toBeCloseTo(73.16, 1);
     expect(on('light', 'text-bright')).toBeCloseTo(79.41, 1);
     expect(on('light', 'text')).toBeCloseTo(67.99, 1);
@@ -506,12 +525,15 @@ describe('the amount inks (R5: one ink per amount)', () => {
       expect(Object.values(AMOUNT_INK)).not.toContain(quieter);
   });
 
-  it('keeps rouge-dim, moved in OKLCH lightness only until it reads at 4.5:1', () => {
+  it('keeps rouge-dim, moved in OKLCH lightness only until it reads at the text grade', () => {
     // rouge-dim was a secondary ink at 3:1 (#aa503c / #a6594c, 3.05 / 3.92 at worst) and used as
     // text; lightened by night (L +0.094) and darkened by day (L −0.033), hue and chroma kept, it
     // is the cinnabar's quiet step at text grade like every other `*-dim`: one key, one meaning.
     // It was the negative amount's fraction ink until R5; the key stays, a quiet cinnabar word's.
-    expect(PALETTE.dark['rouge-dim']).toBe('#ca6c57');
+    // Re-pinned on purpose by night (readability ruling R2): the night's text grade is Lc 60 on
+    // every ground, so the prototype's #f6947d (Lc 58) moved on in OKLCH lightness to #fc9982 (Lc
+    // 60.1 on the surface, 60.9 on the page); it was #ca6c57 (4.51:1, Lc 38) before the ruling.
+    expect(PALETTE.dark['rouge-dim']).toBe('#fc9982');
     expect(PALETTE.light['rouge-dim']).toBe('#9b4f43');
     expect(PALETTE_KEYS as string[]).not.toContain('rouge-fraction');
   });
@@ -521,8 +543,9 @@ describe('the amount inks (R5: one ink per amount)', () => {
 // scanline alpha in 1 px of every 3, over the sky — and the hair (`base-border-subtle`, #e3dbcc)
 // and the elevated tint (`base-elevated`, #e9e2d4) are 1.09:1 and 1.03:1 on a ruled line, so a row
 // rule is one more ruled line and a bar's empty track is not there. A row rule and a bar track are
-// keys of their own, each clearing the paper and a ruled line by 1.25:1; by night they stay the
-// boards' hair and elevated tint, lighter than the ground as they were.
+// keys of their own, each clearing the paper and a ruled line by 1.25:1; by night (readability
+// ruling R2) the rule is the hair and the track a step of its own, at 1.25 and 1.30:1 to the
+// ground, lighter than it as they were.
 describe('the row rule and the bar track (R5, DY-01)', () => {
   const day = PALETTE.light;
   const ruledLine = overGround(
@@ -559,15 +582,19 @@ describe('the row rule and the bar track (R5, DY-01)', () => {
     expect(ink('light', 'bar-track')).toBe('#d4cdc0');
   });
 
-  it('keeps them the boards’ hair and elevated tint by night, lighter than the ground', () => {
+  // Re-pinned on purpose (readability ruling R2, the owner's Gate F0): by night the row rule is
+  // still the hair, both now at 1.25:1, and the bar's track is no longer the elevated tint (1.14:1,
+  // and 1.17:1 since the tint moved) but a key of its own at 1.30:1; both stay lighter than the
+  // ground. Before, this read "keeps them the boards' hair and elevated tint by night", ≥ 1.1:1.
+  it('keeps the row rule the hair by night and the track its own step, lighter than the ground by 1.25:1', () => {
     expect(ink('dark', 'row-rule')).toBe(PALETTE.dark['base-border-subtle']);
-    expect(ink('dark', 'bar-track')).toBe(PALETTE.dark['base-elevated']);
+    expect(ink('dark', 'bar-track')).toBe('#2f2924');
     for (const key of ['row-rule', 'bar-track']) {
       const hex = ink('dark', key);
       expect(relativeLuminance(hex), key).toBeGreaterThan(
         relativeLuminance(PALETTE.dark['base-bg'])
       );
-      expect(contrastRatio(hex, PALETTE.dark['base-bg']), key).toBeGreaterThanOrEqual(1.1);
+      expect(contrastRatio(hex, PALETTE.dark['base-bg']), key).toBeGreaterThanOrEqual(1.25);
     }
   });
 });
@@ -675,6 +702,10 @@ describe('the ELF region hues on the evidence tier', () => {
     expect(PALETTE.light['elf-header']).toBe('#416a7a');
     // round 4: the header's hue and chroma at L 0.430 (the night pair's 0.0706 below the header)
     expect(PALETTE.light['elf-program-headers']).toBe('#2d5665');
+    // Re-pinned on purpose by night (readability ruling R2): the header (the data framing) and the
+    // meta moved in OKLCH lightness to Lc 60 on every word ground, and the program headers are the
+    // header's hue a step lighter again (L +0.0704, inside the day pair's 0.0708); rodata, eh-frame
+    // and data already cleared Lc 60 and stay. Before: #7898a3, #8daeb9, …, #b8acd0.
     expect([
       PALETTE.dark['elf-header'],
       PALETTE.dark['elf-program-headers'],
@@ -682,7 +713,7 @@ describe('the ELF region hues on the evidence tier', () => {
       PALETTE.dark['elf-eh-frame'],
       PALETTE.dark['elf-data'],
       PALETTE.dark['elf-meta'],
-    ]).toEqual(['#7898a3', '#8daeb9', '#9ac09b', '#aab9aa', '#d5b985', '#b8acd0']);
+    ]).toEqual(['#97b9c4', '#abd0dc', '#9ac09b', '#aab9aa', '#d5b985', '#baaed2']);
   });
 
   // Round 4's ruling: by night the program headers are the header's hue a step lighter; by day a
@@ -723,7 +754,7 @@ describe('the palette as CSS', () => {
   it('declares a colour, its channels and the materials per theme', () => {
     const dark = themeDeclarations('dark');
     expect(dark['--c-jade']).toBe(RUBBING.jade);
-    expect(dark['--rgb-jade']).toBe('147 193 182');
+    expect(dark['--rgb-jade']).toBe('158 205 194');
     expect(dark['--c-mark']).toBe(RUBBING.mark);
     expect(dark['--m-glow']).toBe('1');
     const light = themeDeclarations('light');
@@ -759,12 +790,12 @@ describe('the palette as CSS', () => {
     );
     expect(() => fade('', 0.5)).toThrow('empty colour');
     expect(() => fade(color('jade'), 2)).toThrow('not in 0..1');
-    expect(hexAlpha(RUBBING.jade, 0.2)).toBe('rgba(147, 193, 182, 0.2)');
+    expect(hexAlpha(RUBBING.jade, 0.2)).toBe('rgba(158, 205, 194, 0.2)');
     expect(() => hexAlpha(color('jade'), 0.2)).toThrow('not #rrggbb');
   });
 
   it('parses hex and refuses what is not #rrggbb', () => {
-    expect(hexToRgb(RUBBING.jade)).toEqual({ r: 147, g: 193, b: 182 });
+    expect(hexToRgb(RUBBING.jade)).toEqual({ r: 158, g: 205, b: 194 });
     expect(() => hexToRgb('#fff')).toThrow('#fff is not #rrggbb');
     expect(() => hexToRgb('var(--c-jade)')).toThrow('not #rrggbb');
     // white on black is 21:1, the scale's end
