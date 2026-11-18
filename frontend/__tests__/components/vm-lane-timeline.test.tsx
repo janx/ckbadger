@@ -381,11 +381,11 @@ describe('VmLaneTimeline: every word in its place (readability F3)', () => {
     const lines = allTextLines(svg);
     for (const line of lines) expectInside(line, viewBox(svg), 'the lanes', 'flush');
     expectApart(lines, `the lanes at ${width}`);
-    // a VM's name inside its bar
+    // a VM's name inside its bar: three on `type`, one on each other lane
     const bars = [...svg.querySelectorAll('[data-lane] g')].filter((g) =>
       /^VM\d$/.test(g.querySelector('text')?.textContent ?? '')
     );
-    expect(bars.length).toBe(5);
+    expect(bars.length).toBe(6);
     for (const bar of bars)
       for (const line of textLines(bar.querySelector('text')!))
         expectInside(line, rectBox(bar.querySelector('rect')!), `${line.text} in its bar`);
