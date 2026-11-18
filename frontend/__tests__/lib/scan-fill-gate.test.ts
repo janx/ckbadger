@@ -399,6 +399,25 @@ describe('the scan gate finds what it must, and only that', () => {
       )
     ).toEqual(['.scan-fill', '.title, h1']);
   });
+
+  // Review of the fixes (2026-11-19, S2): the rule check matched the literal `var(--m-fill-scan)`
+  // only, so a rule that read the variable with a fallback, or with a space after the paren, laid
+  // the scan on what it selects unseen.
+  it('reads the variable in a rule with a fallback or a space, and not a longer name', () => {
+    expect(
+      cssRulesReading(
+        [
+          '.scan-fill { mask-image: var(--m-fill-scan); }',
+          '.title { mask-image: var(--m-fill-scan, none); }',
+          '.spaced { -webkit-mask-image: var( --m-fill-scan ); }',
+          '.broken { mask-image: var(\n    --m-fill-scan\n  ); }',
+          '.other { mask-image: var(--m-fill-scan-x); }',
+          '.named { --scan: --m-fill-scan; }',
+        ].join('\n'),
+        '--m-fill-scan'
+      )
+    ).toEqual(['.scan-fill', '.title', '.spaced', '.broken']);
+  });
 });
 
 describe('the scan stands on fills, never on words (R1)', () => {
