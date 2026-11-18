@@ -1099,6 +1099,32 @@ describe('the ink-role scan finds what it must, and only that', () => {
     ]);
   });
 
+  // Review of the fixes (2026-11-19, S3): a class's key was compared whole, so the quiet ink under
+  // an opacity modifier (`text-text-dim/90`, read as the key `text-dim/90`) or the important
+  // modifier (`!text-text-dim`, read as no ink) passed uncounted; and a size with its line height
+  // (`text-small/5`) was read as an ink, so a link in it hid from the quiet line around it.
+  it('finds the quiet ink under an opacity or an important modifier', () => {
+    expect(
+      sitesOf([
+        '<p className="text-text-dim/90">a sentence</p>;',
+        '<Link href="/x" className="text-text-dim/95">x</Link>;',
+        '<td className="text-text-dim/[0.9]">1,234</td>;',
+        '<div className="text-text"><p className="!text-text-dim">explains</p></div>;',
+        '<BlockLink number={1} className="md:!text-text-dim" />;',
+        '<div className="text-text-dim"><Link href="/y" className="text-small/5">y</Link></div>;',
+        '<p className="!text-text">reads</p>;',
+        '<p className="text-text/90">reads</p>;',
+      ])
+    ).toEqual([
+      '1 prose <p>',
+      '2 link <Link>',
+      '3 td <td>',
+      '4 prose <p>',
+      '5 link <BlockLink>',
+      '6 link <Link>',
+    ]);
+  });
+
   it('passes another arbitrary or inline ink, and a quiet ink at an alpha', () => {
     expect(
       sitesOf([
