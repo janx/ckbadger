@@ -3,10 +3,11 @@ import Link from '@/components/ui/link';
 import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
 import { MinerLink } from '@/components/forks/miner-link';
 import { Hash } from '@/components/ui/hash';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import type { Block, BlockProposalFees } from '@/lib/api';
 import { REWARD_COLORS } from '@/lib/design-tokens';
-import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
+import { ckbAmountText } from '@/lib/amount-form';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { percentFigure } from '@/lib/format-unit';
@@ -24,12 +25,6 @@ type RewardBlock = Pick<
   | 'totalFees'
   | 'transactionsCount'
 >;
-
-/** `0.0506`: an exact CKB amount inside a sentence, trailing zeros dropped. */
-function plainCkb(shannons: bigint): string {
-  const { integer, fraction } = splitCkbAmount(shannons);
-  return `${integer}${fraction}`;
-}
 
 /**
  * What the 40% proposal share is paid from, as `/blocks/{id}/proposal-fees` reports it (R2b-a 2).
@@ -51,7 +46,8 @@ function proposalNote(fees: BlockProposalFees | undefined, error: Error | null):
         ]
       : ['none of the transactions it proposed first is committed yet; ', ...window];
   const basis: SentencePart[] = [
-    `of ${plainCkb(parseShannons(fees.fees, `block ${fees.number} proposal fees`))} in fees of the ${formatCount(fees.transactionsCount, 'transaction')} it proposed, committed in `,
+    // `0.0506`: an exact CKB amount inside a sentence, trailing zeros dropped.
+    `of ${ckbAmountText(parseShannons(fees.fees, `block ${fees.number} proposal fees`), 'exact')} in fees of the ${formatCount(fees.transactionsCount, 'transaction')} it proposed, committed in `,
     ...heightListParts(fees.committedIn),
   ];
   return fees.complete ? basis : [...basis, ' so far; ', ...window];
@@ -123,15 +119,15 @@ export function RewardBreakdown({
   const committedTxs = block.transactionsCount - 1;
   const notes: Record<(typeof parts)[number]['key'], ReactNode> = {
     primary: 'the whole primary issuance of this block',
-    secondary: `the miners' share of this block's ${plainCkb(secondaryIssuance)} secondary issuance; the rest goes to DAO depositors or is burnt`,
-    committed: `of ${plainCkb(fees)} in fees of the ${formatCount(committedTxs, 'transaction')} committed here`,
+    secondary: `the miners' share of this block's ${ckbAmountText(secondaryIssuance, 'exact')} secondary issuance; the rest goes to DAO depositors or is burnt`,
+    committed: `of ${ckbAmountText(fees, 'exact')} in fees of the ${formatCount(committedTxs, 'transaction')} committed here`,
     proposal: <SentenceNodes parts={proposalNote(proposalFees, proposalFeesError)} />,
   };
   const share = (value: bigint) => (total === BigInt(0) ? '0.00' : percentFigure(value, total));
   return (
     <div className="text-small space-y-3">
       <div data-testid="reward-total" className="text-text-bright text-body font-medium">
-        <ExactCkb shannons={total} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={total} signed={false} tone="plain" />
         {block.minerAddress && (
           <>
             <span className="text-text-dim text-small font-normal"> to </span>
@@ -178,7 +174,13 @@ export function RewardBreakdown({
             />
             <dt>{p.label}</dt>
             <dd className="text-right">
-              <ExactCkb shannons={p.value} signed={false} tone="plain" unit={false} />
+              <CkbAmount
+                form="column"
+                shannons={p.value}
+                signed={false}
+                tone="plain"
+                unit={false}
+              />
             </dd>
             <dd className="text-text-dim col-span-3 col-start-2 md:col-span-1 md:col-start-auto">
               {notes[p.key]}

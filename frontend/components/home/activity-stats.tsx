@@ -28,7 +28,9 @@ import { dayLabel } from '@/lib/daily-series';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { usePhosphor } from '@/hooks/usePhosphor';
-import { cn, formatCkbCompact } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { ckbAmountText, ckbShortenedTitle } from '@/lib/amount-form';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { countNoun, formatCount } from '@/lib/format-count';
 
 const TYPE_BREAKDOWN = '/charts/activity-type-breakdown';
@@ -79,7 +81,8 @@ interface SummaryView {
   activities: number;
   occurrences: number;
   addresses: number;
-  ckbMoved: string;
+  /** CKB moved, compact (a tile, R5), and the exact value its title names when it was cut. */
+  ckbMoved: { text: string; title: string | undefined };
   types: RankedRow[];
   scripts: RankedRow[];
   scriptCalls: number;
@@ -106,7 +109,10 @@ function summaryView(s: ActivitySummary24h): SummaryView {
     activities: s.activityCount,
     occurrences: totalActivities(s),
     addresses: s.uniqueAddressCount,
-    ckbMoved: formatCkbCompact(s.totalCkbMoved).value,
+    ckbMoved: {
+      text: ckbAmountText(parseShannons(s.totalCkbMoved, 'CKB moved'), 'compact'),
+      title: ckbShortenedTitle(parseShannons(s.totalCkbMoved, 'CKB moved'), 'compact'),
+    },
     types: activityTypeShares(s).map((r) => ({
       key: r.key,
       label: r.label,
@@ -120,12 +126,15 @@ function summaryView(s: ActivitySummary24h): SummaryView {
 }
 
 /** A 24 h count; it flares when the served figure changes (material pass v2, move 4). */
-function Kpi({ label, children }: { label: string; children: string }) {
+function Kpi({ label, title, children }: { label: string; title?: string; children: string }) {
   const flare = usePhosphor(children);
   return (
     <div className="flex flex-col gap-0.5">
       <dt className="text-text-dim text-small">{label}</dt>
-      <dd className={cn('text-text-bright text-hero m-0 font-medium tabular-nums', flare)}>
+      <dd
+        title={title}
+        className={cn('text-text-bright text-hero m-0 font-medium tabular-nums', flare)}
+      >
         {children}
       </dd>
     </div>
@@ -139,7 +148,9 @@ function Summary({ view }: { view: SummaryView }) {
       <dl className="m-0 flex flex-wrap gap-x-11 gap-y-3">
         <Kpi label="Activities">{n(view.activities)}</Kpi>
         <Kpi label="Addresses">{n(view.addresses)}</Kpi>
-        <Kpi label="CKB moved">{view.ckbMoved}</Kpi>
+        <Kpi label="CKB moved" title={view.ckbMoved.title}>
+          {view.ckbMoved.text}
+        </Kpi>
       </dl>
       <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-x-10 gap-y-[22px]">
         <RankedBars

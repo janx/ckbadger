@@ -224,7 +224,9 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
     expect(table.querySelector('[data-thumb-frame="centralized_mixture"]')).toBeNull();
     expect(within(table).getByText(/^m-NFT/)).toBeInTheDocument();
     expect(table.querySelectorAll('[data-segment]')).toHaveLength(0);
-    expect(table.querySelectorAll('[data-ckb-two-places]')).toHaveLength(2);
+    // the amount in the list's summary form (lane B2, readability R5, re-pinned on purpose: it
+    // was CkbTwoPlaces' [data-ckb-two-places])
+    expect(table.querySelectorAll('[data-ckb-amount][data-form="summary"]')).toHaveLength(2);
   });
 });
 
@@ -272,15 +274,16 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
     );
   });
   // Re-pinned on purpose (readability B5, plan §7.6): the azure bar on the page's scale left the
-  // list; CKB held is its amount, cut to 2 dp.
+  // list; CKB held is its amount, in the list's summary form (lane B2, readability R5, re-pinned
+  // on purpose: it was cut to 2 dp, "30,670,103.00", "7,667,525.75").
   it('prints CKB held as its amount with no bar, and occupied in whole CKB in the title', async () => {
     render(<TokensPage />);
     const table = await screen.findByRole('table', { name: 'Tokens' });
     // Occupied leaves the row for its title.
     expect(table.querySelectorAll('[data-segment]')).toHaveLength(0);
     expect(
-      Array.from(table.querySelectorAll('[data-ckb-two-places]')).map((n) => n.textContent)
-    ).toEqual(['30,670,103.00', '7,667,525.75']);
+      Array.from(table.querySelectorAll('[data-ckb-amount]')).map((n) => n.textContent)
+    ).toEqual(['30,670,103', '7,667,525']);
     expect(within(table).queryByRole('columnheader', { name: 'Occupied' })).toBeNull();
     expect(within(table).getAllByRole('row')[2].getAttribute('title')).toContain(
       '7,667,525.75 CKB held · 1,838 CKB occupied'

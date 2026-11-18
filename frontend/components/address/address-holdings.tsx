@@ -9,13 +9,13 @@ import { ShortId } from '@/components/ui/short-id';
 import { shortenHash } from '@/lib/shorten';
 import Link from '@/components/ui/link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { AMOUNT_INK, ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { formatStandard } from '@/components/activity-event-row';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { splitTokenAmount } from '@/lib/format-asset';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -123,27 +123,6 @@ const composition = [
   ['unknown', 'unknown'],
   ['decodePending', 'decode_pending'],
 ] as const;
-function TokenAmount({ amount, decimals }: { amount: string; decimals: number | null }) {
-  const { integer, fraction } = splitTokenAmount(amount, decimals);
-  const significant = fraction.replace(/0+$/, '');
-  return (
-    <>
-      {integer}
-      {fraction && (
-        <>
-          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
-            {significant ? '.' + significant : ''}
-          </span>
-          <span data-ghost className="text-text-ghost">
-            {significant ? '' : '.'}
-            {fraction.slice(significant.length)}
-          </span>
-        </>
-      )}
-      {decimals === null ? ' (raw)' : ''}
-    </>
-  );
-}
 /** "free part of 5 deposits": what the DAO free figure is made of (BA-37). */
 function daoFreeNote(holdings: AddressHoldings): string | undefined {
   const { depositCellsCount: deposits, withdrawalRequestCellsCount: requests } = holdings;
@@ -185,20 +164,15 @@ function collectionOrder(groups: AddressHoldings['objectCollections']) {
   );
 }
 
-/** An exact CKB amount in running text: the whole part, then the fraction dim (Address board). */
+/** An exact CKB amount in the balance's line of exact parts (Address board), in one ink. */
 function ExactParts({ shannons }: { shannons: bigint }) {
-  const { integer, decimal } = formatCkbAmount(shannons);
-  return (
-    <span className="text-text tabular-nums">
-      {integer}
-      <span className="text-text-dim">.{decimal}</span>
-    </span>
-  );
+  return <CkbAmount form="exact" shannons={shannons} signed={false} tone="plain" unit={false} />;
 }
 
 /**
- * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, its
- * fraction 22 px dim — with its live cells at the right; the 18 px partition with each share
+ * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, in
+ * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — with its live
+ * cells at the right; the 18 px partition with each share
  * inside its part (a share its part cannot hold is in the part's title, never cut); and one quiet
  * line of the exact parts. A DAO part is drawn only when the address has CKB in the Nervos DAO.
  */
@@ -221,7 +195,6 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   ).filter((p) => p.value > BigInt(0));
   const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
-  const { integer, decimal } = formatCkbAmount(sum);
   const zero = sum === BigInt(0);
   // The bar's width less its 2 px gaps, shared out as the parts' flex-grow does.
   const room = barWidth === null ? null : barWidth - 2 * (parts.length - 1);
@@ -231,19 +204,10 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
         <div className="min-w-0">
           <span className="eyebrow text-text-dim text-meta block w-fit">balance</span>
           <div data-role="balance-figure" className="mt-1.5 tabular-nums leading-[1.05]">
-            {zero ? (
-              <span data-zero className="text-text-dim text-entity sm:text-display">
-                0
-              </span>
-            ) : (
-              // One step smaller below sm (RESPONSIVE_LAYOUT 5), and the fraction may take the
-              // next line on a phone rather than push the page wide.
-              <>
-                <span className="text-text-bright text-entity sm:text-display">{integer}</span>
-                <wbr />
-                <span className="text-text-dim text-section sm:text-hero">.{decimal}</span>
-              </>
-            )}
+            {/* One step smaller below sm (RESPONSIVE_LAYOUT 5); a zero balance is a dim datum. */}
+            <span className="text-text-bright text-entity sm:text-display">
+              <CkbAmount form="summary" shannons={sum} signed={false} tone="inherit" unit={false} />
+            </span>
             <span className="text-text-dim text-body"> CKB</span>
           </div>
         </div>
@@ -507,7 +471,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   // "14 in 7 collections · X CKB held" (an object is its own cell).
   const held_ = (kind: AddressCellClass) => (
     <>
-      <ExactCkb
+      <CkbAmount
+        form="column"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"
@@ -519,7 +484,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const summary = (kind: AddressCellClass) => (
     <>
       {unitNode(formatCount(holdings.classes[kind].cellCount, 'cell'))} ·{' '}
-      <ExactCkb
+      <CkbAmount
+        form="column"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"
@@ -700,7 +666,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
                     </dt>
                     <dd className="mt-1">
-                      <ExactCkb
+                      <CkbAmount
+                        form="summary"
                         shannons={BigInt(holdings.classes.dao.capacity)}
                         signed={false}
                         tone="plain"
@@ -711,7 +678,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   <div>
                     <dt className="text-text-dim">Unclaimed compensation</dt>
                     <dd className="mt-1">
-                      <ExactCkb
+                      <CkbAmount
+                        form="summary"
                         shannons={BigInt(holdings.daoUnclaimedCompensation)}
                         signed={false}
                         tone="plain"
@@ -771,7 +739,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                             </Link>{' '}
                             · <Utc8Date timestamp={eventTimestamp} />
                           </span>
-                          <ExactCkb
+                          <CkbAmount
+                            form="column"
                             shannons={BigInt(cell.capacity)}
                             signed={false}
                             tone="plain"
@@ -847,7 +816,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       )}
                     </span>
                     <span className="text-text-bright max-w-full text-right tabular-nums [overflow-wrap:anywhere]">
-                      <TokenAmount amount={t.balance} decimals={t.decimals} />{' '}
+                      <TokenAmount form="column" amount={t.balance} decimals={t.decimals} />{' '}
                       <span className="text-text-dim">{t.symbol}</span>
                     </span>
                   </div>

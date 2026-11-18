@@ -1,4 +1,4 @@
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatAccumulatedRate, type DaoHeader } from '@/lib/dao-header';
 
 /**
@@ -10,7 +10,7 @@ export function DaoHeaderFields({ dao }: { dao: DaoHeader }) {
     <div className="mt-2 space-y-2" aria-label="Decoded DAO header">
       <p>
         <span className="text-text-dim">C · total issued </span>
-        <ExactCkb shannons={dao.C} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={dao.C} signed={false} tone="plain" />
       </p>
       <p>
         <span className="text-text-dim">AR · accumulated rate </span>
@@ -18,11 +18,11 @@ export function DaoHeaderFields({ dao }: { dao: DaoHeader }) {
       </p>
       <p>
         <span className="text-text-dim">S · compensation still owed + the burnt share </span>
-        <ExactCkb shannons={dao.S} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={dao.S} signed={false} tone="plain" />
       </p>
       <p>
         <span className="text-text-dim">U · protocol occupied </span>
-        <ExactCkb shannons={dao.U} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={dao.U} signed={false} tone="plain" />
       </p>
       <p className="text-text-dim">
         S counts the burnt share alongside compensation still owed to live deposits; it holds

@@ -227,11 +227,13 @@ describe('CkbytesSection', () => {
       'Knowledge151.13M CKB151.1 MB · 0.30%'
     );
     expect(document.querySelector('[data-legend="Free"]')).toHaveTextContent(
-      'Free41.50B CKB83.22%'
+      // compact, cut (readability R5, re-pinned on purpose: 41,499,405,173 CKB was 41.50B, rounded)
+      'Free41.49B CKB83.22%'
     );
     // The DAO part is the DAO cells' free capacity; their whole capacity is context only.
     expect(document.querySelector('[data-legend="Nervos DAO"]')).toHaveTextContent(
-      'Nervos DAO8.22B CKB16.48% · 8.22B locked'
+      // compact, cut (R5, re-pinned on purpose: the DAO's free part was 8.22B, rounded up)
+      'Nervos DAO8.21B CKB16.48% · 8.22B locked'
     );
   });
 
@@ -451,7 +453,8 @@ describe('CkbytesSection allocation highlight', () => {
 
     fireEvent.pointerLeave(seg('free'));
     expectNoHighlight(seg);
-    expect(free).toHaveTextContent('Free41.50B CKB83.22%');
+    // compact, cut (R5, re-pinned on purpose: was 41.50B, rounded up)
+    expect(free).toHaveTextContent('Free41.49B CKB83.22%');
     expect(within(free).getByText('Free')).toHaveClass('text-text');
   });
 

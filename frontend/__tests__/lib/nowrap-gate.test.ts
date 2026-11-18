@@ -88,9 +88,9 @@ describe('the nowrap gate reads the AST exactly (self-tests)', () => {
   });
 
   it('(b) passes a unit that carries a value, and an arrow held to its word', () => {
-    expect(b(`<span className="whitespace-nowrap">fee <ExactCkb shannons={f} /></span>`)).toEqual(
-      []
-    );
+    expect(
+      b(`<span className="whitespace-nowrap">fee <CkbAmount form="column" shannons={f} /></span>`)
+    ).toEqual([]);
     expect(b(`<span className="whitespace-nowrap">{n} cycles</span>`)).toEqual([]);
     expect(b(`<NoBreak>{holder}</NoBreak>`)).toEqual([]);
     expect(b(`<a>How it works<span className="whitespace-nowrap"> ↓</span></a>`)).toEqual([]);

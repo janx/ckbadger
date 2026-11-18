@@ -6,7 +6,8 @@ import { CompositionBadge } from '@/components/ui/composition-mark';
 import { LockKind } from '@/components/ui/lock-kind';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { formatStandard } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
@@ -116,7 +117,8 @@ function assetHref(asset: FlowAsset): string | null {
 
 /** An end's exact amount in the asset's unit; an object or identity moves whole, so none. */
 function Amount({ asset, amount, size }: { asset: FlowAsset; amount: bigint; size: ShortSize }) {
-  if (asset.kind === 'ckb') return <ExactCkb shannons={amount} signed={false} tone="plain" />;
+  if (asset.kind === 'ckb')
+    return <CkbAmount form="column" shannons={amount} signed={false} tone="plain" />;
   if (asset.kind !== 'token') return null;
   const decimals = asset.item.decimals ?? null;
   // A token without known decimals is written in raw units and marked so; its name stays on the

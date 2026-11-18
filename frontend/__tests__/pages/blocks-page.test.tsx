@@ -553,12 +553,14 @@ describe('BlocksPage · Blocks v3 board', () => {
         // the head line: what every reader comes for, the height, the transactions and the age
         ['identity', '#20,828,894', expect.stringMatching(/^5\stxs · \d+[smhd] ago$/)],
         // U-09 (re-pinned): the phone row's unnamed miner at the tight size, 4…6 (the lead's ruling)
-        ['miner', 'miner ckb1…93hhsj', 'fees 0.05060000 CKB'],
+        // A phone row's amounts are the summary form, each cut one titled with its exact value
+        // (readability R5, re-pinned on purpose: "fees 0.05060000 CKB", "reward 684.32120795 CKB")
+        ['miner', 'miner ckb1…93hhsj', 'fees 0.0506 CKB'],
         [
           'figures',
           // Every desktop column: hash, the proposals (consensus detail, after the hash that
           // starts every row's line), size with its overhead, cycles, the reward.
-          '0x0000…d2de · 4\u00a0proposals · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32120795 CKB',
+          '0x0000…d2de · 4\u00a0proposals · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32 CKB',
           null,
         ],
       ]);
@@ -660,7 +662,8 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
         'miner',
         'miner ckb1…93hhsj',
-        'fees 9.99999999 CKB',
+        // the summary form (R5, re-pinned on purpose: was "fees 9.99999999 CKB")
+        'fees 9.99 CKB',
       ]);
       expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
       expect(testnet.left).toBe('miner ckt1…x3ze7p'); // testnet's prefix, same form
@@ -678,24 +681,24 @@ describe('BlocksPage · Blocks v3 board', () => {
         expect(link.closest('[data-part="left"]')!.parentElement).toBe(line);
         expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);
       }
-      // the widest fee below 10 CKB with "miner ckb1…93hhsj": 122.4 + 12 + 134.4 = 268.8 px,
-      // 25.2 to spare at 360 and 55.2 at 390 (with main's "ckb1...93hhsj" it was 283.2)
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(268.8, 6);
+      // Readability R5 (re-pinned on purpose): a phone row's fee is the summary form, so a fee of
+      // 9.99999999 CKB is "fees 9.99 CKB": 122.4 + 12 + 91.2 = 225.6 px (it was 268.8 px, every
+      // decimal). The widest fee is now one under 1 CKB, which keeps its exact value — "fees
+      // 0.99999999 CKB" is 268.8 px, as the 8-decimal form was, 25.2 to spare at 360 and 55.2 at
+      // 390 — and from 1 CKB up the summary is shorter: 999.99 CKB is 240 px, 1,000,000 CKB 261.6.
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(225.6, 6);
       expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(294);
-      // a fee of 10–99 CKB adds a digit and still fits at 360; so does a fee of 100–999 CKB, two
-      // characters shorter than main's form (it dropped there on main); from 1,000 CKB the
-      // separator adds one more and it drops under the miner at 360 (PhoneRow's rule) and still
-      // fits at 390
-      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeCloseTo(276, 6);
-      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeLessThanOrEqual(294);
-      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeCloseTo(283.2, 6);
-      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeLessThanOrEqual(294);
-      expect(lineWidth(unnamed.left, 'fees 1,000.00000000 CKB')).toBeGreaterThan(294);
-      expect(lineWidth(unnamed.left, 'fees 1,000.00000000 CKB')).toBeLessThanOrEqual(324);
-      // lane B3's 8…6, "miner ckb1qzda…93hhsj" (151.2 px), made it 297.6 px, past 294
-      expect(lineWidth('miner ckb1qzda…93hhsj', unnamed.right!)).toBeGreaterThan(294);
-      // with the tables' 10-character head it was 180 + 12 + 134.4 = 326.4 px, past both columns
-      expect(lineWidth('miner ckb1qzda0c...93hhsj', unnamed.right!)).toBeGreaterThan(324);
+      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeCloseTo(268.8, 6);
+      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeLessThanOrEqual(294);
+      expect(lineWidth(unnamed.left, 'fees 999.99 CKB')).toBeCloseTo(240, 6);
+      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeCloseTo(261.6, 6);
+      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeLessThanOrEqual(294);
+      // lane B3's 8…6, "miner ckb1qzda…93hhsj" (151.2 px), made it 297.6 px with the widest fee,
+      // past 294
+      expect(lineWidth('miner ckb1qzda…93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(294);
+      // with the tables' 10-character head and the widest fee it was 180 + 12 + 134.4 = 326.4 px,
+      // past both columns
+      expect(lineWidth('miner ckb1qzda0c...93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(324);
       // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
       expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
       expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);

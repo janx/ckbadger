@@ -270,7 +270,9 @@ it('opens with the cluster kind, its on-chain description, its composition and a
   expect(hero.querySelector('[data-role="figure"]')).toHaveTextContent(
     'objects live90 all live · none burned'
   );
-  expect(hero).toHaveTextContent('28,920.00000000 CKB held in their cells');
+  // the hero's figure in the summary form (readability R5, re-pinned on purpose: was
+  // "28,920.00000000")
+  expect(hero).toHaveTextContent('28,920 CKB held in their cells');
   expect(
     within(hero as HTMLElement).getByRole('group', { name: 'Object composition' })
   ).toHaveTextContent(

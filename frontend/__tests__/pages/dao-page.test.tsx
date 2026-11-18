@@ -150,7 +150,9 @@ describe('DaoPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/the indexed epoch is 185\+2\/4/)).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      'claimable now 400.00000000 CKB · 1 cell'
+      // a segment's label in the exact form (readability R5, re-pinned on purpose: was padded to 8
+      // decimals)
+      'claimable now 400 CKB · 1 cell'
     );
     expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
       'depositors 2'

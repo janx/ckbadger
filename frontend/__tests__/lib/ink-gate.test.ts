@@ -79,27 +79,15 @@ const arrow = (anchor: string): Allowed => ({ reason: ARROW, anchor });
 
 /** `text-text-ghost` sites, each the padding zeros of a number or pure decoration. */
 const GHOST_ALLOWLIST: Allowlist = {
-  'app/dao/depositors/page.tsx': [padding('{parts.ghost}')],
   'app/fiber/channels/[id]/client-page.tsx': [separator('>/</span>')],
-  'components/activity-event-row.tsx': [padding('data-ghost')],
-  'components/address/address-holdings.tsx': [padding('data-ghost')],
   'components/asset/asset-feed.tsx': [separator('> · </span>')],
   'components/asset/detail-shell.tsx': [separator('>/</span>')],
   'components/asset/genetics.tsx': [arrow('aria-hidden="true"')],
-  'components/asset/inventory-table.tsx': [padding('data-ghost')],
-  // Amount's zeros, the deposited figure's, the 24 h change's; the mechanism chain's arrow
-  'components/dao/dao-board.tsx': [
-    padding('{parts.ghost}'),
-    padding('{parts.ghost}'),
-    padding('{parts.ghost}'),
-    arrow('aria-hidden="true"'),
-  ],
-  'components/dao/dao-grows.tsx': [padding('{parts.ghost}')],
-  'components/dao/dao-history.tsx': [padding('{parts.ghost}')],
-  'components/fiber/fiber-channel-board.tsx': [padding('{parts.ghost}')],
+  // the mechanism chain's arrow (the amounts' padding zeros are ckb-amount.tsx's)
+  'components/dao/dao-board.tsx': [arrow('aria-hidden="true"')],
   'components/scripts/script-family-page.tsx': [separator('>/</span>')],
-  'components/scripts/script-hero.tsx': [padding('{parts.ghost}')],
   'components/transaction/script-group-matrix.tsx': [arrow('aria-hidden="true"')],
+  'components/ui/ckb-amount.tsx': [padding('data-ghost')],
   'components/ui/script-byte-map.tsx': [arrow('aria-hidden="true"')],
 };
 

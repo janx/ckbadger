@@ -109,7 +109,8 @@ describe('DAO depositors page (DAO-12)', () => {
     // the bar is on the page's rounded maximum (1 % for two 1.00 % depositors), not 10 % = full.
     expect(phoneLines(row)).toEqual([
       // U-09 (re-pinned): the phone row's depositor at the tight size, 4…6 (the lead's ruling)
-      { key: 'holder', tone: 'head', left: '1ckb1…sd2hqn', right: '999.00000000 CKB' },
+      // a phone row's summary form (readability R5, re-pinned on purpose: was "999.00000000 CKB")
+      { key: 'holder', tone: 'head', left: '1ckb1…sd2hqn', right: '999 CKB' },
       { key: 'axis', tone: 'quiet', left: '01%', right: null },
       // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
       { key: 'share', tone: 'quiet', left: '1.00%', right: '1 deposit' },
@@ -188,7 +189,8 @@ describe('DAO depositors page (DAO-12)', () => {
         key: 'holder',
         tone: 'head',
         left: '1ckb1…sd2hqn',
-        right: '1\u00a0deposit999.00000000 CKB1.00%',
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "999.00000000 CKB")
+        right: '1\u00a0deposit999 CKB1.00%',
       },
     ]);
   });

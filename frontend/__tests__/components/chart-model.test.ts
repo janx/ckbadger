@@ -169,7 +169,8 @@ describe('29 chart variants', () => {
     // A whole count under 100,000 reads exactly, grouped, as charts.json does ("16,826"; F2 charts).
     expect(formatChartReadout('1234', 'transactions')).toBe('1,234');
     expect(formatChartReadout('123456', 'transactions')).toBe('123.46k');
-    expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.01B');
+    // A CKB amount is cut, never rounded (readability R5, re-pinned on purpose: was 9.01B).
+    expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.00B');
     // A negative takes the minus sign (re-pinned for CH-21: was the hyphen).
     expect(formatChartReadout('-1234.5', 'CKB')).toBe('−1.23k');
     // Rates and durations at two decimals, as charts.json shows them (91.34 PH/s, 1.34%).

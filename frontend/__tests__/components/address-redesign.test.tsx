@@ -35,7 +35,11 @@ describe('Address v3 components', () => {
         }}
       />
     );
-    expect(screen.getByLabelText('Balance')).toHaveTextContent('100.00000001');
+    // Readability R5 (re-pinned on purpose): the hero is the summary form, its single shannon in
+    // its title (it showed every decimal: "100.00000001").
+    const figure = screen.getByLabelText('Balance').querySelector('[data-ckb-amount]')!;
+    expect(figure).toHaveTextContent(/^100$/);
+    expect(figure).toHaveAttribute('title', '100.00000001 CKB');
     expect(screen.queryByText('CKB held')).not.toBeInTheDocument();
     // Lane P (Address.dc.html): the exact parts are the quiet line under the bar.
     expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent('39.00000001');
@@ -67,19 +71,16 @@ describe('Address v3 components', () => {
       // material pass v2 (move 3): the hero label is an eyebrow (`.eyebrow`: upper case, .12 em, 500)
       expect(within(hero).getByText('balance')).toHaveClass('text-meta', 'eyebrow');
       const figure = hero.querySelector('[data-role="balance-figure"]')!;
-      expect(figure).toHaveTextContent(/^319,742\.66879443 CKB$/);
-      // 40 px from sm (30 px, one step smaller, on a phone); the fraction 22 px (17 px), dim.
-      expect(within(figure as HTMLElement).getByText('319,742')).toHaveClass(
-        'sm:text-display',
-        'text-entity',
-        'text-text-bright'
-      );
-      expect(within(figure as HTMLElement).getByText('.66879443')).toHaveClass(
-        'sm:text-hero',
-        'text-section',
-        'text-text-dim'
-      );
-      expect(figure.querySelector('wbr')).not.toBeNull();
+      // Readability R5 (re-pinned on purpose): the hero figure is the summary form, whole CKB,
+      // one run in one ink, its exact value in its title — was "319,742.66879443", the fraction
+      // 22 px (17 px) dim after a <wbr>. "33,600,000,000 CKB" (14 characters) is 336 px at 40 px
+      // and 252 px at 30 px on a phone, plus " CKB" (31.2 px): no break is needed.
+      expect(figure).toHaveTextContent(/^319,742 CKB$/);
+      const amount = figure.querySelector('[data-ckb-amount]')!;
+      expect(amount).toHaveAttribute('title', '319,742.66879443 CKB');
+      expect(amount.closest('.text-entity')).toHaveClass('sm:text-display', 'text-text-bright');
+      expect(within(figure as HTMLElement).queryByText(/^\.66879443$/)).toBeNull();
+      expect(figure.querySelector('wbr')).toBeNull();
       expect(hero).toHaveTextContent('in 828 live cells');
     });
 
@@ -95,7 +96,8 @@ describe('Address v3 components', () => {
       expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
       expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
       expect(screen.getByTestId('balance-parts')).toHaveTextContent(
-        /^occupied 291,486\.00000000 pays for the bytes its cells keep · free 28,256\.66879443 · no CKB in the Nervos DAO$/
+        // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals)
+        /^occupied 291,486 pays for the bytes its cells keep · free 28,256\.66879443 · no CKB in the Nervos DAO$/
       );
     });
 
@@ -117,7 +119,8 @@ describe('Address v3 components', () => {
         [...bar.querySelectorAll('[data-part]')].map((p) => p.getAttribute('data-part'))
       ).toEqual(['occupied', 'free', 'DAO free']);
       expect(screen.getByTestId('balance-parts')).toHaveTextContent(
-        /· DAO free 9,589,480\.00000000, free part of 5 deposits$/
+        // the exact form (R5, re-pinned on purpose: was "9,589,480.00000000")
+        /· DAO free 9,589,480, free part of 5 deposits$/
       );
     });
 
@@ -211,7 +214,8 @@ describe('Address v3 components', () => {
       ['figures', 'quiet'],
     ]);
     expect(lines[0].left).toMatch(new RegExp(`:${cell.outputIndex}$`));
-    expect(lines[0].right).toBe('1,000.00000000 CKB');
+    // a phone row's summary form (R5, re-pinned on purpose: was "1,000.00000000 CKB")
+    expect(lines[0].right).toBe('1,000 CKB');
     expect(lines[2].left).toMatch(/^occupied .+ CKB · created #[\d,]+$/);
     expect(
       screen

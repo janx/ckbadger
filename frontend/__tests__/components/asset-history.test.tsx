@@ -295,8 +295,10 @@ describe('Asset history', () => {
       expect(screen.queryByRole('table', { name: 'Mints and burns' })).toBeNull();
       const [row] = screen.getAllByTestId('supply-event-row-mobile');
       expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-        ['change', 'Burn −1.00000000', '2024-01-02'],
-        ['after', 'supply after 12.00000000', null],
+        // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+        // decimals)
+        ['change', 'Burn −1', '2024-01-02'],
+        ['after', 'supply after 12', null],
         // U-09 (re-pinned): the phone row's lock hash at the tight size
         ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbb…bbbb JoyID'],
       ]);

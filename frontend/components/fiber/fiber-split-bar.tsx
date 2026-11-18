@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { FIBER_COLORS } from '@/lib/design-tokens';
 import { unitNode } from '@/components/ui/units';
 
@@ -27,10 +27,10 @@ export function FiberSplitBar({ left, right, note }: { left: Side; right: Side; 
       <div className="text-body mb-1.5 flex flex-wrap justify-between gap-4">
         <span>
           <span className="text-text-dim">{left.name}</span>{' '}
-          <ExactCkb shannons={left.shannons} signed={false} tone="plain" />
+          <CkbAmount form="column" shannons={left.shannons} signed={false} tone="plain" />
         </span>
         <span>
-          <ExactCkb shannons={right.shannons} signed={false} tone="plain" />{' '}
+          <CkbAmount form="column" shannons={right.shannons} signed={false} tone="plain" />{' '}
           <span className="text-text-dim">{right.name}</span>
         </span>
       </div>

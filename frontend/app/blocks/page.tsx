@@ -13,7 +13,7 @@ import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import type { SealId } from '@/lib/seal/stones';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   BlockContents,
   BlocksLimitsNote,
@@ -120,7 +120,8 @@ export default function BlocksPage() {
             )}
           </span>
         ) : (
-          <ExactCkb
+          <CkbAmount
+            form="column"
             shannons={parseShannons(block.miningReward, `block ${block.number} reward`)}
             signed={false}
             tone="plain"
@@ -139,7 +140,8 @@ export default function BlocksPage() {
       minWidth: 105,
       numeric: true,
       render: (block) => (
-        <ExactCkb
+        <CkbAmount
+          form="column"
           shannons={parseShannons(block.totalFees, `block ${block.number} fees`)}
           signed={false}
           tone="plain"
@@ -338,9 +340,11 @@ function miner(block: Block, size: ShortSize) {
   );
 }
 
+/** A block's fees: a column in the table, a summary on the phone row with its unit (R5). */
 function fees(block: Block, unit: boolean) {
   return (
-    <ExactCkb
+    <CkbAmount
+      form={unit ? 'summary' : 'column'}
       shannons={parseShannons(block.totalFees, `block ${block.number} fees`)}
       signed={false}
       tone="plain"
@@ -365,7 +369,8 @@ function reward(block: Block) {
     return (
       <span className="whitespace-nowrap">
         reward{' '}
-        <ExactCkb
+        <CkbAmount
+          form="summary"
           shannons={parseShannons(block.miningReward, `block ${block.number} reward`)}
           signed={false}
           tone="plain"

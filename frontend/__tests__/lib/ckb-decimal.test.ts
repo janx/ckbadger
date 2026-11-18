@@ -152,7 +152,7 @@ describe('splitCkbAmount', () => {
 });
 
 describe('exactCkbText', () => {
-  it('writes the digits ExactCkb prints: every decimal, the sign only when signed, zero as 0', () => {
+  it('writes the digits CkbAmount prints in its column form: every decimal, the sign only when signed, zero as 0', () => {
     expect(exactCkbText(BigInt(1647), false)).toBe('0.00001647');
     expect(exactCkbText(BigInt(-30000), false)).toBe('0.00030000');
     expect(exactCkbText(BigInt(-30000), true)).toBe(`${MINUS}0.00030000`);

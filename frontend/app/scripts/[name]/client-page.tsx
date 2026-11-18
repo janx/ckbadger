@@ -5,7 +5,8 @@ import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
 import { NotFoundPage } from '@/components/not-found-page';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
@@ -31,7 +32,7 @@ import {
   normalizeScriptRefHashType,
   type ScriptRefHashType,
 } from '@/lib/script-ref';
-import { formatCapacity, formatCkbCompact, formatNumber } from '@/lib/utils';
+import { formatCapacity, formatNumber } from '@/lib/utils';
 import type { Cell, KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -53,7 +54,8 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
       <span
         title={`Virtual common knowledge size: ${formatCapacity(cell.virtualCommonKnowledgeSize)}`}
       >
-        <ExactCkb
+        <CkbAmount
+          form="column"
           shannons={BigInt(cell.virtualCommonKnowledgeSize)}
           signed={false}
           tone="plain"
@@ -62,7 +64,15 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
       </span>
     );
   }
-  return <ExactCkb shannons={BigInt(cell.commonKnowledgeSize)} signed={false} tone="plain" wrap />;
+  return (
+    <CkbAmount
+      form="column"
+      shannons={BigInt(cell.commonKnowledgeSize)}
+      signed={false}
+      tone="plain"
+      wrap
+    />
+  );
 }
 
 function CellOwner({ cell }: { cell: Cell }) {
@@ -188,10 +198,15 @@ function VersionUsageCell({ usage, field }: { usage: VersionUsage; field: 'cells
       </span>
     );
   }
-  const compact = formatCkbCompact(usage.ownedCapacitySum);
+  // A column of a table of versions: compact, cut (R5), the exact value in its title.
   return (
-    <span data-testid="version-usage" data-state="ready" title={`${compact.full} CKB`}>
-      {compact.value} CKB
+    <span data-testid="version-usage" data-state="ready">
+      <CkbAmount
+        form="compact"
+        shannons={parseShannons(usage.ownedCapacitySum, 'script version CKB')}
+        signed={false}
+        tone="inherit"
+      />
     </span>
   );
 }
@@ -1316,11 +1331,24 @@ export default function ScriptDetailPage({
             },
             {
               label: 'CKB in its cells',
-              value: !isCodeHashMode
-                ? formatCkbCompact(namedScriptDetail!.ownedCapacitySum).value
-                : usage
-                  ? formatCkbCompact(usage.ownedCapacitySum).value
-                  : 'unavailable',
+              // A stat tile: the summary form (R5), the exact value in its title.
+              value:
+                !isCodeHashMode || usage ? (
+                  <CkbAmount
+                    form="summary"
+                    shannons={parseShannons(
+                      !isCodeHashMode
+                        ? namedScriptDetail!.ownedCapacitySum
+                        : usage!.ownedCapacitySum,
+                      'script CKB in its cells'
+                    )}
+                    signed={false}
+                    tone="inherit"
+                    unit={false}
+                  />
+                ) : (
+                  'unavailable'
+                ),
             },
             {
               label: 'Code versions',
@@ -1556,7 +1584,8 @@ export default function ScriptDetailPage({
                           numeric: true,
                           // Material pass v2 leftovers: the shared exact figure (ink, dim unit), not gold.
                           render: (cell) => (
-                            <ExactCkb
+                            <CkbAmount
+                              form="column"
                               shannons={BigInt(cell.capacity)}
                               signed={false}
                               tone="plain"
@@ -1608,7 +1637,8 @@ export default function ScriptDetailPage({
                             Type: <CellTypeReference cell={cell} />
                           </div>
                           <div>
-                            <ExactCkb
+                            <CkbAmount
+                              form="summary"
                               shannons={BigInt(cell.capacity)}
                               signed={false}
                               tone="plain"

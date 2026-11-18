@@ -201,9 +201,20 @@ describe('ActivityFeed', () => {
     ]);
     const amounts = [
       ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
-    ].map((e) => e.textContent);
+    ];
     // Consistency plan C4: the zero party's amount is a ghost "0 CKB" (was "0.00000000 CKB").
-    expect(amounts).toEqual([`${MINUS}412.32488212 CKB`, '+412.32486750 CKB', '0 CKB']);
+    // Readability R5 (re-pinned on purpose): a feed line is the summary form, cut, every cut
+    // figure titled with its exact value (was "−412.32488212 CKB", "+412.32486750 CKB").
+    expect(amounts.map((e) => e.textContent)).toEqual([
+      `${MINUS}412.32 CKB`,
+      '+412.32 CKB',
+      '0 CKB',
+    ]);
+    expect(amounts.map((e) => e.getAttribute('title'))).toEqual([
+      `${MINUS}412.32488212 CKB`,
+      '+412.3248675 CKB',
+      null,
+    ]);
     // Occupied only where it changed: two of three.
     expect([...row.querySelectorAll('[data-role="occupied"]')].map((e) => e.textContent)).toEqual([
       `occupied ${MINUS}61`,
@@ -235,7 +246,10 @@ describe('ActivityFeed', () => {
     expect(row.querySelectorAll('[data-party]')).toHaveLength(3);
   });
 
-  it("ghosts trailing zeros and keeps each exact amount on its participant's own line", async () => {
+  // Readability R5 (re-pinned and renamed on purpose: "ghosts trailing zeros and keeps each exact
+  // amount on its participant's own line"): a feed line's amount is the summary form, so it has no
+  // padding zeros to ghost; it still stands on its participant's own line.
+  it("keeps each amount, in its summary form, on its participant's own line", async () => {
     server.use(
       http.get(`${API}/activities/latest`, () => HttpResponse.json([feedSamples.fiberClose]))
     );
@@ -254,11 +268,11 @@ describe('ActivityFeed', () => {
     const amounts = [
       ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
     ];
-    for (const a of amounts) expect(a.textContent).toMatch(/\.\d{8} CKB$/);
-    expect(amounts[0]).toHaveTextContent(`${MINUS}750.00000000 CKB`);
-    expect(amounts[0].querySelector('[data-ghost]')).toHaveTextContent(/^\.00000000$/);
-    expect(amounts[0].querySelector('[data-ghost]')).toHaveClass('text-text-ghost');
-    expect(amounts[2].querySelector('[data-ghost]')).toHaveTextContent(/^$/);
+    for (const a of amounts) expect(a.querySelector('[data-ghost]')).toBeNull();
+    expect(amounts[0]).toHaveTextContent(`${MINUS}750 CKB`);
+    expect(amounts[0]).not.toHaveAttribute('title');
+    expect(amounts[2]).toHaveTextContent('+250 CKB');
+    expect(amounts[2]).toHaveAttribute('title', '+250.00000006 CKB');
     expect(row.querySelector('[data-role="participants"]')?.className).not.toMatch(/grid/);
   });
 
@@ -277,7 +291,8 @@ describe('ActivityFeed', () => {
       [
         ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
       ].map((e) => e.textContent)
-    ).toEqual([`${MINUS}750.00000000 CKB`, '+499.99999456 CKB', '+250.00000006 CKB']);
+      // the participants' summary form (R5, re-pinned on purpose: was every decimal)
+    ).toEqual([`${MINUS}750 CKB`, '+499.99 CKB', '+250 CKB']);
   });
 
   it("reads an object transfer: its calls and each party's object arriving or departing", async () => {
@@ -316,10 +331,9 @@ describe('ActivityFeed', () => {
       'title',
       `0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
     );
-    expect(
-      within(row).getByRole('link', { name: `${MINUS}36,583.46853885 Seal` })
-    ).toBeInTheDocument();
-    expect(within(row).getByRole('link', { name: '+36,583.46853885 Seal' })).toBeInTheDocument();
+    // the summary form of a feed line (R5, re-pinned on purpose: was every decimal)
+    expect(within(row).getByRole('link', { name: `${MINUS}36,583 Seal` })).toBeInTheDocument();
+    expect(within(row).getByRole('link', { name: '+36,583 Seal' })).toBeInTheDocument();
     expect([...row.querySelectorAll('[data-party]')].map((e) => e.textContent)).toEqual([
       expect.stringMatching(/j3pkeh$/),
       expect.stringMatching(/3fzxu7$/),
