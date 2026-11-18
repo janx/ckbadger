@@ -47,6 +47,25 @@ export interface DetailFact {
 }
 
 /**
+ * A fact a reading shows at some points and not at this one (the DAO reading's week before a
+ * range's first whole week, a script's code before its first deployment): its row keeps its place,
+ * unseen and with no words, so the list stands as tall as its fullest form at every width and a
+ * hover moves no layout (ReadoutRow's rule). A reading passes every fact it can show; an empty
+ * labelled row is never drawn.
+ */
+export interface ReservedFact {
+  label: string;
+  reserved: true;
+}
+
+/** One row of a fact list: its name and its value side by side from sm, stacked below. */
+const FACT_ROW =
+  'grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]';
+/** A fact's name is a label: quiet (R3). */
+const FACT_NAME = 'text-text-dim text-small min-w-0 break-words';
+const FACT_VALUE = 'text-text-bright min-w-0 break-words tabular-nums';
+
+/**
  * Facts as the detail pages draw them: a `dl` whose rows are a label (a fact's name: the quiet ink,
  * R3) beside its value, the label over the value below sm, one column of rows until md (at 640 a
  * two-column grid wrapped labels into three lines), two from md. A page's head draws its facts
@@ -57,23 +76,27 @@ export function DetailFacts({
   facts,
   className,
 }: {
-  facts: readonly DetailFact[];
+  facts: readonly (DetailFact | ReservedFact)[];
   className?: string;
 }) {
   return (
     <dl className={cn(className, 'grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2')}>
-      {facts.map(({ label, value, title }) => (
-        <div
-          key={label}
-          className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
-        >
-          {/* a fact's name is a label: quiet (R3) */}
-          <dt title={title} className="text-text-dim text-small min-w-0 break-words">
-            {label}
-          </dt>
-          <dd className="text-text-bright min-w-0 break-words tabular-nums">{unitNode(value)}</dd>
-        </div>
-      ))}
+      {facts.map((fact) =>
+        'reserved' in fact ? (
+          // a line of a name and a line of a value, as tall as a fact's, with nothing in them
+          <div key={fact.label} aria-hidden="true" className={cn(FACT_ROW, 'invisible')}>
+            <dt className={FACT_NAME}>{'\u00a0'}</dt>
+            <dd className={FACT_VALUE}>{'\u00a0'}</dd>
+          </div>
+        ) : (
+          <div key={fact.label} className={FACT_ROW}>
+            <dt title={fact.title} className={FACT_NAME}>
+              {fact.label}
+            </dt>
+            <dd className={FACT_VALUE}>{unitNode(fact.value)}</dd>
+          </div>
+        )
+      )}
     </dl>
   );
 }

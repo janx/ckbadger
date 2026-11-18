@@ -546,7 +546,7 @@ export function FiberNetworkReading({ network, pin }: Props) {
         {pin.active ? readoutLine(data, pin.active) : null}
       </ReadoutRow>
       <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
-        Each circle is a party, each line a pair; green is CKB locked between them now.
+        Each circle is a party, each line a pair; green is the CKB they lock now.
       </p>
     </>
   );

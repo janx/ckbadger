@@ -55,6 +55,11 @@ describe('KnowledgeSizePage', () => {
     });
     expect(screen.getByText('Calculation scope')).toBeInTheDocument();
     expect(screen.getByText('Evidence path')).toBeInTheDocument();
+    // Readability R4 (lane B7, the fix round): the scope's items are sentences; on 13 chart pages
+    // they ran 78 characters a line, the grid column's width. The list stands on the measure.
+    const items = screen.getByText('Calculation scope').parentElement!.querySelector('ul')!;
+    expect(items.querySelectorAll('li').length).toBeGreaterThan(0);
+    expect(items).toHaveClass('max-w-measure');
   });
   it('keeps daily net flow exact above the safe integer range', async () => {
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue({

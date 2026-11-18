@@ -164,13 +164,24 @@ The 640–767 band has one content width to design for. Below 640 the container 
   explains reads at the body step in the reading ink in both tiers; a note under a figure may stay
   quiet at the small or meta step, on the measure too. A table cell (`ListTable` owns its width),
   raw data, a one-line label and a row of items are not running text.
-  `__tests__/lib/measure-gate.test.ts` holds the rule where the source shows it: a `<p>`, or a
-  block with more than 110 characters of its own text, outside the measure fails, but for the sites
-  it lists with their reason. A reading of more than three facts is drawn as labelled facts, the
-  detail pages' `dl` rows (`DetailFacts`, `components/ui/detail-layout.tsx`: a quiet label beside
-  its value), not joined by "·" into a line that runs across the page (the DAO history's reading,
-  the address balance's parts, the "CKB held" readings of an asset and of a script); "·" stays for
-  two or three short facts of one kind ("tx 12 · sequence 3").
+  `__tests__/lib/measure-gate.test.ts` holds the rule where the source shows it, but for the sites
+  it lists with their reason. It reads as running text every `<p>` (one whose every word is written
+  in the source and that is no longer than the measure excepted), any other block — a `div`, `li`,
+  `dd`, `figcaption`, … — whose written text is longer than the measure, and a tag it cannot
+  resolve (refused by name; a tag held in a constant or an `as` prop is read as every tag it can
+  be). It does not count an element in a table cell, an element `truncate`, `whitespace-nowrap`,
+  `flex`, `inline-flex` or `grid` in every branch of its class, `<pre>`, headings and SVG text. A
+  class counts only where every branch of its expression holds it, read through `cn` and `clsx`,
+  the file's constants and the string constants it imports from the app; the measure counts on an
+  intrinsic element only, a component given it proving nothing. It does not read a block other
+  than a `<p>` whose text an expression builds (an `li` or a `dd` holds a value as often as a
+  sentence): such a block takes the class by hand where it holds a sentence. A reading of more than
+  three facts is drawn as labelled facts, the detail pages' `dl` rows (`DetailFacts`,
+  `components/ui/detail-layout.tsx`: a quiet label beside its value), not joined by "·" into a
+  line that runs across the page (the DAO history's reading, the address balance's parts, the "CKB
+  held" readings of an asset and of a script); "·" stays for two or three short facts of one kind
+  ("tx 12 · sequence 3"). A reading passes every fact it can show, one it cannot show at this point
+  as a reserved fact whose row keeps its place unseen, so a hover moves no layout.
 - **Scrollbars**: painted in the page's palette and thin inside the page (`app/globals.css`), so a
   region that legitimately scrolls shows no platform-grey bar.
 - **Touch**: anything a hover reveals must also be reachable by a tap that pins a readout under the

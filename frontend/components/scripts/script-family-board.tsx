@@ -1,5 +1,6 @@
 'use client';
 import type { ReactNode } from 'react';
+import { cn } from '@/lib/utils';
 import Link from '@/components/ui/link';
 import { NoBreak } from '@/components/ui/no-break';
 import { ShortId } from '@/components/ui/short-id';
@@ -102,6 +103,31 @@ function holderSentence(custody: ScriptCustodyApi): string {
   return holderName(custody, 'row');
 }
 
+/**
+ * A sentence of the script's notes: a paragraph of its own at the body step on the measure, or a
+ * span inside a caller's paragraph (table-rows L1-5), the tag and its class chosen together (the
+ * measure gate reads a paragraph by its tag; review of the rules branch, tests SHOULD-1).
+ */
+function NoteSentence({
+  inline,
+  className,
+  testId,
+  children,
+}: {
+  inline: boolean;
+  className?: string;
+  testId?: string;
+  children: ReactNode;
+}) {
+  return inline ? (
+    <span data-testid={testId}>{children}</span>
+  ) : (
+    <p data-testid={testId} className={cn('text-body max-w-measure', className)}>
+      {children}
+    </p>
+  );
+}
+
 /** The board's summary sentence: what the script guards, since when, and who can change it. */
 export function ScriptSummarySentence({
   family,
@@ -122,12 +148,8 @@ export function ScriptSummarySentence({
         : 'guards';
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
-  const Sentence = inline ? 'span' : 'p';
   return (
-    <Sentence
-      data-testid="script-summary"
-      className={inline ? undefined : 'text-body max-w-measure'}
-    >
+    <NoteSentence inline={inline} testId="script-summary">
       {family.name} {verb}{' '}
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
@@ -157,7 +179,7 @@ export function ScriptSummarySentence({
       {code === 'upgradable' && lineage && lineage.length === 1 && (
         <> Its code is upgradable by {holderSentence(lineage[0].custody)}.</>
       )}
-    </Sentence>
+    </NoteSentence>
   );
 }
 
@@ -542,6 +564,9 @@ export function ScriptHistoryReading({
   const unused = point ? BigInt(point.values.unused) : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
+  // whether some day of the range has a code fact (hover never moves layout: ReadoutRow)
+  const codeShown =
+    lineage !== null && chart.data.some((p) => deploymentOnDay(lineage, p.date) !== null);
   const swatch = (color: string) => (
     <span
       aria-hidden="true"
@@ -610,7 +635,10 @@ export function ScriptHistoryReading({
                     ),
                   },
                 ]
-              : []),
+              : // a range with a deployed day shows the fact on it: its row keeps its place here
+                codeShown
+                ? [{ label: 'code', reserved: true as const }]
+                : []),
           ]}
         />
       ) : (
@@ -641,19 +669,17 @@ export function ScriptHistoryNotes({
   const peak = chart?.totalPeak;
   const capacity = BigInt(family.ownedCapacitySum);
   const occupiedNow = BigInt(family.ownedKnowledgeSum);
-  const Sentence = inline ? 'span' : 'p';
-  const block = inline ? undefined : 'text-body max-w-measure';
   return (
     <>
-      <Sentence className={block}>
+      <NoteSentence inline={inline}>
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
         {family.name} guards; <span className="text-text">free</span> is CKB its owners keep there.
         {lineage && lineage.length > 1 ? ' Dashed lines mark the days its code was replaced.' : ''}
-      </Sentence>
+      </NoteSentence>
       {inline && peak && ' '}
       {peak && (
-        <Sentence data-testid="script-history-peak" className={block}>
+        <NoteSentence inline={inline} testId="script-history-peak">
           CKB held peaked at{' '}
           <CkbAmount form="column" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
           {unitNode(peak.date)}
@@ -666,7 +692,7 @@ export function ScriptHistoryNotes({
             </>
           )}
           {inline && '.'}
-        </Sentence>
+        </NoteSentence>
       )}
     </>
   );
@@ -856,20 +882,19 @@ export function ScriptCustodyMechanism({
   /** Spans inside a paragraph (table-rows L1-5) instead of two paragraphs. */
   inline?: boolean;
 }) {
-  const Sentence = inline ? 'span' : 'p';
   return (
     <>
       {lineage && (
-        <Sentence className={inline ? undefined : 'text-body max-w-measure'}>
+        <NoteSentence inline={inline}>
           {family.name} cells point at their code through one code cell&apos;s type id, not at a
           fixed binary. Whoever can spend that cell can put new code in it, and every {family.name}{' '}
           cell runs the new code from the next block.
-        </Sentence>
+        </NoteSentence>
       )}
       {inline && lineage && ' '}
-      <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-measure'}>
+      <NoteSentence inline={inline} className="text-text-dim">
         Code versions: {unitText(binaries)}.
-      </Sentence>
+      </NoteSentence>
     </>
   );
 }

@@ -12,6 +12,7 @@ import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
 import overviewFixture from '@/__tests__/fixtures/fork-api-producer/fork-overview.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
 import { fullText } from '@/__tests__/utils/full-text';
+import { MEASURE_CHARS } from '@/lib/type-metrics';
 
 vi.mock('@/lib/api', () => ({
   api: { getForks: vi.fn(), getForkOverview: vi.fn() },
@@ -42,7 +43,9 @@ describe('ForksPage', () => {
     const lede = within(hero).getByText(/^Two blocks, one height: one stays, one is an uncle\./);
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
     expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
-    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    // one line of the measure with room to spare, as the DAO page's lede: at most 67 characters,
+    // where the measure holds MEASURE_CHARS, 76, at the body step (it said 560 px, 8.3 px a
+    // character at 13 px)
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
@@ -170,7 +173,9 @@ describe('ForksPage', () => {
     const caption = under.querySelector('p')!;
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'max-w-measure');
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     // the paragraph and the scope note moved to tier 2, every sentence kept
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(

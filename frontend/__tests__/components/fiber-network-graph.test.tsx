@@ -19,6 +19,7 @@ import {
   textLines,
   viewBox,
 } from '@/__tests__/utils/svg-text-boxes';
+import { MEASURE_CHARS } from '@/lib/type-metrics';
 
 const node = (tail: string) => screen.getByRole('button', { name: new RegExp(`^Party …${tail},`) });
 const panel = () => screen.getByRole('complementary', { name: 'Party or pair' });
@@ -324,7 +325,9 @@ describe('FiberNetworkGraph', () => {
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'max-w-measure');
     // one line inside 640 px (13 px mono, about 8 px a character)
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     expect(caption.textContent).toMatch(/^Each circle is a party, each line a pair/);
   });
 });

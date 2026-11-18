@@ -454,7 +454,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
     >
       <div ref={ref} className="min-w-0">
         {root === null ? (
-          <div className="text-text-dim text-small">
+          <div className="text-text-dim text-small max-w-measure">
             No secondary issuance has accrued at this indexed block; allocation shares are
             undefined.
           </div>
@@ -1303,7 +1303,7 @@ function RawEvidence({
               </div>
               <div>
                 <dt className="text-text-dim">Cell data, 8 bytes</dt>
-                <dd className="mt-0.5">
+                <dd className="max-w-measure mt-0.5">
                   0 for a deposit · the deposit&apos;s block number (u64 LE) for a withdrawal
                   request
                 </dd>
