@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, render, screen, within } from '@testing-library/react';
+import resolveConfig from 'tailwindcss/resolveConfig';
+import tailwindConfig from '@/tailwind.config';
 import {
+  CELL_GAP_CLASS,
+  CELL_GAP_PX,
+  CELL_HORIZONTAL_CLASSES,
   ListTable,
   WIDE_ROW_MIN_WIDTH,
   listTableForm,
+  minimumWidth,
   type ListColumn,
   type ListTableProps,
 } from '@/components/ui/list-table';
@@ -420,5 +426,116 @@ describe('ListTable row density and row title (table-rows plan T2, lane R1)', ()
     expect(() => render(table({ rowTitle: (r) => (r.name === 'Coin' ? ' ' : r.name) }))).toThrow(
       'Holdings: row Coin has an empty title'
     );
+  });
+});
+
+// Review fb-tests 5 (the lead's ruling: ListTable owns every horizontal pixel of a cell). A
+// column's budget is its content and CELL_GAP_PX; a padding, a margin, a width or a side border a
+// column wrote on its cells would take pixels no budget counts (cn() lets a column's `px-2` replace
+// the table's `pl-0` and `pr-4`), so the table refuses it when it is built.
+describe('ListTable owns every horizontal pixel of a cell (review fb-tests 5)', () => {
+  const named = (className: string): ListColumn<Row> => ({
+    key: 'name',
+    label: 'Name',
+    minWidth: 180,
+    className,
+    render: (r) => r.name,
+  });
+
+  it('refuses a column that sets a padding, a margin, a width or a side border, naming it', () => {
+    for (const cls of [
+      'px-2',
+      'pl-1',
+      'pr-3',
+      'p-2',
+      'ps-1',
+      'pe-1',
+      'ml-2',
+      '-mr-1',
+      'mx-auto',
+      'w-24',
+      'min-w-0',
+      'min-w-[80px]',
+      'max-w-xs',
+      'border',
+      'border-l',
+      'border-x-2',
+      'border-r-[3px]',
+      '!pl-2',
+      'md:px-4',
+      'last:pr-2',
+      '[padding-left:3px]',
+    ])
+      expect(() => listTableForm('Holdings', 608, [named(`text-body ${cls}`), COLUMNS[1]])).toThrow(
+        `Holdings: column name sets its own horizontal space (${cls})`
+      );
+    // the narrower table's columns, and the sum a page computes at load, are held to it too
+    expect(() => listTableForm('Holdings', 300, COLUMNS, [named('px-2'), NARROW[1]])).toThrow(
+      'Holdings: column name sets its own horizontal space (px-2)'
+    );
+    expect(() => minimumWidth('Holdings', [named('pl-3')])).toThrow(
+      'Holdings: column name sets its own horizontal space (pl-3)'
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubChartWidth(608);
+    expect(() => render(table({ columns: [named('px-2'), COLUMNS[1]] }))).toThrow(
+      'Holdings: column name sets its own horizontal space (px-2)'
+    );
+  });
+
+  it('lets a column set what takes no horizontal pixel', () => {
+    for (const cls of [
+      'py-1.5',
+      'py-[9px] align-top',
+      'text-body text-text-dim',
+      'truncate',
+      'whitespace-nowrap',
+      '!whitespace-normal',
+      'border-b',
+      'border-t-2',
+      'border-row-rule',
+      'font-medium tabular-nums',
+    ])
+      expect(listTableForm('Holdings', 608, [named(cls), COLUMNS[1]])).toBe('table');
+  });
+
+  // The gap and the class that draws it are one fact: the class's step read from the Tailwind
+  // config (the root's 16 px a rem: no rule in globals.css sets the root's font size) is the
+  // number every budget adds. Moving either alone fails here.
+  it('draws the gap with the class whose step is CELL_GAP_PX', () => {
+    const { padding } = resolveConfig(tailwindConfig).theme as { padding: Record<string, string> };
+    const step = /^pr-(.+)$/.exec(CELL_GAP_CLASS);
+    expect(step).not.toBeNull();
+    const rem = /^([\d.]+)rem$/.exec(padding[step![1]]);
+    expect(rem).not.toBeNull();
+    const css = readFileSync(join(__dirname, '..', '..', 'app', 'globals.css'), 'utf8');
+    expect(css).not.toMatch(/(^|[\s,}])html\s*\{[^}]*font-size/);
+    expect(Number(rem![1]) * 16).toBe(CELL_GAP_PX);
+  });
+
+  // Head and cell pinned alike, in both densities and both tables: their horizontal classes are
+  // exactly the table's, no more and no fewer.
+  it('gives every head and every cell exactly pl-0, the gap and last:pr-0', () => {
+    expect(CELL_HORIZONTAL_CLASSES).toEqual(['pl-0', CELL_GAP_CLASS, 'last:pr-0']);
+    const horizontal = (el: Element) =>
+      Array.from(el.classList)
+        .filter((c) =>
+          /^(\w+:)*!?-?(p|px|pl|pr|ps|pe|m|mx|ml|mr|ms|me|w|max-w)-|^border-[xlrse]/.test(c)
+        )
+        .sort();
+    for (const [width, props] of [
+      [608, {}],
+      [608, { density: 'row' }],
+      [300, { narrowColumns: NARROW }],
+      [300, { narrowColumns: NARROW, density: 'row' }],
+    ] as const) {
+      stubChartWidth(width);
+      const { unmount } = render(table(props));
+      const cells = Array.from(screen.getByRole('table').querySelectorAll('th, td'));
+      expect(cells.length).toBeGreaterThan(4);
+      for (const cell of cells) expect(horizontal(cell)).toEqual(['last:pr-0', 'pl-0', 'pr-4']);
+      unmount();
+      vi.restoreAllMocks();
+    }
   });
 });
