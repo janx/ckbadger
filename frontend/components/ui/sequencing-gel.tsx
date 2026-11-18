@@ -123,7 +123,7 @@ function wideColumns(genes: readonly SequencingGene[]) {
   const widest = (texts: string[], px: number) =>
     Math.max(0, ...texts.map((t) => foreignTextPx(t, px)));
   const bytes = TX + widest(genes.map(geneName), SVG_TEXT.head) + 10;
-  // "bytes N–M · <rule>": ours, then the creator's rule, one upper bound over both
+  // "bytes N–M · <rule>": ours, then the creator's rule, one bound over both
   const raw =
     bytes +
     widest(
@@ -452,7 +452,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
   const mapW = 16 * lane;
   // One line a gene (name · bytes · raw → value) while the longest reading fits its column;
   // otherwise the reading takes a line of its own, so the value is the last to lose room. The
-  // raw and its arrow are ours; the value is the creator's, its upper bound.
+  // raw and its arrow are ours; the value is the creator's, by its bound.
   const readingWidth = Math.max(
     0,
     ...genes.map(

@@ -1,13 +1,19 @@
 import { expect } from 'vitest';
 import { lineAscentPx } from '@/lib/chart-type';
-import { descentPx, textPx } from '@/lib/type-metrics';
+import { join } from 'node:path';
+import { descentPx, emUnitsPx, foreignGraphemes, MONO_ADVANCE_EM } from '@/lib/type-metrics';
+import { cmapCodePoints, woff2Tables } from '@/__tests__/utils/woff2';
 
 /**
  * Where a figure's SVG text stands, by arithmetic from its own attributes (readability plan
  * 2026-11-18, lane F3, the figures' text budgets). jsdom lays nothing out, so a line of text is
  * measured as the type modules state it:
  *
- * - across, its glyphs at 0.6 em of their own size (`textPx`), from its x by its text-anchor;
+ * - across, from its x by its text-anchor, grapheme by grapheme: one the face it is drawn from
+ *   maps (its weight and style, read from the woff2 file the site serves) at 0.6 em of its own
+ *   size, as `textPx` counts our text; any other at the bound the figures count text that is not
+ *   ours by, 1.25 em (`foreignGraphemes`), so a pool's or a gene's CJK name is never counted
+ *   narrower than its figure counts it (review fb-tests SHOULD-4: it counted 0.6 em a code point);
  * - down, the tight line it occupies (`tightLinePx`: its size and 3 px of leading), standing on
  *   its baseline: its descent (`descentPx`, 0.3 em) under the baseline, the rest of the line over
  *   it (`lineAscentPx`: 11.4 px at 12 px).
@@ -100,9 +106,79 @@ function fontSizeOf(el: Element): number {
   throw new Error(`svg-text-boxes: no font size for "${el.textContent}"`);
 }
 
+/** The face a weight and a style draw from (app/globals.css's @font-face rules). */
+const FACES: Record<string, string> = {
+  '300': 'jetbrains-mono-light.woff2',
+  '400': 'jetbrains-mono-regular.woff2',
+  '500': 'jetbrains-mono-medium.woff2',
+  '600': 'jetbrains-mono-semibold.woff2',
+  'italic 400': 'jetbrains-mono-italic.woff2',
+};
+const WEIGHT_CLASSES: Record<string, string> = {
+  'font-light': '300',
+  'font-normal': '400',
+  'font-medium': '500',
+  'font-semibold': '600',
+};
+
+/** The served face an SVG text node is drawn from: its weight and style, inherited. */
+function faceOf(el: Element): string {
+  let weight: string | null = null;
+  let italic: boolean | null = null;
+  for (let e: Element | null = el; e && (weight === null || italic === null); e = e.parentElement) {
+    const style = (e as HTMLElement).style;
+    const w =
+      e.getAttribute('font-weight') ??
+      (style?.fontWeight || null) ??
+      Object.entries(WEIGHT_CLASSES).find(([cls]) => e!.classList.contains(cls))?.[1] ??
+      null;
+    if (weight === null && w !== null) weight = w === 'normal' ? '400' : w;
+    const s = e.getAttribute('font-style') ?? (style?.fontStyle || null);
+    if (italic === null && s !== null) italic = s === 'italic';
+    else if (italic === null && e.classList.contains('italic')) italic = true;
+  }
+  const key = `${italic ? 'italic ' : ''}${weight ?? '400'}`;
+  const face = FACES[key];
+  if (!face) throw new Error(`svg-text-boxes: no served face for ${key} ("${el.textContent}")`);
+  return face;
+}
+
+const faceCodePoints = new Map<string, Set<number>>();
+/** The code points a served face maps, read from its woff2 file once. */
+function codePointsOf(face: string): Set<number> {
+  let points = faceCodePoints.get(face);
+  if (!points) {
+    points = cmapCodePoints(woff2Tables(join(__dirname, '..', '..', 'public', 'fonts', face)));
+    faceCodePoints.set(face, points);
+  }
+  return points;
+}
+
+/**
+ * A run's width as the browser draws it from its face: a grapheme the face maps whole at the
+ * face's 0.6 em (our own `→` in the regular face too), any other at the bound the figures count
+ * text that is not ours by (`foreignGraphemes`, 1.25 em).
+ */
+function runPx(run: Run): number {
+  const points = codePointsOf(run.face);
+  return emUnitsPx(
+    foreignGraphemes(run.text).reduce(
+      (sum, g) =>
+        sum +
+        (Array.from(g.grapheme).every((ch) => points.has(ch.codePointAt(0)!))
+          ? MONO_ADVANCE_EM * 1000
+          : g.units),
+      0
+    ),
+    run.size
+  );
+}
+
 interface Run {
   text: string;
   size: number;
+  /** The served face it is drawn from. */
+  face: string;
 }
 interface Chunk {
   x: number;
@@ -127,7 +203,11 @@ export function textLines(text: Element): TextLine[] {
   const walk = (el: Element) => {
     for (const node of Array.from(el.childNodes)) {
       if (node.nodeType === 3) {
-        chunks[chunks.length - 1].runs.push({ text: node.textContent ?? '', size: fontSizeOf(el) });
+        chunks[chunks.length - 1].runs.push({
+          text: node.textContent ?? '',
+          size: fontSizeOf(el),
+          face: faceOf(el),
+        });
         continue;
       }
       if (node.nodeType !== 1) continue;
@@ -164,7 +244,8 @@ export function textLines(text: Element): TextLine[] {
       runs[runs.length - 1].text = runs[runs.length - 1].text.replace(/ $/, '');
     const shown = runs.filter((r) => r.text.length > 0);
     if (!shown.length) return;
-    const width = shown.reduce((w, r) => w + textPx(Array.from(r.text).length, r.size), 0);
+    // a run as its face draws it, text that is not ours by its bound (review fb-tests SHOULD-4)
+    const width = shown.reduce((w, r) => w + runPx(r), 0);
     const left =
       anchor === 'end' ? chunk.x - width : anchor === 'middle' ? chunk.x - width / 2 : chunk.x;
     const size = Math.max(...shown.map((r) => r.size));
