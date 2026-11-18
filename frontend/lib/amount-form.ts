@@ -140,14 +140,30 @@ export function shownSign(d: AmountDigits): AmountDigits['sign'] {
   return /^[0,.]*$/.test(`${d.integer}${d.fraction}`) ? '' : d.sign;
 }
 
-/** The text of an amount's digits: the sign when `signed`. */
-export function amountText(d: AmountDigits, signed: boolean): string {
+/**
+ * The text of an amount's digits: the sign when `signed`. The module's own: its callers below
+ * settle the sign before they write.
+ */
+function amountText(d: AmountDigits, signed: boolean): string {
   return `${signed ? shownSign(d) : ''}${d.integer}${d.fraction}${d.suffix}${d.padding}`;
+}
+
+/**
+ * The digits of a CKB amount of `shannons` in `form`, to be written with its sign or without
+ * (`signed`): the one entry through which every CKB text below and the renderer `CkbAmount` read
+ * them. Where no sign is written a CKB amount is never negative: one that is fails here, the one
+ * place the rule and its message live, rather than read as its absolute value (a broken invariant
+ * upstream, a cell's free CKB held minus occupied, would read as a plausible positive figure).
+ */
+export function ckbDigits(shannons: bigint, form: AmountForm, signed: boolean): AmountDigits {
+  if (!signed && shannons < ZERO)
+    throw new Error(`CKB amount ${shannons} shannons is negative where a sign is not written`);
+  return amountDigits(shannons, 8, form);
 }
 
 /** A CKB amount, from shannons, as text in `form`, without its unit. */
 export function ckbAmountText(shannons: bigint, form: AmountForm, signed = false): string {
-  return amountText(amountDigits(shannons, 8, form), signed);
+  return amountText(ckbDigits(shannons, form, signed), signed);
 }
 
 /** The exact CKB amount and its unit, for a shortened figure's title: `+1,000.99999999 CKB`. */
@@ -161,7 +177,17 @@ export function ckbShortenedTitle(
   form: AmountForm,
   signed = false
 ): string | undefined {
-  return amountDigits(shannons, 8, form).shortened ? ckbAmountTitle(shannons, signed) : undefined;
+  return ckbDigits(shannons, form, signed).shortened ? ckbAmountTitle(shannons, signed) : undefined;
+}
+
+/**
+ * A token amount of `raw` base units at `decimals`, as text in `form`, without a sign and without
+ * its unit (a column's widest figure, for a width budget). The rule of `ckbDigits` holds here too:
+ * a negative amount is never written as its absolute value.
+ */
+export function tokenAmountText(raw: bigint, decimals: number, form: AmountForm): string {
+  if (raw < ZERO) throw new Error(`token amount ${raw} is negative where a sign is not written`);
+  return amountText(amountDigits(raw, decimals, form), false);
 }
 
 const DECIMAL_RE = /^([+-])?(\d+)(?:\.(\d+))?$/;
@@ -180,4 +206,14 @@ export function parseDecimalAmount(raw: string): {
   const [, sign, whole, fraction = ''] = m;
   const abs = BigInt(`${whole}${fraction}`);
   return { value: sign === '-' ? -abs : abs, decimals: fraction.length, plus: sign === '+' };
+}
+
+/**
+ * A decimal amount in display units as served (a chart's CKB value `"8131306075.44505907"`, an
+ * exact delta `"+30.5"`) as text in `form`, exactly as served: no digit dropped before the form
+ * cuts it, the minus of a negative and the `+` of a delta kept.
+ */
+export function decimalAmountText(raw: string, form: AmountForm): string {
+  const { value, decimals, plus } = parseDecimalAmount(raw);
+  return amountText(amountDigits(value, decimals, form), value < ZERO || plus);
 }

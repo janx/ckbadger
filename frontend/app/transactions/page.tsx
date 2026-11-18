@@ -182,8 +182,10 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
               <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
             </Link>
           ),
+          // the dot, the status word and the wait stand in one row; "this device's clock is
+          // behind" in the wait's place is words and breaks between them in its item (Utc8Age; L2)
           right: (
-            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            <span className="inline-flex items-center gap-1.5">
               <PoolDot status={tx.status} />
               <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
                 {poolStatusLabel(tx.status)}

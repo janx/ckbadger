@@ -119,20 +119,36 @@ describe('CkbAmount', () => {
   // Rubbing × Song print, phase 5 (T4): a sentence that names an amount the page draws (the
   // transaction comment's fee) takes its digits from exactCkbText; it must read as CkbAmount does.
   // Re-pinned on purpose (review of main..fix/readability, logic finding 5): unsigned, a negative
-  // ('-30000') printed its absolute value; it now fails (the test below), so it is read signed.
-  it('prints the same digits as exactCkbText, signed or not, zero included', () => {
+  // ('-30000') printed its absolute value; the renderer then refused it while the text still
+  // printed '0.00030000', and this table dropped the case. Review of the fixes (M2): the case runs,
+  // and the sentence's text refuses it as the renderer does, with one message: the rule is the
+  // amount module's.
+  it('prints the same digits as exactCkbText, signed or not, zero included; both refuse an unsigned negative', () => {
     const amounts = ['0', '1647', '64119', '100000', '100000000', '75000000000', '-30000'];
-    for (const signed of [true, false])
-      for (const raw of amounts.filter((a) => signed || !a.startsWith('-'))) {
-        const shannons = BigInt(raw);
-        const { container, unmount } = render(
-          <CkbAmount form="column" shannons={shannons} signed={signed} tone="plain" />
-        );
-        expect(container.querySelector('[data-ckb-amount]')!.textContent).toBe(
-          `${exactCkbText(shannons, signed)} CKB`
-        );
-        unmount();
-      }
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const signed of [true, false])
+        for (const raw of amounts) {
+          const shannons = BigInt(raw);
+          const draw = () =>
+            render(<CkbAmount form="column" shannons={shannons} signed={signed} tone="plain" />);
+          if (!signed && shannons < BigInt(0)) {
+            const refusal = `CKB amount ${raw} shannons is negative where a sign is not written`;
+            expect(draw, `CkbAmount ${raw}, unsigned`).toThrow(refusal);
+            expect(() => exactCkbText(shannons, signed), `exactCkbText ${raw}, unsigned`).toThrow(
+              refusal
+            );
+          } else {
+            const { container, unmount } = draw();
+            expect(container.querySelector('[data-ckb-amount]')!.textContent).toBe(
+              `${exactCkbText(shannons, signed)} CKB`
+            );
+            unmount();
+          }
+        }
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });
 

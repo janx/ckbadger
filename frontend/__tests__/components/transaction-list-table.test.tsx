@@ -19,6 +19,13 @@ import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { drawSeal, type SealId } from '@/lib/seal/stones';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
+import {
+  boxPx,
+  containerContentPx,
+  gapPx,
+  insetsPx,
+  textRunPx,
+} from '@/__tests__/utils/tailwind-box';
 
 const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
   blockNumber: 20829775,
@@ -290,41 +297,86 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     expect(faultLines(cellFaults(table))).toEqual([]);
   });
 
-  // The page's real widths (app/transactions/page.tsx's `main.container`: Tailwind's container at
-  // sm 640 / md 768 / lg 1024 / xl 1280 less its gutters, 16 px a side, 24 from lg): the list stands
-  // in 1,232 px from a 1280 window, 976 from 1024, 736 from 768, 608 from 640, and the window less
-  // 32 below (358 at 390, 328 at 360). The page changes both its lists' form at 1,212 px, its
-  // pool's sum (transactions-page.test.tsx pins it), so only 1,232 draws the table, What it did
-  // taking its 205 px minimum and the 20 px beyond; every narrower width draws the phone rows,
-  // whose what-line wraps by design. Re-pinned on purpose (readability R6): the transaction's row
-  // stone 24 × 48.5 → 16 × 32.3 px gives each list's Transaction column 16 px back, so the pool's
-  // sum is 1,212 (was 1,228) and What it did has 225 px at 1,232 (was 209).
+  // The page's real widths (app/transactions/page.tsx draws its lists in `main.container`, no inset
+  // of its own between): Tailwind's container at each window the readability plan reads, from the
+  // theme (tailwind-box's containerContentPx: 1,232 at 1280, 976, 736, 608, then the window less 32,
+  // 358 and 328). The page changes both its lists' form at 1,212 px, its pool's sum
+  // (transactions-page.test.tsx pins it), so only 1,232 draws the table, What it did taking its 205
+  // px minimum and the 20 px beyond; every narrower width draws the phone rows, whose what-line
+  // wraps by design. Re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 →
+  // 16 × 32.3 px gives each list's Transaction column 16 px back, so the pool's sum is 1,212 (was
+  // 1,228) and What it did has 225 px at 1,232 (was 209).
   const PAGE_FORM_PX = 1212;
-  const PAGE_WIDTHS = [1232, 976, 736, 608, 358, 328] as const;
-  /** Where "a common row stands on one line" does not hold: pinned, so the list can only shrink. */
+  const PAGE_VIEWPORTS = [1280, 1024, 768, 640, 390, 360] as const;
+  /**
+   * Block 0's cellbase as the committed list lists it (the live API, `/transactions?cursor=1:0`):
+   * the genesis issuance, 33,600,000,000 CKB, and no block whose reward it pays. Its other fields
+   * are this fixture's.
+   */
+  const genesis: Transaction = {
+    ...cellbase,
+    hash: `0x${'0e'.repeat(32)}`,
+    blockNumber: 0,
+    outputCapacity: '3360000000000000000',
+    txSize: 1235438,
+    pays: null,
+  };
+  const ROWS = [scriptCall, transfer, cellbase, genesis];
+  /**
+   * Where "a row stands on one line" does not hold: pinned, so the list can only shrink. Each
+   * row's line is read from the rendered row (review fb-tests SHOULD-1): the mark's 16 px box, its 8
+   * px gap, the headline's and the note's glyphs at 13 px (7.8), the 8 px between them and the cell's
+   * 16 px gap; its shortfall is that line less What it did's 225 px at 1,232 (its 205 px minimum and
+   * the 20 px the container gives beyond the 1,212). What it did's width moves with the other
+   * columns' budgets (a row stone's footprint among them), every shortfall with it: re-pinned on
+   * purpose (readability R6), the 16 px the smaller transaction stone gives back lowers each
+   * shortfall by 16 (in 209 px they were 221.2, 41.8, 26.2, 41.8); none is cured, the list keeps
+   * its four rows.
+   */
   const KNOWN_FAULTS = [
     {
-      case: 'a common row, "CKB Transfer" and "12 participants", on one line in What it did at 1,232 px',
+      row: 'Script call · .bit Time Index State · .bit Time Info',
       width: 1232,
-      // re-pinned on purpose (readability R6): 49.6 → 33.6, the 16 px the smaller transaction
-      // stone gives back to What it did; not cured
-      shortfall: 33.6,
+      line: 430.2,
+      shortfall: 205.2,
       lane: 'P3 (the lists pages)',
-      why: 'What it did, the flexible column, has 225 px at 1,232 (its 205 px minimum and the 20 px the container gives beyond the 1,212) and the row needs 258.6 (the mark, its gap, 27 glyphs at 7.8 px, the 8 px between headline and note, the cell gap); the other columns are budgeted to what they hold, honestly since this lane (13,568 inputs, genesis’s cellbase), and the lead ruled the column budgets do not change here: where the list gets its width is the page’s layout',
+      why: '16 + 8 + 49 glyphs (11 + 38) × 7.8 + 8 + 16 = 430.2 px in 225 (in 209 beside the 24 px stone: 221.2 short)',
+    },
+    {
+      row: 'CKB Transfer · 8 participants',
+      width: 1232,
+      line: 250.8,
+      shortfall: 25.8,
+      lane: 'P3 (the lists pages)',
+      why: '16 + 8 + 26 glyphs (12 + 14) × 7.8 + 8 + 16 = 250.8 px in 225 (in 209 beside the 24 px stone: 41.8 short; the literal it replaces, "12 participants", was 27 glyphs: 258.6)',
+    },
+    {
+      row: 'Cellbase · pays #20,829,764',
+      width: 1232,
+      line: 235.2,
+      shortfall: 10.2,
+      lane: 'P3 (the lists pages)',
+      why: '16 + 8 + 24 glyphs (8 + 16) × 7.8 + 8 + 16 = 235.2 px in 225 (in 209 beside the 24 px stone: 26.2 short; the case the rewrite of b86847b9 dropped, review fb-tests SHOULD-1)',
+    },
+    {
+      row: 'Cellbase · pays no reward yet (block 0)',
+      width: 1232,
+      line: 250.8,
+      shortfall: 25.8,
+      lane: 'P3 (the lists pages): cellbases get a tab and words of their own',
+      why: '16 + 8 + 26 glyphs (8 + 18) × 7.8 + 8 + 16 = 250.8 px in 225 (in 209 beside the 24 px stone: 41.8 short)',
     },
   ] as const;
-  it('keeps a common row on one line at the page’s widths, but for its pinned known fault', () => {
-    expect(KNOWN_FAULTS).toHaveLength(1);
-    const line = (headline: string, note: string) =>
-      16 + 8 + (headline.length + note.length) * 7.8 + 8 + 16;
-    expect(line('CKB Transfer', '12 participants')).toBeCloseTo(258.6, 10);
-    for (const width of PAGE_WIDTHS) {
+  it('keeps each row on one line at the page’s widths, but for its pinned known faults', () => {
+    expect(KNOWN_FAULTS).toHaveLength(4);
+    const widths = PAGE_VIEWPORTS.map(containerContentPx);
+    expect(widths).toEqual([1232, 976, 736, 608, 358, 328]);
+    const measured: { row: string; width: number; line: number; shortfall: number }[] = [];
+    for (const [i, width] of widths.entries()) {
+      const viewport = PAGE_VIEWPORTS[i];
       atContainerWidth(width);
       const { container, unmount } = render(
-        <TransactionListTable
-          transactions={[scriptCall, transfer, cellbase]}
-          formWidth={PAGE_FORM_PX}
-        />
+        <TransactionListTable transactions={ROWS} formWidth={PAGE_FORM_PX} />
       );
       const form = container.querySelector('[data-list-form]')!.getAttribute('data-list-form');
       if (width < PAGE_FORM_PX) {
@@ -338,15 +390,89 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
         const sum = cols.reduce((s, w) => s + w, 0);
         expect([sum, cols[2]]).toEqual([PAGE_FORM_PX, 205]);
         const what = width - (sum - cols[2]);
-        const shortfall = line('CKB Transfer', '12 participants') - what;
-        const known = KNOWN_FAULTS.find((f) => f.width === width);
-        if (known) expect(shortfall).toBeCloseTo(known.shortfall, 10);
-        else expect(shortfall).toBeLessThanOrEqual(0);
+        // re-pinned on purpose (readability R6): 225 (was 209), the 16 px the stone gave back
+        expect(what).toBe(225);
+        const trs = Array.from(container.querySelectorAll('tbody tr'));
+        expect(trs).toHaveLength(ROWS.length);
+        for (const [r, tr] of trs.entries()) {
+          // the rendered row: its What it did cell, the mark's box and the line of headline + note
+          const td = tr.querySelectorAll('td')[2];
+          const cell = td.firstElementChild as HTMLElement;
+          const [mark, both] = Array.from(cell.children) as HTMLElement[];
+          const [headline, note] = Array.from(both.children) as HTMLElement[];
+          const line =
+            boxPx(mark, viewport)! +
+            gapPx(cell, viewport) +
+            textRunPx(headline.textContent!, headline, viewport) +
+            gapPx(both, viewport) +
+            textRunPx(note.textContent!, note, viewport) +
+            insetsPx(td, viewport).box;
+          const shortfall = line - what;
+          if (shortfall > 1e-9)
+            measured.push({
+              row: `${headline.textContent} · ${note.textContent}${ROWS[r].blockNumber === 0 ? ' (block 0)' : ''}`.replace(
+                /\s+/g,
+                ' '
+              ),
+              width,
+              line: Math.round(line * 100) / 100,
+              shortfall: Math.round(shortfall * 100) / 100,
+            });
+        }
       }
       unmount();
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     }
+    expect(measured).toEqual(
+      KNOWN_FAULTS.map(({ row, width, line, shortfall }) => ({ row, width, line, shortfall }))
+    );
+  });
+
+  /**
+   * Where a row's figure does not stand inside its column's content box (the column less its 16 px
+   * gap) at 1,232 px, the one width the page draws the table: pinned. Review fb-logic 3, the lead's
+   * ruling L3: the lists lane gives cellbases a tab and words of their own; here neither the words
+   * nor the column change.
+   */
+  const FIGURE_FAULTS = [
+    {
+      row: 'block 0',
+      column: 'Value, CKB',
+      text: 'reward 33,600,000,000.00000000',
+      past: 70,
+      lane: 'P3 (the lists pages): cellbases get a tab and words of their own',
+      why: '30 glyphs at 13 px, 234 px, in Value’s 164 px content box (its 180 px less the 16 px gap; its bound, "reward 9,999.99999999", is 21 glyphs, 163.8, so 70.2 past the bound): it draws over Fee. Genesis’s 33.6 B CKB is the first issuance, not a reward',
+    },
+  ] as const;
+  it('holds every row’s figures inside their columns at 1,232 px, but for its pinned known fault', () => {
+    expect(FIGURE_FAULTS).toHaveLength(1);
+    const viewport = 1280;
+    atContainerWidth(containerContentPx(viewport));
+    render(<TransactionListTable transactions={ROWS} formWidth={PAGE_FORM_PX} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const heads = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+    const cols = Array.from(table.querySelectorAll('col')).map((c) =>
+      Number.parseFloat((c as HTMLElement).style.minWidth)
+    );
+    const names = ['script call', 'transfer', 'cellbase', 'block 0'];
+    expect(names).toHaveLength(ROWS.length);
+    const past: { row: string; column: string; text: string; past: number }[] = [];
+    for (const [r, tr] of Array.from(table.querySelectorAll('tbody tr')).entries())
+      for (const column of ['Value, CKB', 'Fee, CKB', 'Cells']) {
+        const at = heads.indexOf(column);
+        expect(at, column).toBeGreaterThan(-1);
+        const td = tr.querySelectorAll('td')[at] as HTMLElement;
+        const text = td.textContent!;
+        const over = textRunPx(text, td, viewport) - (cols[at] - insetsPx(td, viewport).box);
+        if (over > 1e-9)
+          past.push({ row: names[r], column, text, past: Math.round(over * 100) / 100 });
+      }
+    expect(past).toEqual(
+      FIGURE_FAULTS.map(({ row, column, text, past }) => ({ row, column, text, past }))
+    );
   });
 
   // A cell holds its content (components/ui/list-table.tsx). The lead's Chrome reading of

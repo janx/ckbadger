@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { TYPE_STEPS } from '@/lib/type-scale';
@@ -563,7 +563,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 
 // ---- the scan ----
 
-const SCAN_DIRS = ['app', 'components'];
+/** The scan gate's directories (`scan-fill-gate.test.ts`): every `.ts` and `.tsx` in them. */
+const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'];
 
 /** `text-<x>` classes that are not an ink: the type steps and the alignments and wraps. */
 const NOT_INK = new Set<string>([
@@ -600,10 +601,19 @@ function variantsOf(token: string): { variants: string[]; utility: string } {
   return { variants: parts, utility: current };
 }
 
-/** The ink a class sets at rest: `text-text-dim`, another ink, or none (a size, a state variant). */
+/** A class's opacity modifier (`/90`, `/[0.9]`), or a size's line height (`text-small/5`). */
+const MODIFIER = /\/(?:[\d.]+|\[[^\]]*\])$/;
+
+/**
+ * The ink a class sets at rest: `text-text-dim`, another ink, or none (a size, a state variant).
+ * Its key is read without the important modifier (`!text-text-dim`) and without an opacity
+ * modifier or a line height (`text-text-dim/90`, `text-small/5`): the quiet ink at an alpha is
+ * still the quiet ink here (the ink gate refuses the alpha itself).
+ */
 function inkOfClass(token: string): 'dim' | 'ink' | null {
-  const { variants, utility } = variantsOf(token);
+  const { variants, utility: written } = variantsOf(token);
   if (!variants.every((v) => AT_REST.test(v))) return null;
+  const utility = written.replace(/^!/, '').replace(MODIFIER, '');
   if (!utility.startsWith('text-')) return null;
   const key = utility.slice('text-'.length);
   if (key === 'text-dim') return 'dim';
@@ -650,15 +660,15 @@ interface QuietSite {
   what: string;
 }
 
-/** Every site of the four kinds in a TSX source, and every element that exempts its subtree. */
-function scanInkRoles(code: string): { sites: Site[]; quiet: QuietSite[] } {
-  const source = ts.createSourceFile(
-    'scan.tsx',
-    code,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TSX
-  );
+/**
+ * Every site of the four kinds in a source (TSX unless `kind` says otherwise), and every element
+ * that exempts its subtree.
+ */
+function scanInkRoles(
+  code: string,
+  kind: ts.ScriptKind = ts.ScriptKind.TSX
+): { sites: Site[]; quiet: QuietSite[] } {
+  const source = ts.createSourceFile('scan.tsx', code, ts.ScriptTarget.Latest, true, kind);
   const lineOf = (n: ts.Node) => source.getLineAndCharacterOfPosition(n.getStart(source)).line + 1;
   const text = (n: ts.Node) => n.getText(source).replace(/\s+/g, ' ');
 
@@ -896,7 +906,7 @@ function sourceFiles(root: string): string[] {
     for (const name of readdirSync(dir)) {
       const path = join(dir, name);
       if (statSync(path).isDirectory()) walk(path);
-      else if (name.endsWith('.tsx')) files.push(path);
+      else if (/\.tsx?$/.test(name) && !name.endsWith('.d.ts')) files.push(path);
     }
   };
   for (const dir of SCAN_DIRS) walk(join(root, dir));
@@ -1097,6 +1107,32 @@ describe('the ink-role scan finds what it must, and only that', () => {
     ]);
   });
 
+  // Review of the fixes (2026-11-19, S3): a class's key was compared whole, so the quiet ink under
+  // an opacity modifier (`text-text-dim/90`, read as the key `text-dim/90`) or the important
+  // modifier (`!text-text-dim`, read as no ink) passed uncounted; and a size with its line height
+  // (`text-small/5`) was read as an ink, so a link in it hid from the quiet line around it.
+  it('finds the quiet ink under an opacity or an important modifier', () => {
+    expect(
+      sitesOf([
+        '<p className="text-text-dim/90">a sentence</p>;',
+        '<Link href="/x" className="text-text-dim/95">x</Link>;',
+        '<td className="text-text-dim/[0.9]">1,234</td>;',
+        '<div className="text-text"><p className="!text-text-dim">explains</p></div>;',
+        '<BlockLink number={1} className="md:!text-text-dim" />;',
+        '<div className="text-text-dim"><Link href="/y" className="text-small/5">y</Link></div>;',
+        '<p className="!text-text">reads</p>;',
+        '<p className="text-text/90">reads</p>;',
+      ])
+    ).toEqual([
+      '1 prose <p>',
+      '2 link <Link>',
+      '3 td <td>',
+      '4 prose <p>',
+      '5 link <BlockLink>',
+      '6 link <Link>',
+    ]);
+  });
+
   it('passes another arbitrary or inline ink, and a quiet ink at an alpha', () => {
     expect(
       sitesOf([
@@ -1118,10 +1154,18 @@ describe('the ink-role scan finds what it must, and only that', () => {
         '<dt className="text-text-dim">Height</dt>;',
         '<span className="text-text-dim">occupied</span>;',
         '<div className="text-text-dim"><p className="text-text">explains</p></div>;',
-        '<p className="text-text-dim/60">alpha is the other gate’s</p>;',
         '<div className="text-text-dim"><Link href="/i" className="text-[color:var(--ink)]">i</Link></div>;',
       ])
     ).toEqual([]);
+  });
+
+  // Re-pinned on purpose (review of the fixes, S3): '<p className="text-text-dim/60">' passed this
+  // gate as "alpha is the other gate's"; the class still sets the quiet ink, at an alpha, so it is
+  // a site here as well as an offence of the ink gate's.
+  it('counts the quiet ink at an alpha, which the ink gate refuses besides', () => {
+    expect(sitesOf(['<p className="text-text-dim/60">alpha is the other gate’s too</p>;'])).toEqual(
+      ['1 prose <p>']
+    );
   });
 });
 
@@ -1172,13 +1216,31 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   const found = new Map<string, Site[]>();
   const quiet = new Map<string, QuietSite[]>();
   for (const file of files) {
-    const scanned = scanInkRoles(readFileSync(file, 'utf8'));
+    const scanned = scanInkRoles(
+      readFileSync(file, 'utf8'),
+      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+    );
     if (scanned.sites.length) found.set(relative(root, file), scanned.sites);
     if (scanned.quiet.length) quiet.set(relative(root, file), scanned.quiet);
   }
 
   it('scans the page source', () => {
     expect(files.length).toBeGreaterThan(250);
+  });
+
+  // Review of the fixes (2026-11-19, N4): the gate read `app` and `components` only, while the
+  // scan gate reads `hooks` and `lib` too (a `.tsx` there draws words as well).
+  it('reads the directories the scan gate reads, every source in them', () => {
+    expect(SCAN_DIRS).toEqual(['app', 'components', 'hooks', 'lib']);
+    expect(new Set(files.map((file) => relative(root, file).split(sep)[0]))).toEqual(
+      new Set(SCAN_DIRS)
+    );
+  });
+
+  // Review of the fixes (2026-11-19, N4): the pin was per file, so the list could grow by a file
+  // without a second look at the whole; its total is pinned too.
+  it('sets back three elements in all: the pinned total of QUIET_SITES', () => {
+    expect(Object.values(QUIET_SITES).reduce((total, entry) => total + entry.count, 0)).toBe(3);
   });
 
   it('draws no link, amount, table cell or paragraph in the quiet ink but the tolerated list’s', () => {

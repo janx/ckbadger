@@ -192,8 +192,8 @@ function HostingSection({
   const inside = (org: string, count: number, i: number): string => {
     if (width === null) return '';
     const room = (width * spans[i].width) / 100;
-    // an organisation is the ASN registry's text, in any script: measured by the upper bound of
-    // lib/type-metrics.ts (review F-B, logic finding 5)
+    // an organisation is the ASN registry's text, in any script: measured by the bound of
+    // lib/type-metrics.ts (review F-B, logic finding 5), and drawn whole or not at all, never cut
     const fits = (text: string) => foreignTextPx(text, fontPx('small')) + 2 * LABEL_PAD <= room;
     const full = `${org} ${share(count)}`;
     return fits(full) ? full : fits(share(count)) ? share(count) : '';

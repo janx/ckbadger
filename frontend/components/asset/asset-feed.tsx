@@ -21,6 +21,7 @@ import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-ta
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { NoBreak } from '@/components/ui/no-break';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
@@ -36,7 +37,7 @@ import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
-import { amountDigits, amountText } from '@/lib/amount-form';
+import { tokenAmountText } from '@/lib/amount-form';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { COUNT_TRACK_PX } from '@/components/ui/aligned-bar';
@@ -74,12 +75,8 @@ const TRACK_PX = COUNT_TRACK_PX;
  * unknown. A larger amount breaks after a thousands separator.
  */
 export function widestTokenAmount(decimals: number | null): string {
-  if (decimals === null)
-    return `${amountText(amountDigits(BigInt(999_999_999), 0, 'exact'), false)} (raw)`;
-  return amountText(
-    amountDigits(BigInt(10) ** BigInt(9 + decimals) - BigInt(1), decimals, 'column'),
-    false
-  );
+  if (decimals === null) return `${tokenAmountText(BigInt(999_999_999), 0, 'exact')} (raw)`;
+  return tokenAmountText(BigInt(10) ** BigInt(9 + decimals) - BigInt(1), decimals, 'column');
 }
 
 /** One item-feed row's headline from its API `itemContext` (see lib/feed-headlines). */
@@ -421,17 +418,25 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                     <Hash hash={r.hash} size="tight" copyable={false} className="text-body" />
                   </AppLink>
                 ),
+                // the block, its date and its age are each a unit; "this device's clock is
+                // behind" in the age's place is words and breaks between them (Utc8Age; L2)
                 right: (
-                  <span className="whitespace-nowrap">
-                    <AppLink href={`/blocks/${r.blockNumber}`} className="text-text-bright">
-                      {formatBlockNumber(r.blockNumber)}
-                    </AppLink>
+                  <>
+                    <NoBreak>
+                      <AppLink href={`/blocks/${r.blockNumber}`} className="text-text-bright">
+                        {formatBlockNumber(r.blockNumber)}
+                      </AppLink>
+                    </NoBreak>
                     <span className="text-text">
                       {' '}
                       ·{' '}
-                      {identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />}
+                      {identity ? (
+                        <NoBreak>{formatUtc8Date(r.timestamp)}</NoBreak>
+                      ) : (
+                        <Utc8Age timestamp={r.timestamp} />
+                      )}
                     </span>
-                  </span>
+                  </>
                 ),
               },
               wide

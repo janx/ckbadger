@@ -60,8 +60,50 @@ describe('tailwind-box reads a box from its classes', () => {
     const nav = first(<nav className="flex gap-x-4 lg:gap-x-6" />);
     expect(gapPx(nav, 1023)).toBe(16);
     expect(gapPx(nav, 1024)).toBe(24);
-    // a state is no layout at rest
-    expect(insetsPx(first(<span className="hover:px-4 focus-visible:border" />), 1024).box).toBe(0);
+    // a state that sets no width is no layout at rest; re-pinned on purpose (review fb-tests
+    // SHOULD-2, T2): one that changes a width under the state is refused (it read `hover:px-4` as
+    // no layout), below
+    expect(
+      insetsPx(first(<span className="hover:text-jade px-1 focus-visible:underline" />), 1024).box
+    ).toBe(8);
+    // an arbitrary breakpoint, as a screen
+    const narrow = first(<span className="max-[600px]:px-2 min-[900px]:px-4" />);
+    expect([599, 600, 899, 900].map((v) => insetsPx(narrow, v).box)).toEqual([16, 0, 0, 32]);
+  });
+
+  // Review fb-tests SHOULD-2 (lane rd/fb-fixes-2, T2): a structural variant is read where the
+  // element is what it names (every table cell carries `last:pr-0`)
+  it('reads first: and last: by where the element stands among its parent’s', () => {
+    const row = first(
+      <div>
+        <span className="pr-4 last:pr-0" />
+        <span className="pr-4 last:pr-0" />
+      </div>
+    );
+    const [a, b] = Array.from(row.children);
+    expect([insetsPx(a, 1024).box, insetsPx(b, 1024).box]).toEqual([16, 0]);
+  });
+
+  it('reads Tailwind’s container from the theme: the room it is given, its gutters', () => {
+    const main = first(<main className="container mx-auto" />);
+    expect([1280, 1024, 768, 390].map((v) => insetsPx(main, v).box)).toEqual([48, 48, 32, 32]);
+    expect(() => boxPx(main, 1280)).toThrow(/room it is given/);
+  });
+
+  it('reads a ch length, a size, and a flex column as its widest item', () => {
+    // 1ch is the "0" of the monospaced face, 0.6 em: 7.8 px at 13 px
+    expect(insetsPx(first(<span className="text-small pl-[2ch]" />), 1024).box).toBeCloseTo(
+      15.6,
+      9
+    );
+    expect(boxPx(first(<span className="flex size-6" />), 1024)).toBe(24);
+    const column = first(
+      <div className="text-meta flex flex-col gap-2">
+        <span>abcd</span>
+        <span>ab</span>
+      </div>
+    );
+    expect(contentPx(column, 1024)).toBeCloseTo(4 * 7.2, 9);
   });
 
   it('puts the inline style over every class', () => {
@@ -126,6 +168,27 @@ describe('tailwind-box reads a box from its classes', () => {
     expect(() => insetsPx(first(<div className="tier2-ground" />), 1024)).toThrow(/@media/);
     expect(() => insetsPx(first(<div className="comment-lg" />), 1024)).toThrow(/gap/);
     expect(() => insetsPx(first(<span style={{ padding: 4 }} />), 1024)).toThrow(/inline/);
+  });
+
+  // Review fb-tests SHOULD-2 (lane rd/fb-fixes-2, T2): what it skipped silently it refuses, naming
+  // the class. Each case passed before as no layout.
+  it('refuses a variant it cannot place, a class it does not know and a var() value', () => {
+    const at = (className: string) => () => insetsPx(first(<span className={className} />), 1024);
+    // a variant that is not a screen: a state that changes a width, a selector, an unknown one
+    expect(at('hover:px-4')).toThrow('hover:px-4 changes a width under the state hover:');
+    expect(at('group-hover:ml-2')).toThrow('group-hover:ml-2 changes a width');
+    expect(at('*:px-2')).toThrow('cannot read the variant *: of *:px-2');
+    expect(at('[&>a]:px-3')).toThrow('cannot read the variant [&>a]: of [&>a]:px-3');
+    expect(at('before:px-3')).toThrow('before:px-3 sets a width of the before box');
+    // a utility it does not classify
+    expect(at('aspect-square')).toThrow('cannot read aspect-square');
+    expect(at('float-left')).toThrow('cannot read float-left');
+    // an arbitrary value written with var()
+    expect(at('px-[var(--gap)]')).toThrow('cannot read [var(--gap)] as a padding');
+    expect(at('w-[var(--w)]')).toThrow('cannot read [var(--w)] as a width');
+    expect(at('border-l-[var(--w)]')).toThrow('cannot read [var(--w)] as a borderWidth');
+    // an unknown key of a size scale
+    expect(at('px-banana')).toThrow('no padding banana in the theme');
   });
 });
 

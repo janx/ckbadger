@@ -1,6 +1,6 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import tailwindConfig from '@/tailwind.config';
 import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
 import { cn } from '@/lib/utils';
@@ -14,6 +14,7 @@ import {
   charPx,
   columnPx,
   descentPx,
+  emUnitsPx,
   fontPx,
   foreignGraphemes,
   foreignTextPx,
@@ -124,6 +125,53 @@ describe('text that is not ours: an upper bound by grapheme', () => {
     expect(foreignTextPx('é', 12)).toBe(7.2);
     // an accent the subset does not hold (U+0302) takes its letter to the fallback bound
     expect(foreignTextPx('ê', 12)).toBe(15);
+  });
+});
+
+// Review fb-logic N3 (its second part): one path from thousandths of an em to px, which
+// foreignTextPx and clipForeignLabel (lib/shorten.ts) both take.
+describe('thousandths of an em', () => {
+  it('turns them into px at a size by one function', () => {
+    expect(emUnitsPx(600, 12)).toBe(7.2);
+    expect(emUnitsPx(1250, 12)).toBe(15);
+    expect(emUnitsPx(600 + 1250, 13)).toBe(foreignTextPx('a猫', 13));
+  });
+});
+
+// Review fb-logic N7 (lane rd/fb-fixes-2): the segmenter was built when the module loaded, and
+// every page loads this module (and tailwind.config.ts does), so a browser without
+// Intl.Segmenter (Firefox before 125, Safari before 14.1) got no page at all. It is built where
+// text that is not ours is first measured, once; where it is missing that figure throws and says
+// so, and nothing else is touched. No other segmentation stands in for it.
+describe('the grapheme segmenter', () => {
+  it('is built where text that is not ours is first measured, not when the module loads', async () => {
+    const Real = Intl.Segmenter;
+    let built = 0;
+    class Counted extends Real {
+      constructor(...args: ConstructorParameters<typeof Intl.Segmenter>) {
+        super(...args);
+        built++;
+      }
+    }
+    try {
+      vi.resetModules();
+      vi.stubGlobal('Intl', Object.create(Intl, { Segmenter: { value: Counted } }));
+      const fresh = await import('@/lib/type-metrics');
+      expect(built).toBe(0);
+      expect(fresh.foreignTextPx('猫', 12)).toBe(15);
+      expect(fresh.foreignGraphemes('a🐱')).toHaveLength(2);
+      expect(built).toBe(1);
+
+      vi.resetModules();
+      vi.stubGlobal('Intl', Object.create(Intl, { Segmenter: { value: undefined } }));
+      const bare = await import('@/lib/type-metrics');
+      // every figure of our own text is measured as before
+      expect(bare.textPx(13, 12)).toBe(93.6);
+      expect(() => bare.foreignTextPx('猫', 12)).toThrow(/Intl\.Segmenter/);
+    } finally {
+      vi.unstubAllGlobals();
+      vi.resetModules();
+    }
   });
 });
 
