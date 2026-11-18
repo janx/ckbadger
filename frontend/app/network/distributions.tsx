@@ -66,6 +66,7 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
           <span aria-hidden="true" className="bg-bar-track flex h-1.5">
             <span
               {...{ [attr]: '' }}
+              className="scan-fill"
               style={{
                 width: `${(100 * it.count) / max}%`,
                 backgroundColor: DATA_COLOR,

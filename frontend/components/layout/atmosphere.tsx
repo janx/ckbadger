@@ -5,8 +5,10 @@
  * z −1; the pools read the page root's `data-tint`) — and the vignette (`.crt-vignette`, z −1
  * too: rendered right after the sky, it darkens the sky toward the corners and never the ink).
  * Over the content: the CRT grain (`.crt-grain`, a 128 px tile of white noise screened at 3 %)
- * and the scanlines. All four are decoration (aria-hidden, no pointer events); the rules live in
- * app/globals.css.
+ * and the scanlines (`.crt-scanlines`): the ruled paper by day; by night their ink is transparent
+ * (readability R1), so no scan lies over the text. The tree is the same in both themes: the
+ * theme lives in the materials (lib/palette.ts). All four are decoration (aria-hidden, no pointer
+ * events); the rules live in app/globals.css.
  */
 export function Atmosphere() {
   return (

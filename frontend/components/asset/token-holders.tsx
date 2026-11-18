@@ -187,7 +187,7 @@ export function TokenDistributionView({
                     left: (
                       <span aria-hidden="true" className="bg-bar-track inline-block h-1.5 w-10">
                         <span
-                          className="bg-token block h-full"
+                          className="bg-token scan-fill block h-full"
                           style={{
                             width:
                               d.holdersCount === 0

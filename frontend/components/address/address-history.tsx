@@ -364,7 +364,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
         />
         <span aria-hidden="true" className="bg-bar-track mt-1 block h-1">
           <span
-            className="bg-jade block h-1"
+            className="bg-jade scan-fill block h-1"
             style={{
               width:
                 BigInt(c.capacity) === BigInt(0)
