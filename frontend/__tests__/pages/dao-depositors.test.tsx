@@ -133,6 +133,22 @@ describe('DAO depositors page (DAO-12)', () => {
       expect(cell.querySelector('.text-body')).toBeNull();
   });
 
+  // Readability B5: a head stands over what it names; the Share head over the share, not its bar.
+  it('stands the Share head over the share, the ticks over the track (B5)', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1], null));
+    render(<DaoDepositorsPage />);
+    const table = await screen.findByRole('table', { name: 'DAO depositors' });
+    const name = within(within(table).getAllByRole('columnheader')[4]).getByText('Share');
+    expect(name).toHaveClass('justify-end');
+    const share = table.querySelectorAll('tbody td')[4] as HTMLElement;
+    const track = share.querySelector<HTMLElement>('[data-track]')!;
+    const figure = share.querySelector<HTMLElement>('[data-aligned-bar] > :last-child')!;
+    expect(figure).toHaveTextContent('1.00%');
+    expect(Number.parseFloat(name.style.width)).toBe(
+      Number.parseFloat(track.style.width) + 10 + Number.parseFloat(figure.style.width)
+    );
+  });
+
   it('puts a depositor on one line in the 640 band, where the five-column table does not fit', async () => {
     atContainerWidth(608);
     onTestFinished(() => {
