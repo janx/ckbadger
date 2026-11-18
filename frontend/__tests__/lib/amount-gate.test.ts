@@ -133,6 +133,10 @@ function failures(found: ReadonlyMap<string, readonly Split[]>): string[] {
   return out;
 }
 
+/** A source's splits as `line what: match`. */
+const splitsOf = (lines: string[]) =>
+  handSplits(lines.join('\n')).map((h) => `${h.line} ${h.what}: ${h.match}`);
+
 describe('amounts are written by one module (R5)', () => {
   it('splits no amount for display outside lib/amount-form.ts and its renderer', () => {
     const found = new Map<string, Split[]>();
@@ -187,5 +191,72 @@ describe('amounts are written by one module (R5)', () => {
       '7 formatCkbAmount parts: { full, decimal } = formatCkbAmount(',
       `8 ${HELD}: held.decimal`,
     ]);
+  });
+
+  // Review of the fixes (2026-11-19, S1): the gate matched source text one line at a time, and the
+  // review's four splits by hand passed it: a held name destructured, a held name read with `?.`, a
+  // destructure a formatter keeps on several lines, and a call whose argument holds two groups.
+  it('reads the four splits the text matching missed', () => {
+    expect(
+      splitsOf([
+        'const total = formatCkbAmount(x);',
+        'const { integer, decimal } = total;',
+        '<b>{total?.integer}</b>;',
+        'const {',
+        '  integer,',
+        '  decimal,',
+        '} = formatCkbAmount(y);',
+        'formatCkbAmount(BigInt(a) + BigInt(b)).decimal;',
+      ])
+    ).toEqual([
+      `2 ${HELD}: { integer, decimal } = total`,
+      `3 ${HELD}: total?.integer`,
+      '4 formatCkbAmount parts: { integer, decimal, } = formatCkbAmount(y)',
+      '8 formatCkbAmount parts: formatCkbAmount(BigInt(a) + BigInt(b)).decimal',
+    ]);
+  });
+
+  it('follows every binding of the call and reads every part read of it, by `.`, `?.`, `[]`, a pattern or a spread', () => {
+    expect(
+      splitsOf([
+        'const t = on ? formatCkbAmount(a) : formatCkbAmount(b);',
+        "t['decimal'];",
+        'const u = t;',
+        'u.integer;',
+        'let v;',
+        'v = formatCkbAmount(c);',
+        'v?.decimal;',
+        'const { full, ...rest } = formatCkbAmount(d);',
+        'rest.integer;',
+        '<Figure {...formatCkbAmount(e)} />;',
+        'const { [key]: part } = formatCkbAmount(f);',
+        'u[key];',
+        '({ integer: w } = u);',
+      ])
+    ).toEqual([
+      `2 ${HELD}: t['decimal']`,
+      `4 ${HELD}: u.integer`,
+      `7 ${HELD}: v?.decimal`,
+      `9 ${HELD}: rest.integer`,
+      '10 formatCkbAmount parts: {...formatCkbAmount(e)}',
+      '11 formatCkbAmount parts: { [key]: part } = formatCkbAmount(f)',
+      `12 ${HELD}: u[key]`,
+      `13 ${HELD}: { integer: w } = u`,
+    ]);
+  });
+
+  it('passes the whole value, its sign and a name bound to anything else', () => {
+    expect(
+      splitsOf([
+        'const total = formatCkbAmount(x);',
+        'title={`${total.full} CKB`}',
+        "total['full'];",
+        'formatCkbAmount(v).isNegative;',
+        'const { full, isNegative } = formatCkbAmount(y);',
+        'other.integer;',
+        '// total.integer in a comment is not a read',
+        "const s = 'total.decimal in a string is not a read';",
+      ])
+    ).toEqual([]);
   });
 });
