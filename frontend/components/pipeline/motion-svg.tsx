@@ -58,6 +58,10 @@ export class MotionSvg extends Component<MotionSvgProps, object, Departing | nul
         this.props.ctx,
         departing ?? NO_DEPARTURES
       );
+    } else {
+      // The same scene drawn again (a hover, a pin): what React just drew is brought back to the
+      // state the motion layer has reached (a landing block keeps no plate, strap or stone).
+      this.motion.repaint();
     }
   }
 

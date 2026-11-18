@@ -30,9 +30,9 @@ import {
   type SceneNext,
   type ScenePoolGrid,
 } from '@/lib/pipeline/layout';
-import { PlateStone, type DimLevel } from '@/components/pipeline/block-card';
+import { PlateStone, PlateStrap, type DimLevel } from '@/components/pipeline/block-card';
 import { FlowLink } from '@/components/pipeline/pool-zone';
-import { T10, T10B, T11C, T12C, T12D, T12G, fmtInt } from '@/components/pipeline/svg-text';
+import { T10, T10B, T11C, T12C, T12D, fmtInt } from '@/components/pipeline/svg-text';
 import { TxSquare } from '@/components/pipeline/tx-square';
 import { formatBlockNumber } from '@/lib/format-block';
 
@@ -41,7 +41,7 @@ import { formatBlockNumber } from '@/lib/format-block';
  * PlatePhone.dc.html). The same pieces as the row, from the same library, at the same 17 px pitch:
  * a pool a square well, NEXT the one dashed outline, a block a solid plate with its stone, its
  * dots and its tx line cut into it. Every row carries the same data attributes as its card in a
- * row, so the motion layer, the hover and the pin treat both orientations alike; only the
+ * row, so the motion layer, the hover and the click treat both orientations alike; only the
  * arrangement differs. Every number is the scene's or the library's.
  */
 
@@ -50,8 +50,8 @@ const wordY = (u: { y: number; h: number }) => u.y + u.h / 2 + 3.5;
 
 interface ColumnBlockProps {
   card: SceneCard;
-  /** The block number is gold while it lies inside the drawn proposal window. */
-  numberInWindow: boolean;
+  /** The block lies inside the drawn proposal window: the gilt strap runs down through its stone. */
+  gilt: boolean;
   highlighted: boolean;
   dim: DimLevel;
   onIds?: ReadonlySet<string>;
@@ -66,7 +66,10 @@ interface ColumnBlockProps {
  * number, its own proposal dots, then the line: the cellbase and its txs, each set in its cut —
  * one cut per mark, drawn first, and none where there is no transaction — then its "+N" and its
  * uncles (each its word and its dots or its "+N"; no box, no stone), on the line or on a line of
- * their own under it.
+ * their own under it. Inside the drawn proposal window (direction G, StrapPhone.dc.html) the gilt
+ * strap runs down the row's whole height through its stone, x 5 … 25 (`PlateStrap`), as tall as
+ * the row it crosses, so a 3×3 or 4×4 square or a line of uncles does not break it; above the
+ * plate's fill and under its stone, cuts, dots and words, never faded and never set back.
  *
  * An older block steps back by its marks' fill alone (`agedPaint` toward the cut, `agedChip`
  * toward the plate); the plate, the stone and the words keep full strength, the number in
@@ -74,14 +77,7 @@ interface ColumnBlockProps {
  * and the marks beneath them, but an uncle's word, which is what the pointer reads the uncle by.
  * The motion layer owns the outer group's `opacity` and, while a block lands, its box.
  */
-export function ColumnBlock({
-  card,
-  numberInWindow,
-  highlighted,
-  dim,
-  onIds,
-  age,
-}: ColumnBlockProps) {
+export function ColumnBlock({ card, gilt, highlighted, dim, onIds, age }: ColumnBlockProps) {
   const { block } = card;
   const head = columnHeadAt(card);
   const chipCount = columnChipCountAt(card);
@@ -106,6 +102,7 @@ export function ColumnBlock({
           pointerEvents="all"
           style={{ fill: PLATE_FILL, stroke: highlighted ? PLATE_EDGE : 'none' }}
         />
+        {gilt && <PlateStrap o="column" w={card.w} h={card.h} highlighted={highlighted} />}
         {card.stone && (
           <PlateStone hash={block.hash} txs={block.txCount} x={head.stoneX} y={head.stoneY} />
         )}
@@ -148,12 +145,7 @@ export function ColumnBlock({
           })}
         </g>
         <g data-words pointerEvents="none">
-          <text
-            data-block-number
-            x={card.numberX}
-            y={head.y}
-            className={numberInWindow ? T12G : T12C}
-          >
+          <text data-block-number x={card.numberX} y={head.y} className={T12C}>
             {tail4(block.number)}
           </text>
           {card.uncles.map((u) => (
@@ -204,7 +196,7 @@ export function ColumnNext({ next, dim }: { next: SceneNext; dim: DimLevel }) {
   const chipCount = columnChipCountAt(shape);
   const count = columnCountAt(shape);
   return (
-    <g data-next transform={`translate(${next.x},${next.y})`} className="cursor-pointer">
+    <g data-next transform={`translate(${next.x},${next.y})`}>
       <g data-dim={dim}>
         <rect
           data-box
@@ -399,8 +391,8 @@ function ColumnWell({
 }
 
 /**
- * The tx lifetime starts at the top: the mempool row, then the proposed row, then NEXT's; a faint
- * band of ticks runs down each gap between them (`columnFlowPaths`), as the row's flows.
+ * The tx lifetime starts at the top: the mempool row, then the proposed row, then NEXT's;
+ * arrowheads point down each gap between them (`columnFlowPaths`), as the row's flows.
  */
 export function ColumnPool({ scene, dimOf, onIds }: ColumnPoolProps) {
   const { bands, pool } = scene;

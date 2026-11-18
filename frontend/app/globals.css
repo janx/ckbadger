@@ -109,9 +109,6 @@
   --pipeline-jade: var(--color-emphasis);
   --pipeline-aqua: var(--color-interactive);
   --pipeline-gold: var(--c-gold);
-  /* The gold of a word on a tile (an in-window block number): gold by night, its bright step by
-     day, where the gold is under 4.5:1 on the tile (lib/palette.ts). */
-  --pipeline-word-gold: var(--c-pipeline-word-gold);
   /* Stage fills: aqua / gold / jade stepped to OKLCH L≈0.66 for filled marks on dark; the light
      theme steps them down to the same contrast on paper (lib/palette.ts). */
   --pipeline-pending: var(--c-pipeline-pending);
@@ -127,6 +124,9 @@
      back by mixing toward their ground (lib/pipeline/encoding.ts agedFill), not by opacity. */
   --pipeline-plate: var(--c-pipeline-plate);
   --pipeline-cut: var(--c-pipeline-cut);
+  /* The proposal window: the strap through the plates' heads is gilt across every plate inside it
+     and the joints between them, a ground the head's words keep 4.5:1 on, never faded. */
+  --pipeline-gilt: var(--c-pipeline-gilt);
   /* The proposal dots on a plate: waiting, committed, and the quiet expired one. */
   --pipeline-dot-waiting: var(--c-pipeline-dot-waiting);
   --pipeline-dot-committed: var(--c-pipeline-dot-committed);

@@ -476,9 +476,7 @@ describe('ActivityFeed', () => {
     );
     expect(row).toHaveAttribute('data-highlighted', 'true');
     act(() => usePipelineHoverStore.getState().clearHover());
-    act(() => usePipelineHoverStore.getState().togglePin(txs[1].hash));
-    expect(row).toHaveAttribute('data-highlighted', 'true');
-    act(() => usePipelineHoverStore.getState().clearPin());
+    expect(row).toHaveAttribute('data-highlighted', 'false');
 
     fireEvent.pointerEnter(row);
     expect(usePipelineHoverStore.getState()).toMatchObject({
@@ -488,6 +486,24 @@ describe('ActivityFeed', () => {
     });
     fireEvent.pointerLeave(row);
     expect(usePipelineHoverStore.getState().hoverTx).toBeNull();
+  });
+
+  // Lane K: a touch tap in the pipeline pins what it would open (a tx or a block); a pinned tx's row
+  // is highlighted as a hovered one is, a pinned block highlights no transaction row.
+  it('highlights the row of a tx pinned in the pipeline, and no row for a pinned block', async () => {
+    const user = userEvent.setup();
+    const txs = [tx(1), tx(2)];
+    serveTransactions(txs);
+    render(<ActivityFeed />);
+    await user.click(screen.getByRole('button', { name: 'Transactions' }));
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    const row = document.querySelector(`[data-tx-row="${txs[1].hash}"]`) as HTMLElement;
+    act(() => usePipelineHoverStore.getState().pin({ kind: 'tx', hash: txs[1].hash }));
+    expect(row).toHaveAttribute('data-highlighted', 'true');
+    act(() => usePipelineHoverStore.getState().pin({ kind: 'block', number: txs[1].blockNumber }));
+    expect([...rows()].map((r) => r.getAttribute('data-highlighted'))).toEqual(['false', 'false']);
+    act(() => usePipelineHoverStore.getState().clearPin());
+    expect(row).toHaveAttribute('data-highlighted', 'false');
   });
 
   it('takes realtime transaction pushes into the Transactions tab', async () => {

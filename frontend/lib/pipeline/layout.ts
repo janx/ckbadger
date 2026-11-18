@@ -8,8 +8,11 @@
  * Direction F (docs/superpowers/plans/2026-11-17-pipeline-finish-plan.md): one unit, a 15 px cell
  * on a 17 px pitch. A tx is an n×n square of cells (area ∝ bytes, `side(n)` px), set in a cut of
  * the gutter's width; a proposal is a 7 px dot on a 9 px pitch. A plate is cut only where a
- * transaction is: the scene carries one cut per drawn square and nothing for an empty cell. A link
- * from a block to its parent is two bands of filled ticks across the gap between their plates.
+ * transaction is: the scene carries one cut per drawn square and nothing for an empty cell.
+ *
+ * Direction G (round 7, the strap): a block is joined to its parent by one strap through their
+ * heads, as broad as the head line, filled across the whole gap between their plates; inside the
+ * proposal window the strap is gilt, on the plates and across the joints between them.
  *
  * Below `G.minViewW` (two whole blocks after NEXT) the same lifetime stands on end: the column
  * orientation (`COL`) reads it top to bottom as rows that span the canvas, with the same unit,
@@ -76,44 +79,15 @@ export function side(n: number): number {
 }
 
 /**
- * The bands of ticks that link a block to its parent, and a pool stage to the next: filled
- * rectangles, starting `inset` px inside the gap they cross. A link's band is 2 px ticks on a
- * 4 px pitch, 10 px deep (4 ticks in an 18 px gap); a flow's is 1 px ticks on a 3 px pitch, 8 deep.
+ * The pool's flows (direction G, Strap.dc.html `.fw`): filled arrowheads pointing on, `length` px
+ * along the flow and `breadth` across it, on a `pitch` px pitch, as many whole ones as fit their
+ * gap (2 in an 18 px gap, 4 in a 30 px one), the group centred in it.
  */
-export const BAND = {
-  inset: 2,
-  link: { tick: 2, pitch: 4, depth: 10 },
-  flow: { tick: 1, pitch: 3, depth: 8 },
-} as const;
-
-interface Ticks {
-  tick: number;
-  pitch: number;
-  depth: number;
-}
+const ARROW = { length: 5, breadth: 8, pitch: 7 } as const;
 
 /**
- * A band of whole ticks along [from, to] in the chain's direction (`x` in a row, `y` in a column),
- * its side `across` px from the canvas edge: one filled rectangle per tick, from `from` on, as path
- * data. A stretch shorter than one tick has none.
- */
-function tickBand(along: 'x' | 'y', from: number, to: number, across: number, t: Ticks): string {
-  const f = (v: number) => v.toFixed(1);
-  const n = to - from >= t.tick ? Math.floor((to - from - t.tick) / t.pitch) + 1 : 0;
-  let d = '';
-  for (let k = 0; k < n; k++) {
-    const a = from + k * t.pitch;
-    d +=
-      along === 'x'
-        ? `M${f(a)} ${f(across)}h${t.tick}v${t.depth}h-${t.tick}Z`
-        : `M${f(across)} ${f(a)}h${t.depth}v${t.tick}h-${t.depth}Z`;
-  }
-  return d;
-}
-
-/**
- * The lane above the plates, empty until hovered: the proposal window's bracket and its label and
- * the reward link run in it.
+ * The lane above the plates, empty until hovered: the proposal window's one line of words and the
+ * reward link run in it.
  */
 const LANE = 18;
 /** Columns and rows of a plate's tx field and of a pool well (5 × 4 = 20 cells). */
@@ -125,8 +99,7 @@ const PAD = 8;
 /**
  * Down a plate, from its top edge (the board's numbers, Plate.dc.html): the head line 8…28 (the
  * 14 px stone at 11, the number beside it), two rows of dots at 30 and 38, the field from 48 with
- * 8 px below it; a pool's well from 28, under its head line; a link's two bands at 32 and 80; a
- * pool's flow band at 14.
+ * 8 px below it; a pool's well from 28, under its head line.
  */
 const DOWN = {
   head: 8,
@@ -135,9 +108,16 @@ const DOWN = {
   dots: 30,
   field: 48,
   well: 28,
-  links: [32, 80],
-  flow: 14,
 } as const;
+
+/**
+ * The strap (direction G, Strap.dc.html `.sp`, StrapPhone.dc.html `.vs`): one band through the
+ * heads of the plates that joins a block to its parent, as broad as the head line. In a row it
+ * lies along the head line (plate y 8 … 28, `G.strapY`); in a column it runs down through the
+ * stones (`COL.strapX`: x 5 … 25, the 14 px stone with 3 px of strap on each side). Across a gap it
+ * fills the whole gap; on a plate inside the proposal window it crosses the whole plate, gilt.
+ */
+const STRAP = DOWN.headLine;
 
 /** A proposal dot: `size` px on a `pitch` px pitch along its row; a plate's rows `rowPitch` apart. */
 const DOT = { size: 7, pitch: 9, rowPitch: 8 } as const;
@@ -149,13 +129,16 @@ const PLATE_H = DOWN.field + side(ROWS) + PAD;
 const CHAIN_BASE = {
   /** The lane, a plate, and 6 px below it. */
   H: LANE + PLATE_H + 6,
-  /** The window's dimension line and the reward link: along the middle of the lane. */
+  /** The window's one line of words and the reward link: along the middle of the lane. */
   winY: LANE / 2,
   cardTop: LANE,
   /** The plate's head, from its top edge to the bottom of its head line. */
   headH: DOWN.head + DOWN.headLine,
   /** The middle of the head line: the number, a pool's name and total, NEXT's "+N". */
   headY: LANE + DOWN.head + DOWN.headLine / 2,
+  /** The strap along the head line: from `strapY`, `strapH` px (canvas y 26 … 46). */
+  strapY: LANE + DOWN.head,
+  strapH: STRAP,
   /**
    * The block's stone: `stone` px square at (`stoneX`, `stoneY`); its number from `numberX`, or
    * from `padX` on a plate whose stone gives way to its "+N" (`rowHead`).
@@ -196,9 +179,6 @@ const CHAIN_BASE = {
   poolHeadPad: 1,
   /** The theme's inset under a well's top edge: a shade this many px deep, fading to nothing. */
   wellShade: 3,
-  /** The tops of a link's two bands, and of a pool's flow band. */
-  linkY: [LANE + DOWN.links[0], LANE + DOWN.links[1]],
-  flowY: LANE + DOWN.flow,
   x0: 0,
   gap: 18,
   /** The pool stands apart from NEXT: the one wider gap of the row, on the pool side only. */
@@ -206,7 +186,7 @@ const CHAIN_BASE = {
   /** Kept free between the last chain plate and the right edge of the view. */
   marginR: 10,
   maxBlocks: 24,
-  /** The chain's tail past the last plate on screen: at most this long. */
+  /** The strap's tail past the last plate on screen: at most this long, from that plate's edge. */
   tail: 66,
 } as const;
 
@@ -297,6 +277,9 @@ export const UNC = { head: 12, gap: 5, chipRows: 1 } as const;
 /** One tx lifetime left to right (`G`), or stood on end, top to bottom (`COL`). */
 export type Orientation = 'row' | 'column';
 
+/** A column block's stone, from the row's left edge (its number follows at `COL.numberX`). */
+const COL_STONE_X = 8;
+
 /**
  * The column orientation (PlatePhone.dc.html): mempool, proposed, NEXT, the tip and three older
  * blocks, each one row spanning the canvas from `x0` to `viewW − x0`. x values are absolute canvas
@@ -309,15 +292,17 @@ export type Orientation = 'row' | 'column';
  * squares at 17 px per cell, each centred vertically and set in its cut — ending at the row's
  * right padding, its "+N" and then its uncles (each its word, then its dots or its "+N"), `endGap`
  * apart — or, when they do not all fit after what the line keeps, the uncles on a line of their
- * own under it, from `lineX`, the row growing by `uncleGap` and the word's line. A row is two cells and 6 px padding tall (44 px) and grows only for a 3×3 or 4×4 square.
- * A link is two bands of ticks running down the gap between two rows, at `linkX`; the pool's flow
- * one band at `flowX`.
+ * own under it, from `lineX`, the row growing by `uncleGap` and the word's line. A row is two cells
+ * and 6 px padding tall (44 px) and grows only for a 3×3 or 4×4 square.
+ * The strap (StrapPhone.dc.html `.vs`) runs down through the stones, from `strapX`, `strapW` px:
+ * across each gap between a row and its parent, and down the whole height of a window row; the
+ * pool's flows are arrowheads pointing down on its axis.
  */
 export const COL = {
   x0: 0,
   /** Above the mempool row. */
   top: 0,
-  /** Below the last row: 2 px, the tail's 30 px bands, 2 px. */
+  /** Below the last row: the strap's 30 px tail, and 4 px. */
   bottom: 34,
   pad: 6,
   minCells: 2,
@@ -326,7 +311,10 @@ export const COL = {
   frontierGap: 30,
   /** NEXT ⇢ the tip, and block to block. */
   blockGap: 18,
-  stoneX: 8,
+  stoneX: COL_STONE_X,
+  /** The strap down through the stones: 3 px of it on each side of the 14 px stone (x 5 … 25). */
+  strapX: COL_STONE_X + CHAIN_BASE.stone / 2 - STRAP / 2,
+  strapW: STRAP,
   nameX: 8,
   numberX: 27,
   countX: 108,
@@ -348,10 +336,7 @@ export const COL = {
    * or, when those slots cannot hold that "+N", "+N" for all its proposals after the word.
    */
   uncle: { labelW: labelWidth('uncle'), chips: 4 },
-  /** The left edges of a link's two bands, and of the pool's flow band. */
-  linkX: [27, 75],
-  flowX: 28,
-  /** The chain's tail below the last row. */
+  /** The strap's tail below the last row, from its bottom edge. */
   tail: 30,
   /**
    * The narrowest column (a 320 px viewport): a line still holds the cellbase, a 4×4 square and
@@ -603,8 +588,14 @@ export function inWindow(num: number, H: number, w: WindowParams): boolean {
   return num >= H - w.proposalWindowFarthest && num <= H - w.proposalWindowClosest;
 }
 
-export interface RulerSlot {
+/**
+ * What a block's card spans along the chain, NEXT's too: its number, from `x`, `w` long, and
+ * whether it is mined. The window's words (`windowLane`) read these; the strap's pieces read them
+ * with each block's chain state (`ChainSlotState`).
+ */
+export interface BlockSpan {
   number: number;
+  /** Along the chain: a card's left edge and width in a row, its top and height in a column. */
   x: number;
   w: number;
   /** false for the NEXT (predicted) card. */
@@ -612,151 +603,65 @@ export interface RulerSlot {
 }
 
 export interface WindowHit {
-  /** The label lane spans x0 … x1; the plates' head line spans xn … xf. */
+  /** The lane above the plates spans x0 … x1; the plates' head line spans xn … xf. */
   x0: number;
   x1: number;
   xn: number;
   xf: number;
 }
 
-/** Where the window's one line of text goes (drawn with text-anchor middle at `x`). */
+/** Where the window's one line of words goes: start-anchored at `x0`, ending at `x1`. */
 export interface WindowLabelGeom {
-  /** Centre of the text. */
-  x: number;
-  /** The label's room: the text plus `LABEL_PAD` on both sides. */
   x0: number;
   x1: number;
-  /** Between the ticks (the dimension line breaks around it), or outside, before the near tick. */
-  at: 'between' | 'outside';
 }
 
-export interface RulerGeom {
-  ticks: number[];
-  /** null when the label fits nowhere in view (the near tick itself is outside the view). */
+/** The window of H under the pointer: its one line of words and the lane's hit area. */
+export interface WindowLane {
+  /** null when no plate of the window is in view. */
   label: WindowLabelGeom | null;
+  /** null when no plate of the window is in view, and always in a column (it has no lane). */
   hit: WindowHit | null;
-  /** The window runs past the last plate on screen; the chain's tail carries it on. */
-  tailOpen: boolean;
 }
-
-/** The room the dimension line leaves on each side of its label. */
-const LABEL_PAD = 6;
 
 /**
- * The proposal window of H as a dimension line: a tick in the middle of the gap at each end of the
- * window that is on screen (the far end is often past the last card), and where `label` goes.
- *
- * The label follows the drafting rule for dimension text, in this order:
- * 1. Between the ticks, centred on the part of the window in view (from the near tick to the far
- *    tick, or to the view edge when the far end is off screen), when the text and its padding fit
- *    there. The dimension line breaks around it.
- * 2. Otherwise outside the window, its padding ending at the near tick (the newer side, towards
- *    NEXT). The dimension line is then drawn whole.
- * 3. Otherwise no label: only when the near tick is itself outside the view.
- * So the text is always fully inside [0, viewW] and never crosses a tick. The static render and the
- * motion layer both draw the ticks, the line (`rulerPath`) and the label from this one result.
+ * The window of H in a row, under the pointer (direction G: the gilt strap says the window, and
+ * nothing else marks it). Its one line of words starts at the left edge of the window's first plate
+ * in view (the one nearest NEXT) or, when the text would pass the view's right edge, ends at that
+ * edge; there are none when no plate of the window is in view. The lane's hit area runs on the
+ * plates' edges: above the plates from H's own plate to the one past the window's far end, and on
+ * the head line from the first window plate's left edge to the last one's right edge, or to the
+ * view's edge while the window runs on past it. The static render and the motion layer both place
+ * the words from this one result.
  */
-export function windowRuler(
-  slots: readonly RulerSlot[],
+export function windowLane(
+  slots: readonly BlockSpan[],
   H: number,
   w: WindowParams,
   viewW: number,
   text: string
-): RulerGeom {
-  const { hc, q, xn, xf, ticks, tailOpen } = windowEdges(slots, H, w, G.gap);
-  let label: WindowLabelGeom | null = null;
-  if (xn !== null && xn >= 0 && xn <= viewW) {
-    const room = labelWidth(text) + 2 * LABEL_PAD;
-    const end = Math.min(xf ?? viewW, viewW);
-    if (room <= end - xn) {
-      const x = (xn + end) / 2;
-      label = { x, x0: x - room / 2, x1: x + room / 2, at: 'between' };
-    } else if (room <= xn) {
-      label = { x: xn - room / 2, x0: xn - room, x1: xn, at: 'outside' };
-    }
+): WindowLane {
+  const plates = slots
+    .filter((s) => s.mined && inWindow(s.number, H, w) && s.x < viewW)
+    .sort((a, b) => a.x - b.x);
+  if (!plates.length) return { label: null, hit: null };
+  const width = labelWidth(text);
+  if (width > viewW) {
+    throw new Error(
+      `pipeline: the window's words (${width} px) are wider than the ${viewW} px view`
+    );
   }
-  return {
-    ticks,
-    label,
-    hit:
-      xn === null
-        ? null
-        : { x0: hc ? hc.x : xn, x1: q ? q.x + q.w : (xf ?? viewW), xn, xf: xf ?? viewW },
-    tailOpen,
-  };
-}
-
-/**
- * The ends of the window of H along the chain's direction (slot `x`/`w` are positions along it):
- * a tick in the middle of the gap at each end that is on screen, `gap` being the gap to assume
- * past a card whose neighbour is not drawn.
- */
-function windowEdges(slots: readonly RulerSlot[], H: number, w: WindowParams, gap: number) {
+  const first = plates[0];
+  const last = plates[plates.length - 1];
+  const x0 = Math.min(first.x, viewW - width);
   const at = (num: number) => slots.find((s) => s.number === num) ?? null;
   const hc = at(H);
-  const near = at(H - w.proposalWindowClosest);
-  const far = at(H - w.proposalWindowFarthest);
-  const p = at(H - w.proposalWindowClosest + 1);
   const q = at(H - w.proposalWindowFarthest - 1);
-  const ticks: number[] = [];
-  let xn: number | null = null;
-  let xf: number | null = null;
-  if (near) {
-    xn = p ? (p.x + p.w + near.x) / 2 : near.x - gap / 2;
-    ticks.push(xn);
-  }
-  if (far) {
-    xf = q ? (far.x + far.w + q.x) / 2 : far.x + far.w + gap / 2;
-    ticks.push(xf);
-  }
-  const mined = slots.filter((s) => s.mined);
-  const last = mined.length ? mined.reduce((a, b) => (b.x > a.x ? b : a)) : null;
-  return { hc, q, xn, xf, ticks, tailOpen: !!last && inWindow(last.number, H, w) && !far };
-}
-
-/**
- * The window of H in a column, along the rows (slot `x`/`w` are a row's top and height): the same
- * ticks, in the middle of the gaps, and the same gold links and tail. There is no lane beside the
- * rows for a dimension line or its label: the gold links between the ticks are the dimension
- * line, and the words are in the hover's tooltip (window, NEXT and block tips all name the range).
- */
-export function columnWindowRuler(
-  slots: readonly RulerSlot[],
-  H: number,
-  w: WindowParams,
-  viewH: number
-): RulerGeom {
-  const { hc, q, xn, xf, ticks, tailOpen } = windowEdges(slots, H, w, COL.blockGap);
+  const xf = at(H - w.proposalWindowFarthest) ? last.x + last.w : viewW;
   return {
-    ticks,
-    label: null,
-    hit:
-      xn === null
-        ? null
-        : { x0: hc ? hc.x : xn, x1: q ? q.x + q.w : (xf ?? viewH), xn, xf: xf ?? viewH },
-    tailOpen,
+    label: { x0, x1: x0 + width },
+    hit: { x0: hc ? hc.x : first.x, x1: q ? q.x + q.w : xf, xn: first.x, xf },
   };
-}
-
-/** The hovered column window: each tick runs across the full width of the gap it sits in. */
-export function columnRulerPath(r: RulerGeom, viewW: number): string {
-  const f = (v: number) => v.toFixed(1);
-  return r.ticks.map((y) => `M${f(COL.x0)} ${f(y)}H${f(viewW - COL.x0)}`).join('');
-}
-
-/**
- * The hovered window: the ticks rise from above the dimension line at `winY` (the lane above the
- * plates) to the bottom of the head line, and the line joins them, broken around a label that sits between them. One path, shared by the
- * static render and the motion layer.
- */
-export function rulerPath(r: RulerGeom): string {
-  const f = (v: number) => v.toFixed(1);
-  const ticks = r.ticks.map((x) => `M${f(x)} ${G.winY - 5}V${G.cardTop + G.headH}`).join('');
-  if (!r.hit) return ticks;
-  const { xn, xf } = r.hit;
-  const y = G.winY;
-  if (r.label?.at !== 'between') return `${ticks}M${f(xn)} ${y}H${f(xf)}`;
-  return `${ticks}M${f(xn)} ${y}H${f(r.label.x0)}M${f(r.label.x1)} ${y}H${f(xf)}`;
 }
 
 /** Width of a label in the canvas's small text (`SMALL_TEXT_PX`): 6.6 px a glyph. */
@@ -785,7 +690,7 @@ export function rowHead(number: number, hidden: number): { stone: boolean; numbe
 }
 
 /**
- * The window's one line of text: whose window it is, and what the ticks bound. `windowTip` is the
+ * The window's one line of text: whose window it is, and what the gilt spans. `windowTip` is the
  * scene's: the window of `windowTip + 1` is the one of the block being formed.
  */
 export function windowLabel(H: number, windowTip: number, w: WindowParams): string {
@@ -806,10 +711,9 @@ export interface ChainTail {
 }
 
 /**
- * Where the chain runs on past the last plate on screen: from `BAND.inset` past that plate for
- * `G.tail` px, or to the view edge when that is nearer (a plate sliding out past the edge leaves
- * no room: the span is then empty, x1 ≤ x0). The chain's tail bands and an off-screen reward link
- * both end in this one span.
+ * Where the strap runs on past the last plate on screen: from that plate's edge for `G.tail` px, or
+ * to the view edge when that is nearer (a plate sliding out past the edge leaves no room: the span
+ * is then empty, x1 ≤ x0). The strap's tail and an off-screen reward link both end in this span.
  */
 export function chainTail(
   cards: readonly { x: number; w: number }[],
@@ -817,7 +721,7 @@ export function chainTail(
 ): ChainTail | null {
   if (!cards.length) return null;
   const last = cards.reduce((a, b) => (b.x > a.x ? b : a));
-  const x0 = last.x + last.w + BAND.inset;
+  const x0 = last.x + last.w;
   return { x0, x1: x0 + Math.min(G.tail, viewW - x0) };
 }
 
@@ -830,10 +734,10 @@ export interface RewardLink {
 
 /**
  * The reward link of a hovered cellbase at `a`. It rises into the lane above the plates (the
- * window's lane: the ruler steps back while a link is shown) and runs right. With the paid block's
- * cellbase on screen at `b` it drops into it. Without (`b` null: the paid block is past the right
- * edge) it runs on to where the chain's own tail starts and ends there in an open tail over the
- * same span, one lane up; it never drops anywhere.
+ * window's lane: the window's words step back while a link is shown) and runs right. With the paid
+ * block's cellbase on screen at `b` it drops into it. Without (`b` null: the paid block is past the
+ * right edge) it runs on to where the strap's own tail starts and ends there in an open tail over
+ * the same span, one lane up; it never drops anywhere.
  */
 export function rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink {
   const top = G.winY;
@@ -889,33 +793,38 @@ export function columnRewardLink(a: Point, b: Point | null, tail: ChainTail): Re
   };
 }
 
-export interface ChainSlotState extends RulerSlot {
+export interface ChainSlotState extends BlockSpan {
   hash: string;
   parentHash: string;
-  /** 0 = predicted … 1 = mined and settled. */
-  solid: number;
+  /** Its plate is set: false while a block lands (NEXT's dashed outline until contact). */
+  plate: boolean;
 }
 
 /**
- * The chain's links as path data of filled tick rectangles (to be filled, never stroked): each
- * link two bands of ticks across the gap between two plates.
+ * The strap's pieces along the chain, as path data: filled rectangles to be filled, never stroked
+ * (solid, win, tail, tailWin), and the dashed pair of a strap that is not yet a block's (pend: two
+ * lines, to be stroked).
  */
 export interface ChainPaths {
-  /** Links between settled blocks. */
+  /** Across the gap between two settled blocks: the plate's tone. */
   solid: string;
-  /** NEXT ⇢ the tip, and links from a block that is still landing. */
+  /** NEXT ⇢ the tip, and from a block still landing: two dashed lines on the strap's edges. */
   pend: string;
-  /** Links between two blocks inside the window of H: gold. */
+  /** Across the gap between two plates inside the window of H: gilt. */
   win: string;
-  /** The two bands continued past the last plate on screen (`chainTail`). */
+  /** Run on past the last plate on screen (`chainTail`), in the plate's tone. */
   tail: string;
+  /** The same, gilt: the window of H runs on past the last plate on screen. */
+  tailWin: string;
 }
 
 /**
- * The chain from newest (left) to older (right): each link two bands of ticks across the gap
- * between two plates, at 32 and 80 px down them, no arrowheads. A link is drawn only where the
- * newer plate's parentHash is the older plate's hash, so uncles and reorgs break the chain
- * honestly. Inside the window of H the links are gold.
+ * The chain from newest (left) to older (right), as one strap through the plates' heads (canvas y
+ * 26 … 46): a filled rectangle across the whole gap between a block and its parent, in the plate's
+ * tone, gilt between two plates inside the window of H; two dashed lines from NEXT and from a block
+ * still landing; and its tail, run on past the last plate on screen. A link is drawn only where
+ * the newer plate's parentHash is the older plate's hash, so uncles and reorgs break the chain
+ * honestly.
  */
 export function chainPaths(
   cards: readonly ChainSlotState[],
@@ -924,15 +833,86 @@ export function chainPaths(
   w: WindowParams,
   viewW: number
 ): ChainPaths {
-  const link = ([x0, x1]: Span) => G.linkY.map((y) => tickBand('x', x0, x1, y, BAND.link)).join('');
-  const s = chainSpans(cards, next, H, w, BAND.inset);
-  const tail = chainTail(cards, viewW);
+  return strapPaths('x', strapAcross('row'), cards, next, H, w, chainTail(cards, viewW));
+}
+
+/**
+ * The chain of a column, top to bottom (slot `x`/`w` are a row's top and height): the same strap
+ * turned to run down through the stones (x 5 … 25), its tail below the last row.
+ */
+export function columnChainPaths(
+  cards: readonly ChainSlotState[],
+  next: { x: number; w: number } | null,
+  H: number,
+  w: WindowParams,
+  viewH: number
+): ChainPaths {
+  return strapPaths('y', strapAcross('column'), cards, next, H, w, columnChainTail(cards, viewH));
+}
+
+/**
+ * The strap of a chain in either orientation: `along` is the chain's direction (x in a row, y in a
+ * column), `[a, b]` where the strap lies across it; slot `x`/`w` are positions along it. The one
+ * description of the strap's pieces, for the static render, the motion layer and the tests.
+ */
+function strapPaths(
+  along: 'x' | 'y',
+  [a, b]: Span,
+  cards: readonly ChainSlotState[],
+  next: { x: number; w: number } | null,
+  H: number,
+  w: WindowParams,
+  tail: ChainTail | null
+): ChainPaths {
+  const f = (v: number) => v.toFixed(1);
+  const fill = ([p0, p1]: Span) =>
+    along === 'x'
+      ? `M${f(p0)} ${f(a)}h${f(p1 - p0)}v${f(b - a)}h-${f(p1 - p0)}Z`
+      : `M${f(a)} ${f(p0)}h${f(b - a)}v${f(p1 - p0)}h-${f(b - a)}Z`;
+  // on the strap's own outer pixel rows (a row) or columns (a column), so the 1 px lines are crisp
+  const dashed = ([p0, p1]: Span) =>
+    along === 'x'
+      ? `M${f(p0)} ${f(a + 0.5)}H${f(p1)}M${f(p0)} ${f(b - 0.5)}H${f(p1)}`
+      : `M${f(a + 0.5)} ${f(p0)}V${f(p1)}M${f(b - 0.5)} ${f(p0)}V${f(p1)}`;
+  const s = chainSpans(cards, next, H, w);
+  // a plate sliding out past the view's edge leaves the tail no room
+  const run: Span | null = tail && tail.x1 > tail.x0 ? [tail.x0, tail.x1] : null;
+  const gilt = windowRunsOn(cards, H, w);
   return {
-    solid: s.solid.map(link).join(''),
-    pend: s.pend.map(link).join(''),
-    win: s.win.map(link).join(''),
-    tail: tail ? link([tail.x0, tail.x1]) : '',
+    solid: s.solid.map(fill).join(''),
+    pend: s.pend.map(dashed).join(''),
+    win: s.win.map(fill).join(''),
+    tail: run && !gilt ? fill(run) : '',
+    tailWin: run && gilt ? fill(run) : '',
   };
+}
+
+/** Where the strap lies across the chain's direction: its y in a row, its x in a column. */
+function strapAcross(o: Orientation): Span {
+  return o === 'row' ? [G.strapY, G.strapY + G.strapH] : [COL.strapX, COL.strapX + COL.strapW];
+}
+
+/**
+ * A plate's own strap inside the proposal window, local to its card: across the whole plate at the
+ * strap's y in a row, down the whole row at the strap's x in a column. Drawn on the plate, above
+ * its fill and under its stone, cuts, dots and words, in gilt; never faded.
+ */
+export function strapBox(o: Orientation, w: number, h: number): BoxRect {
+  return o === 'row'
+    ? boxRect(0, G.strapY, w, G.strapH, false)
+    : boxRect(COL.strapX - COL.x0, 0, COL.strapW, h, false);
+}
+
+/**
+ * The window of H runs on past the last plate on screen: that plate lies inside it and the window's
+ * far end is not on screen. The strap's tail is then gilt.
+ */
+function windowRunsOn(cards: readonly ChainSlotState[], H: number, w: WindowParams): boolean {
+  const mined = cards.filter((c) => c.mined);
+  if (!mined.length) return false;
+  const last = mined.reduce((p, q) => (q.x > p.x ? q : p));
+  const farOnScreen = mined.some((c) => c.number === H - w.proposalWindowFarthest);
+  return inWindow(last.number, H, w) && !farOnScreen;
 }
 
 /** The pool's two flow links: from the mempool to the proposed stage, and from it to NEXT. */
@@ -942,91 +922,88 @@ export interface FlowPaths {
 }
 
 /**
- * The pool's flow links in a row: one faint band of ticks in each gap before NEXT, `BAND.inset`
- * inside it, 14 px down the plates.
+ * Arrowheads through the gap [p0, p1] along the flow (`along`: x in a row, y in a column),
+ * pointing on and centred across it on `mid`: as many whole ones as fit, the group centred in the
+ * gap. Filled triangles, as path data.
  */
-export function flowPaths(): FlowPaths {
-  const band = (x0: number, x1: number) =>
-    tickBand('x', x0 + BAND.inset, x1 - BAND.inset, G.flowY, BAND.flow);
-  return {
-    toProposed: band(G.mempoolX + G.cardW, G.proposedX),
-    toNext: band(G.proposedX + G.cardW, G.nextX),
-  };
+function arrowheads(along: 'x' | 'y', p0: number, p1: number, mid: number): string {
+  const { length, breadth, pitch } = ARROW;
+  const n = Math.floor((p1 - p0 + pitch - length) / pitch);
+  if (n < 1) throw new Error(`pipeline: a flow's ${p1 - p0} px gap holds no arrowhead`);
+  const start = p0 + (p1 - p0 - (n * pitch - (pitch - length))) / 2;
+  const f = (v: number) => v.toFixed(1);
+  let d = '';
+  for (let k = 0; k < n; k++) {
+    const t = start + k * pitch;
+    d +=
+      along === 'x'
+        ? `M${f(t)} ${f(mid - breadth / 2)}L${f(t + length)} ${f(mid)}L${f(t)} ${f(mid + breadth / 2)}Z`
+        : `M${f(mid - breadth / 2)} ${f(t)}L${f(mid + breadth / 2)} ${f(t)}L${f(mid)} ${f(t + length)}Z`;
+  }
+  return d;
 }
-
-/** The pool's flow links in a column: one faint band at `COL.flowX` down each gap below a well. */
-export function columnFlowPaths(bands: { pending: Band; proposed: Band; next: Band }): FlowPaths {
-  const band = (above: Band, below: Band) =>
-    tickBand('y', above.y + above.h + BAND.inset, below.y - BAND.inset, COL.flowX, BAND.flow);
-  return {
-    toProposed: band(bands.pending, bands.proposed),
-    toNext: band(bands.proposed, bands.next),
-  };
-}
-
-/** A stretch of the chain along its direction: from, to. */
-type Span = [number, number];
 
 /**
- * The chain's links along its direction (slot `x`/`w` are positions along it), `inset` px clear of
- * the plates: NEXT ⇢ the first plate pending, then a link wherever the newer plate names the older
- * one as its parent — gold between two blocks inside the window of H, pending from a block still
- * landing, solid otherwise.
+ * The pool's flows in a row: arrowheads pointing right through each gap before NEXT, centred on
+ * the head line (2 in the 18 px gap, 4 in the 30 px one).
+ */
+export function flowPaths(): FlowPaths {
+  return {
+    toProposed: arrowheads('x', G.mempoolX + G.cardW, G.proposedX, G.headY),
+    toNext: arrowheads('x', G.proposedX + G.cardW, G.nextX, G.headY),
+  };
+}
+
+/** The pool's flows in a column: arrowheads pointing down each gap below a well, on the strap. */
+export function columnFlowPaths(bands: { pending: Band; proposed: Band; next: Band }): FlowPaths {
+  const axis = COL.strapX + COL.strapW / 2;
+  const flow = (above: Band, below: Band) => arrowheads('y', above.y + above.h, below.y, axis);
+  return {
+    toProposed: flow(bands.pending, bands.proposed),
+    toNext: flow(bands.proposed, bands.next),
+  };
+}
+
+/** A stretch of the chain along its direction (or across it): from, to. */
+type Span = readonly [number, number];
+
+/**
+ * The chain's links along its direction (slot `x`/`w` are positions along it), each the whole gap
+ * between two plates: NEXT ⇢ the first plate pending, then a link wherever the newer plate names
+ * the older one as its parent — pending from a block still landing (no plate yet), gilt between
+ * two blocks inside the window of H, solid otherwise. A gap two moving plates have closed has none.
  */
 function chainSpans(
   cards: readonly ChainSlotState[],
   next: { x: number; w: number } | null,
   H: number,
-  w: WindowParams,
-  inset: number
+  w: WindowParams
 ): { solid: Span[]; pend: Span[]; win: Span[] } {
   const list = cards.slice().sort((a, b) => a.x - b.x);
   const solid: Span[] = [];
   const pend: Span[] = [];
   const win: Span[] = [];
-  if (next && list.length) pend.push([next.x + next.w + inset, list[0].x - inset]);
+  const gap = (a: { x: number; w: number }, b: { x: number }): Span | null =>
+    b.x > a.x + a.w ? [a.x + a.w, b.x] : null;
+  const first = next && list.length ? gap(next, list[0]) : null;
+  if (first) pend.push(first);
   for (let i = 0; i + 1 < list.length; i++) {
     const a = list[i];
     const b = list[i + 1];
     if (a.parentHash !== b.hash) continue;
-    const x0 = a.x + a.w + inset;
-    const x1 = b.x - inset;
-    if (x1 - x0 < 6) continue;
-    if (a.mined && b.mined && inWindow(a.number, H, w) && inWindow(b.number, H, w)) {
-      win.push([x0, x1]);
-    } else if (a.solid < 0.5) pend.push([x0, x1]);
-    else solid.push([x0, x1]);
+    const g = gap(a, b);
+    if (!g) continue;
+    if (!a.plate) pend.push(g);
+    else if (a.mined && b.mined && inWindow(a.number, H, w) && inWindow(b.number, H, w)) {
+      win.push(g);
+    } else solid.push(g);
   }
   return { solid, pend, win };
 }
 
 /**
- * The chain of a column, top to bottom (slot `x`/`w` are a row's top and height): each link the
- * two bands of ticks turned to run down the gap between two rows, at `COL.linkX`, `BAND.inset` px
- * clear of both rows. The tail is the two bands continued below the last row.
- */
-export function columnChainPaths(
-  cards: readonly ChainSlotState[],
-  next: { x: number; w: number } | null,
-  H: number,
-  w: WindowParams,
-  viewH: number
-): ChainPaths {
-  const link = ([y0, y1]: Span) =>
-    COL.linkX.map((x) => tickBand('y', y0, y1, x, BAND.link)).join('');
-  const s = chainSpans(cards, next, H, w, BAND.inset);
-  const tail = columnChainTail(cards, viewH);
-  return {
-    solid: s.solid.map(link).join(''),
-    pend: s.pend.map(link).join(''),
-    win: s.win.map(link).join(''),
-    tail: tail ? link([tail.x0, tail.x1]) : '',
-  };
-}
-
-/**
- * Where a column's chain runs on below its last row: from `BAND.inset` below that row for
- * `COL.tail` px, or to the bottom edge when that is nearer.
+ * Where a column's strap runs on below its last row: from that row's bottom edge for `COL.tail` px,
+ * or to the bottom edge when that is nearer.
  */
 export function columnChainTail(
   cards: readonly { x: number; w: number }[],
@@ -1034,7 +1011,7 @@ export function columnChainTail(
 ): ChainTail | null {
   if (!cards.length) return null;
   const last = cards.reduce((a, b) => (b.x > a.x ? b : a));
-  const x0 = last.x + last.w + BAND.inset;
+  const x0 = last.x + last.w;
   return { x0, x1: x0 + Math.min(COL.tail, viewH - x0) };
 }
 
@@ -2025,12 +2002,11 @@ export interface SceneAxis {
     H: number,
     w: WindowParams
   ): ChainPaths;
-  ruler(slots: readonly RulerSlot[], H: number, w: WindowParams, text: string): RulerGeom;
   /**
-   * The hovered window: its ticks (and, in a row, the dimension line). At rest the window has no
-   * mark of its own: its gold bands say it.
+   * The window's one line of words and the lane's hit area, in a row (`windowLane`); a column has
+   * no lane beside its rows, so neither (the gilt says the window, the tips name its range).
    */
-  ticks(r: RulerGeom): string;
+  lane(slots: readonly BlockSpan[], H: number, w: WindowParams, text: string): WindowLane;
   tail(cards: readonly { x: number; w: number }[]): ChainTail | null;
   rewardLink(a: Point, b: Point | null, tail: ChainTail): RewardLink;
 }
@@ -2041,8 +2017,7 @@ export function axisOf(scene: Pick<Scene, 'orientation' | 'viewW' | 'H'>): Scene
     return {
       along: (c) => ({ x: c.x, w: c.w }),
       chainPaths: (cards, next, H, w) => chainPaths(cards, next, H, w, viewW),
-      ruler: (slots, H, w, text) => windowRuler(slots, H, w, viewW, text),
-      ticks: rulerPath,
+      lane: (slots, H, w, text) => windowLane(slots, H, w, viewW, text),
       tail: (cards) => chainTail(cards, viewW),
       rewardLink,
     };
@@ -2050,8 +2025,7 @@ export function axisOf(scene: Pick<Scene, 'orientation' | 'viewW' | 'H'>): Scene
   return {
     along: (c) => ({ x: c.y, w: c.h }),
     chainPaths: (cards, next, H, w) => columnChainPaths(cards, next, H, w, viewH),
-    ruler: (slots, H, w) => columnWindowRuler(slots, H, w, viewH),
-    ticks: (r) => columnRulerPath(r, viewW),
+    lane: () => ({ label: null, hit: null }),
     tail: (cards) => columnChainTail(cards, viewH),
     rewardLink: columnRewardLink,
   };

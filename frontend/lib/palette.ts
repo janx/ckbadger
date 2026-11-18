@@ -124,16 +124,16 @@ const dark = {
   /** What a stage hue is mixed toward as cycles rise: lighter at night, inkier by day. */
   'pipeline-step-to': '#f6f2ea',
   /**
-   * The gold of a word on a pipeline tile (a block number inside the drawn window): the plain gold
-   * by night (6.11:1 on the tile), the gold's bright step by day (5.57:1, where the gold is 4.15:1).
-   * Equal to `gold` here and to `gold-bright` by day, pinned equal in palette.test.ts.
-   */
-  'pipeline-word-gold': '#c9a45c',
-  /**
    * A block in the pipeline is a solid plate of its own tone (1.29 : 1 on the page ground by night,
    * 1.27 by day), never faded; the number and the counts on it are text grade (palette.test).
    */
   'pipeline-plate': '#2f2821',
+  /**
+   * The proposal window (direction G): the strap through the heads of the plates is gilt across
+   * every plate inside the window and the joints between them, a ground the head's words keep
+   * 4.5 : 1 on (text-bright 7.6, text 4.58 : 1; text-dim is not used on it), never faded.
+   */
+  'pipeline-gilt': '#564013',
   /**
    * The cut a transaction is set in: 2 px of this tone round every square and the cellbase on a
    * plate, and only there (no cut where there is no transaction).
@@ -275,8 +275,8 @@ const light: Palette = {
   'pipeline-drop-neutral': '#6e6b67',
   'pipeline-well': '#eee8dc',
   'pipeline-step-to': '#1f1b17',
-  'pipeline-word-gold': '#684e0d',
   'pipeline-plate': '#ddd4c3',
+  'pipeline-gilt': '#c8b47f',
   'pipeline-cut': '#f8f4ec',
   'pipeline-dot-waiting': '#866619',
   'pipeline-dot-committed': '#3d7870',

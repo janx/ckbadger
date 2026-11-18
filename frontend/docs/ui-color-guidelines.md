@@ -201,10 +201,17 @@ colour under the word, and the label takes the ink that reads best on the worst 
 
 A pipeline block's plate (`pipeline-plate`) is a ground of its own, and its words are chosen for
 it: the number in `text-bright`, "uncle" and every "+N" in `text`, one step up from the dim
-(`text-dim` is 4.1 / 4.0:1 on the plate), and a block number inside the drawn window the gold's
-bright step (more ink by day), so each reads at 4.5:1 on the plate at every age; `palette.test.ts`
-pins the inks on the plate and `pipeline-panel.test.tsx` computes every word the canvas writes
-against what it stands on.
+(`text-dim` is 4.1 / 4.0:1 on the plate), so each reads at 4.5:1 on the plate at every age.
+
+A block is joined to its parent by one strap through their heads (down through their stones in
+the narrow column): in the plate's tone across the gap between them, and gilt (`pipeline-gilt`)
+across the plates and the joints inside the proposal window, the block's stone standing on it.
+The gilt is a ground for words as the plate is: `text-bright` and `text` read at 4.5:1 on it in
+both themes and `text-dim` is not used on it, so a block number inside the window stays in
+`text-bright` and no gold word stands on the gilt (`gold` is 4.2:1 on it by night, its bright
+step 3.8:1 by day); it is never faded and never dimmed.
+`palette.test.ts` pins the inks on the plate and on the gilt, and `pipeline-panel.test.tsx`
+computes every word the canvas writes against what it stands on.
 
 ### The display figure
 
@@ -251,6 +258,7 @@ lightness only (lighter by night, darker by day) until it clears that ratio on a
 | `pipeline-well`                                         | well                                    | the well / mix elevated bg 0.5                                                                                                                                                                                                     |
 | `pipeline-step-to`                                      | white / ink                             | `#f6f2ea` / text-bright: what a stage hue is mixed toward as its cycles rise (the cellbase a quarter of the way), lighter by night, inkier by day; the steps used to mix toward white                                              |
 | `pipeline-plate`, `pipeline-cut`                        | the boards                              | the block's plate `#2f2821` / `#ddd4c3`; the cut a transaction is set in `#13100d` / `#f8f4ec`                                                                                                                                     |
+| `pipeline-gilt`                                         | the boards                              | the strap across the plates and joints of the proposal window `#564013` / `#c8b47f`; a ground for `text-bright` and `text` (≥ 4.5), never faded or dimmed                                                                          |
 | `pipeline-dot-waiting` `-committed` `-expired`          | gold, celadon; the quiet dot            | the proposal dots on the plate, waiting and committed ≥ 3 on it: `#ba9a5a #63897f #48413a` / `#866619 #3d7870 #b9b3a8`                                                                                                             |
 | `search-*`, `stream-*`                                  | the well, celadon                       | panel mix well black 0.8 / `#fffdf8`; selected, hover = celadon 8 %, 3 % on the well (10 %, 4 % on the surface); stream mix well black 0.7, 0.88 / tile, mix elevated line 0.75                                                    |
 | `row-tag-accent-edge`, `reward-secondary`               | celadon into bg                         | 36 %; 58 % (day 50 %)                                                                                                                                                                                                              |

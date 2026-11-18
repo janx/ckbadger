@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { FOOTER_ROW } from '@/components/pipeline/svg-text';
 import {
+  GILT_FILL,
   chipPaint,
   diamondPath,
   paintSquare,
@@ -12,6 +13,8 @@ import {
 
 /** A key's square: 9 px, the canvas's own shape, in the canvas's own paint. */
 const SIDE = 9;
+/** The proposal window's key: a 16 px piece of the gilt strap, as tall as a square key. */
+const STRAP_KEY_W = 16;
 
 function Sq({
   paint,
@@ -56,10 +59,12 @@ const solid = (fill: string) => ({ fill, fillOpacity: null, stroke: null });
 
 /**
  * One plain dim line under the canvas (Plate.dc.html `.lg`): the tx square with its scale (the
- * unit is said here only, as on /blocks), the proposal dot, the stage colours as squares in the
- * canvas's own paints (the expired one is a dot's colour), then the cellbase, the cycles shades
- * and the dashed "cycles unknown" square. Everything labelled on the canvas itself (the pool
- * wells, uncles) or explained in a hover or in the "?" title (how to use it) is left out.
+ * unit is said here only, as on /blocks), the proposal dot, the proposal window as a piece of the
+ * gilt strap (Strap.dc.html `.lg .wk`: the canvas writes no words for it at rest), the stage
+ * colours as squares in the canvas's own paints (the expired one is a dot's colour), then the
+ * cellbase, the cycles shades and the dashed "cycles unknown" square. Everything labelled on the
+ * canvas itself (the pool wells, uncles) or explained in a hover or in the "?" title (how to use
+ * it) is left out.
  */
 export function PipelineLegend() {
   const cellbase = paintSquare('cellbase', 'solid', 0);
@@ -77,6 +82,17 @@ export function PipelineLegend() {
           <circle cx={4} cy={4} r={3} style={{ fill: tok('ink-dim') }} />
         </svg>
         proposal
+      </Key>
+      <Key>
+        <svg width={STRAP_KEY_W} height={SIDE} viewBox={`0 0 ${STRAP_KEY_W} ${SIDE}`} aria-hidden>
+          <rect
+            data-swatch="window"
+            width={STRAP_KEY_W}
+            height={SIDE}
+            style={{ fill: GILT_FILL }}
+          />
+        </svg>
+        proposal window
       </Key>
       <GroupBar />
       <Key>

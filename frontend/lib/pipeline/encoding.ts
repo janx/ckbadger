@@ -90,6 +90,7 @@ export type PipelineToken =
   | 'step-to'
   | 'plate'
   | 'cut'
+  | 'gilt'
   | 'dot-waiting'
   | 'dot-committed'
   | 'dot-expired';
@@ -109,11 +110,14 @@ export function mixColor(a: string, b: string, t: number): string {
  * The materials of the canvas: a pool is a well (recessed below the surface), a mined block a solid
  * plate of its own tone (no outline at rest, never faded), every transaction on it set in a cut of
  * a second tone (2 px round each square and the cellbase, and only there), and NEXT the only dashed
- * outline (`GHOST`, predicted).
+ * outline (`GHOST`, predicted). The proposal window is gilt: the strap through the plates' heads,
+ * across every plate inside the window and the joints between them, a ground as the plate is
+ * (never faded, never set back with its block's marks).
  */
 export const WELL_FILL = tok('well');
 export const PLATE_FILL = tok('plate');
 export const CUT_FILL = tok('cut');
+export const GILT_FILL = tok('gilt');
 
 /** How many blocks behind the tip the age fade bottoms out. */
 const AGE_STEPS = 7;
@@ -269,22 +273,19 @@ export const GHOST = {
 } as const;
 
 /**
- * The chain's links, two bands of filled ticks each (never stroked): the muted ink between two
- * blocks, the same at 0.7 from NEXT (and from a block still landing), gold inside the drawn
- * proposal window, at full strength. The pool's flows: one faint band of the muted ink at 0.8.
+ * The strap that joins a block to its parent (direction G, lib/pipeline/layout.ts `chainPaths`):
+ * filled in the plate's own tone across the gap between two blocks, so the chain reads as one
+ * piece, and gilt between two plates inside the drawn proposal window; from NEXT (and from a block
+ * still landing) two dashed lines in NEXT's own outline paint, the only stroke in the chain. Its
+ * tail past the last plate is the same strap run on: gilt while the window runs on past that plate,
+ * the plate's tone otherwise. The pool's flows: arrowheads in the muted ink at 0.8.
  */
 export const LINK_PAINT = {
-  solid: { fill: tok('ink-dim'), fillOpacity: null },
-  pend: { fill: tok('ink-dim'), fillOpacity: 0.7 },
-  win: { fill: tok('gold'), fillOpacity: null },
+  solid: { fill: PLATE_FILL },
+  win: { fill: GILT_FILL },
+  pend: GHOST.outline,
   flow: { fill: tok('ink-dim'), fillOpacity: 0.8 },
 } as const;
-
-/**
- * The chain's tail past the last plate (its two bands fading to nothing): gold while the drawn
- * window runs on past that plate, else the muted ink of a link.
- */
-export const tailFill = (windowRunsOn: boolean) => tok(windowRunsOn ? 'gold' : 'ink-dim');
 
 /** The cellbase diamond inside an s×s cell at (x, y). */
 export function diamondPath(x: number, y: number, s: number): string {

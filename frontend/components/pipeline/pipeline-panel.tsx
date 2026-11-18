@@ -14,9 +14,9 @@ import {
 import { SectionHeading } from '@/components/home/section';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { usePipelineSnapshot } from '@/hooks/usePipelineSnapshot';
-import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
+import { usePipelineHoverStore, type PipelinePin } from '@/hooks/usePipelineHoverStore';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
-import type { PipelineSnapshot } from '@/lib/api';
+import type { PipelineBlock, PipelinePoolTx, PipelineProposal, PipelineSnapshot } from '@/lib/api';
 import type { MotionCtx, MotionView } from '@/lib/pipeline/motion';
 import { diffSnapshots, type Transition } from '@/lib/pipeline/transitions';
 import { STAGE_BASE, mixColor, tok } from '@/lib/pipeline/encoding';
@@ -29,8 +29,8 @@ import {
   pickTargets,
   rewardTarget,
   windowLabel,
+  type BlockSpan,
   type ChainSlotState,
-  type RulerSlot,
   type Scene,
   type ScenePhase,
   type SceneSquare,
@@ -47,23 +47,27 @@ import { MotionSvg } from '@/components/pipeline/motion-svg';
 import { NextCard, NextColumn } from '@/components/pipeline/next-card';
 import { PipelineLegend } from '@/components/pipeline/pipeline-legend';
 import { PoolZone } from '@/components/pipeline/pool-zone';
-import Link from '@/components/ui/link';
+import Link, { useSiteLink } from '@/components/ui/link';
 import {
   PipelineTooltip,
+  blockFacts,
   blockTip,
   commitNote,
   fmtBytes,
   chipTip,
   nextTip,
+  predictedFacts,
   predictedTip,
   txTip,
   uncleTip,
   windowTip,
+  withOpen,
+  type OpenPage,
   type TipContent,
   type TxInfo,
 } from '@/components/pipeline/pipeline-tooltip';
 import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
-import { WindowLabel, WindowTicks } from '@/components/pipeline/window-ruler';
+import { WindowLabel } from '@/components/pipeline/window-label';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
@@ -71,9 +75,9 @@ import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 
 const SVG_LABEL = {
-  row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and its committed transactions set in cuts, starting with the cellbase',
+  row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as plates joined to their parents by one strap through their heads, gilt across the proposal window of the next block, each with its seal, its proposal dots and its committed transactions set in cuts, starting with the cellbase',
   column:
-    'A transaction lifetime read top to bottom: the mempool and proposed pool wells, the predicted next block, then the tip and three older blocks as plates linked to their parents by two bands of ticks, each with its seal, its proposal dots and a line of transactions set in cuts, starting with the cellbase',
+    'A transaction lifetime read top to bottom: the mempool and proposed pool wells, the predicted next block, then the tip and three older blocks as plates joined to their parents by one strap down through their seals, gilt across the proposal window of the next block, each with its seal, its proposal dots and a line of transactions set in cuts, starting with the cellbase',
 } as const;
 
 /**
@@ -253,13 +257,63 @@ const centreOf = (q: { X: number; Y: number; s: number }) => ({
   Y: q.Y + q.s / 2,
 });
 
+/**
+ * What lies under the pointer: a tx square of any stage (a cellbase too), a predicted tx on NEXT, a
+ * proposal dot, a mined block (its plate, stone, number or row, a landing one too) or an uncle's
+ * word on it, NEXT, the proposed well, or the window lane; null for anything else. The hover
+ * explains it, and a click opens (a tap pins) what it opens (`opensOf`), all from this one reading.
+ */
+type PointerTarget =
+  | { kind: 'tx'; hash: string; info: TxInfo }
+  | { kind: 'ghost'; hash: string; size: number; pool: PipelinePoolTx | null }
+  | { kind: 'chip'; block: PipelineBlock; proposal: PipelineProposal }
+  | { kind: 'block'; block: PipelineBlock }
+  | { kind: 'uncle'; block: PipelineBlock; index: number }
+  | { kind: 'next' }
+  | { kind: 'proposed-well' }
+  | { kind: 'lane' };
+
+/**
+ * What a click on a target opens, which is what a tap pins: a tx or a predicted tx opens its
+ * transaction; a proposal dot its transaction when the proposal's tx is known, else the block it
+ * is drawn on; a block, or an uncle's word on it, that block. NEXT (not a block yet), the wells,
+ * the lane and the empty canvas open nothing.
+ */
+function opensOf(t: PointerTarget | null): PipelinePin | null {
+  switch (t?.kind) {
+    case 'tx':
+    case 'ghost':
+      return { kind: 'tx', hash: t.hash };
+    case 'chip':
+      return t.proposal.txHash
+        ? { kind: 'tx', hash: t.proposal.txHash }
+        : { kind: 'block', number: t.block.number };
+    case 'block':
+    case 'uncle':
+      return { kind: 'block', number: t.block.number };
+    default:
+      return null;
+  }
+}
+
+/** The site path of what opens: its transaction's page or its block's. */
+const hrefOf = (o: PipelinePin) => (o.kind === 'tx' ? `/tx/${o.hash}` : `/blocks/${o.number}`);
+/** Its name in the closing sentence of a tip. */
+const nounOf = (o: PipelinePin): OpenPage => (o.kind === 'tx' ? 'transaction' : 'block');
+const samePin = (a: PipelinePin | null, b: PipelinePin) =>
+  a !== null &&
+  (a.kind === 'tx'
+    ? b.kind === 'tx' && a.hash === b.hash
+    : b.kind === 'block' && a.number === b.number);
+
+/** A ring `pad` px around a mark's box (a square, a ghost), in canvas px. */
 function Ring({
   q,
   pad,
   testId,
   dashed,
 }: {
-  q: AbsSquare;
+  q: { X: number; Y: number; s: number };
   pad: number;
   testId: string;
   dashed?: boolean;
@@ -290,18 +344,26 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const windowBlock = usePipelineHoverStore((s) => s.windowBlock);
   const setHover = usePipelineHoverStore((s) => s.setHover);
   const clearHover = usePipelineHoverStore((s) => s.clearHover);
-  const togglePin = usePipelineHoverStore((s) => s.togglePin);
+  const pin = usePipelineHoverStore((s) => s.pin);
   const clearPin = usePipelineHoverStore((s) => s.clearPin);
+  const link = useSiteLink();
+  // The pointer type of the gesture a click ends, as its pointerdown said ('' until one does).
+  const downType = useRef('');
   const [lane, setLane] = useState(false);
   const [arcBlock, setArcBlock] = useState<number | null>(null);
   const [cursor, setCursor] = useState<'' | 'pointer' | 'help'>('');
   const [tip, setTip] = useState<TipContent | null>(null);
 
   // The animator reads the hover-dependent bits of the latest render through this.
-  const live = useRef({ anchor: 0, highlighted: null as string | null });
+  const live = useRef({
+    anchor: 0,
+    highlighted: null as string | null,
+    pinned: null as string | null,
+  });
+  // A block's 1 px edge: while it is hovered (here or in Latest Blocks), and while a tap pins it.
   const motionView = useMemo<MotionView>(
     () => ({
-      highlighted: (id) => live.current.highlighted === id,
+      highlighted: (id) => live.current.highlighted === id || live.current.pinned === id,
       anchor: () => live.current.anchor,
     }),
     []
@@ -356,6 +418,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const highlighted = hoverBlock === null ? null : (byNumber.get(hoverBlock)?.id ?? null);
   live.current.anchor = anchor;
   live.current.highlighted = highlighted;
+  live.current.pinned = pinned?.kind === 'block' ? (byNumber.get(pinned.number)?.id ?? null) : null;
 
   // Slots along the chain's direction: x and w in a row, a row's top and height in a column.
   const chainSlots: ChainSlotState[] = scene.cards.map((c) => ({
@@ -364,28 +427,25 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     mined: true,
     hash: c.block.hash,
     parentHash: c.block.parentHash,
-    solid: 1,
+    plate: true,
   }));
   const nextSlot = scene.next ? axis.along(scene.next) : null;
-  const rulerSlots: RulerSlot[] =
+  const windowSlots: BlockSpan[] =
     scene.next && nextSlot
       ? [{ number: scene.next.number, ...nextSlot, mined: false }, ...chainSlots]
       : chainSlots;
   const windowText = windowLabel(anchor, scene.windowTip, consensus);
-  const ruler = axis.ruler(rulerSlots, anchor, consensus, windowText);
-  // The window is drawn in full only while something that has one is hovered: NEXT, a block, the
-  // proposed well or the lane itself. At rest only its gold bands show it.
+  const windowWords = axis.lane(windowSlots, anchor, consensus, windowText).label;
+  // The window's words are drawn only while something that has a window is hovered: NEXT, a block,
+  // the proposed well or the lane itself. At rest (and under the pointer) the gilt strap says it.
   const showWindow = lane || windowBlock !== null;
-  // The lane above the cards holds the window in a row; a column has no lane (the rows span it).
-  const laneGeom =
-    scene.orientation === 'row'
-      ? axis.ruler(
-          rulerSlots,
-          defaultH,
-          consensus,
-          windowLabel(defaultH, scene.windowTip, consensus)
-        ).hit
-      : null;
+  // The lane above the cards holds the window's words in a row; a column has no lane.
+  const laneGeom = axis.lane(
+    windowSlots,
+    defaultH,
+    consensus,
+    windowLabel(defaultH, scene.windowTip, consensus)
+  ).hit;
   const paths = axis.chainPaths(chainSlots, nextSlot, anchor, consensus);
 
   // Pointing at a block makes it H: blocks outside its window step back (prototype paintCard).
@@ -403,7 +463,12 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   };
 
   const hovered = hoverTx ? (squares.get(hoverTx) ?? null) : null;
-  const pinnedSq = pinned && pinned !== hoverTx ? (squares.get(pinned) ?? null) : null;
+  // The pinned tx's mark, where the readout under the canvas finds it: its square in a well or on
+  // a plate, else (its pool tx not in the listed pool) its predicted ghost on NEXT.
+  const pinnedMark =
+    pinned?.kind === 'tx' && pinned.hash !== hoverTx
+      ? (squares.get(pinned.hash) ?? ghostOfTx.get(pinned.hash) ?? null)
+      : null;
   const chip = hoverTx ? (chipOfTx.get(hoverTx) ?? null) : null;
   const ghost = hoverTx ? (ghostOfTx.get(hoverTx) ?? null) : null;
   const onIds = useMemo(() => new Set(hovered && hoverTx ? [hoverTx] : []), [hovered, hoverTx]);
@@ -465,86 +530,109 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     return p.y >= G.cardTop && p.y <= G.cardTop + G.headH && p.x >= g.xn && p.x <= g.xf;
   };
 
-  const onPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
-    pointer.current = { x: e.clientX, y: e.clientY };
-    place();
-    const p = toLocal(e);
+  /** What lies under a pointer at `p` over `el`: the one reading of the hover and the click. */
+  const targetAt = (p: { x: number; y: number }, el: Element): PointerTarget | null => {
     const hit = pick(targets, p.x, p.y);
-    let nextLane = false;
-    let nextArc: number | null = null;
-    let nextCursor: '' | 'pointer' | 'help' = '';
     if (hit?.kind === 'tx') {
       const info = index.get(hit.id);
       if (!info) throw new Error(`pipeline: picked tx ${hit.id} is not in the snapshot`);
-      const block =
-        info.kind === 'committed' || info.kind === 'cellbase'
-          ? info.block.number
-          : info.kind === 'proposed'
-            ? (info.tx.proposedIn as NonNullable<typeof info.tx.proposedIn>).block
-            : null;
-      setHover({ block, tx: hit.id, window: info.kind === 'committed' ? info.block.number : null });
-      nextArc = info.kind === 'cellbase' ? info.block.number : null;
-      nextCursor = 'pointer';
-      show(txTip(info, snapshot));
-    } else if (hit?.kind === 'ghost') {
+      return { kind: 'tx', hash: hit.id, info };
+    }
+    if (hit?.kind === 'ghost') {
       // A predicted tx: linked to its pool square by hash when the listed pool has it.
       const g = ghostOfTx.get(hit.id);
       if (!g) throw new Error(`pipeline: picked ghost ${hit.id} is not on the NEXT card`);
       const info = index.get(hit.id);
-      setHover({ block: null, tx: hit.id, window: null });
-      nextCursor = 'pointer';
-      show(
-        predictedTip(
-          { hash: hit.id, size: g.size },
-          info?.kind === 'proposed' ? info.tx : null,
-          snapshot
-        )
-      );
-    } else if (hit?.kind === 'chip') {
+      return {
+        kind: 'ghost',
+        hash: hit.id,
+        size: g.size,
+        pool: info?.kind === 'proposed' ? info.tx : null,
+      };
+    }
+    if (hit?.kind === 'chip') {
       const card = scene.cards.find((c) => c.id === hit.card);
       const k = card?.chips.find((x) => x.key === hit.key);
       if (!card || !k) throw new Error(`pipeline: picked chip ${hit.key} is not on screen`);
-      setHover({ block: card.block.number, tx: k.proposal.txHash, window: null });
-      nextCursor = 'pointer';
-      show(chipTip(card.block, k.proposal, snapshot));
-    } else {
-      const el = e.target as Element;
-      const cardEl = el.closest('[data-card]');
+      return { kind: 'chip', block: card.block, proposal: k.proposal };
+    }
+    if (el.closest('[data-next]') && snapshot.next) return { kind: 'next' };
+    if (el.closest('[data-pool-card="proposed"]')) return { kind: 'proposed-well' };
+    const cardEl = el.closest('[data-card]');
+    if (cardEl) {
+      const n = Number(cardEl.getAttribute('data-number'));
+      const card = byNumber.get(n);
+      if (!card) throw new Error(`pipeline: card #${n} under the pointer is not in the scene`);
       const uncleEl = el.closest('[data-uncle]');
-      if (el.closest('[data-next]') && snapshot.next) {
+      return uncleEl
+        ? { kind: 'uncle', block: card.block, index: Number(uncleEl.getAttribute('data-uncle')) }
+        : { kind: 'block', block: card.block };
+    }
+    if (inLane(p)) return { kind: 'lane' };
+    return null;
+  };
+
+  const onPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
+    pointer.current = { x: e.clientX, y: e.clientY };
+    place();
+    const t = targetAt(toLocal(e), e.target as Element);
+    const opens = opensOf(t);
+    let content: TipContent | null = null;
+    switch (t?.kind) {
+      case 'tx': {
+        const { info } = t;
+        const block =
+          info.kind === 'committed' || info.kind === 'cellbase'
+            ? info.block.number
+            : info.kind === 'proposed'
+              ? (info.tx.proposedIn as NonNullable<typeof info.tx.proposedIn>).block
+              : null;
+        setHover({
+          block,
+          tx: t.hash,
+          window: info.kind === 'committed' ? info.block.number : null,
+        });
+        content = txTip(info, snapshot);
+        break;
+      }
+      case 'ghost':
+        setHover({ block: null, tx: t.hash, window: null });
+        content = predictedTip({ hash: t.hash, size: t.size }, t.pool, snapshot);
+        break;
+      case 'chip':
+        setHover({ block: t.block.number, tx: t.proposal.txHash, window: null });
+        content = chipTip(t.block, t.proposal, snapshot);
+        break;
+      case 'next':
         // NEXT shows its own window: where the txs it can commit were proposed.
         clearHover();
-        nextLane = true;
-        show(nextTip(snapshot));
-      } else if (el.closest('[data-pool-card="proposed"]')) {
+        content = nextTip(snapshot);
+        break;
+      case 'proposed-well':
         // The proposed well holds exactly the proposals of NEXT's window (and the tip's, too early).
         clearHover();
-        nextLane = true;
-        show(windowTip(defaultH, snapshot));
-      } else if (cardEl) {
-        const n = Number(cardEl.getAttribute('data-number'));
-        const card = byNumber.get(n);
-        if (!card) throw new Error(`pipeline: hovered card #${n} is not in the scene`);
-        if (uncleEl) {
-          setHover({ block: n, tx: null, window: null });
-          show(uncleTip(card.block, Number(uncleEl.getAttribute('data-uncle'))));
-        } else {
-          setHover({ block: n, tx: null, window: n });
-          show(blockTip(card.block, snapshot));
-        }
-      } else if (inLane(p)) {
+        content = windowTip(defaultH, snapshot);
+        break;
+      case 'uncle':
+        setHover({ block: t.block.number, tx: null, window: null });
+        content = uncleTip(t.block, t.index);
+        break;
+      case 'block':
+        setHover({ block: t.block.number, tx: null, window: t.block.number });
+        content = blockTip(t.block, snapshot);
+        break;
+      case 'lane':
         clearHover();
-        nextLane = true;
-        nextCursor = 'help';
-        show(windowTip(defaultH, snapshot));
-      } else {
+        content = windowTip(defaultH, snapshot);
+        break;
+      default:
         clearHover();
-        show(null);
-      }
     }
-    setLane(nextLane);
-    setArcBlock(nextArc);
-    setCursor(nextCursor);
+    show(content && withOpen(content, opens && nounOf(opens)));
+    setLane(t?.kind === 'next' || t?.kind === 'proposed-well' || t?.kind === 'lane');
+    setArcBlock(t?.kind === 'tx' && t.info.kind === 'cellbase' ? t.info.block.number : null);
+    // A pointer exactly where a click opens a page; the lane explains, so it asks for help.
+    setCursor(opens ? 'pointer' : t?.kind === 'lane' ? 'help' : '');
   };
   const onPointerLeave = () => {
     clearHover();
@@ -553,18 +641,46 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     setCursor('');
     show(null);
   };
+  /**
+   * Open a page, through the router as the site's links do, or in a new tab (this one staying where
+   * it is). Opening a page from the pipeline clears the pin, so it is gone when the reader returns.
+   */
+  const openPage = (o: PipelinePin, newTab: boolean) => {
+    clearPin();
+    const url = link.url(hrefOf(o));
+    if (newTab) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    if (!link.navigator) {
+      throw new Error(`pipeline: a click opens ${url} through the router, and there is none`);
+    }
+    link.navigator.push(url);
+  };
+  const onPointerDown = (e: ReactPointerEvent<SVGSVGElement>) => {
+    downType.current = e.pointerType;
+  };
+  /**
+   * A pointer that hovers (a mouse, a pen, or a click no pointerdown began) opens what it clicks at
+   * once, in a new tab with Ctrl or Meta held. A touch tap (the Touch rule: no hover to read the
+   * tips by) pins what it would open, its readout under the canvas; a tap on what is pinned opens
+   * it; a tap where nothing opens clears the pin.
+   */
   const onClick = (e: ReactMouseEvent<SVGSVGElement>) => {
-    const p = toLocal(e);
-    const hit = pick(targets, p.x, p.y);
-    const id =
-      hit?.kind === 'tx' || hit?.kind === 'ghost'
-        ? hit.id
-        : hit?.kind === 'chip'
-          ? (scene.cards.find((c) => c.id === hit.card)?.chips.find((k) => k.key === hit.key)
-              ?.proposal.txHash ?? null)
-          : null;
-    if (id && squares.has(id)) togglePin(id);
-    else clearPin();
+    const touch = downType.current === 'touch';
+    downType.current = '';
+    const opens = opensOf(targetAt(toLocal(e), e.target as Element));
+    if (!touch) {
+      if (opens) openPage(opens, e.ctrlKey || e.metaKey);
+    } else if (opens === null) clearPin();
+    else if (samePin(pinned, opens)) openPage(opens, false);
+    else pin(opens);
+  };
+  /** A middle click opens what it clicks in a new tab. */
+  const onAuxClick = (e: ReactMouseEvent<SVGSVGElement>) => {
+    if (e.button !== 1) return;
+    const opens = opensOf(targetAt(toLocal(e), e.target as Element));
+    if (opens) openPage(opens, true);
   };
 
   const focus = hovered !== null;
@@ -591,13 +707,14 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
             'aria-label': SVG_LABEL[scene.orientation],
             onPointerMove,
             onPointerLeave,
+            onPointerDown,
             onClick,
+            onAuxClick,
           } as SVGProps<SVGSVGElement>
         }
       >
         <g pointerEvents="none">
-          <ChainLine paths={paths} tailOpen={ruler.tailOpen} along={scene.orientation} />
-          {showWindow && <WindowTicks d={axis.ticks(ruler)} faded={arc !== null} />}
+          <ChainLine paths={paths} along={scene.orientation} dim={dimAnchor !== null} />
         </g>
         {column ? (
           <ColumnPool scene={scene} dimOf={poolDim} onIds={onIds} />
@@ -617,8 +734,8 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
               <Card
                 key={c.id}
                 card={c}
-                numberInWindow={showWindow && inWindow(c.block.number, anchor, consensus)}
-                highlighted={highlighted === c.id}
+                gilt={inWindow(c.block.number, anchor, consensus)}
+                highlighted={motionView.highlighted(c.id)}
                 dim={cardDim(c.block.number)}
                 onIds={onIds}
                 age={i}
@@ -633,7 +750,12 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
             <NextColumn available={snapshot.next !== null} />
           )}
           {showWindow && (
-            <WindowLabel ruler={ruler} emphasis={lane} faded={arc !== null} text={windowText} />
+            <WindowLabel
+              label={windowWords}
+              emphasis={lane}
+              faded={arc !== null}
+              text={windowText}
+            />
           )}
         </g>
         <g data-layer="hover" pointerEvents="none">
@@ -709,10 +831,8 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
               <Ring q={hovered} pad={2} testId="ring" />
             </>
           )}
-          {pinnedSq && <Ring q={pinnedSq} pad={2.5} testId="pin-ring" dashed />}
-          {ghost && (
-            <Ring q={{ ...ghost, stage: 'committed' }} pad={2} testId="ghost-ring" dashed />
-          )}
+          {pinnedMark && <Ring q={pinnedMark} pad={2.5} testId="pin-ring" dashed />}
+          {ghost && <Ring q={ghost} pad={2} testId="ghost-ring" dashed />}
         </g>
       </MotionSvg>
       <PipelineTooltip ref={tipRef} content={tip} />
@@ -724,7 +844,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
 const PIPELINE_HELP = [
   'Two-step confirmation: a tx is proposed in one block and committed in a later block inside its proposal window.',
   'Square area = bytes; shade = cycles.',
-  `${tapOrHover('a tx or a proposal', { capital: true })} to see how they connect; a tap on a tx pins it, so you can follow it from the pool to the block that commits it.`,
+  `${tapOrHover('a tx or a proposal', { capital: true })} to see how they connect; a click, or a second tap, opens the page of a block or a tx.`,
 ].join('\n');
 
 const TAG_TONE = {
@@ -732,9 +852,19 @@ const TAG_TONE = {
   proposed: 'text-gold border-gold/50',
   committed: 'text-jade border-jade/50',
   cellbase: 'text-jade border-jade/50',
+  block: 'text-jade border-jade/50',
 } as const;
 
-/** Where the pinned tx is now, in one line, read from the snapshot on screen. */
+/** A tip's facts said in one line: `label value · label value`. */
+const factsLine = (facts: readonly [string, string][]) =>
+  facts.map(([k, v]) => `${k} ${v}`).join(' · ');
+
+/**
+ * Where the pinned tx is now, in one line, read from the snapshot on screen: in the pool, on a
+ * block, or found only among NEXT's predicted txs (its pool tx not in the listed pool, which is
+ * truncated): then it is a proposed tx the next block is expected to commit, said in the facts
+ * its tip opens with (`predictedFacts`). null when the snapshot has it nowhere.
+ */
 function selectionText(
   hash: string,
   s: PipelineSnapshot
@@ -770,15 +900,34 @@ function selectionText(
       };
     }
   }
+  const predicted = s.next?.txs.find((t) => t.hash === hash);
+  if (predicted) return { tag: 'proposed', text: factsLine(predictedFacts(predicted, s)) };
   return null;
 }
 
-/** The line under the canvas: the legend, or — while a tx is pinned — where that tx is now. */
+/** The pinned block in one line: the facts its tooltip opens with, while the snapshot lists it. */
+function blockSelectionText(
+  n: number,
+  s: PipelineSnapshot
+): { tag: keyof typeof TAG_TONE; text: string } | null {
+  const b = s.blocks.find((x) => x.number === n);
+  if (!b) return null;
+  return { tag: 'block', text: factsLine(blockFacts(b)) };
+}
+
+/**
+ * The line under the canvas: the legend, or — while a tap has pinned a tx or a block — where it
+ * is now, a link that opens it and a button that clears it (the Touch rule's readout).
+ */
 function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
   const pinned = usePipelineHoverStore((s) => s.pinned);
   const clearPin = usePipelineHoverStore((s) => s.clearPin);
   if (!pinned) return <PipelineLegend />;
-  const sel = snapshot ? selectionText(pinned, snapshot) : null;
+  const sel = !snapshot
+    ? null
+    : pinned.kind === 'tx'
+      ? selectionText(pinned.hash, snapshot)
+      : blockSelectionText(pinned.number, snapshot);
   return (
     <div
       data-testid="pipeline-selection"
@@ -787,7 +936,11 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
     >
       <span className="eyebrow text-text-dim text-meta">Selected</span>
       <span className="text-text-bright">
-        <ShortId value={pinned} kind="hash" size="row" />
+        {pinned.kind === 'tx' ? (
+          <ShortId value={pinned.hash} kind="hash" size="row" />
+        ) : (
+          formatBlockNumber(pinned.number)
+        )}
       </span>
       {sel ? (
         <>
@@ -799,8 +952,12 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
       ) : (
         <span>no longer in view</span>
       )}
-      <Link href={`/tx/${pinned}`} className="text-aqua border-aqua/40 border-b no-underline">
-        open tx ↗
+      <Link
+        href={hrefOf(pinned)}
+        onClick={clearPin}
+        className="text-aqua border-aqua/40 border-b no-underline"
+      >
+        {pinned.kind === 'tx' ? 'open tx ↗' : 'open block ↗'}
       </Link>
       <button
         type="button"
@@ -818,7 +975,7 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
  * Homepage transaction pipeline: mempool → next block → chain, from one backend snapshot. An
  * unframed section like the others on the home page (PlateHome.dc.html): the section's prompt
  * heading, the canvas right under it (its own 18 px lane is the gap), and a plain dim line under
- * the canvas for the legend, or for the pinned tx while one is pinned.
+ * the canvas for the legend, or for the pinned tx or block while one is pinned.
  */
 export function PipelinePanel() {
   const { data, error } = usePipelineSnapshot();

@@ -37,7 +37,7 @@ interface NextCardProps {
  */
 export function NextCard({ next, dim }: NextCardProps) {
   return (
-    <g data-next transform={`translate(${next.x},0)`} className="cursor-pointer">
+    <g data-next transform={`translate(${next.x},0)`}>
       <g data-dim={dim}>
         <rect
           data-box
