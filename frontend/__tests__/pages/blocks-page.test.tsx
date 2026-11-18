@@ -436,7 +436,9 @@ describe('BlocksPage · Blocks v3 board', () => {
   // The seal's footprint comes out of other columns' slack, so each table keeps the minimum width
   // it switches form at: the full table 1,230 px (Reward gave the old hash seal 22; Fees gives the
   // block stone's 7 more, 34 against 27), the 608 px table (Size · cycles gave 19 and gives 5,
-  // Miner 2; Height keeps its 2 px of room so its number never breaks).
+  // Miner 2). Corrected (review fb-tests 3): Height's 2 px of room went in F3-e (34a545c8), as
+  // every spare did; its number stays one unit by the table's rule, not by a spare (ListTable: no
+  // cell lets a figure break), and its budget is exact to the tenth (the 608 px table's test).
   // re-pinned with readability R4 (lane F3, step 2): the key at 14 px, the table text 13, the hash 12: the derived columns grow with their text and the table needs
   // 1,260 px (was 1,230), so the widest 1,232 px container draws the 608 px table.
   // Re-pinned on purpose (readability F3-e): every column is its content (Block's 13 px spare and
@@ -1054,7 +1056,16 @@ describe('BlocksPage · Blocks v3 board', () => {
       // and the gap; Miner, "ckb1…4s93hhsj" (the row size, 13 characters) at 13 px and the gap;
       // Size · cycles, "3,500,000,000" at 13 px (the last column, no gap)
       const px = cols.map((c) => Number.parseFloat(c.minWidth));
-      expect(ROW_SEAL.block.footprint + chars(11, 14) + 16).toBeLessThanOrEqual(px[0]);
+      // Height to the tenth (review fb-tests 3: the test, the comment and the budget say one
+      // thing): with pl-0 the content box is the column less its 16 px gap, 143 − 16 = 127.0; it
+      // holds the stone's 34 and "#99,999,999", 11 × 8.4 = 92.4, 126.4 in all, so 0.6 px stays
+      // free; the tight hash under the number, 11 × 7.2 = 79.2, is narrower. The column is that
+      // content and its gap rounded up, no spare: ceil(34 + 92.4 + 16) = ceil(142.4) = 143.
+      expect(ROW_SEAL.block.footprint).toBe(34);
+      expect(chars(11, 14)).toBeCloseTo(92.4, 10);
+      expect(px[0]).toBe(Math.ceil(ROW_SEAL.block.footprint + chars(11, 14) + 16));
+      expect(px[0] - 16 - (ROW_SEAL.block.footprint + chars(11, 14))).toBeCloseTo(0.6, 10);
+      expect(chars(11, 12)).toBeLessThan(chars(11, 14));
       expect(chars(13, 13) + 16).toBeLessThanOrEqual(px[2]);
       expect(chars(13, 13)).toBeLessThanOrEqual(px[4]);
     });
