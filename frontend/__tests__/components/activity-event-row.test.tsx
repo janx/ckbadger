@@ -343,14 +343,16 @@ describe('protocol action metadata — in one quiet line', () => {
 
 // F2-tx: the shared row parts (report A TX-31, and the blocks group's relay).
 describe('row parts (F2-tx)', () => {
-  it('draws arrived / departed quiet, the item itself bright (AssetClasses, Main boards)', () => {
+  // Re-pinned with readability ruling R3: "arrived" / "departed" is the change's direction, a value
+  // as a cell's "live" is, so it reads in the reading ink (it was quiet); the item stays bright.
+  it('draws arrived / departed in the reading ink, the item itself bright (AssetClasses, Main boards)', () => {
     render(
       <ItemDeltaFact
         size="row"
         item={{ kind: 'object', objectId: `0x51c7${'00'.repeat(28)}96f2`, delta: 1 }}
       />
     );
-    expect(screen.getByText('arrived')).toHaveClass('text-text-dim');
+    expect(screen.getByText('arrived')).toHaveClass('text-text');
   });
 
   it('colours a token amount by its sign when a page asks for it (Address board)', () => {

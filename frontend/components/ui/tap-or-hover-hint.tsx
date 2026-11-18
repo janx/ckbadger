@@ -132,6 +132,7 @@ export function TapOrHoverHint({ what, capital, dotted = false, className }: Tap
   // a later hint keeps only its place: an empty element that draws no box
   if (!first) return <span ref={place} data-hint-place="" hidden />;
   return (
+    // a hint is a note: quiet by rule (R3)
     <span ref={place} data-hint="tap-or-hover" className={cn('text-text-dim', className)}>
       {dotted && ' ·\u00a0'}
       {tapOrHover(what, { capital })}

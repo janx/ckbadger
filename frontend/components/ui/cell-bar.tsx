@@ -47,7 +47,8 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
           />
         ))}
       </div>
-      {/* A legend's label is text, in the text ink; the part's colour is on its swatch (U-08). */}
+      {/* A legend's label is text, in the text ink; the part's colour is on its swatch (U-08).
+          R3: its bytes are a number, the reading ink; the unit after them repeats, quiet. */}
       {!hideLegend && (
         <div
           data-role="cell-bar-legend"
@@ -67,7 +68,8 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
                 style={{ backgroundColor: CELL_COLORS[p.key] }}
               />
               <span>
-                <span className="text-text">{p.key}</span> {p.value.toString()} B
+                <span className="text-text">{p.key}</span>{' '}
+                <span className="text-text">{p.value.toString()}</span> B
               </span>
             </span>
           ))}

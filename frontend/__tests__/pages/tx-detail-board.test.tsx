@@ -439,10 +439,12 @@ describe('Transaction board, tier 1', () => {
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${TX_HASH}$`));
     expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
-    // C10 round 2: the id line in the plate's one quiet voice, set by the plate; the hash and its
+    // C10 round 2: the id line in the plate's one voice, set by the plate; the hash and its
     // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
     // the copy button keeps its own classes
-    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    // re-pinned with readability ruling R3: one voice still, in the reading ink (the id is a
+    // value; it was text-text-dim)
+    expect(idLine.className).toBe('text-text text-small min-w-0 [overflow-wrap:anywhere]');
     // the lead's ruling a: the hash is the plate's PlateHash, one line or two halves, never a
     // scroller (re-pinned: it was a bare span, 'min-w-0'); still no size or ink of its own
     // re-pinned (A4 Chrome F3): the piece is every head's HeadId, still no size or ink of its own

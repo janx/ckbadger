@@ -62,6 +62,7 @@ export function CapacityPartition({
     <div className={className} aria-label={`${subject} capacity partition`}>
       {showTotal && (
         <div className="text-small mb-3 flex flex-wrap justify-between gap-2">
+          {/* a label: quiet (R3) */}
           <span className="text-text-dim">CKB held</span>
           <CkbAmount form="column" shannons={sum} signed={false} tone="plain" />
         </div>
@@ -115,12 +116,11 @@ export function CapacityPartition({
             onFocus={() => setActive(p.label)}
             onBlur={() => setActive(null)}
           >
+            {/* R3: the part's name is a label and its note a note, quiet; its share a number */}
             <dt className="text-text-dim">{p.label}</dt>
             <dd>
               <CkbAmount form="column" shannons={p.value} signed={false} tone="plain" />
-              {sum > BigInt(0) && (
-                <span className="text-text-dim ml-2">{percentOf(p.value, sum)}</span>
-              )}
+              {sum > BigInt(0) && <span className="text-text ml-2">{percentOf(p.value, sum)}</span>}
               {p.label === 'DAO free' && daoFreeNote && (
                 <span className="text-text-dim"> · {daoFreeNote}</span>
               )}

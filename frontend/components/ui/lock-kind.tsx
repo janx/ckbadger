@@ -35,7 +35,8 @@ export function LockKind({
   return (
     <span
       // A registered name is words, never kept whole (A4 Chrome sweep); the unregistered
-      // "lock <code hash>" is a label with its id, one unit
+      // "lock <code hash>" is a label with its id, one unit. The lock's kind is a label beside
+      // its party: quiet by rule (R3)
       className={cn(
         !className && 'text-text-dim small-caps lowercase',
         lockKind === null && 'whitespace-nowrap',

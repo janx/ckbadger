@@ -4,7 +4,9 @@ import { unitNode } from '@/components/ui/units';
 
 /**
  * The three voices of a phone row (boards L1–L8): the identity line, the line that says what the
- * row is, and the quiet developer figures last.
+ * row is, and the quiet developer figures last. The quiet line is quieter by its size, not its ink:
+ * its figures are values, so they read in the reading ink (readability ruling R3); a label among
+ * them is the call site's to set in the quiet ink, and the separators are quiet here.
  */
 export type PhoneLineTone = 'head' | 'body' | 'quiet';
 
@@ -23,8 +25,9 @@ const TONE: Record<PhoneLineTone, string> = {
   head: 'text-body text-text-bright',
   body: 'text-small text-text',
   // An exact amount takes the ink of its line here (CkbAmount sets its own), so the developer
-  // figures stay quiet; a part that wraps itself in brighter ink keeps it.
-  quiet: 'text-meta text-text-dim [&_[data-ckb-amount]]:[color:inherit]',
+  // figures read in one ink, the reading ink, a step under the body line by size (R3); a part that
+  // wraps itself in brighter ink keeps it.
+  quiet: 'text-meta text-text [&_[data-ckb-amount]]:[color:inherit]',
 };
 
 /**
@@ -184,6 +187,7 @@ export function Dotted({
     if (oneLine)
       return (
         <span key={i} data-dotted-item="">
+          {/* a separator: quiet by rule (R3) */}
           {i > 0 && (
             <span data-dotted-separator="" aria-hidden="true" className="text-text-dim">
               {' · '}
@@ -198,6 +202,7 @@ export function Dotted({
       </span>
     ) : (
       <span key={i} data-dotted-item="" className="-ml-[2ch] min-w-0 pl-[2ch] -indent-[2ch]">
+        {/* a separator: quiet by rule (R3) */}
         <span
           data-dotted-separator=""
           aria-hidden="true"

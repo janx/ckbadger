@@ -331,7 +331,8 @@ export function ItemDeltaFact({
           >
             <ShortId value={item.objectId} kind="hash" size={size} />
           </Link>{' '}
-          <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
+          {/* the direction of the change is a value: the reading ink (R3) */}
+          <span className="text-text">{item.delta > 0 ? 'arrived' : 'departed'}</span>
           {showComposition && item.composition && (
             <CompositionBadge tier={item.composition} size="sm" className="ml-1.5 align-middle" />
           )}
@@ -351,7 +352,8 @@ export function ItemDeltaFact({
           >
             <ShortId value={item.identityId} kind="hash" size={size} />
           </Link>{' '}
-          <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
+          {/* the direction of the change is a value: the reading ink (R3) */}
+          <span className="text-text">{item.delta > 0 ? 'arrived' : 'departed'}</span>
         </span>
       );
   }
