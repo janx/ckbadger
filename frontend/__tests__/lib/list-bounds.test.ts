@@ -237,7 +237,7 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
       shortfall:
         'one glyph: "#999,999,999" against "#99,999,999", 7.2 px at the status line’s 12 px',
       lane: 'shell + gates',
-      why: '__tests__/utils/shell-budget.ts (WIDEST.block, line 79) is that lane’s file; it should read WIDEST_BLOCK_NUMBER from lib/list-bounds.ts and drop WIDEST.blockToday, the same eight digits',
+      why: '__tests__/utils/shell-budget.ts (WIDEST.block) is that lane’s file; it should read WIDEST_BLOCK_NUMBER from lib/list-bounds.ts and drop WIDEST.blockToday, the same eight digits',
     },
   ] as const;
   it('keeps one bound for a block height: the known fault of the shell, pinned', () => {
