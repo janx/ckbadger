@@ -160,8 +160,8 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
 
 // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
 // of the tree stands whole inside its tile (the wide form: number, hash, time, miner) or inside the
-// band under it (the compact form: time and miner, a miner cut to its column by the tree's own
-// rule; in the last column the labels end at the tile's right edge), touches no other word, and
+// band under it (the compact form: time and miner, an unnamed miner's address in the id form its
+// column holds; in the last column the labels end at the tile's right edge), touches no other word, and
 // stays inside the svg, measured by the type modules (0.6 em a glyph; a tight line over its
 // baseline, its descent under it). The cases are the shapes of mainnet's 58 forks (2026-11-18):
 // four heights whose last is the block that took the dropped one as an uncle (50 of them, as
@@ -328,9 +328,16 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
           expectLineInside(line, band, what, under ? 'flush' : 'clear');
       }
     }
-    // the miner's 13 characters stand whole in a wide tile
-    if (layout.form === 'wide')
-      expect(all.filter((l) => l.text === 'ckb1…qs93hhsj').length).toBeGreaterThan(0);
+    // An unnamed miner is its address in one of the id forms (lib/shorten.ts) chosen by its room,
+    // never cut again: the row form, 13 characters (93.6 px at 12 px), where it stands whole — in
+    // a wide tile, its width less 8 px each side (110 − 16 = 94), or under a compact tile, its
+    // column (the tile and 16 px) — else the tight form, 11 characters (79.2 px): under a 72 px
+    // tile the column is 88 px. Each has the one ellipsis.
+    const miners = all.filter((l) => l.text.startsWith('ckb1'));
+    expect(miners.length).toBeGreaterThan(0);
+    const room = layout.form === 'wide' ? layout.tileW - 16 : layout.tileW + RUN;
+    for (const miner of miners)
+      expect(miner.text).toBe(13 * 7.2 <= room ? 'ckb1…qs93hhsj' : 'ckb1…93hhsj');
   });
 });
 
@@ -353,15 +360,19 @@ describe('ForkTree at 358 px: four heights, every column and the branch (ruling 
     const branch = svg.querySelector(`[data-tile="${FP + 1}"][data-dropped]`)!;
     expect(branch).not.toBeNull();
     expect(screen.getByText('branch')).toBeInTheDocument();
-    // a time and a miner under each block that has them: today's +1 and +2 and the dropped +1;
-    // the miner cut to its column by the tree's rule, (72 + 16) / 7.2 → 12 characters
+    // a time and a miner under each block that has them: today's +1 and +2 and the dropped +1.
+    // Re-pinned (review F-B, logic finding 4): the miner was its row form cut a second time to its
+    // column, (72 + 16) / 7.2 → 12 characters, "ckb1…qs93hh…" (two ellipses and a tail that is
+    // not the address's); an address is written in an id form chosen by its room, never cut
+    // again: the row form is 13 characters, 93.6 px, more than the 88 px column, so it is the
+    // tight form, 11 characters, 79.2 px
     for (const g of [
       svg.querySelector(`[data-tile="${FP + 1}"]:not([data-dropped])`)!,
       svg.querySelector(`[data-tile="${FP + 2}"]:not([data-dropped])`)!,
       branch,
     ]) {
       expect(g.querySelector('[data-time]'), g.getAttribute('data-tile')!).not.toBeNull();
-      expect([...g.querySelectorAll('text')].map((t) => t.textContent)).toContain('ckb1…qs93hh…');
+      expect([...g.querySelectorAll('text')].map((t) => t.textContent)).toContain('ckb1…93hhsj');
     }
     const lines = allTextLines(svg);
     for (const line of lines) expectLineInside(line, viewBox(svg), 'the tree', 'flush');
