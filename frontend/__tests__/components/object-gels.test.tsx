@@ -9,6 +9,8 @@ import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objec
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fullText } from '@/__tests__/utils/full-text';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import { allTextLines, expectApart, expectInside, viewBox } from '@/__tests__/utils/svg-text-boxes';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 const layout = sequencingGenes(nervape3xGenetics, 'Nervape 3x');
 const lanes = alleleLanes(
@@ -402,6 +404,42 @@ describe('SequencingGel at the measured width (V3)', () => {
       /Nervape 3x: a 200 px DNA map cannot hold 16 lanes/
     );
   });
+
+  // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+  // of the DNA map stands whole inside the svg and touches no other word — the lane digits, the
+  // byte ruler, a gene's reading row beside the lanes (each row a tight line at the head size, so
+  // two genes' rows stand apart) — measured by the type modules (0.6 em a glyph; a tight line over
+  // its baseline, its descent under it); and in the narrow form each gene's name and its bytes
+  // stand whole in their columns of the rows under the map. The real case is Nervape 3x's DNA, at
+  // the DNA plate at 1280 (896) and wider (1232), at 640 (608) and on phones (358, 326).
+  it.each([1232, 896, 608, 358, 326])(
+    'writes every word whole and apart at %i px (readability F3)',
+    (width) => {
+      stubChartWidth(width);
+      const { container } = render(<ControlledGel />);
+      const svg = container.querySelector('svg[role="img"]')!;
+      const lines = allTextLines(svg);
+      expect(lines.length).toBeGreaterThan(16);
+      for (const line of lines) expectInside(line, viewBox(svg), 'the map', 'flush');
+      expectApart(lines, `the map at ${width}`);
+      const list = screen.queryByRole('list', { name: 'Genes' });
+      if (list?.getAttribute('data-rows') !== 'one-line') return;
+      // the one-line rows under a narrow map: the name's column holds its name (the small step), the
+      // bytes' column its bytes and its rule (the meta step), each on a line of its own; the columns
+      // are read from the row's grid (a class, or a style where they are computed)
+      const row = within(list).getAllByRole('listitem')[0].firstElementChild as HTMLElement;
+      const grid =
+        row.style.gridTemplateColumns || /grid-cols-\[([^\]]+)\]/.exec(row.className)![1];
+      const [nameCol, bytesCol] = /(\d+)px[ _](\d+)px/.exec(grid)!.slice(1).map(Number);
+      for (const g of layout.genes) {
+        expect(textPx(g.name.length, fontPx('small')), `${g.name}`).toBeLessThanOrEqual(nameCol);
+        const bytes =
+          g.length === 1 ? `byte ${g.offset}` : `bytes ${g.offset}–${g.offset + g.length - 1}`;
+        for (const words of [bytes, g.rule])
+          expect(textPx(words.length, fontPx('meta')), words).toBeLessThanOrEqual(bytesCol);
+      }
+    }
+  );
 });
 
 /** A synthetic collection of `n` two-variant genes (the .cell deeds shape: 72 genes, 6 objects). */
