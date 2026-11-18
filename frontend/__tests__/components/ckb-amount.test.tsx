@@ -128,3 +128,139 @@ describe('ExactCkb', () => {
       }
   });
 });
+
+// Readability plan 2026-11-18, ruling R5 (lane B2): one renderer, four forms, the form named by
+// every call site; the whole amount in one ink (the sign's with tone="sign", the reading ink with
+// tone="plain", its parent's with tone="inherit"), the ghost only for a column's padding; a
+// shortened figure carries its exact value and unit in its title.
+describe('the forms of a CKB amount (R5)', () => {
+  const CKB = BigInt(100000000);
+  const amountOf = (container: HTMLElement) =>
+    container.querySelector('[data-ckb-amount]') as HTMLElement;
+  /** The ink classes inside an amount, but the unit's and the padding's. */
+  const innerInks = (amount: HTMLElement) =>
+    [...amount.querySelectorAll('*')]
+      .filter((el) => !el.hasAttribute('data-ghost') && el.textContent !== ' CKB')
+      .flatMap((el) =>
+        [...el.classList].filter((c) => /^text-(text|jade|rouge|positive|negative)/.test(c))
+      );
+
+  it('summary: whole CKB from 1,000 up, the exact value and its unit in the title', () => {
+    const { container } = render(
+      <ExactCkb form="summary" shannons={BigInt('100099999999')} signed={false} tone="plain" />
+    );
+    const amount = amountOf(container);
+    expect(amount).toHaveTextContent(/^1,000 CKB$/);
+    expect(amount).toHaveAttribute('title', '1,000.99999999 CKB');
+  });
+
+  it('summary: two decimals at most from 1 to 1,000, and no title when nothing was cut', () => {
+    const { container } = render(
+      <>
+        <ExactCkb form="summary" shannons={BigInt(1250000000)} signed={false} tone="plain" />
+        <ExactCkb form="summary" shannons={BigInt(99999500000)} signed={false} tone="plain" />
+        <ExactCkb form="summary" shannons={BigInt(30000)} signed={false} tone="plain" />
+      </>
+    );
+    const [whole, cut, small] = [...container.querySelectorAll('[data-ckb-amount]')];
+    expect(whole).toHaveTextContent(/^12\.5 CKB$/);
+    expect(whole).not.toHaveAttribute('title');
+    expect(cut).toHaveTextContent(/^999\.99 CKB$/);
+    expect(cut).toHaveAttribute('title', '999.995 CKB');
+    expect(small).toHaveTextContent(/^0\.0003 CKB$/);
+    expect(small).not.toHaveAttribute('title');
+  });
+
+  it('summary: a signed amount keeps its sign in the figure and in the title', () => {
+    const { container } = render(<ExactCkb form="summary" shannons={-BigInt('123456789012')} />);
+    const amount = amountOf(container);
+    expect(amount).toHaveTextContent(`${MINUS}1,234 CKB`);
+    expect(amount).toHaveAttribute('title', `${MINUS}1,234.56789012 CKB`);
+    expect(amount).toHaveClass('text-negative');
+  });
+
+  it('exact: the value with its trailing zeros dropped, no point for a whole number', () => {
+    const { container } = render(
+      <>
+        <ExactCkb form="exact" shannons={BigInt(122000) * CKB} signed={false} tone="plain" />
+        <ExactCkb form="exact" shannons={BigInt(30000)} signed={false} tone="plain" />
+        <ExactCkb form="exact" shannons={BigInt(55951253210)} signed={false} tone="plain" />
+      </>
+    );
+    const amounts = [...container.querySelectorAll('[data-ckb-amount]')];
+    expect(amounts.map((a) => a.textContent)).toEqual([
+      '122,000 CKB',
+      '0.0003 CKB',
+      '559.5125321 CKB',
+    ]);
+    for (const a of amounts) {
+      expect(a).not.toHaveAttribute('title');
+      expect(a.querySelector('[data-ghost]')).toBeNull();
+    }
+  });
+
+  it('column: exact, padded to 8 decimals, the padding the only ghost', () => {
+    const { container } = render(
+      <ExactCkb form="column" shannons={BigInt(75000000000)} signed={false} tone="plain" />
+    );
+    const amount = amountOf(container);
+    expect(amount).toHaveTextContent(/^750\.00000000 CKB$/);
+    expect(amount.querySelector('[data-ghost]')).toHaveTextContent(/^\.00000000$/);
+    expect(amount).not.toHaveAttribute('title');
+  });
+
+  it('compact: two decimals of the unit reached, cut, the exact value in the title', () => {
+    const { container } = render(
+      <ExactCkb
+        form="compact"
+        shannons={BigInt('902451123450000000')}
+        signed={false}
+        tone="plain"
+      />
+    );
+    const amount = amountOf(container);
+    expect(amount).toHaveTextContent(/^9\.02B CKB$/);
+    expect(amount).toHaveAttribute('title', '9,024,511,234.5 CKB');
+  });
+
+  it('draws the whole amount in one ink, in every form and every tone', () => {
+    for (const form of ['exact', 'column', 'summary', 'compact'] as const)
+      for (const [shannons, tone, ink] of [
+        [BigInt('-75000000123'), 'sign', 'text-negative'],
+        [BigInt('75000000123'), 'sign', 'text-positive'],
+        [BigInt('75000000123'), 'plain', 'text-text'],
+      ] as const) {
+        const { container, unmount } = render(
+          <ExactCkb form={form} shannons={shannons} tone={tone} />
+        );
+        const amount = amountOf(container);
+        expect(amount, `${form} ${tone}`).toHaveClass(ink);
+        expect(innerInks(amount), `${form} ${tone}`).toEqual([]);
+        unmount();
+      }
+  });
+
+  it('leaves the ink to its parent with tone="inherit"', () => {
+    const { container } = render(
+      <span className="text-gold">
+        <ExactCkb form="summary" shannons={BigInt('75000000123')} signed={false} tone="inherit" />
+      </span>
+    );
+    const amount = amountOf(container);
+    expect([...amount.classList].filter((c) => /^text-(text|positive|negative)/.test(c))).toEqual(
+      []
+    );
+    expect(innerInks(amount)).toEqual([]);
+  });
+
+  it('states zero as a dim 0 in every form', () => {
+    for (const form of ['exact', 'column', 'summary', 'compact'] as const) {
+      const { container, unmount } = render(<ExactCkb form={form} shannons={BigInt(0)} />);
+      const amount = amountOf(container);
+      expect(amount).toHaveTextContent(/^0 CKB$/);
+      expect(amount.querySelector('[data-zero]')).toHaveClass('text-text-dim');
+      expect(amount).not.toHaveAttribute('title');
+      unmount();
+    }
+  });
+});

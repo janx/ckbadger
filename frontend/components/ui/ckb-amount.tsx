@@ -2,6 +2,7 @@ import { cn } from '@/lib/utils';
 import { MINUS } from '@/lib/chart-ticks';
 import { splitCkbAmount, type CkbAmountParts } from '@/lib/ckb-decimal';
 import type { PaletteKey } from '@/lib/palette';
+import type { AmountForm } from '@/lib/amount-form';
 
 /**
  * The ink of an amount by its sign: the integer in the sign's own ink, the fraction digits a step
@@ -76,6 +77,8 @@ export function ExactCkb({
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
   look?: HandRolledLook;
+  /** Lane B2: the form a call site names; not read yet (its tests come first). */
+  form?: AmountForm;
 }) {
   const unitEl = unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>;
   if (shannons === BigInt(0) && look?.zero !== 'padded')
