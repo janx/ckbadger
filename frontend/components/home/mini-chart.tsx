@@ -24,7 +24,8 @@ import { usePhosphor } from '@/hooks/usePhosphor';
 import { sparkline } from '@/lib/blocks-text';
 import { cn } from '@/lib/utils';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
-import { MONO_ADVANCE_EM } from '@/lib/type-metrics';
+import { MONO_ADVANCE_EM, textPx } from '@/lib/type-metrics';
+import { SVG_TEXT, centreShift } from '@/lib/chart-type';
 
 /**
  * The homepage small multiples: one figure frame (caption + headline + chart) and four SVG chart
@@ -355,7 +356,7 @@ function xLabels(labels: string[], midIndex: number, midX: number, right: number
 
 function XAxisLabels({ labels }: { labels: XLabel[] }) {
   return (
-    <g fill={C.tick} fontSize={10} data-axis="x">
+    <g fill={C.tick} fontSize={SVG_TEXT.tick} data-axis="x">
       {labels.map((l, i) => (
         <text key={i} x={f1(l.x)} y={X_LABEL_Y} textAnchor={l.anchor}>
           {l.text}
@@ -373,9 +374,14 @@ interface YTick {
 
 function YAxisLabels({ ticks }: { ticks: YTick[] }) {
   return (
-    <g fontSize={10} textAnchor="end" data-axis="y">
+    <g fontSize={SVG_TEXT.tick} textAnchor="end" data-axis="y">
       {ticks.map((t, i) => (
-        <text key={i} x={TICK_X} y={f1(t.y + 3)} fill={t.emphasis ? C.reference : C.tick}>
+        <text
+          key={i}
+          x={TICK_X}
+          y={f1(t.y + centreShift(SVG_TEXT.tick))}
+          fill={t.emphasis ? C.reference : C.tick}
+        >
           {t.text}
         </text>
       ))}
@@ -857,8 +863,8 @@ function ClipMark({
   const ys = up ? [TOP + 6.5, TOP + 9.5] : [BOTTOM - 6.5, BOTTOM - 3.5];
   const sx = x0 - 1;
   const len = bw + 2;
-  // 10 px JetBrains Mono is about 6 px a character.
-  const labelW = text.length * 6;
+  // set at the tick size: 0.6 em a character
+  const labelW = textPx(text.length, SVG_TEXT.tick);
   const after = x0 + bw + 3.5;
   const fits = after + labelW <= right;
   return (
@@ -875,7 +881,7 @@ function ClipMark({
         y={up ? TOP + 8 : BOTTOM - 1}
         textAnchor={fits ? 'start' : 'end'}
         fill={color}
-        fontSize={10}
+        fontSize={SVG_TEXT.tick}
       >
         {text}
       </text>

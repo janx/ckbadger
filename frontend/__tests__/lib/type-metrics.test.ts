@@ -7,6 +7,7 @@ import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
 import {
   LABEL_LINE_PX,
   MONO_ADVANCE_EM,
+  OBSERVED_ADVANCE_EM,
   ROW_LINE_PX,
   advancePx,
   charPx,
@@ -154,6 +155,13 @@ describe('sizes and advances', () => {
     expect(textPx(34, 13)).toBe(265.2);
     expect(textPx(0, 11)).toBe(0);
     for (let n = 1; n <= 80; n++) expect(textPx(n, 11)).toBeCloseTo(n * charPx('meta'), 10);
+  });
+
+  it('keeps the advance Chromium was observed to draw at as the face’s and 0.04 em: 0.64', () => {
+    expect(OBSERVED_ADVANCE_EM).toBe(0.64);
+    expect(OBSERVED_ADVANCE_EM - MONO_ADVANCE_EM).toBeCloseTo(0.04, 12);
+    // 7.04 px at 11 px, against the 7 px Chromium draws there (snappedAdvancePx)
+    expect(11 * OBSERVED_ADVANCE_EM).toBe(7.04);
   });
 
   it('snaps an advance up to a whole pixel where Chromium does, never under 0.6 em', () => {

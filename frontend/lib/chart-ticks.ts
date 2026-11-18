@@ -3,6 +3,9 @@
  * of a signed (daily-change) chart. One helper per job, so every chart reads the same numbers.
  */
 
+import { SVG_TEXT, labelAdvancePx } from '@/lib/chart-type';
+import { advancePx } from '@/lib/type-metrics';
+
 /** The typographic minus, used for every negative number the charts print. */
 export const MINUS = '−';
 
@@ -206,8 +209,11 @@ export function formatCompactSigned(value: number): string {
   return `${sign}${abs.toFixed(0)}`;
 }
 
-/** The advance of one 10 px JetBrains Mono glyph, for keeping axis labels apart. */
-export const AXIS_CHAR_PX = 6.2;
+/**
+ * The advance an x label (set at the tick size) is measured at, for keeping axis labels apart: the
+ * face's 0.6 em and a fifth of a pixel (lib/chart-type.ts `labelAdvancePx`), 6.2 px at 10 px.
+ */
+export const AXIS_CHAR_PX = labelAdvancePx(SVG_TEXT.tick);
 /** The clear space kept between two x labels on one row. */
 const X_LABEL_GAP = 6;
 /** A time-axis label this close to a plot edge anchors to that edge instead of centring. */
@@ -302,8 +308,8 @@ export function placeXTicks(
   return { ticks: centred.map((t, i) => ({ ...t, row: i % rows })), rows };
 }
 
-/** The advance of one 10 px JetBrains Mono glyph in a y-axis tick label. */
-const TICK_CHAR_PX = 6;
+/** The advance of one glyph of a y-axis tick label, set at the tick size (6 px at 10 px). */
+const TICK_CHAR_PX = advancePx(SVG_TEXT.tick);
 /** Clear space between a y tick label's end and the plot. */
 const TICK_TO_PLOT = 8;
 

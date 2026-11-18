@@ -15,6 +15,8 @@ import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
+import { SVG_TEXT, centreShift } from '@/lib/chart-type';
+import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -36,10 +38,12 @@ const AXIS_H = 18;
 export const MULTIPLE_H = 72;
 const MULTIPLE_NAME_BAND = 18;
 const TICK_GAP_PX = 56;
-/** JetBrains Mono advances ~0.64 em in this Chromium (lane D, observed 7): 11 px names, 13 px values. */
-const CHAR_EM = 0.64;
-const NAME_PX = 11;
-const END_PX = 13;
+/**
+ * The plots' names and time ticks at the label size, their end values at the reading size
+ * (lib/chart-type.ts), measured at the advance Chromium was observed to draw them at (0.64 em).
+ */
+const NAME_PX = SVG_TEXT.label;
+const END_PX = SVG_TEXT.reading;
 
 export type HistoryRange = '1M' | '1Y' | 'All';
 export const HISTORY_RANGES: readonly HistoryRange[] = ['1M', '1Y', 'All'];
@@ -137,7 +141,7 @@ function ReadingCkb({ shannons, signed = false }: { shannons: bigint; signed?: b
   );
 }
 
-const textWidth = (chars: number, px: number) => chars * px * CHAR_EM;
+const textWidth = (chars: number, px: number) => chars * px * OBSERVED_ADVANCE_EM;
 
 /** Ticks on the time axis, thinned so labels keep `TICK_GAP_PX` apart. */
 function timeTicks(days: readonly Day[], x: (i: number) => number) {
@@ -286,9 +290,9 @@ function DepositedPlot({
           <text
             data-role="y-tick"
             x={left - 8}
-            y={y(v) + 3}
+            y={y(v) + centreShift(SVG_TEXT.tick)}
             textAnchor="end"
-            fontSize="10"
+            fontSize={SVG_TEXT.tick}
             className="fill-text-dim"
           >
             {formatTick(v, ticks.step)}
@@ -378,7 +382,7 @@ function EndLabel({
     <text
       data-role="end-label"
       x={width}
-      y={13}
+      y={END_PX}
       textAnchor="end"
       fontSize={END_PX}
       className={cn('stroke-base-bg', className)}

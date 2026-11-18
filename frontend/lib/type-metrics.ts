@@ -22,6 +22,14 @@ const UNITS_PER_EM = 1000;
 /** JetBrains Mono's advance as a fraction of the size: every glyph 0.6 em wide. */
 export const MONO_ADVANCE_EM = ADVANCE_UNITS / UNITS_PER_EM;
 
+/**
+ * The advance Chromium was observed to draw the figures' small SVG text at (lane D, 2026-10: 7 px
+ * a glyph at 11 px, as its snapping to whole pixels gives), as an em: the face's 0.6 and 0.04 more.
+ * The figures that keep their labels apart by an estimate (the DAO history's names, the VM lanes'
+ * plot name, the fork tree's miner, the allele gel's tags) measure at it.
+ */
+export const OBSERVED_ADVANCE_EM = MONO_ADVANCE_EM + 0.04;
+
 /** The font size of a step of the type scale, px. */
 export function fontPx(step: TypeStep): number {
   return parseFloat(TYPE_SCALE[step][0]);
