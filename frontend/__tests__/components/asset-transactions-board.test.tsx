@@ -106,7 +106,8 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       // U-09 (re-pinned): the phone row's hash at the tight size
       ['identity', '0x0101…0101', expect.stringMatching(/^#1,001 · .+ ago$/)],
-      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8 decimals)
+      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+      // decimals)
       ['what', 'Minted 3', '500 CKB'],
       [
         'figures',
@@ -129,7 +130,8 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     const lines = phoneLines(row);
     expect(lines[0].right).toMatch(/^#1,001 · \d{4}-\d{2}-\d{2}$/);
     expect(lines[1]).toMatchObject({ left: 'Renewed · Cell after: output 1', right: null });
-    // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8 decimals)
+    // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+    // decimals)
     expect(lines[2].left).toBe('1 → 2\u00a0cells · fee 0.00001 CKB · 640 B · tx 1 in block');
   });
 
@@ -141,7 +143,8 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
       ['identity', '0x0101…0101', expect.stringMatching(/ago$/)],
       [
         'what',
-        // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8 decimals)
+        // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+        // decimals)
         '500 CKB',
         '1 → 2\u00a0cells · fee 0.00001 CKB · 1,930 B · cycles not computed · tx 1 in block',
       ],

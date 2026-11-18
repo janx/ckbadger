@@ -198,7 +198,8 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getTokenTransactions).mockResolvedValue(p.transactions);
     render(<TokenDetailPage typeHash={p.token.typeScriptHash} />);
     expect(await screen.findByRole('heading', { name: 'TOK' })).toBeInTheDocument();
-    // a stat tile's summary form: below 1 CKB, the exact value (readability R5, re-pinned on purpose: was "0.00001000")
+    // a stat tile's summary form: below 1 CKB, the exact value (readability R5, re-pinned on
+    // purpose: was "0.00001000")
     expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('0.00001 CKB');
     expect(await screen.findByRole('table', { name: 'Top 10 holders' })).toHaveTextContent(
       '100.00%'
@@ -221,7 +222,8 @@ describe('TokenDetailPage', () => {
       'title',
       'Not established. Nothing CKBadger can read in this token’s type script fixes a cap.'
     );
-    // a stat tile's summary form, exact in its title (readability R5, re-pinned on purpose: was "500,000.00000001")
+    // a stat tile's summary form, exact in its title (readability R5, re-pinned on purpose: was
+    // "500,000.00000001")
     expect(facts).toHaveTextContent('500,000 CKB');
     expect(within(facts).getByTitle('500,000.00000001 CKB')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument();

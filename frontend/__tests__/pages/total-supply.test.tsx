@@ -49,7 +49,8 @@ describe('TotalSupplyPage', () => {
       ],
     });
     // The head reading (CH-21) is the summary form, cut, every digit of it in the reading's title
-    // (readability R5, re-pinned on purpose: CKB stayed exact, "100.00000003"); its unit after a no-break space (CH-14).
+    // (readability R5, re-pinned on purpose: CKB stayed exact, "100.00000003"); its unit after a
+    // no-break space (CH-14).
     const readings = screen.getByRole('group', { name: 'Supply readings' });
     expect(readings).toHaveTextContent('2026-02-23100 CKB');
     expect(readings.querySelector('[title="100.00000003 CKB"]')).not.toBeNull();

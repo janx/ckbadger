@@ -152,7 +152,8 @@ describe('Scripts list against the Scripts board', () => {
     ).toBe('code evidence unavailable');
   });
 
-  // readability R5, re-pinned on purpose (and renamed: "..., 2 dp in the row, ..."): the row's CKB is the list's summary form.
+  // readability R5, re-pinned on purpose (and renamed: "..., 2 dp in the row, ..."): the row's CKB
+  // is the list's summary form.
   it('shows "of N ever" and exact CKB in the title, the summary form in the row, and a rounded occupied share (SC-L6, SC-L7, L1-1)', async () => {
     render(<ScriptsPage />);
     const table = await screen.findByRole('table', { name: 'Scripts' });
@@ -343,7 +344,8 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     );
     expect(figure()).toHaveTextContent(/^CKB under these scripts/);
     // 1,727,000,000 + 48,030,000,000 + 0 + 37,300,000 CKB: every class's lock-owned CKB.
-    // the display figure in the summary form (readability R5, re-pinned on purpose: was every decimal)
+    // the display figure in the summary form (readability R5, re-pinned on purpose: was every
+    // decimal)
     expect(amount).toHaveTextContent(/^49,794,300,000 CKB$/);
     expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
     const row = amount.parentElement!;
@@ -454,7 +456,8 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // The hero's request never carries the role: the tab is the table's.
     for (const [params] of vi.mocked(api.getScripts).mock.calls)
       if (params?.limit === 1) expect(params.role).toBeUndefined();
-    // the display figure in the summary form (readability R5, re-pinned on purpose: was every decimal)
+    // the display figure in the summary form (readability R5, re-pinned on purpose: was every
+    // decimal)
     expect(amount).toHaveTextContent(/^49,794,300,000 CKB$/);
   });
 
@@ -505,7 +508,8 @@ describe('Scripts list phone row (board L6)', () => {
     const rows = await screen.findAllByTestId('script-row-mobile');
     expect(screen.queryByRole('table', { name: 'Scripts' })).toBeNull();
     expect(phoneLines(rows[0])).toEqual([
-      // a phone row's summary form (readability R5, re-pinned on purpose: was "456,002,179.57000000 CKB")
+      // a phone row's summary form (readability R5, re-pinned on purpose: was "456,002,179.57000000
+      // CKB")
       { key: 'identity', tone: 'head', left: 'JoyID', right: '456,002,179 CKB' },
       {
         key: 'code',

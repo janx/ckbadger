@@ -65,7 +65,8 @@ describe('SecondaryIssuancePage', () => {
     );
     // Re-pinned for CH-18: the protocol total is the head figure alone (its fact repeated it), and
     // the frozen phase-1 overlap is a developer fact in the evidence tier.
-    // The head figure is the summary form, cut, its exact value in the reading's title (readability R5, re-pinned on purpose:
+    // The head figure is the summary form, cut, its exact value in the reading's title (readability
+    // R5, re-pinned on purpose:
     // was "99.00000001 CKB"); the unit after a no-break space (re-pinned for CH-14).
     const readings = screen.getByRole('group', { name: 'Secondary issuance readings' });
     expect(readings).toHaveTextContent('99 CKB');

@@ -71,7 +71,8 @@ const detail: MnftItemDetail = {
     name: 'Class A',
     description: 'Class description recorded on chain',
     renderer: 'https://example.com/renderer.png',
-    // 1,500, not 1,000 (readability R5, re-pinned on purpose): the cell's 1,000 CKB is "1,000" in its
+    // 1,500, not 1,000 (readability R5, re-pinned on purpose): the cell's 1,000 CKB is "1,000" in
+    // its
     // summary form, and the lede rule, which reads numbers without their units, took the class's
     // "1,000 planned" in the intro for a restatement of the metric.
     total: 1500,

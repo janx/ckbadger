@@ -156,7 +156,7 @@ function DepositedFigure({ shannons }: { shannons: string }) {
   );
 }
 
-/** The figure's 24 h change, signed in its sign's ink, in the summary form beside the figure (R5). */
+/** The figure's 24 h change, signed in its sign's ink, in the summary form beside it (R5). */
 function SignedCkbDecimal({ value }: { value: string }) {
   return <CkbAmount form="summary" shannons={parseCkbDecimal(value)} unit={false} />;
 }

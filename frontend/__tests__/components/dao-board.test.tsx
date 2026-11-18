@@ -120,7 +120,8 @@ describe('DaoBoard', () => {
       'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposit'
     );
     // Board wording (DAO-14; hierarchy v3) for the same readiness partition.
-    // a segment's label in the exact form (readability R5, re-pinned on purpose: was padded to 8 decimals)
+    // a segment's label in the exact form (readability R5, re-pinned on purpose: was padded to 8
+    // decimals)
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
       'waiting for its window 500 CKB · 1 cell'
     );
@@ -145,7 +146,8 @@ describe('DaoBoard', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '1M' }));
     // One History reading (DAO-11) carries the amounts of the last complete day, in the summary
-    // form (readability R5, re-pinned on purpose: was "500.00000000"); a cut one has its exact value in its title.
+    // form (readability R5, re-pinned on purpose: was "500.00000000"); a cut one has its exact
+    // value in its title.
     const reading = screen.getByRole('status', { name: 'History reading' });
     expect(reading).toHaveTextContent('deposited 500 ·');
     expect(reading).toHaveTextContent('share 1.25%');
@@ -492,7 +494,8 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
       />
     );
     const figure = within(hero()).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
-    // the display figure in the summary form (readability R5, re-pinned on purpose: was "500.00000000")
+    // the display figure in the summary form (readability R5, re-pinned on purpose: was
+    // "500.00000000")
     expect(figure).toHaveTextContent('deposited500 CKB');
     const amount = within(figure).getByText(
       (_, el) => el?.getAttribute('data-role') === 'deposited'
@@ -503,7 +506,8 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
     const change = within(hero()).getByText(
       (_, el) => el?.getAttribute('data-role') === 'change24h'
     );
-    // the summary form, exact in its title (readability R5, re-pinned on purpose: was "−2,578,825.48689593 CKB")
+    // the summary form, exact in its title (readability R5, re-pinned on purpose: was
+    // "−2,578,825.48689593 CKB")
     expect(change).toHaveTextContent('−2,578,825 CKB');
     expect(change.querySelector('[data-ckb-amount]')).toHaveAttribute(
       'title',
@@ -918,7 +922,8 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     await waitFor(() =>
       expect(
         within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
-        // the calculator's reading in the summary form (readability R5, re-pinned on purpose: was "+200.00000000")
+        // the calculator's reading in the summary form (readability R5, re-pinned on purpose: was
+        // "+200.00000000")
       ).toHaveTextContent(/^\+200 CKB$/)
     );
     // Board v3: one line, the owed amount white (R11: the figure is the page's one gold text).
@@ -1126,7 +1131,8 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     );
     expect(bar).toHaveClass('h-[28px]');
     // 400 of 900 is 44 % of 800 px: room for the claimable words inside its segment.
-    // the segments' labels in the exact form (readability R5, re-pinned on purpose: were padded to 8 decimals; on the fill a
+    // the segments' labels in the exact form (readability R5, re-pinned on purpose: were padded to
+    // 8 decimals; on the fill a
     // column's ghost padding would have stood on the gold)
     expect(bar.firstElementChild).toHaveTextContent('claimable now 400 CKB · 1 cell');
     const waiting = bar.nextElementSibling!;

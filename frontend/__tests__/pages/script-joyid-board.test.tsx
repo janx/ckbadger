@@ -528,7 +528,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const figure = hero().querySelector('[data-role="figure"]') as HTMLElement;
     expect(figure).toHaveTextContent(/^CKB in its cells/);
     const amount = figure.querySelector('[data-role="figure-amount"]') as HTMLElement;
-    // the display figure in the summary form, exact in its title (readability R5, re-pinned on purpose: was "456,002,179.57")
+    // the display figure in the summary form, exact in its title (readability R5, re-pinned on
+    // purpose: was "456,002,179.57")
     expect(amount).toHaveTextContent(/^456,002,179 CKB$/);
     expect(amount.querySelector('[data-ckb-amount]')).toHaveAttribute(
       'title',

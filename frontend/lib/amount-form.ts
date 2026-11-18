@@ -115,7 +115,7 @@ export function amountDigits(
       }
     }
     if (decimals === 0) return exactly;
-    // Two decimals below 1,000 units (a unit with fewer writes what it has, never a zero of its own)
+    // Two decimals below 1,000 units; a unit with fewer writes what it has, never a zero of its own
     const places = Math.min(decimals, 2);
     return written(
       grouped(whole),
@@ -135,7 +135,7 @@ export function amountDigits(
   return written('0', `.${kept}`, significant.length > first + 4);
 }
 
-/** The sign a figure shows: none on a figure of zeros ("0.00" of a compact form; its title has it). */
+/** The sign a figure shows: none on a figure of zeros (a compact "0.00"; its title has it). */
 export function shownSign(d: AmountDigits): AmountDigits['sign'] {
   return /^[0,.]*$/.test(`${d.integer}${d.fraction}`) ? '' : d.sign;
 }
@@ -155,7 +155,7 @@ export function ckbAmountTitle(shannons: bigint, signed: boolean): string {
   return `${ckbAmountText(shannons, 'exact', signed)} CKB`;
 }
 
-/** The title a CKB figure written as text in `form` carries: its exact value when it was shortened. */
+/** The title of a CKB figure written as text in `form`: its exact value when it was shortened. */
 export function ckbShortenedTitle(
   shannons: bigint,
   form: AmountForm,

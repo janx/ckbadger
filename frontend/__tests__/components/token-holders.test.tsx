@@ -273,7 +273,8 @@ describe('Token holders (board L5)', () => {
     expect(within(first).getByText('JoyID')).toHaveClass('truncate');
     expect(within(first).getByText('JoyID')).toHaveAttribute('title', `0x${'9b'.repeat(32)}`);
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
-    // the list's summary form: whole from 1,000 up (readability R5, re-pinned on purpose: was "562,997.00", two places)
+    // the list's summary form: whole from 1,000 up (readability R5, re-pinned on purpose: was
+    // "562,997.00", two places)
     expect(first).toHaveTextContent('JoyID562,9972.32%');
     expect(first).not.toHaveTextContent('562,997.00');
     expect(first).toHaveAttribute(

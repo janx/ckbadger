@@ -213,7 +213,8 @@ describe('BlockTransactionsTable', () => {
     expect(phoneLines(user).map((l) => [l.key, l.left, l.right])).toEqual([
       // U-09 (re-pinned): the phone row's hash at the tight size
       ['identity', '10x1111…1111', 'proposed in #5 +2'],
-      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8 decimals)
+      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+      // decimals)
       ['amounts', '0.000001 CKB', 'fee 0.0003 CKB'],
       ['figures', '2 → 1\u00a0cell', '300 B · 1,000 cycles'],
     ]);
@@ -229,7 +230,8 @@ describe('BlockTransactionsTable', () => {
     wrap(<BlockTransactionsTable transactions={[tx(1, { cycles: 1000 })]} blockNumber={7} />);
     const [row] = screen.getAllByTestId('block-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8 decimals)
+      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+      // decimals)
       ['identity', '10x1111…1111', '0.000001 CKB'],
       // Consistency plan C4: a zero fee is "0 CKB" (was "0.00000000 CKB").
       ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1\u00a0cell · 300 B · 1,000 cycles'],

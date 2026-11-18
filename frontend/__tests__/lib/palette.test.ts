@@ -477,6 +477,14 @@ describe('the amount inks (R5: one ink per amount)', () => {
     expect(short).toEqual([]);
   });
 
+  // Re-pinned on purpose (R5): this was "sets each fraction a step quieter than its sign's ink on
+  // the page ground" (jade-dim under jade, rouge-dim under rouge, text-dim under text). The
+  // decimals are never quieter than the integer now: no quieter step is an amount's ink.
+  it('sets no amount’s decimals a step quieter: no `-dim` key is an amount ink', () => {
+    for (const quieter of ['text-jade-dim', 'text-rouge-dim', 'text-text-dim'])
+      expect(Object.values(AMOUNT_INK)).not.toContain(quieter);
+  });
+
   it('keeps rouge-dim, moved in OKLCH lightness only until it reads at 4.5:1', () => {
     // rouge-dim was a secondary ink at 3:1 (#aa503c / #a6594c, 3.05 / 3.92 at worst) and used as
     // text; lightened by night (L +0.094) and darkened by day (L −0.033), hue and chroma kept, it

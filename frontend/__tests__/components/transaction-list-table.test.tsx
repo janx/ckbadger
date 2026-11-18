@@ -574,7 +574,8 @@ describe('TransactionListTable phone row (board L2)', () => {
         key: 'figures',
         tone: 'quiet',
         // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB").
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "0.00030000"; below 1 CKB, exact)
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "0.00030000"; below
+        // 1 CKB, exact)
         left: '0 CKB · fee 0.0003 CKB',
         right: '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
       },
