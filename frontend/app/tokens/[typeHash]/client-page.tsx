@@ -309,7 +309,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               label: 'CKB held in its cells',
               value:
                 held !== null ? (
-                  <ExactCkb shannons={held} signed={false} tone="plain" wrap />
+                  <ExactCkb shannons={held} signed={false} tone="plain" />
                 ) : (
                   <span className="text-text-dim">Capacity unavailable</span>
                 ),
