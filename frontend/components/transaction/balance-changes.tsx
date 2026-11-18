@@ -10,7 +10,8 @@ import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
 import type { ShortSize } from '@/lib/shorten';
-import { WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
+import { shortChars, WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
+import { SHORT_FORMS } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 /** The participant's track and the CKB change's (as they were drawn). */
@@ -18,15 +19,26 @@ const PARTY_PX = 190;
 const CKB_PX = 180;
 /**
  * The Occupied track holds the widest change a party can make in one transaction, with its unit
- * (WIDEST_OCCUPIED_CHANGE, "−16,773,724,928 B"), at the body step its cells inherit from the
- * transaction page: 143 px. A change past it is held on its line (nowrap) and runs into the gap.
+ * (WIDEST_OCCUPIED_CHANGE, "−8,101,332,271 B"), at the body step its cells inherit from the
+ * transaction page: 135 px.
  */
 const OCCUPIED_PX = columnPx(textPx(WIDEST_OCCUPIED_CHANGE.length, fontPx('body')));
-/** The room the items keep beside them, as the 700 px table left them with a 100 px Occupied. */
-const ITEMS_MIN_PX = 182;
+/**
+ * The Items track's floor, a stated room and not a bound (no bound holds what an item writes: a
+ * token's amount is a u128, 39 digits, and a symbol or a collection's name is the chain's): its
+ * facts wrap between them and between their words, and the room is the widest unit a fact writes
+ * that the chain's names do not decide, an object's or an identity's id at the row size,
+ * "0x51c7a1b2…96f2ab", 17 glyphs at the body step: 143 px. A wider unit (a long amount, a long
+ * name's word) is held on its line and runs past the track into the row's edge.
+ */
+const ITEMS_MIN_PX = columnPx(textPx(shortChars(SHORT_FORMS.row.hash), fontPx('body')));
 /** gap-4, between the four tracks. */
 const GAP_PX = 16;
-/** The four columns' minimum: below it the table would have to scroll, so the cards are drawn. */
+/**
+ * The four tracks' minimum and their gaps, 696 px: below it the table would have to scroll, so the
+ * cards are drawn. The 768 window's column (736) and 1280's (912) draw the table, 1024's and 640's
+ * (608, beside the tiles) the two-line cards, a phone's the three-line cards.
+ */
 const TABLE_MIN_W = PARTY_PX + CKB_PX + OCCUPIED_PX + ITEMS_MIN_PX + 3 * GAP_PX;
 /** From here a card holds the party and its CKB change on one line (the 640 board). */
 const TWO_LINE_MIN_W = 480;
@@ -79,9 +91,9 @@ function Items({ participant, size }: { participant: ParticipantInfo; size: Shor
 }
 
 const BALANCE_GRID = 'grid gap-4';
-/** Each row is its own grid on these tracks (the Items track takes the rest). */
+/** Each row is its own grid on these tracks (the Items track takes the rest, from its floor). */
 const BALANCE_TRACKS = {
-  gridTemplateColumns: `${PARTY_PX}px ${CKB_PX}px ${OCCUPIED_PX}px minmax(0,1fr)`,
+  gridTemplateColumns: `${PARTY_PX}px ${CKB_PX}px ${OCCUPIED_PX}px minmax(${ITEMS_MIN_PX}px,1fr)`,
 };
 
 function netNote(note: ReturnType<typeof balanceNet>['note']): string {
@@ -102,7 +114,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 /**
  * Balance changes (TX-12, TX-19): every participant, then the Net row that explains the sum.
  * The measured width decides the form (docs/RESPONSIVE_LAYOUT.md rule 4): the four-column table
- * where its tracks fit (TABLE_MIN_W, 743 px), otherwise one card per participant — party and lock, CKB and occupied,
+ * where its tracks fit (TABLE_MIN_W, 696 px), otherwise one card per participant — party and lock, CKB and occupied,
  * the items moved — with the Net row as the last card. Never a sideways scroller. A value the
  * section cannot read fails the section in place, under its heading (review 45fd ruling D7).
  */
