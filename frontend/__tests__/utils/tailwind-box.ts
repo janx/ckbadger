@@ -84,7 +84,7 @@ export function containerContentPx(viewport: number): number {
 }
 
 /** A class split into its variants and its utility, outside brackets (`md:pr-9`, `text-[a:b]`). */
-function splitVariants(cls: string): { variants: string[]; utility: string } {
+function splitVariants(cls: string): { variants: string[]; utility: string; important: boolean } {
   const parts: string[] = [];
   let depth = 0;
   let start = 0;
@@ -96,7 +96,12 @@ function splitVariants(cls: string): { variants: string[]; utility: string } {
       start = i + 1;
     }
   }
-  return { variants: parts, utility: cls.slice(start).replace(/^!/, '') };
+  const utility = cls.slice(start);
+  return {
+    variants: parts,
+    utility: utility.replace(/^!/, ''),
+    important: utility.startsWith('!'),
+  };
 }
 
 /**
@@ -164,7 +169,11 @@ type Prop =
   | 'min-width'
   | 'font-size'
   | 'letter-spacing'
-  | 'flexible';
+  | 'flexible'
+  | 'white-space'
+  | 'flex-wrap'
+  | 'overflow-wrap'
+  | 'word-break';
 
 /** One declaration a class makes: the property, its value, and how specific the class is for it. */
 interface Decl {
@@ -205,6 +214,22 @@ function utilityDecls(utility: string): Decl[] {
     return [{ prop: 'position', value: 'static', rank: 0 }];
   if (['flex-1', 'grow', 'flex-grow', 'flex-auto', 'w-full', 'w-screen'].includes(utility))
     return [{ prop: 'flexible', value: utility, rank: 0 }];
+  // how a line may break: Tailwind's white-space, flex-wrap and word-breaking utilities
+  let w = /^whitespace-(normal|nowrap|pre|pre-line|pre-wrap|break-spaces)$/.exec(utility);
+  if (w) return [{ prop: 'white-space', value: w[1], rank: 0 }];
+  if (utility === 'truncate') return [{ prop: 'white-space', value: 'nowrap', rank: 0 }];
+  w = /^flex-(wrap|wrap-reverse|nowrap)$/.exec(utility);
+  if (w) return [{ prop: 'flex-wrap', value: w[1], rank: 0 }];
+  if (utility === 'break-words') return [{ prop: 'overflow-wrap', value: 'break-word', rank: 0 }];
+  if (utility === 'break-all') return [{ prop: 'word-break', value: 'break-all', rank: 0 }];
+  if (utility === 'break-keep') return [{ prop: 'word-break', value: 'keep-all', rank: 0 }];
+  if (utility === 'break-normal')
+    return [
+      { prop: 'overflow-wrap', value: 'normal', rank: 0 },
+      { prop: 'word-break', value: 'normal', rank: 0 },
+    ];
+  w = /^\[(white-space|flex-wrap|overflow-wrap|word-break):([a-z-]+)\]$/.exec(utility);
+  if (w) return [{ prop: w[1] as Prop, value: w[2], rank: 0 }];
   let m = /^(p|px|pl|ps|pr|pe)-(.+)$/.exec(utility);
   if (m) {
     const v = themeValue('padding', m[2]);
@@ -306,6 +331,10 @@ const CSS_READ: Record<string, Prop> = {
   'border-left-width': 'border-left-width',
   'border-right-width': 'border-right-width',
   'column-gap': 'column-gap',
+  'white-space': 'white-space',
+  'flex-wrap': 'flex-wrap',
+  'overflow-wrap': 'overflow-wrap',
+  'word-break': 'word-break',
 };
 const CSS_HORIZONTAL =
   /^(padding|padding-inline.*|margin|margin-inline.*|border-left|border-right|border-inline.*|border-width|max-width|gap|font|word-spacing|text-indent|inline-size)$/;
@@ -433,15 +462,22 @@ const INLINE: Record<string, Prop> = {
   'min-width': 'min-width',
   'font-size': 'font-size',
   'letter-spacing': 'letter-spacing',
+  'white-space': 'white-space',
+  'flex-wrap': 'flex-wrap',
+  'overflow-wrap': 'overflow-wrap',
+  'word-break': 'word-break',
 };
 const INLINE_REFUSED =
   /^(padding|margin|border|border-width|gap|font|max-width|padding-inline.*|margin-inline.*|border-inline.*)$/;
 
 function ownDecls(el: Element, viewport: number): Map<Prop, string> {
-  const won = new Map<Prop, { value: string; level: number; rank: number; cls: string }>();
+  const won = new Map<
+    Prop,
+    { value: string; level: number; rank: number; important: boolean; cls: string }
+  >();
   const fromCss = new Map<Prop, string>();
   for (const cls of Array.from(el.classList)) {
-    const { variants, utility } = splitVariants(cls);
+    const { variants, utility, important } = splitVariants(cls);
     const level = levelAt(variants, viewport);
     if (level === null) continue;
     const decls = utilityDecls(utility);
@@ -457,12 +493,18 @@ function ownDecls(el: Element, viewport: number): Map<Prop, string> {
       const before = won.get(d.prop);
       // a part that takes its room is so whatever else says it (`w-full max-w-…`)
       if (d.prop === 'flexible' && before) continue;
+      // an `!important` class is over every class that is not (`!whitespace-normal` over a cell's
+      // nowrap), whatever their breakpoints
+      if (before && before.important !== important) {
+        if (important) won.set(d.prop, { value: d.value, level, rank: d.rank, important, cls });
+        continue;
+      }
       if (before && before.level === level && before.rank === d.rank && before.value !== d.value)
         throw new Error(
           `tailwind-box: ${before.cls} and ${cls} both set ${d.prop} at one breakpoint on <${el.tagName.toLowerCase()} class="${el.className}">`
         );
       if (!before || level > before.level || (level === before.level && d.rank >= before.rank))
-        won.set(d.prop, { value: d.value, level, rank: d.rank, cls });
+        won.set(d.prop, { value: d.value, level, rank: d.rank, important, cls });
     }
   }
   const out = new Map<Prop, string>();
@@ -636,4 +678,46 @@ export function outerPx(el: Element, viewport: number): number | null {
 /** The column gap between a flex container's items at a viewport. */
 export function gapPx(el: Element, viewport: number): number {
   return own(el, viewport).gap;
+}
+
+// ------------------------------------------------------------------------------------------------
+// How a line may break
+
+/** An element's own display at a viewport (its tag's default where no class sets one). */
+export function displayAt(el: Element, viewport: number): string {
+  return own(el, viewport).display;
+}
+
+/** The value of an inherited property at an element: its own, else its nearest ancestor's. */
+function inheritedAt(el: Element, viewport: number, prop: Prop): string | null {
+  for (let e: Element | null = el; e; e = e.parentElement) {
+    const v = ownDecls(e, viewport).get(prop);
+    if (v !== undefined) return v;
+  }
+  return null;
+}
+
+/**
+ * Whether the text of an element may wrap at its spaces at a viewport: its white-space, inherited
+ * (`normal` at the root), read from the nearest element that sets one.
+ */
+export function wrapsAt(el: Element, viewport: number): boolean {
+  const ws = inheritedAt(el, viewport, 'white-space') ?? 'normal';
+  return !['nowrap', 'pre'].includes(ws);
+}
+
+/** Whether a flex container lays its items on more than one line at a viewport. */
+export function flexWrapsAt(el: Element, viewport: number): boolean {
+  const v = ownDecls(el, viewport).get('flex-wrap') ?? 'nowrap';
+  return v !== 'nowrap';
+}
+
+/**
+ * Whether a word of an element's text may break inside itself where it overflows (an inherited
+ * `overflow-wrap: anywhere | break-word`, or `word-break: break-all | break-word`).
+ */
+export function breaksWordsAt(el: Element, viewport: number): boolean {
+  const wrap = inheritedAt(el, viewport, 'overflow-wrap') ?? 'normal';
+  const word = inheritedAt(el, viewport, 'word-break') ?? 'normal';
+  return wrap !== 'normal' || ['break-all', 'break-word'].includes(word);
 }
