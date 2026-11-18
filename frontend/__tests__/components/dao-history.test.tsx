@@ -22,6 +22,7 @@ import {
   textLines,
   viewBox,
 } from '@/__tests__/utils/svg-text-boxes';
+import { factsOf } from '@/__tests__/utils/facts';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2024, 0, 1);
@@ -188,9 +189,16 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const { deposited, ratio } = series();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
-    expect(reading).toHaveTextContent(
-      `${date(154)} · deposited 101,190 · share 11.5400% · depositors 254 · week from ${date(148)} +10 · peak 101,190 on ${date(154)}tap or hover`
-    );
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)).toEqual([
+      ['day', date(154)],
+      ['deposited', '101,190'],
+      ['share', '11.5400%'],
+      ['depositors', '254'],
+      ['week from', `${date(148)} +10`],
+      ['peak', `101,190 on ${date(154)}`],
+    ]);
+    expect(reading).toHaveTextContent(/tap or hover$/);
     expect(reading).toHaveClass('border-t', 'text-small');
     // Evidence first: the reading follows every panel.
     for (const svg of Array.from(container.querySelectorAll('svg')))
@@ -209,8 +217,9 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     deposited.peak = { date: date(last), value: '101190.25' };
     render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
-    expect(reading).toHaveTextContent('deposited 101,190 ·');
-    expect(reading).toHaveTextContent('+10.25 ·');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)).toContainEqual(['deposited', '101,190']);
+    expect(factsOf(reading)).toContainEqual(['week from', `${date(148)} +10.25`]);
     const amounts = [...reading.querySelectorAll('[data-ckb-amount]')];
     expect(amounts.map((a) => a.textContent)).toEqual(['101,190', '+10.25', '101,190']);
     expect(amounts.map((a) => a.getAttribute('title'))).toEqual([
@@ -237,13 +246,17 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const reading = screen.getByRole('status', { name: 'History reading' });
     fireEvent.pointerMove(share, { clientX: 0 });
     // the summary form (R5, re-pinned on purpose: was "100,000.00000000")
-    expect(reading).toHaveTextContent(`${date(0)} · deposited 100,000 ·`);
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading).slice(0, 2)).toEqual([
+      ['day', date(0)],
+      ['deposited', '100,000'],
+    ]);
     // Before the first whole week there is no weekly figure to read.
     expect(reading).not.toHaveTextContent('week from');
     // One cursor in each of the three panels.
     expect(container.querySelectorAll('[data-cursor]')).toHaveLength(3);
     fireEvent.pointerLeave(share);
-    expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
+    expect(factsOf(reading)[0]).toEqual(['day', date(154)]);
     // A tap on the main plot pins the day it lands on; leaving keeps it.
     const main = container.querySelector('svg[data-panel="deposited"]')!;
     // Re-pinned with U-19: the plot starts after its 48 px value gutter, so its middle day (77 of
@@ -251,14 +264,14 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     fireEvent.pointerMove(main, { clientX: 624 });
     fireEvent.click(main, { clientX: 624 });
     fireEvent.pointerLeave(main);
-    expect(reading).toHaveTextContent(new RegExp(`^selected ${date(77)} · deposited`));
-    // "selected" opens the same row of items, so it shares their line.
-    // re-pinned (A4 round 2): the date is a unit inside its item, the item in the row
-    const row = within(reading).getByText(date(77)).closest('.flex-wrap') as HTMLElement;
-    expect(row).toHaveClass('flex', 'flex-wrap');
-    expect(row.firstElementChild).toHaveTextContent(/^selected$/);
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts; "selected" opens the
+    // day's value, in the quiet ink, so it shares the date's line (it opened the row of items)
+    expect(factsOf(reading)[0]).toEqual(['day', `selected ${date(77)}`]);
+    const day = within(reading).getByText(date(77)).closest('dd') as HTMLElement;
+    expect(day.firstElementChild).toHaveTextContent(/^selected$/);
+    expect(day.firstElementChild).toHaveClass('text-text-dim');
     fireEvent.click(main, { clientX: 624 });
-    expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
+    expect(factsOf(reading)[0]).toEqual(['day', date(154)]);
   });
 
   it('colours falling weeks red and rising weeks jade (DAO-18)', () => {
@@ -306,9 +319,11 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(end).toHaveClass('fill-negative');
     expect(end.parentElement!.querySelector('title')).toHaveTextContent('−12.34567891 CKB');
     // the reading's summary form too (R5, re-pinned on purpose: was "−12.34567891")
-    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
-      'week from 2024-05-28 −12.34 ·'
-    );
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(screen.getByRole('status', { name: 'History reading' }))).toContainEqual([
+      'week from',
+      '2024-05-28 −12.34',
+    ]);
   });
 
   // Lane E2 (ruling R4) drew the end label's digits after the point in the sign's fraction ink as a

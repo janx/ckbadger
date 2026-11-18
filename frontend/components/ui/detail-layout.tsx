@@ -42,13 +42,16 @@ export function DetailTier2({ children, className }: { children: ReactNode; clas
 export interface DetailFact {
   label: string;
   value: ReactNode;
+  /** What the name means, on hover ("Occupied pays for the state kept on CKB."). */
+  title?: string;
 }
 
 /**
  * Facts as the detail pages draw them: a `dl` whose rows are a label (a fact's name: the quiet ink,
  * R3) beside its value, the label over the value below sm, one column of rows until md (at 640 a
  * two-column grid wrapped labels into three lines), two from md. A page's head draws its facts
- * with it; `className` places the list.
+ * with it, and so does a reading of more than three facts (readability R4, lane B7: never a chain
+ * of facts joined by "·" across the page); `className` places the list.
  */
 export function DetailFacts({
   facts,
@@ -59,13 +62,15 @@ export function DetailFacts({
 }) {
   return (
     <dl className={cn(className, 'grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2')}>
-      {facts.map(({ label, value }) => (
+      {facts.map(({ label, value, title }) => (
         <div
           key={label}
           className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
         >
           {/* a fact's name is a label: quiet (R3) */}
-          <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
+          <dt title={title} className="text-text-dim text-small min-w-0 break-words">
+            {label}
+          </dt>
           <dd className="text-text-bright min-w-0 break-words tabular-nums">{unitNode(value)}</dd>
         </div>
       ))}

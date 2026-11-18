@@ -7,6 +7,7 @@ import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
 import { CkbAmount } from '@/components/ui/ckb-amount';
+import { DetailFacts } from '@/components/ui/detail-layout';
 import {
   ScriptCustodyEvidence,
   immutableHow,
@@ -541,54 +542,79 @@ export function ScriptHistoryReading({
   const unused = point ? BigInt(point.values.unused) : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
+  const swatch = (color: string) => (
+    <span
+      aria-hidden="true"
+      className="mr-1.5 inline-block h-2 w-2"
+      style={{ backgroundColor: color }}
+    />
+  );
   return (
     <div
       role="status"
       aria-live="polite"
       aria-label="History reading"
       data-testid="script-history-reading"
-      className="border-row-rule text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-6 gap-y-1.5 border-t pt-2"
+      className="border-row-rule text-small mt-2.5 border-t pt-2"
     >
       {point && used !== null && unused !== null ? (
-        <>
-          <span className="text-text-bright">
-            {unitNode(point.date)}
-            {active === null && <span className="text-text-dim"> · last full day</span>}
-          </span>
-          <span className="flex items-baseline gap-1.5">
-            <span>CKB held</span>{' '}
-            <CkbAmount form="column" shannons={used + unused} signed={false} tone="plain" />
-          </span>
-          <span className="flex items-baseline gap-1.5">
-            <span
-              aria-hidden="true"
-              className="inline-block h-2 w-2"
-              style={{ backgroundColor: DATA_COLOR }}
-            />
-            <span>occupied</span>{' '}
-            <CkbAmount form="column" shannons={used} signed={false} tone="plain" />
-          </span>
-          <span className="flex items-baseline gap-1.5">
-            <span
-              aria-hidden="true"
-              className="inline-block h-2 w-2"
-              style={{ backgroundColor: HELD_CAPACITY_COLOR }}
-            />
-            <span>free</span>{' '}
-            <CkbAmount form="column" shannons={unused} signed={false} tone="plain" />
-          </span>
-          {deployment && (
-            <span className="flex items-baseline gap-1.5">
-              <span>code</span>{' '}
-              <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
-              {/* tight: the readout is tier 1's, within its 160-character budget
-                  (__tests__/utils/hierarchy.ts), which the row size passes (162 for JoyID) */}
-              <span>held by {holderName(deployment.custody, 'tight')}</span>
-            </span>
-          )}
-        </>
+        // The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): five
+        // facts in a row of their own words. A series' swatch leads its value.
+        <DetailFacts
+          facts={[
+            {
+              label: 'day',
+              value: (
+                <>
+                  {unitNode(point.date)}
+                  {active === null && <span className="text-text-dim"> · last full day</span>}
+                </>
+              ),
+            },
+            {
+              label: 'CKB held',
+              value: (
+                <CkbAmount form="column" shannons={used + unused} signed={false} tone="plain" />
+              ),
+            },
+            {
+              label: 'occupied',
+              value: (
+                <>
+                  {swatch(DATA_COLOR)}
+                  <CkbAmount form="column" shannons={used} signed={false} tone="plain" />
+                </>
+              ),
+            },
+            {
+              label: 'free',
+              value: (
+                <>
+                  {swatch(HELD_CAPACITY_COLOR)}
+                  <CkbAmount form="column" shannons={unused} signed={false} tone="plain" />
+                </>
+              ),
+            },
+            ...(deployment
+              ? [
+                  {
+                    label: 'code',
+                    value: (
+                      <>
+                        {version ? `v${version}` : 'unresolved'}{' '}
+                        {/* tight: the readout is tier 1's (it kept a 160-character budget as one
+                            line, __tests__/utils/hierarchy.ts) */}
+                        <span className="text-text-dim">held by</span>{' '}
+                        <span className="text-text">{holderName(deployment.custody, 'tight')}</span>
+                      </>
+                    ),
+                  },
+                ]
+              : []),
+          ]}
+        />
       ) : (
-        <span>No capacity history in this range.</span>
+        <span className="text-text-dim">No capacity history in this range.</span>
       )}
     </div>
   );

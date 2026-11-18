@@ -7,6 +7,7 @@ import DaoPage from '@/app/dao/page';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
+import { factsOf } from '@/__tests__/utils/facts';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -154,9 +155,11 @@ describe('DaoPage', () => {
       // decimals)
       'claimable now 400 CKB · 1 cell'
     );
-    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
-      'depositors 2'
-    );
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(screen.getByRole('status', { name: 'History reading' }))).toContainEqual([
+      'depositors',
+      '2',
+    ]);
     expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');
     expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(

@@ -105,9 +105,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/address/address-holdings.tsx': {
     family: 'chain',
-    sites: { link: 4, prose: 7 },
-    reason:
-      'the balance parts line, deposit block and cell links, empty holdings and the collection note in the quiet ink',
+    // prose 7 → 6 (B7): the balance's parts are labelled facts, no longer a quiet <p>
+    sites: { link: 4, prose: 6 },
+    reason: 'deposit block and cell links, empty holdings and the collection note in the quiet ink',
   },
   'components/blocks/block-position.tsx': {
     family: 'chain',

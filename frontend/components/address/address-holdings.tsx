@@ -24,6 +24,7 @@ import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
+import { DetailFacts } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { charPx } from '@/lib/type-metrics';
 import { NoBreak } from '@/components/ui/no-break';
@@ -257,21 +258,39 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
               );
             })}
           </div>
-          <p
-            data-testid="balance-parts"
-            className="text-text-dim text-small max-w-measure mt-2 tabular-nums"
-          >
-            occupied <ExactParts shannons={occupied} /> pays for the bytes its cells keep · free{' '}
-            <ExactParts shannons={free} /> ·{' '}
-            {daoFree === BigInt(0) ? (
-              'no CKB in the Nervos DAO'
-            ) : (
-              <>
-                DAO free <ExactParts shannons={daoFree} />
-                {daoFreeNote(holdings) ? `, ${daoFreeNote(holdings)}` : ''}
-              </>
-            )}
-          </p>
+          {/* The exact parts as labelled facts, the detail pages' dl rows (readability R4, lane
+              B7), each named as its part of the bar: three facts with notes joined by "·" read
+              as one sentence about three different frees. */}
+          <div data-testid="balance-parts" className="text-small mt-2 tabular-nums">
+            <DetailFacts
+              facts={[
+                {
+                  label: 'occupied',
+                  value: (
+                    <>
+                      <ExactParts shannons={occupied} />{' '}
+                      <span className="text-text-dim">pays for the bytes its cells keep</span>
+                    </>
+                  ),
+                },
+                { label: 'free', value: <ExactParts shannons={free} /> },
+                {
+                  label: 'DAO free',
+                  value:
+                    daoFree === BigInt(0) ? (
+                      <span className="text-text-dim">no CKB in the Nervos DAO</span>
+                    ) : (
+                      <>
+                        <ExactParts shannons={daoFree} />
+                        {daoFreeNote(holdings) && (
+                          <span className="text-text-dim">, {daoFreeNote(holdings)}</span>
+                        )}
+                      </>
+                    ),
+                },
+              ]}
+            />
+          </div>
         </div>
       )}
     </section>

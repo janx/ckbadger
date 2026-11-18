@@ -4,6 +4,7 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { yTickLabels, plotLeftOf } from '@/__tests__/utils/y-ticks';
+import { factsOf } from '@/__tests__/utils/facts';
 const daily = [
   { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
   { date: '2024-01-08', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
@@ -136,9 +137,16 @@ describe('Asset history', () => {
         plots.at(-1)!.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING
       ).toBeTruthy();
       expect(readout).toHaveClass('border-t');
-      expect(readout).toHaveTextContent(
-        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50% · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
-      );
+      // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+      expect(factsOf(readout)).toEqual([
+        ['day', '2024-01-08'],
+        ['held', '200.00000001 CKB'],
+        ['occupied', '61.00000000 CKB 30.50%'],
+        ['free', '139.00000001 CKB'],
+        ['week', 'Latest complete week, from 2024-01-01: 3 transfers'],
+        ['peak', '200.00000001 CKB on 2024-01-08'],
+      ]);
+      // the name of a part says what it means on hover (it was the word's title in the line)
       expect(within(readout).getByText('occupied')).toHaveAttribute(
         'title',
         'Occupied pays for the state kept on CKB.'
@@ -212,7 +220,8 @@ describe('Asset history', () => {
     // reading names the latest complete week instead of "No completed weekly total".
     expect(readout).toHaveTextContent('Latest complete week, from 2024-01-01: 3 transfers');
     // Lane P (Main.dc.html): the peak is the readout row's last item, not a sentence of its own.
-    expect(readout).toHaveTextContent(/· peak 200\.00000001 CKB on 2024-01-08$/);
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(readout).at(-1)).toEqual(['peak', '200.00000001 CKB on 2024-01-08']);
     expect(screen.queryByText(/CKB held peaked/)).toBeNull();
     // Lane P (Main.dc.html): the scope is the hover of the reading's day, not a line of its own.
     expect(screen.queryByText(/Complete UTC\+8 days through/)).toBeNull();

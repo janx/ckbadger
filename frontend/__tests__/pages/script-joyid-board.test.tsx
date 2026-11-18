@@ -12,6 +12,7 @@ import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { fullText } from '@/__tests__/utils/full-text';
+import { factsOf } from '@/__tests__/utils/facts';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -172,8 +173,11 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     ).toEqual(['CKB held · occupied, free', "CKB occupied by those cells' own bytes"]);
     const reading = screen.getByTestId('script-history-reading');
     expect(reading).toHaveTextContent('2026-10-29');
-    expect(reading).toHaveTextContent('CKB held 456,002,179.57');
-    expect(reading).toHaveTextContent('code v5 held by multisig 0x6598…d696');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading).find(([label]) => label === 'CKB held')![1]).toMatch(
+      /^456,002,179\.57/
+    );
+    expect(factsOf(reading)).toContainEqual(['code', 'v5 held by multisig 0x6598…d696']);
     // Table-rows L1-3 ruling (board ScriptDetail): no code track under the chart. The version days
     // are ghost labels inside the plot; the holders are the timeline's segments.
     expect(screen.queryByLabelText('Code track')).toBeNull();
@@ -581,7 +585,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(follows(reading, metrics)).toBe(true);
     expect(reading).toHaveClass('text-small', 'border-t');
     expect(reading).toHaveTextContent('2026-10-29');
-    expect(reading).toHaveTextContent('code v5 held by multisig 0x6598…d696');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)).toContainEqual(['code', 'v5 held by multisig 0x6598…d696']);
     // The swatches keep the series colours; the values are ink (R11).
     for (const el of reading.querySelectorAll<HTMLElement>('[style]'))
       if (el.textContent!.trim()) expect(el.style.color).toBe('');
@@ -604,7 +609,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   it('reads the hovered day across the picture, and lets it go when the range changes', async () => {
     await renderJoyid();
     const reading = screen.getByTestId('script-history-reading');
-    expect(reading).toHaveTextContent('2026-10-29 · last full day');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)[0]).toEqual(['day', '2026-10-29 · last full day']);
     const [main] = [
       ...within(hero()).getByTestId('script-history').querySelectorAll('svg[role="img"]'),
     ];
@@ -614,9 +620,10 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     fireEvent.click(within(hero()).getByRole('button', { name: '90D' }));
     // The picture and its reading are drawn again for the new range.
     await waitFor(() =>
-      expect(screen.getByTestId('script-history-reading')).toHaveTextContent(
-        '2026-10-29 · last full day'
-      )
+      expect(factsOf(screen.getByTestId('script-history-reading'))[0]).toEqual([
+        'day',
+        '2026-10-29 · last full day',
+      ])
     );
   });
 

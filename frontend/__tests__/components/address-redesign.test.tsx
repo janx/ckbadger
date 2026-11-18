@@ -21,6 +21,7 @@ import { ROW_SEAL } from '@/components/ui/row-seal';
 import { addressCellSealId } from '@/lib/address-cell-seal';
 import type { Activity, ItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
+import { factsOf } from '@/__tests__/utils/facts';
 
 describe('Address v3 components', () => {
   it('keeps the balance hero once and preserves a single shannon in the partition', () => {
@@ -95,10 +96,14 @@ describe('Address v3 components', () => {
       const parts = [...bar.querySelectorAll('[data-part]')];
       expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
       expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
-      expect(screen.getByTestId('balance-parts')).toHaveTextContent(
-        // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals)
-        /^occupied 291,486 pays for the bytes its cells keep · free 28,256\.66879443 · no CKB in the Nervos DAO$/
-      );
+      // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals);
+      // re-pinned with readability R4 (lane B7): labelled facts, each named as its part of the bar
+      // (was one line joined by "·")
+      expect(factsOf(screen.getByTestId('balance-parts'))).toEqual([
+        ['occupied', '291,486 pays for the bytes its cells keep'],
+        ['free', '28,256.66879443'],
+        ['DAO free', 'no CKB in the Nervos DAO'],
+      ]);
     });
 
     it('keeps a share that cannot fit inside its part in the part title, never cut', () => {
@@ -118,10 +123,12 @@ describe('Address v3 components', () => {
       expect(
         [...bar.querySelectorAll('[data-part]')].map((p) => p.getAttribute('data-part'))
       ).toEqual(['occupied', 'free', 'DAO free']);
-      expect(screen.getByTestId('balance-parts')).toHaveTextContent(
-        // the exact form (R5, re-pinned on purpose: was "9,589,480.00000000")
-        /· DAO free 9,589,480, free part of 5 deposits$/
-      );
+      // the exact form (R5, re-pinned on purpose: was "9,589,480.00000000"); re-pinned with
+      // readability R4 (lane B7): a labelled fact (was the line's last item after "·")
+      expect(factsOf(screen.getByTestId('balance-parts')).at(-1)).toEqual([
+        'DAO free',
+        '9,589,480, free part of 5 deposits',
+      ]);
     });
 
     it('states a zero balance as a ghost 0 CKB with no bar', () => {

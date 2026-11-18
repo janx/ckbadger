@@ -5,6 +5,7 @@ import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { DetailFacts } from '@/components/ui/detail-layout';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ckbAmountText, ckbShortenedTitle } from '@/lib/amount-form';
 import { formatSignedCkbInteger, parseCkbDecimal } from '@/lib/ckb-decimal';
@@ -640,57 +641,76 @@ export function DaoHistoryReading({
   const day = days[index];
   const week = weeks.find((w) => w.start <= index && index <= w.end);
   return (
-    // ReadoutRow's own "selected " prefix would stand on a line of its own before this row of
-    // items, so the row opens with it itself (same word, same ink: `usePinWord`, C11).
+    // ReadoutRow's own "selected " prefix would stand on a line of its own before the facts, so
+    // the day's value opens with it itself (same word, same ink: `usePinWord`, C11).
     <ReadoutRow label="History reading" pinned={false}>
-      {/* One row of facts, each its own item: a narrower column wraps between them. */}
-      <span className="text-text-dim flex flex-wrap gap-x-[0.6em]">
-        {pin.showingPin && <span>{pinWord} </span>}
-        <span className="text-text-bright">{unitNode(day.date)}</span>
-        <span>
-          {' '}
-          · deposited{' '}
-          <span className="text-text">
-            <ReadingCkb shannons={day.shannons} />
-          </span>
-        </span>
-        <span>
-          {' '}
-          · share <span className="text-text">{day.ratio}%</span>
-        </span>
-        <span>
-          {' '}
-          · depositors <span className="text-text">{day.depositors}</span>
-        </span>
-        {week && (
-          <span>
-            {' '}
-            · week from <span className="whitespace-nowrap">{days[week.start].date}</span>{' '}
-            <span
-              data-role="week-net"
-              className={
-                week.net > BigInt(0)
-                  ? 'text-positive'
-                  : week.net < BigInt(0)
-                    ? 'text-negative'
-                    : 'text-text'
-              }
-            >
-              <ReadingCkb shannons={week.net} signed />
-            </span>
-          </span>
-        )}
-        {peak && (
-          <span>
-            {' '}
-            · peak{' '}
-            <span className="text-text">
-              <ReadingCkb shannons={parseCkbDecimal(peak.value)} />
-            </span>{' '}
-            on <span className="whitespace-nowrap">{peak.date}</span>
-          </span>
-        )}
-      </span>
+      {/* The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): its
+          six facts joined by "·" ran 1,180 px and wrapped in the middle of the chain. The day is
+          the figure scanned first (the row's bright ink); the amounts, the share, the count and
+          the dates read in the reading ink, the week's net in its sign's. */}
+      <DetailFacts
+        facts={[
+          {
+            label: 'day',
+            value: (
+              <>
+                {pin.showingPin && <span className="text-text-dim">{pinWord} </span>}
+                {unitNode(day.date)}
+              </>
+            ),
+          },
+          {
+            label: 'deposited',
+            value: (
+              <span className="text-text">
+                <ReadingCkb shannons={day.shannons} />
+              </span>
+            ),
+          },
+          { label: 'share', value: <span className="text-text">{day.ratio}%</span> },
+          { label: 'depositors', value: <span className="text-text">{day.depositors}</span> },
+          ...(week
+            ? [
+                {
+                  label: 'week from',
+                  value: (
+                    <>
+                      <span className="text-text whitespace-nowrap">{days[week.start].date}</span>{' '}
+                      <span
+                        data-role="week-net"
+                        className={
+                          week.net > BigInt(0)
+                            ? 'text-positive'
+                            : week.net < BigInt(0)
+                              ? 'text-negative'
+                              : 'text-text'
+                        }
+                      >
+                        <ReadingCkb shannons={week.net} signed />
+                      </span>
+                    </>
+                  ),
+                },
+              ]
+            : []),
+          ...(peak
+            ? [
+                {
+                  label: 'peak',
+                  value: (
+                    <>
+                      <span className="text-text">
+                        <ReadingCkb shannons={parseCkbDecimal(peak.value)} />
+                      </span>{' '}
+                      <span className="text-text-dim">on</span>{' '}
+                      <span className="text-text whitespace-nowrap">{peak.date}</span>
+                    </>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
     </ReadoutRow>
   );
 }

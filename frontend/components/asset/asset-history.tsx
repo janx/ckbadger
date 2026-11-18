@@ -3,7 +3,7 @@ import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
-import { DetailSection } from '@/components/ui/detail-layout';
+import { DetailFacts, DetailSection, type DetailFact } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
@@ -332,66 +332,105 @@ export function AssetHistory({
         selectedDate === null && weekly.length > 0
         ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${formatCount(weekly[weekly.length - 1].count, WEEKLY_ONE[weeklyNoun], weeklyNoun)}`
         : 'No completed weekly total for this day');
-  const readoutItems: ReactNode[] = point
+  // The reading as labelled facts, the detail pages' dl rows (readability R4, lane B7): up to seven
+  // facts joined by "·" ran 1,180 px on a collection's page. A series' swatch leads its value.
+  const readoutFacts: DetailFact[] = point
     ? [
-        // Lane P (Main.dc.html): the scope is the hover of the day, not a line of its own.
-        <span
-          key="date"
-          className="text-text-bright"
-          title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
-        >
-          {unitNode(point.date)}
-        </span>,
-        <>
-          held{' '}
-          <CkbAmount
-            form="column"
-            shannons={BigInt(point.capacity)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
-        </>,
-        <>
-          <Swatch color={DATA_COLOR} />
-          <span title="Occupied pays for the state kept on CKB.">occupied</span>{' '}
-          <CkbAmount
-            form="column"
-            shannons={BigInt(point.occupiedCapacity)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
-          {BigInt(point.capacity) > BigInt(0) && (
-            <span className="text-text-dim">
-              {' '}
-              {percentOf(BigInt(point.occupiedCapacity), BigInt(point.capacity))}
+        {
+          label: 'day',
+          // Lane P (Main.dc.html): the scope is the hover of the day, not a line of its own.
+          value: (
+            <span
+              className="text-text-bright"
+              title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
+            >
+              {unitNode(point.date)}
             </span>
-          )}
-        </>,
-        <>
-          <Swatch color={CLASS_COLORS.ckb} />
-          <span title="Free is CKB held in the same cells beyond that byte cost.">free</span>{' '}
-          <CkbAmount
-            form="column"
-            shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
-            signed={false}
-            tone="plain"
-            wrap
-          />
-        </>,
+          ),
+        },
+        {
+          label: 'held',
+          value: (
+            <CkbAmount
+              form="column"
+              shannons={BigInt(point.capacity)}
+              signed={false}
+              tone="plain"
+            />
+          ),
+        },
+        {
+          label: 'occupied',
+          title: 'Occupied pays for the state kept on CKB.',
+          value: (
+            <>
+              <Swatch color={DATA_COLOR} />
+              <CkbAmount
+                form="column"
+                shannons={BigInt(point.occupiedCapacity)}
+                signed={false}
+                tone="plain"
+              />
+              {BigInt(point.capacity) > BigInt(0) && (
+                <span className="text-text-dim">
+                  {' '}
+                  {percentOf(BigInt(point.occupiedCapacity), BigInt(point.capacity))}
+                </span>
+              )}
+            </>
+          ),
+        },
+        {
+          label: 'free',
+          title: 'Free is CKB held in the same cells beyond that byte cost.',
+          value: (
+            <>
+              <Swatch color={CLASS_COLORS.ckb} />
+              <CkbAmount
+                form="column"
+                shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
+                signed={false}
+                tone="plain"
+              />
+            </>
+          ),
+        },
         ...(token
           ? [
-              <>
-                <Swatch color={CLASS_COLORS.tokens} />
-                Supply{' '}
-                <TokenAmount form="column" amount={point.supply!} decimals={token.decimals} />{' '}
-                {token.symbol}
-              </>,
+              {
+                label: 'supply',
+                value: (
+                  <>
+                    <Swatch color={CLASS_COLORS.tokens} />
+                    <span className="text-text">
+                      <TokenAmount form="column" amount={point.supply!} decimals={token.decimals} />
+                    </span>{' '}
+                    <span className="text-text-dim">{token.symbol}</span>
+                  </>
+                ),
+              },
             ]
           : []),
-        weekText,
-        ...(peakItem ? [peakItem] : []),
+        { label: 'week', value: <span className="text-text">{unitNode(weekText)}</span> },
+        ...(peak
+          ? [
+              {
+                label: 'peak',
+                value: (
+                  <span title="the most CKB its cells held on any complete day">
+                    <CkbAmount
+                      form="column"
+                      shannons={BigInt(peak.capacity)}
+                      signed={false}
+                      tone="plain"
+                    />{' '}
+                    <span className="text-text-dim">on</span>{' '}
+                    <span className="text-text">{unitNode(peak.date)}</span>
+                  </span>
+                ),
+              },
+            ]
+          : []),
       ]
     : [];
   return (
@@ -467,15 +506,14 @@ export function AssetHistory({
               cursorX={selectedDate === null ? null : time(selectedDate)}
             />
           )}
-          {/* Lane P (Main.dc.html): the reading is one row under the plots — the day, held,
-              occupied with its share, free, the week, then the peak among complete days. */}
+          {/* Lane P (Main.dc.html): the reading under the plots — the day, held, occupied with
+              its share, free, the week, then the peak among complete days — as labelled facts. */}
           <div
             aria-live="polite"
             aria-label="History readout"
             className="border-row-rule text-small mt-2 border-t pt-2"
           >
-            {/* PB-23: one separated list, so a wrapped item never opens its line with a "·" */}
-            <Dotted className="gap-y-1" parts={readoutItems} />
+            <DetailFacts facts={readoutFacts} />
           </div>
         </>
       ) : (

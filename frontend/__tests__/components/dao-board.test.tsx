@@ -15,6 +15,7 @@ import evidence from '@/__tests__/fixtures/dao-evidence.json';
 import { expectTicksInGutter, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { fontPx } from '@/lib/type-metrics';
+import { factsOf } from '@/__tests__/utils/facts';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
@@ -156,8 +157,9 @@ describe('DaoBoard', () => {
     // form (readability R5, re-pinned on purpose: was "500.00000000"); a cut one has its exact
     // value in its title.
     const reading = screen.getByRole('status', { name: 'History reading' });
-    expect(reading).toHaveTextContent('deposited 500 ·');
-    expect(reading).toHaveTextContent('share 1.25%');
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    expect(factsOf(reading)).toContainEqual(['deposited', '500']);
+    expect(factsOf(reading)).toContainEqual(['share', '1.25%']);
   });
 
   it('keeps the owner link bound to the source address', () => {
@@ -486,7 +488,12 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
   });
   const hero = () => screen.getByRole('region', { name: 'Nervos DAO' });
   /** The hero block's metric row: the terms after the hero section (tier 2 has its own list). */
-  const terms = () => within(hero().parentElement!).getAllByRole('term');
+  // the metrics row's names; the history's reading under the picture is labelled facts too
+  // (readability R4, lane B7), which are not the metrics
+  const terms = () =>
+    within(hero().parentElement!)
+      .getAllByRole('term')
+      .filter((t) => !t.closest('[role="status"]'));
   /** The metric row's value for a label (dt → its dd). */
   const metric = (label: string) =>
     terms().find((t) => t.textContent === label)!.nextElementSibling!;
@@ -530,9 +537,11 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
     expect(change.parentElement).toHaveClass('text-body');
     // The share and the peak moved into the picture's reading row (board v3).
     expect(hero()).not.toHaveTextContent(/of circulating CKB on/);
-    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
-      'share 1.25% · depositors 2 · peak 600.5 on 2024-01-14'
-    );
+    // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
+    const facts = factsOf(screen.getByRole('status', { name: 'History reading' }));
+    expect(facts).toContainEqual(['share', '1.25%']);
+    expect(facts).toContainEqual(['depositors', '2']);
+    expect(facts).toContainEqual(['peak', '600.5 on 2024-01-14']);
     // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
     expect(hero()).not.toHaveTextContent(/anchor/i);
     expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();

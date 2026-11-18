@@ -43,6 +43,7 @@ import {
   fixtureHash,
 } from '@/__tests__/msw/fixtures/address';
 import { fullText } from '@/__tests__/utils/full-text';
+import { factsOf } from '@/__tests__/utils/facts';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -341,10 +342,13 @@ describe('Address v3', () => {
     expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent(
       '54,571.35338057'
     );
-    expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent(
-      // the exact parts line, exact form (readability R5, re-pinned on purpose: was padded)
-      'DAO free 9,589,480, free part'
-    );
+    // the exact parts, exact form (readability R5, re-pinned on purpose: was padded); re-pinned with
+    // readability R4 (lane B7): a labelled fact (was the parts line's last item after "·")
+    expect(
+      factsOf(
+        within(screen.getByLabelText('Address capacity partition')).getByTestId('balance-parts')
+      )
+    ).toContainEqual(['DAO free', '9,589,480, free part of 5 deposits']);
     expect(container.querySelector('[data-tier="2"]')).toHaveClass(
       'mt-24',
       'border-t',
