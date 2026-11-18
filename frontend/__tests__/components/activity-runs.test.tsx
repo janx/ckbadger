@@ -13,6 +13,10 @@ import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { SCREENS } from '@/__tests__/utils/tailwind-box';
+import resolveConfig from 'tailwindcss/resolveConfig';
+import tailwindConfig from '@/tailwind.config';
 
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -411,6 +415,70 @@ describe('a folded run shows the parties its rows show (B4 fix round)', () => {
     // paid 700, then received 600, 500, 400, 300; the 2 and the 1 under "+2 participants"
     expect(drawn).toEqual([2, 6, 5, 4, 3].map((i) => `${rows[0].participants[i].lockHash}:${i}`));
     expect(head).toEqual(drawn);
+  });
+});
+
+// Lane B4 fix round (review-rules-logic NOTE 8, the coordinator's item 16): the run's toggle is
+// a real button, and on a phone it is a target a finger can take. docs/RESPONSIVE_LAYOUT.md's
+// Touch rule names no size; the size is WCAG 2.2's minimum target (2.5.8), 24 × 24 CSS px, the
+// figure the review measured against and the site's own (the hardfork timeline's DOT_HIT_PX).
+// Below md the toggle stands at least 24 px tall; it stood on its 20 px row line.
+describe('the run’s toggle on a phone (B4 fix round)', () => {
+  const theme = resolveConfig(tailwindConfig).theme as unknown as {
+    minHeight: Record<string, string>;
+    lineHeight: Record<string, string>;
+  };
+  const px = (v: string) => (v.endsWith('rem') ? parseFloat(v) * 16 : parseFloat(v));
+  /**
+   * The height of a button that sets its line and its minimum height in classes and nothing else
+   * vertical (refused otherwise), at a viewport: the larger of its line and its minimum.
+   */
+  function targetPx(el: Element, viewport: number): number {
+    const at = (prefix: string) => {
+      let value: string | undefined;
+      let level = -1;
+      for (const cls of el.classList) {
+        const parts = cls.split(':');
+        const utility = parts.pop()!;
+        if (!utility.startsWith(prefix)) continue;
+        if (parts.length > 1) throw new Error(`targetPx: ${cls} is not read`);
+        const screen = parts[0];
+        const i = screen === undefined ? 0 : SCREENS.findIndex(([n]) => n === screen) + 1;
+        if (i < 0) throw new Error(`targetPx: ${cls} is not read`);
+        if (i > 0 && SCREENS[i - 1][1] > viewport) continue;
+        if (i >= level) {
+          level = i;
+          value = utility.slice(prefix.length);
+        }
+      }
+      return value;
+    };
+    for (const cls of el.classList)
+      if (/^(\w+:)?(h|py|pt|pb|my|border-y|border-t|border-b)-/.test(cls))
+        throw new Error(`targetPx: ${cls} sets a height this does not read`);
+    const line = at('leading-');
+    if (line === undefined) throw new Error('targetPx: the button sets no line');
+    const min = at('min-h-');
+    return Math.max(px(theme.lineHeight[line]), min === undefined ? 0 : px(theme.minHeight[min]));
+  }
+
+  it.each([390, 360])('is at least 24 px tall at %i px', (viewport) => {
+    const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
+    render(
+      <ActivityRuns
+        rows={rows.map((a) => ({
+          key: a.txHash,
+          subject: runSubject(a, activityTitleText(a)),
+          activity: a,
+          title: <ActivityTitle activity={a} />,
+          row: <ActivityRow activity={a} />,
+        }))}
+      />
+    );
+    const toggle = screen.getByRole('button', { name: '2 transactions ↓' });
+    expect(targetPx(toggle, viewport)).toBeGreaterThanOrEqual(24);
+    // from md (no phone) it keeps the row's line
+    expect(targetPx(toggle, 768)).toBe(ROW_LINE_PX);
   });
 });
 
