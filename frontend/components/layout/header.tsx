@@ -42,7 +42,8 @@ function isDropdown(item: NavItem): item is NavDropdown {
   return 'children' in item;
 }
 
-const navItems: NavItem[] = [
+/** The nav's entries, in order (the shell's budget, `__tests__/utils/shell-budget.ts`, reads them). */
+export const navItems: NavItem[] = [
   { href: '/dao', label: 'DAO' },
   // Review 2026-11-03, item 4 (Nav.dc.html): Activities opens as Inventory does — what happened,
   // the transactions that carry it, the blocks that order them, and the blocks that lost.

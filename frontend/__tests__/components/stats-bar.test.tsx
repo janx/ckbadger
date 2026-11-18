@@ -447,6 +447,32 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     expect(Array.from(strip.children)).toEqual([block, epoch, ...homeOnly().slice(0, 3), live]);
   });
 
+  // Readability F3-f (the scale at 12 / 13 / 14 px): the home page's epoch line below md holds the
+  // number, the five-cell bar, `index / length` and the time left, 6 px apart. At its widest real
+  // content (`99,999`, `1,799 / 1,800`, `≈ 23h 59m left`) that is 340.8 px, and already 333.6 px
+  // with today's `≈ 3h 59m left`: past the 328 px line at 360 and the 288 px one at 320, where the
+  // nowrap epoch ran past the page. It breaks between its two groups, the epoch with its bar and
+  // its position with the time left, never inside either (each holds at 320: 134.4 and 200.4 px).
+  it('lets the epoch break between its bar and its position below md, never inside either (F3-f)', async () => {
+    nav.pathname = '/';
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+    const epoch = screen.getByTestId('vitals-epoch');
+    expect(epoch).toHaveClass('flex', 'flex-wrap');
+    expect(epoch).not.toHaveClass('whitespace-nowrap');
+    const groups = Array.from(epoch.children) as HTMLElement[];
+    expect(groups).toHaveLength(2);
+    const [barGroup, positionGroup] = groups;
+    for (const group of groups) expect(group).toHaveClass('flex', 'whitespace-nowrap');
+    expect(barGroup).toHaveTextContent(/^Epoch15,168/);
+    expect(barGroup).toContainElement(screen.getByTestId('vitals-epoch-bar'));
+    expect(positionGroup).toHaveTextContent(/^246 \/ 1,590≈ 3h 8m left$/);
+    // the home page's: drawn below md here, as before
+    expect(positionGroup.className).not.toMatch(/max-md:hidden/);
+  });
+
   it('holds the one line while the figures load', () => {
     nav.pathname = '/tx/0xabc';
     useRealtimeStore.setState({ socketHeld: false });
