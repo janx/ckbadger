@@ -46,10 +46,13 @@ const activity = {
     },
   ],
 };
+// B4 (re-pinned): three requests by three depositors; the same request by the same parties three
+// times running is one run, folded (they were three copies of one transaction's parties)
 const three = Array.from({ length: 3 }, (_, i) => ({
   ...activity,
   txHash: '0x' + String(i + 1).repeat(64),
   blockNumber: 123 - i,
+  participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
 }));
 
 describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {

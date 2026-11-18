@@ -1110,7 +1110,6 @@ export function ActivityRow({
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
   const [openRuns, setOpenRuns] = useState({ types: false, locks: false });
   const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails, {
     ...openRuns,
@@ -1155,12 +1154,7 @@ export function ActivityRow({
     >
       <ActivityRowHead
         layout="line"
-        title={
-          <>
-            {mark && <ClassMark kind={mark} className="mr-2" />}
-            {headline ?? activityHeadline(activity)}
-          </>
-        }
+        title={<ActivityTitle activity={activity} headline={headline} mark={markOverride} />}
         // A caller's own evidence (block, address pages) carries its own tx link; then the
         // headline stays text, which also keeps a headline with links of its own unnested.
         href={evidence === undefined ? `/tx/${activity.txHash}` : undefined}
@@ -1191,5 +1185,157 @@ export function ActivityRow({
         />
       )}
     </RowArticle>
+  );
+}
+
+/** The mark a row's title carries: the caller's (null for none), else the activity's class. */
+function titleMark(activity: ActivityBody, mark: AssetClass | null | undefined): AssetClass | null {
+  return mark === undefined ? activityClassMark(activity) : mark;
+}
+
+/**
+ * A row's title as its head draws it: its class mark, then its headline (the feed's own words,
+ * else the activity's Layer-3 narrative). The one place a title is drawn, for a row and a run.
+ */
+export function ActivityTitle({
+  activity,
+  headline,
+  mark,
+}: {
+  activity: ActivityBody;
+  headline?: ReactNode;
+  mark?: AssetClass | null;
+}) {
+  const shownMark = titleMark(activity, mark);
+  return (
+    <>
+      {shownMark && <ClassMark kind={shownMark} className="mr-2" />}
+      {headline ?? activityHeadline(activity)}
+    </>
+  );
+}
+
+/**
+ * The same title in words, what a feed's runs compare (`lib/activity-runs.ts`): the class mark's
+ * name and the headline's words. `headlineText` is a feed's own headline in words, as it draws it.
+ */
+export function activityTitleText(
+  activity: ActivityBody,
+  headlineText?: string,
+  mark?: AssetClass | null
+): string {
+  const shownMark = titleMark(activity, mark);
+  return `${shownMark === null ? '' : `${shownMark}: `}${headlineText ?? activityHeadline(activity)}`;
+}
+
+/**
+ * A run of rows that say the same thing, folded (readability lane B4; `lib/activity-runs.ts`): one
+ * row with what the rows share — the title, the scripts called by name, the parties — their count,
+ * and the newest time (the first row's: a feed is newest first). It counts rows and sums nothing:
+ * no amount of any row is drawn, and no total. Its button opens the ordinary rows in place, under
+ * it, and folds them again; it is a real button, reached by a tap, a click and the keyboard.
+ */
+export function FoldedActivityRow({
+  rows,
+  title,
+  showScriptDetails,
+  age,
+  focusLockHash,
+  quiet = false,
+  fresh = false,
+  open,
+  onToggle,
+}: {
+  /** The run, newest first: at least two committed rows. */
+  rows: readonly ActivityRowData[];
+  /** The title its rows draw (`ActivityTitle`). */
+  title: ReactNode;
+  showScriptDetails: boolean;
+  /** As the feed's rows: the age on a live feed, else the date (PA-22). */
+  age: boolean;
+  /** The party the page is about, written as text first (consistency C3). */
+  focusLockHash?: string;
+  /** Set back, as its rows are (a neighbour's rows on an identity's feed). */
+  quiet?: boolean;
+  fresh?: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const first = rows[0];
+  if (rows.length < 2)
+    throw new Error(`transaction ${first?.txHash}: a folded run holds at least two rows`);
+  if (first.timestamp === null || first.blockNumber === null)
+    throw new Error(`transaction ${first.txHash}: a folded run's rows are committed`);
+  const [openCalls, setOpenCalls] = useState({ types: false, locks: false });
+  // the scripts are the same on every row of a run: the first row's calls are the run's
+  const { calls } = activityDetails(first, showScriptDetails, {
+    ...openCalls,
+    open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })),
+  });
+  const indexed = first.participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
+  const { focus, others } = splitFocus(indexed, focusLockHash, first.txHash);
+  const parties = focus === null ? others : [focus, ...others];
+  const shown =
+    parties.length > PARTICIPANT_LIMIT ? parties.slice(0, PARTICIPANT_LIMIT - 1) : parties;
+  return (
+    <article
+      data-role="activity-run"
+      data-run-count={rows.length}
+      className={cn(ROW_CLASS, fresh && 'bg-jade/5', quiet && 'quiet')}
+    >
+      <ActivityRowHead
+        layout="line"
+        title={title}
+        details={calls}
+        hash={first.txHash}
+        blockNumber={first.blockNumber}
+        timestamp={first.timestamp}
+        evidence={
+          <>
+            newest <RowDate timestamp={first.timestamp} age={age} />
+          </>
+        }
+      />
+      <div
+        data-role="run-parties"
+        className="text-small leading-row flex flex-wrap items-center gap-x-4 gap-y-0 pl-[18px]"
+      >
+        {shown.map((p) => {
+          const lock = partyLock(p);
+          const isFocus = p === focus;
+          return (
+            <span
+              key={p.key}
+              data-role="party"
+              data-party={p.key}
+              data-this-address={isFocus || undefined}
+              className="inline-flex max-w-full flex-wrap items-center gap-x-2.5"
+            >
+              <ParticipantRefView participant={p} size="row" compact quiet linked={!isFocus} />
+              {isFocus && <span className="sr-only">this address</span>}
+              {lock && (
+                <span data-role="lock-kind">
+                  <PartyLockKind lock={lock} size="row" />
+                </span>
+              )}
+            </span>
+          );
+        })}
+        {shown.length < parties.length && (
+          <span className="text-text-dim">
+            {unitNode(`+${formatCount(parties.length - shown.length, 'participant')}`)}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        data-role="run-toggle"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
+      >
+        {open ? 'fewer ↑' : unitNode(`${formatCount(rows.length, 'transaction')} ↓`)}
+      </button>
+    </article>
   );
 }

@@ -1,7 +1,8 @@
 'use client';
 
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
-import { ActivityRow } from '@/components/activity/activity-row';
+import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
+import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   CLASS_COLORS,
@@ -136,6 +137,21 @@ function getActivityDayLabel(timestamp: string, now: number): string {
     day: 'numeric',
     timeZone: 'UTC',
   }).format(new Date(`${day}T00:00:00Z`));
+}
+
+/** The rows in their days, in order: consecutive rows under one divider are one group. */
+function dayGroups(
+  items: readonly GlobalActivity[],
+  now: number
+): { label: string; items: GlobalActivity[] }[] {
+  const groups: { label: string; items: GlobalActivity[] }[] = [];
+  for (const activity of items) {
+    const label = getActivityDayLabel(activity.timestamp, now);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) last.items.push(activity);
+    else groups.push({ label, items: [activity] });
+  }
+  return groups;
 }
 
 function mergeUniqueActivities(
@@ -563,26 +579,35 @@ export function ActivitiesStreamExplorer({
           <p className="text-text-dim py-4">Nothing of this kind in the latest activities.</p>
         ) : (
           <div>
-            {visibleItems.map((activity, index) => {
-              const key = itemKey(activity);
-              const previousLabel =
-                index > 0 ? getActivityDayLabel(visibleItems[index - 1].timestamp, now) : null;
-              const currentLabel = getActivityDayLabel(activity.timestamp, now);
-              const showDayDivider = currentLabel !== previousLabel;
-
-              return (
-                <div key={key}>
-                  {showDayDivider && <ActivityDayDivider label={currentLabel} />}
-                  {/* The lock kind gets its own column so it never wraps under the address. */}
-                  <ActivityRow
-                    activity={activity}
-                    fresh={highlightedKeys.has(key)}
-                    lockColumn
-                    age
-                  />
-                </div>
-              );
-            })}
+            {/* Readability B4: each day's rows, under its divider, with their runs folded; a run
+                folds within its day and across the older pages appended to it. */}
+            {dayGroups(visibleItems, now).map(({ label, items }) => (
+              <div key={`${label}:${itemKey(items[0])}`}>
+                <ActivityDayDivider label={label} />
+                <ActivityRuns
+                  age
+                  rows={items.map((activity) => {
+                    const key = itemKey(activity);
+                    return {
+                      key,
+                      subject: runSubject(activity, activityTitleText(activity)),
+                      activity,
+                      title: <ActivityTitle activity={activity} />,
+                      fresh: highlightedKeys.has(key),
+                      // The lock kind gets its own place so it never wraps under the address.
+                      row: (
+                        <ActivityRow
+                          activity={activity}
+                          fresh={highlightedKeys.has(key)}
+                          lockColumn
+                          age
+                        />
+                      ),
+                    };
+                  })}
+                />
+              </div>
+            ))}
 
             <div ref={sentinelRef} data-testid="activities-stream-sentinel" className="h-4" />
             {hasNextPage && !isFetchingNextPage && (

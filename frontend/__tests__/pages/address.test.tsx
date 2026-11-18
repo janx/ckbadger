@@ -1262,7 +1262,16 @@ describe('Address board · F2 blocks', () => {
   });
 
   it('draws every activity as the shared ActivityRow, this address first and once (C3)', async () => {
-    const second = { ...addressActivitiesFixture[0], txHash: fixtureHash(801), ckbDelta: '-5' };
+    // B4 (re-pinned): the second transaction has another party, so the two rows do not say the
+    // same thing and are not folded into one run (they were two transfers of this address alone)
+    const second = {
+      ...addressActivitiesFixture[0],
+      txHash: fixtureHash(801),
+      ckbDelta: '-5',
+      participants: [
+        { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [] },
+      ],
+    };
     const page = pageFixture([...addressActivitiesFixture, second]);
     // C14 asks each filter chip for a one-row page; answer it with one row and hasMore, as the
     // API would, so the feed's two rows do not reach the chip's one-row invariant.

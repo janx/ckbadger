@@ -25,10 +25,22 @@ vi.mock('@/lib/api', () => ({
   TAG_CELLBASE: 32,
 }));
 
+/**
+ * A lock hash for a fixture address, one per address as on chain (B4: a feed folds consecutive
+ * rows by their parties' lock hashes, so two addresses never share one; it was '0xaa' for all).
+ */
+const lockHashOf = (address: string) =>
+  `0x${[...address]
+    .map((c) => c.charCodeAt(0).toString(16))
+    .join('')
+    .slice(-64)
+    .padStart(64, '0')}`;
+
 function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantInfo {
+  const address = overrides.address ?? seededAddress('test');
   return {
-    address: overrides.address ?? seededAddress('test'),
-    lockHash: overrides.lockHash ?? '0xaa',
+    address,
+    lockHash: overrides.lockHash ?? (address === null ? '0xaa' : lockHashOf(address)),
     lockHashPrefix: overrides.lockHashPrefix ?? null,
     roles: overrides.roles ?? [],
     ckbDelta: overrides.ckbDelta ?? '0',

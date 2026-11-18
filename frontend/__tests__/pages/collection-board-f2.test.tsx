@@ -229,7 +229,11 @@ it('opens Recent activity with five rows and two links that open the full feed i
   }));
   await page();
   const recent = screen.getByRole('region', { name: 'Recent activity' });
-  await waitFor(() => expect(within(recent).getAllByRole('article')).toHaveLength(5));
+  // B4 (re-pinned on purpose): the five rows say the same thing (one fixture activity five times),
+  // so they are one run, folded, its count the five rows it holds (was five articles)
+  await waitFor(() => expect(within(recent).getAllByRole('article')).toHaveLength(1));
+  expect(within(recent).getByRole('article')).toHaveAttribute('data-run-count', '5');
+  expect(within(recent).getByRole('button', { name: '5 transactions ↓' })).toBeInTheDocument();
   expect(api.getCollectionActivityFeed).toHaveBeenCalledWith('spore', NERVAPE3X_CLUSTER, {
     limit: 5,
   });

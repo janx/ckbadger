@@ -9,7 +9,8 @@ import type {
   ItemActivity,
   Transaction,
 } from '@/lib/api';
-import { ActivityRow } from '@/components/activity/activity-row';
+import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
+import { ActivityRuns, runSubject, type FeedRow } from '@/components/activity/activity-runs';
 import { ActivityReadError } from '@/components/activity-event-row';
 import {
   collectionFeedHeadline,
@@ -558,20 +559,19 @@ function RecentAssetFeed({
           <>
             <AssetReadState error={acts.error} label="recent activity" retained />
             {acts.data.data.length ? (
-              acts.data.data
-                .slice(0, recent.rows)
-                .map((a) => (
-                  <FeedActivityRow
-                    key={a.txHash}
-                    activity={a}
-                    item={item}
-                    collection={collection}
-                    plain={plain}
-                    focusItemId={focusItemId}
-                    mark={mark}
-                    focusTokenTypeHash={token?.typeHash}
-                  />
-                ))
+              <ActivityRuns
+                showScriptDetails={!plain}
+                rows={acts.data.data.slice(0, recent.rows).map((a) =>
+                  feedActivityRow(a, {
+                    item,
+                    collection,
+                    plain,
+                    focusItemId,
+                    mark,
+                    focusTokenTypeHash: token?.typeHash,
+                  })
+                )}
+              />
             ) : (
               <p className="text-text-dim text-small py-6">No activities.</p>
             )}
@@ -584,17 +584,8 @@ function RecentAssetFeed({
   );
 }
 
-/** One activity row of an asset feed, its headline from the item or collection context. */
-function FeedActivityRow({
-  activity: a,
-  item,
-  collection,
-  plain,
-  focusItemId,
-  mark,
-  focusTokenTypeHash,
-}: {
-  activity: GlobalActivity;
+/** What an asset feed's rows are drawn with (the feed's props). */
+interface FeedRowOptions {
   item?: ItemFeedSubject;
   collection: boolean;
   plain: boolean;
@@ -602,7 +593,17 @@ function FeedActivityRow({
   mark?: AssetClass;
   /** A token page's token (`AssetFeedProps.token`): its amount leads each line (B4). */
   focusTokenTypeHash?: string;
-}) {
+}
+
+/**
+ * One activity row of an asset feed, its headline from the item or collection context, with what
+ * its run is compared on (readability B4: the title in words, a neighbour's set-back rows apart
+ * from the item's own). A row the feed cannot read reports itself in place and never folds.
+ */
+function feedActivityRow(
+  a: GlobalActivity,
+  { item, collection, plain, focusItemId, mark, focusTokenTypeHash }: FeedRowOptions
+): FeedRow {
   let headline: ItemFeedHeadline | undefined;
   let notes: ReadonlyMap<string, string> | undefined;
   try {
@@ -617,28 +618,45 @@ function FeedActivityRow({
         : undefined;
   } catch (error) {
     // A row that breaks the feed contract is reported in place; the page stays up.
-    return (
-      <div className="border-row-rule border-b py-3">
-        <ActivityReadError txHash={a.txHash} error={error} />
-      </div>
-    );
+    return {
+      key: a.txHash,
+      subject: null,
+      activity: a,
+      title: null,
+      row: (
+        <div className="border-row-rule border-b py-3">
+          <ActivityReadError txHash={a.txHash} error={error} />
+        </div>
+      ),
+    };
   }
-  return (
-    <ActivityRow
-      activity={a}
-      headline={headline && <FeedHeadlineText headline={headline} />}
-      // a neighbour's row is set back (R4): the quiet variant, every word dim, nothing faded
-      className={headline?.neighbour ? 'quiet' : undefined}
-      // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
-      mark={mark ?? (item?.kind === 'identity' ? 'identities' : undefined)}
-      showScriptDetails={!plain}
-      lockColumn={plain}
-      foldObjects={plain}
-      focusItemId={focusItemId}
-      focusTokenTypeHash={focusTokenTypeHash}
-      participantNotes={notes}
-    />
-  );
+  // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
+  const rowMark = mark ?? (item?.kind === 'identity' ? 'identities' : undefined);
+  const headlineNode = headline && <FeedHeadlineText headline={headline} />;
+  const quiet = headline?.neighbour === true;
+  const words = headline && [headline.text, ...(headline.raw ?? [])].filter(Boolean).join(' · ');
+  return {
+    key: a.txHash,
+    subject: runSubject(a, `${quiet ? 'neighbour: ' : ''}${activityTitleText(a, words, rowMark)}`),
+    activity: a,
+    title: <ActivityTitle activity={a} headline={headlineNode} mark={rowMark} />,
+    quiet,
+    row: (
+      <ActivityRow
+        activity={a}
+        headline={headlineNode}
+        // a neighbour's row is set back (R4): the quiet variant, every word dim, nothing faded
+        className={quiet ? 'quiet' : undefined}
+        mark={rowMark}
+        showScriptDetails={!plain}
+        lockColumn={plain}
+        foldObjects={plain}
+        focusItemId={focusItemId}
+        focusTokenTypeHash={focusTokenTypeHash}
+        participantNotes={notes}
+      />
+    ),
+  };
 }
 
 function FullAssetFeed({
@@ -703,18 +721,20 @@ function FullAssetFeed({
           <AssetReadState error={current.error} label={tab} retained />
           {tab === 'activities' ? (
             acts.data!.data.length ? (
-              acts.data!.data.map((a) => (
-                <FeedActivityRow
-                  key={a.txHash}
-                  activity={a}
-                  item={item}
-                  collection={collection}
-                  plain={plain}
-                  focusItemId={focusItemId}
-                  mark={mark}
-                  focusTokenTypeHash={token?.typeHash}
-                />
-              ))
+              // B4: a run folds within this page; one that goes on is a second run on the next
+              <ActivityRuns
+                showScriptDetails={!plain}
+                rows={acts.data!.data.map((a) =>
+                  feedActivityRow(a, {
+                    item,
+                    collection,
+                    plain,
+                    focusItemId,
+                    mark,
+                    focusTokenTypeHash: token?.typeHash,
+                  })
+                )}
+              />
             ) : (
               <p className="text-text-dim text-small py-6">No activities.</p>
             )
