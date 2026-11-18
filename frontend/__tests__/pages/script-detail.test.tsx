@@ -739,6 +739,15 @@ describe('ScriptDetailPage', () => {
   });
 
   it('lists the cells of every registered reference against the family total (SC-S10)', async () => {
+    // Re-pinned on purpose (readability B5): one page draws no pager, so the shared reference has
+    // an older page here; the pager's range still counts against the family total.
+    const oneReference = vi.mocked(api.getCellsByScriptRef).getMockImplementation()!;
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(async (params) => {
+      const page = await oneReference(params);
+      return params.codeHash === sharedVersionCodeHash && params.hashType === 'type'
+        ? { ...page, hasMore: true, nextCursor: 'older' }
+        : page;
+    });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     const cells = await screen.findByRole('table', { name: 'Its cells' });
     expect(within(cells).getByText('Owner')).toBeInTheDocument();
