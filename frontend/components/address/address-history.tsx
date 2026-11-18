@@ -115,6 +115,8 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
       focusLockHash={address.lockScriptHash}
       foldObjects
       itemTone="sign"
+      // the transaction's other parties are references here, their changes not on the row
+      unlistedParties={activity.participants.length}
     />
   );
 }

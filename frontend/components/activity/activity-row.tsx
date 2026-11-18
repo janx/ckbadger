@@ -648,6 +648,32 @@ export function formatOccupiedDelta(usedDelta: string): string {
   return withUnit(formatSignedCkbInteger(shannons), 'B');
 }
 
+/**
+ * The party whose line's only movement is the fee (readability lane B4): its index, or null. Given
+ * a row that lists every party of the transaction with its change, CKB is conserved but for what
+ * enters (a cellbase's reward, a Nervos DAO withdrawal's compensation) and what leaves (the fee).
+ * When nothing entered, no item moved, and exactly one party's CKB changed and went down, that
+ * change is the fee exactly: its line says so, in the reading ink. Nothing is summed to find it.
+ */
+function feeOnlyParty(activity: ActivityBody): number | null {
+  if (activity.isCellbase) return null;
+  if (
+    activity.protocolActions.some(
+      (pa) => pa.protocol === 'dao' && pa.action === 'withdraw_complete'
+    )
+  )
+    return null;
+  let payer: number | null = null;
+  for (const [i, p] of activity.participants.entries()) {
+    if (p.itemDeltas.length > 0) return null;
+    const delta = BigInt(p.ckbDelta);
+    if (delta === BigInt(0)) continue;
+    if (delta > BigInt(0) || payer !== null) return null;
+    payer = i;
+  }
+  return payer;
+}
+
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
 }
@@ -778,6 +804,7 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 function ParticipantLine({
   p,
   focus,
+  fee,
   foldObjects,
   focusItemId,
   itemTone,
@@ -785,6 +812,8 @@ function ParticipantLine({
 }: {
   p: ActivityParticipant & { key: string };
   focus: boolean;
+  /** Its only movement is the fee (`feeOnlyParty`): "fee" and the fee, in the reading ink. */
+  fee: boolean;
   foldObjects: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
@@ -825,9 +854,19 @@ function ParticipantLine({
           {notes.get(p.lockHash)}
         </span>
       )}
-      <span data-role="ckb">
-        {/* A feed line: the summary form (R5), the exact change in its title. */}
-        <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
+      <span data-role="ckb" data-fee={fee || undefined}>
+        {/* A feed line: the summary form (R5), the exact change in its title. A fee is no loss to
+            mark in the cinnabar: the word says where it went, its amount is unsigned (B4). */}
+        {fee ? (
+          <>
+            <span data-role="fee-label" className="text-text-dim">
+              fee
+            </span>{' '}
+            <CkbAmount form="summary" shannons={-BigInt(p.ckbDelta)} signed={false} tone="plain" />
+          </>
+        ) : (
+          <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
+        )}
       </span>
       {phoneObjects && (
         <span
@@ -917,10 +956,13 @@ function Participants({
   focusItemId,
   itemTone,
   notes,
+  feePayer,
 }: {
   participants: ActivityParticipant[];
   txHash: string;
   focusLockHash?: string;
+  /** The index of the party whose only movement is the fee (`feeOnlyParty`), or null. */
+  feePayer: number | null;
   foldObjects?: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
@@ -941,6 +983,7 @@ function Participants({
           key={p.key}
           p={p}
           focus={p === focus}
+          fee={feePayer !== null && p.key === indexed[feePayer].key}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
           itemTone={itemTone}
@@ -1007,6 +1050,12 @@ export type ActivityRowProps = {
   focusLockHash?: string;
   /** PA-22: a row of a live feed says its age, the date-time its hover; else the date. */
   age?: boolean;
+  /**
+   * How many of the transaction's parties the row does not list with their changes (the address
+   * page lists its own party alone): a line is said to be the fee (`feeOnlyParty`) only on a row
+   * that lists every party, since an unlisted party's change is not known to it.
+   */
+  unlistedParties?: number;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -1030,6 +1079,7 @@ export function ActivityRow({
   participantNotes,
   focusLockHash,
   age = false,
+  unlistedParties = 0,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -1109,6 +1159,7 @@ export function ActivityRow({
           focusItemId={focusItemId}
           itemTone={itemTone}
           notes={participantNotes}
+          feePayer={mode === 'cross-user' && unlistedParties === 0 ? feeOnlyParty(activity) : null}
         />
       )}
     </RowArticle>
