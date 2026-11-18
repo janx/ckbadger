@@ -13,6 +13,11 @@ export interface ListColumn<T> {
   minWidth: number;
   width?: string;
   numeric?: boolean;
+  /**
+   * The cells' own classes: ink, size, vertical padding, white-space, truncation. Never a class that
+   * takes a horizontal pixel (a padding, a margin, a width, a side border): the table owns those
+   * (`CELL_HORIZONTAL_CLASSES`), and a mark a column draws beside its content is in its minWidth.
+   */
   className?: string;
   /** F2 blocks: a richer column header (e.g. a bar column's 0 … scale ticks); `label` stays the plain name. */
   header?: ReactNode;
@@ -113,11 +118,38 @@ const CELL_CLASS: Record<ListTableDensity, string> = {
 
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';
 
+/**
+ * A class that takes a horizontal pixel of a cell, read without its variant (`md:`, `last:`) and
+ * its `!`: a padding or a margin on a horizontal side (`p-*` sets all four), a width, a border of
+ * a horizontal side (`border` and `border-2` set all four), or the same written as an arbitrary
+ * property.
+ */
+const HORIZONTAL_SPACE =
+  /^-?(p|px|pl|pr|ps|pe|m|mx|ml|mr|ms|me|w|min-w|max-w|size)-|^border(-[xlrse])?(-(\d+|\[\d[^\]]*\]))?$|^\[(padding|margin|width|min-width|max-width|border)(-(left|right|inline|inline-start|inline-end))?(-width)?:/;
+
+/**
+ * A column's own classes take no horizontal pixel of its cells (review fb-tests 5, the lead's
+ * ruling): the table writes `pl-0` and the gap on every cell, and a column's `px-2` would replace
+ * both through cn() and draw its content in pixels its minWidth never counted.
+ */
+function refuseHorizontalSpace<T>(label: string, column: ListColumn<T>): void {
+  for (const cls of column.className?.split(/\s+/) ?? []) {
+    const bare = cls.replace(/^([a-z0-9-]+:)*/, '').replace(/^!/, '');
+    if (HORIZONTAL_SPACE.test(bare))
+      throw new Error(
+        `${label}: column ${column.key} sets its own horizontal space (${cls}); a cell's ` +
+          `horizontal space is the table's, its ${CELL_GAP_PX} px gap, and a column budgets what ` +
+          'it draws beside its content in minWidth'
+      );
+  }
+}
+
 export function minimumWidth<T>(label: string, columns: readonly ListColumn<T>[]): number {
   let sum = 0;
   for (const c of columns) {
     if (!Number.isFinite(c.minWidth) || c.minWidth <= 0)
       throw new Error(`${label}: invalid minimum width for ${c.key}`);
+    refuseHorizontalSpace(label, c);
     sum += c.minWidth;
   }
   return sum;
