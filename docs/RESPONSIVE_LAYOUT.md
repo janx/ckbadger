@@ -135,7 +135,11 @@ The 640–767 band has one content width to design for. Below 640 the container 
   is at least 48 px and holds its head's tick row whole, the ticks written in the tick form as
   every axis is ("0 … 600k"), the unit in the head's label, the exact figure beside the bar. A
   table changes form exactly where its budgets stop fitting (`ListTable`); two lists of one page
-  change at one width, the larger of their sums.
+  change at one width, the larger of their sums. A phone row's line is a left part that wraps and
+  an optional right part that keeps the right edge and drops under the left whole; the right part
+  is never wider than its line (`PhoneRow`), so a run of figures longer than a line of its own
+  breaks between its figures from the line's left edge: a long row grows taller, the page never
+  wider.
 - **Analytic tables** that explain a page (balance changes, script groups, peer evidence) get a
   phone form of their own; they are never a sideways scroller in a first screen.
 - **Scrollbars**: painted in the page's palette and thin inside the page (`app/globals.css`), so a

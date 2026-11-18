@@ -15,7 +15,12 @@ export interface PhoneLine {
   key: string;
   tone: PhoneLineTone;
   left: ReactNode;
-  /** The figure the line ends with; it keeps the right edge, and drops under `left` whole. */
+  /**
+   * The figure the line ends with; it keeps the right edge, and drops under `left` whole. It is
+   * never wider than the line: on a line of its own a part longer than the line takes the line's
+   * width and breaks inside itself (a `Dotted` list between its figures, from the line's left
+   * edge), so a long run of figures makes the row taller, never the page wider.
+   */
   right?: ReactNode;
   /** The left part takes the free width (a bar). */
   grow?: boolean;
@@ -95,7 +100,7 @@ export function PhoneRow({
             <span
               data-part="right"
               className={cn(
-                'ml-auto shrink-0 text-right tabular-nums',
+                'ml-auto max-w-full shrink-0 text-right tabular-nums',
                 line.tone === 'head' && 'text-text text-small'
               )}
             >
