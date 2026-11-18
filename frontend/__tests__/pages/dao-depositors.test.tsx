@@ -133,6 +133,25 @@ describe('DAO depositors page (DAO-12)', () => {
       expect(cell.querySelector('.text-body')).toBeNull();
   });
 
+  // Readability B5: the page drew its own Previous / Next, the same control as the site's pager
+  // without its count; it now pages with the one pager, which draws nothing for one page.
+  it('pages with the site’s one pager, and draws none for one page (B5)', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], '2'));
+    const { unmount } = render(<DaoDepositorsPage />);
+    await screen.findByRole('table', { name: 'DAO depositors' });
+    const controls = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    expect(controls).not.toBeNull();
+    expect(within(controls).getByRole('button', { name: '← Previous' })).toBeDisabled();
+    expect(within(controls).getByRole('button', { name: 'Next 50 →' })).toBeEnabled();
+    expect(screen.getByText('Showing 1–2 of 3 depositors · 50 per page')).toBeInTheDocument();
+    unmount();
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
+    render(<DaoDepositorsPage />);
+    await screen.findByRole('table', { name: 'DAO depositors' });
+    expect(document.querySelector('[data-role="pager-controls"]')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
   // Readability B5: a head stands over what it names; the Share head over the share, not its bar.
   it('stands the Share head over the share, the ticks over the track (B5)', async () => {
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1], null));
