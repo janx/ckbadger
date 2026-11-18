@@ -1362,7 +1362,9 @@ export function FoldedActivityRow({
         data-role="run-toggle"
         aria-expanded={open}
         onClick={onToggle}
-        className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
+        // a finger's target on a phone: WCAG 2.2's minimum, 24 px tall (2.5.8; the row line is
+        // 20), its words centred in it; from md the row's line (lane B4 fix round)
+        className="text-interactive hover:text-jade text-small leading-row min-h-6 self-start bg-transparent pl-[18px] transition-colors md:min-h-0"
       >
         {open ? 'fewer ↑' : unitNode(`${formatCount(rows.length, 'transaction')} ↓`)}
       </button>
