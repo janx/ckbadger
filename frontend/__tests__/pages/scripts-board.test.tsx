@@ -502,6 +502,31 @@ describe('Scripts list phone row (board L6)', () => {
     vi.restoreAllMocks();
   });
 
+  // The coordinator's overflow sweep (F3-e): at a 360 px window the counts, one nowrap run of 45
+  // glyphs at 13 px ("817,008 live · of 78,764,381 · 0.13% occupied", 351 px), stood 7 px past
+  // the 328 px row. A phone row's line is budgeted as a column is: below 560 px the counts are two
+  // lines by construction, live of ever over the occupied share, each whole, the widest of them
+  // "99,999,999 live · of 99,999,999" (31 characters, 241.8 px) inside 328.
+  it('writes its counts as two lines inside a 328 px row: live of ever, then the share', async () => {
+    atContainerWidth(328);
+    render(<ScriptsPage />);
+    const rows = await screen.findAllByTestId('script-row-mobile');
+    const right = rows[0].querySelector('[data-line="code"] > [data-part="right"]')!;
+    const lines = Array.from(right.querySelectorAll(':scope > * > *'));
+    expect(lines.map((l) => l.textContent)).toEqual([
+      '161,049 live · of 2,707,778',
+      '4.19% occupied',
+    ]);
+    for (const line of lines) expect(line).toHaveClass('whitespace-nowrap');
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    for (const widest of [
+      '99,999,999 live · of 99,999,999',
+      'unavailable live · of unavailable',
+      '100.00% occupied',
+    ])
+      expect(at(widest, 13)).toBeLessThanOrEqual(328);
+  });
+
   it('is three lines at 358 px: name and CKB · role, code, counts · the description in full', async () => {
     atContainerWidth(358);
     render(<ScriptsPage />);
