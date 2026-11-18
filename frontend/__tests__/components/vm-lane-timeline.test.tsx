@@ -2,6 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  rectBox,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 import { VmLaneTimeline } from '@/components/hardforks/vm-lane-timeline';
 import producer from '@/__tests__/fixtures/network-api-producer/hardforks-deployments.json';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
@@ -344,5 +352,42 @@ describe('VmLaneTimeline', () => {
         />
       )
     ).toThrow(/between genesis and the tip/);
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the lanes stands whole inside the svg and clear of every other word — the plot's name, each
+// edition's name over its epoch, each lane's head over its note (or its header line on a phone),
+// the VM inside its bar, the column head, the years and "now" — measured by the type modules
+// (0.6 em a glyph; a tight line over its baseline, its descent under it). The real case is the
+// mainnet board's: two editions, 1,830,780 live references on `type`, an empty lane, at the
+// hardforks column at 1280 (1232), at 640 (608), and on phones (358, 326).
+describe('VmLaneTimeline: every word in its place (readability F3)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([1232, 608, 358, 326])('at %i px', (width) => {
+    stubChartWidth(width);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={laned}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    const svg = screen.getByRole('img');
+    const lines = allTextLines(svg);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the lanes', 'flush');
+    expectApart(lines, `the lanes at ${width}`);
+    // a VM's name inside its bar
+    const bars = [...svg.querySelectorAll('[data-lane] g')].filter((g) =>
+      /^VM\d$/.test(g.querySelector('text')?.textContent ?? '')
+    );
+    expect(bars.length).toBe(5);
+    for (const bar of bars)
+      for (const line of textLines(bar.querySelector('text')!))
+        expectInside(line, rectBox(bar.querySelector('rect')!), `${line.text} in its bar`);
   });
 });
