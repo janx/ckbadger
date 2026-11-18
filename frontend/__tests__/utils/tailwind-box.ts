@@ -371,6 +371,27 @@ function cssRules(cls: string): { body: string; inAtRule: string | null }[] {
   return out;
 }
 
+/**
+ * The value a class of app/globals.css sets for a property a line breaks by (white-space,
+ * overflow-wrap, word-break), undefined where it sets none; refused where it sets it inside an
+ * at-rule (a width or a state the reader cannot place).
+ */
+export function stylesheetValue(
+  cls: string,
+  prop: 'white-space' | 'overflow-wrap' | 'word-break'
+): string | undefined {
+  let value: string | undefined;
+  for (const rule of cssRules(cls))
+    for (const declaration of rule.body.split(';')) {
+      const colon = declaration.indexOf(':');
+      if (colon < 0 || declaration.slice(0, colon).trim() !== prop) continue;
+      if (rule.inAtRule)
+        throw new Error(`tailwind-box: .${cls} sets ${prop} in ${rule.inAtRule}; teach the reader`);
+      value = declaration.slice(colon + 1).trim();
+    }
+  return value;
+}
+
 const cssCache = new Map<string, Decl[]>();
 
 /** The declarations a stylesheet class makes that bear on a row's width (read once per class). */

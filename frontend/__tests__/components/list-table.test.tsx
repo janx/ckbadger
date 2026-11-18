@@ -9,6 +9,7 @@ import {
   CELL_HORIZONTAL_CLASSES,
   ListTable,
   WIDE_ROW_MIN_WIDTH,
+  cellClassOwner,
   listTableForm,
   minimumWidth,
   type ListColumn,
@@ -442,7 +443,15 @@ describe('ListTable owns every horizontal pixel of a cell (review fb-tests 5)', 
     render: (r) => r.name,
   });
 
-  it('refuses a column that sets a padding, a margin, a width or a side border, naming it', () => {
+  // Re-pinned on purpose (review fb-logic N2 with fb-tests SHOULD-3, the lead's ruling): the rule
+  // was a list of what a column may NOT set, so a class it did not parse passed — a variant it did
+  // not strip (`max-[600px]:px-2`, `[&_a]:ml-2`), a utility it did not list (`space-x-2`,
+  // `indent-4`), a border value it did not read (`border-l-[var(--w)]`). It is a list of what a
+  // column MAY set now (`cellClassOwner`): its cells' ink, size, vertical padding, white-space,
+  // truncation and alignment, with no variant; anything else is refused by name (the message was
+  // "sets its own horizontal space", which no longer names every refusal).
+  const refused = (cls: string) => `Holdings: column name sets a class a column may not (${cls})`;
+  it('refuses a column that sets anything but its cells’ ink, size, vertical padding, white-space, truncation or alignment, naming it', () => {
     for (const cls of [
       'px-2',
       'pl-1',
@@ -465,38 +474,70 @@ describe('ListTable owns every horizontal pixel of a cell (review fb-tests 5)', 
       'md:px-4',
       'last:pr-2',
       '[padding-left:3px]',
-    ])
-      expect(() => listTableForm('Holdings', 608, [named(`text-body ${cls}`), COLUMNS[1]])).toThrow(
-        `Holdings: column name sets its own horizontal space (${cls})`
-      );
-    // the narrower table's columns, and the sum a page computes at load, are held to it too
-    expect(() => listTableForm('Holdings', 300, COLUMNS, [named('px-2'), NARROW[1]])).toThrow(
-      'Holdings: column name sets its own horizontal space (px-2)'
-    );
-    expect(() => minimumWidth('Holdings', [named('pl-3')])).toThrow(
-      'Holdings: column name sets its own horizontal space (pl-3)'
-    );
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    stubChartWidth(608);
-    expect(() => render(table({ columns: [named('px-2'), COLUMNS[1]] }))).toThrow(
-      'Holdings: column name sets its own horizontal space (px-2)'
-    );
-  });
-
-  it('lets a column set what takes no horizontal pixel', () => {
-    for (const cls of [
-      'py-1.5',
-      'py-[9px] align-top',
-      'text-body text-text-dim',
-      'truncate',
-      'whitespace-nowrap',
-      '!whitespace-normal',
+      // what the list of refusals let through (review fb-logic N2)
+      'max-[600px]:px-2',
+      '*:px-2',
+      '[&_a]:ml-2',
+      'group-hover/row:px-2',
+      'data-[x=y]:pl-2',
+      'space-x-2',
+      'indent-4',
+      '-indent-[2ch]',
+      'translate-x-1',
+      'tracking-wide',
+      'border-l-[length:3px]',
+      'border-l-[var(--w)]',
+      // no family a column's doc permits (moved here from the passing list on purpose: no column
+      // sets them, and the list is what columns may set)
       'border-b',
       'border-t-2',
       'border-row-rule',
-      'font-medium tabular-nums',
+      'font-medium',
+      'tabular-nums',
+      // a permitted family under a variant: a column's classes have none
+      'md:whitespace-nowrap',
+      'hover:text-jade',
+      // an arbitrary value or property
+      'text-[13px]',
+      '[white-space:nowrap]',
+    ])
+      expect(() => listTableForm('Holdings', 608, [named(`text-body ${cls}`), COLUMNS[1]])).toThrow(
+        refused(cls)
+      );
+    // the narrower table's columns, and the sum a page computes at load, are held to it too
+    expect(() => listTableForm('Holdings', 300, COLUMNS, [named('px-2'), NARROW[1]])).toThrow(
+      refused('px-2')
+    );
+    expect(() => minimumWidth('Holdings', [named('pl-3')])).toThrow(refused('pl-3'));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    stubChartWidth(608);
+    expect(() => render(table({ columns: [named('px-2'), COLUMNS[1]] }))).toThrow(refused('px-2'));
+  });
+
+  // Every class a column of the site sets (the 18 files that build ListColumns, read 2026-11-19),
+  // and each family the list permits.
+  it('lets a column set its cells’ ink, size, vertical padding, white-space, truncation and alignment', () => {
+    for (const cls of [
+      'py-1.5',
+      'py-[9px] align-top',
+      'py-3 align-top',
+      'text-body py-1.5',
+      'text-body text-text-dim',
+      'text-text-dim',
+      'truncate',
+      'whitespace-nowrap',
+      'whitespace-nowrap truncate',
+      'whitespace-normal',
+      '!whitespace-normal',
+      '!whitespace-normal text-text-dim',
+      'py-[9px] truncate',
+      'text-meta text-jade/80 text-right align-middle pt-1 pb-px',
     ])
       expect(listTableForm('Holdings', 608, [named(cls), COLUMNS[1]])).toBe('table');
+    expect(cellClassOwner('py-3')).toBe('column');
+    expect(cellClassOwner('sticky')).toBe('table');
+    expect(cellClassOwner('pl-0')).toBe('table');
+    expect(cellClassOwner('px-2')).toBeNull();
   });
 
   // The gap and the class that draws it are one fact: the class's step read from the Tailwind
