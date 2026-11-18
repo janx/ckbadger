@@ -191,9 +191,10 @@ describe('Address v3', () => {
     vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
     render(<AddressDetailPage />);
     expect(await screen.findByText('nothing at this address.')).toBeInTheDocument();
-    // U-18: the checked endpoint stands in the facts, the address shortened, once
+    // U-18: the checked endpoint stands in the facts, the address shortened, once; R9 (re-pinned):
+    // shortened as an address, `ckb1…` and its last 8 (it was cut as a hash, 10…6)
     expect(document.querySelector('.error-facts [data-endpoint]')).toHaveTextContent(
-      `/addresses/${addressText.slice(0, 10)}…${addressText.slice(-6)}`
+      `/addresses/${addressText.slice(0, 4)}…${addressText.slice(-8)}`
     );
   });
 
