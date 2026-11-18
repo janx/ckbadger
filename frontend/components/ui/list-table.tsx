@@ -73,15 +73,6 @@ export interface ListTableProps<T> {
 export type ListTableDensity = 'default' | 'row';
 
 /**
- * A column head (B5; a label, so quiet by R3): sticky, on the vitals strip's own opaque ground so no row shows through, one
- * layer under the site header (z-40). Its rule is its own 1 px line in the row-rule ink: a
- * collapsed table border is painted by the table and would stay behind where the head was.
- */
-const HEAD_CLASS =
-  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 pl-0 pr-4 font-normal last:pr-0 after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule';
-const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
-
-/**
  * The gap a column keeps after its content, its cells' `pr-4` (the last column keeps none,
  * `last:pr-0`): every column but the last budgets it in its minimum width. It is a cell's ONLY
  * horizontal padding: `pl-0` is written out because a browser gives a table cell 1 px of padding
@@ -90,10 +81,34 @@ const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
  */
 export const CELL_GAP_PX = 16;
 
+/**
+ * The gap as the class that draws it: Tailwind's `pr-4`, four of its 0.25 rem steps, 16 px at the
+ * root's 16 px (`__tests__/components/list-table.test.tsx` reads the step from the config, so the
+ * class and CELL_GAP_PX cannot move apart).
+ */
+export const CELL_GAP_CLASS = 'pr-4';
+
+/**
+ * Every horizontal class a head and a cell carry, and the only ones: no left padding, the gap,
+ * none after the last column.
+ */
+export const CELL_HORIZONTAL_CLASSES: readonly string[] = ['pl-0', CELL_GAP_CLASS, 'last:pr-0'];
+
+/**
+ * A column head (B5; a label, so quiet by R3): sticky, on the vitals strip's own opaque ground so no row shows through, one
+ * layer under the site header (z-40). Its rule is its own 1 px line in the row-rule ink: a
+ * collapsed table border is painted by the table and would stay behind where the head was.
+ */
+const HEAD_CLASS = [
+  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 font-normal after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule',
+  ...CELL_HORIZONTAL_CLASSES,
+].join(' ');
+const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
+
 /** `td` classes per density; `th` is the same in both. */
 const CELL_CLASS: Record<ListTableDensity, string> = {
-  default: 'min-w-0 py-3 pl-0 pr-4 align-top last:pr-0',
-  row: 'min-w-0 py-[11px] pl-0 pr-4 align-middle last:pr-0',
+  default: ['min-w-0 py-3 align-top', ...CELL_HORIZONTAL_CLASSES].join(' '),
+  row: ['min-w-0 py-[11px] align-middle', ...CELL_HORIZONTAL_CLASSES].join(' '),
 };
 
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';
