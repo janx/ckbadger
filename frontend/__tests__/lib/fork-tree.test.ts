@@ -115,26 +115,23 @@ describe('forkTreeLayout (responsive V4: the two branches drawn to the measured 
     expect(layout.labelsUnder).toBe(false);
   });
 
-  // Re-pinned (readability F3): the time under a compact block is a clock to the millisecond,
-  // 86.4 px at 12 px (72 at 10), so it needs its column, the tile and 16 px of the gap after it,
-  // under the last block too: four 72 px blocks need 6 + 4 × 72 + 3 × 20 + 16 = 370 px (they
-  // fitted 358 at 10 px), and at 358 (a 390 phone) the oldest two heights fold.
-  it('fits four 72 px blocks into 370 px with the time and miner under the boxes', () => {
-    const layout = forkTreeLayout(live, 370);
+  // Re-pinned twice: lane F3-d moved this to 370 px (the last column's 12 px labels kept 16 px
+  // after it, so at 358 the oldest two heights folded); the ruling on F3-d sets it back to 358:
+  // the last column's labels end at its tile's right edge, so the svg keeps 4 px after it again,
+  // 6 + 4 × 72 + 3 × 20 + 4 = 358, and the fork's dropped block keeps its column.
+  it('fits four 72 px blocks into 358 px with the time and miner under the boxes', () => {
+    const layout = forkTreeLayout(live, 358);
     expect(layout.form).toBe('compact');
     expect(layout.tileW).toBe(FORK_TREE.compact.minTile);
     expect(layout.labelsUnder).toBe(true);
     expect(layout.collapsed).toBeNull();
-    expect(layout.width).toBe(370);
+    expect(layout.width).toBe(358);
     for (const n of [11, 12, 13, 14]) {
       expect(layout.x(n)).toBeGreaterThanOrEqual(0);
-      // the block and the run of its labels after it
-      expect(layout.x(n) + layout.tileW + FORK_TREE.compact.labelRun).toBeLessThanOrEqual(370);
+      expect(layout.x(n) + layout.tileW).toBeLessThanOrEqual(358);
     }
     // blocks keep their order with a gap for the branch line between them
     expect(layout.x(12) - layout.x(11)).toBe(layout.tileW + FORK_TREE.compact.gap);
-    // at 358 the oldest two heights fold into "+2 earlier"
-    expect(forkTreeLayout(live, 358).collapsed).toEqual({ count: 2, first: 11, last: 12 });
   });
 
   it('collapses the oldest blocks of a seven-deep fork into one "+N earlier" column', () => {
@@ -147,11 +144,14 @@ describe('forkTreeLayout (responsive V4: the two branches drawn to the measured 
     // the collapsed column plus the newest blocks, every one of them at least 72 px
     expect(layout.columns[0]).toBe(last + 1);
     expect(layout.columns.at(-1)).toBe(107);
-    // re-pinned (readability F3): the svg keeps the last column's label run (16 px, was 4)
+    // re-pinned (the ruling on F3-d): the svg keeps 4 px after the last tile again (lane F3-d had
+    // 16), and the fold's box holds its "+6 earlier" (6 + 72 + 6 = 84 px at 12 px), so where the
+    // tree folds every tile is at least 84 px: floor((358 − 6 − 4 + 20) / (84 + 20)) = 3 columns
+    // (4 with 72 px tiles, before the type change and in lane F3-d)
     expect(layout.columns.length + 1).toBe(
-      Math.floor((358 - 6 - FORK_TREE.compact.right + 20) / (72 + 20))
+      Math.floor((358 - 6 - FORK_TREE.compact.right + 20) / (84 + 20))
     );
-    expect(layout.tileW).toBeGreaterThanOrEqual(72);
+    expect(layout.tileW).toBeGreaterThanOrEqual(84);
     // a hidden block is drawn in the collapsed column
     expect(layout.x(101)).toBe(layout.x(100));
     expect(layout.x(107) + layout.tileW).toBeLessThanOrEqual(358);

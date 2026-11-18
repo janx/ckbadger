@@ -5,7 +5,7 @@ const names = (n: number, name = (i: number) => `g${i}`) =>
   Array.from({ length: n }, (_, i) => name(i));
 const NERVAPE = ['prev.type', 'relief', 'prev.bg', 'Color', 'Serial', 'Note'];
 
-describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lanes below md)', () => {
+describe('alleleGelLayout (R3: lane floor 16 px, wrap, ranked list above 32 lanes below md)', () => {
   it('wraps six lanes to two rows of three at 358 px, in order, so each lane can label its bands', () => {
     const layout = alleleGelLayout({ genes: NERVAPE, width: 358, subject: 'Nervape 3x' });
     if (layout.form !== 'gel') throw new Error('expected a gel');
@@ -38,7 +38,7 @@ describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lane
     expect(alleleGelLayout({ genes: names(72), width: 735, subject: 'deeds' }).form).toBe('list');
     const md = alleleGelLayout({ genes: names(72), width: 736, subject: 'deeds' });
     if (md.form !== 'gel') throw new Error('expected a gel at md');
-    // 72 lanes at the 12 px floor do not fit one 736 px row: two balanced rows of 36
+    // 72 lanes at the 16 px floor do not fit one 736 px row: two balanced rows of 36
     expect(md.rows.map((row) => row.length)).toEqual([36, 36]);
     expect(md.rows.flat()).toEqual(names(72).map((_, i) => i));
     expect(md.laneWidth).toBeGreaterThanOrEqual(ALLELE_GEL.laneFloor);
@@ -49,7 +49,7 @@ describe('alleleGelLayout (R3: lane floor 12 px, wrap, ranked list above 32 lane
     expect(wide.laneWidth).toBeGreaterThanOrEqual(ALLELE_GEL.laneFloor);
   });
 
-  it('keeps up to 32 genes a gel on a phone, wrapping at the 12 px floor', () => {
+  it('keeps up to 32 genes a gel on a phone, wrapping at the 16 px floor', () => {
     const layout = alleleGelLayout({ genes: names(32), width: 358, subject: 'x' });
     if (layout.form !== 'gel') throw new Error('expected a gel');
     expect(layout.rows.flat()).toHaveLength(32);
