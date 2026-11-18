@@ -15,19 +15,25 @@ import { describe, expect, it } from 'vitest';
  *   words the scan cannot see; `<title>` and the paint servers paint nothing — the manner of
  *   `__tests__/lib/ink-gate.test.ts`;
  * - the class is written only on an element's `className`, where the gate sees what it holds (a
- *   constant or a helper that carried it would hide its element);
+ *   constant or a helper that carried it would hide its element), and the scan's CSS variable
+ *   (`--m-fill-scan`) is named nowhere in the source and read by the `.scan-fill` rule alone;
  * - the elements that carry the scan are listed below by file: a new one is a decision (the
  *   seals, the pipeline's plates and strap, a tile and a word never take it), and one that went
  *   leaves a count behind.
  *
  * A `mask` is the scan's when its value reads the result of `useScanFill()`
- * (components/ui/scan-fill.tsx); every other `mask` (the pipeline strap's fade) is held to the
- * same rule of no words, and is not counted.
+ * (components/ui/scan-fill.tsx) or a name bound to anything read from it; every other `mask` (the
+ * pipeline strap's fade) is held to the same rule of no words, and is not counted. A JSX spread
+ * that reads the scan or writes a `mask`, and any other prop that reads the scan (a component's
+ * `fill={scan}`), are masks too. Limits: the scan's result passed into a function, or a mask set
+ * through a `style` object, is followed only where it reads a scan name in this file.
  */
 
-const SCAN_DIRS = ['app', 'components'];
+const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'];
 const CLASS = /(?<![\w-])scan-fill(?![\w-])/;
 const CLASS_ALL = new RegExp(CLASS.source, 'g');
+/** The scan's CSS variable (the material `fill-scan`, `lib/palette.ts`). */
+const FILL_VAR_ALL = /--m-fill-scan(?![\w-])/g;
 const TEXT_TAGS = new Set(['text', 'tspan', 'textPath']);
 const UNPAINTED_TAGS = new Set([
   'title',
@@ -166,22 +172,19 @@ function scanSites(code: string): { fills: Site[]; masks: Site[]; stray: number[
   const carriesWords = (n: ts.JsxElement | ts.JsxSelfClosingElement) =>
     isComponent(tagOf(n)) || holdsWords(n);
 
-  // ---- the names bound to useScanFill() ----
+  // ---- the names bound to useScanFill(), and to anything read from one (`const m = scan?.mask`) ----
   const scanNames = new Set<string>();
+  const readsScan = (e: ts.Node): boolean =>
+    (ts.isIdentifier(e) && scanNames.has(e.text)) || (ts.forEachChild(e, readsScan) ?? false);
   const bind = (node: ts.Node) => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.initializer &&
-      ts.isCallExpression(unwrap(node.initializer)) &&
-      text((unwrap(node.initializer) as ts.CallExpression).expression) === 'useScanFill'
-    )
-      scanNames.add(node.name.text);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const init = unwrap(node.initializer);
+      if ((ts.isCallExpression(init) && text(init.expression) === 'useScanFill') || readsScan(init))
+        scanNames.add(node.name.text);
+    }
     ts.forEachChild(node, bind);
   };
   bind(source);
-  const readsScan = (e: ts.Node): boolean =>
-    (ts.isIdentifier(e) && scanNames.has(e.text)) || (ts.forEachChild(e, readsScan) ?? false);
 
   // ---- the sites, and every class name the sites account for ----
   const fills: Site[] = [];
@@ -191,8 +194,33 @@ function scanSites(code: string): { fills: Site[]; masks: Site[]; stray: number[
     if (ts.isJsxElement(node) || ts.isJsxSelfClosingElement(node)) {
       const tag = tagOf(node);
       for (const attr of opening(node).attributes.properties) {
-        if (!ts.isJsxAttribute(attr) || !attr.initializer) continue;
+        // A spread is a mask when it reads the scan or writes a `mask`: held to the same rule.
+        if (ts.isJsxSpreadAttribute(attr)) {
+          const spread = unwrap(attr.expression);
+          const writesMask =
+            ts.isObjectLiteralExpression(spread) &&
+            spread.properties.some((p) => p.name !== undefined && text(p.name) === 'mask');
+          if (readsScan(attr.expression) || writesMask)
+            masks.push({
+              line: lineOf(attr),
+              what: `<${tag}> ${text(attr)}`,
+              words: carriesWords(node),
+              scan: readsScan(attr.expression),
+            });
+          continue;
+        }
+        if (!attr.initializer) continue;
         const name = text(attr.name);
+        // The scan handed on under another prop (a component's `fill={scan}`) is its mask too.
+        if (name !== 'className' && name !== 'mask' && readsScan(attr.initializer)) {
+          masks.push({
+            line: lineOf(attr),
+            what: `<${tag}> ${text(attr)}`,
+            words: carriesWords(node),
+            scan: true,
+          });
+          continue;
+        }
         if (name === 'className') {
           const found = [...attr.getText(source).matchAll(CLASS_ALL)];
           if (!found.length) continue;
@@ -233,6 +261,8 @@ function scanSites(code: string): { fills: Site[]; masks: Site[]; stray: number[
       const start = node.getStart(source);
       for (const m of node.getText(source).matchAll(CLASS_ALL))
         if (!seen.has(start + m.index)) stray.push(lineOf(node));
+      // the scan's CSS variable is read by the `.scan-fill` rule alone (cssRulesReading below)
+      stray.push(...[...node.getText(source).matchAll(FILL_VAR_ALL)].map(() => lineOf(node)));
     }
     ts.forEachChild(node, scanTokens);
   };
@@ -251,6 +281,14 @@ function sourceFiles(root: string): string[] {
   };
   for (const dir of SCAN_DIRS) walk(join(root, dir));
   return files;
+}
+
+/** The selectors of the CSS rules (inside an at-rule too) whose declarations read `variable`. */
+function cssRulesReading(css: string, variable: string): string[] {
+  const code = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return [...code.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, , body]) => body.includes(`var(${variable})`))
+    .map(([, selector]) => selector.trim().replace(/\s+/g, ' '));
 }
 
 describe('the scan gate finds what it must, and only that', () => {
@@ -343,6 +381,24 @@ describe('the scan gate finds what it must, and only that', () => {
     ]);
     expect(stray).toEqual([1, 3, 8]);
   });
+
+  it('reads which CSS rules read the scan’s variable, in an at-rule too, comments aside', () => {
+    expect(
+      cssRulesReading(
+        [
+          '/* .x { mask-image: var(--m-fill-scan); } */',
+          '.scan-fill {',
+          '  mask-image: var(--m-fill-scan);',
+          '}',
+          '@media (min-width: 640px) {',
+          '  .title, h1 { -webkit-mask-image: var(--m-fill-scan); }',
+          '  .other { mask-image: none; }',
+          '}',
+        ].join('\n'),
+        '--m-fill-scan'
+      )
+    ).toEqual(['.scan-fill', '.title, h1']);
+  });
 });
 
 describe('the scan stands on fills, never on words (R1)', () => {
@@ -376,5 +432,25 @@ describe('the scan stands on fills, never on words (R1)', () => {
       if (fills.length || scanMasks) carried[path] = { fills: fills.length, masks: scanMasks };
     }
     expect(carried).toEqual(SCAN_SITES);
+  });
+
+  // Review of main..fix/readability (2026-11-18, test finding 7): another rule reading the scan's
+  // variable would lay the scan on whatever it selects, unseen by the source gate.
+  it('reads the scan’s CSS variable in the .scan-fill rule alone', () => {
+    const sheets: string[] = [];
+    const walk = (dir: string) => {
+      for (const name of readdirSync(dir)) {
+        const path = join(dir, name);
+        if (statSync(path).isDirectory()) walk(path);
+        else if (name.endsWith('.css')) sheets.push(path);
+      }
+    };
+    for (const dir of SCAN_DIRS) walk(join(root, dir));
+    const rules = sheets.flatMap((path) =>
+      cssRulesReading(readFileSync(path, 'utf8'), '--m-fill-scan').map(
+        (selector) => `${relative(root, path)} ${selector}`
+      )
+    );
+    expect(rules).toEqual(['app/globals.css .scan-fill']);
   });
 });
