@@ -211,6 +211,42 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
   });
 
+  // Readability 2026-11-18, lane B5: "What it did" was 215 px and its note was cut mid-word ("CKB
+  // Transfer 2 participa", "Cellbase pays #21,042,6…", capture transactions n-02). The note now
+  // wraps under the headline, part by part, and is never cut.
+  it('never cuts what a transaction did: the note wraps, whole parts (B5)', () => {
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    for (const row of within(screen.getByRole('table')).getAllByRole('row').slice(1)) {
+      const what = row.querySelectorAll('td')[2];
+      expect(what.querySelector('.truncate')).toBeNull();
+      // the headline and its note share one wrapping line box
+      const line = what.querySelector('.flex-wrap') as HTMLElement;
+      expect(line).not.toBeNull();
+      expect(line.children).toHaveLength(2);
+    }
+    const [, call] = within(screen.getByRole('table')).getAllByRole('row');
+    const note = call.querySelectorAll('td')[2].querySelector('[data-dotted]') as HTMLElement;
+    expect(note).not.toHaveClass('whitespace-nowrap');
+    expect(note).toHaveClass('flex-wrap');
+  });
+
+  // B5: it takes the width a common row needs from the hash (13 px of its 15.9 spare) and the
+  // Cycles bar (18 px: its ticks say "2M", so its track is 56 px like Size's), and the table keeps
+  // its 1,230 px. Headline + 8 px + note, beside the 16 px mark and its 8 px gap, and the 16 px
+  // gap: "CKB Transfer" and "12 participants", "Cellbase" and "pays #21,042,681", on one line.
+  it('gives What it did the width of a common row on one line, inside the 1,230 px (B5)', () => {
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const widths = Array.from(table.querySelectorAll('col')).map((c) =>
+      Number.parseFloat((c as HTMLElement).style.width)
+    );
+    const line = (headline: string, note: string) =>
+      16 + 8 + (headline.length + note.length) * 7.2 + 8 + 16;
+    expect(line('CKB Transfer', '12 participants')).toBeLessThanOrEqual(widths[2]);
+    expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(widths[2]);
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1230);
+  });
+
   it('says what each transaction did: kind, mark and a quiet note', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer]} />);
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
