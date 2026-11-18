@@ -10,6 +10,7 @@ import {
   type Bar,
 } from '@/components/home/mini-chart';
 import { MINUS } from '@/lib/chart-ticks';
+import { expectInside, textLines, viewBox } from '@/__tests__/utils/svg-text-boxes';
 
 const texts = (root: Element, axis: 'x' | 'y') =>
   [...root.querySelectorAll(`[data-axis="${axis}"] text`)].map((t) => ({
@@ -454,4 +455,100 @@ describe('mini chart hover', () => {
     fireEvent.pointerMove(svg, { clientX: 100 });
     expect(svg.querySelector('[data-role="guide"]')).not.toBeNull();
   });
+});
+
+// Readability plan 2026-11-18, lane F3-d (measured in Chrome on the merged build, 1280 and 390):
+// "Daily change of knowledge size" wrote its ticks "1.5M", "0", "−1.5M" in a gutter sized for four
+// glyphs, so "−1.5M" (five glyphs, 36 px at 12 px) stood at −3…33 of the svg, its minus sign on
+// the svg's edge. A chart's gutter holds the widest tick it writes, sign included, and its plot
+// starts after it: every y tick's box inside the svg and left of the plot, for each mini chart
+// with the ticks it really writes (a signed axis of ±1.5M and of ±10k, a line of three-digit
+// values, a percentage around its target, bars to 1,234 on a scale to 2k), at the home columns' widths.
+describe('mini chart y ticks inside the svg (readability F3)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const day = (i: number) => `11/${String(10 + i)}`;
+  const signed = (values: number[]) =>
+    values.map((value, i) => ({
+      label: day(i),
+      value,
+      readout: { value: `${value} CKB`, text: `${value} CKB` },
+    }));
+  const line = (values: number[]) => values.map((value, i) => ({ label: day(i), value }));
+  const charts = [
+    [
+      'the signed axis of ±1.5M',
+      <SignedBarChart
+        key="m"
+        points={signed([0.4e6, -1.1e6, 0.8e6, -0.6e6, 1.05e6, -0.2e6])}
+        ariaLabel="chart"
+      />,
+      `${MINUS}1.5M`,
+    ],
+    [
+      'the signed axis of ±10k',
+      <SignedBarChart
+        key="k"
+        points={signed([4_000, -8_000, 2_000, -1_000, 7_500, 300])}
+        ariaLabel="chart"
+      />,
+      `${MINUS}10k`,
+    ],
+    [
+      'a line of three-digit values',
+      <LineChart
+        key="l"
+        points={line([152.4, 180.25, 210.5, 199.75, 236.1])}
+        formatValue={(v) => `${v}`}
+        ariaLabel="chart"
+      />,
+      '250',
+    ],
+    [
+      'a percentage around its target',
+      <LineChart
+        key="p"
+        points={line([2.13, 2.41, 3.08, 2.66, 1.97])}
+        reference={2.5}
+        formatValue={(v) => `${v}%`}
+        ariaLabel="chart"
+      />,
+      '3.5',
+    ],
+    [
+      'bars to 1,234',
+      <BarChart
+        key="b"
+        bars={[120, 840, 1_234, 560].map((value, i) => ({
+          label: day(i),
+          value,
+          state: 'complete' as const,
+        }))}
+        formatValue={(v) => `${v}`}
+        ariaLabel="chart"
+      />,
+      '2k',
+    ],
+  ] as const;
+
+  it.each([280, 358].flatMap((w) => charts.map(([name, chart, tick]) => [w, name, chart, tick])))(
+    'at %i px, %s',
+    (width, _name, chart, widest) => {
+      stubChartWidth(width as number);
+      render(chart as React.ReactElement);
+      const svg = screen.getByRole('img', { name: /^chart/ });
+      const ticks = [...svg.querySelectorAll('[data-axis="y"] text')].flatMap(textLines);
+      expect(ticks.map((t) => t.text)).toContain(widest);
+      // the plot starts where its grid does
+      const plot = Number(
+        /^M([\d.]+)/.exec(svg.querySelector('[data-role="grid"]')!.getAttribute('d')!)![1]
+      );
+      for (const tick of ticks) {
+        expectInside(tick, viewBox(svg), 'the chart', 'flush');
+        expect(tick.right, `"${tick.text}" ends before the plot`).toBeLessThan(plot);
+      }
+    }
+  );
 });

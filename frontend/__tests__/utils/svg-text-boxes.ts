@@ -112,7 +112,15 @@ interface Chunk {
 
 /** The lines of one `<text>`, each as its box in the svg's user space. */
 export function textLines(text: Element): TextLine[] {
-  const anchor = text.getAttribute('text-anchor') ?? 'start';
+  // text-anchor is inherited, as font-size is: a group may set it for its texts
+  let anchor = 'start';
+  for (let e: Element | null = text; e; e = e.parentElement) {
+    const v = e.getAttribute('text-anchor');
+    if (v !== null) {
+      anchor = v;
+      break;
+    }
+  }
   const chunks: Chunk[] = [
     { x: Number(text.getAttribute('x') ?? 0), y: Number(text.getAttribute('y') ?? 0), runs: [] },
   ];
