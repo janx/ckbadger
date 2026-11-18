@@ -42,6 +42,7 @@ import {
   columnFlowPaths,
   columnHeadAt,
   columnLineH,
+  columnUncleLines,
   columnRewardLink,
   columnRowH,
   columnWellCountAt,
@@ -1819,6 +1820,32 @@ describe('the column: the pipeline stood on end below the 589 px row', () => {
       ['own', 126, 74],
       ['own', 204, 74],
     ]);
+  });
+
+  // Review F-B (test finding 9): the packing of uncles on lines of their own, as a function. The
+  // chain allows at most two uncles a block (a plate refuses three), so lines past the second and
+  // an uncle wider than a whole line are not reachable through a scene; the rule is held here.
+  it('packs uncles on lines of their own as many to a line as fit, past two lines too', () => {
+    // the narrowest column's line: 154 px; uncles 4 px apart
+    expect(columnUncleLines([], 154, 'block #9')).toEqual([]);
+    // two with dots, 74 + 4 + 74 = 152: one line
+    expect(columnUncleLines([74, 74], 154, 'block #9')).toEqual([0]);
+    // two of the widest kind, 76 + 4 + 76 = 156: a line each
+    expect(columnUncleLines([76, 76], 154, 'block #9')).toEqual([0, 1]);
+    // three: two on the first line, the third on a second
+    expect(columnUncleLines([74, 74, 74], 154, 'block #9')).toEqual([0, 2]);
+    // three of the widest kind: three lines
+    expect(columnUncleLines([76, 76, 76], 154, 'block #9')).toEqual([0, 1, 2]);
+    // four bare words (36 px): 36 + 4 + 36 + 4 + 36 = 116, a fourth would make 156
+    expect(columnUncleLines([36, 36, 36, 36], 154, 'block #9')).toEqual([0, 3]);
+    // an uncle exactly a line wide stands alone on it
+    expect(columnUncleLines([36, 154, 36], 154, 'block #9')).toEqual([0, 1, 2]);
+  });
+
+  it('refuses an uncle wider than a whole line of its own, naming it, its block and the line', () => {
+    expect(() => columnUncleLines([76, 154.5], 154, 'block #21,000,000')).toThrow(
+      'pipeline: uncle 1 of block #21,000,000 needs 154.5 px, more than a 154 px line of its own'
+    );
   });
 
   it('never refuses a valid block from 288 px up: every row whole, every uncle inside it', () => {
