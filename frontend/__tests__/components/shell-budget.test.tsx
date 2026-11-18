@@ -23,6 +23,7 @@ import {
   type NavEntry,
 } from '../utils/shell-budget';
 import { Header, navItems } from '@/components/layout/header';
+import { headerFieldRoomPx } from '@/lib/header-fit';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { VitalsStrip } from '@/components/stats-bar';
 import {
@@ -155,6 +156,9 @@ describe('the header row per width, one network and two', () => {
         word: WIDEST_WORD,
       });
       const [field, placeholder] = TABLE[width][networks - 1];
+      // the nav stands in the row from md but with two networks across 768–1023
+      const menu = width < 768 || (networks === 2 && width < 1024);
+      expect(row.form).toBe(menu ? 'menu' : 'nav');
       expect(row.field).toBe(field);
       expect(row.placeholder).toBe(placeholder);
       expect(row.field).toBeGreaterThanOrEqual(row.floor);
@@ -169,6 +173,17 @@ describe('the header row per width, one network and two', () => {
     // the widest section word, "Transactions", beside the menu button at 640 leaves the field its
     // 288 px cap: 608 − 90 − 8 − 40 − 8 − 100.8 − 8 = 353.2 of room
     expect(WIDEST_WORD).toBe('Transactions');
+    // below md the row has its phone form: at 640–767 (608 px) the nav would leave the field 16 px
+    expect(
+      px(
+        headerFieldRoomPx(
+          'nav',
+          contentPx(640),
+          { nav: NAV, switcher: null, word: null },
+          { fromSm: true, fromLg: false }
+        )
+      )
+    ).toBe(16);
     expect(px(contentPx(640) - WORDMARK_PX - 8 - 40 - 8 - runPx(WIDEST_WORD, 'body') - 8)).toBe(
       353.2
     );
@@ -263,8 +278,10 @@ describe('the header row takes its form from its measured width (ruling on F3-f,
       expect(drawn(h.nav)).toBe(false);
       expect(drawn(h.menuGroup)).toBe(true);
       expect(drawn(h.theme)).toBe(false);
-      // the row's form below md: the 8 px gap
+      // the row's form below md: the 8 px gap; its height the nav form's, so nothing below moves
       expect(rowGap(h.row)).toBe(8);
+      expect(h.row).toHaveClass('min-h-[52px]', 'lg:min-h-[60px]');
+      expect(h.row.className).not.toMatch(/\b(?:h|max-h|min-h)-(?!\[52px\]|\[60px\])/);
     }
   );
 
@@ -280,6 +297,7 @@ describe('the header row takes its form from its measured width (ruling on F3-f,
       expect(drawn(h.nav), `${viewport}`).toBe(true);
       expect(drawn(h.menuGroup), `${viewport}`).toBe(false);
       expect(rowGap(h.row)).toBe(32);
+      expect(h.row).toHaveClass('min-h-[52px]', 'lg:min-h-[60px]');
       expect(drawn(h.theme)).toBe(true);
       unmount();
       vi.unstubAllGlobals();
@@ -522,7 +540,9 @@ describe('the classes and sources the budget reads', () => {
     const banner = screen.getByRole('banner');
     const nav = within(banner).getByRole('navigation', { name: 'Main' });
     const row = nav.parentElement as HTMLElement;
-    expect(row).toHaveClass('flex', 'gap-2', 'md:gap-8');
+    // unmeasured in jsdom's 1024 px window, the row draws its form of the breakpoint: the nav
+    expect(row).toHaveAttribute('data-header-form', 'nav');
+    expect(row).toHaveClass('flex', 'gap-8');
     expect(nav).toHaveClass('gap-x-4', 'lg:gap-x-6', 'shrink-0');
     expect(NAVBAR_LINK_CLASS.split(' ')).toContain('text-body');
     // the switcher: the eyebrow at the meta step, its border, px-2, gap-1; its wrapper's room

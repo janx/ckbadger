@@ -47,6 +47,22 @@ The 640–767 band has one content width to design for. Below 640 the container 
 
 ## Rules for the shared pieces
 
+- **Header** (every page; `components/layout/header.tsx`): the nav yields to the search field's
+  floor, measured (principle 4; `lib/header-fit.ts`). The nav stands in the row — the wordmark,
+  the nav (the network switcher first where two networks or more are configured), the search
+  field, the theme switcher — while the field keeps at least its floor beside it; where it would
+  not, the nav goes into the menu and the row takes its phone form: the wordmark, the menu button,
+  the section word (from 640), the field, with the network switcher and the theme as rows of the
+  menu, which is the phone menu as it is. The row is measured (its width less the page's gutter)
+  and its parts are budgeted from what they write, so a nav entry, a longer label or a second
+  network is weighed by the same rule, not by a breakpoint or a count. Below `md` the row has its
+  phone form (at 608 px the nav would leave the field 16 px).
+  Before the row is measured it draws the form of its breakpoint (the nav from `md`), and the
+  layout effect measures it before the first paint. Both forms are 52 px tall (60 from `lg`), so
+  nothing below moves when the form changes. At the 12 / 13 / 14 px steps one network keeps the
+  nav from 768; with two, the switcher (117.5 px with its margin, its name in the tracked
+  eyebrow) would leave the field 10.5 px across 768–1023, so there the nav is in the menu, and
+  from 1024 it stands (210.5 px).
 - **Header search field**: the long placeholder `search block / tx / address / cell` (285.6 px at
   the 14 px body step, `lib/type-metrics.ts`) only when the field's measured text box holds it
   whole, `search` otherwise, chosen before paint (principle 4; a field 351.6 px wide from `md`,
@@ -55,10 +71,9 @@ The 640–767 band has one content width to design for. Below 640 the container 
   116.4 px from `md`, 92.4 below it. With one network the row leaves the field 460.8 px at 1280
   (its 36vw cap), 352 at 1024 (the long placeholder with 0.4 px to spare), 144 at 768–1023, its
   288 px cap at 640–767 whatever the section word beside the menu, and 212, 182 and 142 at 390,
-  360 and 320. Beside the network switcher (two networks; 117.5 px with its margin from `md`, the
-  name in the tracked eyebrow) it leaves 460.8 at 1280 and 210.5 at 1024, but 10.5 at 768–1023,
-  under the floor: which part of the row yields there is not ruled yet. Below `md` the switcher
-  is a row of the phone menu and the header row is the same as with one network
+  360 and 320. With two networks it leaves 460.8 at 1280 and 210.5 at 1024 beside the switcher,
+  and across 768–1023, where the nav is in the menu (the header's rule, above), its cap: 288 at
+  768, 36vw above it, the long placeholder from 977 px
   (`__tests__/components/shell-budget.test.tsx` states each width).
 - **Vitals strip** (every page, under the header): one wrapping row from `md` up, the same on
   every page. Below `md` the home page keeps the whole strip in three groups on their own lines —

@@ -16,6 +16,11 @@ import {
   NAVBAR_LINK_DEFAULT_CLASS,
 } from '@/components/layout/navbar-dropdown-styles';
 import { VitalsStrip } from '@/components/stats-bar';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { useFromLg, useFromMd } from '@/hooks/useFromMd';
+import { headerRowForm, type HeaderNavEntry } from '@/lib/header-fit';
+import { resolveNetworks } from '@/lib/runtime-config';
 import { cn } from '@/lib/utils';
 
 interface NavLink {
@@ -72,6 +77,12 @@ export const navItems: NavItem[] = [
   { href: '/charts', label: 'Charts' },
 ];
 
+/** The nav's entries as the row's budget weighs them (lib/header-fit.ts). */
+const NAV_ENTRIES: HeaderNavEntry[] = navItems.map((item) => ({
+  label: item.label,
+  menu: isDropdown(item),
+}));
+
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -96,6 +107,25 @@ export function Header() {
     return null;
   })();
 
+  // The row's form (ruling on F3-f, option B; lib/header-fit.ts): from md the nav stands in the row
+  // while the search field keeps its floor beside it, and goes into the menu where it would not,
+  // the row then taking its form below md. Decided from the row's measured width and the budget of
+  // its parts, the switcher among them where two networks or more are configured; before the row
+  // is measured, the form of the breakpoint (the layout effect measures it before the first paint).
+  const fromMd = useFromMd();
+  const fromLg = useFromLg();
+  const [rowRef, rowWidth] = useElementWidth<HTMLDivElement>();
+  const network = useActiveNetwork();
+  const form = headerRowForm(
+    rowWidth,
+    {
+      nav: NAV_ENTRIES,
+      switcher: resolveNetworks().length > 1 ? network : null,
+      word: activeLabel,
+    },
+    { fromMd, fromLg }
+  );
+
   // From md up the header row and the vitals strip stick together (this wrapper is the sticky
   // block). Below md the wrapper is display: contents, so only the header row sticks — to the page —
   // and the strip scrolls away with the content.
@@ -110,12 +140,23 @@ export function Header() {
         {/* The container gives the page's gutter; the row inside it has none, so its width is the
             room its parts share. */}
         <div className="container mx-auto">
-          <div className="relative flex min-h-[52px] items-center gap-2 md:gap-8 lg:min-h-[60px]">
+          <div
+            ref={rowRef}
+            data-header-form={form}
+            data-measured={rowWidth !== null}
+            className={cn(
+              'relative flex min-h-[52px] items-center lg:min-h-[60px]',
+              form === 'nav' ? 'gap-8' : 'gap-2'
+            )}
+          >
             <Wordmark />
 
             <nav
               aria-label="Main"
-              className="relative z-10 hidden shrink-0 items-center gap-x-4 md:flex lg:gap-x-6"
+              className={cn(
+                'relative z-10 shrink-0 items-center gap-x-4 lg:gap-x-6',
+                form === 'nav' ? 'flex' : 'hidden'
+              )}
             >
               <NetworkSwitcher />
               {/* TX-02 (Main.dc.html): five entries; the current one bright and aria-current.
@@ -155,7 +196,7 @@ export function Header() {
               })}
             </nav>
 
-            <div className="flex items-center gap-2 md:hidden">
+            <div className={cn('items-center gap-2', form === 'menu' ? 'flex' : 'hidden')}>
               <button
                 type="button"
                 onClick={() => setIsMenuOpen(!isMenuOpen)}
@@ -201,14 +242,21 @@ export function Header() {
               </div>
               {/* The theme: dark (midnight, the default), light, or the system's; the phone menu
                 carries the same choice as a row (ThemeSegments). */}
-              <ThemeSwitcher className="hidden md:block" />
+              <ThemeSwitcher className={form === 'nav' ? 'block' : 'hidden'} />
             </div>
           </div>
         </div>
 
-        {/* The phone menu: the nav's entries, in its lowercase (U-01). */}
+        {/* The menu (the phone's, drawn in the menu form: below md, and from md wherever the row
+            cannot hold the nav beside the field's floor): the nav's entries, in its lowercase
+            (U-01). */}
         {isMenuOpen && (
-          <div className="border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm md:hidden">
+          <div
+            className={cn(
+              'border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm',
+              form === 'menu' ? 'block' : 'hidden'
+            )}
+          >
             <nav className="container mx-auto py-4">
               <div className="flex flex-col gap-1">
                 <Link

@@ -1,4 +1,18 @@
 import { formatBlockNumber } from '@/lib/format-block';
+import {
+  FIELD_INSETS_PX,
+  SEARCH_PLACEHOLDER,
+  SEARCH_PLACEHOLDER_SHORT,
+  WORDMARK_PX,
+  headerFieldFloorPx,
+  headerFieldRoomPx,
+  headerNavEntryPx,
+  headerNavPx,
+  headerRowForm,
+  headerSwitcherPx,
+  type HeaderNavEntry,
+  type HeaderRowForm,
+} from '@/lib/header-fit';
 import type { ChainMode } from '@/lib/chain-mode';
 import { fontPx, textPx } from '@/lib/type-metrics';
 import type { TypeStep } from '@/lib/type-scale';
@@ -7,9 +21,10 @@ import type { TypeStep } from '@/lib/type-scale';
  * The shell's budget at the type scale (readability plan 2026-11-18, lane F3-f): what the header,
  * the vitals strip and the footer need for their widest real content, computed from
  * lib/type-metrics.ts (every glyph 0.6 em) and the geometry their classes draw, so that a test can
- * state, per reference width, what stands in each line and that it fits. The status line's budget
- * is the app's own (lib/status-line-fit.ts: the line measures itself and keeps the parts its width
- * holds); what only the tests read lives here, beside them. `__tests__/components/shell-budget.test.tsx`
+ * state, per reference width, what stands in each line and that it fits. The status line's and the
+ * header row's budgets are the app's own (lib/status-line-fit.ts, lib/header-fit.ts: each measures
+ * its line and keeps the parts its width holds), read here at the reference widths; what only the
+ * tests read, the strip's and the footer's, lives here, beside them. `__tests__/components/shell-budget.test.tsx`
  * pins the classes each number below is read from, so a change of either side fails it.
  */
 
@@ -76,119 +91,61 @@ export const WIDEST = {
 } as const;
 
 // ---------------------------------------------------------------------------------------------
-// The header row (components/layout/header.tsx, the search field components/search-bar.tsx)
+// The header row (components/layout/header.tsx): its budget is the app's own, lib/header-fit.ts,
+// read here at the reference widths with the container's content width for the row.
 
-/** The wordmark: the 8 px prompt square, its 10 px gap (`gap-2.5`), `ckbadger` at 15 px. */
-export const WORDMARK_PX = 8 + 10 + textPx('ckbadger'.length, 15);
+export { WORDMARK_PX };
 
-/** The row's gap between the wordmark, the nav and the search: `gap-2`, `md:gap-8`. */
-const ROW_GAP = { belowMd: 8, fromMd: 32 } as const;
-
-/** The nav's gap between entries: `gap-x-4`, `lg:gap-x-6`. */
-const NAV_GAP = { md: 16, lg: 24 } as const;
-
-/** A nav menu's chevron after its label: `gap-1` and the 12 px chevron (`h-3 w-3`). */
-const MENU_CHEVRON_PX = 4 + 12;
-
-/** A nav entry, its label as written (lowercased by CSS: the same length) and whether it is a menu. */
-export interface NavEntry {
-  label: string;
-  menu: boolean;
-}
+/** A nav entry: its label as written and whether it opens a menu (lib/header-fit.ts). */
+export type NavEntry = HeaderNavEntry;
 
 /** A nav entry's width at the body step. */
-export function navEntryPx(entry: NavEntry): number {
-  return runPx(entry.label, 'body') + (entry.menu ? MENU_CHEVRON_PX : 0);
-}
+export const navEntryPx = headerNavEntryPx;
 
-/** The eyebrow's tracking (`.eyebrow` in app/globals.css): 0.12 em after every glyph. */
-export const EYEBROW_TRACKING_EM = 0.12;
+/** The switcher in the nav, its name in the tracked eyebrow, with its margin. */
+export const switcherPx = headerSwitcherPx;
 
-/**
- * The network switcher in the nav, around the active network's name in the eyebrow (uppercase,
- * 0.12 em tracked, the meta step): the button's 1 px border and `px-2` each side, the 6 px dot,
- * two `gap-1`, the 12 px chevron; then the wrapper's `md:pr-2`, its `md:border-r` and its
- * `md:mr-1` outside it.
- */
-export function switcherPx(name: string): number {
-  const n = [...name].length;
-  const meta = fontPx('meta');
-  const label = textPx(n, meta) + n * EYEBROW_TRACKING_EM * meta;
-  return 1 + 8 + 6 + 4 + label + 4 + 12 + 8 + 1 + 8 + 1 + 4;
-}
+/** The field's floor: its short placeholder and, from md, the `/` key's room, with their insets. */
+export const fieldFloorPx = headerFieldFloorPx;
 
-/** The menu button below md (`h-10 w-10`) and the gap before the section word (`gap-2`). */
-const MENU_BUTTON_PX = 40;
-const SECTION_WORD_GAP = 8;
-
-/** The theme switcher from md (`h-9 w-9`) and the gap before it (`gap-3`). */
-const THEME_PX = 36;
-const THEME_GAP = 12;
+/** The field's placeholders (lib/header-fit.ts, drawn by components/search-bar.tsx). */
+export const PLACEHOLDER = { long: SEARCH_PLACEHOLDER, short: SEARCH_PLACEHOLDER_SHORT } as const;
 
 /** The field's cap: `max-w-[clamp(18rem,36vw,36rem)]`. */
 export function fieldCapPx(viewport: number): number {
   return Math.min(Math.max(288, 0.36 * viewport), 576);
 }
 
-/**
- * The field's text box insets: the 1 px border and `pl-7` (the prompt square's room) on the left;
- * on the right `md:pr-9` (the `/` key's room, drawn from md) or `pr-3` below md, and the border.
- */
-export const FIELD_INSETS = { fromMd: 1 + 28 + 36 + 1, belowMd: 1 + 28 + 12 + 1 } as const;
-
-/** The field's placeholders (components/search-bar.tsx): 34 characters and 6. */
-export const PLACEHOLDER = { long: 'search block / tx / address / cell', short: 'search' } as const;
-
-/**
- * The field's floor: a field that holds its short placeholder and, from md, the `/` key's room
- * with their insets (RESPONSIVE_LAYOUT gives no other). 116.4 px from md, 92.4 below.
- */
-export function fieldFloorPx(fromMd: boolean): number {
-  return (fromMd ? FIELD_INSETS.fromMd : FIELD_INSETS.belowMd) + runPx(PLACEHOLDER.short, 'body');
-}
-
 export interface HeaderRow {
-  /** The nav's width (with the switcher where it is drawn); 0 below md, where the menu has it. */
+  /** The row's form: the nav standing in it, or the nav in the menu (lib/header-fit.ts). */
+  form: HeaderRowForm;
+  /** The nav's width where it stands in the row; 0 in the menu form. */
   nav: number;
-  /** What the row leaves the search field, capped by the field's clamp. */
+  /** What the row leaves the search field in its form, capped by the field's clamp. */
   field: number;
   floor: number;
   placeholder: 'long' | 'short';
 }
 
 /**
- * The header row at a viewport: from md the wordmark, the nav (the switcher first when two
- * networks are configured), the field and the theme switcher; below md the wordmark, the menu
- * button, from 640 the section word (`sm:inline`), and the field.
+ * The header row at a viewport, its row measured at the container's content width: the form
+ * lib/header-fit.ts decides, and what that form leaves the field.
  */
 export function headerRow(
   viewport: number,
-  {
-    nav,
-    switcher,
-    word,
-  }: { nav: readonly NavEntry[]; switcher: string | null; word: string | null }
+  parts: { nav: readonly NavEntry[]; switcher: string | null; word: string | null }
 ): HeaderRow {
-  const content = contentPx(viewport);
-  const fromMd = viewport >= 768;
-  let navPx = 0;
-  let room: number;
-  if (fromMd) {
-    const items = nav.map(navEntryPx);
-    if (switcher !== null) items.unshift(switcherPx(switcher));
-    navPx = sum(items) + (items.length - 1) * (viewport >= 1024 ? NAV_GAP.lg : NAV_GAP.md);
-    room = content - WORDMARK_PX - 2 * ROW_GAP.fromMd - navPx - THEME_GAP - THEME_PX;
-  } else {
-    const wordPx = viewport >= 640 && word !== null ? SECTION_WORD_GAP + runPx(word, 'body') : 0;
-    room = content - WORDMARK_PX - 2 * ROW_GAP.belowMd - MENU_BUTTON_PX - wordPx;
-  }
-  const field = px(Math.min(fieldCapPx(viewport), room));
-  const box = field - (fromMd ? FIELD_INSETS.fromMd : FIELD_INSETS.belowMd);
+  const row = contentPx(viewport);
+  const at = { fromSm: viewport >= 640, fromMd: viewport >= 768, fromLg: viewport >= 1024 };
+  const form = headerRowForm(row, parts, at);
+  const field = px(Math.min(fieldCapPx(viewport), headerFieldRoomPx(form, row, parts, at)));
+  const insets = at.fromMd ? FIELD_INSETS_PX.fromMd : FIELD_INSETS_PX.belowMd;
   return {
-    nav: px(navPx),
+    form,
+    nav: form === 'nav' ? px(headerNavPx(parts, at.fromLg)) : 0,
     field,
-    floor: px(fieldFloorPx(fromMd)),
-    placeholder: box >= runPx(PLACEHOLDER.long, 'body') ? 'long' : 'short',
+    floor: px(headerFieldFloorPx(at.fromMd)),
+    placeholder: field - insets >= runPx(SEARCH_PLACEHOLDER, 'body') ? 'long' : 'short',
   };
 }
 
