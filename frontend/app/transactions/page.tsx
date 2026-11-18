@@ -283,7 +283,9 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
       // formatTimeAgo writes for any age under 100 days ("· 59s ago" / "· 59m ago" / "· 23h ago" /
       // "· 99d ago", 9 characters, 70.2), and the gap: 183.2. At 150 it lived on the container's
       // spread slack and "● Pending · 26s ago" (150.2) broke when that went to the hash (old issue
-      // C). A wait of 100 days or more, or "this device's clock is behind", wraps inside the cell.
+      // C). A wait of 100 days or more wraps inside the cell before its age, which stays one unit;
+      // "this device's clock is behind" is words (not a NoBreak, Utc8Age) and breaks between them in
+      // the wait's flex item, which shrinks to the 71 px the dot and "Confirming" leave it.
       minWidth: columnPx(
         7 +
           6 +

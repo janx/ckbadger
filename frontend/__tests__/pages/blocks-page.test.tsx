@@ -1092,10 +1092,14 @@ describe('BlocksPage · Blocks v3 board', () => {
         'leading-row'
       );
       // Regression (the lead's Chrome check, 2026-11-18): a block number is one figure and never
-      // breaks inside itself ("#21,045,84" over "5" in a Height cell 0.4 px short).
-      expect(within(first as HTMLElement).getByRole('link', { name: '#20,828,894' })).toHaveClass(
-        'whitespace-nowrap'
-      );
+      // breaks inside itself ("#21,045,84" over "5" in a Height cell 0.4 px short). Re-pinned on
+      // purpose (the lead's ruling on review fb-tests 5: a rule of the table, not of one link): the
+      // link's own whitespace-nowrap went; no cell of a list table lets a word or a figure break
+      // where it overflows, so nothing on the number's path to its cell can cut it.
+      const height = within(first as HTMLElement).getByRole('link', { name: '#20,828,894' });
+      for (let el: HTMLElement | null = height; el && el.tagName !== 'TR'; el = el.parentElement)
+        expect(el.className).not.toMatch(/break-words|break-all|overflow-wrap:anywhere/);
+      expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
       expect(first).toHaveTextContent('0.05060000');
       expect(first).toHaveTextContent('3,917 B6,831,940');
       expect(screen.queryByTestId('block-row-mobile')).toBeNull();

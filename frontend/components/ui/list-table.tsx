@@ -116,6 +116,26 @@ const CELL_CLASS: Record<ListTableDensity, string> = {
   row: ['min-w-0 py-[11px] align-middle', ...CELL_HORIZONTAL_CLASSES].join(' '),
 };
 
+/**
+ * A cell holds its content (readability 2026-11-18, the lead's rulings on the fb reviews): nothing
+ * in a cell draws outside it, and how its content may break is the table's rule, not a page's.
+ *
+ * - A figure — a number with its sign, its `#`, its decimals — is one unbreakable unit. No cell
+ *   lets a word break where it overflows (no `overflow-wrap: break-word` here, as a non-numeric
+ *   cell once had), so nothing in a table can cut a figure: a column budgeted to the pixel holds
+ *   its figure on one line, and a figure past its column's bound shows the shortfall past the
+ *   figure's edge, never "#21,045,84" over "5". A numeric column's cell is one figure with its
+ *   label and is held on one line whole (`NUMERIC_CELL`).
+ * - Words break between them, never inside one: a phrase is never one unbreakable run in a cell
+ *   (a headline, "this device's clock is behind"), so it makes its row taller, never its column
+ *   wider; a separated list breaks between its parts first (`Dotted`). A column holds its longest
+ *   word at its minimum.
+ * - A chip (a row tag, a composition badge) is one unit as a figure is, budgeted whole.
+ *
+ * `__tests__/utils/list-table-cells.ts` reads every table the suite renders against these.
+ */
+const NUMERIC_CELL = 'whitespace-nowrap text-right tabular-nums';
+
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';
 
 /**
@@ -307,11 +327,7 @@ export function ListTable<T>({
                 {shown.map((c) => (
                   <td
                     key={c.key}
-                    className={cn(
-                      CELL_CLASS[density],
-                      c.numeric ? 'whitespace-nowrap text-right tabular-nums' : 'break-words',
-                      c.className
-                    )}
+                    className={cn(CELL_CLASS[density], c.numeric && NUMERIC_CELL, c.className)}
                   >
                     {unitNode(c.render(row))}
                   </td>

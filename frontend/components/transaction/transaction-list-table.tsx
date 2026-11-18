@@ -54,6 +54,12 @@ const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
 const SIZE_TRACK = COUNT_TRACK_PX;
 const CYCLES_TRACK = COUNT_TRACK_PX;
 
+/**
+ * Where a headline's separated parts meet: `protocolActionLabel` joins a protocol's name and its
+ * action with it (".bit · recycle expired account"), the separator the `Dotted` list draws.
+ */
+const HEADLINE_SEPARATOR = ' · ';
+
 /** The cells a transaction consumed: a cellbase none (the API counts its one null input). */
 function consumedCells(tx: Transaction): number {
   return tx.isCellbase ? 0 : tx.inputsCount;
@@ -303,7 +309,7 @@ function committedColumns(
           >
             {formatBlockNumber(tx.blockNumber)}
           </Link>
-          <span className="text-text-dim block whitespace-nowrap">
+          <span className="text-text-dim block">
             <Utc8Age timestamp={tx.timestamp} />
           </span>
         </span>
@@ -333,14 +339,15 @@ function committedColumns(
               {mark && <ClassMark kind={mark} />}
             </span>
             <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-              <span
-                className={
-                  tx.isCellbase
-                    ? 'text-text whitespace-nowrap'
-                    : 'text-text-bright whitespace-nowrap'
-                }
-              >
-                {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
+              {/* The headline is words (the lead's ruling): it breaks between its separated parts
+                  first, the " · " with the part after it, then between the words of a part still
+                  too long, and the row grows taller; it never draws past the cell. */}
+              <span className={tx.isCellbase ? 'text-text min-w-0' : 'text-text-bright min-w-0'}>
+                {tx.isCellbase ? (
+                  'Cellbase'
+                ) : (
+                  <Dotted parts={activityHeadline(tx.activity!).split(HEADLINE_SEPARATOR)} />
+                )}
               </span>
               <span className="text-text-dim text-small min-w-0">
                 {tx.isCellbase ? paysNote(tx) : <Dotted parts={whatNote(tx.activity!, 'row')} />}

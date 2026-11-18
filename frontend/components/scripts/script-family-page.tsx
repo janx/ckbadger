@@ -325,8 +325,10 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
         </span>
       );
     const [first] = live;
+    // the out point and how many more live code cells there are: one figure, on one line; "no
+    // live code cell" above is words and breaks between them (a list table's rule)
     return (
-      <>
+      <span className="whitespace-nowrap">
         <Link
           href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`}
           className="text-text hover:text-jade"
@@ -335,7 +337,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
           <OutpointIndex index={first.codeCellOutputIndex} />
         </Link>
         {live.length > 1 && <span className="text-text-dim"> +{live.length - 1}</span>}
-      </>
+      </span>
     );
   };
   const holder = (reference: ReferenceRow) =>
@@ -385,7 +387,7 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
       // cells (23 characters at 13 px, 179.4), and the gap (readability F3-e: it was 154, the out
       // point at 12 px without its count).
       minWidth: columnPx(small(`${CODE_CELL_OUTPOINT} +9`) + CELL_GAP_PX),
-      render: (r) => <span className="whitespace-nowrap">{depOf(r, 'row')}</span>,
+      render: (r) => depOf(r, 'row'),
     },
     {
       key: 'holder',

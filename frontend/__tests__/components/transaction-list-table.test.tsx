@@ -398,7 +398,12 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     const row = within(table).getAllByRole('row')[2];
     const lines = row.querySelectorAll('td:nth-child(2) > span > *');
     expect(lines).toHaveLength(2);
-    for (const line of lines) expect(line).toHaveClass('whitespace-nowrap');
+    // Re-pinned on purpose (review fb-logic 3, the lead's ruling): the block is one nowrap line;
+    // the age line is not nowrap, its age one unit of its own (Utc8Age's NoBreak), so "this
+    // device's clock is behind" in its place breaks between its words
+    expect(lines[0]).toHaveClass('whitespace-nowrap');
+    expect(lines[1]).not.toHaveClass('whitespace-nowrap');
+    expect(lines[1].querySelector('[data-nobreak]')).toHaveTextContent(/^\d+[smhdy].* ago$/);
     expect(row.querySelector('td:nth-child(4)')).toHaveTextContent(/^767\.29874184$/);
     expect(row.querySelector('td:nth-child(5)')).toHaveTextContent(/^0\.00030000$/);
   });
@@ -743,7 +748,13 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     expect(lines).toHaveLength(2);
     expect(lines[0]).toHaveTextContent(/^#20,829,775$/);
     expect(lines[1]).toHaveTextContent(/^\d+[smhdy].* ago$/);
-    for (const line of lines) expect(line).toHaveClass('block', 'whitespace-nowrap');
+    // Re-pinned on purpose (review fb-logic 3, the lead's ruling): both are block lines; the
+    // block number's line is nowrap, the age's is not (its age is one unit, Utc8Age's NoBreak; the
+    // clock-behind sentence in its place breaks between its words)
+    for (const line of lines) expect(line).toHaveClass('block');
+    expect(lines[0]).toHaveClass('whitespace-nowrap');
+    expect(lines[1]).not.toHaveClass('whitespace-nowrap');
+    expect(lines[1].querySelector('[data-nobreak]')).toHaveTextContent(/^\d+[smhdy].* ago$/);
     expect(cell).not.toHaveTextContent('·');
   });
 
