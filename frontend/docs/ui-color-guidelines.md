@@ -81,7 +81,7 @@ against the other's own tone does it, both readable. The gate refuses all three 
 
 A value that **is** zero is a datum, not padding: "fee 0 CKB", a zero balance, a tier with 0
 objects, an empty filter's "0" are the dim ink. Only the padding zeros of a non-zero number are
-ghost (`ExactCkb` marks its datum zero `data-zero`, its padding `data-ghost`).
+ghost (`CkbAmount` marks its datum zero `data-zero`, a column's padding `data-ghost`).
 
 An ink is never thinned by an alpha modifier (`text-text-dim/60`, `text-aqua/70`): a quieter ink is
 a named key at 4.5:1 (`jade-dim`, `aqua-dim`, `lavender-dim`, `gold-dim`, `text-dim`).
@@ -115,26 +115,42 @@ strength** (its SVG is outside the rule), because a seal's ink is its state: a c
 force, so its stone stays the pressed cinnabar; a consumed cell's stone is the dead ink whether
 set back or not. The padding zeros inside keep the ghost.
 
-### The fraction inks
+### Amounts
 
-The digits after an amount's decimal point are a step quieter than its integer, in a named ink of
-the amount's sign at body contrast — never the sign's ink at an opacity (78 % put the cinnabar at
-3.7:1 by night and the celadon and the neutral at about 3.2–3.7:1 by day). `AMOUNT_INK` (beside
-`ExactCkb` in `components/activity-event-row.tsx`) is the one table every amount renderer reads:
+How a CKB or a token amount is written is one rule in one module (readability plan 2026-11-18,
+ruling R5): the digits in `lib/amount-form.ts`, the renderers `CkbAmount` and `TokenAmount` in
+`components/ui/ckb-amount.tsx`. Every renderer takes a `form` and has no default: a call site
+names its context. Every form is computed in BigInt base units, never a float; a shortened figure
+is the exact value **cut, never rounded** (999.995 is never 1,000.00: a rounded figure can show a
+digit that is not on chain), carries the exact value and its unit in its `title`, and is never an
+operand.
 
-| Sign     | Integer         | Fraction digits  |
-| -------- | --------------- | ---------------- |
-| positive | `text-positive` | `text-jade-dim`  |
-| negative | `text-negative` | `text-rouge-dim` |
-| neutral  | `text-text`     | `text-text-dim`  |
+| Form      | What it writes                                                                                                                                                          | Example                                  |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `exact`   | The value, its trailing zeros dropped, no point for a whole number                                                                                                      | `122,000` · `0.0003` · `559.5125321`     |
+| `column`  | Exact, padded to the unit's decimals (8 for CKB), the padding zeros in the ghost, so the points of a column align                                                       | `750.00000000` · `0.00030000`            |
+| `summary` | Whole from 1,000 up; at most two decimals from 1 to 1,000, trailing zeros dropped; below 1 the exact CKB value, or a token's first four significant digits; cut, titled | `8,131,306,075` · `999.99` · `0.0001234` |
+| `compact` | Two decimals of the largest unit reached (k, M, B, T), two decimals below 1,000; cut, titled                                                                            | `9.02B` · `123.45k` · `999.99`           |
 
-SVG text reads the same table: each sign's `fractionKey` (`jade-dim`, `rouge-dim`, `text-dim`) is
-the palette key of its fraction class, drawn as `fill={color(AMOUNT_INK[sign].fractionKey)}` on
-the fraction's `<tspan>` (the DAO history's weekly end label), never the sign's ink at
-`fillOpacity`.
+Where each form stands:
 
-A display figure's decimals (the DAO deposit, a Fiber channel's capacity, a script's CKB) take
-their own dim step at the hero size; their padding zeros are the ghost.
+| Place                                                                                                                     | Form      |
+| ------------------------------------------------------------------------------------------------------------------------- | --------- |
+| The amount a page is about (a cell's capacity, a transaction's fee in its balance)                                        | `exact`   |
+| A numeric table column of subject amounts, whose points align                                                             | `column`  |
+| A hero or display figure, a stat tile, a list column, a chart's head figure and readouts, a feed line, a phone row, prose | `summary` |
+| A tile of the chart index or the home page, an axis                                                                       | `compact` |
+
+One ink per amount: the integer and the decimals take the same ink — the sign's with
+`tone="sign"`, the reading ink (`text-text`) with `tone="plain"`, the parent's with
+`tone="inherit"` (a display figure in its class colour, a value inside a brighter line).
+`AMOUNT_INK` (`components/ui/ckb-amount.tsx`) is that table, one ink per sign; a number's
+significant digits are never quieter than its integer. The ghost is for a `column`'s padding zeros
+only. SVG text writes an amount from `ckbAmountText` in the text's one fill, a shortened one with
+its exact value in a `<title>` (the DAO history's weekly end label). A display figure is one run at
+its size; its unit beside it is the body step in the dim ink. `__tests__/lib/amount-gate.test.ts`
+fails on an amount split for display outside the module (`splitCkbAmount`, `splitTokenAmount`,
+`formatCkbAmount`'s parts).
 
 ## Named accent colors (rubbing × Song print)
 
@@ -241,7 +257,7 @@ lightness only (lighter by night, darker by day) until it clears that ratio on a
 | `aqua` `gold` `rouge` `lavender` `amber`                | indigo, gold, cinnabarText, lotus, moss | board values, ≥ 4.5: day gold `#8a6a1e` (3.92) → `#80600f` (4.53), day moss `#4f7a2a` (3.93) → `#46701f` (4.53)                                                                                                                    |
 | `*-dim`                                                 | the accent                              | L −0.10, C ×0.8 / L +0.05, C ×0.7; then ≥ 4.5 (text grade) or ≥ 3 (`amber-dim`)                                                                                                                                                    |
 | `*-bright`                                              | the accent                              | L +0.08 (lighter by night) / L −0.07 (more ink by day; gold C ×0.85)                                                                                                                                                               |
-| `rouge-dim`                                             | the dim step                            | ≥ 4.5, text grade like every other `*-dim` (it is the negative fraction ink): `#aa503c` L +0.094 → `#ca6c57` (4.51) / `#a6594c` L −0.033 → `#9b4f43` (4.53)                                                                        |
+| `rouge-dim`                                             | the dim step                            | ≥ 4.5, text grade like every other `*-dim` (a quiet cinnabar word; it was the negative fraction ink until R5): `#aa503c` L +0.094 → `#ca6c57` (4.51) / `#a6594c` L −0.033 → `#9b4f43` (4.53)                                       |
 | `mark`                                                  | cinnabar                                | the board value (3.25 / 4.71, UI grade)                                                                                                                                                                                            |
 | `token`, `token-bright`                                 | azurite 石青 `#6f9ad6` / `#2a5a9e`      | ≥ 4.5; bright L +0.08 / −0.07                                                                                                                                                                                                      |
 | `object`                                                | a lotus violet `#a58ad6` / `#5e45a8`    | ≥ 4.5                                                                                                                                                                                                                              |
@@ -313,7 +329,8 @@ calc(0.45 * var(--m-glow)))`), out by day.
 - New helper or instruction text uses `text-text-dim` or `text-text`
 - The ghost ink only on padding zeros and decoration; a zero that is a datum is dim
 - Nothing set back with opacity: the `quiet` class, the seal at full strength in its state's ink
-- No ink thinned with `/<n>`; fraction digits from `AMOUNT_INK`
+- No ink thinned with `/<n>`; an amount in one ink (`AMOUNT_INK`), its digits never quieter than its integer
+- An amount names its form (`exact`, `column`, `summary`, `compact`; "Amounts"); a shortened one is cut, titled with its exact value
 - No SVG word thinned by `fillOpacity` / `opacity`, none filled with the ghost; ticks are dim
 - A row rule is `border-row-rule`, a bar's track `bg-bar-track`; a tile has its 1 px border
 - Words on a fill take `inkOnFill`; a legend's label is text, its colour on the swatch only
