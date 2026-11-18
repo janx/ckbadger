@@ -455,7 +455,7 @@ describe('a folded run shows the parties its rows show (B4 fix round)', () => {
 // a real button, and on a phone it is a target a finger can take. docs/RESPONSIVE_LAYOUT.md's
 // Touch rule names no size; the size is WCAG 2.2's minimum target (2.5.8), 24 × 24 CSS px, the
 // figure the review measured against and the site's own (the hardfork timeline's DOT_HIT_PX).
-// Below md the toggle stands at least 24 px tall; it stood on its 20 px row line.
+// The toggle stands at least 24 px tall at every width; it stood on its 20 px row line.
 describe('the run’s toggle on a phone (B4 fix round)', () => {
   const theme = resolveConfig(tailwindConfig).theme as unknown as {
     minHeight: Record<string, string>;
@@ -495,7 +495,10 @@ describe('the run’s toggle on a phone (B4 fix round)', () => {
     return Math.max(px(theme.lineHeight[line]), min === undefined ? 0 : px(theme.minHeight[min]));
   }
 
-  it.each([390, 360])('is at least 24 px tall at %i px', (viewport) => {
+  // B4 second fix round (review-rules-fixes-logic NOTE 7, the coordinator's item 13): at every
+  // width (a touch tablet stands at 768 to 1023; WCAG 2.5.8 has no breakpoint). It was 24 below md
+  // and the row's 20 px line from md.
+  it.each([390, 360, 768, 1024, 1280])('is at least 24 px tall at %i px', (viewport) => {
     const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
     render(
       <ActivityRuns
@@ -510,8 +513,8 @@ describe('the run’s toggle on a phone (B4 fix round)', () => {
     );
     const toggle = screen.getByRole('button', { name: '2 transactions ↓' });
     expect(targetPx(toggle, viewport)).toBeGreaterThanOrEqual(24);
-    // from md (no phone) it keeps the row's line
-    expect(targetPx(toggle, 768)).toBe(ROW_LINE_PX);
+    // above its row's line
+    expect(ROW_LINE_PX).toBeLessThan(24);
   });
 });
 
