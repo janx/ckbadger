@@ -520,12 +520,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       "the shortcuts panel's release and clock line: chrome, the rule's open point (B1 hand-back)",
   },
-  'components/error-page-shell.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason:
-      'the caption under the seal: a note under a figure, quiet by rule (its link and hash read)',
-  },
+  // components/error-page-shell.tsx left the list (readability R6): the caption under the seal,
+  // a note under a figure, quiet by rule, is the seal's <figcaption> now that the seal stands in a
+  // figure of its own beside or below the text, no longer a <p> (this gate's other route for it).
   'components/layout/site-footer.tsx': {
     family: 'shared',
     sites: { prose: 1 },
