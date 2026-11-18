@@ -531,6 +531,405 @@ async fn test_dao_cell_missing_deposit_header_is_error() {
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
 }
 
+// ---------------------------------------------------------------------------
+// F-9 (readability review 2026-11-18): a live Nervos DAO deposit's cell page
+// showed no compensation while its owner's address page showed it. The cell
+// route sent the lifecycle row's stored `compensation`, which the indexer sets
+// only when the withdrawal completes (phase 2); the address route computes it
+// at the tip with `dao_compensation_for_entry_at`. The fixture is one deposit's
+// lifecycle as the indexer writes it, at each of its three states: deposited
+// at block 123, withdraw request at 150, completion at 180, tip at 200.
+// ---------------------------------------------------------------------------
+
+const DAO_TYPE_CODE_HASH: &str = "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+const DAO_CAPACITY: u64 = 100_000_000_000;
+/// capacity field 8 + lock (32 + 1 + 20 args) + DAO type (32 + 1) + data 8 bytes.
+const DAO_OCCUPIED: i64 = 102_00000000;
+const DAO_DEPOSIT_BLOCK: i64 = 123;
+const DAO_REQUEST_BLOCK: i64 = 150;
+const DAO_COMPLETION_BLOCK: i64 = 180;
+const DAO_TIP_BLOCK: i64 = 200;
+const DAO_DEPOSIT_AR: u64 = 10_000_000_000_000_000;
+const DAO_REQUEST_AR: u64 = 10_100_000_000_123_456;
+const DAO_COMPLETION_AR: u64 = 10_150_000_000_000_000;
+const DAO_TIP_AR: u64 = 10_250_000_123_456_789;
+/// floor(898 CKB free x DAO_TIP_AR / DAO_DEPOSIT_AR) - 898 CKB, in shannons.
+const DAO_ACCRUED_AT_TIP: i64 = 2_245_001_108;
+/// floor(898 CKB free x DAO_REQUEST_AR / DAO_DEPOSIT_AR) - 898 CKB, in shannons.
+const DAO_FROZEN_AT_REQUEST: i64 = 898_000_001;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DaoPhase {
+    Deposited,
+    Withdrawing,
+    Withdrawn,
+}
+
+struct DaoCellFixture {
+    app: axum::Router,
+    store: Arc<CkbadgerStore>,
+    owner: Vec<u8>,
+    deposit_tx: Vec<u8>,
+    request_tx: Vec<u8>,
+    deposit_key: Vec<u8>,
+}
+
+/// One 1,000 CKB deposit under one secp-shaped lock, written as the indexer
+/// writes it at `phase`: the deposit cell live (deposited), or spent by the
+/// request whose cell is live (withdrawing), or the request cell spent by the
+/// completion (withdrawn); the lifecycle row, its indexes, the owner's live
+/// cell index and balance, and the canonical headers with their ARs.
+async fn dao_cell_fixture(phase: DaoPhase) -> DaoCellFixture {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder, TransactionView},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash([0x11; 32].pack())
+        .hash_type(1u8.into())
+        .args(Bytes::from(vec![0x23; 20]).pack())
+        .build();
+    let owner = lock.calc_script_hash().as_slice().to_vec();
+    let dao_code_hash: [u8; 32] = hex::decode(DAO_TYPE_CODE_HASH).unwrap().try_into().unwrap();
+    let dao_output = packed::CellOutput::new_builder()
+        .capacity(DAO_CAPACITY.pack())
+        .lock(lock.clone())
+        .type_(
+            Some(
+                packed::Script::new_builder()
+                    .code_hash(dao_code_hash.pack())
+                    .hash_type(1u8.into())
+                    .build(),
+            )
+            .pack(),
+        )
+        .build();
+    let spend = |tx: &TransactionView| {
+        packed::CellInput::new_builder()
+            .previous_output(
+                packed::OutPoint::new_builder()
+                    .tx_hash(tx.hash())
+                    .index(0u32.pack())
+                    .build(),
+            )
+            .build()
+    };
+    let deposit_data = vec![0u8; 8];
+    let request_data = (DAO_DEPOSIT_BLOCK as u64).to_le_bytes().to_vec();
+    let deposit = TransactionBuilder::default()
+        .output(dao_output.clone())
+        .output_data(Bytes::from(deposit_data.clone()).pack())
+        .build();
+    let request = TransactionBuilder::default()
+        .input(spend(&deposit))
+        .output(dao_output)
+        .output_data(Bytes::from(request_data.clone()).pack())
+        .build();
+    let completion = TransactionBuilder::default()
+        .input(spend(&request))
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity((DAO_CAPACITY + DAO_FROZEN_AT_REQUEST as u64).pack())
+                .lock(lock)
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .build();
+    let deposit_tx = deposit.hash().as_slice().to_vec();
+    let request_tx = request.hash().as_slice().to_vec();
+    let completion_tx = completion.hash().as_slice().to_vec();
+    let dao_cell = |data: &[u8]| LiveCellInfo {
+        capacity: DAO_CAPACITY as i64,
+        lock_code_hash: [0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0x23; 20],
+        type_code_hash: Some(dao_code_hash),
+        type_hash_type: Some(1),
+        type_args: Some(vec![]),
+        data_size: 8,
+        udt_amount: None,
+        data_hash: Some(fixture_data_hash(data).try_into().unwrap()),
+    };
+    let deposit_cell = dao_cell(&deposit_data);
+    let request_cell = dao_cell(&request_data);
+    assert_eq!(
+        deposit_cell.occupied_capacity(),
+        DAO_OCCUPIED,
+        "fixture occupied capacity"
+    );
+
+    let times = [
+        (DAO_DEPOSIT_BLOCK, 1_700_000_000_000),
+        (DAO_REQUEST_BLOCK, 1_700_000_100_000),
+        (DAO_COMPLETION_BLOCK, 1_700_000_200_000),
+        (DAO_TIP_BLOCK, 1_700_000_300_000),
+    ];
+    seed_block_headers_at(&store, &times);
+    let mut headers = StoreBatch::new(store.as_ref());
+    for (block, ar) in [
+        (DAO_DEPOSIT_BLOCK, DAO_DEPOSIT_AR),
+        (DAO_REQUEST_BLOCK, DAO_REQUEST_AR),
+        (DAO_COMPLETION_BLOCK, DAO_COMPLETION_AR),
+        (DAO_TIP_BLOCK, DAO_TIP_AR),
+    ] {
+        let mut header = store.get_block_header(block).unwrap().unwrap();
+        header.dao[8..16].copy_from_slice(&ar.to_le_bytes());
+        headers.put_block_header(block, &header);
+    }
+    headers.commit().unwrap();
+    let tip_hash = store.get_block_header(DAO_TIP_BLOCK).unwrap().unwrap().hash;
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = DAO_TIP_BLOCK;
+            s.tip_block_hash = tip_hash;
+        })
+        .unwrap();
+
+    let deposit_key = ckbadger_store::keys::encode_outpoint(&deposit_tx, 0).to_vec();
+    let mut entry = DaoDepositCacheEntry {
+        capacity: DAO_CAPACITY as i64,
+        occupied_capacity: DAO_OCCUPIED,
+        deposit_block_number: DAO_DEPOSIT_BLOCK,
+        deposit_timestamp: times[0].1,
+        lock_script_hash: owner.clone(),
+        deposit_ar: DAO_DEPOSIT_AR as i64,
+        status: 0,
+        withdraw_request_tx: None,
+        withdraw_request_output_index: None,
+        withdraw_request_block: None,
+        withdraw_request_ar: None,
+        withdraw_request_occupied_capacity: None,
+        withdraw_block: None,
+        withdraw_tx: None,
+        withdraw_to_output_index: None,
+        compensation: None,
+        deposit_chain_time_ms: times[0].1,
+    };
+    if phase != DaoPhase::Deposited {
+        entry.status = 1;
+        entry.withdraw_request_tx = Some(request_tx.clone());
+        entry.withdraw_request_output_index = Some(0);
+        entry.withdraw_request_block = Some(DAO_REQUEST_BLOCK);
+        entry.withdraw_request_ar = Some(DAO_REQUEST_AR as i64);
+        entry.withdraw_request_occupied_capacity = Some(DAO_OCCUPIED);
+    }
+    if phase == DaoPhase::Withdrawn {
+        entry.status = 2;
+        entry.withdraw_block = Some(DAO_COMPLETION_BLOCK);
+        entry.withdraw_tx = Some(completion_tx.clone());
+        entry.withdraw_to_output_index = Some(0);
+        entry.compensation = Some(DAO_FROZEN_AT_REQUEST);
+    }
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_dao_deposit(&deposit_key, &entry);
+    let mut blocks = vec![(DAO_DEPOSIT_BLOCK, deposit)];
+    // The one live cell the owner holds, if any: (outpoint tx, created at, payload).
+    let live = match phase {
+        DaoPhase::Deposited => {
+            batch.put_cell(&deposit_tx, 0, &deposit_cell, DAO_DEPOSIT_BLOCK);
+            Some((&deposit_tx, DAO_DEPOSIT_BLOCK))
+        }
+        DaoPhase::Withdrawing => {
+            batch.put_consumed_cell(
+                &deposit_tx,
+                0,
+                &deposit_cell,
+                DAO_DEPOSIT_BLOCK,
+                DAO_REQUEST_BLOCK,
+                0,
+            );
+            batch.put_cell(&request_tx, 0, &request_cell, DAO_REQUEST_BLOCK);
+            batch.put_dao_by_withdraw_tx(&request_tx, 0, &deposit_key);
+            blocks.push((DAO_REQUEST_BLOCK, request));
+            Some((&request_tx, DAO_REQUEST_BLOCK))
+        }
+        DaoPhase::Withdrawn => {
+            batch.put_consumed_cell(
+                &deposit_tx,
+                0,
+                &deposit_cell,
+                DAO_DEPOSIT_BLOCK,
+                DAO_REQUEST_BLOCK,
+                0,
+            );
+            batch.put_consumed_cell(
+                &request_tx,
+                0,
+                &request_cell,
+                DAO_REQUEST_BLOCK,
+                DAO_COMPLETION_BLOCK,
+                0,
+            );
+            batch.put_dao_by_withdraw_tx(&request_tx, 0, &deposit_key);
+            blocks.push((DAO_REQUEST_BLOCK, request));
+            blocks.push((DAO_COMPLETION_BLOCK, completion));
+            None
+        }
+    };
+    if let Some((tx, block)) = live {
+        batch.put_cell_by_lock(&owner, block, tx, 0);
+        batch.put_addr_balance(
+            &owner,
+            &ckbadger_store::types::AddressBalance {
+                balance: i128::from(DAO_CAPACITY),
+                used_capacity: i128::from(DAO_OCCUPIED),
+                live_cells_count: 1,
+                total_cells_count: blocks.len() as i64,
+                txs_count: blocks.len() as i64,
+                cellbase_txs_count: 0,
+                first_seen_block: DAO_DEPOSIT_BLOCK,
+                first_seen_tx_idx: 0,
+                last_activity_block: block,
+                last_activity_tx_idx: 0,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    for (block, tx) in &blocks {
+        seed_cell_transaction(&store, tx.hash().as_slice(), *block, 1);
+    }
+    let chain = seed_ckb_chain(
+        &blocks
+            .into_iter()
+            .map(|(block, tx)| {
+                BlockBuilder::default()
+                    .number((block as u64).pack())
+                    .epoch(EpochNumberWithFraction::new(1, 0, 1000).pack())
+                    .transaction(tx)
+                    .build()
+            })
+            .collect::<Vec<_>>(),
+    );
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store.clone(),
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    DaoCellFixture {
+        app,
+        store,
+        owner,
+        deposit_tx,
+        request_tx,
+        deposit_key,
+    }
+}
+
+/// The deposit is live: its compensation accrues to the tip, and the cell page
+/// answers the figure `dao_compensation_for_entry_at` gives there — the one
+/// the owner's address page sums.
+#[tokio::test]
+async fn dao_deposit_cell_answers_its_unclaimed_compensation_at_the_tip() {
+    let f = dao_cell_fixture(DaoPhase::Deposited).await;
+    let (status, json) = get_json(
+        &f.app,
+        &format!("/cells/0x{}/0", hex::encode(&f.deposit_tx)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let dao = &json["daoInfo"];
+    assert_eq!(dao["daoStatus"], "deposited", "{dao}");
+
+    let entry = f.store.get_dao_deposit(&f.deposit_key).unwrap().unwrap();
+    let at_tip = ckbadger_store::dao_compensation_for_entry_at(&entry, DAO_TIP_BLOCK, DAO_TIP_AR)
+        .unwrap()
+        .unclaimed;
+    assert_eq!(at_tip, i128::from(DAO_ACCRUED_AT_TIP));
+    assert_eq!(dao["compensation"], at_tip.to_string(), "{dao}");
+    assert_eq!(dao["compensationCkb"], "22.45001108", "{dao}");
+    assert_eq!(dao["compensationState"], "accruing", "{dao}");
+    assert_eq!(dao["compensationAtBlock"], DAO_TIP_BLOCK, "{dao}");
+
+    // The address page's figure for the same cell, from the same store.
+    let (status, holdings) = get_json(
+        &f.app,
+        &format!("/addresses/0x{}/holdings", hex::encode(&f.owner)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{holdings}");
+    assert_eq!(holdings["depositCellsCount"], 1, "{holdings}");
+    assert_eq!(
+        holdings["daoUnclaimedCompensation"], dao["compensation"],
+        "{holdings}"
+    );
+}
+
+/// A withdraw request stops the accrual: the figure is fixed at the request's
+/// AR, on the live request cell and on the spent deposit cell alike, and the
+/// owner's address page sums the same figure.
+#[tokio::test]
+async fn dao_withdraw_request_cell_answers_the_compensation_fixed_at_the_request() {
+    let f = dao_cell_fixture(DaoPhase::Withdrawing).await;
+    let entry = f.store.get_dao_deposit(&f.deposit_key).unwrap().unwrap();
+    let at_tip = ckbadger_store::dao_compensation_for_entry_at(&entry, DAO_TIP_BLOCK, DAO_TIP_AR)
+        .unwrap()
+        .unclaimed;
+    assert_eq!(at_tip, i128::from(DAO_FROZEN_AT_REQUEST));
+    assert_eq!(
+        ckbadger_store::dao_frozen_request_compensation(&entry).unwrap(),
+        DAO_FROZEN_AT_REQUEST
+    );
+
+    for tx in [&f.request_tx, &f.deposit_tx] {
+        let (status, json) = get_json(&f.app, &format!("/cells/0x{}/0", hex::encode(tx))).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let dao = &json["daoInfo"];
+        assert_eq!(dao["daoStatus"], "withdrawing", "{dao}");
+        assert_eq!(dao["compensation"], at_tip.to_string(), "{dao}");
+        assert_eq!(dao["compensationCkb"], "8.98000001", "{dao}");
+        assert_eq!(dao["compensationState"], "frozen", "{dao}");
+        assert_eq!(dao["compensationAtBlock"], DAO_REQUEST_BLOCK, "{dao}");
+    }
+
+    let (status, holdings) = get_json(
+        &f.app,
+        &format!("/addresses/0x{}/holdings", hex::encode(&f.owner)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{holdings}");
+    assert_eq!(holdings["withdrawalRequestCellsCount"], 1, "{holdings}");
+    assert_eq!(
+        holdings["daoUnclaimedCompensation"],
+        DAO_FROZEN_AT_REQUEST.to_string(),
+        "{holdings}"
+    );
+}
+
+/// A completed withdrawal answers the compensation its completion claimed, the
+/// value the indexer stored, at the completion's block.
+#[tokio::test]
+async fn dao_completed_withdrawal_cell_answers_its_claimed_compensation_unchanged() {
+    let f = dao_cell_fixture(DaoPhase::Withdrawn).await;
+    let entry = f.store.get_dao_deposit(&f.deposit_key).unwrap().unwrap();
+    assert_eq!(entry.compensation, Some(DAO_FROZEN_AT_REQUEST));
+
+    let (status, json) = get_json(
+        &f.app,
+        &format!("/cells/0x{}/0", hex::encode(&f.request_tx)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["status"], "dead", "{json}");
+    let dao = &json["daoInfo"];
+    assert_eq!(dao["daoStatus"], "withdrawn", "{dao}");
+    assert_eq!(
+        dao["compensation"],
+        DAO_FROZEN_AT_REQUEST.to_string(),
+        "{dao}"
+    );
+    assert_eq!(dao["compensationCkb"], "8.98000001", "{dao}");
+    assert_eq!(dao["compensationState"], "claimed", "{dao}");
+    assert_eq!(dao["compensationAtBlock"], DAO_COMPLETION_BLOCK, "{dao}");
+    assert_eq!(dao["withdrawBlock"], DAO_COMPLETION_BLOCK, "{dao}");
+}
+
 /// `.cell` Cells Account type script, mainnet (docs/metadata/scripts/dotcell-account.toml;
 /// `ACCOUNT_TYPE_CODE_HASH_MAINNET` in the indexer's dotcell fixtures).
 const DOTCELL_ACCOUNT_TYPE_MAINNET: &str =
