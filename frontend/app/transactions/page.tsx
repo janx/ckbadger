@@ -420,9 +420,10 @@ const POOL_MIN_PX = minimumWidth('Transactions in the pool', poolColumns(0));
  * The width both of the page's lists change form at (they are one page): the larger of their
  * sums, the pool's 1,212 px today (the committed list's own is 1,211). Each list's flexible column
  * keeps what that width is over its own sum: the pool's What it does none, the committed list's
- * What it did 1 px (its `formWidth`).
+ * What it did 1 px (its `formWidth`). Exported as the one source of that width (review rules-tests
+ * NOTE-1): the tests draw both lists at it and compare it with the pool's budgets.
  */
-const TRANSACTIONS_FORM_PX = Math.max(TRANSACTION_LIST_MIN_PX, POOL_MIN_PX);
+export const TRANSACTIONS_FORM_PX = Math.max(TRANSACTION_LIST_MIN_PX, POOL_MIN_PX);
 
 /** The pool list's columns as drawn, changing form at TRANSACTIONS_FORM_PX. */
 export const POOL_COLUMNS = poolColumns(TRANSACTIONS_FORM_PX - POOL_MIN_PX);

@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
-import { TransactionListTable } from '@/components/transaction/transaction-list-table';
+import {
+  TRANSACTION_LIST_MIN_PX,
+  TransactionListTable,
+} from '@/components/transaction/transaction-list-table';
+import { TRANSACTIONS_FORM_PX } from '@/app/transactions/page';
 import type { Transaction } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import {
@@ -300,13 +304,14 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // The page's real widths (app/transactions/page.tsx draws its lists in `main.container`, no inset
   // of its own between): Tailwind's container at each window the readability plan reads, from the
   // theme (tailwind-box's containerContentPx: 1,232 at 1280, 976, 736, 608, then the window less 32,
-  // 358 and 328). The page changes both its lists' form at 1,212 px, its pool's sum
-  // (transactions-page.test.tsx pins it), so only 1,232 draws the table, What it did taking its 205
+  // 358 and 328). The page changes both its lists' form at its TRANSACTIONS_FORM_PX, 1,212 px, its
+  // pool's sum (read from the page, its one source: review rules-tests NOTE-1; transactions-page.test
+  // compares it with the pool's budgets), so only 1,232 draws the table, What it did taking its 205
   // px minimum and the 20 px beyond; every narrower width draws the phone rows, whose what-line
   // wraps by design. Re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 →
   // 16 × 32.3 px gives each list's Transaction column 16 px back, so the pool's sum is 1,212 (was
   // 1,228) and What it did has 225 px at 1,232 (was 209).
-  const PAGE_FORM_PX = 1212;
+  const PAGE_FORM_PX = TRANSACTIONS_FORM_PX;
   const PAGE_VIEWPORTS = [1280, 1024, 768, 640, 390, 360] as const;
   /**
    * Block 0's cellbase as the committed list lists it (the live API, `/transactions?cursor=1:0`):
@@ -388,6 +393,10 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
           Number.parseFloat((c as HTMLElement).style.minWidth)
         );
         const sum = cols.reduce((s, w) => s + w, 0);
+        // the list at the page's width: What it did its own 204 px minimum (the budgets pinned
+        // below) and what the page's width is over the list's own sum, 1,212 − 1,211
+        expect(TRANSACTION_LIST_MIN_PX).toBeLessThanOrEqual(PAGE_FORM_PX);
+        expect(cols[2]).toBe(204 + (PAGE_FORM_PX - TRANSACTION_LIST_MIN_PX));
         expect([sum, cols[2]]).toEqual([PAGE_FORM_PX, 205]);
         const what = width - (sum - cols[2]);
         // re-pinned on purpose (readability R6): 225 (was 209), the 16 px the stone gave back

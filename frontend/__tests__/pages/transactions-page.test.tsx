@@ -10,7 +10,7 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '@/__tests__/utils/test-utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
-import TransactionsPage from '@/app/transactions/page';
+import TransactionsPage, { TRANSACTIONS_FORM_PX } from '@/app/transactions/page';
 import { api } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
@@ -190,7 +190,7 @@ describe('Transactions pool view', () => {
     // widest 1,232 px container holds
     // re-pinned on purpose (review fb-tests 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13568 → 9999" (102 → 110): 1,228 px
     // re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 → 16 × 32.3 px, its footprint 56.5 → 40.3, Transaction 216 → 200: 1,212 px
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1212);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(TRANSACTIONS_FORM_PX);
     expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
     expect(table).toHaveTextContent('0.00012345 CKB');
     expect(table).toHaveTextContent('3,500,000,000');
@@ -213,8 +213,8 @@ describe('Transactions pool view', () => {
     // re-pinned on purpose (review fb-tests 6, the lead's ruling): Cells holds the most inputs a transaction holds, "13568 → 9999" (102 → 110): 1,228 px
     // re-pinned on purpose (readability R6): the transaction's row stone 24 × 48.5 → 16 × 32.3 px, its footprint 56.5 → 40.3, Transaction 216 → 200: 1,212 px
     expect(cols).toEqual([200, 126, 184, 110, 170, 131, 118, 71, 102]);
-    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1212);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1212);
+    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(TRANSACTIONS_FORM_PX);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(TRANSACTIONS_FORM_PX);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at 14 px since R4 (8.4; 7.8 at 13 px; it was 21, 12 + 6 with
     // three dots)
@@ -465,8 +465,8 @@ describe('Transactions pool view', () => {
     });
     for (const [width, form] of [
       [1232, 'table'],
-      [1212, 'table'],
-      [1211, 'rows'],
+      [TRANSACTIONS_FORM_PX, 'table'],
+      [TRANSACTIONS_FORM_PX - 1, 'rows'],
       [976, 'rows'],
     ] as const) {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
@@ -520,7 +520,7 @@ describe('Transactions pool view', () => {
     });
     render(<TransactionsPage />);
     const table = await screen.findByRole('table', { name: 'Committed transactions' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1212);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(TRANSACTIONS_FORM_PX);
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
     expect(Number.parseFloat(cols[2].minWidth)).toBe(204 + 1);
   });
@@ -559,7 +559,15 @@ describe('Transactions pool view', () => {
       ceil(at('3,500,000,000', 13)),
     ];
     expect(budgets).toEqual([200, 126, 184, 110, 170, 131, 118, 71, 102]);
-    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1212);
+    // the page's one form width (review rules-tests NOTE-1) is the pool's sum of these budgets,
+    // the larger of the two lists' own sums: 1,212
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(TRANSACTIONS_FORM_PX);
+    expect(TRANSACTIONS_FORM_PX).toBe(
+      Math.max(
+        TRANSACTION_LIST_MIN_PX,
+        budgets.reduce((sum, w) => sum + w, 0)
+      )
+    );
     // re-pinned on purpose (the coordinator's ruling: the committed Size head in the tick form):
     // the committed list's own sum is 1,203, the pool's 1,220 the larger, so both change form at
     // the pool's (the committed What it did keeps the 17 px between them); re-pinned on purpose
@@ -600,7 +608,7 @@ describe('Transactions pool view', () => {
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
     expect(cols[1].width).toBe('auto');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1212);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(TRANSACTIONS_FORM_PX);
     unmount();
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -608,8 +616,8 @@ describe('Transactions pool view', () => {
     });
     for (const [width, form] of [
       [1232, 'table'],
-      [1212, 'table'],
-      [1211, 'rows'],
+      [TRANSACTIONS_FORM_PX, 'table'],
+      [TRANSACTIONS_FORM_PX - 1, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {
