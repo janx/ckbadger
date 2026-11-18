@@ -21,7 +21,7 @@ import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ERROR_PAGE_LAYOUT, ErrorPageShell } from '@/components/error-page-shell';
 import { inkOf } from '@/__tests__/utils/ink-role';
-import { displayAt, textRunPx } from '@/__tests__/utils/tailwind-box';
+import { displayAt, textRunPx, wrapsAt } from '@/__tests__/utils/tailwind-box';
 import { WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
@@ -592,14 +592,26 @@ describe('the caption under the 404 seal never opens a line with a separator', (
   }
   /** The block-level displays (line-runs' set): such a box opens and closes its own lines. */
   const BLOCK_LEVEL = new Set(['block', 'flex', 'grid', 'list-item', 'table']);
-  /** The text an element draws, a block number written at its widest. */
+  /** The atomic inline displays: such a box stands on one line whole, its content never parts. */
+  const ATOMIC = new Set(['inline-block', 'inline-flex', 'inline-grid', 'inline-table']);
+  /** The block link: the one element whose text is counted at the widest block number. */
+  const isBlockLink = (node: Node): node is HTMLAnchorElement =>
+    node instanceof HTMLAnchorElement && /\/blocks\/\d+$/.test(node.getAttribute('href') ?? '');
+  /** The text an element draws, the block link's number written at its widest. */
   const drawn = (node: Node): string =>
-    node instanceof HTMLAnchorElement && /\/blocks\/\d+$/.test(node.getAttribute('href') ?? '')
+    isBlockLink(node)
       ? WIDEST_BLOCK_NUMBER
       : node.nodeType === 3
         ? (node.textContent ?? '')
         : Array.from(node.childNodes).map(drawn).join('');
-  /** The caption's units in order at a window: words, and the boxes a line never breaks inside. */
+  /**
+   * The caption's units in order at a window: words, and the boxes a line never breaks inside,
+   * each element read by its display at the window (review rules-fixes-tests NOTE-4): a box hidden
+   * there counts nothing; a separated list is one inline box (inline-flex) or a block; any other
+   * atomic inline box (inline-block, inline-flex, …) and a nowrap run are one unit; the block link
+   * alone is one unit at the widest number, and one that holds words is refused; any other block
+   * is refused; an inline box is walked for its words.
+   */
   function units(root: Element, viewport: number): Unit[] {
     const out: Unit[] = [];
     let space = false;
@@ -617,13 +629,25 @@ describe('the caption under the 404 seal never opens a line with a separator', (
       }
       const el = node as HTMLElement;
       const display = displayAt(el, viewport);
+      // a box hidden at this window draws nothing: no word of it is on a line
+      if (display === 'none') return;
       const block = BLOCK_LEVEL.has(display);
       const dotted = el.hasAttribute('data-dotted');
       if (dotted && !block && display !== 'inline-flex')
         throw new Error(
           `${viewport}: a separated list drawn ${display}, which the reader does not lay out`
         );
-      if (dotted || el.classList.contains('whitespace-nowrap') || drawn(el) !== el.textContent) {
+      if (isBlockLink(el)) {
+        const own = (el.textContent ?? '').trim();
+        if (/\s/.test(own))
+          throw new Error(
+            `${viewport}: the block link holds words ("${own}"), the reader counts it as one number`
+          );
+        out.push({ text: WIDEST_BLOCK_NUMBER, breakBefore: space, dotted: false, block: false });
+        space = false;
+        return;
+      }
+      if (dotted || ATOMIC.has(display) || !wrapsAt(el, viewport)) {
         const text = drawn(el).replace(/\s+/g, ' ');
         if (/^\s/.test(text)) space = true;
         out.push({
