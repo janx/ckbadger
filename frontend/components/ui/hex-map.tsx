@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { NoBreak } from '@/components/ui/no-break';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes, validateByteRanges, type ByteRange } from '@/lib/hex-bytes';
@@ -116,7 +117,10 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
           >
             {f.label}{' '}
             <span className="text-text-dim">
-              bytes {offsetBase + f.offset}–{offsetBase + f.offset + f.length - 1}
+              bytes{' '}
+              <NoBreak>
+                {offsetBase + f.offset}–{offsetBase + f.offset + f.length - 1}
+              </NoBreak>
             </span>
           </button>
         ))}
