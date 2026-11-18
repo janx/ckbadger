@@ -692,7 +692,10 @@ export function DaoHistoryReading({
                   ),
                 },
               ]
-            : []),
+            : // a range with a whole week shows the fact at its other days: its row keeps its place
+              weeks.length > 0
+              ? [{ label: 'week from', reserved: true as const }]
+              : []),
           ...(peak
             ? [
                 {

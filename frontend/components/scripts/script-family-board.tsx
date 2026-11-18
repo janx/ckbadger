@@ -564,6 +564,9 @@ export function ScriptHistoryReading({
   const unused = point ? BigInt(point.values.unused) : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
+  // whether some day of the range has a code fact (hover never moves layout: ReadoutRow)
+  const codeShown =
+    lineage !== null && chart.data.some((p) => deploymentOnDay(lineage, p.date) !== null);
   const swatch = (color: string) => (
     <span
       aria-hidden="true"
@@ -632,7 +635,10 @@ export function ScriptHistoryReading({
                     ),
                   },
                 ]
-              : []),
+              : // a range with a deployed day shows the fact on it: its row keeps its place here
+                codeShown
+                ? [{ label: 'code', reserved: true as const }]
+                : []),
           ]}
         />
       ) : (
