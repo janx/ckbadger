@@ -31,7 +31,8 @@ import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import {
-  MAX_BLOCK_BYTES,
+  LARGEST_TX_BYTES,
+  MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_AGE,
   WIDEST_BLOCK_NUMBER,
@@ -44,12 +45,14 @@ import {
 
 /**
  * The widest scale each bar column's figure writes (readability F3-e). Size: a transaction is no
- * larger than a block's 597,000 bytes, whose scale is 600,000. Cycles: any scale under a billion
- * cycles (lane B5's bound of record: a page's largest transaction under 750,000,000). Both heads
- * write their ticks in the tick form ("0 … 600k", "0 … 750M"; the rule at `trackPx`), so each
- * track is COUNT_TRACK_PX, 48 px; the exact figure beside each bar keeps its digits.
+ * larger than its block, and the largest block is genesis, whose 1,235,438-byte cellbase the oldest
+ * page lists (LARGEST_TX_BYTES, as the block page's table; review fb-logic 6: it was the 597,000
+ * limit, a 600,000 scale): a 1,500,000 scale. Cycles: any scale under a billion cycles (lane B5's
+ * bound of record: a page's largest transaction under 750,000,000). Both heads write their ticks in
+ * the tick form ("0 … 1.5M", "0 … 750M"; the rule at `trackPx`), so each track is COUNT_TRACK_PX,
+ * 48 px; the exact figure beside each bar keeps its digits.
  */
-const SIZE_SCALE = resourceScale([MAX_BLOCK_BYTES]).toLocaleString('en-US');
+const SIZE_SCALE = resourceScale([LARGEST_TX_BYTES]).toLocaleString('en-US');
 const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
 const SIZE_TRACK = COUNT_TRACK_PX;
 const CYCLES_TRACK = COUNT_TRACK_PX;
@@ -417,10 +420,15 @@ function committedColumns(
     {
       key: 'cells',
       label: 'Cells',
-      // Four digits a side, "9,999 → 9,999" (13 characters at 13 px, 101.4), and the gap, on one
-      // line. It held "10 → 2" (65 px), and the genesis cellbase's "0 → 671" ran past it.
+      // The most inputs a transaction holds and the widest output count, "13,568 → 9,999" (14
+      // characters at 13 px, 109.2), and the gap, on one line (review fb-tests 6: it counted four
+      // digits of inputs, "9,999", while 13,568 44-byte inputs fit a block). It held "10 → 2"
+      // (65 px), and the genesis cellbase's "0 → 671" ran past it.
       minWidth: columnPx(
-        textPx(`${WIDEST_COUNT} → ${WIDEST_COUNT}`.length, fontPx('small')) + CELL_GAP_PX
+        textPx(
+          `${MAX_TX_INPUTS.toLocaleString('en-US')} → ${WIDEST_COUNT}`.length,
+          fontPx('small')
+        ) + CELL_GAP_PX
       ),
       className: 'whitespace-nowrap',
       render: (tx) => (
@@ -432,9 +440,10 @@ function committedColumns(
     {
       key: 'size',
       label: 'Size, bytes',
-      // The 48 px track (its head's "0 … 600k" in the tick form), the bar's 10 px gap, the scale's
-      // figure ("600,000", 7 characters at 13 px, 54.6) and the gap: 128.6. It held a 5-digit scale
-      // ("2,000") on a 56 px track its head's exact ticks ran past.
+      // The 48 px track (its head's "0 … 1.5M" in the tick form), the bar's 10 px gap, the scale's
+      // figure ("1,500,000", genesis's cellbase; 9 characters at 13 px, 70.2) and the gap: 144.2
+      // (review fb-logic 6: it was "600,000", 128.6, and genesis's figure ran 15.6 px past it). It
+      // held a 5-digit scale ("2,000") on a 56 px track its head's exact ticks ran past.
       minWidth: columnPx(
         SIZE_TRACK + BAR_FIGURE_GAP + textPx(SIZE_SCALE.length, fontPx('small')) + CELL_GAP_PX
       ),
@@ -489,7 +498,7 @@ function committedColumns(
 }
 
 /**
- * The committed list's own sum of its columns' minimums (1,203 px). The Transactions page changes
+ * The committed list's own sum of its columns' minimums (1,227 px). The Transactions page changes
  * both of its lists' form at one width, the larger of the two sums (`formWidth`).
  */
 export const TRANSACTION_LIST_MIN_PX = minimumWidth(

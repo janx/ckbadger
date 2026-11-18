@@ -11,8 +11,10 @@ import { formatAgeOneUnit } from '@/lib/format-age';
 import { SHORT_FORMS, shortenAddress, shortenHash } from '@/lib/shorten';
 import {
   GENESIS_BLOCK_BYTES,
+  LARGEST_TX_BYTES,
   MAX_BLOCK_BYTES,
   MAX_BLOCK_CYCLES,
+  MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_AGE,
   WIDEST_BLOCK_FEES,
@@ -127,7 +129,7 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
   it('marks each bound consensus or of record, and an of-record bound names its source', () => {
     expect(bounds.filter((b) => kind(b.doc) === null).map((b) => b.name)).toEqual([]);
     for (const b of bounds.filter((b) => kind(b.doc) === 'of record'))
-      expect([b.name, /Source: \S/.test(b.doc)]).toEqual([b.name, true]);
+      expect([b.name, /Source:\s+\S/.test(b.doc)]).toEqual([b.name, true]);
     const named = (k: string) =>
       bounds
         .filter((b) => kind(b.doc) === k)
@@ -193,6 +195,24 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
   const INPUT = 8 + 32 + 4;
   const OUTPUT = 4 + 3 * 4 + 8 + (4 + 3 * 4 + 32 + 1 + 4) + 4 + 4 + 4;
   const TRANSACTION = 4 + 2 * 4 + (4 + 6 * 4) + 4 + 4 + 4 + (4 + INPUT) + 4 + 4 + 4 + 4;
+
+  it('bounds a transaction’s inputs by the block: 13,568, five digits (review fb-tests 6)', () => {
+    expect(INPUT).toBe(44);
+    expect(Math.floor(blockBytes / INPUT)).toBe(13_568);
+    expect(MAX_TX_INPUTS).toBe(Math.floor(blockBytes / INPUT));
+    // genesis, past the limit, spends no real cell: its two transactions hold one input each
+    expect(genesisTransactions.map((tx) => tx.inputsCount)).toEqual([1, 1]);
+  });
+
+  // Review fb-logic 6: one bound for one quantity. A transaction is no larger than its block, and
+  // the largest block is genesis (1,236,271 bytes, its cellbase 1,235,438): the block page's table
+  // budgeted for it, /transactions' Size column for 597,000, while its oldest page lists block 0.
+  it('bounds a transaction’s size by the largest block, genesis', () => {
+    expect(GENESIS_BLOCK_BYTES).toBe(genesisBlock.size);
+    expect(LARGEST_TX_BYTES).toBe(Math.max(blockBytes, genesisBlock.size));
+    expect(Math.max(...genesisTransactions.map((tx) => tx.txSize!))).toBe(1_235_438);
+    expect(LARGEST_TX_BYTES).toBeGreaterThan(1_235_438);
+  });
 
   it('bounds a block’s transactions and a transaction’s outputs under 10,000: four digits', () => {
     expect([OUTPUT, TRANSACTION]).toEqual([89, 116]);

@@ -45,6 +45,7 @@ import { SHORT_FORMS } from '@/lib/shorten';
 import {
   MAX_BLOCK_BYTES,
   MAX_BLOCK_CYCLES,
+  MAX_TX_INPUTS,
   WIDEST_COUNT_DIGITS,
   WIDEST_FEE_RATE,
   WIDEST_POOL_VALUE_LINE,
@@ -263,7 +264,7 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
       // "Interpretation" (14 characters at 13 px, 109.2), and the gap, and it takes what the
       // container gives beyond the sum. Both of the page's lists change form at one width, the
       // larger of their sums: `sameWidth` is what the committed list's sum is over the pool's
-      // (none today: the pool's 1,220 px is the larger, the committed list's 1,203). It was 180
+      // (none today: the pool's 1,228 px is the larger, the committed list's 1,227). It was 180
       // and named no content.
       minWidth:
         columnPx(textPx('Interpretation'.length, fontPx('small')) + CELL_GAP_PX) + sameWidth,
@@ -312,11 +313,12 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
     {
       key: 'cells',
       label: 'Cells',
-      // Four digits a side as the pool writes them (ungrouped), "9999 → 9999" (11 characters at
-      // 13 px, 85.8), and the gap. It was 64, which held "10 → 2".
+      // The most inputs a transaction holds and four digits of outputs, as the pool writes them
+      // (ungrouped), "13568 → 9999" (12 characters at 13 px, 93.6), and the gap (review fb-tests
+      // 6: it counted four digits of inputs while 13,568 44-byte inputs fit a block). It was 64,
+      // which held "10 → 2".
       minWidth: columnPx(
-        textPx(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT_DIGITS}`.length, fontPx('small')) +
-          CELL_GAP_PX
+        textPx(`${MAX_TX_INPUTS} → ${WIDEST_COUNT_DIGITS}`.length, fontPx('small')) + CELL_GAP_PX
       ),
       numeric: true,
       render: (tx) => `${poolConsumed(tx)} → ${tx.outputsCount}`,
@@ -385,8 +387,9 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
     {
       key: 'size',
       label: 'Size, bytes',
-      // The largest a transaction can be, a block's "597,000" (7 characters at 13 px, 54.6), and
-      // the gap; its 1 px spare went (readability F3-e). Its head takes two lines ("Size," /
+      // The largest a pool transaction can be, a block's "597,000" (7 characters at 13 px, 54.6:
+      // a node takes no transaction too large for a block, so genesis's cellbase is never in the
+      // pool), and the gap; its 1 px spare went (readability F3-e). Its head takes two lines ("Size," /
       // "bytes"), as "Fee rate, shannon/KB" beside it already does, so the head row keeps its
       // height; the 22 px its one-line head held went to Status (old issue C).
       minWidth: columnPx(
@@ -412,9 +415,9 @@ const POOL_MIN_PX = minimumWidth('Transactions in the pool', poolColumns(0));
 
 /**
  * The width both of the page's lists change form at (they are one page): the larger of their
- * sums, the pool's 1,220 px today (the committed list's own is 1,203). Each list's flexible column
+ * sums, the pool's 1,228 px today (the committed list's own is 1,227). Each list's flexible column
  * keeps what that width is over its own sum: the pool's What it does none, the committed list's
- * What it did 17 px (its `formWidth`).
+ * What it did 1 px (its `formWidth`).
  */
 const TRANSACTIONS_FORM_PX = Math.max(TRANSACTION_LIST_MIN_PX, POOL_MIN_PX);
 
