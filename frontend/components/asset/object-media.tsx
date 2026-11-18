@@ -141,7 +141,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
     contentHex === null
       ? undefined
       : Uint8Array.from(hexBytes(contentHex, object.sporeId), (b) => parseInt(b, 16));
-  const preview = bitcoin.length ? null : detectPreview(object.contentType, bytes, decoded?.media);
+  const preview = bitcoin.length ? null : detectPreview(object.contentType, bytes, decoded);
   return (
     <section aria-label="Object media" className="min-w-0 space-y-4">
       {/* F2 objects (OB-6): the composition badge and its sentence now open the page hero. */}

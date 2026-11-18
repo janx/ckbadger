@@ -48,13 +48,13 @@ it('presents Bitcoin media as a copper link plate without fetching an image', ()
         media: [
           {
             mediaType: 'image/png',
-            role: null,
             size: 1,
             hash: 'x',
             step: 0,
             url: 'https://external.example/image',
           },
         ],
+        render: null,
       }}
     />
   );
