@@ -311,7 +311,9 @@ describe('the classes and sources the budget reads', () => {
     expect(NAVBAR_DROPDOWN_TRIGGER_CLASS.split(' ')).toEqual(
       expect.arrayContaining(['eyebrow', 'text-meta', 'border', 'px-2', 'gap-1'])
     );
-    expect(screen.getByTestId('network-switcher')).toHaveClass('md:mr-1', 'md:border-r', 'md:pr-2');
+    const switcher = within(nav).getByTestId('network-switcher');
+    expect(switcher).toHaveAttribute('data-placement', 'nav');
+    expect(switcher).toHaveClass('mr-1', 'border-r', 'pr-2');
     const input = within(banner).getByRole('textbox');
     expect(input).toHaveClass('well', 'text-body', 'pl-7', 'pr-3', 'md:pr-9');
     const fieldBox = input.closest('form')!.parentElement!.parentElement as HTMLElement;
