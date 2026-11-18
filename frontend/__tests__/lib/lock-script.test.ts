@@ -84,10 +84,16 @@ describe('the fixtures’ encoder (__tests__/utils/ckb-address.ts) against the d
   });
 });
 
+// B4 fix round (re-pinned on purpose; review-rules MUST 3, NOTE-7): the default lock is the pair,
+// its code hash by type; the same code hash by data, data1 or data2 is another lock.
 describe('isDefaultLock', () => {
-  it('is the default lock’s code hash, in either case, and no other', () => {
-    expect(isDefaultLock(DEFAULT_LOCK_CODE_HASH)).toBe(true);
-    expect(isDefaultLock(DEFAULT_LOCK_CODE_HASH.toUpperCase().replace('0X', '0x'))).toBe(true);
-    expect(isDefaultLock(JOYID)).toBe(false);
+  it('is the default lock’s code hash by type, in either case, and no other pair', () => {
+    expect(isDefaultLock(DEFAULT_LOCK_CODE_HASH, 'type')).toBe(true);
+    expect(isDefaultLock(DEFAULT_LOCK_CODE_HASH.toUpperCase().replace('0X', '0x'), 'type')).toBe(
+      true
+    );
+    for (const hashType of ['data', 'data1', 'data2'] as const)
+      expect(isDefaultLock(DEFAULT_LOCK_CODE_HASH, hashType)).toBe(false);
+    expect(isDefaultLock(JOYID, 'type')).toBe(false);
   });
 });

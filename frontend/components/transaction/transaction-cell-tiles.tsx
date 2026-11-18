@@ -10,6 +10,8 @@ import {
   transactionScriptHashes,
 } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { lockWords, lockWordsText } from '@/components/ui/lock-kind';
+import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import { ShortId } from '@/components/ui/short-id';
 function required<T>(value: T | null | undefined, hash: string, field: string): T {
   if (value === null || value === undefined)
@@ -50,6 +52,14 @@ export function kindOf(cell: {
       return cell.type ? 'other' : 'ckb';
   }
 }
+/** A cell's lock's hash type as the chain writes it; any other word is a contract break, named. */
+function hashTypeOf(value: string): ScriptRefHashType {
+  const hashType = normalizeScriptRefHashType(value);
+  if (hashType === null)
+    throw new Error(`lock hash type ${JSON.stringify(value)} is not a CKB hash type`);
+  return hashType;
+}
+
 export function cellTiles(
   tx: TransactionDetail,
   lookup: ScriptLookupResponse | undefined
@@ -76,9 +86,21 @@ export function cellTiles(
       </Link>
     );
   };
-  const lockKind = (codeHash: string | undefined) => {
-    const name = codeHash ? lookup?.[codeHash]?.name : undefined;
-    return name && name.toLowerCase() !== 'unknown' ? name : null;
+  // A cell's lock beside its owner, as every row writes one (the one decision, B4): its script
+  // (code hash and hash type) decides the default lock, which is not named; the registry's name,
+  // else "lock <code hash>". A cell with no lock (none here: every tile is a cell) names none.
+  const lockKind = (lock: { codeHash: string; hashType: string } | null | undefined) => {
+    if (!lock) return null;
+    const registered = lookup?.[lock.codeHash]?.name;
+    const words = lockWords(
+      {
+        name: registered && registered.toLowerCase() !== 'unknown' ? registered : null,
+        codeHash: lock.codeHash,
+        hashType: hashTypeOf(lock.hashType),
+      },
+      'inline'
+    );
+    return words && lockWordsText(words, 'row');
   };
   const content = (cell: { type?: { codeHash: string } | null; cellType?: string | null }) => {
     const kind = kindOf(cell);
@@ -111,7 +133,7 @@ export function cellTiles(
             outPoint: { txHash: out.txHash, index: out.index },
             label: `input ${i}`,
             owner: owner(cell.address, `input ${i}`),
-            lockKind: lockKind(cell.lock?.codeHash),
+            lockKind: lockKind(cell.lock),
             kind,
             seal: {
               id: transactionCellSealId(scripts, 'input', i, {
@@ -152,7 +174,7 @@ export function cellTiles(
         label: `output ${i}`,
         owner: owner(cell.address, `output ${i}`),
         // F2-tx (R2b-a 40, TX-22): the API marks change outputs; the tile says so beside the lock.
-        lockKind: changeMarked(lockKind(cell.lock?.codeHash), cell.isChange),
+        lockKind: changeMarked(lockKind(cell.lock), cell.isChange),
         kind,
         seal: {
           id: transactionCellSealId(scripts, 'output', i, {

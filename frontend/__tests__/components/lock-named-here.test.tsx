@@ -21,7 +21,7 @@ import { ActivityRow, type ActivityRowData } from '@/components/activity/activit
 import { TokenHolders } from '@/components/asset/token-holders';
 import { CollectionHolders } from '@/components/asset/collection-holders';
 import { WhatMoved } from '@/components/transaction/what-moved';
-import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
+import { BalanceChanges } from '@/components/transaction/balance-changes';
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { CELL_GAP_PX } from '@/components/ui/list-table';
 import { api, type CollectionHolder, type GlobalActivity, type TransactionDetail } from '@/lib/api';
@@ -209,22 +209,7 @@ describe('a place that may name no lock leaves the part out', () => {
       ],
     };
     const { container } = render(
-      <WhatMoved
-        hash={a.txHash}
-        activity={a}
-        fee="8888"
-        compensation={null}
-        lockCodeHashes={lockCodeHashesByAddress([
-          {
-            address: DEFAULT_ADDRESS,
-            lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args: '0x' },
-          },
-          {
-            address: a.participants[1].address,
-            lock: { codeHash: JOYID_CODE_HASH, hashType: 'type', args: '0x' },
-          },
-        ])}
-      />
+      <WhatMoved hash={a.txHash} activity={a} fee="8888" compensation={null} />
     );
     // a span with no content that is not a mark (the ribbon's 4 px swatch is aria-hidden)
     const empty = [...container.querySelectorAll('[data-flow-end="party"] span')].filter(
@@ -238,19 +223,7 @@ describe('a place that may name no lock leaves the part out', () => {
     const base = feedSamples.objectTransfer;
     const named = party(DEFAULT_ADDRESS, 'Default Lock', '0c');
     const a: GlobalActivity = { ...base, participants: [...base.participants, named] };
-    render(
-      <BalanceChanges
-        activity={a}
-        fee="64119"
-        compensation={null}
-        lockCodeHashes={lockCodeHashesByAddress(
-          base.participants.map((p) => ({
-            address: p.address!,
-            lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args: '0x' },
-          }))
-        )}
-      />
-    );
+    render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     expect(document.body).not.toHaveTextContent('Default Lock');
   });
 });

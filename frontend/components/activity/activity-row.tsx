@@ -21,7 +21,7 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { PartyLockKind, partyLock } from '@/components/ui/lock-kind';
+import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -856,7 +856,7 @@ function ParticipantLine({
         // controls): plain words at the line's own size, only for a lock that is not the default
         // (R9, lane B4)
         <span data-role="lock-kind">
-          <PartyLockKind lock={lock} size="row" />
+          <LockWordsView words={lock} size="row" />
         </span>
       )}
       {p.lockHash !== null && notes?.has(p.lockHash) && (
@@ -1319,7 +1319,7 @@ export function FoldedActivityRow({
               {isFocus && <span className="sr-only">this address</span>}
               {lock && (
                 <span data-role="lock-kind">
-                  <PartyLockKind lock={lock} size="row" />
+                  <LockWordsView words={lock} size="row" />
                 </span>
               )}
             </span>

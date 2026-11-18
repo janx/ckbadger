@@ -8,11 +8,13 @@ import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
-import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
+import { BalanceChanges } from '@/components/transaction/balance-changes';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type { GlobalActivity } from '@/lib/api';
 
 const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}895d`;
-const DEFAULT_LOCK = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+/** A lock the registry names (made up: the fixture names it "Nervape Shadow Lock"). */
+const NERVAPE_SHADOW_LOCK = `0x${'ab'.repeat(32)}`;
 
 /** The board's object transfer: two named locks, the third one unnamed in the registry. */
 function activity(): GlobalActivity {
@@ -28,24 +30,18 @@ function activity(): GlobalActivity {
   return {
     ...feedSamples.objectTransfer,
     participants: [
+      // B4 fix round (re-pinned on purpose): each party's lock is read off its address, so each
+      // address spells the lock its fixture names (the sample's are all the default lock's)
       { ...from, lockKind: 'Default Lock', itemDeltas: [object(-1)] },
-      { ...to, lockKind: 'Nervape Shadow Lock', itemDeltas: [object(1)] },
-      { ...third, lockKind: null },
+      {
+        ...to,
+        address: seededAddress('shp3hr', NERVAPE_SHADOW_LOCK),
+        lockKind: 'Nervape Shadow Lock',
+        itemDeltas: [object(1)],
+      },
+      { ...third, address: seededAddress('204m4g', UNNAMED_LOCK), lockKind: null },
     ],
   };
-}
-
-/** The transaction's own cells: each party's lock script, by its address. */
-function codeHashes(a: GlobalActivity) {
-  const [from, to, third] = a.participants;
-  return lockCodeHashesByAddress([
-    { address: from.address!, lock: { codeHash: DEFAULT_LOCK, hashType: 'type', args: '0x01' } },
-    {
-      address: to.address!,
-      lock: { codeHash: `0x${'ab'.repeat(32)}`, hashType: 'type', args: '0x' },
-    },
-    { address: third.address!, lock: { codeHash: UNNAMED_LOCK, hashType: 'type', args: '0x02' } },
-  ]);
 }
 
 /** A sample party's address at the tight size's tail: its last 6 characters (R9). */
@@ -54,9 +50,7 @@ const tight = (i: number) => activity().participants[i].address!.slice(-6);
 function renderAt(width: number) {
   stubChartWidth(width);
   const a = activity();
-  return render(
-    <BalanceChanges activity={a} fee="64119" compensation={null} lockCodeHashes={codeHashes(a)} />
-  );
+  return render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
 }
 
 afterEach(() => {
@@ -99,9 +93,10 @@ describe('BalanceChanges form by measured width', () => {
     // address, and no lock beside it, the default lock (R9); the second party's lock is whole.
     expect(lines[0]).toHaveTextContent(new RegExp(`^ckb1…${tight(0)}$`));
     expect(lines[0].querySelector('[data-role="lock"]')).toBeNull();
-    expect(cards[1].querySelector(':scope > [data-line="party"] [data-role="lock"]')).toHaveClass(
-      'whitespace-nowrap'
-    );
+    // B4 fix round (re-pinned): the lock's words are LockWordsView's, inside the card's lock slot
+    expect(
+      cards[1].querySelector(':scope > [data-line="party"] [data-role="lock"] [data-lock-kind]')
+    ).toHaveClass('whitespace-nowrap');
     // Second line: the CKB change and the occupied change. The list forms are phone rows: the
     // summary form (readability R5, re-pinned on purpose: was "−528.00064119 CKB"), exact in its
     // title.
@@ -158,7 +153,7 @@ describe('BalanceChanges form by measured width', () => {
         'Nervape Shadow Lock',
         width === 358 ? 'lock 0x43b2…895d' : 'lock 0x43b2924e…00895d',
       ]);
-      expect(locks[1]).toHaveAttribute('title', UNNAMED_LOCK);
+      expect(locks[1].querySelector('[data-lock-kind]')).toHaveAttribute('title', UNNAMED_LOCK);
     }
   );
 });
@@ -172,54 +167,5 @@ describe('BalanceChanges names no lock for a party on the default lock (B4 item 
     expect(locks.map((l) => l.textContent)).not.toContain('Default Lock');
     expect(document.body).not.toHaveTextContent('Default Lock');
     expect(locks).toHaveLength(2);
-  });
-});
-
-describe('lockCodeHashesByAddress', () => {
-  it('reads each address its lock code hash from the transaction cells', () => {
-    const map = lockCodeHashesByAddress([
-      { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      { address: 'ckb1b', lock: { codeHash: '0x02', hashType: 'data1', args: '0x' } },
-    ]);
-    expect([...map]).toEqual([
-      ['ckb1a', '0x01'],
-      ['ckb1b', '0x02'],
-    ]);
-  });
-
-  it('passes over an input with no cell behind it: a pool input not resolved yet, or the cellbase null out point', () => {
-    // The API's cellbase input (`/transactions/{hash}/detail`): the null out point, every cell
-    // field `null`. It took the transaction page down ("Cannot read properties of null (reading
-    // 'codeHash')") on every live cellbase.
-    const map = lockCodeHashesByAddress([
-      { address: null, lock: null },
-      {},
-      { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-    ]);
-    expect([...map]).toEqual([['ckb1a', '0x01']]);
-  });
-
-  it('refuses a cell with one of address and lock but not the other (no such shape)', () => {
-    expect(() =>
-      lockCodeHashesByAddress([
-        { address: 'ckb1a', lock: null },
-        { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      ])
-    ).toThrow('cell with address ckb1a and no lock');
-    expect(() =>
-      lockCodeHashesByAddress([
-        { address: undefined, lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      ])
-    ).toThrow('cell with a lock but no address');
-  });
-
-  it('refuses one address with two lock code hashes (an address encodes its lock)', () => {
-    expect(() =>
-      lockCodeHashesByAddress([
-        { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-        { address: 'ckb1a', lock: { codeHash: '0x02', hashType: 'type', args: '0x' } },
-      ])
-    ).toThrow('address ckb1a carries two lock code hashes: 0x01 and 0x02');
   });
 });

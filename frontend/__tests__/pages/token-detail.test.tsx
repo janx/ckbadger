@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -302,7 +303,7 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
     });
@@ -321,7 +322,7 @@ describe('TokenDetailPage', () => {
           supplyAfter: '1000000000000',
           lockHash: other,
           address: null,
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockCodeHash: JOYID_CODE_HASH,
           lockKind: 'JoyID',
         },
       ],
@@ -352,7 +353,7 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
     });
@@ -385,7 +386,8 @@ describe('TokenDetailPage', () => {
       ...mockToken,
       issuer: {
         lockHash: other,
-        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
+        // B4 fix round: a real address on the unregistered lock (the lock is read off it)
+        address: seededAddress('test', unregistered),
         lockCodeHash: unregistered,
         lockKind: null,
       },
@@ -443,8 +445,9 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
-        lockKind: 'SECP256K1/blake160',
+        // B4 fix round: a real other lock (the made-up 0x9b… is no SECP256K1/blake160)
+        lockCodeHash: JOYID_CODE_HASH,
+        lockKind: 'JoyID',
       },
     });
     render(<TokenDetailPage typeHash={hash} />);
@@ -454,9 +457,7 @@ describe('TokenDetailPage', () => {
       'href',
       expect.stringMatching(new RegExp(`/address/${other}$`))
     );
-    expect(metrics).toHaveTextContent(
-      /343434 · SECP256K1\/blake160 · owner lock proven by token script/
-    );
+    expect(metrics).toHaveTextContent(/343434 · JoyID · owner lock proven by token script/);
   });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));

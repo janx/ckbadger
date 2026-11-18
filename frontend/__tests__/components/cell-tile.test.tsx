@@ -469,14 +469,17 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
       'href',
       `/mainnet/address/${ADDRESS}`
     );
-    // the change output's lock kind (no lookup: 'change' alone), dim
-    expect(expectEnd(owner.text, /^change$/).firstElementChild).toHaveClass('text-text-dim');
-    // a lock of no known kind: the owner alone, no empty end
+    // B4 fix round (re-pinned on purpose): a tile names its owner's lock by the one decision every
+    // row reads (U-15: a lock the registry does not name is "lock <code hash>"; here no lookup
+    // names the fixture's made-up 0x9b… lock), then "change" on the change output, dim. It wrote
+    // 'change' alone and left an unregistered lock unnamed, so it read as the default lock.
+    expect(
+      expectEnd(owner.text, /^lock 0x9b9b9b9b…9b9b9b · change$/).firstElementChild
+    ).toHaveClass('text-text-dim');
     cleanup();
     render(<CellTile cell={outputs[1]} />);
     const [, other] = tileRows(screen.getByTestId('tx-io-output-1'));
-    expect(other.text.children).toHaveLength(1);
-    expect(other.text.querySelector('[data-tile-end]')).toBeNull();
+    expectEnd(other.text, /^lock 0x9b9b9b9b…9b9b9b$/);
   });
 
   it('reads the content, bright, on the third row, the exact capacity at its right end', () => {

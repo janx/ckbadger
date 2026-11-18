@@ -983,7 +983,10 @@ describe('Transaction board, R2b-a fields', () => {
   it('marks change outputs and reads decoded lock args (TX-22, TX-20)', async () => {
     render(<TransactionDetailPage />);
     const out = await screen.findByTestId('tx-io-output-0');
-    await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'));
+    // B4 fix round (re-pinned on purpose): the default lock is named beside no owner, so a
+    // default-lock change output says 'change' alone (it was 'Default Lock · change')
+    await waitFor(() => expect(out).toHaveTextContent('change'));
+    expect(out).not.toHaveTextContent('Default Lock');
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
     expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
       'pubkey hash 0x11111111…111111'

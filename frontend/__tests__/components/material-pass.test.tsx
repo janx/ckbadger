@@ -512,13 +512,21 @@ describe('move 5 on the activity row', () => {
 
   // Readability B4 (re-pinned on purpose): LockKind's default form is plain dim words.
   it('LockKind: dim words by default; a row chip’s classes replace them', () => {
-    const code = `0x${'9b'.repeat(32)}`;
-    const { rerender } = render(<LockKind size="row" lockKind="JoyID" lockCodeHash={code} />);
+    const code = JOYID_CODE_HASH;
+    const { rerender } = render(
+      <LockKind address={null} size="row" lockKind="JoyID" lockCodeHash={code} />
+    );
     expect(screen.getByText('JoyID')).toHaveClass('text-text-dim');
     expect(screen.getByText('JoyID')).not.toHaveClass('small-caps');
     expect(screen.getByText('JoyID')).not.toHaveClass('lowercase');
     rerender(
-      <LockKind size="row" lockKind="JoyID" lockCodeHash={code} className={rowTagClass()} />
+      <LockKind
+        address={null}
+        size="row"
+        lockKind="JoyID"
+        lockCodeHash={code}
+        className={rowTagClass()}
+      />
     );
     expect(screen.getByText('JoyID')).not.toHaveClass('small-caps', 'lowercase');
     expect(screen.getByText('JoyID')).toHaveClass('border');

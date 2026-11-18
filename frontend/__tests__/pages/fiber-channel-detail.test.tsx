@@ -62,7 +62,9 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
     expect(screen.queryByText(/on-chain channel/i)).toBeNull();
     expect(await screen.findAllByText('Fiber Funding Lock')).not.toHaveLength(0);
     expect(screen.getAllByText('Fiber Commitment Lock').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Default Lock').length).toBeGreaterThan(0);
+    // B4 fix round (re-pinned on purpose): the default lock is named beside no owner, the tiles'
+    // included (it was written beside every default-lock owner)
+    expect(screen.queryAllByText('Default Lock')).toHaveLength(0);
     expect(screen.getByRole('heading', { name: /^1 · Open/ })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^2 · Force close/ })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^3 · Settle/ })).toBeInTheDocument();

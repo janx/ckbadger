@@ -2,6 +2,7 @@
 // lines and with the lock kind as its own column (OB-12, IV-14), a batch of objects folded behind
 // "+N more objects" that leads with this page's object (OB-M3), and the item Transactions column
 // naming where the object went (OB-13).
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { objectCountLabel } from '@/components/activity/activity-row';
@@ -171,8 +172,10 @@ it('says where the object went in the Transactions column (OB-13)', () => {
     />
   );
   expect(screen.getByText(/^to /)).toHaveTextContent('(output 1)');
-  // R9 (re-pinned): the owner at the row size, `ckb1…` and its last 8 characters
-  expect(screen.getByRole('link', { name: 'ckb1…qgutsyjq' })).toHaveAttribute(
+  // R9 (re-pinned): the owner at the row size, `ckb1…` and its last 8 characters (B4 fix round:
+  // the producer's owner is a real address now, its tail read off it)
+  const owner = seededAddress('owner1');
+  expect(screen.getByRole('link', { name: `ckb1…${owner.slice(-8)}` })).toHaveAttribute(
     'href',
     expect.stringContaining(`/address/${created.ownerAddress}`)
   );

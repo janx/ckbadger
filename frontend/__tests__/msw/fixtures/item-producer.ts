@@ -1,4 +1,5 @@
 // Captured unchanged from native CKB fixture + real API handlers; not live mainnet data.
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type {
   ObjectGenetics,
   CollectionInsights,
@@ -15,6 +16,13 @@ import type {
   ClusterProtocol,
   AssetCapacityHistory,
 } from '@/lib/api';
+// B4 fix round: the producer's owner addresses were synthetic (a code hash of 0x41… and a hash
+// type byte the chain does not have); a row reads its lock off its address, so each is a real
+// address, on the default lock the rows name (lockCodeHash 0x9bd7e06f…, SECP256K1/blake160).
+const PRODUCER_OWNER_1 = seededAddress('owner1');
+const PRODUCER_OWNER_2 = seededAddress('owner2');
+const PRODUCER_OWNER_3 = seededAddress('owner3');
+
 export const objectGeneticsProducer = {
   cachedVmTraits: {
     decodedAt: '1700000000',
@@ -278,8 +286,7 @@ export const collectionGalleryFilteredProducer = {
       },
       number: '18446744073709551614',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
       traits: [
@@ -319,8 +326,7 @@ export const didCellVersionsProducer = {
       lockName: null,
       occupiedCapacity: '11400000000',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       timestamp: '1700000000100',
       txHash: '0x5151515151515151515151515151515151515151515151515151515151515151',
@@ -353,8 +359,7 @@ export const didCellVersionsProducer = {
       lockName: null,
       occupiedCapacity: '11400000000',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqsqdnfwk',
+      ownerAddress: PRODUCER_OWNER_3,
       ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
       timestamp: '1700000000100',
       txHash: '0x5252525252525252525252525252525252525252525252525252525252525252',
@@ -412,8 +417,7 @@ export const itemActivityFeedProducer = {
           lockName: null,
           occupiedCapacity: '11400000000',
           outputIndex: 0,
-          ownerAddress:
-            'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+          ownerAddress: PRODUCER_OWNER_1,
           ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
           timestamp: '1700000000100',
           txHash: '0x5151515151515151515151515151515151515151515151515151515151515151',
@@ -446,8 +450,7 @@ export const itemActivityFeedProducer = {
           lockName: null,
           occupiedCapacity: '11400000000',
           outputIndex: 0,
-          ownerAddress:
-            'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqsqdnfwk',
+          ownerAddress: PRODUCER_OWNER_3,
           ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
           timestamp: '1700000000100',
           txHash: '0x5252525252525252525252525252525252525252525252525252525252525252',
@@ -550,8 +553,7 @@ export const itemTransactionsProducer = {
           lockName: null,
           occupiedCapacity: '11400000000',
           outputIndex: 0,
-          ownerAddress:
-            'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+          ownerAddress: PRODUCER_OWNER_1,
           ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
           timestamp: '1700000000100',
           txHash: '0x5151515151515151515151515151515151515151515151515151515151515151',
@@ -592,8 +594,7 @@ export const sporeDetailProducer = {
   outputIndex: 0,
   ownedCapacity: '50000000000',
   ownedKnowledge: '22900000000',
-  ownerAddress:
-    'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+  ownerAddress: PRODUCER_OWNER_1,
   ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
   sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
   txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
@@ -623,8 +624,7 @@ export const sporeCellVersionsProducer = {
       lockName: null,
       occupiedCapacity: '22900000000',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       timestamp: '1700000000100',
       txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
@@ -658,8 +658,7 @@ export const clusterDetailProducer = {
   name: 'Genes',
   ownedCapacity: '400000000000',
   ownedKnowledge: '183200000000',
-  ownerAddress:
-    'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+  ownerAddress: PRODUCER_OWNER_1,
   ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
   sporesCount: 8,
   totalCount: 8,
@@ -708,8 +707,7 @@ export const clusterProtocolProducer = {
       lockName: null,
       occupiedCapacity: '33600000000',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       timestamp: '1700000000099',
       txHash: '0xa5c53484e7aa75ca3d36da3b03aa560e7341f616e53b5ef1e03f03c3541f3261',
@@ -774,8 +772,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551615',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       sporeId: '0x0101010101010101010101010101010101010101010101010101010101010101',
       traits: [
@@ -805,8 +802,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551614',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
       traits: [
@@ -836,8 +832,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551613',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       sporeId: '0x0303030303030303030303030303030303030303030303030303030303030303',
       traits: [
@@ -867,8 +862,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551612',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       sporeId: '0x0404040404040404040404040404040404040404040404040404040404040404',
       traits: [
@@ -898,8 +892,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551611',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       sporeId: '0x0505050505050505050505050505050505050505050505050505050505050505',
       traits: [
@@ -929,8 +922,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551610',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+      ownerAddress: PRODUCER_OWNER_1,
       ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
       sporeId: '0x0606060606060606060606060606060606060606060606060606060606060606',
       traits: [
@@ -960,8 +952,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551609',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqsqdnfwk',
+      ownerAddress: PRODUCER_OWNER_3,
       ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
       sporeId: '0x0707070707070707070707070707070707070707070707070707070707070707',
       traits: [
@@ -991,8 +982,7 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551608',
       outputIndex: 0,
-      ownerAddress:
-        'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgzqgpqyqszqgpqyqszqgpqyqszqgpqyqsqdnfwk',
+      ownerAddress: PRODUCER_OWNER_3,
       ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
       sporeId: '0x0808080808080808080808080808080808080808080808080808080808080808',
       traits: [
@@ -1149,8 +1139,7 @@ export const bitCellLegacyProtocolProducer = {
         lockName: null,
         occupiedCapacity: '18700000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+        ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
         timestamp: '1700000000100',
         txHash: '0x3e35fe5ad7951ccb966d3d00682751aa608b63aeb380014dfe71d1628ac90b23',
@@ -1221,8 +1210,7 @@ export const bitCellProtocolProducer = {
         lockName: null,
         occupiedCapacity: '20400000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+        ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
         timestamp: '1700000000100',
         txHash: '0xbf0608f4099ba088540c4eb7a1176e55a77d9fcf20266e0d907631c68e042732',
@@ -1305,8 +1293,7 @@ export const didProtocolProducer = {
         lockName: null,
         occupiedCapacity: '36500000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+        ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
         timestamp: '1700000000100',
         txHash: '0x4182b486dc5250570e5e4f0e11e8dbb243bf90674ee99f7bc941d52642e6a996',
@@ -1392,8 +1379,7 @@ export const dotbitV1ProtocolProducer = {
         lockName: null,
         occupiedCapacity: '22800000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgrvenxvenxvenxvenxvenxvenxvenxvenxqemhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwyz4vmj',
+        ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
         timestamp: '1700000000100',
         txHash: '0x761920f1f9323f0ce1634de7fea42cbcc4520bdb4d43e9e190b0a77cac849c16',
@@ -1492,8 +1478,7 @@ export const dotcellProtocolProducer = {
         lockName: null,
         occupiedCapacity: '21700000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+        ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
         timestamp: '1700000000100',
         txHash: '0xe5f008d482b4e40667ea4b44736c721ba94db39fea001dcedb986e555d1fd5ef',
@@ -1601,8 +1586,7 @@ export const dotbitV2ProtocolProducer = {
         lockName: null,
         occupiedCapacity: '22800000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgrvenxvenxvenxvenxvenxvenxvenxvenxqemhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwyz4vmj',
+        ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
         timestamp: '1700000000100',
         txHash: '0x107081f2287e4f392600f2c4da59e1e7a07929a7ffb6d93aa834092b8a94869c',
@@ -1699,8 +1683,7 @@ export const mnftProtocolProducer = {
         lockName: null,
         occupiedCapacity: '13300000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+        ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
         timestamp: '1700000000100',
         txHash: '0xf265f5e569b6d0ee919016037ec907b63c77f54a40219442ac6e3d967771beaa',
@@ -1785,8 +1768,7 @@ export const dotbitV3ProtocolProducer = {
         lockName: null,
         occupiedCapacity: '22800000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgrvenxvenxvenxvenxvenxvenxvenxvenxqemhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwyz4vmj',
+        ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
         timestamp: '1700000000100',
         txHash: '0x7db0dd6ce39d57008941916f273885cbb4969f71b1dadae02c779b4e9e3dac40',
@@ -1883,8 +1865,7 @@ export const dotbitV4ProtocolProducer = {
         lockName: null,
         occupiedCapacity: '22800000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgrvenxvenxvenxvenxvenxvenxvenxvenxqemhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwamhwyz4vmj',
+        ownerAddress: PRODUCER_OWNER_2,
         ownerLockHash: '0x4c1b4df29a210d377ff56c59442fc017dd45fe91f2a405e99375d0682adccd33',
         timestamp: '1700000000100',
         txHash: '0xd4537ec3c91c87df3382c6a2628fbcbcd52d06798e2ea0a89f31a3498ec709b5',
@@ -1981,8 +1962,7 @@ export const sporeProtocolProducer = {
         lockName: null,
         occupiedCapacity: '22900000000',
         outputIndex: 0,
-        ownerAddress:
-          'ckb1qpq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgutsyjq',
+        ownerAddress: PRODUCER_OWNER_1,
         ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
         timestamp: '1700000000100',
         txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',

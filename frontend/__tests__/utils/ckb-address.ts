@@ -43,6 +43,7 @@ export function ckbAddress({
   args: string;
   network?: 'ckb' | 'ckt';
 }): string {
+  if (bytes(codeHash).length !== 32) throw new Error(`a code hash is 32 bytes: ${codeHash}`);
   const payload = [0x00, ...bytes(codeHash), HASH_TYPE_BYTE[hashType], ...bytes(args)];
   const words: number[] = [];
   let acc = 0;

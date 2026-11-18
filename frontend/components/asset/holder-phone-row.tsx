@@ -49,7 +49,7 @@ export function HolderPhoneRow({
         {rank.toLocaleString('en-US')}
       </span>
       {party}
-      {lock !== undefined && (
+      {lock !== undefined && lock !== null && lock !== false && (
         <>
           {' '}
           <span className="text-text-dim text-small whitespace-nowrap">{lock}</span>

@@ -204,11 +204,13 @@ describe('Its transactions against the Cell board', () => {
     expect(structure.querySelectorAll('[data-onward-bridge] path')).toHaveLength(1);
     const out1 = structure.querySelector('[data-cell-id="out:1"]') as HTMLElement;
     await within(out1).findByText('Nervape Shadow Lock');
+    // B4 fix round (re-pinned on purpose): a tile names its owner's lock only when it is not the
+    // default lock, as every row does (it wrote "Default Lock" beside every default-lock owner)
     expect(
-      within(structure.querySelector('[data-cell-id="in:1"]') as HTMLElement).getByText(
+      within(structure.querySelector('[data-cell-id="in:1"]') as HTMLElement).queryByText(
         'Default Lock'
       )
-    ).toBeInTheDocument();
+    ).toBeNull();
   });
 
   it("links each executed group's cell dep out point to its cell page", async () => {
