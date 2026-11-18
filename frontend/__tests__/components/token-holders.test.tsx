@@ -5,6 +5,7 @@ import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import type { TokenDistribution } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
+import { formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 
 /** A column head's name: its text, or the name over a bar column's scale ticks. */
@@ -250,6 +251,36 @@ describe('Token holders (board L5)', () => {
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
   };
+
+  // Review fb-logic 7 (the lead's ruling): the share head writes "0" and its scale in hundredths
+  // of a percent; the widest tick it writes for any page is five glyphs ("0.75%" where the top
+  // ten hold under 1 % each), wider than the "100%" the track was measured from: "0" and five
+  // glyphs a glyph apart at 12 px is 50.4 px.
+  it('measures the share track from the widest tick its head writes, "0.75%": 50.4 px', async () => {
+    const ticks = new Set<string>();
+    for (let v = 0; v <= 10_000; v++) ticks.add(formatShareTick(resourceScale([v])));
+    const widest = Math.max(...[...ticks].map((t) => t.length));
+    expect([widest, ticks.has('0.75%')]).toEqual([5, true]);
+    const track = (1 + 1 + widest) * 7.2;
+    atContainerWidth(1248);
+    // 0.72 % and 0.5 % of the supply: the page's scale is 0.75 %
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
+      ...holders,
+      data: [
+        { ...holders.data[0], balance: '72000000' },
+        { ...holders.data[1], balance: '50000000' },
+      ],
+      totalSupply: '10000000000',
+    });
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const ticksRow = within(table)
+      .getAllByRole('columnheader')[4]
+      .querySelector<HTMLElement>('[data-scale-ticks]')!;
+    expect(Array.from(ticksRow.children).map((t) => t.textContent)).toEqual(['0', '0.75%']);
+    expect(Number.parseFloat(ticksRow.style.width)).toBeCloseTo(track, 10);
+  });
 
   it('draws the five-column table in the token page’s 554 px column at 1280 and the 608 px band', async () => {
     atContainerWidth(554);

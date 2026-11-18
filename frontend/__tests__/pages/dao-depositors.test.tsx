@@ -5,6 +5,8 @@ import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import DaoDepositorsPage from '@/app/dao/depositors/page';
 import { ApiRequestError, api } from '@/lib/api';
+import { resourceScale } from '@/components/blocks/block-visual';
+import { formatShareTick } from '@/components/ui/share-bar';
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
@@ -154,6 +156,31 @@ describe('DAO depositors page (DAO-12)', () => {
     await screen.findByRole('table', { name: 'DAO depositors' });
     expect(document.querySelector('[data-role="pager-controls"]')).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // Review fb-logic 7 (the lead's ruling): the share head writes "0" and its scale in hundredths
+  // of a percent, and the widest tick it writes for any page is five glyphs ("0.75%", "0.01%": a
+  // page of depositors holding under 1 % each), wider than the "100%" the track was measured from:
+  // "0" and five glyphs a glyph apart at 12 px is 50.4 px, over the 48 a bar keeps at least.
+  it('measures the share track from the widest tick its head writes, "0.75%": 50.4 px', async () => {
+    const ticks = new Set<string>();
+    for (let v = 0; v <= 10_000; v++) ticks.add(formatShareTick(resourceScale([v])));
+    const widest = Math.max(...[...ticks].map((t) => t.length));
+    expect([widest, ticks.has('0.75%'), '100%'.length]).toEqual([5, true, 4]);
+    const track = (1 + 1 + widest) * 7.2;
+    expect(track).toBeCloseTo(50.4, 10);
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce({
+      ...page([1], null),
+      data: [{ ...row(1), sharePercent: '0.72' }],
+    });
+    render(<DaoDepositorsPage />);
+    const table = await screen.findByRole('table', { name: 'DAO depositors' });
+    const head = within(table).getAllByRole('columnheader')[4];
+    const ticksRow = head.querySelector<HTMLElement>('[data-scale-ticks]')!;
+    expect(Array.from(ticksRow.children).map((t) => t.textContent)).toEqual(['0', '0.75%']);
+    expect(Number.parseFloat(ticksRow.style.width)).toBeCloseTo(track, 10);
+    const bar = table.querySelector<HTMLElement>('tbody td:nth-child(5) [data-track]')!;
+    expect(Number.parseFloat(bar.style.width)).toBeCloseTo(track, 10);
   });
 
   // Readability B5: a head stands over what it names; the Share head over the share, not its bar.

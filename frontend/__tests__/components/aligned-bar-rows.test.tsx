@@ -2,11 +2,68 @@
 // display slot and class tones. Every default is the drawing the existing bars already had.
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { ALIGNED_BAR_HEIGHT, AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
-import { ScaleHeader as BlockVisualScaleHeader } from '@/components/blocks/block-visual';
+import { ALIGNED_BAR_HEIGHT, AlignedBar, ScaleHeader, tickForm } from '@/components/ui/aligned-bar';
+import {
+  ScaleHeader as BlockVisualScaleHeader,
+  resourceScale,
+} from '@/components/blocks/block-visual';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 
 const ticksOf = (root: ParentNode) => root.querySelector('[data-scale-ticks]') as HTMLElement;
+
+/** What a tick in the tick form says, read back independently: "1.5M" is 1,500,000. */
+function readTick(text: string): number {
+  const m = /^(\d+(?:\.\d+)?)([kMB]?)$/.exec(text);
+  if (!m) throw new Error(`not a tick: ${text}`);
+  return Number(`${m[1]}e${{ '': 0, k: 3, M: 6, B: 9 }[m[2] as '' | 'k' | 'M' | 'B']}`);
+}
+
+/** Every scale resourceScale gives for a largest value from 0 to `max`: brute force over each. */
+function everyScale(max: number): number[] {
+  const scales = new Set<number>();
+  for (let v = 0; v <= max; v++) scales.add(resourceScale([v]));
+  return [...scales].sort((a, b) => a - b);
+}
+
+// Review fb-logic 7 (the lead's ruling): an axis maximum states the scale its bars are drawn on, so
+// a head whose tick text is not exactly its value is a wrong figure. The tick form rounds through
+// toFixed(3); it now refuses a value it cannot write exactly, and every scale the heads are given
+// (resourceScale's: 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5 × 10^k) is written exactly, its half too.
+describe('the tick form writes an axis maximum exactly (review fb-logic 7)', () => {
+  it('refuses a value its text would round, naming the value and the text', () => {
+    expect(() => tickForm(1_234_567)).toThrow(
+      'tick form: 1,234,567 would read "1.235M", not exactly its value'
+    );
+    expect(() => ScaleHeader({ label: 'Size, bytes', scale: 1_234_567 })).toThrow(
+      'tick form: 1,234,567 would read "1.235M"'
+    );
+    expect(tickForm(1_500_000)).toBe('1.5M');
+  });
+
+  it('writes every scale resourceScale gives exactly, and every scale’s half', () => {
+    // every scale from a largest value up to 10,000, by brute force, then to ten billion (past the
+    // cycle limit, the largest count a head is given) one past each scale resourceScale gives, or
+    // one past the value where its scale is under it (niceTicks' 1e-9 tolerance gives
+    // 2,000,000,001 the scale 2,000,000,000: an AlignedBar refuses that pair, never draws it)
+    const small = everyScale(10_000);
+    expect(small.slice(0, 12)).toEqual([1, 2, 3, 4, 6, 10, 15, 20, 30, 40, 60, 75]);
+    const large: number[] = [];
+    for (let v = 10_001; v < 1e10; ) {
+      const s = resourceScale([v]);
+      large.push(s);
+      v = Math.max(s, v) + 1;
+    }
+    // their significant digits: 1, 1.5, 2, 3, 4, 6 and 7.5 times a power of ten, and 8 × 10^9
+    // where the tolerance meets 7,500,000,000
+    expect(new Set([...small, ...large].map((s) => String(s).replace(/0+$/, '')))).toEqual(
+      new Set(['1', '15', '2', '3', '4', '6', '75', '8'])
+    );
+    for (const s of [...small, ...large]) {
+      expect(readTick(tickForm(s))).toBe(s);
+      expect(readTick(tickForm(s / 2))).toBe(s / 2);
+    }
+  });
+});
 
 describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
   it('is the same component block-visual has always exported', () => {
