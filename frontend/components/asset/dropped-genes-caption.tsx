@@ -1,5 +1,4 @@
 import { droppedGenesCaption, type DroppedGene } from '@/lib/dob-genes';
-import { cn } from '@/lib/utils';
 import { TraitText } from '@/components/asset/trait-text';
 
 /**
@@ -11,18 +10,17 @@ import { TraitText } from '@/components/asset/trait-text';
 export function DroppedGenesCaption({
   dropped,
   objects,
-  className,
 }: {
   dropped: readonly DroppedGene[];
   objects: number;
-  className?: string;
 }) {
   if (dropped.length === 0) return null;
   return (
     <p
       data-role="caption"
-      // on the measure (readability R4, lane B7); a narrower column's caller may set it narrower
-      className={cn('text-text-dim text-small max-w-measure [overflow-wrap:anywhere]', className)}
+      // on the measure (readability R4, lane B7): a caller that wants it narrower sets its own
+      // box narrower around it, so no class of the caller's can override the measure
+      className="text-text-dim text-small max-w-measure [overflow-wrap:anywhere]"
     >
       <TraitText text={droppedGenesCaption(dropped, objects)} />
     </p>

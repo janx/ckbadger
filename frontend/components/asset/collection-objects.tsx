@@ -273,11 +273,10 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
             </p>
           )}
           {ruled && (
-            <DroppedGenesCaption
-              dropped={ruled.dropped}
-              objects={total}
-              className="max-w-[400px]"
-            />
+            // the caption as narrow as it was (400 px), its box around it
+            <div className="max-w-[400px]">
+              <DroppedGenesCaption dropped={ruled.dropped} objects={total} />
+            </div>
           )}
         </div>
         <div className="min-w-0 space-y-1.5">

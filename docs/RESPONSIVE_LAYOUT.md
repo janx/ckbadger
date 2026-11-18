@@ -172,10 +172,15 @@ The 640–767 band has one content width to design for. Below 640 the container 
   be). It does not count an element in a table cell, an element `truncate`, `whitespace-nowrap`,
   `flex`, `inline-flex` or `grid` in every branch of its class, `<pre>`, headings and SVG text. A
   class counts only where every branch of its expression holds it, read through `cn` and `clsx`,
-  the file's constants and the string constants it imports from the app; the measure counts on an
-  intrinsic element only, a component given it proving nothing. It does not read a block other
-  than a `<p>` whose text an expression builds (an `li` or a `dd` holds a value as often as a
-  sentence): such a block takes the class by hand where it holds a sentence. A reading of more than
+  the file's constants and the string constants it imports from the app, and only as it holds on
+  the page: a `cn` list is merged as `cn` merges it (tailwind-merge: `cn('flex gap-2', 'block')`
+  is no row), a class with another of its group in the list (max width, display, white space, at
+  any variant) is refused, and so is one a part the scan cannot read may override. The measure
+  counts on an intrinsic element only, a component given it proving nothing; the text written at
+  a component's call site counts as its parent's, but where a component the file declares returns
+  a line or a row. It does not read a block other than a `<p>` whose text an expression builds (an
+  `li` or a `dd` holds a value as often as a sentence): such a block takes the class by hand where
+  it holds a sentence. A reading of more than
   three facts is drawn as labelled facts, the detail pages' `dl` rows (`DetailFacts`,
   `components/ui/detail-layout.tsx`: a quiet label beside its value), not joined by "·" into a
   line that runs across the page (the DAO history's reading, the address balance's parts, the "CKB
