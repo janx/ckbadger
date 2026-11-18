@@ -277,8 +277,9 @@ describe('mini chart hover', () => {
     vi.restoreAllMocks();
   });
 
-  // Plot x runs 39..272 (re-pinned, readability R4: the 12 px ticks widen the gutter from 34);
-  // three bars have centres at about 77.8, 155.5 and 233.2.
+  // Plot x runs 32..272 (re-pinned, readability R4: the 12 px ticks widen the gutter from 34 to
+  // 39; re-pinned again, F3-d: a chart's gutter holds the ticks it writes, here "500" and "1k",
+  // 22 + 4 + 6 = 32); three bars have centres at 72, 152 and 232 (were about 77.8, 155.5, 233.2).
   const bars: Bar[] = [
     { label: '09:00', value: 610, state: 'complete' },
     { label: '10:00', value: 731, state: 'highlight' },
@@ -307,7 +308,7 @@ describe('mini chart hover', () => {
 
   it('snaps the pointer to the nearest bar, dims the rest and reads it out in the caption', () => {
     const svg = renderBars();
-    fireEvent.pointerMove(svg, { clientX: 100 }); // nearer 77.8 than 155.5
+    fireEvent.pointerMove(svg, { clientX: 100 }); // nearer 72 than 152
     expect(headline()).toHaveTextContent('610');
     expect(subtitle()).toHaveTextContent('09:00');
     const groups = svg.querySelectorAll('[data-bucket]');
@@ -316,10 +317,10 @@ describe('mini chart hover', () => {
     expect(groups[1]).toHaveAttribute('opacity', '0.35');
     expect(svg.querySelector('[data-bar="complete"]')).toHaveAttribute('fill-opacity', '1');
     const guide = svg.querySelector('[data-role="guide"]') as SVGLineElement;
-    expect(Number(guide.getAttribute('x1'))).toBeCloseTo(77.8, 0);
+    expect(Number(guide.getAttribute('x1'))).toBeCloseTo(72, 0);
     expect(guide).toHaveAttribute('stroke', 'var(--c-text-dim)');
 
-    fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 155.5
+    fireEvent.pointerMove(svg, { clientX: 120 }); // nearer 152
     expect(headline()).toHaveTextContent('731');
     expect(subtitle()).toHaveTextContent('10:00');
   });
@@ -419,11 +420,13 @@ describe('mini chart hover', () => {
       />
     );
     const svg = screen.getByRole('img', { name: 'Block time' });
-    fireEvent.pointerMove(svg, { clientX: 215 }); // point 3 at x 213.8 (re-pinned from 212.5: the plot starts at 39)
+    // point 3 at x 210.3 (re-pinned from 212.5, then 213.8 with the plot at 39; F3-d: the gutter
+    // holds this chart's ticks, "10" and "11", 15 + 4 + 6 = 25, so 25 + 3 × 247 / 4 = 210.25)
+    fireEvent.pointerMove(svg, { clientX: 215 });
     expect(headline()).toHaveTextContent('10.90');
     expect(subtitle()).toHaveTextContent('10/22');
     const dot = svg.querySelector('[data-role="hover-dot"]') as SVGCircleElement;
-    expect(dot.getAttribute('cx')).toBe('213.8');
+    expect(dot.getAttribute('cx')).toBe('210.3');
     expect(Number(dot.getAttribute('r'))).toBeGreaterThan(2.6);
   });
 
