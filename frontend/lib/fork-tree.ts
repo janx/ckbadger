@@ -152,7 +152,8 @@ export const FORK_TREE = {
     top: 46,
   },
   /**
-   * Narrow widths (V4 board): tiles shrink from 96 to no less than 72 px with 20 px between them,
+   * Narrow widths (V4 board): tiles shrink from 96 to no less than 72 px with 20 px between them
+   * (past 96 only where a fold's "+N earlier" needs it, from "+100 earlier"),
    * and carry only the number and hash, 6 px in from the tile's side; the time and miner hang under
    * the box, in its column: the tile and 16 px of the gap (`labelRun`), so a clock to the
    * millisecond (86.4 px at 12 px) stands whole under a 72 px tile. They start at the tile's left
@@ -251,11 +252,12 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
   const room = width - c.x0 - c.right;
   const tileFor = (columns: number) => (room - (columns - 1) * c.gap) / columns;
   let shown = heights;
+  // The least a tile may be: 72 px, or where the tree folds, its "+N earlier" box's words.
+  let least: number = c.minTile;
   if (tileFor(shown) < c.minTile) {
     // Fold the oldest heights into one column. Every column is one tile wide, and the fold's box
     // holds its "+N earlier" (84 px at 12 px for a one-digit count, more than a 72 px tile), so
     // the tiles are at least that wide wherever the tree folds: fewer, wider columns.
-    let least: number = c.minTile;
     for (;;) {
       shown = Math.floor((room + c.gap) / (least + c.gap));
       if (shown < 2)
@@ -267,7 +269,11 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
       least = need;
     }
   }
-  const tileW = Math.min(c.maxTile, Math.floor(tileFor(shown)));
+  // Tiles grow to 96 px where there is room, and never under the least: from "+100 earlier"
+  // (99 px) the fold's box is as wide as its words (review F-B, logic finding 8). The columns
+  // hold it: `shown` columns of a whole `least` px and their gaps fit the room, so a tile's
+  // share, rounded down, is at least `least`.
+  const tileW = Math.min(Math.max(c.maxTile, least), Math.floor(tileFor(shown)));
   const folded = shown < heights ? heights - (shown - 1) : 0;
   const columns = all.slice(folded);
   const pitch = tileW + c.gap;
