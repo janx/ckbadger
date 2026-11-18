@@ -7,8 +7,8 @@
  */
 
 import { clipLabel } from '@/lib/shorten';
-import { SVG_TEXT } from '@/lib/chart-type';
-import { advancePx } from '@/lib/type-metrics';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { advancePx, tightLinePx } from '@/lib/type-metrics';
 
 /** A gene caption's glyph, set at the tick size. */
 const CHAR_WIDTH = advancePx(SVG_TEXT.tick);
@@ -16,10 +16,17 @@ const CHAR_WIDTH = advancePx(SVG_TEXT.tick);
 const CAPTION_CHARS = 14;
 /** The margin a turned caption keeps inside its head. */
 const ROTATED_MARGIN = 8;
+/** A caption's line at the tick size (readability plan 2026-11-18, lane F3). */
+const CAPTION_LINE = tightLinePx(SVG_TEXT.tick);
+/** A caption across its lane stands a pixel under the row's top, its well 6 px under it. */
+const CAPTION_PAD = 1;
 
 export const ALLELE_GEL = {
-  /** The narrowest lane that still holds a band (R3). */
-  laneFloor: 12,
+  /**
+   * The narrowest lane: it holds a band (R3) and its gene's caption turned on end, a tick line and
+   * a pixel (16 px at 12 px; it was 12, and a turned 12 px caption ran into its neighbour's).
+   */
+  laneFloor: CAPTION_LINE + 1,
   /** A lane this wide writes its variants inside its bands. */
   labelledLane: 60,
   /** More genes than this become the ranked list below `listBelow`. */
@@ -36,8 +43,10 @@ export const ALLELE_GEL = {
   charWidth: CHAR_WIDTH,
   /** Gene names longer than this are shortened on the gel (the full name is in the lane title). */
   captionChars: CAPTION_CHARS,
-  /** Head of a row whose gene names are written across their lanes. */
-  headAcross: 22,
+  /** Head of a row whose gene names are written across their lanes: a pixel, the line and 6 px (22). */
+  headAcross: CAPTION_PAD + CAPTION_LINE + 6,
+  /** The baseline of a caption written across its lane. */
+  captionY: CAPTION_PAD + lineAscentPx(SVG_TEXT.tick),
   /** Head of a row whose gene names are turned on end (14 characters at the tick size, and margin): 98. */
   headRotated: Math.ceil(CAPTION_CHARS * CHAR_WIDTH) + ROTATED_MARGIN,
 } as const;

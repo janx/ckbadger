@@ -595,12 +595,13 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
   });
 
   // Re-pinned with PB-04: with no tag always shown there is no left margin, so the narrowest box
-  // that still holds a 12 px lane is 34 px (the 22 px right edge and one lane), not 96.
-  it('throws on a box too narrow for one 12 px lane instead of drawing an empty gel', () => {
+  // that still holds a 12 px lane is 34 px (the 22 px right edge and one lane), not 96. Re-pinned
+  // with readability F3: the floor is 16 px (a turned 12 px caption's line and a pixel), so 38 px.
+  it('throws on a box too narrow for one lane at the floor instead of drawing an empty gel', () => {
     stubChartWidth(30);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => render(<AlleleGel lanes={lanes} total={90} subject="Nervape 3x" />)).toThrow(
-      /Nervape 3x: a 30 px allele gel cannot hold a 12 px lane/
+      /Nervape 3x: a 30 px allele gel cannot hold a 16 px lane/
     );
   });
 });
