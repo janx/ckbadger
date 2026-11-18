@@ -18,6 +18,7 @@ import {
 import { addressProducerCells } from '@/__tests__/msw/fixtures/address-producer';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { addressCellSealId } from '@/lib/address-cell-seal';
 import type { Activity, ItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
@@ -254,7 +255,10 @@ describe('Address v3 components', () => {
       vi.restoreAllMocks();
     });
 
-    it('leads every table row before its out point, overhanging the 18 px line', () => {
+    // re-pinned on purpose (readability R6): the cell's 18 px stone stands centred on the 20 px row
+    // line, 1 px clear above and below, where the 30 px stone overhung it by 5 px (`-my-[5px]`);
+    // renamed: "overhanging the 18 px line"
+    it('leads every table row before its out point, centred on its line', () => {
       render(<AddressLiveCells rows={cells} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const rows = within(table).getAllByRole('row').slice(1);
@@ -266,12 +270,14 @@ describe('Address v3 components', () => {
           'aria-label',
           `Cell seal ${cell.txHash.slice(0, 10)}:${cell.outputIndex}, ${CLASSES[i]}, 1,000.00000000 CKB`
         );
-        // first in the first column, before the out point (still the row's link), and 30 px over
-        // the 20 px line: 5 px above and below (re-pinned, readability R4: 6 px over 18)
+        // first in the first column, before the out point (still the row's link), centred in a
+        // box of the 20 px line: (20 − 18) / 2 = 1 px clear above and below
         const first = row.querySelector('td')!;
         expect(first.firstElementChild).toHaveClass('flex', 'items-start');
         expect(first.firstElementChild?.firstElementChild).toBe(seal);
-        expect(seal).toHaveClass('-my-[5px]');
+        expect((ROW_LINE_PX - ROW_SEAL.cell.height) / 2).toBe(1);
+        expect(seal).toHaveClass('h-row', 'items-center');
+        expect(seal.className).not.toMatch(/-my-/);
         const outPoint = within(first).getByRole('link');
         expect(outPoint).toHaveAttribute(
           'href',
@@ -297,7 +303,7 @@ describe('Address v3 components', () => {
           const seal = expectOneRowSeal(row, addressCellSealId(cell));
           expect(row.firstElementChild).toHaveAttribute('data-part', 'mark');
           expect(row.firstElementChild).toContainElement(seal);
-          expect(seal).not.toHaveClass('-my-[5px]');
+          expect(seal.className).not.toMatch(/-my-/);
           // the head line is the out point alone, the seal in its own column
           const lines = phoneLines(row);
           // U-09 (re-pinned): the phone row's out point at the tight size
@@ -314,22 +320,25 @@ describe('Address v3 components', () => {
     // out point at 13 px and its 12.4 px of spare gone; Contains the flexible column, 280 → 282
     // minimum; Capacity 196 → 201 and Occupied 178 → 170 with their units at 12 px; Created at
     // 100 → 86), so the table is 965 px (renamed: it said "keeps the table at 992 px").
-    it('budgets the seal in the Cell column and keeps the table at 965 px', () => {
+    // Re-pinned on purpose (readability R6): the cell's row stone 30 → 18 px, its footprint 38 →
+    // 26, Cell 226 → 214, the table 953 px (renamed: "965 px").
+    it('budgets the seal in the Cell column and keeps the table at 953 px', () => {
       render(<AddressLiveCells rows={cells} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const widths = Array.from(table.querySelectorAll('col')).map(
         (c) => (c as HTMLElement).style.minWidth
       );
-      expect(widths).toEqual(['226px', '282px', '201px', '170px', '86px']);
+      expect(widths).toEqual(['214px', '282px', '201px', '170px', '86px']);
       // the out point and its gap, 187.6 rounded up with the stone's footprint
-      expect(226 - 188).toBe(ROW_SEAL.cell.footprint);
-      expect(Number.parseFloat(table.style.minWidth)).toBe(965);
+      expect(214 - 188).toBe(ROW_SEAL.cell.footprint);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(953);
     });
 
     // Re-pinned on purpose (readability F3-e): the table changes form at its 965 px (was 992).
+    // Re-pinned on purpose (readability R6): at its 953 px (was 965).
     it.each([
-      [965, 'table'],
-      [964, 'rows'],
+      [953, 'table'],
+      [952, 'rows'],
     ])('changes form where it did: at %i px it is %s', (width, form) => {
       atContainerWidth(width);
       const { container } = render(<AddressLiveCells rows={cells} />);
@@ -349,7 +358,9 @@ describe('Address v3 components', () => {
       vi.restoreAllMocks();
     });
 
-    it('the live cells: 965 px, a table from it', () => {
+    // re-pinned on purpose (readability R6): the cell's stone footprint 38 → 26, Cell 226 → 214,
+    // 953 px (renamed: "965 px")
+    it('the live cells: 953 px, a table from it', () => {
       const budgets = [
         // the stone and its gap, the out point at the row size with a four-digit index
         ceil(ROW_SEAL.cell.footprint + at('0xdce40476…3993e1:9999', 13) + 16),
@@ -362,14 +373,14 @@ describe('Address v3 components', () => {
         // "#99,999,999", the last column
         ceil(at('#99,999,999', 13)),
       ];
-      expect(budgets).toEqual([226, 282, 201, 170, 86]);
-      expect(budgets.reduce((s, w) => s + w, 0)).toBe(965);
+      expect(budgets).toEqual([214, 282, 201, 170, 86]);
+      expect(budgets.reduce((s, w) => s + w, 0)).toBe(953);
       render(<AddressLiveCells rows={addressProducerCells.data} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
       expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
       expect(cols[1].width).toBe('auto');
-      expect(Number.parseFloat(table.style.minWidth)).toBe(965);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(953);
     });
 
     it('the transactions: 1,006 px, a table from it', () => {

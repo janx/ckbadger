@@ -232,8 +232,8 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
     {
       key: 'tx',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
-      // characters at the key's 14 px (142.8), and the gap: 215.3. Its 31 px spare, kept so the
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 40.3 px), the hash at the row size, 17
+      // characters at the key's 14 px (142.8), and the gap: 199.1. Its 31 px spare, kept so the
       // two lists changed form at one width, went (readability F3-e): What it does keeps that.
       minWidth: columnPx(
         ROW_SEAL.tx.footprint +
@@ -242,9 +242,10 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
       ),
       render: (tx) => (
         <div className="flex items-start">
-          <RowSeal id={poolSealId(tx)} state="unpressed" overhang />
+          {/* the stone stands centred on the key's line (RowSeal) */}
+          <RowSeal id={poolSealId(tx)} state="unpressed" />
           <div className="min-w-0 space-y-1">
-            {/* Table-rows T5: the pool row's key, 13 px bright on an 18 px line. */}
+            {/* Table-rows T5: the pool row's key, bright on the 20 px row line. */}
             <Link href={`/tx/${tx.hash}`}>
               <Hash
                 hash={tx.hash}
@@ -266,7 +267,7 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
       // "Interpretation" (14 characters at 13 px, 109.2), and the gap, and it takes what the
       // container gives beyond the sum. Both of the page's lists change form at one width, the
       // larger of their sums: `sameWidth` is what the committed list's sum is over the pool's
-      // (none today: the pool's 1,228 px is the larger, the committed list's 1,227). It was 180
+      // (none today: the pool's 1,212 px is the larger, the committed list's 1,211). It was 180
       // and named no content.
       minWidth:
         columnPx(textPx('Interpretation'.length, fontPx('small')) + CELL_GAP_PX) + sameWidth,
@@ -417,7 +418,7 @@ const POOL_MIN_PX = minimumWidth('Transactions in the pool', poolColumns(0));
 
 /**
  * The width both of the page's lists change form at (they are one page): the larger of their
- * sums, the pool's 1,228 px today (the committed list's own is 1,227). Each list's flexible column
+ * sums, the pool's 1,212 px today (the committed list's own is 1,211). Each list's flexible column
  * keeps what that width is over its own sum: the pool's What it does none, the committed list's
  * What it did 1 px (its `formWidth`).
  */

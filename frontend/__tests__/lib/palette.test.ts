@@ -309,6 +309,7 @@ describe('the rubbing / Song print finish', () => {
 
   // Phase 4: the newest block's seal is pressed behind the 404 verse in the cinnabar mark at
   // `seal-press`; the verse's three inks, the dim facts and the links stay text-grade on a stroke.
+  // Since readability R6 the seal stands clear of the text; the press keeps this ceiling.
   it('presses the 404 seal faint: every ink of the verse and its facts is text-grade on a stroke', () => {
     for (const theme of THEMES) {
       const press = Number(MATERIALS[theme]['seal-press']);

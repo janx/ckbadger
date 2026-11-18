@@ -346,25 +346,27 @@ function CellContains({ cell: c, size }: { cell: AddressCell; size: ShortSize })
 /**
  * The live cells table's columns (readability F3-e: each budgeted from the widest value it holds,
  * the 13 px cells and 12 px units at 0.6 em a glyph, 16 px between columns, none after the last):
- * 965 px, the width it changes form at (it was 992). The seals by kind (C4) lead the Cell column
- * with the cell's 30 px row seal and its 8 px gap. Contains is the flexible column.
+ * 953 px, the width it changes form at (it was 992, then 965 with the 30 px stone). The seals by
+ * kind (C4) lead the Cell column with the cell's 18 px row seal and its 8 px gap (readability R6).
+ * Contains is the flexible column.
  */
 const cellColumns: ListColumn<AddressCell>[] = [
   {
     key: 'outpoint',
     label: 'Cell',
-    // the stone, the out point at the row size with a four-digit index (22 characters, 171.6) and
-    // the gap: 225.6 (it was 238, 12.4 of it spare)
+    // the stone and its gap (ROW_SEAL.cell.footprint, 26), the out point at the row size with a
+    // four-digit index (22 characters, 171.6) and the gap: 213.6 (it was 238, 12.4 of it spare,
+    // then 225.6 with the 30 px stone)
     minWidth: columnPx(
       ROW_SEAL.cell.footprint +
         cell(shortChars(SHORT_FORMS.row.hash) + `:${WIDEST_COUNT_DIGITS}`.length) +
         CELL_GAP_PX
     ),
-    // The cell's seal leads the row, overhanging the out point's 18 px line (RowSeal), so a row
-    // keeps its height; the out point stays the row's link (the seal is an image, not a link).
+    // The cell's seal leads the row, centred on the out point's line (RowSeal), so a row keeps its
+    // height; the out point stays the row's link (the seal is an image, not a link).
     render: (c) => (
       <span className="flex items-start">
-        <RowSeal id={addressCellSealId(c)} overhang />
+        <RowSeal id={addressCellSealId(c)} />
         <CellOutPoint cell={c} size="row" />
       </span>
     ),
@@ -480,7 +482,8 @@ export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
       mobileRow={(c, wide) => (
         <PhoneRow
           testId="address-cell-row-mobile"
-          // the cell's seal is the row's mark, beside every line (it overhangs nothing here)
+          // the cell's seal is the row's mark, beside every line, centred in a row line's box at
+          // the top (RowSeal)
           mark={<RowSeal id={addressCellSealId(c)} />}
           lines={[
             {

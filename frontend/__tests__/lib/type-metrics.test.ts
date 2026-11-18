@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import tailwindConfig from '@/tailwind.config';
 import { TYPE_SCALE, TYPE_STEPS } from '@/lib/type-scale';
+import { cn } from '@/lib/utils';
 import { cmapCodePoints, woff2Tables } from '@/__tests__/utils/woff2';
 import {
   LABEL_LINE_PX,
@@ -232,6 +233,14 @@ describe('lines', () => {
       row: `${ROW_LINE_PX}px`,
       label: `${LABEL_LINE_PX}px`,
     });
+  });
+
+  // readability R6: a row stone stands centred in a box one row line tall (RowSeal's `h-row`)
+  it('emits the row line as a Tailwind height too, h-row, which cn() merges as a height', () => {
+    const theme = tailwindConfig.theme as { extend: { height?: Record<string, string> } };
+    expect(theme.extend.height).toEqual({ row: `${ROW_LINE_PX}px` });
+    expect(cn('h-5', 'h-row')).toBe('h-row');
+    expect(cn('h-row', 'leading-row')).toBe('h-row leading-row');
   });
 });
 

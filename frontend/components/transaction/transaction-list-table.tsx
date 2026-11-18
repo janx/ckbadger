@@ -276,19 +276,19 @@ function committedColumns(
     {
       key: 'transaction',
       label: 'Transaction',
-      // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
-      // characters at the key's 14 px (142.8), and the gap: 215.3. Its 2 px spare went
+      // The transaction's row stone (ROW_SEAL.tx.footprint, 40.3 px), the hash at the row size, 17
+      // characters at the key's 14 px (142.8), and the gap: 199.1. Its 2 px spare went
       // (readability F3-e): it stood for no content, and a glyph advances exactly 0.6 em.
       minWidth: columnPx(
         ROW_SEAL.tx.footprint +
           textPx(shortChars(SHORT_FORMS.row.hash), fontPx('body')) +
           CELL_GAP_PX
       ),
-      // Table-rows T5: the hash is the row's key, 13 px bright on the row's 18 px line (a cellbase
-      // row keeps its dim row class); its stone leads it, overhanging that line (RowSeal).
+      // Table-rows T5: the hash is the row's key, bright on the 20 px row line (a cellbase row
+      // keeps its dim row class); its stone leads it, centred on that line (RowSeal).
       render: (tx) => (
         <span className="flex items-start">
-          <RowSeal id={txSealId(tx)} overhang />
+          <RowSeal id={txSealId(tx)} />
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
             <Hash
               hash={tx.hash}
@@ -506,7 +506,7 @@ function committedColumns(
 }
 
 /**
- * The committed list's own sum of its columns' minimums (1,227 px). The Transactions page changes
+ * The committed list's own sum of its columns' minimums (1,211 px). The Transactions page changes
  * both of its lists' form at one width, the larger of the two sums (`formWidth`).
  */
 export const TRANSACTION_LIST_MIN_PX = minimumWidth(

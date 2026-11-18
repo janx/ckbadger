@@ -241,6 +241,10 @@ cell, a script); `text-dim`, the dead ink, for a consumed cell or an uncle; and 
 committed (a pool transaction and the cells it would create) a dashed stone in `mark`, its field at
 half strength. A row stone's text is cut in `base-bg`, the page ground. `Seal` passes no other
 paint, and the library refuses one that is not a palette reference or a hex (`assertPaint`).
+A list row's stone is small, as the home pipeline's (readability ruling R6, `ROW_SEAL`): 16 px
+high for a block, a transaction and a script, 18 for a cell, so a column of rows keeps each
+state's ink in less than half the red it had (a block's 16² against 26²); a page head keeps its
+large seal.
 
 The grounds step the other way by day: the page is paper (`base-bg`), a surface is a whiter sheet
 (`base-surface`), the well is the whitest (`base-void`, under an inset), and `base-elevated` is a
@@ -374,9 +378,10 @@ none); `vignette` black 18 % / ink 3 % (half the midnight strength); `grain-opac
 the surface under its own 1 px border); `well-inset` black 60 % / ink 8 % (the boards' `inset`),
 `well-lip` transparent; `tier2-ground` the well at 90 % / elevated at 90 %; `header-strip` the
 surface, opaque, in both themes (the vitals strip is the page's own ground drawn solid, so the page
-never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest block's stone (its page seal) pressed behind the
-404 verse (the most each theme allows with every ink of the verse and its facts text-grade across a
-stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
+never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest block's stone (its page seal) pressed on the
+404 page, beside the verse or below it and clear of every line of text since readability R6 (the
+values are the most each theme allowed while it stood behind the verse, every ink of the verse and
+its facts text-grade across a stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
 calc(0.45 * var(--m-glow)))`), out by day.
 
 By night the scan is a property of a fill, never of a word. An HTML fill takes the class

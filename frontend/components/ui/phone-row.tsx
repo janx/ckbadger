@@ -174,15 +174,22 @@ const shownPart = (part: ReactNode) =>
  *
  * `oneLine`: the same parts and separators as inline text, for a line that never wraps (a table
  * cell that ends in an ellipsis): with no line to start, no separator can open or end one.
+ *
+ * `inline`: the list stands in running text after other words (the 404 seal's caption), one box
+ * on its line (`inline-flex`): where it does not fit what is left of the line it moves to the next
+ * line whole, so the words before it break before it, never between its parts; only a line
+ * narrower than the whole list wraps it inside, by the rule above.
  */
 export function Dotted({
   parts,
   className,
   oneLine = false,
+  inline = false,
 }: {
   parts: readonly (ReactNode | DottedGroup)[];
   className?: string;
   oneLine?: boolean;
+  inline?: boolean;
 }) {
   if (useContext(InDotted))
     throw new Error('a separated list inside another: pass its parts to the outer list');
@@ -247,7 +254,8 @@ export function Dotted({
       <span
         data-dotted=""
         className={cn(
-          'flex min-w-0 flex-wrap items-baseline gap-x-[3ch] [clip-path:inset(-1em_-100vw_-1em_-0.75ch)]',
+          inline ? 'inline-flex' : 'flex',
+          'min-w-0 flex-wrap items-baseline gap-x-[3ch] [clip-path:inset(-1em_-100vw_-1em_-0.75ch)]',
           className
         )}
       >

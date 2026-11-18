@@ -7,11 +7,13 @@ import { formatAgeOneUnit, formatSpan } from '@/lib/format-age';
 // `text-text-dim text-meta` keeps both classes and `text-body text-section` keeps the last. The
 // lines of lib/type-metrics.ts (`leading-row`, `leading-label`) are line heights, as the
 // `leading-[18px]` and `leading-[14px]` they replaced were: a later size step drops them alike.
+// `h-row`, a box one row line tall (a row stone's, RowSeal), is a height.
 const twMerge = extendTailwindMerge({
   extend: {
     classGroups: {
       'font-size': [{ text: [...TYPE_STEPS] }],
       leading: [{ leading: ['row', 'label'] }],
+      h: [{ h: ['row'] }],
     },
   },
 });

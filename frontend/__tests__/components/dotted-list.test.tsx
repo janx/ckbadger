@@ -62,6 +62,32 @@ describe('Dotted: the one separator-joined list', () => {
     expect(second.lastElementChild).toHaveClass('indent-0');
   });
 
+  // The 404 seal's caption: two figures after words. Inline, the list is one box on its line, so it
+  // moves to the next line whole and the words before it break before it; inside it the rule above
+  // holds where a line is narrower than the list.
+  it('stands inline after words as one box when asked, with the same separators and clipping', () => {
+    const { container } = render(
+      <p>
+        words before <Dotted inline parts={['a', 'b']} />
+      </p>
+    );
+    const list = container.querySelector('[data-dotted]') as HTMLElement;
+    expect(list).toHaveClass(
+      'inline-flex',
+      'flex-wrap',
+      'items-baseline',
+      'gap-x-[3ch]',
+      'min-w-0',
+      '[clip-path:inset(-1em_-100vw_-1em_-0.75ch)]'
+    );
+    expect(list).not.toHaveClass('flex');
+    expect(list.textContent).toBe('a · b');
+    const [first, second] = items(list);
+    expect(first.querySelector('[data-dotted-separator]')).toBeNull();
+    expect(second.firstElementChild).toHaveAttribute('data-dotted-separator');
+    expect(second).toHaveClass('-ml-[2ch]', 'pl-[2ch]', '-indent-[2ch]');
+  });
+
   it('draws nothing for an empty part, so no separator is left with nothing after it', () => {
     const { container } = render(<Dotted parts={['a', null, false, undefined, '', 'b', null]} />);
     const list = container.firstElementChild as HTMLElement;

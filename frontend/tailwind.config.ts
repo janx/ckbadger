@@ -170,6 +170,10 @@ export default {
       maxWidth: {
         measure: `${MEASURE_CHARS}ch`,
       },
+      // `h-row`: a box one row line tall, the line a row stone stands centred on (RowSeal).
+      height: {
+        row: `${ROW_LINE_PX}px`,
+      },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
         display: ['var(--font-mono)', 'ui-monospace', 'monospace'],

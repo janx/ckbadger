@@ -384,9 +384,10 @@ export const PALETTE: Readonly<Record<ThemeName, Palette>> = { dark, light };
  * (`.glass`, the rule name kept) is a flat tile: the surface, opaque, under its own 1 px border —
  * no sheen, no lit edges, no outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
  * 8 % by day) with no lip. The tints are the palette's own grounds and inks. `seal-press` is how
- * faint the newest block's seal is pressed behind the 404 verse: the cinnabar at 16 % on the night,
- * 8 % on paper (where the same red reads stronger): the most each allows with every ink of the
- * verse and its facts still text-grade across a stroke (palette.test).
+ * faint the newest block's seal is pressed on the 404 page: the cinnabar at 16 % on the night,
+ * 8 % on paper (where the same red reads stronger): the most each allowed, while it stood behind
+ * the verse, with every ink of the verse and its facts still text-grade across a stroke
+ * (palette.test); since readability R6 it stands clear of the text, beside or below it.
  */
 
 /**

@@ -12,7 +12,7 @@ export const OWNER_SEAL = { height: 20, width: 15, gap: 5 } as const;
  * stone, standing before the address's text in a cell row — the owner read from its own stone,
  * not from the cell's small mark. An image named by the hash (its label), not a link: the address
  * beside it keeps its own link. `data-owner-seal` tells it from the row's own seal. `gap={false}`:
- * the stone stands alone in a column of its own (a cell tile's 30 px mark column, C11), whose gap
+ * the stone stands alone in a column of its own (a cell tile's mark column, C11), whose gap
  * is its gap, so it keeps no 5 px of its own after it.
  */
 export function OwnerSeal({

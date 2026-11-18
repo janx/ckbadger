@@ -118,6 +118,10 @@ The 640–767 band has one content width to design for. Below 640 the container 
   and this one 234.0, breaking for a zone of more than 25 characters at 360). From `md`, with
   "keyboard shortcuts", the links need 736.2 px: one line from 1024, two at 768, where the last
   takes a line of its own.
+- **Not-found and error pages** (`components/error-page-shell.tsx`, `ERROR_PAGE_LAYOUT`): the
+  newest block's seal stands clear of the text column at every width (readability R6): from 1280
+  beside it (a column of at most 768 px, 64 px, the 256 px stone), below 1280 under it, 64 px down.
+  Never under a line of text.
 - **Transaction pipeline** (homepage): a block is a plate 99 px wide; one row down to a 589 px
   canvas (two whole plates); below that a vertical timeline (the mempool and proposed wells, the
   dashed next block and the plates as rows 44 px tall, taller only for a 3×3 or 4×4 square or a
@@ -129,7 +133,10 @@ The 640–767 band has one content width to design for. Below 640 the container 
   from the widest value its formatter writes for real chain data (`frontend/lib/list-bounds.ts`
   names each bound and its reason: an eight-digit height, an age to "10y 364d ago", the consensus
   limits of size and cycles), measured at its step (0.6 em a glyph, `lib/type-metrics.ts`), with
-  the 16 px gap after every column but the last; no spare is kept. The one column whose content is
+  the 16 px gap after every column but the last; no spare is kept. A row that leads with its seal
+  draws the small row stone (readability R6, `ROW_SEAL`: 16 px high, a cell's 18), centred on the
+  row's 20 px key line and never over it, and the column that leads with it budgets its drawn width
+  and 8 px gap. The one column whose content is
   unbounded (a name, what a transaction did) is the table's flexible column: a stated minimum, the
   rest of the container, a longer value ending in the one ellipsis with its title. A bar's track
   is at least 48 px and holds its head's tick row whole, the ticks written in the tick form as
