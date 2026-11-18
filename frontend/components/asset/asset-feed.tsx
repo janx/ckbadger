@@ -21,6 +21,7 @@ import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-ta
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { NoBreak } from '@/components/ui/no-break';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
@@ -421,17 +422,25 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                     <Hash hash={r.hash} size="tight" copyable={false} className="text-body" />
                   </AppLink>
                 ),
+                // the block, its date and its age are each a unit; "this device's clock is
+                // behind" in the age's place is words and breaks between them (Utc8Age; L2)
                 right: (
-                  <span className="whitespace-nowrap">
-                    <AppLink href={`/blocks/${r.blockNumber}`} className="text-text-bright">
-                      {formatBlockNumber(r.blockNumber)}
-                    </AppLink>
+                  <>
+                    <NoBreak>
+                      <AppLink href={`/blocks/${r.blockNumber}`} className="text-text-bright">
+                        {formatBlockNumber(r.blockNumber)}
+                      </AppLink>
+                    </NoBreak>
                     <span className="text-text">
                       {' '}
                       ·{' '}
-                      {identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />}
+                      {identity ? (
+                        <NoBreak>{formatUtc8Date(r.timestamp)}</NoBreak>
+                      ) : (
+                        <Utc8Age timestamp={r.timestamp} />
+                      )}
                     </span>
-                  </span>
+                  </>
                 ),
               },
               wide
