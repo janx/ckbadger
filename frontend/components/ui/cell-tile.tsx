@@ -152,9 +152,10 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         {/* the bar, its bytes and the state at 12 px, budgeted at a cell's widest occupied figure:
             no more than the transaction that made it (LARGEST_TX_BYTES, of record: genesis's
             cellbase), "occupied 1,236,271 B", 144 px: 56 + 6 + 144 + 6 + 57.6 ('consumed') =
-            269.6 px. It holds in the 343 px text column at 1280; in the 215 px column at 1024
-            (from "occupied 9 B" on) the state, the line's end, drops under the bar on its own line
-            at the right */}
+            269.6 px. It holds in the 343 px text column at 1280. In the 215 px column at 1024 it
+            holds up to "occupied 9 B" and not from "occupied 10 B" on, so every real cell (at
+            least 41 bytes) stands its state, the line's end, under the bar on its own line at the
+            right, as it did before the unit was written (measured on the type build) */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)

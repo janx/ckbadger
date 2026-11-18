@@ -1,3 +1,5 @@
+import { SHEETS } from '@/components/transaction/tx-structure';
+import { containerContentPx } from '@/__tests__/utils/tailwind-box';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
 import { occupiedBytesText } from '@/lib/occupied';
@@ -541,23 +543,48 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(within(tile).getAllByText('live')).toHaveLength(1);
     // The line's budget at a stated bound (B4 fix round, tests NOTE-4; it was the sample
     // 'occupied 231'): a cell's occupied bytes are no more than the transaction that made it, and
-    // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record: it
-    // was MAX_BLOCK_BYTES here, which a genesis cell is not held by), so the widest figure is
-    // "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px. With the 56 px
-    // bar, 'consumed' and the 6 px gaps the line is 269.6 px. The text column is 215 px at its
-    // narrowest (1024: the recorded 203 px column, the 30 px mark column and the 10 px gap, less
-    // the 18 px column and its gap) and 343 at 1280: past its room (at 1024 from "occupied 9 B"
-    // on) the state, the line's right end, drops under the bar on a line of its own, at the right
-    // (TileText's end: ml-auto).
-    const narrowest = 203 + 30 + 10 - Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16) - 10;
-    expect(narrowest).toBe(215);
+    // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record), so the
+    // widest figure is "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px.
+    // With the 56 px bar, 'consumed' and the 6 px gaps the line is 269.6 px.
+    //
+    // The tile's text column, derived (second fix round, tests NOTE-2: 343 was typed, 215 came
+    // from a recorded 203): the transaction page's main column (the container less the 280 px rail
+    // and the 56 px gap, its lg grid), half of it less the 4 px seam (the two sheets), less the
+    // sheet's lane on the seam side (SHEETS.lane) and its outer side (12 px and the 1 px border),
+    // the tile's sides (12 px and 1 px each), its mark column and the 10 px gap: 215 px at 1024,
+    // 343 at 1280.
+    const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    const textColumn = (viewport: number) =>
+      (containerContentPx(viewport) - 280 - 56 - SHEETS.seam) / 2 -
+      SHEETS.lane -
+      (12 + 1) -
+      2 * (12 + 1) -
+      mark -
+      10;
+    expect([textColumn(1024), textColumn(1280)]).toEqual([215, 343]);
+    const lineOf = (words: string) =>
+      56 + 6 + textPx(words.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
     const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES), 'a cell')}`;
     expect(widest).toBe('occupied 1,236,271\u00a0B');
-    const line = 56 + 6 + textPx(widest.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
-    expect(line).toBeCloseTo(269.6, 10);
-    expect(line).toBeGreaterThan(narrowest);
-    expect(line).toBeLessThanOrEqual(343);
-    expect(occupied.text.lastElementChild).toHaveClass('ml-auto');
+    expect(lineOf(widest)).toBeCloseTo(269.6, 10);
+    // it holds at 1280; at 1024 the line holds up to "occupied 9 B" (212 px) and not from
+    // "occupied 10 B" (219.2) on: every real cell, which occupies at least 41 bytes (its capacity
+    // field, 8, and its lock's code hash and hash type, 33), stands its state under the bar there,
+    // as it did before the unit was written (the type build, measured in Chrome)
+    expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1280));
+    expect(lineOf(`occupied ${occupiedBytesText(BigInt(9), 'a cell')}`)).toBeLessThanOrEqual(
+      textColumn(1024)
+    );
+    expect(lineOf(`occupied ${occupiedBytesText(BigInt(10), 'a cell')}`)).toBeGreaterThan(
+      textColumn(1024)
+    );
+    expect(lineOf(`occupied ${occupiedBytesText(BigInt(41), 'a cell')}`)).toBeGreaterThan(
+      textColumn(1024)
+    );
+    // where it does not fit, the line wraps and its end (the state) drops under the bar: the row
+    // is a wrapping flex row, the state its own last item
+    expect(occupied.text).toHaveClass('flex', 'flex-wrap');
+    expect(occupied.text.lastElementChild).toHaveAttribute('data-tile-end');
     // with the cell's anatomy, its byte bar takes the line's free width, the bytes after it
     cleanup();
     render(
