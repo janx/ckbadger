@@ -630,7 +630,8 @@ describe('TransactionDetailPage', () => {
     expect(moved.querySelector('[data-flow-end="miner"]')).toBeNull();
     expect(moved).not.toHaveTextContent(/genesis|issued/);
     const net = screen.getByTestId('tx-balance-net');
-    expect(net).toHaveTextContent(/^Net0 CKB\+173no fee: nothing paid to the miner$/);
+    // B4 item 2 (re-pinned on purpose): the occupied change carries its unit
+    expect(net).toHaveTextContent(/^Net0 CKB\+173 Bno fee: nothing paid to the miner$/);
     expect(net).toHaveTextContent('no fee: nothing paid to the miner');
     expect(net).not.toHaveTextContent(/fee, paid|genesis|issued/);
     expect(screen.queryByText(/issued in the genesis block/)).toBeNull();
@@ -1159,8 +1160,9 @@ describe('TransactionDetailPage', () => {
     expect(output).toHaveTextContent('occupied 94');
     expect(output).not.toHaveTextContent('occupied 94.00000000');
     expect(output).toHaveTextContent('live');
+    // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
     expect(screen.getByText(/^occupied 94 → 94/)).toHaveTextContent(
-      'occupied 94 → 94 · common knowledge 0'
+      /^occupied 94 → 94 · common knowledge 0 B$/
     );
     expect(
       document.querySelector(`[data-group-row="lock:attached:${OUTPUT_LOCK}"]`)

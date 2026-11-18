@@ -21,10 +21,12 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
+import { PartyLockKind, partyLock } from '@/components/ui/lock-kind';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
-import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
+import { withUnit } from '@/lib/format-unit';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
@@ -178,10 +180,11 @@ export function ActivityRowHead({
       {showEvidence && evidence === undefined && (
         <span
           data-role="evidence"
-          className={cn(
-            'text-text-dim text-meta shrink-0',
-            line && 'leading-row ml-auto whitespace-nowrap'
-          )}
+          // no run around the parts: each unit owns its white-space (the block number has no space
+          // to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
+          // device's clock is behind" break between its words), so the line breaks only between
+          // them (lane B4)
+          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
         >
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
@@ -631,23 +634,51 @@ function activityDetails(
   };
 }
 
-/** The change in occupied capacity, whole CKB (it is bytes), exact otherwise. */
+/**
+ * A change in occupied capacity as the figure it is: bytes, signed and grouped, with their unit
+ * ("−61 B"; readability lane B4, docs/RESPONSIVE_LAYOUT.md "Formats": a figure writes the symbol).
+ * Occupied capacity is bytes, 1 CKB (10^8 shannons) of capacity for each: a change that is not a
+ * whole number of bytes is not one the chain can make, and is refused with its value.
+ */
 export function formatOccupiedDelta(usedDelta: string): string {
   const shannons = BigInt(usedDelta);
-  return shannons % SHANNONS_PER_CKB === BigInt(0)
-    ? formatSignedCkbInteger(shannons)
-    : formatSignedCkbExact(shannons);
+  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
+    throw new Error(
+      `occupied change ${usedDelta} shannons is not a whole number of bytes (10^8 shannons each)`
+    );
+  return withUnit(formatSignedCkbInteger(shannons), 'B');
+}
+
+/**
+ * The party whose line's only movement is the fee (readability lane B4): its index, or null. Given
+ * a row that lists every party of the transaction with its change, CKB is conserved but for what
+ * enters (a cellbase's reward, a Nervos DAO withdrawal's compensation) and what leaves (the fee).
+ * When nothing entered, no item moved, and exactly one party's CKB changed and went down, that
+ * change is the fee exactly: its line says so, in the reading ink. Nothing is summed to find it.
+ */
+function feeOnlyParty(activity: ActivityBody): number | null {
+  if (activity.isCellbase) return null;
+  if (
+    activity.protocolActions.some(
+      (pa) => pa.protocol === 'dao' && pa.action === 'withdraw_complete'
+    )
+  )
+    return null;
+  let payer: number | null = null;
+  for (const [i, p] of activity.participants.entries()) {
+    if (p.itemDeltas.length > 0) return null;
+    const delta = BigInt(p.ckbDelta);
+    if (delta === BigInt(0)) continue;
+    if (delta > BigInt(0) || payer !== null) return null;
+    payer = i;
+  }
+  return payer;
 }
 
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
 }
 
-/**
- * The lock kind as dim small caps after the address (material pass v2, move 5: boxes stay on
- * controls; the words are LockKind's default form, `.small-caps`), never a chip.
- */
-const LOCK_KIND = 'text-text-dim small-caps lowercase';
 /** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
 const LINE_BUTTON =
   'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap border bg-transparent px-[5px] leading-4';
@@ -756,9 +787,10 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 
 /**
  * One participant, one 18 px line (T7 · option A, Feed.dc.html column A): the address (and any
- * roles), the lock kind in small caps, a note the API attaches, the signed exact CKB, each item change
- * with its mark (signed, by sign; symbol dim), and the occupied change last at 11 px in the
- * dim ink (a figure: never the ghost, never the dim thinned; R4). The line wraps between those items, in that order, when it cannot hold
+ * roles), its lock's name in plain words when it is not the default lock (`partyLock`, R9), a note
+ * the API attaches, the signed CKB, each item change with its mark (signed, by sign; symbol dim),
+ * and the occupied change last at the meta step in the dim ink (a figure: never the ghost, never
+ * the dim thinned; R4). The line wraps between those items, in that order, when it cannot hold
  * them — never inside one.
  *
  * Consistency C3: the participant a page is about (`focus`) writes its address as text, not a link
@@ -773,23 +805,36 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 function ParticipantLine({
   p,
   focus,
+  fee,
   foldObjects,
   focusItemId,
+  focusTokenTypeHash,
   itemTone,
   notes,
 }: {
   p: ActivityParticipant & { key: string };
   focus: boolean;
+  /** Its only movement is the fee (`feeOnlyParty`): "fee" and the fee, in the reading ink. */
+  fee: boolean;
   foldObjects: boolean;
   focusItemId?: string;
+  /** The token the page is about: its amount leads the line, before the CKB (B4). */
+  focusTokenTypeHash?: string;
   itemTone: 'plain' | 'sign';
   notes?: ReadonlyMap<string, string>;
 }) {
   const [objectsOpen, setObjectsOpen] = useState(false);
+  const leads = (i: ItemDelta) =>
+    focusTokenTypeHash !== undefined &&
+    i.kind === 'token' &&
+    i.typeScriptHash === focusTokenTypeHash;
+  const lead = p.itemDeltas.filter(leads);
+  const rest = p.itemDeltas.filter((i) => !leads(i));
   const phoneObjects = foldObjects && p.itemDeltas.some((i) => i.kind === 'object');
-  const otherItems = p.itemDeltas.filter((i) => i.kind !== 'object');
+  const otherItems = rest.filter((i) => i.kind !== 'object');
   const lineTier = lineCompositionTier(p.itemDeltas);
   const showComposition = lineTier === null;
+  const lock = partyLock(p);
   return (
     <div
       data-role="participant"
@@ -806,9 +851,12 @@ function ParticipantLine({
         <ParticipantRefView participant={p} size="row" compact quiet linked={!focus} />
         {focus && <span className="sr-only">this address</span>}
       </span>
-      {p.lockKind && (
-        <span data-role="lock-kind" className={LOCK_KIND}>
-          {p.lockKind}
+      {lock && (
+        // LockKind's default form, never a chip (material pass v2, move 5: boxes stay on
+        // controls): plain words at the line's own size, only for a lock that is not the default
+        // (R9, lane B4)
+        <span data-role="lock-kind">
+          <PartyLockKind lock={lock} size="row" />
         </span>
       )}
       {p.lockHash !== null && notes?.has(p.lockHash) && (
@@ -816,9 +864,28 @@ function ParticipantLine({
           {notes.get(p.lockHash)}
         </span>
       )}
-      <span data-role="ckb">
-        {/* A feed line: the summary form (R5), the exact change in its title. */}
-        <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
+      {lead.map((item, i) => (
+        // the page's own token, before the CKB that holds it (B4)
+        <ItemOnLine
+          key={`lead${i}`}
+          item={item}
+          tone={itemTone}
+          showComposition={showComposition}
+        />
+      ))}
+      <span data-role="ckb" data-fee={fee || undefined}>
+        {/* A feed line: the summary form (R5), the exact change in its title. A fee is no loss to
+            mark in the cinnabar: the word says where it went, its amount is unsigned (B4). */}
+        {fee ? (
+          <>
+            <span data-role="fee-label" className="text-text-dim">
+              fee
+            </span>{' '}
+            <CkbAmount form="summary" shannons={-BigInt(p.ckbDelta)} signed={false} tone="plain" />
+          </>
+        ) : (
+          <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
+        )}
       </span>
       {phoneObjects && (
         <span
@@ -840,7 +907,7 @@ function ParticipantLine({
         </span>
       )}
       <ItemsOnLine
-        items={p.itemDeltas}
+        items={rest}
         foldObjects={foldObjects}
         focusItemId={focusItemId}
         itemTone={itemTone}
@@ -908,10 +975,15 @@ function Participants({
   focusItemId,
   itemTone,
   notes,
+  feePayer,
+  focusTokenTypeHash,
 }: {
   participants: ActivityParticipant[];
   txHash: string;
   focusLockHash?: string;
+  /** The index of the party whose only movement is the fee (`feeOnlyParty`), or null. */
+  feePayer: number | null;
+  focusTokenTypeHash?: string;
   foldObjects?: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
@@ -932,8 +1004,10 @@ function Participants({
           key={p.key}
           p={p}
           focus={p === focus}
+          fee={feePayer !== null && p.key === indexed[feePayer].key}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
+          focusTokenTypeHash={focusTokenTypeHash}
           itemTone={itemTone}
           notes={notes}
         />
@@ -984,6 +1058,11 @@ export type ActivityRowProps = {
   foldObjects?: boolean;
   focusItemId?: string;
   /**
+   * Readability B4: the token the page is about (a token page's feed). Its amount leads each
+   * participant line that moved it, the CKB after it; any other item keeps its place.
+   */
+  focusTokenTypeHash?: string;
+  /**
    * Token amounts: by sign (jade +, rouge −) by default — an asset delta is a signed delta, like
    * the CKB beside it (T7 ruling, 2026-11-02; was the Address board only, BA-35). `plain` draws
    * them bright.
@@ -998,6 +1077,12 @@ export type ActivityRowProps = {
   focusLockHash?: string;
   /** PA-22: a row of a live feed says its age, the date-time its hover; else the date. */
   age?: boolean;
+  /**
+   * How many of the transaction's parties the row does not list with their changes (the address
+   * page lists its own party alone): a line is said to be the fee (`feeOnlyParty`) only on a row
+   * that lists every party, since an unlisted party's change is not known to it.
+   */
+  unlistedParties?: number;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -1017,14 +1102,15 @@ export function ActivityRow({
   evidence,
   foldObjects = false,
   focusItemId,
+  focusTokenTypeHash,
   itemTone = 'sign',
   participantNotes,
   focusLockHash,
   age = false,
+  unlistedParties = 0,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
   const [openRuns, setOpenRuns] = useState({ types: false, locks: false });
   const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails, {
     ...openRuns,
@@ -1069,12 +1155,7 @@ export function ActivityRow({
     >
       <ActivityRowHead
         layout="line"
-        title={
-          <>
-            {mark && <ClassMark kind={mark} className="mr-2" />}
-            {headline ?? activityHeadline(activity)}
-          </>
-        }
+        title={<ActivityTitle activity={activity} headline={headline} mark={markOverride} />}
         // A caller's own evidence (block, address pages) carries its own tx link; then the
         // headline stays text, which also keeps a headline with links of its own unnested.
         href={evidence === undefined ? `/tx/${activity.txHash}` : undefined}
@@ -1100,8 +1181,165 @@ export function ActivityRow({
           focusItemId={focusItemId}
           itemTone={itemTone}
           notes={participantNotes}
+          feePayer={mode === 'cross-user' && unlistedParties === 0 ? feeOnlyParty(activity) : null}
+          focusTokenTypeHash={focusTokenTypeHash}
         />
       )}
     </RowArticle>
+  );
+}
+
+/** The mark a row's title carries: the caller's (null for none), else the activity's class. */
+function titleMark(activity: ActivityBody, mark: AssetClass | null | undefined): AssetClass | null {
+  return mark === undefined ? activityClassMark(activity) : mark;
+}
+
+/**
+ * A row's title as its head draws it: its class mark, then its headline (the feed's own words,
+ * else the activity's Layer-3 narrative). The one place a title is drawn, for a row and a run.
+ */
+export function ActivityTitle({
+  activity,
+  headline,
+  mark,
+}: {
+  activity: ActivityBody;
+  headline?: ReactNode;
+  mark?: AssetClass | null;
+}) {
+  const shownMark = titleMark(activity, mark);
+  return (
+    <>
+      {shownMark && <ClassMark kind={shownMark} className="mr-2" />}
+      {headline ?? activityHeadline(activity)}
+    </>
+  );
+}
+
+/**
+ * The same title in words, what a feed's runs compare (`lib/activity-runs.ts`): the class mark's
+ * name and the headline's words. `headlineText` is a feed's own headline in words, as it draws it.
+ */
+export function activityTitleText(
+  activity: ActivityBody,
+  headlineText?: string,
+  mark?: AssetClass | null
+): string {
+  const shownMark = titleMark(activity, mark);
+  return `${shownMark === null ? '' : `${shownMark}: `}${headlineText ?? activityHeadline(activity)}`;
+}
+
+/**
+ * A run of rows that say the same thing, folded (readability lane B4; `lib/activity-runs.ts`): one
+ * row with what the rows share — the title, the scripts called by name, the parties — their count,
+ * and the newest time (the first row's: a feed is newest first). It counts rows and sums nothing:
+ * no amount of any row is drawn, and no total. Its button opens the ordinary rows in place, under
+ * it, and folds them again; it is a real button, reached by a tap, a click and the keyboard.
+ */
+export function FoldedActivityRow({
+  rows,
+  title,
+  showScriptDetails,
+  age,
+  focusLockHash,
+  className,
+  fresh = false,
+  open,
+  onToggle,
+}: {
+  /** The run, newest first: at least two committed rows. */
+  rows: readonly ActivityRowData[];
+  /** The title its rows draw (`ActivityTitle`). */
+  title: ReactNode;
+  showScriptDetails: boolean;
+  /** As the feed's rows: the age on a live feed, else the date (PA-22). */
+  age: boolean;
+  /** The party the page is about, written as text first (consistency C3). */
+  focusLockHash?: string;
+  /**
+   * The class its feed gives its rows, given to the run too: a neighbour's rows on an identity's
+   * feed are set back, and so is their run (the feed's one decision, R4).
+   */
+  className?: string;
+  fresh?: boolean;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const first = rows[0];
+  if (rows.length < 2)
+    throw new Error(`transaction ${first?.txHash}: a folded run holds at least two rows`);
+  if (first.timestamp === null || first.blockNumber === null)
+    throw new Error(`transaction ${first.txHash}: a folded run's rows are committed`);
+  const [openCalls, setOpenCalls] = useState({ types: false, locks: false });
+  // the scripts are the same on every row of a run: the first row's calls are the run's
+  const { calls } = activityDetails(first, showScriptDetails, {
+    ...openCalls,
+    open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })),
+  });
+  const indexed = first.participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
+  const { focus, others } = splitFocus(indexed, focusLockHash, first.txHash);
+  const parties = focus === null ? others : [focus, ...others];
+  const shown =
+    parties.length > PARTICIPANT_LIMIT ? parties.slice(0, PARTICIPANT_LIMIT - 1) : parties;
+  return (
+    <article
+      data-role="activity-run"
+      data-run-count={rows.length}
+      className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
+    >
+      <ActivityRowHead
+        layout="line"
+        title={title}
+        details={calls}
+        hash={first.txHash}
+        blockNumber={first.blockNumber}
+        timestamp={first.timestamp}
+        evidence={
+          <>
+            newest <RowDate timestamp={first.timestamp} age={age} />
+          </>
+        }
+      />
+      <div
+        data-role="run-parties"
+        className="text-small leading-row flex flex-wrap items-center gap-x-4 gap-y-0 pl-[18px]"
+      >
+        {shown.map((p) => {
+          const lock = partyLock(p);
+          const isFocus = p === focus;
+          return (
+            <span
+              key={p.key}
+              data-role="party"
+              data-party={p.key}
+              data-this-address={isFocus || undefined}
+              className="inline-flex max-w-full flex-wrap items-center gap-x-2.5"
+            >
+              <ParticipantRefView participant={p} size="row" compact quiet linked={!isFocus} />
+              {isFocus && <span className="sr-only">this address</span>}
+              {lock && (
+                <span data-role="lock-kind">
+                  <PartyLockKind lock={lock} size="row" />
+                </span>
+              )}
+            </span>
+          );
+        })}
+        {shown.length < parties.length && (
+          <span className="text-text-dim">
+            {unitNode(`+${formatCount(parties.length - shown.length, 'participant')}`)}
+          </span>
+        )}
+      </div>
+      <button
+        type="button"
+        data-role="run-toggle"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
+      >
+        {open ? 'fewer ↑' : unitNode(`${formatCount(rows.length, 'transaction')} ↓`)}
+      </button>
+    </article>
   );
 }

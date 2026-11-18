@@ -8,6 +8,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
+import { isDefaultLock } from '@/lib/lock-script';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /**
@@ -59,7 +60,11 @@ function balanceForm(width: number | null): BalanceForm {
  * The participant's lock: its registry name, else its code hash (the transaction's cells carry
  * the script). A party with no cell here (a protocol-named party) or no known script has none.
  */
-/** A party's lock, its code hash at the form's size (U-09) when the registry names none. */
+/**
+ * A party's lock, its code hash at the form's size (U-09) when the registry names none; nothing for
+ * the default lock (readability R9, lane B4: a shortened address no longer says its lock, so a lock
+ * is named beside it only when it is not the default lock, as `LockKind` does).
+ */
 function LockLabel({
   participant,
   lockCodeHashes,
@@ -73,6 +78,7 @@ function LockLabel({
 }) {
   const codeHash =
     participant.address === null ? undefined : lockCodeHashes.get(participant.address);
+  if (codeHash !== undefined && isDefaultLock(codeHash)) return null;
   const name = participant.lockKind ?? (codeHash ? `lock ${shortenHash(codeHash, size)}` : null);
   if (name === null) return null;
   return (
@@ -181,7 +187,7 @@ export function BalanceChanges({
                   <span role="cell" className="text-right">
                     <CkbAmount form="column" shannons={BigInt(p.ckbDelta)} />
                   </span>
-                  <span role="cell" className="text-right tabular-nums">
+                  <span role="cell" className="whitespace-nowrap text-right tabular-nums">
                     {formatOccupiedDelta(p.usedDelta)}
                   </span>
                   <span role="cell" className="flex min-w-0 flex-wrap gap-x-3.5 gap-y-0.5">
@@ -202,7 +208,7 @@ export function BalanceChanges({
                       <span role="cell" className="text-right">
                         <CkbAmount form="column" shannons={n.ckb} tone="plain" />
                       </span>
-                      <span role="cell" className="text-right tabular-nums">
+                      <span role="cell" className="whitespace-nowrap text-right tabular-nums">
                         {formatOccupiedDelta(n.occupied.toString())}
                       </span>
                       <span role="cell">{netNote(n.note)}</span>
@@ -299,7 +305,7 @@ export function BalanceChanges({
                     <>
                       <span>
                         Net <CkbAmount form="summary" shannons={n.ckb} tone="plain" /> · occupied{' '}
-                        <span className="text-text tabular-nums">
+                        <span className="text-text whitespace-nowrap tabular-nums">
                           {formatOccupiedDelta(n.occupied.toString())}
                         </span>
                       </span>

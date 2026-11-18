@@ -1,3 +1,4 @@
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import userEvent from '@testing-library/user-event';
@@ -50,6 +51,13 @@ function serveTransactions(txs: Transaction[]) {
 }
 
 const rows = () => screen.getByTestId('feed-rows').querySelectorAll('[data-feed-row]');
+
+/**
+ * A feed sample's party as its row writes it, by the seed the fixture spells its args from: `ckb1…`
+ * and the address's last 8 characters (R9; B4 re-pinned: the samples carry real addresses, whose
+ * last characters are their checksum).
+ */
+const shown = (seed: string) => `ckb1…${seededAddress(seed).slice(-8)}`;
 
 describe('ActivityFeed', () => {
   // The clock stands still in every test (Date only; timers stay real): a row's age and the
@@ -194,11 +202,7 @@ describe('ActivityFeed', () => {
     expect(note).toHaveClass('text-text-dim', 'text-small');
     // Paid first, received next, the zero last.
     const parties = [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
-    expect(parties).toEqual([
-      expect.stringMatching(/hxw6h7$/),
-      expect.stringMatching(/r4p74p$/),
-      expect.stringMatching(/fxdtl8$/),
-    ]);
+    expect(parties).toEqual(['hxw6h7', 'r4p74p', 'fxdtl8'].map(shown));
     const amounts = [
       ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
     ];
@@ -215,10 +219,11 @@ describe('ActivityFeed', () => {
       '+412.3248675 CKB',
       null,
     ]);
-    // Occupied only where it changed: two of three.
+    // Occupied only where it changed: two of three, in bytes with their unit (B4 item 2,
+    // re-pinned on purpose: was "occupied −61" with no unit).
     expect([...row.querySelectorAll('[data-role="occupied"]')].map((e) => e.textContent)).toEqual([
-      `occupied ${MINUS}61`,
-      'occupied +61',
+      `occupied ${MINUS}61 B`,
+      'occupied +61 B',
     ]);
     expect(row).not.toHaveTextContent('+1 more');
   });
@@ -334,10 +339,9 @@ describe('ActivityFeed', () => {
     // the summary form of a feed line (R5, re-pinned on purpose: was every decimal)
     expect(within(row).getByRole('link', { name: `${MINUS}36,583 Seal` })).toBeInTheDocument();
     expect(within(row).getByRole('link', { name: '+36,583 Seal' })).toBeInTheDocument();
-    expect([...row.querySelectorAll('[data-party]')].map((e) => e.textContent)).toEqual([
-      expect.stringMatching(/j3pkeh$/),
-      expect.stringMatching(/3fzxu7$/),
-    ]);
+    expect([...row.querySelectorAll('[data-party]')].map((e) => e.textContent)).toEqual(
+      ['j3pkeh', '3fzxu7'].map(shown)
+    );
   });
 
   it('over six participants, shows the five largest and expands to all and back', async () => {
@@ -348,15 +352,14 @@ describe('ActivityFeed', () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
-    const parties = () =>
-      [...row.querySelectorAll('[data-party]')].map((e) => e.textContent?.slice(-2));
+    const parties = () => [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
     // The five largest |Δ| (900, 700, 500, 300, 200), paid first.
-    expect(parties()).toEqual(['p4', 'p6', 'p2', 'p5', 'p7']);
+    expect(parties()).toEqual(['p4', 'p6', 'p2', 'p5', 'p7'].map(shown));
     const more = within(row).getByRole('button', { name: '+3 participants' });
     expect(more).toHaveAttribute('aria-expanded', 'false');
 
     await user.click(more);
-    expect(parties()).toEqual(['p4', 'p6', 'p1', 'p8', 'p2', 'p5', 'p7', 'p3']);
+    expect(parties()).toEqual(['p4', 'p6', 'p1', 'p8', 'p2', 'p5', 'p7', 'p3'].map(shown));
     const fewer = within(row).getByRole('button', { name: 'Show fewer participants' });
     expect(fewer).toHaveAttribute('aria-expanded', 'true');
 
@@ -556,10 +559,13 @@ describe('ActivityFeed', () => {
   });
 });
 
+// B4 item 2 (re-pinned on purpose): occupied capacity is bytes, written with its unit, and a
+// change that is not whole bytes is refused (it was written as exact CKB, "+1.50000001");
+// __tests__/components/occupied-unit.test.tsx holds the rest.
 describe('formatOccupiedDelta', () => {
-  it('prints occupied capacity in whole CKB (it is bytes), and exactly if it ever is not', () => {
-    expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61`);
-    expect(formatOccupiedDelta('32000000000')).toBe('+320');
-    expect(formatOccupiedDelta('150000001')).toBe('+1.50000001');
+  it('prints occupied capacity in whole bytes with their unit, and refuses what is not whole', () => {
+    expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61 B`);
+    expect(formatOccupiedDelta('32000000000')).toBe('+320 B');
+    expect(() => formatOccupiedDelta('150000001')).toThrow('not a whole number of bytes');
   });
 });

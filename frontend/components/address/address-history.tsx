@@ -1,7 +1,13 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
+import {
+  ActivityRow,
+  ActivityTitle,
+  activityTitleText,
+  type ActivityRowData,
+} from '@/components/activity/activity-row';
+import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import { activityHeadline } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -55,7 +61,10 @@ const plural = (n: number, noun: string) => formatCount(n, noun);
  * participant's own deltas, never a transaction-wide mint or burn. The collection follows, dim, when
  * every object shares one named collection.
  */
-function objectHeadline(participant: ParticipantInfo, txHash: string): ReactNode {
+function objectHeadline(
+  participant: ParticipantInfo,
+  txHash: string
+): { node: ReactNode; text: string } {
   const objects = participant.itemDeltas.flatMap((d) => (d.kind === 'object' ? [d] : []));
   if (objects.length === 0)
     throw new Error(`transaction ${txHash}: an object activity of this address moved no object`);
@@ -69,22 +78,24 @@ function objectHeadline(participant: ParticipantInfo, txHash: string): ReactNode
         : `Received ${arrived}, sent ${plural(departed, 'object')}`;
   const names = new Set(objects.map((o) => o.collection?.name?.trim() || null));
   const [collection] = names;
-  return names.size === 1 && collection ? (
-    <>
-      {movement}
-      <span className="text-text-dim font-normal"> · {collection}</span>
-    </>
-  ) : (
-    movement
-  );
+  return names.size === 1 && collection
+    ? {
+        node: (
+          <>
+            {movement}
+            <span className="text-text-dim font-normal"> · {collection}</span>
+          </>
+        ),
+        text: `${movement} · ${collection}`,
+      }
+    : { node: movement, text: movement };
 }
 
 /**
- * One activity of this address: the site's one activity row (consistency C3), its participant line
- * this address's — first, as text, tagged "this address" (`focusLockHash`). The endpoint supplies
- * this participant's deltas only; the other parties of the transaction are on its page.
+ * What the address page draws of one activity: the row (this address's participant line alone),
+ * and its headline, in words for its run (readability B4) and as drawn.
  */
-export function AddressActivity({ activity, address }: AddressActivityProps) {
+function addressRow(activity: Activity, address: Address) {
   const participant: ParticipantInfo = {
     address: address.address ?? null,
     lockHash: address.lockScriptHash,
@@ -102,22 +113,63 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
   const classification = classifyActivity(row);
   const primary = classification.primaryItemDelta;
   const itemClass = classification.displayType;
+  const words =
+    (itemClass === 'token' || itemClass === 'identity') && primary
+      ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${BigInt(primary.delta) > BigInt(0) ? 'received' : BigInt(primary.delta) < BigInt(0) ? 'sent' : 'changed'}`
+      : activityHeadline(row);
   const headline =
     itemClass === 'object'
       ? objectHeadline(participant, activity.txHash)
-      : (itemClass === 'token' || itemClass === 'identity') && primary
-        ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${BigInt(primary.delta) > BigInt(0) ? 'received' : BigInt(primary.delta) < BigInt(0) ? 'sent' : 'changed'}`
-        : activityHeadline(row);
+      : { node: words, text: words };
+  return { row, participant, headline };
+}
+
+/**
+ * One activity of this address: the site's one activity row (consistency C3), its participant line
+ * this address's — first, as text, tagged "this address" (`focusLockHash`). The endpoint supplies
+ * this participant's deltas only; the other parties of the transaction are on its page.
+ */
+export function AddressActivity({ activity, address }: AddressActivityProps) {
+  const { row, headline } = addressRow(activity, address);
   return (
     <ActivityRow
-      headline={headline}
+      headline={headline.node}
       activity={row}
       focusLockHash={address.lockScriptHash}
       foldObjects
       itemTone="sign"
+      // the transaction's other parties are references here, their changes not on the row
+      unlistedParties={activity.participants.length}
     />
   );
 }
+/**
+ * The address's activities with their runs folded (readability B4, `lib/activity-runs.ts`): a run
+ * is compared on this address's line and the transaction's other parties, which the row does not
+ * draw but the activity names, so two transfers to different counterparties never fold. A run
+ * folds within the page shown.
+ */
+export function AddressActivities({ rows, address }: { rows: Activity[]; address: Address }) {
+  return (
+    <ActivityRuns
+      focusLockHash={address.lockScriptHash}
+      rows={rows.map((activity) => {
+        const { row, participant, headline } = addressRow(activity, address);
+        return {
+          key: activity.txHash,
+          subject: runSubject(row, activityTitleText(row, headline.text), [
+            participant,
+            ...activity.participants,
+          ]),
+          activity: row,
+          title: <ActivityTitle activity={row} headline={headline.node} />,
+          row: <AddressActivity activity={activity} address={address} />,
+        };
+      })}
+    />
+  );
+}
+
 function TxPosition({ tx }: { tx: AddressTransaction }) {
   return (
     <span className="text-small flex flex-col gap-1">

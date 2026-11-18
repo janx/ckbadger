@@ -343,10 +343,12 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         // holders.
         render: (h) => (
           <span className="flex min-w-0">
+            {/* a column headed "Lock" is never empty: the default lock by its name (B4) */}
             <LockKind
               lockKind={h.lockKind}
               lockCodeHash={h.lockCodeHash}
               size="row"
+              place="column"
               className={rowTagClass('default', 'min-w-0 truncate')}
             />
           </span>

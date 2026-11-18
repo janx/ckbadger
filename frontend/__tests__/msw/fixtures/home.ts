@@ -1,3 +1,4 @@
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type {
   ActivitySummary24h,
   CkbytesAllocation,
@@ -282,10 +283,8 @@ export const dailyTransactionCountChart: ChartResponse = chart(
   'Transactions'
 );
 
-const ADDRS = [
-  'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfkcv576ccddnn4quf2ga65xee2m26h7nq3q7ue',
-  'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2qf8keemy2p5uu0g0gn8cd4ju23s5269qsv05e',
-];
+// Real default-lock addresses (a row reads the lock off the address, lane B4).
+const ADDRS = [seededAddress('q3q7ue'), seededAddress('qsv05e')];
 
 /** Nine latest activities: .bit type calls, a DAO deposit and a plain transfer. */
 export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, i) => {
@@ -356,7 +355,7 @@ function party(
   itemDeltas: GlobalActivity['participants'][number]['itemDeltas'] = []
 ): GlobalActivity['participants'][number] {
   return {
-    address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
+    address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
     roles: [],

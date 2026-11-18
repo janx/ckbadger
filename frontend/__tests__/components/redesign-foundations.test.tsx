@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
@@ -476,7 +477,12 @@ describe('transaction and activity foundations', () => {
   });
   it('shares cross-user and participant activity grammar, including registered lock kind', () => {
     const activity = latestActivities[0];
-    const participant = { ...activity.participants[0], lockKind: 'JoyID' };
+    // B4 (re-pinned): a JoyID address, since a default-lock party's line names no lock (R9)
+    const participant = {
+      ...activity.participants[0],
+      address: seededAddress('joyid1', JOYID_CODE_HASH),
+      lockKind: 'JoyID',
+    };
     const { container } = render(
       <ActivityRow activity={activity} mode="participant" participant={participant} />
     );

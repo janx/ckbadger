@@ -4,6 +4,7 @@
 // tx-level facts inline; block · date on the right (consistency C3: the absolute UTC+8 date, was the
 // age), the tx hash and the age in the row's hover. jsdom does not lay out, so these assert the
 // structure and classes; the survey gate measures the heights.
+import { namedLockCodeHash, seededAddress } from '@/__tests__/utils/ckb-address';
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
@@ -14,9 +15,14 @@ const MINUS = '−';
 const TX = '0x8a39e8e3' + 'ab'.repeat(26) + 'd67305';
 const CKB = (whole: string) => `${whole}00000000`;
 
+/**
+ * A fixture party on a real address (B4: a row reads the lock off the address): the default lock
+ * unless its `lockKind` names another, then a lock of its own.
+ */
 function party(tail: string, over: Partial<ParticipantInfo> = {}): ParticipantInfo {
+  const named = over.lockKind !== undefined && over.lockKind !== null;
   return {
-    address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${tail}`,
+    address: seededAddress(tail, named ? namedLockCodeHash(over.lockKind!) : undefined),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
     lockKind: 'Default Lock',
@@ -79,6 +85,20 @@ const transfer = row([
 /** The board's 5-participant row: UTXOSwap remove liquidity settled. */
 const RGBPP = '0x' + '77'.repeat(32);
 const LP = '0x' + '88'.repeat(32);
+const intentParty = party('s7p9j4', {
+  lockKind: 'UTXOSwap Intent Lock',
+  ckbDelta: `-${CKB('288')}`,
+  usedDelta: `-${CKB('231')}`,
+  itemDeltas: [token('LP-UTXOSwap V1', '-591345087427', LP)],
+});
+const joyParty = party('d8csr7', {
+  lockKind: 'JoyID',
+  ckbDelta: '305211026713',
+  usedDelta: CKB('207'),
+  itemDeltas: [token('RGB++', '1300019363874', RGBPP)],
+});
+/** The default lock: the registry's name stays off the row (B4). */
+const zeroParty = party('w8xxul');
 const swap = row(
   [
     party('9rvpf8', {
@@ -86,20 +106,10 @@ const swap = row(
       ckbDelta: '-276411026713',
       itemDeltas: [token('RGB++', '-1300019363874', RGBPP)],
     }),
-    party('s7p9j4', {
-      lockKind: 'UTXOSwap Intent Lock',
-      ckbDelta: `-${CKB('288')}`,
-      usedDelta: `-${CKB('231')}`,
-      itemDeltas: [token('LP-UTXOSwap V1', '-591345087427', LP)],
-    }),
+    intentParty,
     party('68r5ue', { ckbDelta: '-9030' }),
-    party('d8csr7', {
-      lockKind: 'JoyID',
-      ckbDelta: '305211026713',
-      usedDelta: CKB('207'),
-      itemDeltas: [token('RGB++', '1300019363874', RGBPP)],
-    }),
-    party('w8xxul', { lockKind: null }),
+    joyParty,
+    zeroParty,
   ],
   {
     blockNumber: 20724160,
@@ -115,6 +125,9 @@ const swap = row(
 );
 
 const lines = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('[data-role="participant"]')];
+/** The line of a party, found by its address as the row writes it (its last 8 characters). */
+const lineOf = (c: HTMLElement, p: ParticipantInfo) =>
+  lines(c).find((l) => l.textContent?.includes(p.address!.slice(-8))) as HTMLElement;
 const head = (c: HTMLElement) => c.querySelector('[data-role="row-head"]') as HTMLElement;
 
 describe('option A: the headline line', () => {
@@ -243,11 +256,12 @@ describe('option A: every participant, one line each (D1)', () => {
 
   it('puts CKB, every asset delta and occupied on the participant’s own line, in that order', () => {
     const { container } = render(<ActivityRow activity={swap} />);
-    const joy = lines(container).find((l) => l.textContent?.includes('d8csr7')) as HTMLElement;
+    const joy = lineOf(container, joyParty);
     const order = [...joy.children].map((e) => e.getAttribute('data-role'));
     expect(order).toEqual(['party', 'lock-kind', 'ckb', 'item', 'occupied']);
     expect(joy.querySelector('[data-role="party"]')).toHaveAttribute('data-party');
-    expect(within(joy).getByText('JoyID')).toHaveAttribute('data-role', 'lock-kind');
+    // B4 (re-pinned): LockKind's own element inside the line's lock-kind part
+    expect(within(joy).getByText('JoyID').closest('[data-role="lock-kind"]')).not.toBeNull();
     // Readability R5 (re-pinned on purpose): a feed line's amounts are the summary form, cut,
     // each with its exact value in its title (was every decimal: "+3,052.11026713 CKB").
     expect(joy.querySelector('[data-ckb-amount]')).toHaveTextContent('+3,052 CKB');
@@ -258,15 +272,16 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(within(rgbpp).getByText('RGB++')).toHaveClass('text-text-dim');
     expect(joy.querySelector('[data-role="occupied"]')).toHaveTextContent('occupied +207');
     // No second line per asset: the intent lock's LP delta is on its own participant line.
-    const intent = lines(container).find((l) => l.textContent?.includes('s7p9j4')) as HTMLElement;
+    const intent = lineOf(container, intentParty);
     const lp = within(intent).getByRole('link', { name: `${MINUS}5,913 LP-UTXOSwap V1` });
     expect(lp).toHaveClass('text-negative');
     expect(within(lp).getByText('LP-UTXOSwap V1')).toHaveClass('text-text-dim');
     expect(intent.querySelector('[data-role="occupied"]')).toHaveTextContent(
       `occupied ${MINUS}231`
     );
-    // A party with no registered lock has no tag, and its zero is still its fact.
-    const zero = lines(container).find((l) => l.textContent?.includes('w8xxul')) as HTMLElement;
+    // A party on the default lock has no tag (B4, re-pinned: was "no registered lock"), and its
+    // zero is still its fact.
+    const zero = lineOf(container, zeroParty);
     expect(zero.querySelector('[data-role="lock-kind"]')).toBeNull();
     // Consistency plan C4: a ghost "0 CKB" (was "0.00000000 CKB").
     expect(zero.querySelector('[data-ckb-amount]')).toHaveTextContent(/^0 CKB$/);
@@ -284,7 +299,9 @@ describe('option A: every participant, one line each (D1)', () => {
     expect([...occupied.classList].filter((c) => c.includes('/'))).toEqual([]);
   });
 
-  it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), with the lock kind in small caps', () => {
+  // Readability B4 (re-pinned on purpose): the lock is named in plain words at the line's own size,
+  // and only when it is not the default lock (R9); it was dim small caps on every line.
+  it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), the lock in plain words', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
     for (const line of lines(container)) {
       expect(line).toHaveClass('flex', 'flex-wrap', 'items-center', 'text-small');
@@ -294,15 +311,17 @@ describe('option A: every participant, one line each (D1)', () => {
       expect(line).toHaveClass('pl-[30px]');
       expect(line.querySelector('[data-role="party"]')).toHaveClass('-ml-3');
       expect([...line.classList].filter((c) => /^(sm|md|lg):/.test(c))).toEqual([]);
-      // re-pinned (A4 Chrome sweep): a lock name is words, never made one unit
-      expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass(
-        'text-text-dim',
-        'small-caps',
-        'lowercase'
-      );
-      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('whitespace-nowrap');
-      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass('border', 'text-meta');
+      // the default lock: no name beside the address
+      expect(line.querySelector('[data-role="lock-kind"]')).toBeNull();
     }
+    // another lock: its name, words (A4 Chrome sweep: never made one unit), quiet, no small caps,
+    // no case change, no size of its own and no box
+    const { container: named } = render(<ActivityRow activity={swap} />);
+    const kind = lineOf(named, joyParty).querySelector('[data-lock-kind]') as HTMLElement;
+    expect(kind).toHaveTextContent(/^JoyID$/);
+    expect(kind).toHaveClass('text-text-dim');
+    for (const gone of ['small-caps', 'lowercase', 'whitespace-nowrap', 'border', 'text-meta'])
+      expect(kind).not.toHaveClass(gone);
     // Occupied last, 11 px, in the dim ink (R4, re-pinned on purpose: the dim at 60 % read 2.7:1).
     const occupied = container.querySelector('[data-role="occupied"]');
     expect(occupied).toHaveClass('text-meta', 'text-text-dim', 'whitespace-nowrap');

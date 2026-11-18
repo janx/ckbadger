@@ -4,7 +4,8 @@ import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
 import Link from '@/components/ui/link';
-import { ActivityRow } from '@/components/activity/activity-row';
+import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
+import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 
 /** Hierarchy R15 (v3): a topic page's activity feed shows three rows; the list pages page the rest. */
@@ -57,15 +58,17 @@ export function DaoSources() {
       ) : !rows?.length ? (
         <div className="text-text-dim text-small py-7">No DAO activities at this indexed tip.</div>
       ) : (
-        rows.map((row) => (
-          <ActivityRow
-            key={`${row.txHash}:${row.txIndex}`}
-            activity={row}
-            lockColumn
-            age
-            className="py-2.5"
-          />
-        ))
+        // B4: consecutive rows that say the same thing fold into one counted run
+        <ActivityRuns
+          age
+          rows={rows.map((row) => ({
+            key: row.txHash,
+            subject: runSubject(row, activityTitleText(row)),
+            activity: row,
+            title: <ActivityTitle activity={row} />,
+            row: <ActivityRow activity={row} lockColumn age className="py-2.5" />,
+          }))}
+        />
       )}
     </section>
   );

@@ -3,6 +3,7 @@
  * order, quiet states in sentence case, day dividers on the site's one UTC+8 clock (D2), and
  * object items with their collection and composition (R12, TX-29).
  */
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
@@ -34,7 +35,7 @@ const activity = (
   lockCalls: [],
   participants: [
     {
-      address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwlng7r',
+      address: seededAddress('wlng7r'),
       lockHash: `0x${'aa'.repeat(32)}`,
       lockHashPrefix: null,
       roles: [],

@@ -1,3 +1,4 @@
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { screen, waitFor, within } from '@testing-library/react';
@@ -11,7 +12,7 @@ vi.mock('@/lib/api', () => ({
 
 const tx = '0x' + 'a'.repeat(64);
 const party = (n: number, ckbDelta: string, usedDelta: string) => ({
-  address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfzyg3zyg3zyg3zyg3zyg3zyg3zygssparty${n}`,
+  address: seededAddress(`party${n}`),
   lockHash: '0x' + String(n).repeat(64),
   lockHashPrefix: null,
   lockKind: 'Default Lock',
@@ -45,10 +46,13 @@ const activity = {
     },
   ],
 };
+// B4 (re-pinned): three requests by three depositors; the same request by the same parties three
+// times running is one run, folded (they were three copies of one transaction's parties)
 const three = Array.from({ length: 3 }, (_, i) => ({
   ...activity,
   txHash: '0x' + String(i + 1).repeat(64),
   blockNumber: 123 - i,
+  participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
 }));
 
 describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
@@ -129,9 +133,13 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     expect(article).toHaveTextContent('26,050');
     // ACTIVITY_DESIGN "Show All Layers": all three parties, the zero-delta one included.
     expect(article.querySelectorAll('[data-role="participant"]')).toHaveLength(3);
-    for (const n of [1, 2, 3]) expect(article).toHaveTextContent(`party${n}`);
-    // The lock kind sits in its own column (one line per party), as on the activities page.
-    expect(article.querySelectorAll('[data-role="lock-kind"]')).toHaveLength(3);
+    // B4 (re-pinned): real addresses, each written `ckb1…` and its last 8 characters (R9)
+    for (const p of activity.participants)
+      expect(article).toHaveTextContent(`ckb1…${p.address.slice(-8)}`);
+    // The lock kind sits in its own place on each party's line, as on the activities page; on the
+    // default lock it is not written at all (B4, re-pinned: it was "Default Lock" three times).
+    expect(article.querySelectorAll('[data-role="lock-kind"]')).toHaveLength(0);
+    expect(article).not.toHaveTextContent('Default Lock');
     // R11: no gold text in a DAO row; the vault ring is the graphic that carries the colour.
     const gold = Array.from(article.querySelectorAll('[class]')).filter((el) =>
       /(^|\s)text-gold/.test(el.getAttribute('class')!)

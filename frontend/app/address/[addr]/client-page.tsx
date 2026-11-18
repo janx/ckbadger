@@ -19,7 +19,7 @@ import {
   ADDRESS_CLASSES,
 } from '@/components/address/address-holdings';
 import {
-  AddressActivity,
+  AddressActivities,
   AddressTransactions,
   AddressLiveCells,
 } from '@/components/address/address-history';
@@ -607,9 +607,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 (activities.data ? (
                   <>
                     {activities.data.data.length ? (
-                      activities.data.data.map((row) => (
-                        <AddressActivity key={row.txHash} activity={row} address={a} />
-                      ))
+                      // B4: its runs folded, within the page shown
+                      <AddressActivities rows={activities.data.data} address={a} />
                     ) : (
                       <p className="text-text-dim text-small max-w-measure py-6">
                         {filter === 'all'

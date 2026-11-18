@@ -524,10 +524,13 @@ describe('Address activity is the shared activity row (C3)', () => {
     expect(container.querySelectorAll('[data-party]')).toHaveLength(1);
     const [line] = lines(container);
     expect(within(line as HTMLElement).getAllByText('this address')).toHaveLength(1);
-    expect(within(line as HTMLElement).getByText('JoyID')).toHaveAttribute(
-      'data-role',
-      'lock-kind'
-    );
+    // B4 (re-pinned): LockKind's words inside the line's lock-kind part (JoyID is not the
+    // default lock, so it is named)
+    expect(
+      within(line as HTMLElement)
+        .getByText('JoyID')
+        .closest('[data-role="lock-kind"]')
+    ).not.toBeNull();
     // Never a link to the page it is on; the full address is its hover.
     const party = line.querySelector('[data-role="party"]') as HTMLElement;
     expect(within(party).queryByRole('link')).toBeNull();

@@ -65,4 +65,30 @@ describe('LockKind (R-2)', () => {
     );
     log.mockRestore();
   });
+
+  // B4, the lead's ruling: silent for the default lock beside a party, named in a "Lock" column
+  it('names the default lock only in a column, in quiet words without the column’s tag', () => {
+    const DEFAULT = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+    const tag = rowTagClass('default', 'min-w-0 truncate');
+    const { container, rerender } = render(
+      <LockKind size="row" lockKind="Default Lock" lockCodeHash={DEFAULT} className={tag} />
+    );
+    expect(container).toBeEmptyDOMElement();
+    rerender(
+      <LockKind
+        size="row"
+        lockKind="Default Lock"
+        lockCodeHash={DEFAULT}
+        className={tag}
+        place="column"
+      />
+    );
+    const plain = screen.getByText('Default Lock');
+    expect(plain).toHaveClass('text-text-dim', 'text-meta', 'truncate');
+    expect(plain).not.toHaveClass('border');
+    rerender(
+      <LockKind size="row" lockKind="JoyID" lockCodeHash={CODE} className={tag} place="column" />
+    );
+    expect(screen.getByText('JoyID')).toHaveClass('border');
+  });
 });
