@@ -326,16 +326,25 @@ pub struct DobTraitResponse {
     pub value: String,
 }
 
+/// One output of one decoder step, as the worker stored it: its bytes are a blob
+/// named by their sha256, served at `url` (`/media/{hash}`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DecodedMediaResponse {
     pub media_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
     pub size: u64,
     pub hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub step: Option<u32>,
+    pub step: u32,
+    pub url: String,
+}
+
+/// The picture `/render` draws on request from the decoded traits (an SVG a trait
+/// holds, or the cluster's DOB/1 pattern filled with them). No byte of it is
+/// stored, so it has no size and no hash: only what it is and where it is drawn.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodedRenderResponse {
+    pub media_type: String,
     pub url: String,
 }
 
@@ -348,8 +357,11 @@ pub struct SporeDobDecodeResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dna_hex: Option<String>,
     pub traits: Vec<DobTraitResponse>,
-    #[serde(default)]
+    /// The decoder's stored outputs, one per step.
     pub media: Vec<DecodedMediaResponse>,
+    /// `null` unless no stored output is an image and the traits or the cluster's
+    /// pattern give an SVG to draw.
+    pub render: Option<DecodedRenderResponse>,
     pub issues: Vec<String>,
 }
 
@@ -1427,26 +1439,26 @@ async fn decode_spore(
             // earlier steps' unique traits are preserved. Insertion order maintained.
             let traits = super::asset_genetics::merged_traits(&decoded_entry);
 
-            // One media entry per step
-            let mut media: Vec<DecodedMediaResponse> = decoded_entry
+            // One media entry per step: the stored output of that step.
+            let media: Vec<DecodedMediaResponse> = decoded_entry
                 .steps
                 .iter()
                 .map(|step| DecodedMediaResponse {
                     media_type: step.media_type.clone(),
-                    role: None,
                     size: step.size,
                     hash: step.hash.clone(),
-                    step: Some(step.step),
+                    step: step.step,
                     url: format!("/spore/objects/{}/media/{}", spore_id_hex, step.hash),
                 })
                 .collect();
 
-            // Check all steps for renderable SVG in trait values or raw output.
-            // If found, add a render URL so the frontend can display it.
+            // When no stored output is an image, the picture is the one `/render`
+            // draws from an SVG in the traits or from the cluster's DOB/1 pattern.
             let has_image_media = decoded_entry
                 .steps
                 .iter()
                 .any(|s| s.media_type.starts_with("image/"));
+            let mut render = None;
             if !has_image_media {
                 let all_traits: Vec<_> = decoded_entry
                     .steps
@@ -1475,12 +1487,8 @@ async fn decode_spore(
                 };
 
                 if has_svg {
-                    media.push(DecodedMediaResponse {
+                    render = Some(DecodedRenderResponse {
                         media_type: "image/svg+xml".to_string(),
-                        role: Some("render".to_string()),
-                        size: 0,
-                        hash: String::new(),
-                        step: None,
                         url: format!("/spore/objects/{}/render", spore_id_hex),
                     });
                 }
@@ -1493,6 +1501,7 @@ async fn decode_spore(
                 dna_hex: None,
                 traits,
                 media,
+                render,
                 issues: Vec::new(),
             })
         }
@@ -1503,6 +1512,7 @@ async fn decode_spore(
             dna_hex: None,
             traits: Vec::new(),
             media: vec![],
+            render: None,
             issues: vec![failure.message],
         }),
         None => ok(SporeDobDecodeResponse {
@@ -1512,6 +1522,7 @@ async fn decode_spore(
             dna_hex: None,
             traits: Vec::new(),
             media: vec![],
+            render: None,
             issues: vec![
                 "DOB decode pending — background worker has not processed this spore yet"
                     .to_string(),
