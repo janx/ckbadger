@@ -75,7 +75,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       onFocus={() => onHover?.(cell.id)}
       onBlur={() => onHover?.(null)}
       className={cn(
-        'bg-base-surface text-small grid min-w-0 grid-cols-[30px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 border px-3 pb-2 pt-3 transition-colors',
+        'bg-base-surface text-small grid min-w-0 grid-cols-[18px_minmax(0,1fr)] gap-x-2.5 gap-y-2.5 border px-3 pb-2 pt-3 transition-colors',
         highlighted
           ? 'border-jade io-linked-highlight border-emphasis/70'
           : 'border-base-border-subtle',
@@ -83,17 +83,19 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         dimmed && 'quiet'
       )}
     >
-      {/* One mark column, one text edge (seals by kind, C11): a 30 px column of marks and the
-          text, 10 px apart, in four rows — the cell's stone with its label and out point, the
-          owner's stone with the owner, the class mark with the content, then the occupied bar.
-          Each mark stands alone, centred in the column, on its row's first line (the row line, 20 px):
-          the cell's 18 px stone centred on it, 1 px clear above and below (RowSeal); the owner's
-          overhangs it by 1 px; the 16 px class mark sits 1 px down. Every row's text starts on the same
-          edge; the rows after the first end with their right-end item (lock kind, capacity, the
-          cell's state beside the bar), which wraps under its row's text when it does not fit and
-          stays right. Row 1 is the label and the out point alone: with the state beside them it
-          wrapped on every tile of a 203 px text column (the sheets at 1024). A row is a
-          `contents` pair: its two cells are the grid's. */}
+      {/* One mark column, one text edge (seals by kind, C11): a column of marks as wide as the
+          widest, the cell's 18 px stone (readability R6: it was the 30 px stone's 30; the owner's
+          stone is 15 wide, the class mark 16), and the text, 10 px apart, in four rows — the
+          cell's stone with its label and out point, the owner's stone with the owner, the class
+          mark with the content, then the occupied bar. Each mark stands alone, centred in the
+          column, on its row's first line (the row line, 20 px): the cell's 18 px stone centred on
+          it, 1 px clear above and below (RowSeal); the owner's overhangs it by 1 px; the 16 px
+          class mark sits 1 px down. Every row's text starts on the same edge; the rows after the
+          first end with their right-end item (lock kind, capacity, the cell's state beside the
+          bar), which wraps under its row's text when it does not fit and stays right. Row 1 is the
+          label and the out point alone: with the state beside them it wrapped on every tile of a
+          203 px text column (the sheets at 1024 beside the 30 px mark column; 215 beside the 18).
+          A row is a `contents` pair: its two cells are the grid's. */}
       <div data-tile-row="cell" className="contents">
         <span data-tile-mark className="flex items-start justify-center">
           <RowSeal id={cell.seal.id} state={cell.seal.state} gap={false} />
@@ -135,7 +137,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="content" className="contents">
         <span data-tile-mark className="flex items-start justify-center pt-px">
-          <ClassMark kind={cell.kind} />
+          <ClassMark kind={cell.kind} size={16} />
         </span>
         <TileText end={<CkbAmount form="column" shannons={capacity} signed={false} tone="plain" />}>
           <span className="text-text-bright min-w-0 max-w-full">{cell.content}</span>
@@ -143,8 +145,9 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
-        {/* the bar, its bytes and the state: 56 + 6 + 79.2 ('occupied 231') + 6 + 52.8
-            ('consumed') = 200 px, inside the narrowest text column (203 px, the sheets at 1024) */}
+        {/* the bar, its bytes and the state at 12 px: 56 + 6 + 86.4 ('occupied 231') + 6 + 57.6
+            ('consumed') = 212 px, inside the narrowest text column (215 px, the sheets at 1024; it
+            was 203 beside the 30 px mark column, where the state wrapped under the bar) */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)

@@ -5,6 +5,9 @@ import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import type { TransactionDetail, TransactionScriptGroup } from '@/lib/api';
 import { drawSeal } from '@/lib/seal/stones';
+import { ROW_SEAL } from '@/components/ui/row-seal';
+import { OWNER_SEAL } from '@/components/ui/owner-seal';
+import { fontPx, textPx } from '@/lib/type-metrics';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import {
   expectBefore,
@@ -14,7 +17,7 @@ import {
 } from '@/__tests__/utils/seals';
 
 /**
- * C11: in a tile the cell's stone and the owner's stand alone in the 30 px mark column, the
+ * C11: in a tile the cell's stone and the owner's stand alone in the 18 px mark column, the
  * column's 10 px gap their gap, so neither keeps its own trailing margin.
  */
 const IN_MARK_COLUMN = { gap: false };
@@ -382,13 +385,23 @@ function expectEnd(text: HTMLElement, content: RegExp) {
 // its first flex line wrapped seal + out point, owner and lock kind differently at every width.
 // The tile is now a grid of a 30 px mark column and the text, 10 px apart, in four rows: every
 // mark centred in the one column, every text from the one edge, the right ends one column.
+// Re-pinned on purpose (readability R6): the column is as wide as its widest mark, the cell's row
+// stone, 18 px since the stone is (it was 30); renamed: "the 30 px mark column".
 describe('CellTile: one mark column, one text edge (C11)', () => {
-  it('is a grid of the 30 px mark column and the text, 10 px apart, in four rows of one mark each', () => {
+  it('is a grid of the mark column, as wide as its widest mark, and the text, 10 px apart, in four rows of one mark each', () => {
     const { outputs } = cellTiles(transfer('committed'), undefined);
     render(<CellTile cell={outputs[0]} />);
     const tile = screen.getByTestId('tx-io-output-0');
     expect(tile.tagName).toBe('ARTICLE');
-    expect(tile).toHaveClass('grid', 'grid-cols-[30px_minmax(0,1fr)]', 'gap-x-2.5', 'gap-y-2.5');
+    // the widest of the three marks: the cell's stone (18), the owner's (15), the class mark (16)
+    const column = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    expect(column).toBe(18);
+    expect(tile).toHaveClass(
+      'grid',
+      `grid-cols-[${column}px_minmax(0,1fr)]`,
+      'gap-x-2.5',
+      'gap-y-2.5'
+    );
     // 12 px above (it held the 30 px stone's overhang; since readability R6 the 18 px stone stands
     // inside its line, 1 px clear of it)
     expect(tile).toHaveClass('pt-3', 'pb-2', 'px-3', 'min-w-0');
@@ -399,6 +412,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(owner.mark.firstElementChild).toHaveAttribute('data-owner-seal');
     expect(content.mark.children).toHaveLength(1);
     expect(content.mark.firstElementChild).toHaveAttribute('data-class', 'ckb');
+    expect(content.mark.firstElementChild).toHaveAttribute('width', '16');
     expect(occupied.mark.childNodes).toHaveLength(0);
     // each mark centred in the column, on its row's first line (the cell's stone centred in a box
     // of the 20 px line, the owner's overhanging it by 1 px; the 16 px class mark sits 1 px down)
@@ -499,9 +513,18 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(state.firstElementChild).toHaveClass('text-meta', 'text-text');
     // the state once in the tile
     expect(within(tile).getAllByText('live')).toHaveLength(1);
-    // the narrowest sheet's text column (1024: 203 px) holds the 56 px bar, 'occupied 231' and
-    // 'consumed' at 11 px (6.6 px a character) with the 6 px gaps: 200 px
-    expect(56 + 6 + 12 * 6.6 + 6 + 8 * 6.6).toBeLessThanOrEqual(203);
+    // the narrowest sheet's text column holds the 56 px bar, 'occupied 231' and 'consumed' at
+    // the meta step with the 6 px gaps. Re-pinned on purpose (readability R6): the tile's content
+    // box at 1024 is 243 px (the recorded 203 px text column, the 30 px mark column and the 10 px
+    // gap), so beside the 18 px column the text has 215; the line is 212 px at 12 px (7.2 a
+    // glyph). This counted it at 11 px (200 px against 203): at 12 px it did not fit beside the
+    // 30 px column.
+    const narrowest = 203 + 30 + 10 - Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16) - 10;
+    expect(narrowest).toBe(215);
+    const line = 56 + 6 + textPx(12, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
+    expect(line).toBeCloseTo(212, 10);
+    expect(line).toBeLessThanOrEqual(narrowest);
+    expect(line).toBeGreaterThan(203);
     // with the cell's anatomy, its byte bar takes the line's free width, the bytes after it
     cleanup();
     render(
