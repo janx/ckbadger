@@ -88,8 +88,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/cell/[outpoint]/client-page.tsx': {
     family: 'chain',
-    sites: { link: 4, prose: 2 },
-    reason: 'the out-point sentence and the DAO line with their block links in the quiet lede',
+    // link 4 → 1, prose 2 → 1 (B7): the out-point sentence reads in the reading ink
+    sites: { link: 1, prose: 1 },
+    reason: 'the DAO line and its deposit block link in the quiet ink',
   },
   'app/tx/[hash]/client-page.tsx': {
     family: 'chain',
@@ -124,11 +125,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 1 },
     reason:
       'the size-and-cycles sentence under the blocks figure (a note under a figure, or a reading: P1 decides)',
-  },
-  'components/blocks/dao-header-fields.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: 'the S and U explanation in the quiet ink',
   },
   'components/blocks/reward-breakdown.tsx': {
     family: 'chain',
@@ -337,8 +333,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/scripts/page.tsx': {
     family: 'lists',
-    sites: { link: 1, prose: 2 },
-    reason: "the lede and its link, and the code-class bar's caption, in the quiet ink",
+    // link 1 → 0, prose 2 → 1 (B7): the lede and its link read in the reading ink
+    sites: { prose: 1 },
+    reason: "the code-class bar's caption in the quiet ink",
   },
   'app/transactions/page.tsx': {
     family: 'lists',
@@ -373,9 +370,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/scripts/script-family-page.tsx': {
     family: 'lists',
-    sites: { link: 4, td: 9, prose: 6 },
+    // link 4 → 3, prose 6 → 5 (B7): the lede and its link read in the reading ink
+    sites: { link: 3, td: 9, prose: 5 },
     reason:
-      'deployment blocks, cells, dashes and states quiet in table cells and links; the lede, loading, empty and cells sentences',
+      'deployment blocks, cells, dashes and states quiet in table cells and links; the reference, loading, empty and cells sentences',
   },
   'components/scripts/script-hero.tsx': {
     family: 'lists',
@@ -415,9 +413,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/forks/[height]/[orphan]/client-page.tsx': {
     family: 'topics',
-    sites: { link: 1, td: 1, prose: 2 },
-    reason:
-      "the breadcrumb link, a row's clock in a table cell, the node-store and uncle sentences",
+    // prose 2 → 1 (B7): the node-store sentence explains, in the reading ink
+    sites: { link: 1, td: 1, prose: 1 },
+    reason: "the breadcrumb link, a row's clock in a table cell, the uncle sentence",
   },
   'app/forks/page.tsx': {
     family: 'topics',
@@ -426,20 +424,24 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/hardforks/page.tsx': {
     family: 'topics',
-    sites: { link: 2, prose: 10 },
+    // prose 10 → 5 (B7): the lede, the two editions paragraphs, the hash-type paragraph and the
+    // RFC note explain, in the reading ink
+    sites: { link: 2, prose: 5 },
     reason:
-      "the lede, the edition explanations, epoch and block lines, the how link and the RFC note in the quiet ink (B7's explanations too)",
+      'the epoch and block lines, the loading and not-reached lines, the consensus line and the how link in the quiet ink',
   },
   'app/network/advertisement-graph.tsx': {
     family: 'topics',
-    sites: { prose: 4 },
-    reason: 'the advertisement sentences and loading, refresh and empty lines in the quiet ink',
+    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink
+    sites: { prose: 3 },
+    reason: 'the loading, refresh and empty lines in the quiet ink',
   },
   'app/network/client-page.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 8 },
-    reason:
-      'the lede and its link, the crawler explanations, the round lines and the MaxMind credit in the quiet ink',
+    // link 1 → 0, prose 8 → 3 (B7): the lede, the crawler explanations and the note explain, in
+    // the reading ink
+    sites: { prose: 3 },
+    reason: 'the round lines and the MaxMind credit in the quiet ink',
   },
   'app/network/distributions.tsx': {
     family: 'topics',
@@ -458,8 +460,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/network/trends.tsx': {
     family: 'topics',
-    sites: { td: 1, prose: 5 },
-    reason: 'a bucket count in a table cell; the trends notes, loading and empty lines',
+    // prose 5 → 4 (B7): the top-label note explains, in the reading ink
+    sites: { td: 1, prose: 4 },
+    reason: 'a bucket count in a table cell; the loading, empty and round lines',
   },
   'components/charts/chart-detail.tsx': {
     family: 'topics',
@@ -473,9 +476,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/dao/dao-board.tsx': {
     family: 'topics',
-    sites: { link: 6, td: 2, prose: 3 },
+    // link 6 → 3, prose 3 → 1 (B7): the lede and the AR explanation, with their links, read in
+    // the reading ink
+    sites: { link: 3, td: 2, prose: 1 },
     reason:
-      "the lede and its link, the exact amounts line, the AR sentences and their block links, a holder's rank and share in table cells",
+      "the exact amounts line, the block links in the readout and anchor lines, a holder's rank and share in table cells",
   },
   'components/dao/dao-grows.tsx': {
     family: 'topics',
@@ -489,9 +494,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/fiber/fiber-channel-board.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 5 },
-    reason:
-      'the channel id, the lede, the empty commitment sentence, the lock and output notes, a party link',
+    // prose 5 → 2 (B7): the lede and the lock and output notes explain, in the reading ink
+    sites: { link: 1, prose: 2 },
+    reason: 'the channel id, the empty commitment sentence, a party link',
   },
   'components/fiber/fiber-channel-step.tsx': {
     family: 'topics',
@@ -505,8 +510,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/hardforks/script-deployment-timeline.tsx': {
     family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the empty and the earliest-creation sentences in the quiet ink',
+    // prose 2 → 1 (B7): the earliest-creation sentence explains, in the reading ink
+    sites: { prose: 1 },
+    reason: 'the empty sentence in the quiet ink',
   },
   // ---- shared ----
   'components/activity/activity-row.tsx': {

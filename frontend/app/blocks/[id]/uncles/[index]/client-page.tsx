@@ -205,7 +205,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         </>
       }
     >
-      <p className="text-body leading-relaxed">
+      <p className="text-body max-w-measure leading-relaxed">
         Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
         {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
         chain is{' '}

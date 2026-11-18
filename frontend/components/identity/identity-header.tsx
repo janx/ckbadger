@@ -51,7 +51,7 @@ export function IdentityPositioning({
   return (
     <div className="flex flex-wrap items-center gap-3">
       <CompositionBadge tier="pure_ckb" />
-      <span className="text-text text-body">{text}</span>
+      <span className="text-text text-body max-w-measure">{text}</span>
     </div>
   );
 }

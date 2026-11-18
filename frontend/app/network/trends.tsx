@@ -350,7 +350,7 @@ function ShareTrend({
         <p className="text-text-dim text-small">No completed daily crawler observations yet.</p>
       ) : (
         <>
-          <p className="text-text-dim text-body mb-3">
+          <p className="text-text text-body max-w-measure mb-3">
             Retained top-label counts per observed day. The historical total and omitted labels were
             not recorded, so percentages are unavailable. Each bar is a day&apos;s retained count,
             its most common label in jade; every label is in the row&apos;s title.

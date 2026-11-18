@@ -1046,7 +1046,7 @@ export function ScriptFamilyPage({
               {(family.description || family.website) && (
                 <p
                   data-role="lede"
-                  className="text-text-dim text-body max-w-measure mt-1.5 [overflow-wrap:anywhere]"
+                  className="text-text text-body max-w-measure mt-1.5 [overflow-wrap:anywhere]"
                 >
                   {family.description}
                   {family.website && (

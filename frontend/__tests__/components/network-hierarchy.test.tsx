@@ -14,6 +14,7 @@ import { FILL_INKS } from '@/lib/palette';
 import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 import type { NetworkMap } from '@/lib/api';
 import {
   allTextLines,
@@ -181,7 +182,9 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     expect(lede.textContent).toMatch(/^Nodes find each other by word of mouth/);
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'
@@ -740,6 +743,10 @@ describe('Network tier 2 prose at body (R1: meta is never prose; lane D3 ruling)
     for (const p of prose) {
       expect(p).toHaveClass('text-body');
       expect(p.className).not.toMatch(/(^|\s)text-(meta|small)(\s|$)/);
+      // readability R3 / R4 (lane B7): an explanation reads in the reading ink, on the measure
+      // (the boundary and the advertisement note were the quiet ink; the note ran 115 characters)
+      expect(inkOf(p)).toBe(READING);
+      expect(p).toHaveClass('max-w-measure');
     }
   });
 });

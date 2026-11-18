@@ -200,7 +200,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             <p className="text-text-dim text-meta">Composition unavailable.</p>
           )}
           {history && history.data.length > 0 ? (
-            <p className="text-text text-body leading-relaxed">
+            <p className="text-text text-body max-w-measure leading-relaxed">
               <ItemLife
                 versions={history.data}
                 verb="Issued"
@@ -208,7 +208,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               />
             </p>
           ) : (
-            <p className="text-text text-body">
+            <p className="text-text text-body max-w-measure">
               Issued in <AppLink href={classHref}>{className}</AppLink> at{' '}
               <AppLink href={`/blocks/${item.createdAtBlock}`}>
                 block <AssetCount value={item.createdAtBlock} />
@@ -217,7 +217,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             </p>
           )}
           {item.class.description && (
-            <blockquote className="border-base-border border-l pl-4">
+            <blockquote className="border-base-border max-w-measure border-l pl-4">
               <p className="break-words">{item.class.description}</p>
               <footer className="text-text-dim text-meta mt-2">
                 the class’s description, on chain

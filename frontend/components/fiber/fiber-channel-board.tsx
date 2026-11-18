@@ -467,7 +467,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           <p className="text-text-dim text-small mt-1.5 w-fit max-w-full break-all">
             {channel.channelId}
           </p>
-          <p className="text-text-dim text-body max-w-measure mt-1.5">{ledeSentence(channel)}</p>
+          <p className="text-text text-body max-w-measure mt-1.5">{ledeSentence(channel)}</p>
           <div data-role="figure" className="mt-9 min-w-0">
             <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">capacity</div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
@@ -685,7 +685,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
               </div>
               {evidence.openingPartyFlows.length > 0 && (
                 <DetailSection title="Opening transaction, per party">
-                  <p className="text-text-dim text-meta mb-2">
+                  <p className="text-text text-body max-w-measure mb-2">
                     Non-Fiber locks on the opening transaction’s inputs or outputs. An output-only
                     lock did not necessarily sign it. Net input includes fees and any unrelated
                     outputs in the same transaction; it is not a proven channel balance or payment.
@@ -723,7 +723,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
               )}
               {evidence.settlementOutputs.length > 0 && (
                 <DetailSection title="Final transaction outputs">
-                  <p className="text-text-dim text-meta mb-2">
+                  <p className="text-text text-body max-w-measure mb-2">
                     All final transaction outputs are shown, the payouts and any change alike.
                   </p>
                   <Grid>

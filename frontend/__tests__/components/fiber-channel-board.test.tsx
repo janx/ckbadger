@@ -120,7 +120,9 @@ describe('FiberChannelBoard', () => {
       'Force-closed 8d 3h after it opened; settled after 6 epochs.'
     );
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     // the display figure: the channel's capacity, bright (R4, R11), in the summary form, one run

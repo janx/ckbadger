@@ -142,7 +142,9 @@ it('opens with one hero section — name, status, id and the composition sentenc
     'Fully on-chain: its record lives in a CKB cell, its image in a Bitcoin inscription.'
   );
   // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
-  expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
+  // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+  // reading ink (was text-text-dim)
+  expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
   expect(lede.textContent!.length).toBeLessThanOrEqual(90);
   const traits = screen.getByLabelText('Traits');
   expect(hero.contains(traits)).toBe(false);

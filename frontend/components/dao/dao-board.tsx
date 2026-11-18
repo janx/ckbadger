@@ -177,7 +177,7 @@ export function DaoHeading() {
 /** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
 export function DaoLede() {
   return (
-    <p className="text-text-dim text-body max-w-measure mt-1.5">
+    <p className="text-text text-body max-w-measure mt-1.5">
       CKB locked in the DAO keeps its share of the supply.{' '}
       <a href="#evidence" className="hover:text-text-bright hover:underline">
         How it works<span className="whitespace-nowrap"> ↓</span>
@@ -687,7 +687,8 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
   ];
   return (
     <div ref={ref} className="mt-3.5 flex min-w-0 flex-col">
-      <div className="text-text-dim text-meta">
+      {/* the bar's caption, a note over the figure: quiet, on the measure (R4) */}
+      <div className="text-text-dim text-meta max-w-measure">
         How all{' '}
         <span className="text-text">
           <Amount form="column" value={issued.toString()} />
@@ -1231,8 +1232,9 @@ function RawEvidence({
         ))}
       </div>
       <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
-      {/* Board v3: the explanation reads at body (13 px), as tier 2's other prose. */}
-      <p className="text-text-dim text-body mt-3">
+      {/* Board v3: the explanation reads at the body step, as tier 2's other prose: in the reading
+          ink, on the measure (readability R3, R4). */}
+      <p className="text-text text-body max-w-measure mt-3">
         AR, in every block header, is the DAO&apos;s growth index. Since genesis, AR grew from{' '}
         {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)} at block{' '}
         <BlockLink number={evidence.tipBlockNumber} />: free capacity deposited in block 0 would
@@ -1308,7 +1310,7 @@ function RawEvidence({
               </div>
               <div>
                 <dt className="text-text-dim">Withdrawing</dt>
-                <dd className="mt-0.5 leading-relaxed">
+                <dd className="max-w-measure mt-0.5 leading-relaxed">
                   header deps: the deposit block and the request block · input since: the epoch
                   where the cycle ends · paid out: (capacity − occupied) × AR(request) ÷ AR(deposit)
                   + occupied
@@ -1346,7 +1348,7 @@ function HowItWorks({
       {/* R1 roles: the explanation and the protocol notes are prose (body, as the v3 board).
           Material pass v2 (7): the former two paragraphs are four, one topic each, and the two
           mechanisms are drawn as tiles between them; every sentence is kept, in its order. Set in
-          the tier-2 Prose piece (material pass v2 leftovers): 14 px on a 1.7 line, 64 characters. */}
+          the tier-2 Prose piece (material pass v2 leftovers): 14 px on a 1.7 line, on the measure. */}
       <Prose className="flex flex-col">
         <p>
           CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344

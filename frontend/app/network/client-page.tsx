@@ -48,7 +48,7 @@ function LoadingSkeleton() {
 function ReachabilityCaveat({ className }: { className?: string }) {
   return (
     <div className={`border-base-border bg-base-surface border px-4 py-3 ${className ?? ''}`}>
-      <p className="text-text-dim text-body font-mono">
+      <p className="text-text text-body max-w-measure font-mono">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
         network; nodes behind NAT or firewalls can stay hidden.
@@ -85,7 +85,7 @@ function PeersOnboarding({
           args={enabled ? 'enabled' : 'disabled'}
           className="mb-2 font-mono"
         />
-        <p className="text-text-dim text-body mb-4 leading-relaxed">
+        <p className="text-text text-body max-w-measure mb-4 leading-relaxed">
           The peer crawler performs whole-network CKB L1 node discovery: starting from bootnodes it
           dials outward across the p2p network and records each same-network peer this observer
           verifies. It is <span className="text-text">local-first</span> — you run the crawl, and
@@ -95,7 +95,7 @@ function PeersOnboarding({
         <ReachabilityCaveat className="mb-4" />
 
         <h3 className="text-text-bright text-body mb-2 font-mono font-bold">How to enable</h3>
-        <p className="text-text-dim text-body mb-2">
+        <p className="text-text text-body max-w-measure mb-2">
           Set the crawler to enabled in{' '}
           <code className="text-aqua">this network&apos;s config.toml</code> and restart:
         </p>
@@ -106,7 +106,7 @@ enabled = true
 # geoip_city_path = "/path/to/GeoLite2-City.mmdb"
 # geoip_asn_path  = "/path/to/GeoLite2-ASN.mmdb"`}
         </pre>
-        <p className="text-text-dim text-small mt-3 leading-relaxed">
+        <p className="text-text text-body max-w-measure mt-3 leading-relaxed">
           Note: enabling performs outbound whole-network crawling from your host. Geo / ASN columns
           stay empty unless the optional MaxMind GeoLite2 databases are configured.
         </p>
@@ -196,7 +196,7 @@ function NetworkHeading() {
 /** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
 function NetworkLede() {
   return (
-    <p data-role="lede" className="text-text-dim text-body max-w-measure mt-1.5">
+    <p data-role="lede" className="text-text text-body max-w-measure mt-1.5">
       Nodes find each other by word of mouth; unreachable is not gone.{' '}
       <a href="#evidence" className="hover:text-text-bright hover:underline">
         How it works<span className="whitespace-nowrap"> ↓</span>

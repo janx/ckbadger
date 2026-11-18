@@ -642,7 +642,9 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
     const lede = within(hero()).getByText(/^CKB locked in the DAO keeps its share of the supply\./);
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'

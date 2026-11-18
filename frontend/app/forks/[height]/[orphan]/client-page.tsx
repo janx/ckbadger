@@ -243,7 +243,7 @@ function StoredFork({ event }: { event: ReorgEvent }) {
       >
         {story}
       </p>
-      <p role="status" className="text-text-dim text-body max-w-measure mt-3 leading-relaxed">
+      <p role="status" className="text-text text-body max-w-measure mt-3 leading-relaxed">
         Branch evidence needs the node store: this API runs without the node reader, so the blocks
         of both branches, their miners and what became of them are not shown. Below is what this
         node recorded when it switched.

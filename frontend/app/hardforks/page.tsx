@@ -221,7 +221,7 @@ function TitleRow({ status }: { status?: ReactNode }) {
  */
 function Lede() {
   return (
-    <p className="text-text-dim text-body max-w-measure mt-1.5">
+    <p className="text-text text-body max-w-measure mt-1.5">
       Editions change CKB&apos;s rules; a script&apos;s hash type picks its VM.
     </p>
   );
@@ -248,21 +248,21 @@ function HowHashTypePicksAVm({
     <DetailSection title="How hash_type picks a VM">
       <div className="grid items-start gap-x-14 gap-y-3.5 lg:grid-cols-2">
         <div className="max-w-measure flex min-w-0 flex-col gap-3.5">
-          <p className="text-text-dim text-body">
+          <p className="text-text text-body">
             CKB changes its rules in editions. Each one switches on at an agreed epoch, and every
             node must run it from there on. Both so far brought a new version of CKB-VM, the machine
             that runs scripts, and a cell&apos;s scripts choose which one runs them through their
             hash type.
           </p>
           {/* Moved from the edition cards (H3): what each edition did to type-hash scripts. */}
-          <p className="text-text-dim text-body">
+          <p className="text-text text-body">
             Scripts named by type hash moved to VM1 at {vm1.shortName}&apos;s epoch,{' '}
             {vm1.activationEpoch.toLocaleString()}, and to VM2 at {vm2.shortName}&apos;s,{' '}
             {vm2.activationEpoch.toLocaleString()}. {vm2.shortName}&apos;s Spawn syscalls let
             scripts start and talk to other scripts.
           </p>
         </div>
-        <p className="text-text-dim text-body max-w-measure">
+        <p className="text-text text-body max-w-measure">
           A script named by its type hash follows every upgrade: the same code runs on VM0, then
           VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a
           hardfork never changes how an existing data-pinned script runs. Live cells reference
@@ -430,7 +430,7 @@ export default function HardforksPage() {
                   ))}
                 </dl>
                 {genesisFeatures.length > 0 && (
-                  <p className="text-text-dim text-meta max-w-measure mt-3">
+                  <p className="text-text text-body max-w-measure mt-3">
                     Today&apos;s node applies RFC{' '}
                     {joinWords(genesisFeatures.map((feature) => feature.rfc))} from epoch 0, so they
                     do not show as switching on with an edition.

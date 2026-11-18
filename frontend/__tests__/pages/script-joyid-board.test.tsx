@@ -491,7 +491,9 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
       /^An universal Account Protocol for Web3 Mass-adoption · joy\.id ↗$/
     );
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'joy.id ↗' })).toHaveAttribute(
       'href',
       'https://joy.id'

@@ -464,7 +464,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           <div className="text-text-dim text-small space-y-1.5">
             <CellInventoryLine cell={cell} />
             <CellOrigin cell={cell} />
-            <p>
+            {/* a sentence that explains: the reading ink at the body step (R3, R4) */}
+            <p className="text-text text-body">
               The out point is the cell&apos;s only name: transaction hash and output index. No
               other cell has it, and this one{' '}
               {cell.status === 'dead' && cell.consumedAtBlock != null ? (

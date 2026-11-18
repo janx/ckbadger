@@ -233,7 +233,7 @@ export function DeploymentEvidence({
       </ReadoutRow>
       {selected && (
         <>
-          <p className="text-text-dim max-w-measure mt-2 leading-relaxed">
+          <p className="text-text max-w-measure mt-2 leading-relaxed">
             Earliest indexed code-cell creation for this named version. This is a code-cell event,
             not proof that a script instance used a particular VM or that the code remains live.
           </p>

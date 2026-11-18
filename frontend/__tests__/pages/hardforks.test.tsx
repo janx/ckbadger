@@ -515,7 +515,9 @@ describe('HardforksPage', () => {
     );
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     // No figure: the timeline follows the lede directly, with no h2 of its own (it is the hero).
     expect(hero).toContainElement(timeline);
     expect(lede.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -641,7 +643,7 @@ describe('HardforksPage', () => {
     expect(moved.previousElementSibling).toHaveTextContent(/^CKB changes its rules in editions\./);
   });
 
-  it('keeps the consensus grid as it is, its closing sentence at meta, sections 64 and 72 px apart (H3, R6)', async () => {
+  it('keeps the consensus grid as it is, its closing sentence at the body step, sections 64 and 72 px apart (H3, R6; B7)', async () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     getHardforksMock.mockResolvedValue(mockTimeline);
     render(<HardforksPage />);
@@ -671,8 +673,10 @@ describe('HardforksPage', () => {
       within(consensus).getByText(
         "Today's node applies RFC 0029, 0030, 0031, 0036 and 0038 from epoch 0, so they do not show as switching on with an edition."
       )
-      // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
-    ).toHaveClass('text-meta', 'text-text-dim', 'max-w-measure');
+      // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px]);
+      // the sentence explains, so it reads in the reading ink at the body step (was the quiet ink
+      // at the meta step)
+    ).toHaveClass('text-body', 'text-text', 'max-w-measure');
     // Rhythm: hero → caption → the editions 64 px under it → the consensus 72 px under them.
     const hero = screen.getByRole('region', { name: 'Hardforks' });
     const caption = hero.nextElementSibling as HTMLElement;

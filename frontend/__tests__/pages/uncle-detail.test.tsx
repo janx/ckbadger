@@ -51,6 +51,13 @@ describe('Uncle detail page', () => {
     expect(decoded).toHaveTextContent('1.2065094518945692');
     expect(decoded).toHaveTextContent('S · compensation still owed + the burnt share');
     expect(screen.getByText(blockUncle.dao.raw)).toBeInTheDocument();
+    // readability R3 / R4 (lane B7): the uncle's sentence and the DAO field note stand on the
+    // measure (they ran 158 and 148 characters a line at 1280); the note explains, so it reads in
+    // the reading ink at the body step (it was the quiet ink at the raw data's small step)
+    expect(sentence).toHaveClass('max-w-measure');
+    const note = within(decoded).getByText(/^S counts the burnt share/);
+    expect(note).toHaveClass('text-text', 'text-body', 'max-w-measure');
+    expect(note).not.toHaveClass('text-text-dim');
   });
 
   // The review's item E: the plate's id is the uncle's copy control; a click writes the WHOLE hash

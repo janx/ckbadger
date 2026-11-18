@@ -327,7 +327,9 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // ≤ 90 (R13), and one line: 71 characters of 13 px mono (7.8 px each) fill the 560 px measure.
     expect(lede.textContent!.length).toBeLessThanOrEqual(71);
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
+    // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
+    // reading ink (was text-text-dim)
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'

@@ -333,6 +333,10 @@ describe('CellDetailPage', () => {
     // Lane L: the "only name" sentence links both blocks of the cell's life.
     const onlyName = screen.getByText(/The out point is the cell's only name/);
     expect(onlyName).toHaveTextContent('existed from block #123 until block #125 spent it.');
+    // readability R3 / R4 (lane B7): the sentence explains, so it reads in the reading ink at the
+    // body step, in the lede's measured holder (it ran 171 characters a line at 1280, quiet, small)
+    expect(onlyName).toHaveClass('text-text', 'text-body');
+    expect(onlyName.closest('[data-detail-lede]')).toHaveClass('max-w-measure');
     expect(within(onlyName).getByRole('link', { name: '#123' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/123'
