@@ -81,10 +81,11 @@ const WIDEST_WORD = SECTION_WORDS.reduce((a, b) => (b.length > a.length ? b : a)
 /** The widest network name the switcher can show. */
 const WIDEST_NETWORK = WIDEST.networks.reduce((a, b) => (b.length > a.length ? b : a));
 
-describe('the shell measured as Chrome measured it (one network, the scale at 12 / 13 / 14 px)', () => {
-  it('measures the nav entries and the search field the lead measured on the new-size build', () => {
-    // the lead's Chrome reading (lanes/checks/shell.cjs): dao 25, activities 100, inventory 92,
-    // scripts 59, charts 50
+// Re-titled (review-fb-tests finding 8): the describe said "measured as Chrome measured it" and its
+// first test "measures the nav entries and the search field the lead measured on the new-size
+// build", and both assert the budget's numbers; the Chrome readings are their own test below.
+describe('the shell budgeted at the scale (one network, 12 / 13 / 14 px)', () => {
+  it('budgets the nav entries, the wordmark and the search field per width', () => {
     expect(NAV.map((e) => [e.label, px(navEntryPx(e))])).toEqual([
       ['DAO', 25.2],
       ['Activities', 100],
@@ -99,6 +100,12 @@ describe('the shell measured as Chrome measured it (one network, the scale at 12
       (w) => headerRow(w, { nav: NAV, switcher: null, word: 'Blocks' }).field
     );
     expect(field).toEqual([460.8, 352, 144, 288, 212, 182, 142]);
+  });
+
+  it('agrees to the whole pixel with the nav entries the lead measured in Chrome', () => {
+    // The literals are the lead's Chrome readings on the new-size build (lanes/checks/shell.cjs),
+    // whole pixels as recorded: dao 25, activities 100, inventory 92, scripts 59, charts 50.
+    expect(NAV.map((e) => Math.round(navEntryPx(e)))).toEqual([25, 100, 92, 59, 50]);
   });
 
   it('measures the switcher with its eyebrow tracking: 117.48 px with its margin, not 107', () => {
