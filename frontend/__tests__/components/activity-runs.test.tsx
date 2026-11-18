@@ -169,6 +169,35 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(4);
   });
 
+  // Lane B4 fix round (review-rules-logic NOTE 1, the coordinator's item 11): a row whose
+  // protocol action cannot be read reports it in its place, so it is never folded: folded, its
+  // error showed only when the run was opened. Three deposits by one party, the middle one's
+  // metadata unreadable: it stands alone, so no two of them are consecutive and nothing folds.
+  it('never folds a row whose protocol action cannot be read: its error stands in its place', async () => {
+    const deposit = (n: number, metadata: Record<string, string>): GlobalActivity => ({
+      ...oracle(n, 'q3q7ue', '0x00', n * 49),
+      typeCalls: [],
+      protocolActions: [
+        { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata },
+      ],
+    });
+    const rows = [
+      deposit(1, { capacity: '10200000000' }),
+      deposit(2, {}),
+      deposit(3, { capacity: '10200000000' }),
+    ];
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page(rows));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
+    expect(
+      [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual(rows.map((a) => a.txHash));
+    expect(screen.getByRole('alert')).toHaveTextContent(`Cannot read tx ${rows[1].txHash}`);
+  });
+
   it('never folds across a day: a run ends at the day’s divider', async () => {
     const day = 86_400;
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
