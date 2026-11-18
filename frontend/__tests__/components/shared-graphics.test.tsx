@@ -13,11 +13,19 @@ import {
   allTextLines,
   expectApart,
   expectInside,
+  meetings,
   meets,
+  pastPx,
   rectBox,
+  standsInside,
   textLines,
   viewBox,
 } from '@/__tests__/utils/svg-text-boxes';
+
+/** A word of the icicle where it should not stand, by what it measures. */
+type IcicleFault =
+  | { kind: 'meets'; a: string; b: string; by: number }
+  | { kind: 'out of its box'; text: string; box: string; by: number };
 
 describe('AlignedBar (BA-01)', () => {
   it('starts every bar at one left baseline: fixed track first, value in a fixed column after', () => {
@@ -748,6 +756,47 @@ describe('IciclePartition: every word where it is written (readability F3)', () 
     ['words inside the boxes at 1200', { root: inside, width: 1200 }] as const,
   ];
 
+  /**
+   * The icicle's known faults, each pinned by what it measures (the ruling on review F-B's test
+   * finding 1: no case is filtered out and no check relaxed; a fault a later lane owns is held at
+   * its measured size). They are all in the original drawing's "labels under the boxes" form,
+   * which no page draws (the DAO page passes `rows`): under the boxes a part's name wider than
+   * its part runs into the next part's, and a placeholder's words wider than their part run out
+   * of their dashed box. Every other case holds the property whole. The list can only shrink: a
+   * fix fails its entry's pin, and the entry goes with it.
+   */
+  const UNDER_FORM = 'labels under the boxes, on the 900-unit viewBox';
+  const NO_RULE =
+    'the "labels under the boxes" form has no rule for a name wider than its part (PAGE-LANE-NOTES, P4); no page draws it, and this lane does not design one';
+  const KNOWN_FAULTS: readonly {
+    case: string;
+    fault: IcicleFault;
+    owner: string;
+    why: string;
+  }[] = [
+    {
+      case: UNDER_FORM,
+      // "paid out" (8 glyphs at 12 px, 57.6 px) under its 45-unit part runs 12.6 px into
+      // "still owed", written from the next part's left edge, 45 units on
+      fault: { kind: 'meets', a: 'paid out', b: 'still owed', by: 12.6 },
+      owner: 'P4 rd/p-topics (DAO)',
+      why: NO_RULE,
+    },
+    {
+      case: UNDER_FORM,
+      // "paid in cellbases" (17 glyphs at 12 px, 122.4 px) in the dashed box under the 90-unit
+      // "to miners" part ends 41.4 px past the box's inner right edge
+      fault: { kind: 'out of its box', text: 'paid in cellbases', box: 'a placeholder', by: 41.4 },
+      owner: 'P4 rd/p-topics (DAO)',
+      why: NO_RULE,
+    },
+  ];
+
+  it('pins the known faults it holds, which only shrink', () => {
+    expect(KNOWN_FAULTS).toHaveLength(2);
+    for (const known of KNOWN_FAULTS) expect(cases.map(([name]) => name)).toContain(known.case);
+  });
+
   it.each(cases)('%s', (name, props) => {
     const { container } = render(
       <IciclePartition label="issuance" formatValue={String} {...props} />
@@ -758,9 +807,6 @@ describe('IciclePartition: every word where it is written (readability F3)', () 
     expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) expectInside(line, viewBox(svg), 'the icicle', 'flush');
     // A part's words stand apart: its name, value and note under its box, or its words inside.
-    // Under the boxes, a name wider than its part meets the next part's name ("paid out", 57.6 px
-    // under a 45-unit box, met "still owed" at 11 px too): that form has no rule for it, and no
-    // page draws it, so across parts only the forms the pages draw are held apart.
     const parts = [...svg.querySelectorAll('g')].filter((g) =>
       [...g.children].some((c) => c.hasAttribute('data-node'))
     );
@@ -771,20 +817,24 @@ describe('IciclePartition: every word where it is written (readability F3)', () 
         allTextLines(part),
         `${name}: ${part.querySelector('rect')!.getAttribute('data-node')}`
       );
-    if (!name.startsWith('labels under')) expectApart(lines, name);
+    const faults: IcicleFault[] = [];
+    // across parts too, no two words meet (within a part they are held apart above)
+    for (const m of meetings(lines)) faults.push({ kind: 'meets', ...m });
     for (const line of lines) {
-      // a word that stands on a box stands inside it; one under its box meets none (under the
-      // boxes, a placeholder's words wider than their part are its form's own, as above: held
-      // inside it top to foot only)
+      // a word that stands on a box stands inside it, clear of its edges; one under its box
+      // meets none
       const host = boxes.find((b) => meets(rectBox(b), line));
       if (!host) continue;
       const box = rectBox(host);
-      expectInside(
-        line,
-        name.startsWith('labels under') ? { ...box, left: -Infinity, right: Infinity } : box,
-        `"${line.text}" in its box`
-      );
+      if (!standsInside(line, box))
+        faults.push({
+          kind: 'out of its box',
+          text: line.text,
+          box: host.getAttribute('data-node') ?? 'a placeholder',
+          by: pastPx(line, box),
+        });
     }
+    expect(faults, name).toEqual(KNOWN_FAULTS.filter((k) => k.case === name).map((k) => k.fault));
   });
 });
 

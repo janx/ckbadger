@@ -8,11 +8,18 @@ import forceClosed from '../fixtures/fiber-force-closed.json';
 import type { FiberChannelDetail } from '@/lib/api';
 import {
   allTextLines,
-  expectApart,
-  expectInside,
+  meetings,
   meets,
+  pastPx,
+  standsInside,
   viewBox,
 } from '@/__tests__/utils/svg-text-boxes';
+
+/** A word of the timeline where it should not stand, by what it measures. */
+type Fault =
+  | { kind: 'past the svg'; text: string; by: number }
+  | { kind: 'meets'; a: string; b: string; by: number }
+  | { kind: 'meets a mark'; text: string; mark: string };
 
 describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
   it('places opened → force-closed → settled on a time axis with block, date, and the wait', () => {
@@ -143,46 +150,134 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
       settlementTimestamp: null,
       settlementBlock: null,
     } as FiberChannelDetail;
+    /**
+     * A channel open for months and settled within days of its close: mainnet's c07e opened at
+     * #15,564,812, here force-closed 300 days later and settled 1.5 days after that (its wait is
+     * 6 epochs, about a day), so the close and the settlement stand a few pixels apart at the
+     * line's right end.
+     */
+    const DAY_MS = 86_400_000;
+    const settledSoon = {
+      ...(fixture.channel as FiberChannelDetail),
+      closeBlock: 18_464_812,
+      closeTimestamp: String(1741228548404 + 300 * DAY_MS),
+      observedLifetimeMs: String(300 * DAY_MS),
+      lifetimeAnchorBlock: 18_464_812,
+      settlementBlock: 18_478_812,
+      settlementTimestamp: String(1741228548404 + 301.5 * DAY_MS),
+    } as FiberChannelDetail;
     const channels = [
       ['settled', fixture.channel as FiberChannelDetail],
       ['open', openChannel as FiberChannelDetail],
       ['force-closed, waiting', waiting],
       ['closed together', together],
+      ['settled within days of its close', settledSoon],
     ] as const;
-    // Not held at 326: a settled channel's wait ("6 epochs", 57.6 px) is written from 10 px right
-    // of the close on a phone, and the close stands where its time puts it; at 326 the word runs
-    // 1.08 px past the svg (a channel open for months and settled within days: about 26 px at
-    // 358 too). The figure has no rule for a wait that does not fit there: it is handed back for
-    // a ruling, not given one here.
-    it.each(
-      [1232, 608, 358, 326].flatMap((w) =>
-        channels
-          .filter(([n]) => !(w === 326 && n === 'settled'))
-          .map(([n, c]) => [w, n, c] as const)
-      )
-    )('at %i px, %s', (width, _name, channel) => {
+    const cases = [1232, 608, 358, 326].flatMap((w) =>
+      channels.map(([n, c]) => [w, n, c] as const)
+    );
+    const P4 = 'P4 rd/p-topics (Fiber)';
+    const NO_RULE =
+      'the figure has no rule for a wait that does not fit beside its close (PAGE-LANE-NOTES, P4: the wait label runs past the svg on a phone for long-open channels, and meets "force-closed" on the desktop); this lane does not design one';
+    /**
+     * The timeline's known faults, each pinned by what it measures (the ruling on review F-B's
+     * test finding 1: no case is filtered out of the table; a case whose fault a later lane owns
+     * runs, and its fault is held at its measured size). Every other case holds the property
+     * whole. The list can only shrink: a fix fails its entry's pin, and the entry goes with it.
+     * Below 700 px a settled channel's wait ("6 epochs", 57.6 px at 12 px) is written from 10 px
+     * right of its close, where the close's time puts it; on the board it is centred between
+     * the close and the settlement.
+     */
+    const KNOWN_FAULTS: readonly {
+      width: number;
+      channel: string;
+      fault: Fault;
+      owner: string;
+      why: string;
+    }[] = [
+      {
+        width: 326,
+        channel: 'settled',
+        // the close 89.22 % of the way along 246 px from x 40: 259.48 + 10 + 57.6 = 327.08
+        fault: { kind: 'past the svg', text: '6 epochs', by: 1.08 },
+        owner: P4,
+        why: NO_RULE,
+      },
+      // The close 300 / 301.5 of the way along the line (99.50 %):
+      {
+        width: 1232,
+        channel: 'settled within days of its close',
+        // centred between the close (x 1186.27) and the settlement (1192), the wait runs from
+        // 1160.33; "force-closed" (12 glyphs at 12.5 px, 90 px) ends 10 px left of the close,
+        // at 1176.27: they share 15.93 px
+        fault: { kind: 'meets', a: '6 epochs', b: 'force-closed', by: 15.93 },
+        owner: P4,
+        why: NO_RULE,
+      },
+      {
+        width: 608,
+        channel: 'settled within days of its close',
+        // 40 + 99.50 % of 528 = 565.37, then 10 + 57.6: 632.97
+        fault: { kind: 'past the svg', text: '6 epochs', by: 24.97 },
+        owner: P4,
+        why: NO_RULE,
+      },
+      {
+        width: 358,
+        channel: 'settled within days of its close',
+        // 40 + 99.50 % of 278 = 316.62, then 67.6: 384.22
+        fault: { kind: 'past the svg', text: '6 epochs', by: 26.22 },
+        owner: P4,
+        why: NO_RULE,
+      },
+      {
+        width: 326,
+        channel: 'settled within days of its close',
+        // 40 + 99.50 % of 246 = 284.78, then 67.6: 352.38
+        fault: { kind: 'past the svg', text: '6 epochs', by: 26.38 },
+        owner: P4,
+        why: NO_RULE,
+      },
+    ];
+    it('pins the known faults it holds, which only shrink', () => {
+      expect(KNOWN_FAULTS).toHaveLength(5);
+      for (const known of KNOWN_FAULTS)
+        expect(cases.some(([w, n]) => w === known.width && n === known.channel)).toBe(true);
+    });
+    it.each(cases)('at %i px, %s', (width, name, channel) => {
       stubChartWidth(width);
       const { container } = render(<FiberChannelTimeline channel={channel} />);
       const svg = container.querySelector('svg')!;
       const lines = allTextLines(svg);
-      for (const line of lines) expectInside(line, viewBox(svg), 'the timeline', 'flush');
-      expectApart(lines, `the timeline at ${width}`);
-      // the line's stroke and every point's circle (its stroke too)
+      const faults: Fault[] = [];
+      // every word inside the svg, flush allowed
+      for (const line of lines)
+        if (!standsInside(line, viewBox(svg), 'flush'))
+          faults.push({ kind: 'past the svg', text: line.text, by: pastPx(line, viewBox(svg)) });
+      // no two words meet
+      for (const m of meetings(lines)) faults.push({ kind: 'meets', ...m });
+      // no word meets the line's stroke or a point's circle (its stroke too)
       const marks = [
         ...[...svg.querySelectorAll('line[data-segment]')].map((l) => {
           const [x1, x2, y] = ['x1', 'x2', 'y1'].map((a) => Number(l.getAttribute(a)));
           const half = Number(l.getAttribute('stroke-width')) / 2;
-          return { left: x1, right: x2, top: y - half, bottom: y + half };
+          const name = `the ${l.getAttribute('data-segment')} segment`;
+          return { name, left: x1, right: x2, top: y - half, bottom: y + half };
         }),
         ...[...svg.querySelectorAll('circle[data-point]')].map((c) => {
           const [cx, cy, r] = ['cx', 'cy', 'r'].map((a) => Number(c.getAttribute(a)));
           const reach = r + Number(c.getAttribute('stroke-width')) / 2;
-          return { left: cx - reach, right: cx + reach, top: cy - reach, bottom: cy + reach };
+          const name = `the ${c.getAttribute('data-point')} point`;
+          return { name, left: cx - reach, right: cx + reach, top: cy - reach, bottom: cy + reach };
         }),
       ];
       for (const line of lines)
         for (const mark of marks)
-          expect(meets(line, mark), `"${line.text}" meets the line or a point`).toBe(false);
+          if (meets(line, mark))
+            faults.push({ kind: 'meets a mark', text: line.text, mark: mark.name });
+      expect(faults, `the timeline at ${width}`).toEqual(
+        KNOWN_FAULTS.filter((k) => k.width === width && k.channel === name).map((k) => k.fault)
+      );
     });
   });
 });

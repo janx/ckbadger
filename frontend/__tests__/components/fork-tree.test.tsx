@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '../utils/test-utils';
 import { ForkTree } from '@/components/forks/fork-tree';
-import { FORK_TREE, forkTreeLayout, forkTreeModel, type ForkTreeModel } from '@/lib/fork-tree';
+import { forkTreeLayout, forkTreeModel, type ForkTreeModel } from '@/lib/fork-tree';
 import {
   allTextLines,
   expectApart,
   expectInside as expectLineInside,
+  meetings,
   rectBox,
   textLines,
   viewBox,
@@ -234,6 +235,35 @@ const deep: ForkTreeModel = {
   last: 20_894_107,
 };
 
+/**
+ * The faults of the tree's phone form that are known and not this lane's to fix, each pinned by
+ * what it measures (the ruling on review F-B's test finding 1: no case is filtered out of the
+ * table; a case whose fault a later lane owns runs, and its fault is held at its measured size).
+ * Every other case holds the property whole. The list can only shrink: a fix fails its entry's
+ * pin, and the entry goes with the fix.
+ */
+const KNOWN_FAULTS = [
+  {
+    width: 358,
+    shape: 'four heights, the last two today’s',
+    // the time of today's +2 (from its tile's left edge) and of +3 (ending at its tile's right
+    // edge, the last column): 86.4 px each under columns that span 72 + 20 + 72 = 164 px, so they
+    // share 2 × 86.4 − 164 = 8.8 px of the gap between the two tiles
+    meets: { a: '15:47:24.564', b: '15:47:24.564', by: 8.8 },
+    owner: 'P4 rd/p-topics (forks, fork)',
+    why: 'the tree’s phone form needs a design (PAGE-LANE-NOTES, P4: two of mainnet’s 58 forks, #21,022,666 and #21,006,834); this lane does not redesign it',
+  },
+  {
+    width: 358,
+    shape: 'four heights, the last two today’s',
+    // the miners of +2 and +3, the address cut a second time to 12 characters (86.4 px): the
+    // same 8.8 px
+    meets: { a: 'ckb1…qs93hh…', b: 'ckb1…qs93hh…', by: 8.8 },
+    owner: 'P4 rd/p-topics (forks, fork)',
+    why: 'the tree’s phone form needs a design (as above)',
+  },
+] as const;
+
 describe('ForkTree: every word inside its tile (readability F3)', () => {
   const shapes = [
     ['four heights, the last an uncle inclusion', usual],
@@ -242,43 +272,57 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
     ['five heights, two dropped', five],
     ['a 7-deep fork', deep],
   ] as const;
-  // Not held at 358: four heights whose last two are both today's blocks (2 of 58 forks). Their
-  // times, 86.4 px each, need 172.8 px under the last two 72 px columns, which span 164: the third
-  // column's runs 14.4 px right of its tile, the last one's (ending at its tile's right edge) 14.4
-  // px left of its own, into the same 20 px gap: they meet by 8.8 px. Handed back for a ruling.
   const cases = [1248, 608, 358].flatMap((width) =>
-    shapes
-      .filter(([name]) => !(width === 358 && name === 'four heights, the last two today’s'))
-      .map(([name, model]) => [width, name, model] as const)
+    shapes.map(([name, model]) => [width, name, model] as const)
   );
+  /*
+   * Under a compact tile its time and miner stand in its column, measured here by literal
+   * arithmetic and the drawn rects, not by the module's constants: across, the tile and 16 px of
+   * the 20 px gap after it (4 px kept clear of the next tile), from the tile's left edge, or in
+   * the last column ending at its right edge; down, two tight lines of the 12 px tick (12 + 3
+   * each) with 4 px over and under them, 38 px from the tile's foot.
+   */
+  const GAP = 20;
+  const RUN = GAP - 4;
+  const UNDER = 4 + 2 * (12 + 3) + 4;
 
-  it.each(cases)('at %i px, %s', (width, _name, model) => {
+  it('pins the known faults it holds, which only shrink', () => {
+    expect(KNOWN_FAULTS).toHaveLength(2);
+    for (const fault of KNOWN_FAULTS)
+      expect(cases.some(([w, name]) => w === fault.width && name === fault.shape)).toBe(true);
+  });
+
+  it.each(cases)('at %i px, %s', (width, name, model) => {
     stubChartWidth(width);
     const layout = forkTreeLayout(model, width);
     const { container } = render(<ForkTree model={model} />);
     const svg = container.querySelector('svg[data-fork-tree]')!;
     const all = allTextLines(svg);
     for (const line of all) expectLineInside(line, viewBox(svg), 'the tree', 'flush');
-    expectApart(all, 'the tree');
-    for (const g of [...svg.querySelectorAll('[data-tile], [data-collapsed]')]) {
+    // no two words meet but a known fault, held at its measured overlap
+    expect(meetings(all), 'the tree').toEqual(
+      KNOWN_FAULTS.filter((f) => f.width === width && f.shape === name).map((f) => f.meets)
+    );
+    const tiles = [...svg.querySelectorAll('[data-tile], [data-collapsed]')];
+    if (layout.labelsUnder) {
+      // the gap the run is measured in: every two tiles of a row stand 20 px apart
+      const xs = [...new Set(tiles.map((g) => rectBox(g.querySelector('rect')!).left))].sort(
+        (a, b) => a - b
+      );
+      for (let i = 1; i < xs.length; i++) expect(xs[i] - xs[i - 1]).toBe(layout.tileW + GAP);
+    }
+    for (const g of tiles) {
       const rect = g.querySelector('rect')!;
       const box = rectBox(rect);
       const what = `${g.getAttribute('data-tile') ?? '+N earlier'} (${layout.form})`;
       const last = Number(g.getAttribute('data-tile')) === model.last;
       for (const text of [...g.querySelectorAll('text')]) {
         const under = layout.labelsUnder && Number(text.getAttribute('y')) > box.bottom;
-        // under a compact tile: its column, the tile and the run into the gap its miner is cut
-        // to, from the tile's left edge, or in the last column to its right edge; no edge is
-        // drawn there, so a label may stand flush with the tile's side
-        const run = layout.tileW + FORK_TREE.compact.labelRun;
+        // no edge is drawn under a tile, so a label may stand flush with its column's sides
+        const run = Number(rect.getAttribute('width')) + RUN;
         const left = last ? box.right + 0.5 - run : box.left - 0.5;
         const band = under
-          ? {
-              left,
-              right: left + run,
-              top: box.bottom,
-              bottom: box.bottom + FORK_TREE.compact.under,
-            }
+          ? { left, right: left + run, top: box.bottom, bottom: box.bottom + UNDER }
           : box;
         for (const line of textLines(text))
           expectLineInside(line, band, what, under ? 'flush' : 'clear');
