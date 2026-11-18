@@ -70,6 +70,13 @@ describe('an activity row names a lock on the default code hash by data as anoth
     const { container } = render(<ActivityRow activity={row} />);
     const kind = container.querySelector('[data-role="participant"] [data-role="lock-kind"]');
     expect(kind).toHaveTextContent(new RegExp(`^${BY_DATA_WORDS}$`));
+    // B4 second fix round (review-rules-fixes-logic SHOULD 2, the coordinator's item 4): its link
+    // opens that lock, by its hash type, as a lock (the script page reads both); a bare code hash
+    // opened the default lock's family page
+    expect(kind!.querySelector('a')).toHaveAttribute(
+      'href',
+      `/mainnet/script/${DEFAULT_LOCK_CODE_HASH}?hashType=data&kind=lock`
+    );
   });
 });
 
