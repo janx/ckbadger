@@ -516,6 +516,18 @@ describe('BlocksPage · Blocks v3 board', () => {
     );
   });
 
+  // Readability 2026-11-18, lane B5: the limits that give the Size and Cycles bars their meaning
+  // ("Fullest of these 50: … of the 597,000-byte limit") stood after the fiftieth row; they stand
+  // above the table, and the pager stays under it.
+  it('states the block limits above the table, the pager under it (B5)', async () => {
+    render(<BlocksPage />);
+    const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
+    const table = screen.getByRole('table', { name: 'Latest blocks' });
+    expect(note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const pager = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    expect(table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('reads the footnote figures in bright ink', async () => {
     render(<BlocksPage />);
     const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
