@@ -6,6 +6,10 @@ import { NODE_H } from '@/components/transaction/what-moved';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { CHAR_10 as FORK_CHAR_10 } from '@/components/forks/fork-tree';
 import {
+  CHAR_PX as VM_CHAR_PX,
+  NAME_CHAR_PX as VM_NAME_CHAR_PX,
+} from '@/components/hardforks/vm-lane-timeline';
+import {
   LABEL_LINE_PX,
   MONO_ADVANCE_EM,
   ROW_LINE_PX,
@@ -16,6 +20,7 @@ import {
   fontPx,
   snappedAdvancePx,
   textPx,
+  tightLinePx,
 } from '@/lib/type-metrics';
 import { SVG_TEXT, centreShift } from '@/lib/chart-type';
 import { AXIS_CHAR_PX } from '@/lib/chart-ticks';
@@ -130,6 +135,41 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
   ['components/forks/fork-tree.tsx', 'CHAR_10 = 6.4 (0.64 em, observed)', 6.4, FORK_CHAR_10],
   ['components/forks/fork-days-chart.tsx', 'fontSize="11" (4 sites)', 11, SVG_TEXT.label],
   ['components/forks/fork-days-chart.tsx', 'CHAR = 6.6', 6.6, advancePx(SVG_TEXT.label)],
+  // the VM lanes (hardforks)
+  [
+    'components/hardforks/vm-lane-timeline.tsx',
+    'fontSize="11" (3) and NAME_PX = 11',
+    11,
+    SVG_TEXT.label,
+  ],
+  ['components/hardforks/vm-lane-timeline.tsx', 'fontSize="12.5" (2 sites)', 12.5, SVG_TEXT.title],
+  ['components/hardforks/vm-lane-timeline.tsx', 'fontSize="10.5" (8 sites)', 10.5, SVG_TEXT.note],
+  ['components/hardforks/vm-lane-timeline.tsx', 'fontSize="12" (2 sites)', 12, SVG_TEXT.head],
+  ['components/hardforks/vm-lane-timeline.tsx', 'fontSize="10"', 10, SVG_TEXT.tick],
+  [
+    'components/hardforks/vm-lane-timeline.tsx',
+    'CHAR_PX = 6.5 (note +0.2, allowance)',
+    6.5,
+    VM_CHAR_PX,
+  ],
+  [
+    'components/hardforks/vm-lane-timeline.tsx',
+    'NAME_CHAR_PX = 11 × 0.64',
+    11 * 0.64,
+    VM_NAME_CHAR_PX,
+  ],
+  [
+    'components/hardforks/vm-lane-timeline.tsx',
+    'EDITION_CHAR_PX = 7.5',
+    7.5,
+    advancePx(SVG_TEXT.title),
+  ],
+  [
+    'components/hardforks/vm-lane-timeline.tsx',
+    'PLOT_NAME_LINE = 14',
+    14,
+    tightLinePx(SVG_TEXT.label),
+  ],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
   // transaction-list-table: 1,230 and 564 px as before)
