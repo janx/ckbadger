@@ -210,17 +210,22 @@ describe('BlockTransactionsTable', () => {
     }
   });
 
-  it('fits the block page main column at 1440 (visual pass: the Cycles column was cut off)', () => {
+  // Re-pinned on purpose (readability F3-e, the coordinator's ruling on the block page's table): the
+  // columns' minimums were literals for 12 / 13 px text (32 + 140 + 120 + 70 + 140 + 104 + 160 +
+  // 172 = 938 px, which the 968 px main column at 1440 held); budgeted from what they hold they are
+  // 1,086 px, so in that column the table takes its rows, by ListTable's rule, 118 px short
+  // (renamed: it was "fits the block page main column at 1440").
+  it('takes its rows in the block page main column at 1440, 118 px short of its 1,086 px', () => {
     wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
-    // the columns' minimums, 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172 = 938 px (re-pinned by
-    // lane E3 from the table's own constant, which nothing in the app read)
     const minWidth = screen.getByRole('table').style.minWidth;
-    expect(minWidth).toBe('938px');
-    expect(parseFloat(minWidth)).toBeLessThanOrEqual(968);
+    expect(minWidth).toBe('1086px');
+    expect(parseFloat(minWidth) - 968).toBe(118);
   });
   // Table-rows R2: the bar heads are the shared ScaleHeader, at the geometry this table has always
   // drawn (a 96 px tick row 3 px under the name), so the lift changes no pixel.
-  it('heads its bars with the shared ScaleHeader: 96 px ticks, 3 px under the name', () => {
+  // Re-pinned on purpose (readability F3-e, the coordinator's ruling): the ticks in the tick form
+  // on the 48 px track a count bar keeps (renamed: "96 px ticks").
+  it('heads its bars with the shared ScaleHeader: 48 px ticks, 3 px under the name', () => {
     wrap(
       <BlockTransactionsTable
         transactions={[tx(0), tx(1, { cycles: 1000, txSize: 700 })]}
@@ -228,8 +233,10 @@ describe('BlockTransactionsTable', () => {
       />
     );
     const heads = Array.from(screen.getByRole('table').querySelectorAll('thead th'));
-    const size = resourceScale([300, 700]).toLocaleString('en-US');
-    const cycles = resourceScale([0, 1000]).toLocaleString('en-US');
+    const sizeScale = resourceScale([300, 700]);
+    const cyclesScale = resourceScale([0, 1000]);
+    const size = formatTick(sizeScale, sizeScale);
+    const cycles = formatTick(cyclesScale, cyclesScale);
     expect(heads.map((h) => h.textContent)).toEqual([
       '#',
       'Transaction',
@@ -245,16 +252,16 @@ describe('BlockTransactionsTable', () => {
       [7, cycles],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
-      expect(ticks.style.width).toBe('96px');
+      expect(ticks.style.width).toBe('48px');
       expect((ticks.parentElement as HTMLElement).style.gap).toBe('3px');
       expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', end]);
     }
-    // Its row bars: 8 px, exact width, no minimum (300 of the size scale on 96 px).
+    // Its row bars: 8 px, exact width, no minimum (300 of the size scale on 48 px).
     const fill = screen
       .getByRole('table')
       .querySelector('tbody tr [data-segment="size"]') as HTMLElement;
     expect(fill.style.width).toBe(
-      `${Math.round((300 / resourceScale([300, 700])) * 96 * 100) / 100}px`
+      `${Math.round((300 / resourceScale([300, 700])) * 48 * 100) / 100}px`
     );
     expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
   });
@@ -310,9 +317,11 @@ describe('BlockTransactionsTable', () => {
 });
 
 describe('Blocks list pieces', () => {
+  // re-pinned on purpose (readability F3-e, the coordinator's ruling): the tick form, "8M" (it was
+  // "8,000,000"), on the 48 px track a count bar keeps
   it('heads a bar column with 0 … scale as wide as its track', () => {
-    render(<ScaleHeader label="Cycles" scale={8_000_000} trackWidth={96} />);
-    expect(screen.getByText('8,000,000').parentElement).toHaveStyle({ width: '96px' });
+    render(<ScaleHeader label="Cycles" scale={8_000_000} trackWidth={48} />);
+    expect(screen.getByText('8M').parentElement).toHaveStyle({ width: '48px' });
     expect(() => ScaleHeader({ label: 'x', scale: 0 })).toThrow('invalid column scale');
   });
   it('rejects a page whose blocks disagree on the consensus limits', () => {

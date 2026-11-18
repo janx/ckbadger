@@ -149,7 +149,9 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
       'Value, CKB',
       'Fee, CKB',
       'Cells',
-      'Size, bytes01,000',
+      // re-pinned on purpose (the coordinator's ruling on F3-e): the Size ticks in the tick form
+      // too (it was "Size, bytes01,000")
+      'Size, bytes01k',
       // re-pinned on purpose (readability B5): the Cycles ticks say the scale as a tick does
       'Cycles02M',
     ]);
@@ -162,12 +164,15 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // Re-pinned on purpose (readability F3-e): each track is its head's widest tick row at 12 px,
   // "0 600,000" (64.8 px; the 56 px track was budgeted at 11 px and 12 px ticks ran past it), and
   // the Cycles head's "0 750M" under the 48 px a bar keeps at least, so 48.
-  it('heads its bars with the shared ScaleHeader: Size 64.8 and Cycles 48 px ticks, 2 px under the name', () => {
+  // Re-pinned on purpose (the coordinator's ruling on F3-e): the Size head writes its ticks in the
+  // tick form too, "0 … 1k", so its track is 48 like the Cycles one (renamed: "Size 64.8 and
+  // Cycles 48 px ticks").
+  it('heads its bars with the shared ScaleHeader: Size and Cycles 48 px ticks, 2 px under the name', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table');
     const heads = within(table).getAllByRole('columnheader');
     for (const [i, end, track] of [
-      [6, '1,000', '64.8px'],
+      [6, '1k', '48px'],
       [7, '2M', '48px'],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
@@ -199,7 +204,8 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     );
     const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
     for (const [i, end, used] of [
-      [6, '600,000', 57.6],
+      // re-pinned on purpose (the coordinator's ruling): "600k" in the tick form, 36 of the 48 px
+      [6, '600k', 36],
       [7, '750M', 36],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
@@ -250,21 +256,24 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
   // the container gives beyond the table's 1,220 px; at its minimum it holds the longest DAO
   // headline whole and a note goes under its headline, and a common row is one line from a
   // container of 1,275 px (at 1,232, What it did has 216 px).
-  it('gives What it did a common row on one line from 1,275 px, beyond the 1,220 (B5, F3-e)', () => {
+  // Re-pinned on purpose (the coordinator's ruling): with the Size bar on a 48 px track the list's
+  // own sum is 1,203 px, so a common row is one line from a container of 1,258 px, and at 1,232
+  // What it did has 233 (renamed: "from 1,275 px, beyond the 1,220").
+  it('gives What it did a common row on one line from 1,258 px, beyond the 1,203 (B5, F3-e)', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const widths = Array.from(table.querySelectorAll('col')).map((c) =>
       Number.parseFloat((c as HTMLElement).style.minWidth)
     );
     const sum = widths.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(1220);
+    expect(sum).toBe(1203);
     const what = (container: number) => container - (sum - widths[2]);
     const line = (headline: string, note: string) =>
       16 + 8 + (headline.length + note.length) * 7.8 + 8 + 16;
-    expect(line('CKB Transfer', '12 participants')).toBeLessThanOrEqual(what(1275));
-    expect(line('CKB Transfer', '12 participants')).toBeGreaterThan(what(1274));
-    expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(what(1275));
-    expect(what(1232)).toBe(216);
+    expect(line('CKB Transfer', '12 participants')).toBeLessThanOrEqual(what(1258));
+    expect(line('CKB Transfer', '12 participants')).toBeGreaterThan(what(1257));
+    expect(line('Cellbase', 'pays #21,042,681')).toBeLessThanOrEqual(what(1258));
+    expect(what(1232)).toBe(233);
   });
 
   it('says what each transaction did: kind, mark and a quiet note', () => {
@@ -324,10 +333,11 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
   // 1,230), and narrower it takes its row form; it never scrolls.
   // Re-pinned on purpose (readability F3-e): the table is drawn from 1,220 px, and the block and
   // its age are the cell's two lines (they were one, "#… · age"), each whole on its line.
-  it('is drawn from its 1,220 px minimum, keeps the block and its age each on one line and drops the per-cell unit', () => {
+  // Re-pinned on purpose (the coordinator's ruling): 1,203 px on its own (renamed: "1,220").
+  it('is drawn from its 1,203 px minimum, keeps the block and its age each on one line and drops the per-cell unit', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
     const row = within(table).getAllByRole('row')[2];
     const lines = row.querySelectorAll('td:nth-child(2) > span > *');
     expect(lines).toHaveLength(2);
@@ -358,7 +368,8 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     const cell = within(table).getAllByRole('row')[1].querySelectorAll('td')[at];
     expect(cell).toHaveTextContent(/^10 → 2$/);
     expect(cell).toHaveClass('whitespace-nowrap');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    // re-pinned on purpose (the coordinator's ruling): the list is 1,203 px on its own
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
   });
 
   // CH-14 (the thousands hunt): a count of four digits or more is grouped, as every count is
@@ -488,9 +499,10 @@ describe('TransactionListTable row stones', () => {
     // Re-pinned with readability R4 (lane F3, step 2): the table text is 13 px (7.8 px a glyph, was 7.2) and its key 14 px (8.4, was 7.8): every derived column grows with its text, 1,286 px.
     // Re-pinned on purpose (readability F3-e): every column its content, the spares gone, the
     // block over its age, What it did the flexible column (its minimum read from minWidth): 1,220.
-    expect(widths).toEqual([216, 110, 204, 180, 102, 118, 146, 144]);
-    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1220);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    // Re-pinned on purpose (the coordinator's ruling): Size on a 48 px track, 146 → 129: 1,203.
+    expect(widths).toEqual([216, 110, 204, 180, 102, 118, 129, 144]);
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBe(1203);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
     expect(ROW_SEAL.tx.footprint).toBe(56.5);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at the body step, 14 px since R4 (8.4; 7.8 at 13 px; it was 19
@@ -517,7 +529,9 @@ describe('TransactionListTable row stones', () => {
     // Size: its track holds its head's "0 600,000" at 12 px (64.8; F3-e: it was 56, which 12 px
     // ticks ran past), the bar's 10 px gap, the scale's figure "600,000" (7 ch at 13 px; it counted
     // a 5-digit "2,000") and the gap; 0.6 of rounding up to a whole pixel
-    expect(widths[6] - (9 * 7.2 + 10 + 7 * 7.8 + 16)).toBeCloseTo(0.6, 6);
+    // Re-pinned on purpose (the coordinator's ruling): the track is 48 px under its head's tick-form
+    // "0 … 600k" (it was 64.8 for the exact "0 600,000"); 0.4 of rounding up to a whole pixel
+    expect(widths[6] - (48 + 10 + 7 * 7.8 + 16)).toBeCloseTo(0.4, 6);
   });
 
   // U-09 (re-pinned; old issue C had the table and the phone row alike at 10 + 6): the size is
@@ -525,13 +539,14 @@ describe('TransactionListTable row stones', () => {
   it('shows the hash at the row size in the table and the tight size in the phone row', () => {
     // re-pinned (readability R4): the table is drawn from 1,286 px (was 1,230)
     // re-pinned (readability F3-e): the table is drawn from 1,220 px, so at 1,232 too
-    for (const width of [1232, 1220, 1219, 608, 358]) {
+    // re-pinned (the coordinator's ruling): on its own from 1,203 px
+    for (const width of [1232, 1203, 1202, 608, 358]) {
       atContainerWidth(width);
       const { unmount } = render(<TransactionListTable transactions={[scriptCall]} />);
       expect(screen.getByTitle(scriptCall.hash)).toHaveTextContent(
-        width >= 1220 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
+        width >= 1203 ? /^0x00de304b…25cbbc$/ : /^0x00de…cbbc$/
       );
-      expect(screen.queryByRole('table') === null).toBe(width < 1220);
+      expect(screen.queryByRole('table') === null).toBe(width < 1203);
       unmount();
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
@@ -542,11 +557,12 @@ describe('TransactionListTable row stones', () => {
   // 1,230 at 12 / 13 px text), the phone rows below; the widest content box, 1,232, takes the rows.
   // Re-pinned on purpose (readability F3-e): a table from 1,220 px, so the widest content box,
   // 1,232, draws it.
-  it('changes form at its 1,220 px minimum', () => {
+  // Re-pinned on purpose (the coordinator's ruling): on its own from 1,203 px (renamed: "1,220").
+  it('changes form at its 1,203 px minimum', () => {
     for (const [width, form] of [
       [1232, 'table'],
-      [1220, 'table'],
-      [1219, 'rows'],
+      [1203, 'table'],
+      [1202, 'rows'],
     ] as const) {
       atContainerWidth(width);
       const { container, unmount } = render(<TransactionListTable transactions={txs} />);
@@ -614,25 +630,28 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     // four digits a side
     ceil(at('9,999 → 9,999', 13) + 16),
     // a transaction is no larger than a block: "0 … 600,000" over the track, "600,000" beside it
-    ceil(tickRow('0', '600,000') + 10 + at('600,000', 13) + 16),
+    // (re-pinned on purpose, the coordinator's ruling: its head in the tick form, "0 600k", so the
+    // 48 px track; it held the exact "0 600,000", 64.8)
+    ceil(tickRow('0', '600k') + 10 + at('600,000', 13) + 16),
     // a scale under a billion cycles: its ticks in the tick form ("1.5k" the widest), the exact
     // "750,000,000" beside the bar; the last column
     ceil(tickRow('0', '1.5k') + 10 + at('750,000,000', 13)),
   ];
 
-  it('pins each column to its content and the table to their sum, 1,220 px', () => {
+  // re-pinned on purpose (the coordinator's ruling): 1,203 px on its own (renamed: "1,220 px")
+  it('pins each column to its content and the table to their sum, 1,203 px', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-    expect(budgets).toEqual([216, 110, 204, 180, 102, 118, 146, 144]);
+    expect(budgets).toEqual([216, 110, 204, 180, 102, 118, 129, 144]);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
     expect(cols[2].width).toBe('auto');
-    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1220);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1203);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1203);
     // each bar's track holds its head's widest tick row
     const heads = within(table).getAllByRole('columnheader');
     expect((heads[6].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe(
-      `${tickRow('0', '600,000')}px`
+      `${tickRow('0', '600k')}px`
     );
     expect((heads[7].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe('48px');
   });
@@ -671,11 +690,12 @@ describe('TransactionListTable budgets (readability F3-e)', () => {
     expect(cell).not.toHaveTextContent('·');
   });
 
-  it('changes form where the sum stops fitting: a table at 1,232 and 1,220, rows below', () => {
+  // re-pinned on purpose (the coordinator's ruling): on its own from 1,203 px (renamed: "1,220")
+  it('changes form where the sum stops fitting: a table at 1,232 and 1,203, rows below', () => {
     for (const [width, form] of [
       [1232, 'table'],
-      [1220, 'table'],
-      [1219, 'rows'],
+      [1203, 'table'],
+      [1202, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {

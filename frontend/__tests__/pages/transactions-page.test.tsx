@@ -447,8 +447,10 @@ describe('Transactions pool view', () => {
     ];
     expect(budgets).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
     expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1220);
-    // the committed list's sum is the larger (or equal), so the pool takes it
-    expect(TRANSACTION_LIST_MIN_PX).toBe(1220);
+    // re-pinned on purpose (the coordinator's ruling: the committed Size head in the tick form):
+    // the committed list's own sum is 1,203, the pool's 1,220 the larger, so both change form at
+    // the pool's (the committed What it did keeps the 17 px between them)
+    expect(TRANSACTION_LIST_MIN_PX).toBe(1203);
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,

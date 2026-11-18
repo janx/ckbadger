@@ -15,7 +15,12 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
-import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
+import {
+  AlignedBar,
+  BAR_FIGURE_GAP,
+  COUNT_TRACK_PX,
+  ScaleHeader,
+} from '@/components/ui/aligned-bar';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
@@ -24,7 +29,7 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { countNoun } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
-import { WIDEST_COMPACT_TICK, shortChars } from '@/lib/list-bounds';
+import { shortChars } from '@/lib/list-bounds';
 
 /** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
 const cell = (chars: number) => textPx(chars, fontPx('small'));
@@ -49,7 +54,7 @@ type BarClass = Extract<AssetClass, 'tokens' | 'objects' | 'identities' | 'dao'>
  * keeps at least, so 48; the count is a holder's items or a range's holders, under 100,000:
  * "99,999" (6 characters at 13 px, 46.8; it was 44, five).
  */
-const TRACK = trackPx(['0', WIDEST_COMPACT_TICK]);
+const TRACK = COUNT_TRACK_PX;
 const WIDEST_COUNT = '99,999';
 const COUNT_WIDTH = columnPx(cell(WIDEST_COUNT.length));
 
@@ -72,14 +77,7 @@ function countColumn<T>(
     label,
     // the track, the bar's 10 px gap, the count and the gap, none after the last column
     minWidth: columnPx(TRACK + BAR_FIGURE_GAP + COUNT_WIDTH + (last ? 0 : CELL_GAP_PX)),
-    header: (
-      <ScaleHeader
-        label={label}
-        scale={scale}
-        trackWidth={TRACK}
-        format={(n) => formatTick(n, n)}
-      />
-    ),
+    header: <ScaleHeader label={label} scale={scale} trackWidth={TRACK} />,
     render: (row) => (
       <AlignedBar
         label={label}

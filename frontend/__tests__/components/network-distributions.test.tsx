@@ -552,8 +552,10 @@ describe('NetworkTrends', () => {
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
       ceil(at('2025-07-01', 14) + 16),
-      // the track ("0 10,000" at 12 px), the bar's 10 px gap and the scale's figure
-      ceil(at('0 10,000', 12) + 10 + at('10,000', 13) + 16),
+      // the 48 px track (re-pinned on purpose, the coordinator's ruling on F3-e: the head writes
+      // "0 … 10k" in the tick form; it held the exact "0 10,000", 57.6), the bar's 10 px gap and
+      // the scale's figure
+      ceil(48 + 10 + at('10,000', 13) + 16),
       // three digits of labels, under the head's word
       ceil(Math.max(at('999', 13), at('Labels', 12)) + 16),
       // the quiet sentence whole, wider than 12 characters of a label and its count; the last
@@ -564,9 +566,9 @@ describe('NetworkTrends', () => {
         )
       ),
     ];
-    expect(budgets).toEqual([100, 131, 60, 209]);
+    expect(budgets).toEqual([100, 121, 60, 209]);
     const sum = budgets.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(500);
+    expect(sum).toBe(490);
     const ts = 1751299200;
     const serve = () =>
       server.use(
@@ -593,7 +595,7 @@ describe('NetworkTrends', () => {
     expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
     expect(
       Number.parseFloat((table.querySelector('tbody [data-track]') as HTMLElement).style.width)
-    ).toBe(at('0 10,000', 12));
+    ).toBe(48);
     unmount();
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -601,8 +603,8 @@ describe('NetworkTrends', () => {
     });
     for (const [width, form] of [
       [1232, 'table'],
-      [500, 'table'],
-      [499, 'rows'],
+      [490, 'table'],
+      [489, 'rows'],
       [358, 'rows'],
     ] as const) {
       atContainerWidth(width);

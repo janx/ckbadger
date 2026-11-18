@@ -28,9 +28,11 @@ describe('AssetTransactions board columns', () => {
     render(<AssetTransactions rows={[tx(1, 1930, 1_923_713), tx(2, 640, 0)]} />);
     const table = screen.getByRole('table', { name: 'Asset transactions' });
     const size = within(table).getByRole('columnheader', { name: /Size/ });
-    expect(size.querySelector('[data-scale-ticks]')).toHaveTextContent('02,000');
+    // re-pinned on purpose (the coordinator's ruling on F3-e): the tick form, "2k" and "2M" (they
+    // were the exact "2,000" and "2,000,000")
+    expect(size.querySelector('[data-scale-ticks]')).toHaveTextContent('02k');
     const cycles = within(table).getByRole('columnheader', { name: /Cycles/ });
-    expect(cycles.querySelector('[data-scale-ticks]')).toHaveTextContent('02,000,000');
+    expect(cycles.querySelector('[data-scale-ticks]')).toHaveTextContent('02M');
   });
 
   // The coordinator's ruling (F3-e): a head's tick row is in the tick form and stands whole over
@@ -76,7 +78,8 @@ describe('AssetTransactions board columns', () => {
 
   // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (13 px cells,
   // 12 px notes, units and ticks) and the 16 px gap after every column but the last. The bar
-  // columns hold their heads' 120 px tick rows; a feed's own words (a context, an identity's
+  // columns hold their heads' tick rows on 48 px tracks (re-pinned on purpose, the coordinator's
+  // ruling: they held 120 px rows of exact ticks); a feed's own words (a context, an identity's
   // action) hold 12 characters at their minimum and wrap.
   describe('budgets every column from what it holds (F3-e)', () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5;
@@ -96,17 +99,18 @@ describe('AssetTransactions board columns', () => {
       output: ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
       // a fee under 100 CKB with its unit
       fee: ceil(at('99.99999999', 13) + at(' CKB', 12) + 16),
-      // the head's 120 px tick row ("0 600,000" in it), wider than the bar's 80 and its count
-      size: 120 + 16,
-      // the head's 120 px tick row ("0 4,000,000,000", 108 px, in it); the last column
-      cycles: 120,
+      // the head's name, "Size, bytes", wider than the figure ("597,000") and the 48 px track
+      size: ceil(Math.max(at('Size, bytes', 12), at('597,000', 13), 48) + 16),
+      // the figure, a transaction's cycles under a billion ("750,000,000"); the last column
+      cycles: ceil(Math.max(at('Cycles', 12), at('750,000,000', 13), 48)),
     };
 
-    it('in the plain feed: 1,027 px, a table from it', () => {
-      expect(Object.values(base)).toEqual([149, 219, 102, 170, 131, 136, 120]);
+    // re-pinned on purpose (the coordinator's ruling): Size 136 → 96, Cycles 120 → 86, 1,027 → 953
+    it('in the plain feed: 953 px, a table from it', () => {
+      expect(Object.values(base)).toEqual([149, 219, 102, 170, 131, 96, 86]);
       render(<AssetTransactions rows={[tx(1, 1930, 1_923_713), tx(2, 640, 0)]} />);
       expect(minWidths()).toEqual(Object.values(base));
-      expect(minWidths().reduce((s, w) => s + w, 0)).toBe(1027);
+      expect(minWidths().reduce((s, w) => s + w, 0)).toBe(953);
     });
 
     it('with a token and a collection column: the token’s decimals, a stated context', () => {
@@ -145,8 +149,8 @@ describe('AssetTransactions board columns', () => {
     it('changes form where the plain feed’s sum stops fitting', () => {
       for (const [width, form] of [
         [1232, 'table'],
-        [1027, 'table'],
-        [1026, 'rows'],
+        [953, 'table'],
+        [952, 'rows'],
         [608, 'rows'],
         [358, 'rows'],
       ] as const) {
@@ -190,7 +194,9 @@ describe('AssetTransactions identity columns (ID-C8)', () => {
     const headers = within(table)
       .getAllByRole('columnheader')
       .map((h) => h.textContent);
-    expect(headers.map((h) => h!.replace(/0[\d,]+$/, ''))).toEqual([
+    // the bar head's tick row stripped: "0" and its scale in the tick form (re-pinned on purpose,
+    // the coordinator's ruling on F3-e: it was the exact "2,000")
+    expect(headers.map((h) => h!.replace(/0[\d.]+[kMBT]?$/, ''))).toEqual([
       'Transaction',
       'Block · date',
       '.bit action',

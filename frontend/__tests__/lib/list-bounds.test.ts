@@ -20,9 +20,11 @@ import {
   WIDEST_DAO_DEPOSIT,
   WIDEST_FEE_RATE,
   WIDEST_POOL_VALUE_LINE,
+  WIDEST_PROPOSALS,
   WIDEST_RANK,
   WIDEST_ROW_COUNT,
   WIDEST_TX_FEE,
+  WIDEST_TX_OUTPUT,
   WIDEST_TX_VALUE,
   shortChars,
 } from '@/lib/list-bounds';
@@ -33,6 +35,7 @@ describe('the widest values a list column holds (lib/list-bounds)', () => {
   it('writes each bound as its column’s formatter writes it', () => {
     expect(WIDEST_BLOCK_NUMBER).toBe('#99,999,999');
     expect(WIDEST_COUNT).toBe('9,999');
+    expect(WIDEST_PROPOSALS).toBe('1,500');
     expect(WIDEST_COUNT_DIGITS).toBe('9999');
     expect(WIDEST_ROW_COUNT).toBe('99,999,999');
     expect(WIDEST_RANK).toBe('999,999');
@@ -42,6 +45,7 @@ describe('the widest values a list column holds (lib/list-bounds)', () => {
     expect(WIDEST_BLOCK_FEES).toBe('999.99999999');
     expect(WIDEST_TX_VALUE).toBe('999,999,999.99999999');
     expect(WIDEST_TX_FEE).toBe('99.99999999');
+    expect(WIDEST_TX_OUTPUT).toBe('99,999,999,999.99999999');
     expect(WIDEST_POOL_VALUE_LINE).toBe('999,999.99999999');
     expect(WIDEST_DAO_DEPOSIT).toBe('9,999,999,999.99999999');
     // the summary form, whole from 1,000 up

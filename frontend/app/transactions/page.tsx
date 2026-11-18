@@ -263,7 +263,8 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
       // "Interpretation" (14 characters at 13 px, 109.2), and the gap, and it takes what the
       // container gives beyond the sum. Both of the page's lists change form at one width, the
       // larger of their sums: `sameWidth` is what the committed list's sum is over the pool's
-      // (none today: both are 1,220 px). It was 180 and named no content.
+      // (none today: the pool's 1,220 px is the larger, the committed list's 1,203). It was 180
+      // and named no content.
       minWidth:
         columnPx(textPx('Interpretation'.length, fontPx('small')) + CELL_GAP_PX) + sameWidth,
       width: 'auto',
@@ -408,11 +409,15 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
 const POOL_MIN_PX = minimumWidth('Transactions in the pool', poolColumns(0));
 
 /**
- * The pool list's columns as drawn: both of the page's lists change form at one width, the
- * larger of their sums, so What it does keeps what the committed list's sum is over the pool's
- * (none today: both are 1,220 px; a test holds the pool's no larger).
+ * The width both of the page's lists change form at (they are one page): the larger of their
+ * sums, the pool's 1,220 px today (the committed list's own is 1,203). Each list's flexible column
+ * keeps what that width is over its own sum: the pool's What it does none, the committed list's
+ * What it did 17 px (its `formWidth`).
  */
-const POOL_COLUMNS = poolColumns(Math.max(0, TRANSACTION_LIST_MIN_PX - POOL_MIN_PX));
+const TRANSACTIONS_FORM_PX = Math.max(TRANSACTION_LIST_MIN_PX, POOL_MIN_PX);
+
+/** The pool list's columns as drawn, changing form at TRANSACTIONS_FORM_PX. */
+const POOL_COLUMNS = poolColumns(TRANSACTIONS_FORM_PX - POOL_MIN_PX);
 
 export default function TransactionsPage() {
   const searchParams = useSearchParams();
@@ -760,7 +765,10 @@ export default function TransactionsPage() {
                 Value is what the participants received. A cellbase row shows, grey, the reward it
                 pays; no total counts it.
               </p>
-              <TransactionListTable transactions={committed.data.data} />
+              <TransactionListTable
+                transactions={committed.data.data}
+                formWidth={TRANSACTIONS_FORM_PX}
+              />
               <CursorPagination
                 className="flex-col items-start gap-3 sm:flex-row sm:items-center"
                 total={committed.data.total ?? undefined}

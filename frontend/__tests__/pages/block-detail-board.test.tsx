@@ -677,17 +677,18 @@ describe('Block board · second tier', () => {
 });
 
 describe('BlockTxs board', () => {
-  it('reads the cellbase row as "cellbase", grey, 0 → 1, under 0 … 1,000 / 0 … 2,000,000 scales (BA-20)', async () => {
+  // Re-pinned on purpose (readability F3-e, the coordinator's ruling: a head's ticks are in the
+  // tick form): the scales read "0 … 1k" and "0 … 2M" (renamed: they were "0 … 1,000" and
+  // "0 … 2,000,000").
+  it('reads the cellbase row as "cellbase", grey, 0 → 1, under 0 … 1k / 0 … 2M scales (BA-20)', async () => {
     render(<BlockDetailPage />);
     fireEvent.click(await screen.findByRole('button', { name: /^Transactions/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in this block' });
     const ths = Array.from(table.querySelectorAll('th'));
     expect(ths.find((th) => th.textContent?.startsWith('Size, bytes'))).toHaveTextContent(
-      'Size, bytes01,000'
+      'Size, bytes01k'
     );
-    expect(ths.find((th) => th.textContent?.startsWith('Cycles'))).toHaveTextContent(
-      'Cycles02,000,000'
-    );
+    expect(ths.find((th) => th.textContent?.startsWith('Cycles'))).toHaveTextContent('Cycles02M');
     const cellbase = table.querySelectorAll('tbody tr')[0] as HTMLElement;
     expect(cellbase).toHaveTextContent('cellbase');
     expect(cellbase).toHaveTextContent('0→1');

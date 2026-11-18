@@ -43,7 +43,9 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     const head = container.firstElementChild as HTMLElement;
     expect(head).toHaveClass('flex', 'flex-col');
     expect(head.style.gap).toBe('3px');
-    expect(head).toHaveTextContent(/^Size, bytes04,000$/);
+    // re-pinned on purpose (readability F3-e, the coordinator's ruling): the ticks in the tick
+    // form ("4k"; it was the exact "4,000"), the unit in the name
+    expect(head).toHaveTextContent(/^Size, bytes04k$/);
     // T5 (coordinator ruling, lane M): the name is a column head, 11 px like every head.
     expect(head.firstElementChild).toHaveTextContent(/^Size, bytes$/);
     expect(head.firstElementChild).toHaveClass('text-meta');
@@ -51,7 +53,7 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     expect(ticks).toHaveAttribute('aria-hidden', 'true');
     expect(ticks).toHaveClass('text-meta', 'flex', 'justify-between');
     expect(ticks.style.width).toBe('120px');
-    expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '4,000']);
+    expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '4k']);
   });
 
   it('takes the track width and the gap a table has always drawn (transactions: 80 px, 2 px)', () => {
@@ -61,7 +63,8 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     const head = container.firstElementChild as HTMLElement;
     expect(head.style.gap).toBe('2px');
     expect(ticksOf(head).style.width).toBe('80px');
-    expect(head).toHaveTextContent(/^Cycles02,000,000$/);
+    // re-pinned on purpose (F3-e): "2M" in the tick form (it was "2,000,000")
+    expect(head).toHaveTextContent(/^Cycles02M$/);
   });
 
   it('formats its ticks and can mark the middle of the scale ("0 · 25B · 50B")', () => {

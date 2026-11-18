@@ -39,7 +39,10 @@ import { unitNode } from '@/components/ui/units';
 import { amountDigits, amountText } from '@/lib/amount-form';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { COUNT_TRACK_PX } from '@/components/ui/aligned-bar';
 import {
+  MAX_BLOCK_BYTES,
+  TX_CYCLES_BOUND,
   WIDEST_AGE,
   WIDEST_BLOCK_NUMBER,
   WIDEST_COUNT_DIGITS,
@@ -57,8 +60,12 @@ const cell = (chars: number) => textPx(chars, fontPx('small'));
  */
 const FEED_WORDS_PX = columnPx(cell(12) + CELL_GAP_PX);
 
-/** The track `ScaleHeader` draws a bar column's ticks on, its default (the stacked bars are 80). */
-const HEAD_TRACK_PX = 120;
+/**
+ * The Size and Cycles bars' track, their heads' and their stacked bars' alike (the coordinator's
+ * ruling on F3-e: a head's tick row is in the tick form and stands whole over its track): 48 px.
+ * The heads drew 120 px of exact ticks over 80 px bars.
+ */
+const TRACK_PX = COUNT_TRACK_PX;
 
 /**
  * The widest token amount a list column holds on one line (the moved column here, a supply
@@ -270,27 +277,60 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       key: 'size',
       label: 'Size',
       // OB-13: the header carries the scale every bar in the column shares.
-      header: sizeScale > 0 ? <ScaleHeader label="Size, bytes" scale={sizeScale} /> : undefined,
-      // the head's tick row, as long as ScaleHeader's track (120 px; "0 … 600,000" in it), wider
-      // than the bar's 80 px and its count; it was 112
-      minWidth: columnPx(HEAD_TRACK_PX + CELL_GAP_PX),
+      header:
+        sizeScale > 0 ? (
+          <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={TRACK_PX} />
+        ) : undefined,
+      // the head's name, "Size, bytes" (11 characters at 12 px, 79.2), wider than the figure over
+      // each bar ("597,000", a transaction no larger than a block, 54.6) and the 48 px track; it was
+      // 136 for a 120 px row of exact ticks
+      minWidth: columnPx(
+        Math.max(
+          textPx('Size, bytes'.length, fontPx('meta')),
+          cell(MAX_BLOCK_BYTES.toLocaleString('en-US').length),
+          TRACK_PX
+        ) + CELL_GAP_PX
+      ),
       render: (r) => (
-        <ResourceBar value={r.txSize!} scale={sizeScale} label="Serialized bytes" stacked />
+        <ResourceBar
+          value={r.txSize!}
+          scale={sizeScale}
+          label="Serialized bytes"
+          stacked
+          trackWidth={TRACK_PX}
+        />
       ),
     },
     {
       key: 'cycles',
       label: 'Cycles',
-      header: cycleScale > 0 ? <ScaleHeader label="Cycles" scale={cycleScale} /> : undefined,
-      // the head's 120 px tick row ("0 … 4,000,000,000", 108 px, in it), wider than the figure
-      minWidth: columnPx(HEAD_TRACK_PX + CELL_GAP_PX),
+      header:
+        cycleScale > 0 ? (
+          <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={TRACK_PX} />
+        ) : undefined,
+      // the figure over each bar, a transaction's cycles under a billion as the committed list's
+      // ("750,000,000", 85.8), wider than the head's name and the 48 px track; it was 120 for a
+      // 120 px row of exact ticks
+      minWidth: columnPx(
+        Math.max(
+          textPx('Cycles'.length, fontPx('meta')),
+          cell(TX_CYCLES_BOUND.toLocaleString('en-US').length),
+          TRACK_PX
+        ) + CELL_GAP_PX
+      ),
       render: (r) =>
         r.cycles === null ? (
           <span className="text-text-dim">
             {r.cyclesStatus === 'failed' ? 'Calculation failed' : 'Not computed'}
           </span>
         ) : (
-          <ResourceBar label="Cycles" value={r.cycles} scale={cycleScale} stacked />
+          <ResourceBar
+            label="Cycles"
+            value={r.cycles}
+            scale={cycleScale}
+            stacked
+            trackWidth={TRACK_PX}
+          />
         ),
     }
   );

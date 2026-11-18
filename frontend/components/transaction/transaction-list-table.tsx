@@ -6,7 +6,12 @@ import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/compone
 import { Hash } from '@/components/ui/hash';
 import { ROW_SEAL, RowSeal } from '@/components/ui/row-seal';
 import { ClassMark } from '@/components/ui/class-mark';
-import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
+import {
+  AlignedBar,
+  BAR_FIGURE_GAP,
+  COUNT_TRACK_PX,
+  ScaleHeader,
+} from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
   activityClassMark,
@@ -17,7 +22,6 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
-import { formatTick } from '@/lib/chart-ticks';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -33,24 +37,22 @@ import {
   WIDEST_BLOCK_NUMBER,
   WIDEST_BLOCK_REWARD,
   shortChars,
-  WIDEST_COMPACT_TICK,
   WIDEST_COUNT,
   WIDEST_TX_FEE,
   WIDEST_TX_VALUE,
 } from '@/lib/list-bounds';
 
 /**
- * The widest scale each bar column writes (readability F3-e). Size: a transaction is no larger
- * than a block's 597,000 bytes, whose scale is 600,000; its head writes the scale exact, "0" …
- * "600,000", which its track holds whole (64.8 px). Cycles: any scale under a billion cycles (lane
- * B5's bound of record: a page's largest transaction under 750,000,000), its head's ticks in the
- * tick form ("0" … "750M", at most four characters), so its track is the shortest a bar takes, 48
- * px; the exact figure beside each bar keeps its 11 characters.
+ * The widest scale each bar column's figure writes (readability F3-e). Size: a transaction is no
+ * larger than a block's 597,000 bytes, whose scale is 600,000. Cycles: any scale under a billion
+ * cycles (lane B5's bound of record: a page's largest transaction under 750,000,000). Both heads
+ * write their ticks in the tick form ("0 … 600k", "0 … 750M"; the rule at `trackPx`), so each
+ * track is COUNT_TRACK_PX, 48 px; the exact figure beside each bar keeps its digits.
  */
 const SIZE_SCALE = resourceScale([MAX_BLOCK_BYTES]).toLocaleString('en-US');
 const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
-const SIZE_TRACK = trackPx(['0', SIZE_SCALE]);
-const CYCLES_TRACK = trackPx(['0', WIDEST_COMPACT_TICK]);
+const SIZE_TRACK = COUNT_TRACK_PX;
+const CYCLES_TRACK = COUNT_TRACK_PX;
 
 /** The cells a transaction consumed: a cellbase none (the API counts its one null input). */
 function consumedCells(tx: Transaction): number {
@@ -248,7 +250,11 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
  * The committed list's columns (readability F3-e: each budgeted from the widest value it holds),
  * on the page's two bar scales.
  */
-function committedColumns(sizeScale: number, cycleScale: number): ListColumn<Transaction>[] {
+function committedColumns(
+  sizeScale: number,
+  cycleScale: number,
+  sameWidth: number
+): ListColumn<Transaction>[] {
   return [
     {
       key: 'transaction',
@@ -311,11 +317,12 @@ function committedColumns(sizeScale: number, cycleScale: number): ListColumn<Tra
       // the headline on its line when it fits and wraps under it, part by part, when it does not.
       // At its minimum the mark (16), its 8 px gap, the longest DAO headline, "DAO Withdraw
       // Complete" (21 characters at 13 px, 163.8), whole, and the gap: 203.8; a common row's note
-      // ("CKB Transfer" and "12 participants", 258.6 px on one line) goes under its headline there
-      // and joins it from a container of 1,275 px.
-      minWidth: columnPx(
-        16 + 8 + textPx('DAO Withdraw Complete'.length, fontPx('small')) + CELL_GAP_PX
-      ),
+      // ("CKB Transfer" and "12 participants", 258.6 px on one line) goes under its headline there.
+      // On the Transactions page it also keeps `sameWidth`, what the pool list's sum is over this
+      // one's, so both of the page's lists change form at one width.
+      minWidth:
+        columnPx(16 + 8 + textPx('DAO Withdraw Complete'.length, fontPx('small')) + CELL_GAP_PX) +
+        sameWidth,
       width: 'auto',
       render: (tx) => {
         const mark = tx.activity ? activityClassMark(tx.activity) : null;
@@ -418,9 +425,9 @@ function committedColumns(sizeScale: number, cycleScale: number): ListColumn<Tra
     {
       key: 'size',
       label: 'Size, bytes',
-      // The track (SIZE_TRACK, its head's "0" … "600,000" whole, 64.8), the bar's 10 px gap, the
-      // scale's figure ("600,000", 7 characters at 13 px, 54.6) and the gap. It held a 5-digit
-      // scale ("2,000") on a 56 px track its head's ticks ran past.
+      // The 48 px track (its head's "0 … 600k" in the tick form), the bar's 10 px gap, the scale's
+      // figure ("600,000", 7 characters at 13 px, 54.6) and the gap: 128.6. It held a 5-digit scale
+      // ("2,000") on a 56 px track its head's exact ticks ran past.
       minWidth: columnPx(
         SIZE_TRACK + BAR_FIGURE_GAP + textPx(SIZE_SCALE.length, fontPx('small')) + CELL_GAP_PX
       ),
@@ -455,13 +462,7 @@ function committedColumns(sizeScale: number, cycleScale: number): ListColumn<Tra
         CYCLES_TRACK + BAR_FIGURE_GAP + textPx(CYCLES_SCALE.length, fontPx('small'))
       ),
       header: (
-        <ScaleHeader
-          label="Cycles"
-          scale={cycleScale}
-          trackWidth={CYCLES_TRACK}
-          tickGap={2}
-          format={(n) => formatTick(n, n)}
-        />
+        <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={CYCLES_TRACK} tickGap={2} />
       ),
       render: (tx) =>
         tx.cycles === null ? (
@@ -481,12 +482,12 @@ function committedColumns(sizeScale: number, cycleScale: number): ListColumn<Tra
 }
 
 /**
- * The width the committed list changes form at, the sum of its columns' minimums (1,220 px): the
- * pool list on the same page changes form there too (both lists are one page).
+ * The committed list's own sum of its columns' minimums (1,203 px). The Transactions page changes
+ * both of its lists' form at one width, the larger of the two sums (`formWidth`).
  */
 export const TRANSACTION_LIST_MIN_PX = minimumWidth(
   'Committed transactions',
-  committedColumns(1, 1)
+  committedColumns(1, 1, 0)
 );
 
 /**
@@ -499,10 +500,20 @@ export const TRANSACTION_LIST_MIN_PX = minimumWidth(
 export function TransactionListTable({
   transactions,
   label = 'Committed transactions',
+  formWidth = TRANSACTION_LIST_MIN_PX,
 }: {
   transactions: readonly Transaction[];
   label?: string;
+  /**
+   * The width this list changes form at, at least its own sum: the page that draws it beside
+   * another list gives the larger of their sums, and What it did keeps the difference.
+   */
+  formWidth?: number;
 }) {
+  if (!(formWidth >= TRANSACTION_LIST_MIN_PX))
+    throw new Error(
+      `${label}: cannot change form at ${formWidth} px, under its ${TRANSACTION_LIST_MIN_PX}`
+    );
   for (const tx of transactions) {
     if (!Number.isSafeInteger(tx.txSize) || tx.txSize! <= 0)
       throw new Error(`Transaction ${tx.hash} is missing its exact serialized size`);
@@ -517,7 +528,7 @@ export function TransactionListTable({
   const cycleScale = resourceScale(
     transactions.flatMap((tx) => (tx.cycles === null ? [] : [tx.cycles]))
   );
-  const columns = committedColumns(sizeScale, cycleScale);
+  const columns = committedColumns(sizeScale, cycleScale, formWidth - TRANSACTION_LIST_MIN_PX);
   return (
     <ListTable
       label={label}
