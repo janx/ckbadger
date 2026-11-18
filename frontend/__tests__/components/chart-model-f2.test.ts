@@ -539,3 +539,79 @@ describe('Deposited per day card window (CH-13)', () => {
     expect(model.card?.points.at(-1)).toEqual(model.points.at(-1));
   });
 });
+
+// Review of main..fix/readability (2026-11-18, test finding 8): filling a histogram's regular run
+// (readability lane A) fails on what it cannot read, and nothing reached those throws. The grid is
+// the API's: a label off it, a label that is not a decimal number and a second series (an empty
+// bucket has no value for it) are broken reads, never guessed at. An axis reads the run the model
+// filled and fails without it (logic finding 2).
+describe('a filled histogram fails on what it cannot read', () => {
+  const histogram = (slug: string, data: { date: string; value: string; value2?: string }[]) =>
+    chartModel(def(slug), { title: slug, yAxisLabel: 'Epochs', data });
+  /** Epoch durations as the API labels them: the minute in hours, two decimals. */
+  const minutes = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => ({
+      date: ((from + i) / 60).toFixed(2),
+      value: '1',
+    }));
+  /** Block intervals: every 0.1 s from 0 to 5 s. */
+  const tenths = () =>
+    Array.from({ length: 51 }, (_, i) => ({ date: `${Math.floor(i / 10)}.${i % 10}`, value: '1' }));
+  /** One label replaced, inside the regular run (an outlier beyond it is never filled). */
+  const replaced = (data: { date: string; value: string }[], at: string, by: string) =>
+    data.map((point) => (point.date === at ? { ...point, date: by } : point));
+
+  it('fails on a bucket off its grid', () => {
+    // 4.16 h is 249.6 minutes: the API writes minute 250 as 4.17
+    expect(() =>
+      histogram('epoch-time-distribution', replaced(minutes(180, 300), '4.17', '4.16'))
+    ).toThrow('epoch-time-distribution: bucket 4.16 is not one of 1/60 of its unit');
+    expect(() => histogram('block-time-distribution', replaced(tenths(), '2.5', '2.55'))).toThrow(
+      'block-time-distribution: bucket 2.55 is not one of 1/10 of its unit'
+    );
+  });
+
+  it('fails on a bucket that is not a decimal number', () => {
+    expect(() =>
+      histogram('epoch-time-distribution', replaced(minutes(180, 300), '4.17', '4.17e0'))
+    ).toThrow('epoch-time-distribution: bucket 4.17e0 is not a number');
+  });
+
+  it('fails on a histogram of more than one series', () => {
+    expect(() =>
+      histogram(
+        'epoch-time-distribution',
+        minutes(180, 300).map((point) => ({ ...point, value2: '2' }))
+      )
+    ).toThrow(
+      'epoch-time-distribution: a filled histogram has one series; an empty bucket has no other value'
+    );
+  });
+
+  it('keeps the run it filled, and an axis without that run fails', () => {
+    // two outliers (2.05 h, 50.50 h) around a run from 4 to 5 h with minutes missing in it
+    const model = histogram(
+      'epoch-time-distribution',
+      [123, 240, 241, 243, 250, 260, 270, 280, 290, 300, 3030].map((m) => ({
+        date: (m / 60).toFixed(2),
+        value: '2',
+      }))
+    );
+    // every minute from 240 to 300 has its slot, a missing one its 0; the outliers keep one each
+    expect(model.points).toHaveLength(63);
+    expect(model.bucketRun).toEqual({ lo: 1, hi: 61 });
+    expect([model.points[0].label, model.points[1].label, model.points[61].label]).toEqual([
+      '2.05',
+      '4.00',
+      '5.00',
+    ]);
+    expect(model.points[3]).toEqual({ label: '4.03', values: { primary: '0' } });
+    expect(model.points.at(-1)!.label).toBe('50.50');
+    expect(() => axisTicks(model.points, 'bucket', 6, 'h')).toThrow(
+      'bucket axis: a numeric histogram has no regular run from its model'
+    );
+    expect(() => axisTicks(model.points, 'bucket', 6, 'h', { lo: 1, hi: 63 })).toThrow(
+      'bucket axis: run 1..63 is past the 63 points drawn'
+    );
+  });
+});
