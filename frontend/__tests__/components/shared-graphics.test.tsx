@@ -9,7 +9,15 @@ import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { SharedGraphicsDemo } from '@/__tests__/fixtures/shared-graphics-demo';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
-import { allTextLines, expectApart, expectInside, viewBox } from '@/__tests__/utils/svg-text-boxes';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  meets,
+  rectBox,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 describe('AlignedBar (BA-01)', () => {
   it('starts every bar at one left baseline: fixed track first, value in a fixed column after', () => {
@@ -593,6 +601,183 @@ describe('TenureBar at any width (ID-C7, visual pass)', () => {
     expect(container.querySelector('[data-role="tenure-now"] title')).toHaveTextContent(
       /^3,900 days left$/
     );
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the icicle stands whole where it is written — inside its box, inside a dashed placeholder, or
+// under its box clear of every box — touches no other word and stays inside the svg, measured by
+// the type modules (0.6 em a glyph; a tight line over its baseline, its descent under it). The
+// real cases: the DAO page's partition (rows 48 / 48 / 32, words inside the boxes) at the DAO
+// column at 1280 (1232), at 640 (608) and on a phone (358); the original drawing's labels under
+// the boxes, with mainnet's amounts, on its 900-unit viewBox; the words inside the boxes at 1200.
+describe('IciclePartition: every word where it is written (readability F3)', () => {
+  // the original drawing, as its own test draws it (DAO-7): no page draws this form today
+  const under = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    children: [
+      {
+        key: 'miners',
+        label: 'to miners',
+        value: BigInt(10),
+        tone: 'ckb' as const,
+        placeholder: 'paid in cellbases',
+      },
+      {
+        key: 'comp',
+        label: 'compensation',
+        value: BigInt(20),
+        tone: 'dao' as const,
+        note: 'via AR',
+        children: [
+          { key: 'paid', label: 'paid out', value: BigInt(5), tone: 'dao' as const },
+          {
+            key: 'owed',
+            label: 'still owed',
+            value: BigInt(15),
+            tone: 'dao' as const,
+            opacity: 0.4,
+          },
+        ],
+      },
+      {
+        key: 'burnt',
+        label: 'burnt',
+        value: BigInt(70),
+        tone: 'other' as const,
+        note: 'no cell can ever claim it',
+        placeholder: 'No cell can ever claim it.',
+      },
+    ],
+  };
+  const inside = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    align: 'inside' as const,
+    note: '1.344 billion CKB a year',
+    fill: 'ink-quiet' as const,
+    children: [
+      { key: 'm', label: 'to miners', value: BigInt(10), tone: 'ckb' as const, note: '10.00%' },
+      {
+        key: 'c',
+        label: 'compensation',
+        value: BigInt(20),
+        tone: 'dao' as const,
+        align: 'end' as const,
+        note: '20.00% · via AR',
+      },
+      {
+        key: 'b',
+        label: 'burnt',
+        value: BigInt(70),
+        tone: 'other' as const,
+        align: 'inside' as const,
+      },
+    ],
+  };
+  const dao = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    fill: 'ink-quiet' as const,
+    opacity: 0.55,
+    boxLabel: { name: 'secondary issuance since genesis', share: '9,314,713,506', unit: 'CKB' },
+    children: [
+      {
+        key: 'miners',
+        label: 'to miners',
+        value: BigInt(10),
+        tone: 'ckb' as const,
+        fill: 'text' as const,
+        boxLabel: { name: 'miners', share: '10.34%' },
+      },
+      {
+        key: 'compensation',
+        label: 'compensation for depositors',
+        value: BigInt(17),
+        tone: 'dao' as const,
+        boxLabel: { name: 'depositors', share: '17.17%' },
+        children: [
+          {
+            key: 'paid',
+            label: 'paid out',
+            value: BigInt(8),
+            tone: 'dao' as const,
+            boxLabel: { name: 'paid out', share: '47.57%' },
+          },
+          {
+            key: 'owed',
+            label: 'still owed',
+            value: BigInt(9),
+            tone: 'dao' as const,
+            opacity: 0.4,
+            boxLabel: { name: 'still owed', share: '52.43%' },
+          },
+        ],
+      },
+      {
+        key: 'burnt',
+        label: 'burnt',
+        value: BigInt(73),
+        tone: 'other' as const,
+        boxLabel: { name: 'burnt', share: '72.49%', note: 'no cell can ever claim it' },
+      },
+    ],
+  };
+  const cases = [
+    ...[1232, 608, 358].map(
+      (width) =>
+        [
+          `the DAO page at ${width}`,
+          { root: dao, width, rows: { heights: [48, 48, 32], gap: 3 } },
+        ] as const
+    ),
+    ['labels under the boxes, on the 900-unit viewBox', { root: under }] as const,
+    ['words inside the boxes at 1200', { root: inside, width: 1200 }] as const,
+  ];
+
+  it.each(cases)('%s', (name, props) => {
+    const { container } = render(
+      <IciclePartition label="issuance" formatValue={String} {...props} />
+    );
+    const svg = container.querySelector('svg')!;
+    const boxes = [...svg.querySelectorAll('rect[data-node], [data-placeholder] rect')];
+    const lines = allTextLines(svg);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the icicle', 'flush');
+    // A part's words stand apart: its name, value and note under its box, or its words inside.
+    // Under the boxes, a name wider than its part meets the next part's name ("paid out", 57.6 px
+    // under a 45-unit box, met "still owed" at 11 px too): that form has no rule for it, and no
+    // page draws it, so across parts only the forms the pages draw are held apart.
+    const parts = [...svg.querySelectorAll('g')].filter((g) =>
+      [...g.children].some((c) => c.hasAttribute('data-node'))
+    );
+    expect(parts.length).toBeGreaterThanOrEqual(6);
+    for (const part of parts)
+      expectApart(
+        allTextLines(part),
+        `${name}: ${part.querySelector('rect')!.getAttribute('data-node')}`
+      );
+    if (!name.startsWith('labels under')) expectApart(lines, name);
+    for (const line of lines) {
+      // a word that stands on a box stands inside it; one under its box meets none (under the
+      // boxes, a placeholder's words wider than their part are its form's own, as above: held
+      // inside it top to foot only)
+      const host = boxes.find((b) => meets(rectBox(b), line));
+      if (!host) continue;
+      const box = rectBox(host);
+      expectInside(
+        line,
+        name.startsWith('labels under') ? { ...box, left: -Infinity, right: Infinity } : box,
+        `"${line.text}" in its box`
+      );
+    }
   });
 });
 
