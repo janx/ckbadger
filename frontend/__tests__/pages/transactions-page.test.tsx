@@ -625,6 +625,59 @@ describe('Transactions pool view', () => {
   });
 });
 
+// F-6 follow-up: one classification, so the kinds and the cellbases are All. The Protocols kind is
+// a chip like the others (with its count, its share of the bar and its filter), so nothing of the
+// day falls outside the chips.
+it('counts every transaction of the day in one chip, Protocols included, so the chips are All', async () => {
+  const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+  vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+    {
+      ...dailyActivities[0],
+      date: yesterday,
+      activityCount: 17,
+      kindCounts: { dao: 2, token: 5, object: 0, identity: 1, protocol: 4, script: 3, ckb: 2 },
+      coinbaseCount: 3,
+      protocolActionCounts: { 'dao:deposit': 2, 'fiber:channel_open': 4 },
+    },
+  ]);
+  vi.mocked(api.getTxStats).mockResolvedValue({
+    currentHour: 0,
+    currentDay: 500,
+    hourlyData: [],
+    dailyData: [{ label: yesterday.slice(5).replace('-', '/'), value: 20, complete: true }],
+  });
+  vi.mocked(api.getTransactions).mockResolvedValue({
+    data: [],
+    limit: 50,
+    nextCursor: null,
+    hasMore: false,
+    total: 0,
+  });
+  render(<TransactionsPage />);
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All20')
+  );
+  expect(screen.getByRole('button', { name: 'Protocols' })).toHaveTextContent(/^Protocols4$/);
+  const chips = within(
+    screen.getByRole('group', { name: "Filter by kind, with yesterday's counts" })
+  )
+    .getAllByRole('button')
+    .filter((chip) => chip.getAttribute('aria-label') !== 'All')
+    .map((chip) => Number((chip.textContent ?? '').replace(/\D/g, '')));
+  expect(chips.reduce((sum, count) => sum + count, 0)).toBe(20);
+  const bar = screen.getByRole('img', { name: "Yesterday's transactions by kind" });
+  const widths = [...bar.querySelectorAll('span')].map((span) => parseFloat(span.style.width));
+  expect(widths.reduce((sum, w) => sum + w, 0)).toBeCloseTo(100, 9);
+  fireEvent.click(screen.getByRole('button', { name: 'Protocols' }));
+  await waitFor(() =>
+    expect(api.getTransactions).toHaveBeenLastCalledWith({
+      cursor: undefined,
+      limit: 50,
+      activityType: 'protocol',
+    })
+  );
+});
+
 it('keeps the pool banner above tabs and gives each kind its transactions, one kind each', async () => {
   const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
