@@ -59,7 +59,9 @@ describe('DAO depositors page (DAO-12)', () => {
     );
     const next = await screen.findByRole('table', { name: 'DAO depositors' });
     await waitFor(() => expect(next.querySelector('tbody tr')).toHaveTextContent('997.00000000'));
-    expect(screen.queryByRole('button', { name: 'Next 50 →' })).toBeNull();
+    // Re-pinned on purpose (readability B5): the page pages with the site's one pager, whose
+    // last page keeps a disabled Next (it hid the button).
+    expect(screen.getByRole('button', { name: 'Next 50 →' })).toBeDisabled();
     // Back to the page already ranked at the same tip (kept, not re-ranked).
     fireEvent.click(screen.getByRole('button', { name: '← Previous' }));
     await waitFor(() =>

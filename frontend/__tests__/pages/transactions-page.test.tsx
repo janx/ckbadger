@@ -137,7 +137,9 @@ describe('TransactionsPage', () => {
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     expect(table).toHaveTextContent('What it did');
     expect(screen.getByText('newest first · cellbase rows set back')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Older →' })).toBeDisabled();
+    // Re-pinned on purpose (readability B5): this fixture is one page (no older, no newer), and
+    // one page draws no pager (it drew a disabled "Older →").
+    expect(screen.queryByRole('button', { name: 'Older →' })).toBeNull();
   });
 });
 
