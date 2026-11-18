@@ -3,8 +3,9 @@
  * table only when the measured container holds its 700 px; below that one card per participant
  * (three lines on a phone, two from 480 px), the Net row the last card, never a sideways scroller.
  */
+import { containerContentPx, gapPx } from '@/__tests__/utils/tailwind-box';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, within } from '@testing-library/react';
+import { cleanup, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
@@ -76,8 +77,9 @@ describe('BalanceChanges form by measured width', () => {
 
   // Lane B4 fix round (review-rules-logic NOTE 4, the coordinator's item 14): the Occupied
   // column holds the widest change a party can make in one transaction, with its unit
-  // (WIDEST_OCCUPIED_CHANGE, "−16,773,724,928 B", 17 glyphs), at the step its cells inherit
-  // from the transaction page, the body step (8.4 px a glyph): 142.8 px. It was a 100 px literal,
+  // (WIDEST_OCCUPIED_CHANGE, "−8,101,332,271 B", 16 glyphs; re-pinned on purpose in the second
+  // fix round, the exact bound: it was "−16,773,724,928 B"), at the step its cells inherit from
+  // the transaction page, the body step (8.4 px a glyph): 134.4 px. It was a 100 px literal,
   // which "−1,234,567 B" (100.8 px) already passed. The column is a grid track, read from the
   // rows the table draws (each row is its own grid, so every row is read).
   it('budgets the Occupied column at the widest change, with its unit, in every row', () => {
@@ -90,7 +92,7 @@ describe('BalanceChanges form by measured width', () => {
       return cls!.slice('grid-cols-['.length, -1).split('_');
     };
     const widest = textPx(WIDEST_OCCUPIED_CHANGE.length, fontPx('body'));
-    expect(widest).toBeCloseTo(142.8, 10);
+    expect(widest).toBeCloseTo(134.4, 10);
     const rows = within(table).getAllByRole('row');
     expect(rows).toHaveLength(5);
     for (const row of rows) {
@@ -101,6 +103,42 @@ describe('BalanceChanges form by measured width', () => {
       const cell = row.children[2] as HTMLElement;
       expect(cell.className).not.toMatch(/\btext-(meta|small|body|lede)\b/);
     }
+  });
+
+  // B4 second fix round (tests SHOULD-2, review-rules-fixes-logic SHOULD 1; the coordinator's
+  // item 3): the table is drawn where its tracks fit, the width rebuilt from the tracks its rows
+  // write (each a length or a floor, the Items track's minmax) and the three 16 px gaps; one pixel
+  // narrower draws the two-line cards. The 768 px window's column, 736 px (one column below lg,
+  // 768 less the container's 16 px sides), keeps its table; 912 (1280) draws it, 608 (1024 and
+  // 640, beside the tiles) the two-line cards, 358 (390) the three-line cards.
+  it('draws the table from the width its tracks need, the cards one px below (736 at 768)', () => {
+    renderAt(912);
+    const row = within(
+      screen.getByRole('table', { name: 'Balance changes by participant' })
+    ).getAllByRole('row')[0];
+    const tracks = row.style.gridTemplateColumns.split(/ (?![^(]*\))/);
+    expect(tracks).toHaveLength(4);
+    const floor = (track: string) => {
+      const m = /^(\d+)px$/.exec(track) ?? /^minmax\((\d+)px, ?1fr\)$/.exec(track);
+      if (!m) throw new Error(`a track this does not read: ${track}`);
+      return Number(m[1]);
+    };
+    const need = tracks.map(floor).reduce((a, b) => a + b, 0) + 3 * gapPx(row, 912);
+    const form = (width: number) => {
+      cleanup();
+      renderAt(width);
+      return screen.queryByRole('table')
+        ? 'table'
+        : screen.getByRole('list').getAttribute('data-form');
+    };
+    expect(form(need)).toBe('table');
+    expect(form(need - 1)).toBe('two-line');
+    expect(need).toBeLessThanOrEqual(containerContentPx(768));
+    expect(containerContentPx(768)).toBe(736);
+    expect(form(736)).toBe('table');
+    expect(form(912)).toBe('table');
+    expect(form(608)).toBe('two-line');
+    expect(form(358)).toBe('three-line');
   });
 
   it('renders one three-line card per participant at 358 px, and no sideways scroller', () => {
