@@ -11,6 +11,9 @@ import { PeersTable } from '@/app/network/nodes-table';
 import { HostingBar, NetworkDistributions } from '@/app/network/distributions';
 import { NetworkTrends } from '@/app/network/trends';
 import type { NetworkMap } from '@/lib/api';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { descentPx, textPx } from '@/lib/type-metrics';
+import { expectApart, expectInside } from '@/__tests__/utils/svg-text-boxes';
 
 // F2 charts group: the Network board (V70, "no edges, not centred on this node").
 
@@ -450,6 +453,72 @@ describe('Network board (F2 charts)', () => {
     expect(desktop.labels).toHaveLength(crawl.length);
     expect(desktop.listed).toEqual([]);
   });
+
+  // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor a
+  // country's label stands whole on the map, clear of its own cluster's dots and rings and of every
+  // other label, measured by the type modules (0.6 em a glyph; a tight line over its baseline, its
+  // descent under it). The real case is the 2026-11-01 mainnet crawl, at the map's column at 1280
+  // (880 × 431), at 640 (576 × 282) and on phones (358 × 256, 326 × 256).
+  it.each([880, 576, 358, 326])(
+    'writes every country label clear of its cluster and of the others at %i px (readability F3)',
+    (width) => {
+      const crawl: [string, number, number, number][] = [
+        ['AE', 2, 25.1, 55.3],
+        ['AU', 2, -35.8, 148.1],
+        ['BR', 1, -23.5, -46.6],
+        ['CA', 4, 44.1, -77.9],
+        ['CL', 1, -33.5, -70.7],
+        ['CN', 1, 34.8, 113.7],
+        ['DE', 10, 50.4, 9.2],
+        ['FR', 3, 48.9, 4.3],
+        ['GB', 1, 51.5, -0.1],
+        ['HK', 10, 22.3, 114.2],
+        ['ID', 1, -6.2, 106.8],
+        ['IN', 1, 19.1, 72.9],
+        ['JP', 1, 35.7, 139.7],
+        ['KR', 6, 37.5, 127.0],
+        ['MO', 1, 22.2, 113.6],
+        ['PL', 1, 52.2, 21.0],
+        ['SG', 8, 1.3, 103.8],
+        ['TW', 1, 25.1, 121.5],
+        ['US', 12, 38.9, -94.8],
+        ['ZA', 1, -33.9, 18.4],
+      ];
+      const points = crawl.flatMap(([country, n, lat, lon]) =>
+        Array.from({ length: n }, (_, i) => ({
+          ...point(`${country}${i}`, country, i % 2 === 0, i === 0),
+          lat,
+          lon,
+        }))
+      );
+      // the map's own height for its width (network-map.tsx)
+      const height = Math.max(256, Math.round(width * 0.49));
+      const { dots, labels } = layoutCountryClusters(points, width, height);
+      expect(labels.length).toBeGreaterThan(5);
+      const px = SVG_TEXT.tick;
+      const lines = labels.map((l) => {
+        const text = `${l.country} ${l.count.toLocaleString('en-US')}`;
+        const w = textPx(text.length, px);
+        return {
+          text,
+          size: px,
+          left: l.x - w / 2,
+          right: l.x + w / 2,
+          top: l.y - lineAscentPx(px),
+          bottom: l.y + descentPx(px),
+        };
+      });
+      const map = { left: 0, top: 0, right: width, bottom: height };
+      for (const line of lines) expectInside(line, map, 'the map', 'flush');
+      expectApart(lines, `the labels at ${width}`);
+      // a dot's ring (6.2 px and its 1.2 px stroke) is the most a dot reaches
+      for (const [i, l] of labels.entries()) {
+        const own = dots.filter((d) => d.point.country === l.country);
+        const foot = Math.max(...own.map((d) => d.y)) + 6.2 + 0.6;
+        expect(lines[i].top, `${lines[i].text} clears its dots`).toBeGreaterThan(foot);
+      }
+    }
+  );
 
   it('names every unlabelled single-node country under the phone map, as text', async () => {
     stubChartWidth(358);
