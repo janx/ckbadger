@@ -5,8 +5,9 @@ import { fontPx, textPx } from '@/lib/type-metrics';
  * docs/RESPONSIVE_LAYOUT.md "Status line"). The line is one row of the window's width at the meta
  * step: the mode block, the network, the tip, from md the release and the key hints, the clock.
  * Every part is measured from what it writes (lib/type-metrics.ts, a glyph 0.6 em) and the insets
- * its classes draw (components/layout/status-line.tsx), and a part is drawn only where the line
- * holds it: the line measures itself and gives its parts up in one order until the rest fit.
+ * it is drawn with (`STATUS_LINE_INSET_PX` below, which components/layout/status-line.tsx draws),
+ * and a part is drawn only where the line holds it: the line measures itself and gives its parts up
+ * in one order until the rest fit.
  *
  * The order, first to go: the key hints, the last first (`g b blocks`, `/ search`, `? help`: the
  * help lists them all, and the footer's "Keyboard shortcuts" opens it from md); the tip's word, the
@@ -55,12 +56,27 @@ export const CLOCK_FORM = '00:00:00';
 
 /** The line's text: the meta step (`text-meta`). */
 const LINE_PX = fontPx('meta');
-/** The mode block's inset, `px-2.5` each side. */
-const MODE_INSET_PX = 2 * 10;
-/** A segment's inset, `px-3` each side, and its 1 px line. */
-const SEGMENT_INSET_PX = 2 * 12 + 1;
-/** The gap between a segment's runs, `gap-1.5`. */
-const SEGMENT_GAP_PX = 6;
+
+/**
+ * The insets the line's parts are drawn with, px. components/layout/status-line.tsx draws its
+ * parts with these (an inline style, over any class), so the line and its budget are one number
+ * each: change one here and the line and the budget move together (review-fb-tests finding 2:
+ * the classes and a copy of their numbers here could differ while every test stayed green).
+ */
+export const STATUS_LINE_INSET_PX = {
+  /** The mode block's padding, each side. */
+  mode: 10,
+  /** A segment's padding, each side. */
+  segment: 12,
+  /** A segment's line, on the side away from the edge it keeps. */
+  line: 1,
+  /** The gap between a segment's runs (`tip` and its number, a key and its word). */
+  gap: 6,
+} as const;
+
+const MODE_INSET_PX = 2 * STATUS_LINE_INSET_PX.mode;
+const SEGMENT_INSET_PX = 2 * STATUS_LINE_INSET_PX.segment + STATUS_LINE_INSET_PX.line;
+const SEGMENT_GAP_PX = STATUS_LINE_INSET_PX.gap;
 
 const chars = (runs: readonly string[]) => runs.reduce((n, run) => n + [...run].length, 0);
 

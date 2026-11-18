@@ -86,6 +86,11 @@ describe('StatusLine', () => {
     expect(segments[2]).toHaveTextContent('tip#1,000,000');
     expect(segments[3]).toHaveTextContent(/^ckbadger 0\.1\.0 · synced$/);
     expect(segments[3]).toHaveAttribute('title', 'ckbadger 0.1.0+feature/foo@abcdef123456');
+    // the left-hand segments close on a 1 px line at their right
+    for (const s of segments.slice(1, 4)) {
+      expect(s.style.borderRightWidth).toBe('1px');
+      expect(s.style.borderLeftWidth).toBe('');
+    }
     // no node version: the vitals payload carries none, and none is made up
     expect(bar).not.toHaveTextContent(/node/);
   });
@@ -113,7 +118,13 @@ describe('StatusLine', () => {
       'g b',
     ]);
     expect(cells[3]).toContainElement(screen.getByTestId('status-clock'));
-    for (const c of cells) expect(c).toHaveClass('border-l');
+    // each closes on a 1 px line at its left (re-pinned: the line was the class border-l; it is now
+    // drawn from the line's budget, lib/status-line-fit.ts, as an inline style, review-fb-tests 2)
+    for (const c of cells) {
+      expect(c).toHaveClass('border-base-border');
+      expect(c.style.borderLeftWidth).toBe('1px');
+      expect(c.style.borderRightWidth).toBe('');
+    }
   });
 
   it('says SYNCING on gold while the indexer is behind the node', async () => {
