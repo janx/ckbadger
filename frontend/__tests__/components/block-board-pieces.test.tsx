@@ -65,6 +65,22 @@ describe('RewardBreakdown', () => {
       'The reward is paid by the cellbase of #20,827,943; it is not indexed yet.'
     );
   });
+  // B3 (readability 2026-11-18): the payee is the block's miner, named as every miner is
+  // (MinerLink): by the pool pools.toml names, else by its address at the row size, the address
+  // in the title either way.
+  it('names the payee by its pool where pools.toml names one, else by its address', () => {
+    const pooled = { ...rewardBlock, minerPool: 'Example Pool' };
+    const { unmount } = wrap(<RewardBreakdown block={pooled} />);
+    const pool = screen.getByRole('link', { name: 'Example Pool' });
+    expect(screen.getByTestId('reward-total')).toContainElement(pool);
+    expect(pool.getAttribute('href')).toMatch(new RegExp(`/address/${rewardBlock.minerAddress}$`));
+    expect(pool).toHaveAttribute('title', rewardBlock.minerAddress);
+    unmount();
+    const unnamed = { ...rewardBlock, minerPool: null };
+    wrap(<RewardBreakdown block={unnamed} />);
+    expect(screen.getByTestId('reward-total')).toHaveTextContent(/ to ckb1…qgp909qk$/);
+    expect(screen.queryByRole('link', { name: 'Example Pool' })).toBeNull();
+  });
   it('names the paying cellbase and its tx', () => {
     wrap(<RewardPaidBy block={rewardBlock} />);
     expect(screen.getByRole('link', { name: '#20,827,943' }).getAttribute('href')).toMatch(
