@@ -1112,6 +1112,11 @@ export class SceneMotion {
    * The strap and the window's words follow the cards while they move, drawn every frame from the
    * same library functions as the static render (`axis.chainPaths`, `axis.lane`): a landing block's
    * link is the dashed pair until its plate is set, and the tail is gilt while the window runs on.
+   * Only the cards that stay are read: a card leaving through the exit layer fades out over the
+   * strap with its own gilt and takes no part in it, so while the chain slides the tail starts at
+   * the far edge of the last plate that stays and moves with it (a retiring card moves on 18 px as
+   * it fades while its neighbour slides a whole pitch into its slot: counted, it carried the tail
+   * past its own fading edge and left a gap after the plate sliding in).
    */
   private paintChain(): void {
     const svg = this.svg;
@@ -1123,7 +1128,7 @@ export class SceneMotion {
     const slots: ChainSlotState[] = [];
     let next: { x: number; w: number } | null = null;
     let nextSlot: BlockSpan | null = null;
-    for (const r of [...this.cards.values(), ...this.exitingCards]) {
+    for (const r of this.cards.values()) {
       if (r.node.v.op <= 0.02) continue;
       const { X, Y, w, h } = r.node.v;
       const at = axis.along({ x: X, y: Y, w, h });

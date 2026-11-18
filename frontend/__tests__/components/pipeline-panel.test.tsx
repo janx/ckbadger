@@ -1583,6 +1583,112 @@ describe('PipelinePanel static render', () => {
   });
 });
 
+/**
+ * What breaks the strap in the frame on screen, read from the DOM alone (the static render and the
+ * motion layer alike), as one line per fault. The rule (direction G, the coordinator's ruling on
+ * 26b7f8e3): the strap never shows a gap that is not a real parentHash break. Only the plates that
+ * stay (the cards layer; a card leaving through the exit layer fades out over the strap and takes
+ * no part in it) count: between two of them that the snapshot links, the whole gap is filled — a
+ * link (solid or gilt) from a set plate, the dashed pair from one still landing — and no link lies
+ * anywhere else (none across a parentHash break, none over a plate); the tail starts at the far
+ * edge of the last of them; NEXT's dashed pair fills the gap to the first while NEXT shows; and a
+ * plate carries its gilt exactly while it lies inside the window of `H`.
+ */
+function strapFaults(svg: Element, s: PipelineSnapshot, o: 'row' | 'column', H: number): string[] {
+  const row = o === 'row';
+  // a card's place is written to 2 decimals, a path's to 1, a path's far end as a start and a length
+  const TOL = 0.11;
+  const near = (p: number, q: number) => Math.abs(p - q) <= TOL;
+  const along = (el: Element) => {
+    const m = /translate\(([-\d.]+),([-\d.]+)\)/.exec(el.getAttribute('transform') ?? '');
+    if (!m) throw new Error(`${el.outerHTML.slice(0, 60)} has no translation`);
+    return Number(m[row ? 1 : 2]);
+  };
+  const length = (el: Element) => {
+    if (row) return G.cardW;
+    const box = el.querySelector('[data-box]') as Element;
+    return Number(box.getAttribute('height')) + 2 * Number(box.getAttribute('y'));
+  };
+  const blocks = new Map(s.blocks.map((b) => [b.number, b]));
+  const plates = [...svg.querySelectorAll('[data-layer="cards"] [data-card]')]
+    .map((el) => ({
+      el,
+      n: Number(el.getAttribute('data-number')),
+      a: along(el),
+      b: along(el) + length(el),
+      set:
+        (el.querySelector('[data-box]') as SVGElement).style.getPropertyValue('fill') ===
+        PLATE_FILL,
+    }))
+    .sort((p, q) => p.a - q.a);
+  const span = (r: { x: number; y: number; w: number; h: number }): [number, number] =>
+    row ? [r.x, r.x + r.w] : [r.y, r.y + r.h];
+  const rectsOf = (names: string[]) =>
+    names.flatMap((n) => strapRects(path(svg, n).getAttribute('d'))).map(span);
+  const dashedOf = () => {
+    const d = path(svg, 'pend').getAttribute('d') ?? '';
+    const re = row ? /M([\d.]+) [\d.]+H([\d.]+)/g : /M[\d.]+ ([\d.]+)V([\d.]+)/g;
+    const runs = [...d.matchAll(re)].map((m) => [Number(m[1]), Number(m[2])] as [number, number]);
+    // the pair: two lines over one run
+    return runs.filter((r, i) => runs.findIndex((q) => q[0] === r[0] && q[1] === r[1]) === i);
+  };
+  const faults: string[] = [];
+  const links = rectsOf(['solid', 'win']);
+  const dashed = dashedOf();
+  const used = { links: new Set<number>(), dashed: new Set<number>() };
+  const claim = (pool: [number, number][], seen: Set<number>, p0: number, p1: number) => {
+    const i = pool.findIndex(([l0, l1], k) => !seen.has(k) && near(l0, p0) && near(l1, p1));
+    if (i >= 0) seen.add(i);
+    return i >= 0;
+  };
+  // NEXT ⇢ the first plate, while NEXT shows
+  const next = svg.querySelector('[data-layer="cards"] [data-next]');
+  if (next && plates.length) {
+    const op = Number(next.getAttribute('opacity') ?? '1');
+    const [p0, p1] = [along(next) + length(next), plates[0].a];
+    const filled = claim(dashed, used.dashed, p0, p1);
+    if (op >= 0.03 && p1 - p0 > TOL && !filled) {
+      faults.push(`NEXT ${p0.toFixed(1)} ⇢ #${plates[0].n} ${p1.toFixed(1)}: no dashed pair`);
+    }
+  }
+  // between two staying plates
+  for (let i = 0; i + 1 < plates.length; i++) {
+    const [p, q] = [plates[i], plates[i + 1]];
+    const linked = blocks.get(p.n)?.parentHash === blocks.get(q.n)?.hash;
+    if (!linked || q.a - p.b <= 0) continue;
+    const filled = p.set
+      ? claim(links, used.links, p.b, q.a)
+      : claim(dashed, used.dashed, p.b, q.a);
+    if (!filled && q.a - p.b > TOL) {
+      faults.push(
+        `#${p.n} ${p.b.toFixed(1)} → #${q.n} ${q.a.toFixed(1)}: no ${p.set ? 'link' : 'dashed pair'}`
+      );
+    }
+  }
+  links.forEach(([l0, l1], k) => {
+    if (!used.links.has(k)) faults.push(`a link ${l0} … ${l1} across no gap between linked plates`);
+  });
+  dashed.forEach(([l0, l1], k) => {
+    if (!used.dashed.has(k)) faults.push(`a dashed pair ${l0} … ${l1} across no gap`);
+  });
+  // the tail, from the far edge of the last staying plate
+  const last = plates[plates.length - 1];
+  const tails = rectsOf(['tail', 'tail-win']);
+  if (tails.length !== 1) faults.push(`${tails.length} tails after #${last.n}`);
+  else if (!near(tails[0][0], last.b)) {
+    faults.push(`the tail starts at ${tails[0][0]}, #${last.n} ends at ${last.b.toFixed(2)}`);
+  }
+  // a staying plate's own gilt, exactly while it lies inside the window and its plate is set
+  for (const p of plates) {
+    const strap = p.el.querySelector('[data-strap]');
+    const shown = strap !== null && strap.getAttribute('opacity') !== '0';
+    if (shown !== (p.set && inWindow(p.n, H, CONSENSUS))) {
+      faults.push(`#${p.n}: gilt ${shown ? 'outside' : 'missing inside'} the window of #${H}`);
+    }
+  }
+  return faults;
+}
+
 describe('PipelineCanvas motion', () => {
   const s1 = buildPipelineSnapshot();
   const w0 = poolTxHash('w0');
@@ -1895,6 +2001,51 @@ describe('PipelineCanvas motion', () => {
     expect(box.style.getPropertyValue('stroke')).toBe('none');
     expect(rectOf(box)).toEqual(asRect(cardBox('row', G.cardW, CARD_H, false)));
   });
+
+  // Measured in Chrome on 26b7f8e3: while the chain slid after a landing, the gilt strap broke at
+  // its far end for about 400 ms (frames 7–11 of land-right.png). The block leaving the screen
+  // still counted: the tail started past its right edge while it faded, and its link to the block
+  // sliding into its slot had no extent. A leaving block takes no part in the strap; the tail
+  // starts at the last plate that stays and moves with it. Sampled frame by frame through the
+  // landing and the slide, at rest and with a block pointed at (its window moves the gilt).
+  it.each([null, T - 3])(
+    'keeps the strap whole through a landing and the slide, a block leaving at the far end (pointing at %s)',
+    (pointing) => {
+      viewW = CONTAINER_VIEW_W;
+      const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+      const svg = getByTestId('pipeline-svg');
+      if (pointing !== null) {
+        act(() =>
+          usePipelineHoverStore.getState().setHover({ block: pointing, tx: null, window: pointing })
+        );
+      }
+      // seven plates on screen before and after: T−6 leaves while T+1 … T−5 slide one slot right
+      expect(buildScene(s1, CONTAINER_VIEW_W, 'settled').cards.map((c) => c.block.number)).toEqual(
+        Array.from({ length: 7 }, (_, i) => T - i)
+      );
+      rerender(<PipelineCanvas snapshot={s2} />);
+      const exitLayer = svg.querySelector('[data-layer="exit"]') as SVGGElement;
+      const faults: string[] = [];
+      let leaving = 0;
+      let nearEnd = 0;
+      for (let ms = 16; ms <= t.settleAt + 1000; ms += 16) {
+        at(16);
+        const landed = svg.querySelector(`[data-card="${newHash}"]`);
+        const H = pointing ?? (landed?.getAttribute('data-slot') === 'landing' ? T + 1 : T + 2);
+        if (exitLayer.querySelector('g')) leaving++;
+        // the near end: the new NEXT showing while the landed block slides off its slot
+        if (path(svg, 'pend').getAttribute('d') !== 'M0 0') {
+          if (landed?.getAttribute('data-slot') === 'chain') nearEnd++;
+        }
+        faults.push(...strapFaults(svg, s2, 'row', H).map((f) => `${ms} ms: ${f}`));
+      }
+      // the slide was sampled while T−6 left (600 ms of it), and while NEXT's dashed pair ran to
+      // the landed block sliding into the tip's slot
+      expect(leaving).toBeGreaterThan(30);
+      expect(nearEnd).toBeGreaterThan(10);
+      expect(faults).toEqual([]);
+    }
+  );
 
   it('retires the block that leaves the screen through the exit layer', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
@@ -4181,6 +4332,40 @@ describe('PipelineCanvas motion below 589 px', () => {
     at(FRESH_MS + 16);
     expect(fills()).toEqual(marks.map((m) => m.own));
   });
+
+  // The column (lane S1's ruling on 26b7f8e3, the same code path as the row): while the rows step
+  // down after a landing, T−3 leaves below the last row; the strap stays whole down the rows that
+  // stay and its tail starts at the bottom of the last of them, at rest and with T pointed at.
+  it.each([null, T])(
+    'keeps the strap whole down the rows through a landing and the slide, a row leaving at the bottom (pointing at %s)',
+    (pointing) => {
+      const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
+      const svg = getByTestId('pipeline-svg');
+      if (pointing !== null) {
+        act(() =>
+          usePipelineHoverStore.getState().setHover({ block: pointing, tx: null, window: pointing })
+        );
+      }
+      rerender(<PipelineCanvas snapshot={s2} />);
+      const exitLayer = svg.querySelector('[data-layer="exit"]') as SVGGElement;
+      const faults: string[] = [];
+      let leaving = 0;
+      let nearEnd = 0;
+      for (let ms = 16; ms <= t.settleAt + 1000; ms += 16) {
+        at(16);
+        const landed = svg.querySelector(`[data-card="${newHash}"]`);
+        const H = pointing ?? (landed?.getAttribute('data-slot') === 'landing' ? T + 1 : T + 2);
+        if (exitLayer.querySelector('g')) leaving++;
+        if (path(svg, 'pend').getAttribute('d') !== 'M0 0') {
+          if (landed?.getAttribute('data-slot') === 'chain') nearEnd++;
+        }
+        faults.push(...strapFaults(svg, s2, 'column', H).map((f) => `${ms} ms: ${f}`));
+      }
+      expect(leaving).toBeGreaterThan(30);
+      expect(nearEnd).toBeGreaterThan(10);
+      expect(faults).toEqual([]);
+    }
+  );
 
   it('slides the landed block down one row into the chain while the older rows step down', () => {
     const { getByTestId, rerender } = renderPlain(<PipelineCanvas snapshot={s1} />);
