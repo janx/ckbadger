@@ -236,7 +236,9 @@ it('writes each Newest row on one line with the name bright and the rest in its 
   const own = base.traits.find((t) => t.name === 'Face')!;
   expect(numbered).toHaveAttribute(
     'title',
-    `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · SECP256K1/blake160 · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
+    // B4 second fix round (re-pinned on purpose): the owner's lock as its tag writes it, nothing
+    // for the default lock (it wrote the API's name, 'SECP256K1/blake160')
+    `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
   );
   expect(plain.getAttribute('title')).toContain(`owner ${base.ownerLockHash}`);
 });

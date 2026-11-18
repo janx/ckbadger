@@ -35,6 +35,8 @@ import {
 } from '@/components/asset/object-hero';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
+import { cellOwnerLock, LockWordsView } from '@/components/ui/lock-kind';
+import { Dotted } from '@/components/ui/phone-row';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -296,11 +298,18 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               ) : (
                 evidenceState
               ),
+              // the owner's lock by the one decision (B4): nothing for the default lock
               note: current ? (
-                <>
-                  {current.lockName ?? 'Unregistered lock'} · since{' '}
-                  <Utc8Date timestamp={current.timestamp} />
-                </>
+                <Dotted
+                  parts={[
+                    cellOwnerLock(current) && (
+                      <LockWordsView words={cellOwnerLock(current)!} size="row" />
+                    ),
+                    <>
+                      since <Utc8Date timestamp={current.timestamp} />
+                    </>,
+                  ]}
+                />
               ) : undefined,
             },
             {

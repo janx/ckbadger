@@ -10,9 +10,7 @@ import {
   transactionScriptHashes,
 } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { lockWords, lockWordsText } from '@/components/ui/lock-kind';
-import { addressScript } from '@/lib/lock-script';
-import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
+import { cellLockFacts, lockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { ShortId } from '@/components/ui/short-id';
 function required<T>(value: T | null | undefined, hash: string, field: string): T {
   if (value === null || value === undefined)
@@ -52,13 +50,6 @@ export function kindOf(cell: {
     default:
       return cell.type ? 'other' : 'ckb';
   }
-}
-/** A cell's lock's hash type as the chain writes it; any other word is a contract break, named. */
-function hashTypeOf(value: string): ScriptRefHashType {
-  const hashType = normalizeScriptRefHashType(value);
-  if (hashType === null)
-    throw new Error(`lock hash type ${JSON.stringify(value)} is not a CKB hash type`);
-  return hashType;
 }
 
 /**
@@ -103,27 +94,18 @@ export function cellTiles(
   ) => {
     const context = `${side} ${i}`;
     const lock = required(cell.lock ?? undefined, tx.hash, `${context}.lock`);
-    const hashType = hashTypeOf(lock.hashType);
     const address = cell.address ?? null;
-    if (address !== null) {
-      const spelled = addressScript(address);
-      if (
-        spelled.codeHash !== lock.codeHash.toLowerCase() ||
-        spelled.hashType !== hashType ||
-        spelled.args !== lock.args.toLowerCase()
-      )
-        throw new Error(
-          `Transaction ${tx.hash} ${context}: address ${address} spells the lock ${spelled.codeHash} by ${spelled.hashType}, args ${spelled.args}; the cell's lock is ${lock.codeHash} by ${hashType}, args ${lock.args}`
-        );
-    }
+    const words = lockWords(
+      cellLockFacts(
+        { lock, name: registeredName(lookup, lock.codeHash), address },
+        `Transaction ${tx.hash} ${context}`
+      ),
+      'inline'
+    );
     const lockHash =
       address === null
         ? required(scripts[side].get(i)?.lock, tx.hash, `${context}'s lock script group`)
         : null;
-    const words = lockWords(
-      { name: registeredName(lookup, lock.codeHash), codeHash: lock.codeHash, hashType },
-      'inline'
-    );
     return {
       owner: (
         // the row size, as the summary, the balances and What moved write the same party (R9): a

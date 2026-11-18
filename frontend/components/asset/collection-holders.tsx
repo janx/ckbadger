@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { LockKind, LockWordsView, rowLock } from '@/components/ui/lock-kind';
+import { LockKind, LockWordsView, lockWordsText, rowLock } from '@/components/ui/lock-kind';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -173,7 +173,8 @@ function ScopedCollectionHolders({
       holder.address ??
         holder.lockScriptHash ??
         `${holder.ownerHashPrefix ?? holderKey(holder)} (unresolved)`,
-      holder.lockCodeHash === null ? 'lock not indexed' : (holder.lockKind ?? holder.lockCodeHash),
+      // what its Lock cell says, from the one decision (B4)
+      lockWordsText(rowLock(holder, 'column')!, 'row'),
       `${holder.itemCount.toLocaleString('en-US')} ${countNoun(holder.itemCount, 'item', 'items')}`,
     ].join(' · ');
   const listed = holders.data?.data ?? [];

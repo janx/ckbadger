@@ -41,7 +41,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUtc8DateTime } from '@/lib/utils';
 import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
 import { TraitText } from '@/components/asset/trait-text';
-import { LockWordsView, rowLock, type LockWords } from '@/components/ui/lock-kind';
+import { LockWordsView, lockWordsText, rowLock, type LockWords } from '@/components/ui/lock-kind';
 import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
 import { Utc8Date } from '@/components/ui/utc8-date';
@@ -71,7 +71,6 @@ function objectName(number: string | null, sporeId: string, size: ShortSize): st
   return '#' + BigInt(number).toLocaleString('en-US');
 }
 
-/** A gene value as a table cell: a Bitcoin inscription by its id, anything else for people. */
 /** An owner's lock beside its address, or null where none is written (B4). */
 function ownerLock(item: {
   lockKind: string | null;
@@ -88,6 +87,7 @@ function ownerLock(item: {
   );
 }
 
+/** A gene value as a table cell: a Bitcoin inscription by its id, anything else for people. */
 function geneCellText(value: string): string {
   return inscriptionText(value) ?? traitDisplay(value);
 }
@@ -342,8 +342,10 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                   const itemTier = item.mediaProfile?.tier ?? null;
                   // Table-rows L2-4 / C11: one line per object; what does not fit it (its id, the
                   // genes past the columns, its DNA, the full owner) is the row's title.
+                  // the owner's lock as the row's tag writes it, from the one decision (B4)
+                  const ownerWords = item.ownerLockHash ? ownerLock(item) : null;
                   const owner = item.ownerLockHash
-                    ? `owner ${item.ownerAddress ?? item.ownerLockHash} · ${item.lockKind ?? item.lockCodeHash}`
+                    ? `owner ${item.ownerAddress ?? item.ownerLockHash}${ownerWords ? ` · ${lockWordsText(ownerWords, 'row')}` : ''}`
                     : 'no live owner';
                   const genes = (lanes ?? []).flatMap((lane) => {
                     const own = item.traits.find((t) => t.name === lane.gene);

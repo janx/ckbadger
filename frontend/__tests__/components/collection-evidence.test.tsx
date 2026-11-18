@@ -30,8 +30,10 @@ describe('ClusterCellEvidence', () => {
     const facts = within(section).getByLabelText('The cluster cell');
     expect(facts).toHaveTextContent(
       // U-09 (re-pinned): the evidence's rows at the row size; R9 (re-pinned): `ckb1…` and 8
-      // B4 fix round (re-pinned): the producer's owner is a real address now, its tail read off it
-      `live cell0xa5c53484…1f3261:0 · created in #99 · 2023-11-15held byckb1…${current.cell.ownerAddress.slice(-8)} · Unregistered locktype0x7366a615…030075 · the cluster id is this cell’s type args`
+      // B4 fix round (re-pinned): the producer's owner is a real address now, its tail read off it;
+      // second fix round (re-pinned): its lock by the one decision, 'lock 0x…' (it was
+      // 'Unregistered lock')
+      `live cell0xa5c53484…1f3261:0 · created in #99 · 2023-11-15held byckb1…${current.cell.ownerAddress.slice(-8)} · lock 0x41414141…414141type0x7366a615…030075 · the cluster id is this cell’s type args`
     );
     expect(within(facts).getAllByRole('link')[0]).toHaveAttribute(
       'href',

@@ -398,7 +398,8 @@ describe('Token holders (board L5)', () => {
     );
     expect(second).toHaveAttribute(
       'title',
-      `#2 · 0x${'22'.repeat(32)} · lock not indexed · 10,000,000 RGB++ · 41.23% of supply`
+      // B4 second fix round (re-pinned on purpose): the Lock cell's words, 'not indexed'
+      `#2 · 0x${'22'.repeat(32)} · not indexed · 10,000,000 RGB++ · 41.23% of supply`
     );
   });
 
@@ -494,11 +495,15 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
       'href',
       scriptPage
     );
-    expect(unnamed).toHaveAttribute('title', expect.stringContaining(` · ${unregistered} · `));
+    // B4 second fix round (re-pinned on purpose): the row's title says what its Lock cell says, from the one decision: 'lock 0x43434343…434343' (it was the bare code hash)
+    expect(unnamed).toHaveAttribute(
+      'title',
+      expect.stringContaining(' · lock 0x43434343…434343 · ')
+    );
     // B4 fix round (the coordinator's ruling, re-pinned on purpose): no cell under "Lock" is
     // empty: a lock that is not indexed says so in words, quiet (it was an empty cell)
     expect(notIndexed.querySelector('[data-lock-kind]')).toHaveTextContent(/^not indexed$/);
-    expect(notIndexed).toHaveAttribute('title', expect.stringContaining(' · lock not indexed · '));
+    expect(notIndexed).toHaveAttribute('title', expect.stringContaining(' · not indexed · '));
     for (const row of [named, unnamed, notIndexed]) {
       expect(row).not.toHaveTextContent(/lock kind unavailable/i);
       expect(row.getAttribute('title')).not.toMatch(/lock kind unavailable/i);

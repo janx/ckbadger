@@ -86,6 +86,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode, unitText } from '@/components/ui/units';
+import { cellLockFacts, lockWords, lockWordsText } from '@/components/ui/lock-kind';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-small">Loading graph section…</p>,
@@ -1781,8 +1782,21 @@ export default function TransactionDetailPage() {
                     : `Lock of output ${i}`}
                 </dt>
                 <dd>
-                  {registeredName(lookup, cell.lock.codeHash) ?? (
-                    <ShortId value={cell.lock.codeHash} kind="hash" size="row" />
+                  {/* the lock as its tile names it, from the one decision (B4), here a fact that
+                      is never empty: the default lock by its name */}
+                  {lockWordsText(
+                    lockWords(
+                      cellLockFacts(
+                        {
+                          lock: cell.lock,
+                          name: registeredName(lookup, cell.lock.codeHash),
+                          address: cell.address ?? null,
+                        },
+                        `Transaction ${tx.hash} output ${i}`
+                      ),
+                      'column'
+                    )!,
+                    'row'
                   )}
                   ,{' '}
                   <span className={cell.lockArgsDecodeError ? 'text-text-dim' : undefined}>

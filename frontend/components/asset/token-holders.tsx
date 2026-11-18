@@ -21,7 +21,7 @@ import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { SHARE_TRACK_PX, formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { rowTagClass } from '@/components/ui/row-tag';
-import { LockKind, LockWordsView, rowLock } from '@/components/ui/lock-kind';
+import { LockKind, LockWordsView, lockWordsText, rowLock } from '@/components/ui/lock-kind';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatCount, countNoun } from '@/lib/format-count';
@@ -406,7 +406,8 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     [
       `#${rank(h)}`,
       h.address ?? h.lockScriptHash,
-      h.lockCodeHash === null ? 'lock not indexed' : (h.lockKind ?? h.lockCodeHash),
+      // what its Lock cell says, from the one decision (B4)
+      lockWordsText(rowLock(h, 'column')!, 'row'),
       `${formatTokenBalanceWithRawMarker(h.balance, decimals)}${symbol ? ` ${symbol}` : ''}`,
       `${holderShare(h).text} of supply`,
     ].join(' · ');

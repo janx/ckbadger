@@ -6,7 +6,7 @@ import { ShortId } from '@/components/ui/short-id';
 import type { ParticipantRef } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
-import type { ScriptRefHashType } from '@/lib/script-ref';
+import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /** A lock's name in its default form: plain words in the quiet ink, at the size of its line. */
@@ -107,6 +107,44 @@ export function rowLockFacts({
   return { name: lockKind, codeHash: script.codeHash, hashType: script.hashType };
 }
 
+/** A lock's hash type as the chain writes it; any other word is a contract break, named. */
+function hashTypeOf(value: string, where: string): ScriptRefHashType {
+  const hashType = normalizeScriptRefHashType(value);
+  if (hashType === null)
+    throw new Error(`${where}: lock hash type ${JSON.stringify(value)} is not a CKB hash type`);
+  return hashType;
+}
+
+/**
+ * A cell's lock (a transaction's input or output, a version of an item's cell): its script and the
+ * registry's name for its code hash. Its owner's address, where it has one, is that script spelled
+ * (lane B4 second fix round): an address that spells another lock (code hash, hash type or args)
+ * is refused with `where` named, as is a hash type the chain does not have.
+ */
+export function cellLockFacts(
+  cell: {
+    lock: { codeHash: string; hashType: string; args: string };
+    name: string | null;
+    address: string | null;
+  },
+  where: string
+): LockFacts {
+  const { lock, name, address } = cell;
+  const hashType = hashTypeOf(lock.hashType, where);
+  if (address !== null) {
+    const spelled = addressScript(address);
+    if (
+      spelled.codeHash !== lock.codeHash.toLowerCase() ||
+      spelled.hashType !== hashType ||
+      spelled.args !== lock.args.toLowerCase()
+    )
+      throw new Error(
+        `${where}: address ${address} spells the lock ${spelled.codeHash} by ${spelled.hashType}, args ${spelled.args}; the cell's lock is ${lock.codeHash} by ${hashType}, args ${lock.args}`
+      );
+  }
+  return { name, codeHash: lock.codeHash.toLowerCase(), hashType };
+}
+
 /**
  * A transaction party's lock: the registry's name the API sends and, where the party has an
  * address, the lock read off it (a feed's party carries no code hash). A party with no address (its
@@ -118,6 +156,26 @@ export function partyLockFacts(party: ParticipantRef): LockFacts {
   if (party.address === null) return { name, codeHash: null, hashType: null };
   const { codeHash, hashType } = addressScript(party.address);
   return { name, codeHash, hashType };
+}
+
+/**
+ * The lock of a version of an item's cell beside its owner (`cellLockFacts` off the cell's lock and
+ * its owner's address, `lockWords` inline), or null where none is written: the default lock.
+ */
+export function cellOwnerLock(cell: {
+  lock: { codeHash: string; hashType: string; args: string };
+  lockName: string | null;
+  ownerAddress: string;
+  txHash: string;
+  outputIndex: number;
+}): LockWords | null {
+  return lockWords(
+    cellLockFacts(
+      { lock: cell.lock, name: cell.lockName, address: cell.ownerAddress },
+      `cell ${cell.txHash}:${cell.outputIndex}`
+    ),
+    'inline'
+  );
 }
 
 /** An API row's lock where it stands (`rowLockFacts`, `lockWords`), or null where none is written. */
@@ -190,7 +248,8 @@ export function LockWordsView({
             // default lock's for a by-data lock on its code hash)
             href={getScriptDetailHref({
               codeHash: codeHash!,
-              hashType: words.form === 'lock' ? words.hashType : null,
+              // the default lock is its code hash by type
+              hashType: words.form === 'lock' ? words.hashType : 'type',
               scriptKind: 'lock',
             })}
             title={codeHash ?? undefined}
