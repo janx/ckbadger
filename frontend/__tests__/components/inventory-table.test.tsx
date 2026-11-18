@@ -476,6 +476,107 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
 // holding, the "CKB held" bar was a 1–3 px stub from about the twelfth row on, and its head stood
 // over the bar while the sorted figure had none. The bar leaves the three lists; the figure, right
 // aligned under its own head, shows the magnitude.
+// Readability F3-e: every inventory column budgeted from the widest value it writes (lib/
+// list-bounds.ts), at 0.6 em a glyph (names 14 px, cells 13, tags, heads and notes 12) and the 16 px
+// gap after every column but the last. The name column is the flexible one: its marks and tags at
+// their widest and 12 characters of the name at its minimum, the rest of the container beyond it;
+// a longer name ends in the one ellipsis (the row's title holds it whole).
+describe('inventory columns budgeted from what they hold (readability F3-e)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+  const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+  /** A row tag: its words at 12 px, 5 px sides and a 1 px border. */
+  const tag = (text: string) => at(text, 12) + 12;
+  const name = at('x'.repeat(12), 14);
+  /** A count, or "Unavailable" where the API has not derived it, whichever is wider. */
+  const count = ceil(Math.max(at('99,999,999', 13), at('Unavailable', 13)) + 16);
+  const held = ceil(Math.max(at('CKB held in its cells', 12), at('99,999,999,999', 13)) + 16);
+  const cases = [
+    [
+      'token',
+      'Tokens',
+      [
+        // the 16 px mark, a name, the symbol's tag (8 characters) and "sUDT", 8 px apart
+        ceil(16 + 8 + name + 8 + tag('x'.repeat(8)) + 8 + tag('sUDT') + 16),
+        count,
+        count,
+        // a supply to 19 characters ("100,000,000,000,000"); a wider one ends in the ellipsis
+        ceil(at('100,000,000,000,000', 13) + 16),
+        held,
+        // "×1.64" or "Unavailable", the last column
+        ceil(at('Unavailable', 13)),
+      ],
+      [268, 102, 102, 165, 168, 86],
+    ],
+    [
+      'object',
+      'Object collections',
+      [
+        // the 24 px framed thumb, a name, the standard's tag and the widest composition tag
+        ceil(24 + 8 + name + 8 + tag('m-NFT') + 8 + tag('Composition unavailable') + 16),
+        // live items and the quiet " / minted" beside them, six digits each
+        ceil(at('999,999', 13) + at(' / 999,999', 12) + 16),
+        count,
+        // an activity count (never "Unavailable": a count not derived says nothing)
+        ceil(at('99,999,999', 13) + 16),
+        held,
+        ceil(at('Unavailable', 13)),
+      ],
+      [391, 143, 102, 94, 168, 86],
+    ],
+    [
+      'identity',
+      'Identity systems',
+      [
+        // the 16 px mark, a name and the widest standard's tag, ".bit Cell"
+        ceil(16 + 8 + name + 8 + tag('.bit Cell') + 16),
+        count,
+        count,
+        count,
+        held,
+        // occupied CKB, whole from 1,000 up, the last column
+        ceil(Math.max(at('99,999,999,999', 13), at('Unavailable', 13))),
+      ],
+      [226, 102, 102, 102, 168, 110],
+    ],
+  ] as const;
+
+  it.each(cases)(
+    'pins every %s column and the form at its sum',
+    (assetType, label, budgets, numbers) => {
+      expect(budgets).toEqual(numbers);
+      const sum = budgets.reduce((s: number, w: number) => s + w, 0);
+      const rows = [{ ...asset, assetType }];
+      const { unmount } = render(<InventoryRows assetType={assetType} rows={rows} />);
+      const table = screen.getByRole('table', { name: label });
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual([...budgets]);
+      expect(cols[0].width).toBe('auto');
+      expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+      unmount();
+      for (const [width, form] of [
+        [1232, 'table'],
+        [sum, 'table'],
+        [sum - 1, 'rows'],
+        [608, 'rows'],
+        [358, 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        const { container, unmount: drop } = render(
+          <InventoryRows assetType={assetType} rows={rows} />
+        );
+        expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+        drop();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    }
+  );
+});
+
 describe('CKB held is a right-aligned figure under its head, with no bar (readability B5)', () => {
   const rich: Asset = {
     ...asset,

@@ -372,6 +372,97 @@ describe('Transactions pool view', () => {
     }
   });
 
+  // Readability F3-e: every pool column budgeted from the widest value its formatter writes
+  // (lib/list-bounds.ts), at 0.6 em a glyph (the hash 14 px, the cells 13, the units and heads 12)
+  // and the 16 px gap after every column but the last. What it does is the flexible column: its
+  // longest word whole, the rest of the container beyond the sum. The pool and the committed list
+  // are one page and change form at one width, the larger of their sums: both are 1,220 px.
+  it('budgets every pool column from what it holds; both lists change form at 1,220 px', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // the stone and its gap, the hash at the row size at 14 px
+      ceil(ROW_SEAL.tx.footprint + at('0xabababab…ababab', 14) + 16),
+      // the longest word a headline or "Interpretation unavailable" breaks around
+      ceil(at('Interpretation', 13) + 16),
+      // the dot, its gap, "Confirming", the gap and the longest wait under 100 days
+      ceil(7 + 6 + at('Confirming', 13) + 6 + at('· 99d ago', 13) + 16),
+      // four digits a side, as the pool writes them (ungrouped)
+      ceil(at('9999 → 9999', 13) + 16),
+      // a value under a million CKB on one line with its unit; a larger one breaks before its
+      // decimals
+      ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
+      // a fee under 100 CKB with its unit
+      ceil(at('99.99999999', 13) + at(' CKB', 12) + 16),
+      // a rate up to 1,000,000,000 (its head's longest word, "shannon/KB", is narrower)
+      ceil(Math.max(at('1,000,000,000', 13), at('shannon/KB', 12)) + 16),
+      // a transaction no larger than a block
+      ceil(at('597,000', 13) + 16),
+      // the most a transaction may take, the last column
+      ceil(at('3,500,000,000', 13)),
+    ];
+    expect(budgets).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const poolPage = {
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+      data: [
+        {
+          hash: `0x${'ab'.repeat(32)}`,
+          status: 'pending' as const,
+          value: '100000000',
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '1709221',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation: { status: 'complete' as const, reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    };
+    vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
+    const { unmount } = render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[1].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    unmount();
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1220, 'table'],
+      [1219, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
+      atContainerWidth(width);
+      const shown = render(<TransactionsPage />);
+      fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+      const list = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
+      });
+      expect(list.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      shown.unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
   // The seals by kind (C2): a pool transaction's row leads with its stone (the stone its page
   // presses), dashed — it is not in a block yet — before the hash, in the table and the phone row.
   it('leads each pool row with its transaction’s stone, dashed, in the table and the phone row', async () => {

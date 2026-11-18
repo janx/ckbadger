@@ -554,6 +554,92 @@ describe('TransactionListTable row stones', () => {
   });
 });
 
+// Readability F3-e: every column of the committed list is budgeted from the widest value its
+// formatter writes for the chain (lib/list-bounds.ts), at 0.6 em a glyph (the hash 14 px, the cells
+// 13, the ticks 12) and the 16 px gap after every column but the last. What it did is the flexible
+// column: the longest DAO headline whole at its minimum, the rest of the container beyond the sum.
+// The block and its age are two data of one cell, on two lines: at the minimum every row is two
+// lines already (the note under the headline), and the table is 1,220 px, inside the widest
+// container (1,232 at 1280).
+describe('TransactionListTable budgets (readability F3-e)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+  /** A column's minimum, as columnPx rounds it: to the hundredth, then up to a whole pixel. */
+  const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+  /** A head's tick row whole over its track: the ticks at 12 px, one glyph apart, 48 at least. */
+  const tickRow = (...ticks: string[]) => Math.max(48, at(ticks.join(' '), 12));
+  const budgets = [
+    // the stone and its gap, the hash at the row size at 14 px
+    ceil(ROW_SEAL.tx.footprint + at('0x00de304b…25cbbc', 14) + 16),
+    // "#99,999,999" over "10y 364d ago", the wider of its two lines
+    ceil(Math.max(at('#99,999,999', 13), at('10y 364d ago', 13)) + 16),
+    // the 16 px mark, its 8 px gap and "DAO Withdraw Complete" whole; its note goes under it
+    ceil(16 + 8 + at('DAO Withdraw Complete', 13) + 16),
+    // a value under a billion CKB, or a cellbase's "reward" and four whole digits
+    ceil(Math.max(at('999,999,999.99999999', 13), at('reward 9,999.99999999', 13)) + 16),
+    // a fee under 100 CKB
+    ceil(at('99.99999999', 13) + 16),
+    // four digits a side
+    ceil(at('9,999 → 9,999', 13) + 16),
+    // a transaction is no larger than a block: "0 … 600,000" over the track, "600,000" beside it
+    ceil(tickRow('0', '600,000') + 10 + at('600,000', 13) + 16),
+    // a scale under a billion cycles: its ticks in the tick form ("1.5k" the widest), the exact
+    // "750,000,000" beside the bar; the last column
+    ceil(tickRow('0', '1.5k') + 10 + at('750,000,000', 13)),
+  ];
+
+  it('pins each column to its content and the table to their sum, 1,220 px', () => {
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(budgets).toEqual([216, 110, 204, 180, 102, 118, 146, 144]);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[2].width).toBe('auto');
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    // each bar's track holds its head's widest tick row
+    const heads = within(table).getAllByRole('columnheader');
+    expect((heads[6].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe(
+      `${tickRow('0', '600,000')}px`
+    );
+    expect((heads[7].querySelector('[data-scale-ticks]') as HTMLElement).style.width).toBe('48px');
+  });
+
+  it('writes the block over its age, two lines with no separator', () => {
+    render(<TransactionListTable transactions={[transfer]} />);
+    const [, row] = within(screen.getByRole('table')).getAllByRole('row');
+    const cell = row.querySelectorAll('td')[1];
+    const lines = Array.from(cell.firstElementChild!.children) as HTMLElement[];
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toHaveTextContent(/^#20,829,775$/);
+    expect(lines[1]).toHaveTextContent(/^\d+[smhdy].* ago$/);
+    for (const line of lines) expect(line).toHaveClass('block', 'whitespace-nowrap');
+    expect(cell).not.toHaveTextContent('·');
+  });
+
+  it('changes form where the sum stops fitting: a table at 1,232 and 1,220, rows below', () => {
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1220, 'table'],
+      [1219, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount } = render(
+        <TransactionListTable transactions={[scriptCall, transfer, cellbase]} />
+      );
+      expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe('TransactionListTable phone row (board L2)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

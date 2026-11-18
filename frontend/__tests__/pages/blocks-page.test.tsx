@@ -542,6 +542,113 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(within(note).getByText('6,831,940')).toHaveClass('text-text-bright');
   });
 
+  // Readability F3-e: every column of the wide table is budgeted from the widest value its
+  // formatter writes for the chain (lib/list-bounds.ts), at 0.6 em a glyph (14 px key, 13 px cells,
+  // 12 px hash, count and ticks) and the 16 px gap after every column but the last. The bars'
+  // tracks hold their heads' tick rows ("0", a glyph, the widest scale) whole. The table needs
+  // 1,284 px: 52 more than the widest container, 1,232 at 1280, holds, so there the 608 px table
+  // is drawn — this table stops there (the lane's hand-back gives the options).
+  describe('every wide column budgeted from what it holds (readability F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    /** A column's minimum, as columnPx rounds it: to the hundredth, then up to a whole pixel. */
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    /** A head's tick row whole over its track: the ticks at 12 px, one glyph apart, 48 at least. */
+    const tickRow = (...ticks: string[]) => Math.max(48, at(ticks.join(' '), 12));
+    const budgets = [
+      // the stone and its gap, "#99,999,999" (eight digits) at 14 px, a space at 13, the tight hash
+      ceil(
+        ROW_SEAL.block.footprint + at('#99,999,999', 14) + chars(1, 13) + at('0x0000…d2de', 12) + 16
+      ),
+      // the widest age, "10y 364d ago" (two digits of years from genesis's tenth birthday)
+      ceil(at('10y 364d ago', 13) + 16),
+      // the 112 px glyph, its 8 px gap and the widest count, "9,999 tx" at 12 px
+      ceil(112 + 8 + at('9,999 tx', 12) + 16),
+      // the flexible column: an unnamed miner whole, "ckb1…4s93hhsj"; a pool name takes the rest
+      ceil(at('ckb1…4s93hhsj', 13) + 16),
+      // four whole digits of reward, every decimal
+      ceil(at('9,999.99999999', 13) + 16),
+      // fees under 1,000 CKB
+      ceil(at('999.99999999', 13) + 16),
+      // genesis's 1,236,271 bytes on a 1,500,000 scale: its tick row, the 10 px gap, its figure
+      ceil(tickRow('0', '1,500,000') + 10 + at('1,500,000', 13) + 16),
+      // the cycle limit's 4,000,000,000 scale, the last column (no gap after it)
+      ceil(tickRow('0', '4,000,000,000') + 10 + at('4,000,000,000', 13)),
+    ];
+
+    it('pins each column to its content and the table to their sum, 1,284 px', async () => {
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+      expect(budgets).toEqual([230, 110, 194, 118, 126, 110, 176, 220]);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+      // the Miner column takes what the container gives beyond the sum
+      expect(cols.map((c) => c.width)).toEqual([
+        '230px',
+        '110px',
+        '194px',
+        'auto',
+        '126px',
+        '110px',
+        '176px',
+        '220px',
+      ]);
+      expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1284);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(1284);
+    });
+
+    it('draws each bar on a track its head’s widest tick row fits', async () => {
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const ths = Array.from(table.querySelectorAll('th'));
+      for (const [head, track] of [
+        ['Size, bytes', tickRow('0', '1,500,000')],
+        ['Cycles', tickRow('0', '4,000,000,000')],
+      ] as const) {
+        const th = ths.find((h) => h.textContent?.startsWith(head))!;
+        expect(
+          Number.parseFloat((th.querySelector('[data-scale-ticks]') as HTMLElement).style.width)
+        ).toBe(track);
+      }
+      expect([tickRow('0', '1,500,000'), tickRow('0', '4,000,000,000')]).toEqual([79.2, 108]);
+    });
+
+    it('lets a long pool name end in the one ellipsis, its title the miner', async () => {
+      const long = 'A Mining Pool Whose Name Is Longer Than Its Column';
+      vi.mocked(api.getBlocks).mockResolvedValue({
+        ...page,
+        data: [{ ...page.data[0], minerPool: long }, page.data[1]],
+      });
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      const pool = within(table).getByRole('link', { name: long });
+      expect(pool.closest('td')).toHaveClass('truncate');
+      expect(pool).toHaveAttribute('title', miner);
+    });
+
+    it('changes form where the sum stops fitting: 1,284 the table, below it the 608 px table', async () => {
+      for (const [width, form] of [
+        [1284, 'table'],
+        [1283, 'narrow-table'],
+        [1232, 'narrow-table'],
+        [608, 'narrow-table'],
+        [358, 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        const { container, unmount } = render(<BlocksPage />);
+        await waitFor(() =>
+          expect(container.querySelector('[data-list-form]')).toHaveAttribute(
+            'data-list-form',
+            form
+          )
+        );
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        vi.mocked(api.getBlocks).mockResolvedValue(page);
+      }
+    });
+  });
+
   // Board L1 (2026-11-01 responsive plan): the phone row is three lines and 640 is a table.
   describe('at phone and 640 widths (board L1)', () => {
     afterEach(() => {

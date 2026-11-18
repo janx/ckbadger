@@ -172,6 +172,57 @@ describe('DAO depositors page (DAO-12)', () => {
     );
   });
 
+  // Readability F3-e: every column budgeted from the widest value it writes (lib/list-bounds.ts),
+  // at 0.6 em a glyph (the depositor 14 px, the cells 13, heads and ticks 12) and the 16 px gap
+  // after every column but the last: 605 px, so the 608 px band draws the table.
+  it('budgets every column from what it holds and changes form at their sum (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // a rank under a million
+      ceil(at('999,999', 13) + 16),
+      // a depositor with no address, its lock hash at the row size (an address is 13 characters)
+      ceil(at('0x00000000…000001', 14) + 16),
+      // the head's word "Deposits" is wider than a count of four digits
+      ceil(Math.max(at('Deposits', 12), at('9,999', 13)) + 16),
+      // under ten billion CKB, every decimal
+      ceil(at('9,999,999,999.99999999', 13) + 16),
+      // the track (its tick row "0 100%" is under 48 px), the 10 px gap, "100.00%"; the last column
+      ceil(48 + 10 + Math.ceil(at('100.00%', 13))),
+    ];
+    expect(budgets).toEqual([71, 159, 74, 188, 113]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(605);
+    vi.mocked(api.getDaoDepositors).mockResolvedValue(page([1, 2], null));
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    const { unmount } = render(<DaoDepositorsPage />);
+    const table = await screen.findByRole('table', { name: 'DAO depositors' });
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    unmount();
+    for (const [width, form] of [
+      [1232, 'table'],
+      [608, 'table'],
+      [605, 'table'],
+      [604, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount: drop } = render(<DaoDepositorsPage />);
+      await waitFor(() =>
+        expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form)
+      );
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      vi.mocked(api.getDaoDepositors).mockResolvedValue(page([1, 2], null));
+    }
+  });
+
   it('puts a depositor on one line in the 640 band, where the five-column table does not fit', async () => {
     atContainerWidth(608);
     onTestFinished(() => {
