@@ -9,6 +9,8 @@ import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objec
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fullText } from '@/__tests__/utils/full-text';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import { allTextLines, expectApart, expectInside, viewBox } from '@/__tests__/utils/svg-text-boxes';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 const layout = sequencingGenes(nervape3xGenetics, 'Nervape 3x');
 const lanes = alleleLanes(
@@ -34,10 +36,11 @@ describe('SequencingGel (Object board, OB-7)', () => {
     );
     const bands = container.querySelectorAll('[data-nibble]');
     expect(bands).toHaveLength(106);
-    // a9 → nibble 0 in lane a, nibble 1 in lane 9; lanes are 15 px wide from x = 38 (V3: the
-    // ruler gutter gave 26 px to the gene columns so they fit the 896 px plate 1:1).
-    expect(Number(bands[0].getAttribute('x'))).toBeCloseTo(38 + 10 * 15 + 2.5, 5);
-    expect(Number(bands[1].getAttribute('x'))).toBeCloseTo(38 + 9 * 15 + 2.5, 5);
+    // a9 → nibble 0 in lane a, nibble 1 in lane 9; lanes are 15 px wide from x = 42 (V3: the
+    // ruler gutter gave 26 px to the gene columns so they fit the 896 px plate 1:1; re-pinned with
+    // readability F3: the gutter holds its "byte", 1 + 29 + 12 = 42, was 38)
+    expect(Number(bands[0].getAttribute('x'))).toBeCloseTo(42 + 10 * 15 + 2.5, 5);
+    expect(Number(bands[1].getAttribute('x'))).toBeCloseTo(42 + 9 * 15 + 2.5, 5);
     expect(screen.getByText('byte')).toBeInTheDocument();
     expect(container.querySelectorAll('[data-ruler]').length).toBeGreaterThanOrEqual(7);
     expect(
@@ -247,7 +250,9 @@ describe('SequencingGel at the measured width (V3)', () => {
   // the arrow's 16 and the 2 px end. 896 − 692.2 = 203.8 px holds 26 characters of 7.8 (202.8)
   // and not 27 (210.6): the budget is 26. A value of 40 characters is cut to it and still fits.
   // Re-pinned (readability R4): the gene text is 13 and 12.5 px at 0.6 em (was 12 and 11.5 px at
-  // a measured 0.636 em), so the budget is 26 (was 27).
+  // a measured 0.636 em), so the budget is 26 (was 27). Re-pinned (readability F3): the ruler's
+  // gutter holds its "byte" (42 px, was 38), the gene columns start at 308 and the value at 696.2,
+  // and 896 − 696.2 = 199.8 px holds 25 characters (195) and not 26 (202.8): the budget is 25.
   it('draws the wide gel at the 896 px plate with a value cut to the full budget', () => {
     stubChartWidth(896);
     const long = 'N'.repeat(40);
@@ -263,8 +268,8 @@ describe('SequencingGel at the measured width (V3)', () => {
     const words = Array.from(container.querySelectorAll('[data-gene="Serial"] text')).map(
       (t) => t.textContent
     );
-    expect(words).toContain(`${'N'.repeat(25)}…`);
-    expect(words.some((w) => w!.includes('N'.repeat(26)))).toBe(false);
+    expect(words).toContain(`${'N'.repeat(24)}…`);
+    expect(words.some((w) => w!.includes('N'.repeat(25)))).toBe(false);
     expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
       'inscription a94617…79e0i0'
     );
@@ -402,6 +407,42 @@ describe('SequencingGel at the measured width (V3)', () => {
       /Nervape 3x: a 200 px DNA map cannot hold 16 lanes/
     );
   });
+
+  // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+  // of the DNA map stands whole inside the svg and touches no other word — the lane digits, the
+  // byte ruler, a gene's reading row beside the lanes (each row a tight line at the head size, so
+  // two genes' rows stand apart) — measured by the type modules (0.6 em a glyph; a tight line over
+  // its baseline, its descent under it); and in the narrow form each gene's name and its bytes
+  // stand whole in their columns of the rows under the map. The real case is Nervape 3x's DNA, at
+  // the DNA plate at 1280 (896) and wider (1232), at 640 (608) and on phones (358, 326).
+  it.each([1232, 896, 608, 358, 326])(
+    'writes every word whole and apart at %i px (readability F3)',
+    (width) => {
+      stubChartWidth(width);
+      const { container } = render(<ControlledGel />);
+      const svg = container.querySelector('svg[role="img"]')!;
+      const lines = allTextLines(svg);
+      expect(lines.length).toBeGreaterThan(16);
+      for (const line of lines) expectInside(line, viewBox(svg), 'the map', 'flush');
+      expectApart(lines, `the map at ${width}`);
+      const list = screen.queryByRole('list', { name: 'Genes' });
+      if (list?.getAttribute('data-rows') !== 'one-line') return;
+      // the one-line rows under a narrow map: the name's column holds its name (the small step), the
+      // bytes' column its bytes and its rule (the meta step), each on a line of its own; the columns
+      // are read from the row's grid (a class, or a style where they are computed)
+      const row = within(list).getAllByRole('listitem')[0].firstElementChild as HTMLElement;
+      const grid =
+        row.style.gridTemplateColumns || /grid-cols-\[([^\]]+)\]/.exec(row.className)![1];
+      const [nameCol, bytesCol] = /(\d+)px[ _](\d+)px/.exec(grid)!.slice(1).map(Number);
+      for (const g of layout.genes) {
+        expect(textPx(g.name.length, fontPx('small')), `${g.name}`).toBeLessThanOrEqual(nameCol);
+        const bytes =
+          g.length === 1 ? `byte ${g.offset}` : `bytes ${g.offset}–${g.offset + g.length - 1}`;
+        for (const words of [bytes, g.rule])
+          expect(textPx(words.length, fontPx('meta')), words).toBeLessThanOrEqual(bytesCol);
+      }
+    }
+  );
 });
 
 /** A synthetic collection of `n` two-variant genes (the .cell deeds shape: 72 genes, 6 objects). */
@@ -595,12 +636,13 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
   });
 
   // Re-pinned with PB-04: with no tag always shown there is no left margin, so the narrowest box
-  // that still holds a 12 px lane is 34 px (the 22 px right edge and one lane), not 96.
-  it('throws on a box too narrow for one 12 px lane instead of drawing an empty gel', () => {
+  // that still holds a 12 px lane is 34 px (the 22 px right edge and one lane), not 96. Re-pinned
+  // with readability F3: the floor is 16 px (a turned 12 px caption's line and a pixel), so 38 px.
+  it('throws on a box too narrow for one lane at the floor instead of drawing an empty gel', () => {
     stubChartWidth(30);
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() => render(<AlleleGel lanes={lanes} total={90} subject="Nervape 3x" />)).toThrow(
-      /Nervape 3x: a 30 px allele gel cannot hold a 12 px lane/
+      /Nervape 3x: a 30 px allele gel cannot hold a 16 px lane/
     );
   });
 });

@@ -1,4 +1,7 @@
 import type { ReorgDetail } from '@/lib/api';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { textPx, tightLinePx } from '@/lib/type-metrics';
 
 /** One block drawn in the fork tree; time and miner are absent for the fork point stub. */
 export interface ForkTreeTile {
@@ -96,22 +99,76 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
   };
 }
 
+/*
+ * The tree's words (readability plan 2026-11-18, lane F3): a tile's number at the label size, its
+ * hash, time and miner at the tick size, each a tight line (lib/chart-type.ts), so a tile's height
+ * and width follow from them. A miner is named by its address in the row form (13 characters) or
+ * by its pool's name, cut to the room it is given (U-09).
+ */
+const LABEL_LINE = tightLinePx(SVG_TEXT.label);
+const TICK_LINE = tightLinePx(SVG_TEXT.tick);
+/** A miner's address in the row form: `ckb1`, the ellipsis and its last 8 characters. */
+const ROW_ADDRESS = SHORT_FORMS.row.address.head + 1 + SHORT_FORMS.row.address.tail;
+/** A wide tile's words stand this far in from its sides. */
+const WIDE_INSET = 8;
+/**
+ * A wide tile: its number over its time over its miner, 5 px under its top and 8 px over its foot,
+ * where a tip mark on the main row (r 9, 2 px under the tile) reaches 7 px in.
+ */
+const WIDE_PAD = { top: 5, foot: 8 } as const;
+const WIDE_TILE = WIDE_INSET + Math.ceil(textPx(ROW_ADDRESS, SVG_TEXT.tick)) + WIDE_INSET;
+/** A compact tile: its number over its hash, 3 px clear of its top and foot. */
+const COMPACT_PAD = 3;
+/** Under a compact tile: its time over its miner, 4 px under the tile and 4 px over the next row. */
+const UNDER_PAD = 4;
+const COMPACT_GAP = 20;
+
 export const FORK_TREE = {
-  /** The desktop board: 96 px tiles on a 112 px pitch, time and miner inside the tile. */
-  wide: { pitch: 112, tile: 96, tileH: 58, x0: 30, right: 30, rowGap: 46, top: 46 },
+  /**
+   * The desktop board: tiles that hold a miner's 13-character address whole (110 px; 96 when the
+   * tick was 10 px) 16 px apart, time and miner inside the tile.
+   */
+  wide: {
+    pitch: WIDE_TILE + 16,
+    tile: WIDE_TILE,
+    inset: WIDE_INSET,
+    /** 5 + 15 + 15 + 15 + 8 = 58 px. */
+    tileH: WIDE_PAD.top + LABEL_LINE + 2 * TICK_LINE + WIDE_PAD.foot,
+    /** The baselines of the number (and the hash beside it), the time and the miner. */
+    numberY: WIDE_PAD.top + lineAscentPx(SVG_TEXT.label),
+    timeY: WIDE_PAD.top + LABEL_LINE + lineAscentPx(SVG_TEXT.tick),
+    minerY: WIDE_PAD.top + LABEL_LINE + TICK_LINE + lineAscentPx(SVG_TEXT.tick),
+    /** A tip mark's radius. */
+    markR: 9,
+    x0: 30,
+    right: 30,
+    rowGap: 46,
+    top: 46,
+  },
   /**
    * Narrow widths (V4 board): tiles shrink from 96 to no less than 72 px with 20 px between them,
-   * and carry only the number and hash; the time and miner hang under the box.
+   * and carry only the number and hash; the time and miner hang under the box, in its column: the
+   * tile and 16 px of the gap after it (`labelRun`), the last column too (`right`), so a clock to
+   * the millisecond (86.4 px at 12 px) stands whole under a 72 px tile.
    */
   compact: {
     minTile: 72,
     maxTile: 96,
-    tileH: 34,
+    /** 3 + 15 + 15 + 3 = 36 px (34 at 10 px). */
+    tileH: COMPACT_PAD + LABEL_LINE + TICK_LINE + COMPACT_PAD,
+    /** The baselines of the number and of the hash under it. */
+    numberY: COMPACT_PAD + lineAscentPx(SVG_TEXT.label),
+    hashY: COMPACT_PAD + LABEL_LINE + lineAscentPx(SVG_TEXT.tick),
+    markR: 8,
     x0: 6,
-    gap: 20,
-    right: 4,
-    /** Under a box: two 10 px lines (time, miner) and a 4 px margin for a tip mark. */
-    under: 34,
+    gap: COMPACT_GAP,
+    labelRun: COMPACT_GAP - 4,
+    right: COMPACT_GAP - 4,
+    /** Under a box: its time and miner lines, 4 px over and under them: 38 px (34 at 10 px). */
+    under: UNDER_PAD + 2 * TICK_LINE + UNDER_PAD,
+    /** The baselines of the time and the miner, from the tile's foot. */
+    timeY: UNDER_PAD + lineAscentPx(SVG_TEXT.tick),
+    minerY: UNDER_PAD + TICK_LINE + lineAscentPx(SVG_TEXT.tick),
     rowGap: 32,
     top: 40,
   },

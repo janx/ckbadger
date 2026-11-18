@@ -1,4 +1,4 @@
-import { fontPx, textPx } from '@/lib/type-metrics';
+import { descentPx, fontPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
 /**
  * The sizes of SVG text by role (readability plan 2026-11-18, lane F3): every `fontSize` on an
@@ -35,6 +35,17 @@ for (const [role, px] of Object.entries(SVG_TEXT))
     throw new Error(
       `chart-type: the ${role} role is ${px} px, under the ${SVG_TEXT_FLOOR} px floor`
     );
+
+/**
+ * How far a tight line of SVG text set at `px` stands over its baseline: the line
+ * (`tightLinePx`, its size and 3 px of leading) less its descent (`descentPx`, 0.3 em): 11.4 at
+ * 12 px, 12.1 at 13. A figure stacks its words in tight lines: a line whose top is at `top` stands
+ * on the baseline `top + lineAscentPx(px)`, its descent reaching `top + tightLinePx(px)`; a band of
+ * n lines is n tight lines and the band's stated padding (readability plan 2026-11-18, lane F3).
+ */
+export function lineAscentPx(px: number): number {
+  return tightLinePx(px) - descentPx(px);
+}
 
 /**
  * The shift from a line's y to the baseline that centres a run of digits on it: 0.3 em (3 px for

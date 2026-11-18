@@ -12,6 +12,13 @@ import network from '../fixtures/fiber-network.json';
 import mainnet from '../fixtures/fiber-network-mainnet.json';
 import type { FiberNetwork } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 const node = (tail: string) => screen.getByRole('button', { name: new RegExp(`^Party …${tail},`) });
 const panel = () => screen.getByRole('complementary', { name: 'Party or pair' });
@@ -318,5 +325,47 @@ describe('FiberNetworkGraph', () => {
     // one line inside 640 px (13 px mono, about 8 px a character)
     expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     expect(caption.textContent).toMatch(/^Each circle is a party, each line a pair/);
+  });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the graph — its name, a party's label under its circle and ring, a hub's count inside its
+// circle, the islands' note — stands whole inside the svg, touches no other word, and a party's
+// label clears its own circle and ring, measured by the type modules (0.6 em a glyph; a tight line
+// over its baseline, its descent under it). The real case is mainnet's network (25 parties), at
+// the desktop column (880), the 640 column (584) and on phones (358, 326).
+describe('FiberNetworkGraph: every word in its place (readability F3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it.each([880, 584, 358, 326])('at %i px', (width) => {
+    stubChartWidth(width);
+    const { container } = render(<Graph network={mainnet as FiberNetwork} />);
+    const svg = container.querySelector('svg[data-fiber-graph]')!;
+    const lines = allTextLines(svg);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the graph', 'flush');
+    expectApart(lines, `the graph at ${width}`);
+    for (const g of [...svg.querySelectorAll('[data-node]')]) {
+      const circles = [...g.querySelectorAll('circle')].filter(
+        (c) => c.getAttribute('fill') !== 'transparent'
+      );
+      // its circle or its ring, with its stroke
+      const reach = Math.max(
+        ...circles.map(
+          (c) => Number(c.getAttribute('r')) + Number(c.getAttribute('stroke-width')) / 2
+        )
+      );
+      const [label] = textLines(g.querySelector('text')!);
+      const cy =
+        Number(circles[0].getAttribute('cy')) +
+        Number(
+          /translate\(0[ ,]+([\d.]+)\)/.exec(
+            svg.querySelector('[data-role="drawing"]')!.getAttribute('transform')!
+          )![1]
+        );
+      expect(label.top, `"${label.text}" clears its ring`).toBeGreaterThan(cy + reach);
+    }
   });
 });

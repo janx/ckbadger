@@ -4,6 +4,14 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { AlleleGel, type GenotypeOverlay } from '@/components/ui/allele-gel';
 import { ALLELE_GEL, alleleGelLayout } from '@/lib/allele-gel-layout';
 import type { AlleleLane } from '@/lib/dob-genes';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  rectBox,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 // PB-04 (UI review 2026-11-14): "this one" on the object page's allele gel was a line drawn through
 // the middle of its own band's name ("COPPER", "Bitcoin inscr…" read as struck out), and on a
@@ -161,4 +169,62 @@ describe('the margin for a genotype tag (PB-04)', () => {
     // the lane's hit box starts 1 px into its slot
     expect(num(first, 'x')).toBe(1);
   });
+});
+
+// Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
+// of the gel stands whole in its place — a gene's caption in its lane's head (across, or turned on
+// end inside its lane), a variant's name inside its band, the count of variants under its lane,
+// the genotype's tag in the margin — touches no other word, and stays inside the svg, measured by
+// the type modules (0.6 em a glyph; a tight line over its baseline, its descent under it). The
+// real cases: the object page's two genes with "this one", and a DOB of 16 and of 24 genes (their
+// captions turned on end), at the object column at 1280 (1232), at 640 (608), on phones (358, 326).
+describe('every word of the gel in its place (readability F3)', () => {
+  const genes = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      lane(`prev.gene${String(i).padStart(2, '0')}`, [
+        [`trait ${i} first`, 50],
+        ['second', 30],
+        ['third', 20],
+      ])
+    );
+  // a gene whose rare variants are bands 14 to 19 px tall in the 250 px gel, each named
+  const rare = lane('Eyes', [
+    ['common', 76],
+    ['rare', 6],
+    ['rarer', 7],
+    ['rarest', 8],
+    ['the last', 3],
+  ]);
+  const cases = [
+    ['two genes and "this one"', LANES, [THIS_ONE]],
+    ['three genes, one with rare variants', [...LANES, rare], []],
+    ['16 genes', genes(16), []],
+    ['24 genes', genes(24), []],
+  ] as const;
+  it.each([1232, 608, 358, 326].flatMap((w) => cases.map(([n, l, o]) => [w, n, l, o] as const)))(
+    'at %i px, %s',
+    (width, _name, lanes, overlays) => {
+      stubChartWidth(width);
+      const { container } = render(
+        <AlleleGel lanes={lanes} total={100} subject="Nervape" overlays={overlays} />
+      );
+      const svg = container.querySelector('svg')!;
+      const lines = allTextLines(svg);
+      for (const line of lines) expectInside(line, viewBox(svg), 'the gel', 'flush');
+      expectApart(lines, `the gel at ${width}`);
+      for (const g of [...svg.querySelectorAll('[data-lane]')]) {
+        const lane = rectBox(g.querySelector('rect')!);
+        // a caption, across or on end, stands inside its lane's width
+        for (const line of textLines(g.querySelector('[data-gene-caption]')!))
+          expectInside(line, { ...lane, top: -Infinity, bottom: Infinity }, 'a caption', 'flush');
+        // a variant's name inside its band
+        for (const band of [...g.querySelectorAll('rect[data-allele]')]) {
+          const text = band.parentElement!.querySelector('text');
+          if (text)
+            for (const line of textLines(text))
+              expectInside(line, rectBox(band), `"${line.text}" in its band`);
+        }
+      }
+    }
+  );
 });

@@ -15,6 +15,7 @@ import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import type { NetworkMap } from '@/lib/api';
+import { allTextLines, expectApart, expectInside } from '@/__tests__/utils/svg-text-boxes';
 
 // Hierarchy v3 on /network (plan 2026-11-02 lane N, rulings R11–R16): the DAO page's anatomy —
 // title row, one short lede, one display figure with its companion, the picture right under it,
@@ -334,6 +335,27 @@ describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', 
       expect(within(key).getByText(words)).toBeInTheDocument();
     expect(panel).not.toHaveTextContent(/tap or hover/i);
     expect(panel.querySelectorAll('p')).toHaveLength(0);
+  });
+
+  // Readability plan 2026-11-18, lane F3 (the figures' text budgets): each row of the key holds its
+  // words' line (the head size, 13 px: a 16 px tight line) whole, inside the key's svg and apart
+  // from the next row's, beside its glyph, measured by the type modules.
+  it('writes each key row whole inside the key, one under the other (readability F3)', async () => {
+    await renderMap();
+    const panel = screen.getByRole('complementary', { name: 'Selected peer evidence' });
+    const key = within(panel).getByRole('img', { name: /^Key:/ });
+    const lines = allTextLines(key);
+    expect(lines).toHaveLength(4);
+    const frame = { left: 0, top: 0, right: 320, bottom: Number(key.getAttribute('height')) };
+    for (const line of lines) expectInside(line, frame, 'the key', 'flush');
+    expectApart(lines, 'the key');
+    // beside its glyph: every glyph (a dot, a ring) ends before the words start
+    for (const circle of [...key.querySelectorAll('circle')])
+      expect(
+        Number(circle.getAttribute('cx')) +
+          Number(circle.getAttribute('r')) +
+          Number(circle.getAttribute('stroke-width') ?? 0) / 2
+      ).toBeLessThan(Math.min(...lines.map((l) => l.left)));
   });
 
   it('reads the map in one row, keeps the never-verified strip, and ends with one caption', async () => {

@@ -18,19 +18,61 @@ import { cn } from '@/lib/utils';
 interface NetworkSwitcherProps {
   className?: string;
   onSwitch?: () => void;
+  /**
+   * Where it stands: in the header's nav row (`nav`: a trigger with its menu dropping below it,
+   * set off from the nav's links by a line), or in the header's menu (`menu`: a full-width row
+   * whose list opens in place). The header puts it in one or the other by the row's form.
+   */
+  placement?: 'nav' | 'menu';
 }
 
-export function NetworkSwitcher({ className, onSwitch }: NetworkSwitcherProps = {}) {
+/** Each placement's classes: the wrapper, the trigger, the list's frame, the list's inner box. */
+const PLACEMENT = {
+  nav: {
+    wrapper: 'border-base-border/70 mr-1 w-auto border-r pr-2',
+    trigger: 'w-auto',
+    frame:
+      'invisible absolute left-0 top-full block w-auto translate-y-1 pt-2 transition-all group-focus-within:visible group-focus-within:translate-y-0 group-hover:visible group-hover:translate-y-0',
+    inner: 'overflow-visible pt-0',
+  },
+  menu: {
+    wrapper: 'w-full',
+    trigger: 'w-full',
+    frame:
+      'grid w-full grid-rows-[0fr] transition-[grid-template-rows,opacity] group-focus-within:grid-rows-[1fr] group-hover:grid-rows-[1fr]',
+    inner: 'overflow-hidden pt-2',
+  },
+} as const;
+
+export function NetworkSwitcher({
+  className,
+  onSwitch,
+  placement = 'nav',
+}: NetworkSwitcherProps = {}) {
   const networks = resolveNetworks();
   if (networks.length <= 1) return null;
-  return <NetworkSwitcherControl networks={networks} className={className} onSwitch={onSwitch} />;
+  return (
+    <NetworkSwitcherControl
+      networks={networks}
+      className={className}
+      onSwitch={onSwitch}
+      placement={placement}
+    />
+  );
 }
 
 interface NetworkSwitcherControlProps extends NetworkSwitcherProps {
   networks: string[];
+  placement: 'nav' | 'menu';
 }
 
-function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitcherControlProps) {
+function NetworkSwitcherControl({
+  networks,
+  className,
+  onSwitch,
+  placement,
+}: NetworkSwitcherControlProps) {
+  const at = PLACEMENT[placement];
   const active = useActiveNetwork();
   // `pathname` is canonical / un-prefixed — Task 6's `usePathname` strips the
   // active `:network` segment, so we rebuild the target with the chosen network.
@@ -52,10 +94,8 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
     <div
       data-testid="network-switcher"
       data-control="network-context"
-      className={cn(
-        'md:border-base-border/70 group relative w-full shrink-0 md:mr-1 md:w-auto md:border-r md:pr-2',
-        className
-      )}
+      data-placement={placement}
+      className={cn('group relative shrink-0', at.wrapper, className)}
     >
       <button
         type="button"
@@ -63,7 +103,8 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
         aria-haspopup="menu"
         className={cn(
           NAVBAR_DROPDOWN_TRIGGER_CLASS,
-          'border-aqua/50 bg-aqua/10 text-aqua shadow-glow-aqua hover:border-aqua/80 hover:bg-aqua/15 hover:text-info-bright focus-visible:border-aqua focus-visible:ring-aqua/30 w-full justify-between focus-visible:outline-none focus-visible:ring-1 md:w-auto'
+          'border-aqua/50 bg-aqua/10 text-aqua shadow-glow-aqua hover:border-aqua/80 hover:bg-aqua/15 hover:text-info-bright focus-visible:border-aqua focus-visible:ring-aqua/30 justify-between focus-visible:outline-none focus-visible:ring-1',
+          at.trigger
         )}
       >
         <span
@@ -81,8 +122,13 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
-      <div className="z-50 grid w-full grid-rows-[0fr] opacity-0 transition-[grid-template-rows,opacity] duration-150 group-focus-within:grid-rows-[1fr] group-focus-within:opacity-100 group-hover:grid-rows-[1fr] group-hover:opacity-100 md:invisible md:absolute md:left-0 md:top-full md:block md:w-auto md:translate-y-1 md:pt-2 md:transition-all md:group-focus-within:visible md:group-focus-within:translate-y-0 md:group-hover:visible md:group-hover:translate-y-0">
-        <div className="min-h-0 overflow-hidden pt-2 md:overflow-visible md:pt-0">
+      <div
+        className={cn(
+          'z-50 opacity-0 duration-150 group-focus-within:opacity-100 group-hover:opacity-100',
+          at.frame
+        )}
+      >
+        <div className={cn('min-h-0', at.inner)}>
           <div
             role="menu"
             aria-label="CKB network"

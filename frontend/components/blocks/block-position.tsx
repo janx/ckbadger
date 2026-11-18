@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from 'react';
 import Link from '@/components/ui/link';
-import { BlockContents } from '@/components/blocks/block-visual';
+import { BLOCK_GLYPH_HEIGHT, BlockContents } from '@/components/blocks/block-visual';
 import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
 import { BLOCK_POSITION_COLORS } from '@/lib/design-tokens';
@@ -14,7 +14,38 @@ import { HexCode } from '@/components/ui/hex-code';
 import { Dotted } from '@/components/ui/phone-row';
 import { shortenHash } from '@/lib/shorten';
 import { unitNode } from '@/components/ui/units';
-import { SVG_TEXT } from '@/lib/chart-type';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { descentPx, tightLinePx } from '@/lib/type-metrics';
+
+/*
+ * The diagram's words (readability plan 2026-11-18, lane F3): a box holds its lines PAD clear of
+ * its top and foot and GAP apart, each the tight line of its role (lib/chart-type.ts), so every
+ * box's height and every baseline follow from the roles.
+ */
+const PAD = 10;
+const GAP = 4;
+const LABEL_LINE = tightLinePx(SVG_TEXT.label);
+const NUMBER_LINE = tightLinePx(SVG_TEXT.head);
+/** A block tile: its number (the head), its time (a label), then the contents glyph. */
+const NUMBER_Y = PAD + lineAscentPx(SVG_TEXT.head);
+const TIME_Y = PAD + NUMBER_LINE + GAP + lineAscentPx(SVG_TEXT.label);
+const CONTENTS_Y = PAD + NUMBER_LINE + GAP + LABEL_LINE + GAP;
+/** 10 + 16 + 4 + 15 + 4 + 18 + 10 = 77 px. */
+export const BLOCK_TILE_HEIGHT = CONTENTS_Y + BLOCK_GLYPH_HEIGHT + PAD;
+/** A box of `n` label lines (an uncle, the parent off the strip): 3 lines 73 px, 2 lines 54. */
+const boxHeight = (n: number) => PAD + n * LABEL_LINE + (n - 1) * GAP + PAD;
+/** The baseline of a box's line `i`. */
+const lineY = (i: number) => PAD + i * (LABEL_LINE + GAP) + lineAscentPx(SVG_TEXT.label);
+/** A row of uncles: an uncle forked from the tile beside it (three lines) and 22 px for the links. */
+const UNCLE_ROW = boxHeight(3) + 22;
+/**
+ * The proposal arcs, a row each over the tiles: an arc's label is a label line standing on the
+ * arc's control line, and a row is that line and the 11 px the arc's crest rises under it; under
+ * the rows, the lowest arc's label line and 32 px of its climb to the tiles.
+ */
+const ARC_PAD = 7;
+const ARC_ROW = LABEL_LINE + 11;
+const ARC_RISE = LABEL_LINE + 32;
 
 /** A canonical block beside this one, as the blocks list reports it (F2 blocks, BA-15). */
 export type BlockNeighbour = Pick<
@@ -151,9 +182,10 @@ export function BlockPosition({
   const tileWidth = 148;
   const step = 192;
   const width = Math.max(620, ordered.length * step - 24);
-  const tileTop = 54 + links.length * 26;
-  const tileBottom = tileTop + 88;
-  const height = tileBottom + 36 + block.uncles.length * 94;
+  const tileTop = ARC_PAD + links.length * ARC_ROW + ARC_RISE;
+  const tileBottom = tileTop + BLOCK_TILE_HEIGHT;
+  const tileMiddle = tileTop + BLOCK_TILE_HEIGHT / 2;
+  const height = tileBottom + 36 + block.uncles.length * UNCLE_ROW;
   const x = (number: number) => 12 + ordered.indexOf(number) * step;
   const currentX = x(block.number);
   useEffect(() => {
@@ -280,14 +312,14 @@ export function BlockPosition({
           {ordered.slice(1).map((number, index) => (
             <g key={number}>
               <path
-                d={`M${x(ordered[index]) + tileWidth} ${tileTop + 44}H${x(number)}`}
+                d={`M${x(ordered[index]) + tileWidth} ${tileMiddle}H${x(number)}`}
                 stroke="var(--c-slate-other)"
                 fill="none"
               />
               {number - ordered[index] > 1 && (
                 <text
                   x={x(number) - 22}
-                  y={tileTop + 38}
+                  y={tileMiddle - GAP - descentPx(SVG_TEXT.label)}
                   textAnchor="middle"
                   fill="var(--c-text-dim)"
                   fontSize={SVG_TEXT.label}
@@ -300,7 +332,8 @@ export function BlockPosition({
           {links.map((arc, index) => {
             const from = x(arc.from) + tileWidth / 2;
             const to = x(arc.to) + tileWidth / 2;
-            const top = 22 + index * 26;
+            // the arc's control line, the foot of its label's line
+            const top = ARC_PAD + LABEL_LINE + index * ARC_ROW;
             return (
               <g
                 key={`${arc.from}:${arc.to}`}
@@ -323,7 +356,7 @@ export function BlockPosition({
                 />
                 <text
                   x={(from + to) / 2}
-                  y={top - 4}
+                  y={top - descentPx(SVG_TEXT.label)}
                   textAnchor="middle"
                   fill="var(--c-text)"
                   fontSize={SVG_TEXT.label}
@@ -353,13 +386,13 @@ export function BlockPosition({
                     x="0.5"
                     y="0.5"
                     width={tileWidth - 1}
-                    height="87"
+                    height={BLOCK_TILE_HEIGHT - 1}
                     fill={current ? BLOCK_POSITION_COLORS.currentTile : 'var(--c-tile)'}
                     stroke="var(--c-slate-other)"
                   />
                   <text
-                    x="10"
-                    y="20"
+                    x={PAD}
+                    y={NUMBER_Y}
                     fill={current ? 'var(--c-text-bright)' : 'var(--c-text)'}
                     fontSize={SVG_TEXT.head}
                   >
@@ -368,8 +401,8 @@ export function BlockPosition({
                   {timestamp && (
                     <text
                       data-tile-time
-                      x="10"
-                      y="39"
+                      x={PAD}
+                      y={TIME_Y}
                       fill="var(--c-text-dim)"
                       fontSize={SVG_TEXT.label}
                     >
@@ -378,20 +411,28 @@ export function BlockPosition({
                   )}
                 </Link>
                 {contents && (
-                  <foreignObject x="10" y="48" width="130" height="40">
-                    <BlockContents
-                      transactionSizes={contents.transactionSizes}
-                      proposalsCount={contents.proposalsCount}
-                      unclesCount={contents.unclesCount}
-                      showCount={false}
-                    />
+                  <foreignObject
+                    x={PAD}
+                    y={CONTENTS_Y}
+                    width={tileWidth - 2 * PAD}
+                    height={BLOCK_GLYPH_HEIGHT}
+                  >
+                    {/* a flex item, so the glyph is its own height and no line box stands under it */}
+                    <div className="flex">
+                      <BlockContents
+                        transactionSizes={contents.transactionSizes}
+                        proposalsCount={contents.proposalsCount}
+                        unclesCount={contents.unclesCount}
+                        showCount={false}
+                      />
+                    </div>
                   </foreignObject>
                 )}
               </g>
             );
           })}
           {block.uncles.map((uncle, index) => {
-            const top = tileBottom + 36 + index * 94;
+            const top = tileBottom + 36 + index * UNCLE_ROW;
             const from = forkFrom[index];
             if (from !== null) {
               const uncleX = x(uncle.number);
@@ -399,13 +440,13 @@ export function BlockPosition({
                 <g key={uncle.hash} data-uncle-hash={uncle.hash}>
                   <path
                     data-uncle-fork-from={from}
-                    d={`M${x(from) + tileWidth} ${tileTop + 44}C${x(from) + tileWidth + 25} ${tileTop + 44} ${uncleX - 25} ${top + 36} ${uncleX} ${top + 36}`}
+                    d={`M${x(from) + tileWidth} ${tileMiddle}C${x(from) + tileWidth + 25} ${tileMiddle} ${uncleX - 25} ${top + boxHeight(3) / 2} ${uncleX} ${top + boxHeight(3) / 2}`}
                     stroke="var(--c-slate-other)"
                     strokeWidth="1.5"
                     fill="none"
                   />
                   <path
-                    d={`M${currentX + tileWidth / 2} ${tileBottom}C${currentX + tileWidth / 2} ${top + 36} ${uncleX + tileWidth + 36} ${top + 36} ${uncleX + tileWidth} ${top + 36}`}
+                    d={`M${currentX + tileWidth / 2} ${tileBottom}C${currentX + tileWidth / 2} ${top + boxHeight(3) / 2} ${uncleX + tileWidth + 36} ${top + boxHeight(3) / 2} ${uncleX + tileWidth} ${top + boxHeight(3) / 2}`}
                     fill="none"
                     stroke="var(--c-text-dim)"
                     strokeDasharray="3 3"
@@ -418,22 +459,22 @@ export function BlockPosition({
                       x={uncleX + 0.5}
                       y={top + 0.5}
                       width={tileWidth - 1}
-                      height="71"
+                      height={boxHeight(3) - 1}
                       fill="none"
                       stroke="var(--c-ink-quiet)"
                       strokeDasharray="3 3"
                     />
                     <text
-                      x={uncleX + 10}
-                      y={top + 20}
+                      x={uncleX + PAD}
+                      y={top + lineY(0)}
                       fill="var(--c-text)"
                       fontSize={SVG_TEXT.label}
                     >
                       uncle {formatBlockNumber(uncle.number)}
                     </text>
                     <text
-                      x={uncleX + 10}
-                      y={top + 39}
+                      x={uncleX + PAD}
+                      y={top + lineY(1)}
                       fill="var(--c-text-dim)"
                       fontSize={SVG_TEXT.label}
                     >
@@ -441,8 +482,8 @@ export function BlockPosition({
                     </text>
                     <text
                       data-uncle-time
-                      x={uncleX + 10}
-                      y={top + 58}
+                      x={uncleX + PAD}
+                      y={top + lineY(2)}
                       fill="var(--c-text-dim)"
                       fontSize={SVG_TEXT.label}
                     >
@@ -457,12 +498,12 @@ export function BlockPosition({
             return (
               <g key={uncle.hash} data-uncle-hash={uncle.hash}>
                 <path
-                  d={`M${parentX + 178} ${top + 28}H${uncleX}`}
+                  d={`M${parentX + 178} ${top + boxHeight(2) / 2}H${uncleX}`}
                   stroke="var(--c-ink-quiet)"
                   fill="none"
                 />
                 <path
-                  d={`M${uncleX + 178} ${top + 28}C${uncleX + 216} ${top + 28} ${currentX + 74} ${tileBottom + 12} ${currentX + 74} ${tileBottom}`}
+                  d={`M${uncleX + 178} ${top + boxHeight(2) / 2}C${uncleX + 216} ${top + boxHeight(2) / 2} ${currentX + 74} ${tileBottom + 12} ${currentX + 74} ${tileBottom}`}
                   fill="none"
                   stroke="var(--c-text-dim)"
                   strokeDasharray="3 3"
@@ -471,18 +512,24 @@ export function BlockPosition({
                   href={`/blocks/${uncle.parentHash}`}
                   aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
-                  <rect x={parentX} y={top} width="178" height="58" fill="var(--c-base-surface)" />
+                  <rect
+                    x={parentX}
+                    y={top}
+                    width="178"
+                    height={boxHeight(2)}
+                    fill="var(--c-base-surface)"
+                  />
                   <text
-                    x={parentX + 10}
-                    y={top + 21}
+                    x={parentX + PAD}
+                    y={top + lineY(0)}
                     fill="var(--c-text-dim)"
                     fontSize={SVG_TEXT.label}
                   >
                     Parent {formatBlockNumber(uncle.number - 1)}
                   </text>
                   <text
-                    x={parentX + 10}
-                    y={top + 41}
+                    x={parentX + PAD}
+                    y={top + lineY(1)}
                     fill="var(--c-text)"
                     fontSize={SVG_TEXT.label}
                   >
@@ -498,17 +545,22 @@ export function BlockPosition({
                     x={uncleX}
                     y={top}
                     width="178"
-                    height="58"
+                    height={boxHeight(2)}
                     fill="none"
                     stroke="var(--c-ink-quiet)"
                     strokeDasharray="3 3"
                   />
-                  <text x={uncleX + 10} y={top + 21} fill="var(--c-text)" fontSize={SVG_TEXT.label}>
+                  <text
+                    x={uncleX + PAD}
+                    y={top + lineY(0)}
+                    fill="var(--c-text)"
+                    fontSize={SVG_TEXT.label}
+                  >
                     Uncle {formatBlockNumber(uncle.number)}
                   </text>
                   <text
-                    x={uncleX + 10}
-                    y={top + 41}
+                    x={uncleX + PAD}
+                    y={top + lineY(1)}
                     fill="var(--c-text-dim)"
                     fontSize={SVG_TEXT.label}
                   >

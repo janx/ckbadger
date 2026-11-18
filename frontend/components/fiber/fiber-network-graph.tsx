@@ -16,6 +16,7 @@ import { formatCount, countNoun } from '@/lib/format-count';
 import { formatDurationMs, formatUtc8Date } from '@/lib/utils';
 import { FIBER_COLORS } from '@/lib/design-tokens';
 import {
+  FIBER_GRAPH,
   fiberGraphData,
   fiberGraphLayout,
   fiberNodeReach,
@@ -29,7 +30,8 @@ import {
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
-import { SVG_TEXT } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { descentPx, tightLinePx } from '@/lib/type-metrics';
 
 /** A party (node) or a pair (edge) of the graph: what a hover shows and a tap pins. */
 export type FiberGraphTarget = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
@@ -42,8 +44,11 @@ interface Props {
 
 const DIM = 0.18;
 const targetKey = (target: FiberGraphTarget) => `${target.kind}:${target.id}`;
-/** The band at the plot's top that holds its name (one 11 px line and its gap, R13). */
-const NAME_BAND = 22;
+/** The plot's name, a label line 2 px under the svg's top. */
+const NAME_PAD = 2;
+const NAME_Y = NAME_PAD + lineAscentPx(SVG_TEXT.label);
+/** The band at the plot's top that holds its name: its line and 5 px under it (22 px, R13). */
+const NAME_BAND = NAME_PAD + tightLinePx(SVG_TEXT.label) + 5;
 
 /**
  * The box the picture needs (material pass v2 leftovers: the graph sits in the instrument frame,
@@ -65,8 +70,8 @@ export function fiberPictureBox(model: FiberGraphModel): { shift: number; height
     top = Math.min(top, node.y - reach.up);
     bottom = Math.max(bottom, node.y + reach.down);
   }
-  // the islands' note: an 11 px line, 3 px of descenders
-  if (model.islandsNote) bottom = Math.max(bottom, model.islandsNote.y + 3);
+  // the islands' note: a label line, its descent under its baseline
+  if (model.islandsNote) bottom = Math.max(bottom, model.islandsNote.y + descentPx(SVG_TEXT.label));
   const shift = Math.max(0, NAME_BAND - top);
   return { shift, height: Math.ceil(Math.max(model.height, bottom)) + shift };
 }
@@ -366,7 +371,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                 <text
                   data-role="chart-name"
                   x="8"
-                  y="14"
+                  y={NAME_Y}
                   fontSize={SVG_TEXT.label}
                   fill={FIBER_COLORS.note}
                 >
@@ -471,7 +476,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                         />
                         <text
                           x={node.x}
-                          y={node.y + node.r + 14}
+                          y={node.y + node.r + FIBER_GRAPH.labelDrop}
                           textAnchor="middle"
                           fontSize={SVG_TEXT.label}
                           fill={FIBER_COLORS.label}
@@ -484,7 +489,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
                         {node.r > 14 && (
                           <text
                             x={node.x}
-                            y={node.y + 4}
+                            y={node.y + centreShift(SVG_TEXT.label)}
                             textAnchor="middle"
                             fontSize={SVG_TEXT.label}
                             fill={FIBER_COLORS.count}
