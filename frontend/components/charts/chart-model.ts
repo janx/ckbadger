@@ -1557,20 +1557,24 @@ export function bucketName(label: string, unit: string | undefined): string {
   return label;
 }
 
-/**
- * A numeric histogram's ticks (CH-12): round values over its regular run of buckets — the longest
- * stretch with no gap wider than one tick step — and, beyond the run at either end, the outlying
- * buckets marked open-ended on the run's side (`≤ 2.05`, `≥ 50.50`). `max` bounds the round values.
- */
-function numericBucketTicks(
-  points: readonly ChartPoint[],
-  max: number
-): { index: number; label: string }[] {
+/** A numeric histogram's bucket values, each above the one before (CH-12). */
+function bucketValues(points: readonly ChartPoint[]): number[] {
   const values = points.map((point) => Number(point.label));
   values.forEach((value, i) => {
     if (i > 0 && !(value > values[i - 1]))
       throw new Error(`bucket axis: ${points[i].label} does not follow ${points[i - 1].label}`);
   });
+  return values;
+}
+
+/**
+ * A numeric histogram's regular run of buckets (CH-12): the longest stretch with no gap wider than
+ * one tick step, and that step, the round values over the run being at most `max`.
+ */
+function bucketRun(
+  values: readonly number[],
+  max: number
+): { lo: number; hi: number; step: number } {
   let lo = 0;
   let hi = values.length - 1;
   let step = values[hi] > values[lo] ? tickStep(values[lo], values[hi], max) : 1;
@@ -1588,6 +1592,20 @@ function numericBucketTicks(
     hi = best.hi;
     if (values[hi] > values[lo]) step = tickStep(values[lo], values[hi], max);
   }
+  return { lo, hi, step };
+}
+
+/**
+ * A numeric histogram's ticks (CH-12): round values over its regular run of buckets
+ * ({@link bucketRun}) and, beyond the run at either end, the outlying buckets marked open-ended on
+ * the run's side (`≤ 2.05`, `≥ 50.50`). `max` bounds the round values.
+ */
+function numericBucketTicks(
+  points: readonly ChartPoint[],
+  max: number
+): { index: number; label: string }[] {
+  const values = bucketValues(points);
+  const { lo, hi, step } = bucketRun(values, max);
   const decimals = stepDecimals(step);
   const ticks =
     values[hi] > values[lo]
