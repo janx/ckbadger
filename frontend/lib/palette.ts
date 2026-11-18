@@ -344,11 +344,13 @@ export const PALETTE: Readonly<Record<ThemeName, Palette>> = { dark, light };
  * and `glow`, the factor every halo's alpha is multiplied by (1 at night, 0 by day: nothing
  * glows on paper).
  *
- * The rubbing / Song print finish (the boards' `scan` and `inset`): CRT scanlines by night, 1 px
- * of black at 22 % in every 3; ruled paper by day, the same lines in the ink at 4.5 %. The vignette
- * and the grain sit at about half their midnight strength. A frame (`.glass`, the rule name kept)
- * is a flat tile: the surface, opaque, under its own 1 px border — no sheen, no lit edges, no
- * outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
+ * The rubbing / Song print finish (the boards' `scan` and `inset`): ruled paper by day, 1 px of
+ * the ink at 4.5 % in every 3 over the page (`scanline-ink`). By night no scan lies over the page
+ * (readability R1: on the night ground its lines showed only where they crossed the text, and cut
+ * its strokes): `scanline-ink` is transparent, and the layer, mounted in both themes, paints
+ * nothing. The vignette and the grain sit at about half their midnight strength. A frame
+ * (`.glass`, the rule name kept) is a flat tile: the surface, opaque, under its own 1 px border —
+ * no sheen, no lit edges, no outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
  * 8 % by day) with no lip. The tints are the palette's own grounds and inks. `seal-press` is how
  * faint the newest block's seal is pressed behind the 404 verse: the cinnabar at 16 % on the night,
  * 8 % on paper (where the same red reads stronger): the most each allows with every ink of the
@@ -357,7 +359,7 @@ export const PALETTE: Readonly<Record<ThemeName, Palette>> = { dark, light };
 const darkMaterials = {
   glow: '1',
   vignette: 'rgba(0, 0, 0, 0.18)',
-  'scanline-ink': 'rgba(0, 0, 0, 0.22)',
+  'scanline-ink': 'transparent',
   'grain-blend': 'screen',
   'grain-opacity': '0.02',
   'inset-scan': 'rgba(0, 0, 0, 0.06)',

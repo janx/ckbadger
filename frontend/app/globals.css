@@ -287,13 +287,17 @@ body * {
  * page's hue), the vignette (.crt-vignette, also z −1 and after the sky in the DOM, so it darkens
  * the sky and its pools toward the corners and paints under every page element — the ink never
  * darkens with its position on the screen), then over the content the grain (.crt-grain) and the
- * scanlines (.crt-scanlines). The doubled pair is gone (body::before / body::after painted a
+ * scanlines (.crt-scanlines: the ruled paper by day; by night transparent, so no scan lies over
+ * the text — readability R1). The doubled pair is gone (body::before / body::after painted a
  * second scanline and vignette). The pools are read by the page root's data-tint: the variables
  * are declared on :root and redefined per tint below.
  */
 
-/* The scanlines (visual finish V2; rubbing × Song print): 1 px in every 3 — black at 22 % by night
-   (the CRT), the ink at 4.5 % by day (ruled paper); lib/palette.ts `scanline-ink`. */
+/* The scanlines (visual finish V2; rubbing × Song print; readability R1): 1 px in every 3 — by day
+   the ink at 4.5 % (ruled paper, landing on the paper and leaving the ink whole); by night
+   transparent, since on the dark ground the lines showed only where they crossed the text and
+   cut its strokes (lib/palette.ts `scanline-ink`). The layer is mounted in both themes; by night
+   it paints nothing. */
 .crt-scanlines {
   position: fixed;
   inset: 0;
