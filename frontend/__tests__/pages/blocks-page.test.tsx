@@ -5,6 +5,7 @@ import { genesisNeighbours, genesisNeighboursPage } from '@/__tests__/msw/fixtur
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { contentPx, gapPx } from '@/__tests__/utils/tailwind-box';
 import { screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
@@ -1007,8 +1008,6 @@ describe('BlocksPage · Blocks v3 board', () => {
       // the text column beside the stone at 360 and 390 (re-pinned, R6: were 294 and 324)
       const [at360, at390] = [360, 390].map((w) => w - 32 - ROW_SEAL.block.footprint);
       expect([at360, at390]).toEqual([304, 334]);
-      // the column the 26 px stone left at 360 and 390, which the two old forms below missed
-      const [old360, old390] = [360, 390].map((w) => w - 32 - (26 + 8));
       // the budget first, as the row writes the line: it failed at 8…6 (297.6 px) and holds at 4…6
       expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(at360);
       expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
@@ -1046,16 +1045,49 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(lineWidth(unnamed.left, 'fees 999.99 CKB')).toBeCloseTo(240, 6);
       expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeCloseTo(261.6, 6);
       expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeLessThanOrEqual(at360);
-      // lane B3's 8…6, "miner ckb1qzda…93hhsj" (151.2 px), made it 297.6 px with the widest fee,
-      // past the 294 px the 26 px stone left at 360 (the history that set the 4…6 form)
-      expect(lineWidth('miner ckb1qzda…93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(old360);
-      // with the tables' 10-character head and the widest fee it was 180 + 12 + 134.4 = 326.4 px,
-      // past both of that stone's columns
-      expect(lineWidth('miner ckb1qzda0c...93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(old390);
       // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
       expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
       expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(at360);
     });
+
+    // Review rules-tests NOTE-3: two checks here compared literal strings with the 294 / 324 px
+    // columns of the 26 px stone, so nothing the page draws could fail them. The short form is R9's
+    // rule (an address keeps `ckb1…` and its tail: the head after `ckb1` is its lock's code hash,
+    // the same for every default-lock miner, so it tells no two miners apart), no longer the
+    // arithmetic's: at the old count above (12 px, the unit 11) lane B3's 8…6, "miner
+    // ckb1qzda…93hhsj", with the widest fee was 297.6 px, past the 294 the 26 px stone left at 360
+    // and inside the 304 the 16 px one leaves. The live property, on the rows the page draws at
+    // 390 and 360 and measured at their own steps (tailwind-box: the line at 13 px, 7.8 a glyph,
+    // the unit at 12, 7.2, the 12 px gap): the miner in the tight form, and its line with the
+    // widest fee, one under 1 CKB in its exact value, inside the text column beside the stone:
+    // "miner ckb1…93hhsj" 132.6 + 12 + "fees 0.99999999" 117 + " CKB" 28.8 = 290.4 px, in 304 at
+    // 360 and 334 at 390. (At these steps the 8…6 form would be 321.6 px and the row size's 4…8
+    // 306, both past 304.)
+    it.each([390, 360] as const)(
+      'writes the miner in the tight form at %i px, its line with the widest fee inside the column beside the stone',
+      async (viewport) => {
+        const content = viewport - 32;
+        atContainerWidth(content);
+        vi.mocked(api.getBlocks).mockResolvedValue({
+          ...page,
+          data: [{ ...page.data[0], totalFees: '99999999' }],
+        });
+        render(<BlocksPage />);
+        const [card] = await screen.findAllByTestId('block-row-mobile');
+        const line = card.querySelector(':scope > [data-line="miner"]') as HTMLElement;
+        const [left, right] = Array.from(line.children) as HTMLElement[];
+        expect([left.textContent, right.textContent]).toEqual([
+          'miner ckb1…93hhsj',
+          'fees 0.99999999 CKB',
+        ]);
+        const column = content - ROW_SEAL.block.footprint;
+        expect(column).toBe(viewport === 390 ? 334 : 304);
+        const drawn =
+          contentPx(left, viewport) + gapPx(line, viewport) + contentPx(right, viewport);
+        expect(drawn).toBeCloseTo(290.4, 6);
+        expect(drawn).toBeLessThanOrEqual(column);
+      }
+    );
 
     // The review's item H: a block row's age reads the page's one clock, so it moves with no data
     // change (it was written once at render and froze between refetches). Date stands still and
