@@ -189,6 +189,28 @@ it('counts genes from the pattern and says a decoder output is not drawn as one 
 // rest in its title. Consistency round C11 (Main.dc.html): the row is object · the genes that
 // vary · made of · owner · minted; the object is its number (else its short id), never the
 // collection's name again; its id and DNA are in the title.
+// B4 second fix round (review-rules-fixes-logic SHOULD 3, the coordinator's item 5): a row's title
+// writes its owner's lock as the row's tag does, from the one decision: nothing for the default
+// lock, its code hash and hash type for a lock on the default code hash by data.
+it('titles a Newest row with its owner’s lock as its tag writes it', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const byData =
+    'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl';
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([
+      { ...base, ownerAddress: byData },
+      { ...base, sporeId: `0x${'03'.repeat(32)}` },
+    ])
+  );
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  const [, byDataRow, defaultRow] = within(table).getAllByRole('row');
+  expect(byDataRow.getAttribute('title')).toContain(
+    `owner ${byData} · lock 0x9bd7e06f…a3cce8 by data · minted`
+  );
+  expect(defaultRow.getAttribute('title')).toContain(`owner ${base.ownerAddress} · minted`);
+});
+
 it('writes each Newest row on one line with the name bright and the rest in its title (L2-4, C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(

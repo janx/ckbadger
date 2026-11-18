@@ -1230,6 +1230,55 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
 describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
   const who = () => screen.getByRole('region', { name: 'Who deposits' });
 
+  // B4 second fix round (review-rules-fixes-logic SHOULD 3, tests SHOULD-3; the coordinator's
+  // item 5): the Lock column and the phone row read the one decision, the lock off the depositor's
+  // address: in the column the default lock is written, a lock on its code hash by data is named
+  // with its hash type; beside the party on a phone row the default lock is silent.
+  it('names a depositor’s lock by the one decision, in the column and on a phone', () => {
+    const DEFAULT = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+    const [first, second] = evidence.concentration.owners;
+    const owners = [
+      { ...first, lockKind: 'SECP256K1/blake160' },
+      {
+        ...second,
+        address:
+          'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl',
+        lockCodeHash: DEFAULT,
+        lockHashType: 'data',
+        lockKind: 'SECP256K1/blake160',
+      },
+    ];
+    const withOwners = { ...evidence, concentration: { ...evidence.concentration, owners } };
+    stubCalculator();
+    stubChartWidth(1248);
+    const { unmount } = render(<DaoBoard statistics={stats} evidence={withOwners} />);
+    const table = within(who()).getByRole('table', { name: 'Largest depositors' });
+    const at = within(table)
+      .getAllByRole('columnheader')
+      .findIndex((h) => h.textContent === 'Lock');
+    const cells = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => within(r).getAllByRole('cell')[at]);
+    expect(cells[0]).toHaveTextContent(/^SECP256K1\/blake160$/);
+    expect(cells[1]).toHaveTextContent(/^lock 0x9bd7e06f…a3cce8 by data$/);
+    expect(within(cells[1]).getByRole('link')).toHaveAttribute(
+      'href',
+      `/mainnet/script/${DEFAULT}?hashType=data&kind=lock`
+    );
+    unmount();
+    vi.unstubAllGlobals();
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={withOwners} />);
+    const rows = within(
+      within(who()).getByRole('list', { name: 'Largest depositors, compact' })
+    ).getAllByRole('listitem');
+    expect(rows[0]).not.toHaveTextContent('SECP256K1/blake160');
+    expect(rows[0]).toHaveTextContent(`ckb1…${first.address.slice(-6)}`);
+    expect(rows[1]).toHaveTextContent('lock 0x9bd7…cce8 by data');
+    vi.unstubAllGlobals();
+  });
+
   it('draws the concentration bar: largest, next 9, next 90, everyone else', () => {
     stubCalculator();
     const many = {

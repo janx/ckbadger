@@ -1001,6 +1001,33 @@ describe('Transaction board, R2b-a fields', () => {
     );
   });
 
+  // B4 second fix round (review-rules-fixes-logic SHOULD 3, the coordinator's item 5): the
+  // "Lock of output i" fact reads the one decision off the output's lock, as its tile does: a
+  // lock on the default code hash by data is named by its code hash and hash type, never the
+  // default lock's name.
+  it('names an output lock on the default code hash by data as its tile does', async () => {
+    const base = committed();
+    const lock = { codeHash: LOCK_CODE_HASH, hashType: 'data', args: `0x${'22'.repeat(20)}` };
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...base,
+      outputs: [
+        {
+          ...base.outputs![0],
+          lock,
+          address: ckbAddress({ ...lock, hashType: 'data' }),
+          lockArgsDecoded: null,
+          lockArgsDecodeError: 'args not read for this hash type',
+        },
+      ],
+    } as TransactionDetail);
+    render(<TransactionDetailPage />);
+    const tile = await screen.findByTestId('tx-io-output-0');
+    await waitFor(() => expect(tile).toHaveTextContent('lock 0x9bd7e06f…a3cce8 by data'));
+    const fact = screen.getByTestId('tx-fact-output-lock-0');
+    expect(fact).toHaveTextContent(/^Lock of output 0lock 0x9bd7e06f…a3cce8 by data, /);
+    expect(fact).not.toHaveTextContent('Default Lock');
+  });
+
   it('reads a Shadow Lock and a JoyID lock by their registry layouts (R-8, TX-20)', async () => {
     const base = committed();
     const shadow = `0x31da${'00'.repeat(28)}5d74`;

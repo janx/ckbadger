@@ -131,6 +131,16 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     expect(notIndexed).toHaveTextContent(/^not indexed$/);
     expect(notIndexed).toHaveClass('text-text-dim');
     expect(notIndexed).not.toHaveClass('border');
+    // B4 second fix round (review-rules-fixes-logic SHOULD 3, tests SHOULD-3; the coordinator's
+    // item 5): each row's title says what its Lock cell says, from the one decision
+    const titles = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.getAttribute('title')!);
+    expect(titles[0]).toContain(' · Default Lock · ');
+    expect(titles[1]).toContain(` · ${BY_DATA_WORDS} · `);
+    expect(titles[1]).not.toContain('Default Lock');
+    expect(titles[2]).toContain(' · not indexed · ');
     // NOTE-2: the column's budget, read from the table, holds the widest of its plain words whole
     // ("Default Lock", 12 glyphs at 12 px, 86.4; "not indexed", 79.2) and a 12-glyph tag (98.4)
     const tag = textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1;
@@ -157,9 +167,14 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
           lockKind: 'Default Lock',
         }),
         holder('22', {}),
+        holder('33', {
+          address: BY_DATA_ADDRESS,
+          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+          lockKind: 'Default Lock',
+        }),
       ],
       limit: 10,
-      total: 2,
+      total: 3,
       hasMore: false,
       nextCursor: null,
     });
@@ -168,6 +183,15 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     const { cells, minWidth } = lockColumn(table);
     for (const cell of cells) expect(cell.textContent?.trim()).not.toBe('');
     expect(cells[1].querySelector('[data-lock-kind]')).toHaveTextContent(/^not indexed$/);
+    // B4 second fix round (the coordinator's item 5): the row titles read the one decision
+    const titles = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.getAttribute('title')!);
+    expect(titles[0]).toContain(' · Default Lock · ');
+    expect(titles[1]).toContain(' · not indexed · ');
+    expect(titles[2]).toContain(` · ${BY_DATA_WORDS} · `);
+    expect(titles[2]).not.toContain('Default Lock');
     const tag = textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1;
     expect(minWidth).toBe(columnPx(tag + CELL_GAP_PX));
   });
