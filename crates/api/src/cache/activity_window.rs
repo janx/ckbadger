@@ -1,5 +1,11 @@
 //! Exact rolling activity, retained only in API memory. Each canonical extension
-//! reads its new transactions once. A changed cached-tip hash rebuilds the window.
+//! reads its new transactions and its new blocks once. A changed cached-tip hash
+//! rebuilds the window.
+//!
+//! A cellbase has no `activities` row, so the window counts the cellbases from
+//! the canonical blocks it holds: one per block, the `tx_index` row at position
+//! 0, which consensus reserves for it. A block leaving the window takes its
+//! cellbase with it; a reorg rebuilds the window, cellbases included.
 use anyhow::{anyhow, ensure, Result};
 use ckbadger_common::stats_bucket::{DAY_MS, HOUR_MS};
 use ckbadger_store::types::ParticipantId;
@@ -17,6 +23,9 @@ struct ActivityWindow {
     stats: DailyActivityStats,
     addresses: HashMap<[u8; 32], u32>,
     hours: HashMap<i64, u32>,
+    /// Every canonical block of the window, number → chain time: one cellbase
+    /// each (`stats.coinbase_count` is their number).
+    cellbase_blocks: BTreeMap<i64, i64>,
 }
 
 struct BlockActivity {
@@ -93,6 +102,8 @@ impl ActivityWindow {
             if page.is_empty() {
                 break;
             }
+            // Cellbases are counted from their blocks below, never from a row.
+            ckbadger_store::ensure_no_cellbase_activity(&page)?;
             for tx in &page {
                 ensure!(
                     tx.block_number <= tip_number,
@@ -121,11 +132,9 @@ impl ActivityWindow {
                 block
                     .stats
                     .accumulate_from_tx_actions(ClassifiedTxActions::classify(tx));
-                if !tx.is_cellbase {
-                    for participant in &tx.participants {
-                        if let ParticipantId::Lock(hash) = participant.id {
-                            block.addresses.insert(hash);
-                        }
+                for participant in &tx.participants {
+                    if let ParticipantId::Lock(hash) = participant.id {
+                        block.addresses.insert(hash);
                     }
                 }
             }
@@ -150,8 +159,66 @@ impl ActivityWindow {
             let (_, block) = self.blocks.pop_first().expect("checked nonempty window");
             self.apply(&block, false)?;
         }
+        self.add_cellbase_blocks(store, tip_number, old_tip, cutoff)?;
+        while self
+            .cellbase_blocks
+            .first_key_value()
+            .is_some_and(|(_, chain_time_ms)| *chain_time_ms <= cutoff)
+        {
+            self.cellbase_blocks.pop_first();
+        }
+        self.stats.coinbase_count = u32::try_from(self.cellbase_blocks.len())?;
         self.stats.unique_address_count = u32::try_from(self.addresses.len())?;
         self.tip = Some((tip_number, tip.hash.clone()));
+        Ok(())
+    }
+
+    /// The canonical blocks the window gains, `(old_tip, tip]` newest first
+    /// down to the cutoff (every block on a rebuild): each holds one cellbase,
+    /// its `tx_index` row at position 0, read with one `multi_get` a page. A
+    /// block without that row, or whose position 0 is no cellbase, is an
+    /// error naming the block: the window never counts a cellbase it did not
+    /// read.
+    fn add_cellbase_blocks(
+        &mut self,
+        store: &CkbadgerStore,
+        tip_number: i64,
+        old_tip: Option<i64>,
+        cutoff: i64,
+    ) -> Result<()> {
+        const PAGE_SIZE: usize = 2_000;
+        let mut from = Some(tip_number);
+        while let Some(start) = from {
+            let headers = store.list_blocks_desc(Some(start), PAGE_SIZE)?;
+            let gained: Vec<(i64, i64)> = headers
+                .iter()
+                .take_while(|(number, header)| {
+                    old_tip.is_none_or(|old| *number > old) && header.chain_time_ms > cutoff
+                })
+                .map(|(number, header)| (*number, header.chain_time_ms))
+                .collect();
+            let positions: Vec<(i64, i32)> =
+                gained.iter().map(|(number, _)| (*number, 0)).collect();
+            let entries = store.tx_index_entries_at("activity window cellbase", &positions)?;
+            for ((number, chain_time_ms), entry) in gained.iter().zip(entries) {
+                ensure!(
+                    entry.is_cellbase,
+                    "canonical block {number} transaction zero is not a cellbase"
+                );
+                ensure!(
+                    self.cellbase_blocks
+                        .insert(*number, *chain_time_ms)
+                        .is_none(),
+                    "duplicate rolling cellbase block {number}"
+                );
+            }
+            from = match (gained.len() == headers.len(), headers.last()) {
+                (true, Some((last, _))) if *last > 0 && headers.len() == PAGE_SIZE => {
+                    Some(last - 1)
+                }
+                _ => None,
+            };
+        }
         Ok(())
     }
 
@@ -174,7 +241,7 @@ impl ActivityWindow {
                     .ok_or_else(|| anyhow!("rolling activity {} overflow/underflow at chain_time_ms={}", stringify!($field), block.chain_time_ms))?;
             )+ };
         }
-        counters!(coinbase_count, total_ckb_moved);
+        counters!(total_ckb_moved);
         for (key, count) in &block.stats.script_counts {
             update_count(&mut self.stats.script_counts, key.clone(), *count, add)?;
         }
@@ -276,13 +343,17 @@ mod tests {
                     semantic_tags: 0,
                 },
             );
+            if index == 0 {
+                // Production writes no `activities` row for a cellbase.
+                continue;
+            }
             batch.put_tx_actions(&TxActions {
                 block_number: number,
                 block_hash: vec![hash_byte; 32],
                 tx_hash: vec![index as u8; 32],
                 tx_index: index,
                 timestamp: time,
-                is_cellbase: index == 0,
+                is_cellbase: false,
                 protocol_actions: vec![],
                 type_calls: vec![],
                 lock_calls: vec![],
@@ -527,6 +598,68 @@ mod tests {
         assert_eq!(
             reorged.kind_counts.total() + u64::from(reorged.coinbase_count),
             1 + 2 + 2 + 3
+        );
+    }
+
+    /// The window counts a cellbase only from its block's position 0: a block
+    /// without that `tx_index` row, or whose position 0 is no cellbase, is an
+    /// error naming the block, and an `activities` row for a cellbase (which
+    /// production never writes) is refused, so nothing is counted twice.
+    #[test]
+    fn the_window_reads_each_cellbase_at_its_blocks_position_zero_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_production_block(&store, 0, DAY_MS, 0x10, 2);
+        store
+            .delete_cf(
+                store.cf_tx_index(),
+                &ckbadger_store::keys::encode_tx_slot_key(0, 0),
+            )
+            .unwrap();
+        let error = ActivityWindowCache::default()
+            .summary(&store, store.get_sync_tip_block().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "activity window cellbase points at block=0, tx_idx=0, which has no tx_index row"
+            ),
+            "{error}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_production_block(&store, 0, DAY_MS, 0x20, 2);
+        let mut entry = store.get_tx_index(0, 0).unwrap().unwrap();
+        entry.is_cellbase = false;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(0, 0, &entry);
+        batch.commit().unwrap();
+        let error = ActivityWindowCache::default()
+            .summary(&store, store.get_sync_tip_block().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("canonical block 0 transaction zero is not a cellbase"),
+            "{error}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed(&store, 0, DAY_MS, 0x30, 2);
+        let mut cellbase_row = store.get_tx_actions(0, 1, &[1; 32]).unwrap().unwrap();
+        cellbase_row.tx_index = 0;
+        cellbase_row.tx_hash = vec![0; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&cellbase_row);
+        batch.commit().unwrap();
+        let error = ActivityWindowCache::default()
+            .summary(&store, store.get_sync_tip_block().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("activities holds a cellbase row at block=0, tx_idx=0"),
+            "{error}"
         );
     }
 

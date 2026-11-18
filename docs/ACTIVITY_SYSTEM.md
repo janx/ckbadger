@@ -1139,7 +1139,11 @@ buckets at its running-maximum chain-time watermark and writes each sealed aggre
   transactions, the sum of `kindCounts`), `kindCounts` (keys = the global filter's values),
   `coinbaseCount`, `uniqueAddressCount`, `totalCkbMoved`, `scriptCounts` and `protocolActionCounts`
 - **`GET /stats/activity-summary-24h`** — The same counts over the exact rolling 24 h chain-time
-  window, accumulated from the window's `activities` rows through the same classification
+  window, accumulated from the window's `activities` rows through the same classification. A
+  cellbase has no `activities` row, so the window's `coinbaseCount` is its canonical blocks, one
+  cellbase each, read at each block's `tx_index` position 0 (a block without that row, or whose
+  position 0 is no cellbase, is an error); a block leaving the window takes its cellbase with it,
+  and a reorg rebuilds the window
 
 ---
 

@@ -2573,6 +2573,18 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
         };
         batch.put_tx_actions(&actions);
         index_tx_of_actions(&mut batch, &actions);
+        // Each block's cellbase: its `tx_index` row at position 0, and no
+        // `activities` row, as the indexer leaves it.
+        index_tx_of_actions(
+            &mut batch,
+            &TxActions {
+                tx_hash: vec![number as u8 + 0x20; 32],
+                tx_index: 0,
+                is_cellbase: true,
+                participants: vec![],
+                ..actions
+            },
+        );
     }
     // Cross the 512-row page boundary. Every extra transaction reuses A, so
     // a paginated scan must count transactions while deduplicating addresses.
@@ -2643,6 +2655,8 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
         "same lock across hours counts once"
     );
     assert_eq!(json["activityCount"], 522);
+    // Blocks 2 and 3 are in (cutoff, tip]: their two cellbases.
+    assert_eq!(json["coinbaseCount"], 2);
     assert_eq!(json["totalCkbMoved"], "645");
     assert_eq!(json["hoursCovered"], 2);
 

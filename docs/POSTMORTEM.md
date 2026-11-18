@@ -4199,6 +4199,15 @@ counts):
 - `/stats/daily-activities` and `/stats/activity-summary-24h` send `kindCounts` (keyed by the
   filter's values), `activityCount` (their sum) and `protocolActionCounts`.
 
+**Follow-ups** (same ruling): the Transactions page had no Protocol kind — `/transactions` and
+`/transactions/pool` refused `activity_type=protocol` though both already read every bucket — so its
+chips and the cellbases fell short of All by the protocol transactions; the routes now accept it
+and the page has the chip (`transaction_protocol_kind_lists_exactly_the_protocol_bucket`). And the
+24 h summary's `coinbaseCount` was always 0, because the window accumulated `activities` rows and a
+cellbase has none; the window now counts one cellbase per canonical block it holds, read at the
+block's `tx_index` position 0
+(`the_window_counts_one_cellbase_per_block_and_kinds_plus_cellbases_are_its_transactions`).
+
 **Regression checks**: `a_fiber_channel_open_alone_is_counted_in_the_protocol_kind` and
 `every_transaction_is_counted_in_exactly_the_kind_its_filter_lists` (store; red first: `[]` for the
 Fiber open, 4,382 of 9,216 combinations), `a_ckb_only_action_of_every_known_protocol_lands_in_its_filter_kind`

@@ -586,7 +586,9 @@ status.
   the 24h window (`hoursCovered`): `activityCount` (non-cellbase transactions, the sum of the kinds),
   `kindCounts` `{dao, token, object, identity, protocol, script, ckb}` (each transaction in exactly
   one kind, the one `/activities?filter=<kind>` lists it under, so each count is what that filter
-  lists), `coinbaseCount`, `uniqueAddressCount`, `totalCkbMoved`, `scriptCounts:
+  lists), `coinbaseCount` (the cellbases: on a day, those the activity rows counted; in the 24h
+  window, one per canonical block it holds, read at the block's `tx_index` position 0),
+  `uniqueAddressCount`, `totalCkbMoved`, `scriptCounts:
 Vec<ScriptCountEntry>` and `protocolActionCounts` (`protocol:action` → count of actions; the DAO
   split is `dao:deposit` / `dao:withdraw_request` / `dao:withdraw_complete`). The per-layer fields
   `transferCount`, `daoDepositCount`, `daoWithdrawRequestCount`, `daoWithdrawCompleteCount`,
