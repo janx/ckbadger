@@ -111,14 +111,15 @@ purpose: it is for the **padding zeros** of a number (the trailing zeros that ke
 aligned, a leading zero) and for **pure decoration** (the `#` of a comment line, a separator, an
 arrow between two tiles, a rule). It never carries information. A section heading's note, a hint
 ("tap or hover …"), a caption, a footnote, a field's name, a count, "occupied ±N" and a tick are
-information: they are the dim ink. A link inside a note is still a link: it takes the reading ink
-("Text hierarchy") and the page's link hover (`a:hover`).
+information: they take a word's ink by their role ("Text hierarchy"), never the ghost. A link inside
+a note is still a link: it takes the reading ink and the page's link hover (`a:hover`).
 
 The rule is about what an ink is used for, not its name: the quiet slate (`ink-quiet`, Lc 28–30 /
 3.6–4.4:1 by night, 2.7–3.3:1 by day) and the muted ink (`ink-muted`, Lc 43–45 / 5.4–6.6:1 by
 night, pinned at 3:1 as a mark's ink) are under text grade too. Like the ghost they draw marks — a rule, a tick, a swatch, a frame, the
 separator between two names (↔, →) — and never a word or a figure: an offset, a date, a day label,
-a caption, a framing byte's hex, "vs", a dash that stands for "none" are the dim ink. Where a quiet
+a caption, a framing byte's hex, "vs", a dash that stands for "none" take a word's ink by their
+role. Where a quiet
 ink used to set two kinds of bytes apart (framing from fields, padding from sections), the dim ink
 against the other's own tone does it, both readable. The gate refuses all three on words.
 
