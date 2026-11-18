@@ -12,9 +12,10 @@ paint (`index.html`, `lib/theme.ts`).
 
 `frontend/lib/palette.ts` holds every colour of both themes by name (`PALETTE.dark`,
 `PALETTE.light`) and the non-colour finish per theme (`MATERIALS`: glass fills, the sky, the
-scanline ink, `glow`). `tailwind.config.ts` emits both as CSS custom properties — `--c-<key>` (the
-colour), `--rgb-<key>` (its channels, for Tailwind's opacity modifiers) and `--m-<key>` (a
-material) — on `:root` for dark and under `:root[data-theme='light']` for light.
+scanline ink, the scan of a fill, `glow`). `tailwind.config.ts` emits both as CSS custom
+properties — `--c-<key>` (the colour), `--rgb-<key>` (its channels, for Tailwind's opacity
+modifiers) and `--m-<key>` (a material) — on `:root` for dark and under
+`:root[data-theme='light']` for light.
 
 Page code never writes a hex (`__tests__/lib/theme-tokens-gate.test.ts` fails the build if it
 does). A colour is one of:
@@ -26,7 +27,9 @@ does). A colour is one of:
 - `color(key)`, `alpha(key, a)`, `glowAlpha(key, a)` or `material(key)` from `lib/palette.ts`;
 - `fade(cssColor, a)` to tint a colour you only hold as a reference (a `color-mix`);
 - for a 2D canvas or a WebGL shader, which cannot read a variable: `useThemePalette()` for the
-  concrete hex of the theme in force (`hexAlpha(hex, a)` for an rgba).
+  concrete hex of the theme in force (`hexAlpha(hex, a)` for an rgba). The SVG scan of a chart's
+  fills reads its material the same way (`useScanFill()`): a mask is referenced by an id of its
+  own chart, which a variable cannot carry.
 
 Halos and glows are alphas multiplied by `--m-glow` (1 by night, 0 by day): write them with
 `glowAlpha`, or in CSS as `rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)))`. A rule whose glow
@@ -331,10 +334,15 @@ the page ground.
 \* The boards' day celadonBright `#8fb9b0` is 1.67:1 on the day elevated ground, below UI grade; by
 day "bright" is more ink, not more light, as for every other accent.
 
-Materials (`MATERIALS`): `scanline-ink` black 22 % / the day ink `#1f1b17` at 4.5 % (CRT
-scanlines by night, ruled paper by day, 1 px in every 3); `vignette` black 18 % / ink 3 % (half
-the midnight strength); `grain-opacity` 0.02 / 0.03; `glow` 1 / 0; `glass-fill` the surface,
-opaque, and `glass-sheen` / `-top-edge` / `-bottom-edge` / `-ring` transparent (a frame is a tile:
+Materials (`MATERIALS`): `scanline-ink` transparent / the day ink `#1f1b17` at 4.5 % (by day the
+ruled paper over the page, 1 px in every 3, landing on the paper and leaving the ink whole; by
+night no layer lies over the text: on the dark ground the lines showed only where they crossed
+the text, and cut its strokes); `fill-scan` the scan of a fill / `none` (by night the scan is a
+property of a figure's fill: of every 3 CSS px from the fill's foot up, 1 px lets the ground
+behind it through at 22 % — `FILL_SCAN`, the strength the window's layer had on a fill; by day
+none); `vignette` black 18 % / ink 3 % (half the midnight strength); `grain-opacity` 0.02 / 0.03;
+`glow` 1 / 0; `glass-fill` the surface, opaque, and `glass-sheen` / `-top-edge` / `-bottom-edge`
+/ `-ring` transparent (a frame is a tile:
 the surface under its own 1 px border); `well-inset` black 60 % / ink 8 % (the boards' `inset`),
 `well-lip` transparent; `tier2-ground` the well at 90 % / elevated at 90 %; `header-strip` the
 surface, opaque, in both themes (the vitals strip is the page's own ground drawn solid, so the page
@@ -342,6 +350,15 @@ never shows through it); `seal-press` 0.16 / 0.08, the opacity of the newest blo
 404 verse (the most each theme allows with every ink of the verse and its facts text-grade across a
 stroke). A halo is the boards' bloom: 6 px of celadon at 45 % (`0 0 6px rgb(var(--rgb-jade) /
 calc(0.45 * var(--m-glow)))`), out by day.
+
+By night the scan is a property of a fill, never of a word. An HTML fill takes the class
+`.scan-fill` (`app/globals.css`: `fill-scan` as its mask image, so the ground shows through the
+hit rows); a chart's SVG areas and bars take the mask of `useScanFill()`
+(`components/ui/scan-fill.tsx`), drawn in the svg's user space, so only on a chart drawn 1:1,
+where 3 px stay 3 px on the screen. A fill that holds its own label (the address page's balance
+bar) does not take it. A line, a tick, a label, a marker, a seal, the pipeline's plates and strap,
+a tile and a word never take it; `__tests__/lib/scan-fill-gate.test.ts` holds that and lists the
+elements that do.
 
 ## Semantic colors
 

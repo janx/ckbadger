@@ -363,20 +363,45 @@ export const PALETTE: Readonly<Record<ThemeName, Palette>> = { dark, light };
  * and `glow`, the factor every halo's alpha is multiplied by (1 at night, 0 by day: nothing
  * glows on paper).
  *
- * The rubbing / Song print finish (the boards' `scan` and `inset`): CRT scanlines by night, 1 px
- * of black at 22 % in every 3; ruled paper by day, the same lines in the ink at 4.5 %. The vignette
- * and the grain sit at about half their midnight strength. A frame (`.glass`, the rule name kept)
- * is a flat tile: the surface, opaque, under its own 1 px border — no sheen, no lit edges, no
- * outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
+ * The rubbing / Song print finish (the boards' `scan` and `inset`): ruled paper by day, 1 px of
+ * the ink at 4.5 % in every 3 over the page (`scanline-ink`). By night no scan lies over the page
+ * (readability R1: on the night ground its lines showed only where they crossed the text, and cut
+ * its strokes): `scanline-ink` is transparent, and the layer, mounted in both themes, paints
+ * nothing; the night's scan is cut into a figure's fills instead (`fill-scan`, `FILL_SCAN`). The
+ * vignette and the grain sit at about half their midnight strength. A frame
+ * (`.glass`, the rule name kept) is a flat tile: the surface, opaque, under its own 1 px border —
+ * no sheen, no lit edges, no outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
  * 8 % by day) with no lip. The tints are the palette's own grounds and inks. `seal-press` is how
  * faint the newest block's seal is pressed behind the 404 verse: the cinnabar at 16 % on the night,
  * 8 % on paper (where the same red reads stronger): the most each allows with every ink of the
  * verse and its facts still text-grade across a stroke (palette.test).
  */
+
+/**
+ * The scan of a fill (readability R1, Gate F0): by night the scan is a property of a figure's
+ * fill — a bar, an area — and never lies over a word. Of every `period` CSS px, `row` px is hit:
+ * the ground behind the fill shows through it at `strength`, the strength the window-wide layer
+ * had on a fill. An HTML fill takes the class `.scan-fill` (app/globals.css), whose mask image is
+ * the material `fill-scan`; an SVG fill takes the mask components/ui/scan-fill.tsx draws from these
+ * numbers, drawn while the material is not `none`. By day there is none: the ruled paper is the
+ * window's (`scanline-ink`).
+ */
+export const FILL_SCAN = { period: 3, row: 1, strength: 0.22 } as const;
+
+/** `fill-scan` by night: an alpha mask from the fill's foot up, `period − row` px whole, `row` px hit. */
+function fillScanMask(): string {
+  const { period, row, strength } = FILL_SCAN;
+  const whole = 'rgba(0, 0, 0, 1)';
+  const hit = `rgba(0, 0, 0, ${1 - strength})`;
+  const at = period - row;
+  return `repeating-linear-gradient(0deg, ${whole} 0px, ${whole} ${at}px, ${hit} ${at}px, ${hit} ${period}px)`;
+}
+
 const darkMaterials = {
   glow: '1',
   vignette: 'rgba(0, 0, 0, 0.18)',
-  'scanline-ink': 'rgba(0, 0, 0, 0.22)',
+  'scanline-ink': 'transparent',
+  'fill-scan': fillScanMask(),
   'grain-blend': 'screen',
   'grain-opacity': '0.02',
   'inset-scan': 'rgba(0, 0, 0, 0.06)',
@@ -409,6 +434,7 @@ const lightMaterials: Materials = {
   glow: '0',
   vignette: hexAlpha(DAY_INK, 0.03),
   'scanline-ink': hexAlpha(DAY_INK, 0.045),
+  'fill-scan': 'none',
   'grain-blend': 'multiply',
   'grain-opacity': '0.03',
   'inset-scan': hexAlpha(DAY_INK, 0.025),

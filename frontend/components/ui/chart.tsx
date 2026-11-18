@@ -2,6 +2,7 @@
 import { Fragment, useId, useState, type CSSProperties, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { useScanFill } from '@/components/ui/scan-fill';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import {
@@ -347,6 +348,11 @@ export function Chart({
   const own = usePinnedReadout<number>();
   // Visual finish V13: an area's fill gradient, one per chart instance and series.
   const areaFillId = `chart-area-${useId().replace(/:/g, '')}`;
+  // Readability R1: by night the scan is cut into the fills (areas, bands, bars), never a line or
+  // a word; null by day. The svg is drawn 1:1 (its viewBox is its size), so the rhythm holds.
+  const scan = useScanFill();
+  const drawsFill =
+    kind === 'bars' || kind === 'stacked' || (kind === 'area' && series.some((s) => !s.lineOnly));
   if (pin && controlledActive !== undefined)
     throw new Error(
       `${title}: a chart takes its active point from its pin or its caller, not both`
@@ -579,7 +585,7 @@ export function Chart({
                 </div>
                 <div
                   aria-hidden="true"
-                  className="mt-1 h-1"
+                  className="scan-fill mt-1 h-1"
                   style={{
                     backgroundColor: color(0),
                     width: `${(Math.abs(values[i][0]) / (Math.max(...values.map((row) => Math.abs(row[0]))) || 1)) * 100}%`,
@@ -620,6 +626,7 @@ export function Chart({
                 tappable ? (e) => tap.toggle(pointAt(e.clientX, e.currentTarget)) : undefined
               }
             >
+              {drawsFill && scan?.defs}
               {ticks.values.map((v, i) =>
                 insideYTicks ? (
                   // hierarchy v3: the baseline and a value in the name's band are not written.
@@ -715,16 +722,19 @@ export function Chart({
                 if (kind === 'bars')
                   return (
                     <g key={s.key}>
-                      {upper.map((v, i) => (
-                        <rect
-                          key={i}
-                          x={slotBars ? x(i) - slot * 0.35 + si * barWidth : x(i) - 2 + si * 4}
-                          y={y(Math.max(0, v))}
-                          width={barWidth}
-                          height={Math.abs(y(v) - y(0))}
-                          fill={color(si)}
-                        />
-                      ))}
+                      {/* one mask over the series' bars, not a mask (a layer) per bar */}
+                      <g mask={scan?.mask}>
+                        {upper.map((v, i) => (
+                          <rect
+                            key={i}
+                            x={slotBars ? x(i) - slot * 0.35 + si * barWidth : x(i) - 2 + si * 4}
+                            y={y(Math.max(0, v))}
+                            width={barWidth}
+                            height={Math.abs(y(v) - y(0))}
+                            fill={color(si)}
+                          />
+                        ))}
+                      </g>
                       {/* F2 charts group: a bar's hovered top, like a line's hovered point. */}
                       {pointDots && activeIndex !== null && (
                         <circle
@@ -744,6 +754,7 @@ export function Chart({
                 // flat 60 %, since its bands must read as the parts of one whole.
                 const lit = kind === 'area' && !s.lineOnly;
                 const fillId = `${areaFillId}-${si}`;
+                const areaFill = kind === 'stacked' ? color(si) : lit ? `url(#${fillId})` : 'none';
                 return (
                   <g key={s.key}>
                     {lit && (
@@ -767,8 +778,9 @@ export function Chart({
                                 .join(' ')} Z`
                           )
                           .join(' ')}
-                        fill={kind === 'stacked' ? color(si) : lit ? `url(#${fillId})` : 'none'}
+                        fill={areaFill}
                         fillOpacity={kind === 'stacked' ? 0.6 : undefined}
+                        mask={areaFill === 'none' ? undefined : scan?.mask}
                       />
                     )}
                     {projectedAfter === undefined ? (

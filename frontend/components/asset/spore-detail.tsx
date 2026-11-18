@@ -493,7 +493,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                     className="bg-bar-track h-2 overflow-hidden"
                   >
                     <span
-                      className="block h-full"
+                      className="scan-fill block h-full"
                       style={{
                         width: `${formatPercent(BigInt(onchain), BigInt(coll.liveCount))}%`,
                         backgroundImage: COMPOSITION_BADGES[coll.composition.tier].bar,

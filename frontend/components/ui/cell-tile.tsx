@@ -153,7 +153,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           ) : (
             <div aria-hidden="true" className="bg-bar-track h-1 w-14 shrink-0">
               <div
-                className="bg-jade h-full"
+                className="bg-jade scan-fill h-full"
                 style={{ width: `${(Number(occupied) / Number(capacity)) * 100}%` }}
               />
             </div>

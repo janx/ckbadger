@@ -588,7 +588,10 @@ function GeneList({
               </span>
               <span role="cell" className="flex items-center justify-end gap-2">
                 <span aria-hidden="true" className="bg-bar-track flex h-1 w-14">
-                  <span className="bg-jade" style={{ width: `${(top.count / total) * 100}%` }} />
+                  <span
+                    className="bg-jade scan-fill"
+                    style={{ width: `${(top.count / total) * 100}%` }}
+                  />
                 </span>
                 <span className="text-text whitespace-nowrap tabular-nums">{of(top.count)}</span>
               </span>
