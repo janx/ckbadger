@@ -40,7 +40,7 @@ const AXIS = AXIS_GAP + LINE + 2;
 /** A value stands a pixel over its gridline. */
 const tickBaseline = (gridline: number) => gridline - 1 - descentPx(SVG_TEXT.label);
 /** A character of the plot's text, all of it set at the label size: 6.6 px at 11 px. */
-const CHAR = advancePx(SVG_TEXT.label);
+export const CHAR = advancePx(SVG_TEXT.label);
 const UNCLES_KEY = 'uncles on chain, per day';
 const SWITCHES_KEY = 'this node’s branch switches';
 

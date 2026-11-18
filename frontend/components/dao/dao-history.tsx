@@ -30,8 +30,8 @@ import { descentPx, textPx, tightLinePx } from '@/lib/type-metrics';
 const DAY_MS = 86_400_000;
 const TICK_GAP_PX = 56;
 /** The plots' names and time ticks at the label size, their end values at the reading size (lib/chart-type.ts). */
-const NAME_PX = SVG_TEXT.label;
-const END_PX = SVG_TEXT.reading;
+export const NAME_PX = SVG_TEXT.label;
+export const END_PX = SVG_TEXT.reading;
 /*
  * The bands follow from the text set in them (readability plan 2026-11-18, lane F3): each line is
  * a tight line of its role, a band is its lines and its stated padding, and a plot grows by a line

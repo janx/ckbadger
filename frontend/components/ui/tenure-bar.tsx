@@ -31,8 +31,8 @@ const DAY = 86_400_000;
  * Advance of one character at the label sizes, for fitting labels: the label size for the period
  * names and the now mark, the note size for the dates.
  */
-const CHAR_11 = advancePx(SVG_TEXT.label);
-const CHAR_10 = advancePx(SVG_TEXT.note);
+export const CHAR_11 = advancePx(SVG_TEXT.label);
+export const CHAR_10 = advancePx(SVG_TEXT.note);
 /*
  * The bar's rows, top to foot (readability plan 2026-11-18, lane F3), each word a tight line of its
  * role: the periods' names (label) 10 px under the top; the now mark's line from a pixel under

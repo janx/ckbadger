@@ -357,7 +357,7 @@ function UpgradeLines({
 }
 
 /** A version label's advance at the meta step (`text-meta`). */
-const LABEL_ADVANCE = charPx('meta');
+export const LABEL_ADVANCE = charPx('meta');
 /** px between a version label and its dashed line, and between two labels or a label and the name. */
 const LABEL_PAD = 4;
 const LABEL_GAP = 8;

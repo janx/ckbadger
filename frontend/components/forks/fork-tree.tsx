@@ -22,7 +22,7 @@ const MARK = ['', '①', '②', '③'] as const;
 /** A later mark on a block that already carries one is drawn this far beside it. */
 const MARK_STEP = { wide: 22, compact: 18 } as const;
 /** One character of a miner's name, set at the tick size. */
-const MINER_CHAR = advancePx(SVG_TEXT.tick);
+export const MINER_CHAR = advancePx(SVG_TEXT.tick);
 /** A tip mark hangs this far over (or under) the tile corner it marks. */
 const MARK_OVERHANG = 2;
 

@@ -7,7 +7,7 @@
 import { charPx, fontPx, textPx } from '@/lib/type-metrics';
 
 /** The advance of one glyph of the dump, set at the small step (`text-small`). */
-const DUMP_CHAR_PX = charPx('small');
+export const DUMP_CHAR_PX = charPx('small');
 /** One hex byte: two glyphs plus its 1 px padding on each side (`px-px`). */
 const HEX_CELL_PX = 2 * DUMP_CHAR_PX + 2;
 /** The gap between two hex bytes (`gap-1`). */

@@ -53,8 +53,8 @@ const WIDE = {
 const GX = WIDE.LX + 16 * WIDE.LANE + 10;
 const TX = GX + 16;
 /** One character of a gene's name, arrow and value (the head size) and of its bytes and raw (the value size). */
-const CHAR_12 = advancePx(SVG_TEXT.head);
-const CHAR_115 = advancePx(SVG_TEXT.value);
+export const CHAR_12 = advancePx(SVG_TEXT.head);
+export const CHAR_115 = advancePx(SVG_TEXT.value);
 // A value that is longer is a label cut to this budget. 25 is the most the wide gel holds at the
 // DNA plate at 1280 (896 px) for the flagship DNA (Nervape): its columns before the value end at
 // 696.2 px (the gene columns from 308; the longest name, "prev.type", 9 × 7.8 + 10; the longest

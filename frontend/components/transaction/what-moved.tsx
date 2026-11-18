@@ -42,7 +42,7 @@ export type WhatMovedHover =
 export const RIBBON_FORM_MIN_W = 700;
 /** A party end: two row lines (lib/type-metrics.ts, 18 px) and 4 px; the pitch leaves 10 px between neighbours. */
 export const NODE_H = 2 * ROW_LINE_PX + 4;
-const PITCH = NODE_H + 10;
+export const PITCH = NODE_H + 10;
 /** The ribbons stack on the name plate 3 px apart. */
 const STACK_GAP = 3;
 

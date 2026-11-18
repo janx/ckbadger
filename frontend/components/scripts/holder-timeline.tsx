@@ -35,14 +35,14 @@ export interface HolderTimelineProps {
 const PAST_FILL = ['var(--c-base-border)', 'var(--c-slate-other)'] as const;
 const CURRENT_FILL = 'var(--c-slate-ckb)';
 /** A segment's words: the small step (12 px) with 6 px each side. */
-const LABEL_PX = fontPx('small');
+export const LABEL_PX = fontPx('small');
 const LABEL_PAD = 6;
 /** A version tick's words: the meta step (11 px), 4 px after the tick, 8 px apart from the next. */
-const TICK_PX = fontPx('meta');
+export const TICK_PX = fontPx('meta');
 const TICK_PAD = 4;
 const TICK_GAP = 8;
 /** Rows of version ticks stack a tight label line apart (`leading-label`). */
-const TICK_ROW_PX = LABEL_LINE_PX;
+export const TICK_ROW_PX = LABEL_LINE_PX;
 
 function day(ms: number): string {
   return formatUtc8Date(ms);
