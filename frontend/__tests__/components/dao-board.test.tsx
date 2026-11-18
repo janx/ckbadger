@@ -14,7 +14,7 @@ import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
 import { expectTicksInGutter, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { formatPercent } from '@/lib/ckb-decimal';
-import { fontPx } from '@/lib/type-metrics';
+import { MEASURE_CHARS, fontPx } from '@/lib/type-metrics';
 import { factsOf } from '@/__tests__/utils/facts';
 
 vi.mock('@/components/dao/dao-sources', () => ({
@@ -1009,7 +1009,9 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     expect(years.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'max-w-measure');
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     expect(grows().lastElementChild).toBe(caption);
   });
 
@@ -1207,7 +1209,9 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     expect(bar.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'max-w-measure');
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     expect(windows().lastElementChild).toBe(caption);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     for (const moved of [

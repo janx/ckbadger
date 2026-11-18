@@ -73,7 +73,9 @@ describe('FiberChannelsPage', () => {
     const lede = within(hero).getByText(/^Channels touch the chain only to open and to close\./);
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
     expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
-    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    // one line of the measure with room to spare, as the DAO page's lede: at most 67 characters,
+    // where the measure holds MEASURE_CHARS, 76, at the body step (it said 560 px, 8.3 px a
+    // character at 13 px)
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',

@@ -10,6 +10,7 @@ import producerDetail from '../fixtures/fiber-open-detail.json';
 import producerEvidence from '../fixtures/fiber-evidence-open.json';
 import c07e from '../fixtures/fiber-channel-c07e.json';
 import { fullText } from '@/__tests__/utils/full-text';
+import { MEASURE_CHARS } from '@/lib/type-metrics';
 
 vi.mock('@/components/fiber/fiber-channel-step', () => ({
   FiberChannelStep: (props: {
@@ -125,7 +126,9 @@ describe('FiberChannelBoard', () => {
     // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
     // reading ink (was text-text-dim)
     expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
-    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    // one line of the measure with room to spare, as the DAO page's lede: at most 67 characters,
+    // where the measure holds MEASURE_CHARS, 76, at the body step (it said 560 px, 8.3 px a
+    // character at 13 px)
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     // the display figure: the channel's capacity, bright (R4, R11), in the summary form, one run
     // (readability R5, re-pinned on purpose: was "1,062.00000000", its decimals a hero-sized dim
@@ -219,7 +222,9 @@ describe('FiberChannelBoard', () => {
     );
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'max-w-measure');
-    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // one line of the measure: MEASURE_CHARS, 76 characters at the body step's 8.4 px a
+    // glyph (it was length × 8 ≤ 640, which let 77 to 80 characters through)
+    expect(caption.textContent!.length).toBeLessThanOrEqual(MEASURE_CHARS);
     expect(close.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
