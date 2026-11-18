@@ -43,6 +43,35 @@ export interface DetailFact {
   label: string;
   value: ReactNode;
 }
+
+/**
+ * Facts as the detail pages draw them: a `dl` whose rows are a label (a fact's name: the quiet ink,
+ * R3) beside its value, the label over the value below sm, one column of rows until md (at 640 a
+ * two-column grid wrapped labels into three lines), two from md. A page's head draws its facts
+ * with it; `className` places the list.
+ */
+export function DetailFacts({
+  facts,
+  className,
+}: {
+  facts: readonly DetailFact[];
+  className?: string;
+}) {
+  return (
+    <dl className={cn(className, 'grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2')}>
+      {facts.map(({ label, value }) => (
+        <div
+          key={label}
+          className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
+        >
+          {/* a fact's name is a label: quiet (R3) */}
+          <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
+          <dd className="text-text-bright min-w-0 break-words tabular-nums">{unitNode(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 interface DetailLayoutBaseProps {
   kind?: 'entity' | 'topic' | 'index';
   identity?: ReactNode;
@@ -163,23 +192,7 @@ export function DetailLayout({
         {/* The seal is pressed beside the name plate, never in the content (the facts and the
             sections run the full width under the head). */}
         {head}
-        {facts && (
-          // One column until md: at 640 a two-column grid wrapped labels into three lines.
-          <dl className="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2">
-            {facts.map(({ label, value }) => (
-              <div
-                key={label}
-                className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
-              >
-                {/* a fact's name is a label: quiet (R3) */}
-                <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
-                <dd className="text-text-bright min-w-0 break-words tabular-nums">
-                  {unitNode(value)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        )}
+        {facts && <DetailFacts facts={facts} className="mt-6" />}
         {kind === 'index' && <div aria-hidden="true" className="hairline-tube mt-3.5" />}
       </header>
       <div data-tier="1" className="min-w-0 space-y-8">
