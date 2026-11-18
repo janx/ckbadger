@@ -801,10 +801,12 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
       <span className={onFill ? undefined : 'text-text-dim'}>· {plural(ready.count, 'cell')}</span>
     </>
   );
-  // R12: the claimable words sit inside their segment where they fit (text-small, 12 px padding).
+  // R12: the claimable words sit inside their segment where they fit (text-small, 12 px padding),
+  // measured as `claimable` draws them: the amount in the exact form `Amount` writes.
   const readyPercent = requested > BigInt(0) ? formatPercent(readyShannons, requested, 4) : '0';
   const claimableChars =
-    `claimable now ${formatCapacity(readyShannons)} · ${plural(ready.count, 'cell')}`.length;
+    `claimable now ${ckbAmountText(readyShannons, 'exact')} CKB · ${plural(ready.count, 'cell')}`
+      .length;
   const claimableInside =
     barWidth !== null &&
     ((barWidth - 2) * Number(readyPercent)) / 100 >= textPx(claimableChars, fontPx('small')) + 24;

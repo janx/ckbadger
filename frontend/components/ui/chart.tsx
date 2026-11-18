@@ -204,6 +204,27 @@ export const INSIDE_TICK_ROOM = SVG_TEXT.label + 1;
  */
 export const HOVER_HEAD_Y = SVG_TEXT.label + 5;
 export const HOVER_LINE = tightLinePx(SVG_TEXT.reading);
+/** The hover reading's padding, left and right of its widest line. */
+export const HOVER_PAD = 10;
+/** The hover reading's distance from its point. */
+const HOVER_GAP = 14;
+/** Half the box's 1 px border: the border stays inside the svg too. */
+const HOVER_EDGE = 0.5;
+
+/**
+ * Where the hover reading's box, `boxWidth` wide, stands for a point at `px` in an svg `svgWidth`
+ * wide: right of the point where the svg holds it there, else left of it, else against the svg's
+ * nearer edge (over the crosshair). `null` where the svg cannot hold it at all: the reading is
+ * drawn whole or not at all, and the readout line and the key under the plot read the point.
+ */
+function hoverBoxX(px: number, boxWidth: number, svgWidth: number): number | null {
+  const first = HOVER_EDGE;
+  const last = svgWidth - HOVER_EDGE - boxWidth;
+  if (last < first) return null;
+  if (px + HOVER_GAP <= last) return px + HOVER_GAP;
+  if (px - HOVER_GAP - boxWidth >= first) return px - HOVER_GAP - boxWidth;
+  return px < svgWidth / 2 ? first : last;
+}
 /**
  * A target line, drawn alike in the plot and as its key's sample (CH-21): a dash in the bright ink
  * over a knock-out of the same dash in the page's ground, drawn after the data, so it reads where
@@ -998,16 +1019,18 @@ export function Chart({
                     return `${series.length > 1 ? `${s.label} ` : ''}${withUnit(String(shown), unit)}`;
                   });
                   const head = formatLabel(data[activeIndex].label);
-                  // the widest line, each measured at the size it is set in (the head at the label
-                  // size, the figures at the reading size), and 10 px of padding each side
+                  // Drawn whole or not at all: as wide as its widest line, each line measured at
+                  // its own size (the head at the label size, the figures at the reading size),
+                  // and its padding; placed by hoverBoxX, or not drawn where the svg cannot hold it.
                   const boxWidth =
                     Math.max(
                       textPx(head.length, SVG_TEXT.label),
                       ...rows.map((r) => textPx(r.length, SVG_TEXT.reading))
-                    ) + 20;
+                    ) +
+                    2 * HOVER_PAD;
+                  const bx = hoverBoxX(x(activeIndex), boxWidth, width);
+                  if (bx === null) return null;
                   const boxHeight = HOVER_HEAD_Y + 6 + rows.length * HOVER_LINE;
-                  const px = x(activeIndex);
-                  const bx = px + 14 + boxWidth > right ? px - 14 - boxWidth : px + 14;
                   const by = top + 4;
                   return (
                     <g data-hover-reading pointerEvents="none">
@@ -1020,7 +1043,7 @@ export function Chart({
                         stroke="var(--c-base-border)"
                       />
                       <text
-                        x={bx + 10}
+                        x={bx + HOVER_PAD}
                         y={by + HOVER_HEAD_Y}
                         fill="var(--c-text-dim)"
                         fontSize={SVG_TEXT.label}
@@ -1030,7 +1053,7 @@ export function Chart({
                       {rows.map((row, i) => (
                         <text
                           key={row}
-                          x={bx + 10}
+                          x={bx + HOVER_PAD}
                           y={by + HOVER_HEAD_Y + 1 + (i + 1) * HOVER_LINE}
                           fill="var(--c-text-bright)"
                           fontSize={SVG_TEXT.reading}

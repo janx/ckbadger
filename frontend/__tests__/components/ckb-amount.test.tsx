@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render } from '../utils/test-utils';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { MINUS } from '@/lib/chart-ticks';
@@ -67,13 +67,15 @@ describe('CkbAmount', () => {
   // integer, in the `-dim` ink of the amount's sign, never the sign's ink at 78 %. Readability R5
   // (re-pinned on purpose): one ink per amount — the decimals take the integer's own ink, the
   // sign's or the reading ink — and still never an opacity.
+  // Re-pinned on purpose (review of main..fix/readability, logic finding 5): the plain negative
+  // was unsigned, which now fails; it keeps its sign, and the plain tone still inks it text-text.
   it('sets the fraction digits in the amount’s one ink, never at an opacity', () => {
     const { container } = render(
       <>
         <CkbAmount form="column" shannons={BigInt(-30000)} />
         <CkbAmount form="column" shannons={BigInt('75000000123')} />
         <CkbAmount form="column" shannons={BigInt('75000000123')} signed={false} tone="plain" />
-        <CkbAmount form="column" shannons={BigInt(-30000)} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={BigInt(-30000)} tone="plain" />
       </>
     );
     const amounts = [...container.querySelectorAll('[data-ckb-amount]')];
@@ -116,10 +118,12 @@ describe('CkbAmount', () => {
 
   // Rubbing × Song print, phase 5 (T4): a sentence that names an amount the page draws (the
   // transaction comment's fee) takes its digits from exactCkbText; it must read as CkbAmount does.
+  // Re-pinned on purpose (review of main..fix/readability, logic finding 5): unsigned, a negative
+  // ('-30000') printed its absolute value; it now fails (the test below), so it is read signed.
   it('prints the same digits as exactCkbText, signed or not, zero included', () => {
     const amounts = ['0', '1647', '64119', '100000', '100000000', '75000000000', '-30000'];
     for (const signed of [true, false])
-      for (const raw of amounts) {
+      for (const raw of amounts.filter((a) => signed || !a.startsWith('-'))) {
         const shannons = BigInt(raw);
         const { container, unmount } = render(
           <CkbAmount form="column" shannons={shannons} signed={signed} tone="plain" />
@@ -265,5 +269,25 @@ describe('the forms of a CKB amount (R5)', () => {
       expect(amount).not.toHaveAttribute('title');
       unmount();
     }
+  });
+
+  // Review of main..fix/readability (2026-11-18, logic finding 5): with signed={false} the one CKB
+  // renderer printed a negative amount's absolute value, the sign nowhere, in the figure or the
+  // title — a broken invariant upstream (a cell's free CKB, held minus occupied) would read as a
+  // plausible positive figure. Where no sign is written an amount is never negative: it fails, as
+  // TokenAmount does.
+  it('refuses a negative amount where no sign is written, in every form', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const form of ['exact', 'column', 'summary', 'compact'] as const)
+        expect(() =>
+          render(<CkbAmount form={form} shannons={BigInt(-123456789)} signed={false} />)
+        ).toThrow('CKB amount -123456789 shannons is negative where a sign is not written');
+    } finally {
+      quiet.mockRestore();
+    }
+    // signed, it is written with its minus sign
+    const { container } = render(<CkbAmount form="summary" shannons={BigInt(-123456789)} />);
+    expect(amountOf(container)).toHaveTextContent(`${MINUS}1.23 CKB`);
   });
 });

@@ -7,13 +7,13 @@
  * a call site names the form of its context (`frontend/docs/ui-color-guidelines.md`, "Amounts"):
  *
  * - `exact`: the value, its trailing zeros dropped, no point for a whole number ("122,000",
- *   "0.0003", "559.5125321"): an amount that is the subject of its page;
+ *   "0.0003", "559.5125321"): an amount that is the subject of its page, a chart's readout;
  * - `column`: exact, padded to the unit's decimals, the padding apart (drawn in the ghost) so the
  *   points of a numeric column of subject amounts align ("750.00000000");
  * - `summary`: whole from 1,000 up ("8,131,306,075"), at most two decimals from 1 to 1,000
  *   ("999.99", "12.5"), the exact value below 1 ("0.00000001"), or, for a token, its first four
- *   significant digits ("0.0001234"): a hero, a stat tile, a list column, a chart's head and
- *   readout, a feed line, a phone row, prose;
+ *   significant digits ("0.0001234"): a hero, a stat tile, a list column, a chart's head figure,
+ *   a feed line, a phone row, prose;
  * - `compact`: two decimals of the largest unit reached, k, M, B or T ("9.02B", "123.45k"), and
  *   two decimals below 1,000 ("999.99"): a tile or an axis.
  */

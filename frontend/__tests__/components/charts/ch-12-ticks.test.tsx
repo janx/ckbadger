@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { ChartDetail } from '@/components/charts/chart-detail';
+import { CHART_BY_SLUG } from '@/components/charts/chart-catalogue';
 import { placeXTicks, type PlacedXTick } from '@/lib/chart-ticks';
 import { api } from '@/lib/api';
 
@@ -169,6 +170,48 @@ describe('axis ticks (CH-12)', () => {
         .slice(1)
         .map((tick, i) => (tick.x - round[i].x) / (Number(tick.label) - Number(round[i].label)));
       for (const step of perHour) expect(step, `${width} px`).toBeCloseTo(perHour[0], 6);
+    }
+  });
+
+  // Review of main..fix/readability (2026-11-18, logic finding 2): the model filled the regular
+  // run it found at the detail page's tick budget (163 → 340 min), and the index tile looked for
+  // the run again at its own budget of 6. Its larger step swallowed the outliers, so the tile's run
+  // ran 2.05 → 8.72 h, "6" stood on the 7.67 h bucket and "8" on the 8.42 h one, "≤ 2.05" was lost
+  // and "≥ 17.22 h" said that 7.67, 8.42 and 8.72 h sat on a linear axis one minute apart. One run,
+  // the model's; a tick budget chooses only the step.
+  it('reads the Epoch durations tile on the run the model filled, at the tile’s own step', async () => {
+    const { ChartSmallMultiple } = await vi.importActual<
+      typeof import('@/components/charts/chart-small-multiple')
+    >('@/components/charts/chart-small-multiple');
+    const definition = CHART_BY_SLUG.get('epoch-time-distribution')!;
+    vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue({
+      title: 'Epoch Time Distribution',
+      yAxisLabel: 'Epochs',
+      data: MAINNET_EPOCH_MINUTES.map(([m, n]) => ({
+        date: (m / 60).toFixed(2),
+        value: String(n),
+      })),
+    });
+    render(<ChartSmallMultiple definition={definition} />);
+    await screen.findByRole('img', { name: 'Epoch durations' });
+    const props = chartProps.filter((entry) => entry.title === 'Epoch durations').at(-1)!;
+    const data = props.data as { label: string }[];
+    const ticks = props.xTicks as Tick[];
+    // the detail page's edges: the run between them is every minute from 163 to 340
+    expect(ticks[0].label).toBe('≤ 2.05');
+    expect(ticks.at(-1)!.label).toBe('≥ 7.67 h');
+    const round = ticks.slice(1, -1);
+    expect(round.length).toBeGreaterThan(2);
+    expect(round.length).toBeLessThanOrEqual(6);
+    assertRegular(round.map((tick) => tick.label));
+    // every round label stands on its own bucket: within the minute, inside the run
+    for (const tick of round) {
+      expect(minute(data[tick.index].label), tick.label).toBeGreaterThanOrEqual(163);
+      expect(minute(data[tick.index].label), tick.label).toBeLessThanOrEqual(340);
+      expect(
+        Math.abs(minute(data[tick.index].label) - Number(tick.label) * 60),
+        tick.label
+      ).toBeLessThan(1);
     }
   });
 
