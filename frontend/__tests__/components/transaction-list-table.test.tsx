@@ -386,6 +386,32 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     expect(faultLines(cellFaults(table))).toEqual([]);
   });
 
+  // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the table
+  // does with it today, for the lists page lane to rule on (no mechanism is built here). A fee of
+  // 100 CKB, "100.00000000" (12 glyphs at 13 px, 93.6; the bound "99.99999999" is 11, 85.8), in
+  // the Fee column (102 px, its content box 102 − 16 = 86): one figure on one line, the cell
+  // nowrap, 7.6 px wider than its box. A right-aligned line too long for its box is start-aligned
+  // (CSS Text 3, text-align), so the figure stands from the box's left edge and runs 7.6 px into
+  // its own 16 px gap, short of the Cells column (it would reach it from a second glyph past).
+  it('holds a fee one glyph past its bound on one line, 7.6 px into its gap', () => {
+    render(<TransactionListTable transactions={[{ ...transfer, fee: '10000000000' }]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const at = within(table)
+      .getAllByRole('columnheader')
+      .findIndex((th) => th.textContent === 'Fee, CKB');
+    const column = Number.parseFloat(
+      (table.querySelectorAll('col')[at] as HTMLElement).style.minWidth
+    );
+    expect(column).toBe(102);
+    const fee = within(table).getAllByRole('row')[1].querySelectorAll('td')[at] as HTMLElement;
+    expect(fee).toHaveTextContent(/^100\.00000000$/);
+    expect(fee).toHaveClass('whitespace-nowrap', 'text-right');
+    expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+    const past = '100.00000000'.length * 7.8 - (column - 16);
+    expect(past).toBeCloseTo(7.6, 10);
+    expect(past).toBeLessThan(16);
+  });
+
   // Review fb-logic 3: the age under the block is a figure; the clock-behind sentence is words
   // and breaks under the block in Block · date's 110 px, where it stood on one 226 px line.
   it('lets the clock-behind sentence break under its block', () => {

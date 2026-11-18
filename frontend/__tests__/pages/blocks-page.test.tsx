@@ -812,6 +812,53 @@ describe('BlocksPage · Blocks v3 board', () => {
         vi.restoreAllMocks();
       }
     });
+
+    // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the table
+    // does with it today, for the lists page lane to rule on (no mechanism is built here). The
+    // nine-digit height "#100,000,000" (12 glyphs at 14 px, 100.8; the bound's 11 are 92.4) stays
+    // one figure on its line, as a figure does in every cell, and runs past its column's content
+    // box: in the wide table the Block column's box is 230 − 16 = 214 px, its line the stone (34),
+    // the number, a space (7.8) and the tight hash (79.2), 221.8: 7.8 px into its own 16 px gap;
+    // in the 608 px table the Height box is 143 − 16 = 127, the stone and the number 134.8: 7.8 px
+    // into its gap. Neither reaches the next column (it would from 16 px, a second glyph past).
+    it('holds a height one glyph past its bound on one line, 7.8 px into its gap', async () => {
+      const at = (chars: number, px: number) => (chars * px * 3) / 5;
+      for (const [width, column, line] of [
+        [1232, 230, 34 + at(12, 14) + at(1, 13) + at(11, 12)],
+        [608, 143, 34 + at(12, 14)],
+      ] as const) {
+        atContainerWidth(width);
+        vi.mocked(api.getBlocks).mockResolvedValue({
+          ...page,
+          data: [
+            row(100_000_000, {
+              size: 641,
+              overheadSize: 641,
+              userTransactionsSize: 0,
+              cycles: '0',
+              transactionSizes: [355],
+              proposalsCount: 0,
+            }),
+            page.data[1],
+          ],
+        });
+        const { unmount } = render(<BlocksPage />);
+        const table = await screen.findByRole('table', { name: 'Latest blocks' });
+        const cols = Array.from(table.querySelectorAll('col')).map((c) =>
+          Number.parseFloat((c as HTMLElement).style.minWidth)
+        );
+        expect(cols[0]).toBe(column);
+        const number = within(table).getByRole('link', { name: '#100,000,000' });
+        expect(number.closest('td')).toBe(table.querySelector('tbody td'));
+        expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+        const past = line - (column - 16);
+        expect(past).toBeCloseTo(7.8, 10);
+        expect(past).toBeLessThan(16);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    });
   });
 
   // Board L1 (2026-11-01 responsive plan): the phone row is three lines and 640 is a table.

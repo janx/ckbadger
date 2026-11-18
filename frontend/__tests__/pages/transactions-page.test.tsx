@@ -366,6 +366,59 @@ describe('Transactions pool view', () => {
     expect(faultLines(cellFaults(table))).toEqual([]);
   });
 
+  // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the pool's
+  // table does with it today, for the lists page lane to rule on. A fee rate of 10,000,000,000
+  // shannons a KB, "10,000,000,000" (14 glyphs at 13 px, 109.2; the bound of record,
+  // "1,000,000,000", is 13, 101.4), in the Fee rate column (118 px, its box 102): one figure on
+  // one line, 7.2 px wider than its box, start-aligned past its right edge (CSS Text 3) into its
+  // own 16 px gap, short of the Size column.
+  it('holds a fee rate one glyph past its bound on one line, 7.2 px into its gap', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+      data: [
+        {
+          hash: `0x${'8'.repeat(64)}`,
+          status: 'pending' as const,
+          value: '100000000',
+          fee: '12345',
+          feeRate: '10000000000',
+          txSize: 597000,
+          cycles: '3500000000',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: String(Date.now() - 30_000),
+          interpretation: { status: 'complete' as const, reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const at = within(table)
+      .getAllByRole('columnheader')
+      .findIndex((th) => th.textContent === 'Fee rate, shannon/KB');
+    const column = Number.parseFloat(
+      (table.querySelectorAll('col')[at] as HTMLElement).style.minWidth
+    );
+    expect(column).toBe(118);
+    const rate = within(table).getAllByRole('row')[1].querySelectorAll('td')[at] as HTMLElement;
+    expect(rate).toHaveTextContent(/^10,000,000,000$/);
+    expect(rate).toHaveClass('whitespace-nowrap', 'text-right');
+    expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+    const past = '10,000,000,000'.length * 7.8 - (column - 16);
+    expect(past).toBeCloseTo(7.2, 10);
+    expect(past).toBeLessThan(16);
+  });
+
   // Old issue C: the pool's table changed form at 1,230 px, where the committed one did, and the
   // widest container (1,232 px from 1280) held both. re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the pool's table is
   // drawn from 1,272 px, the committed one from 1,286; the widest container holds neither.

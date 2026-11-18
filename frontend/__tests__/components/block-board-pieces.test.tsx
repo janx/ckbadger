@@ -16,6 +16,7 @@ import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { scriptLabel } from '@/components/address/address-history';
 import type { Transaction } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { cellFaults } from '@/__tests__/utils/list-table-cells';
 
 const rewardBlock = {
   number: 20_827_932,
@@ -306,6 +307,26 @@ describe('BlockTransactionsTable', () => {
       `${Math.round((300 / resourceScale([300, 700])) * 48 * 100) / 100}px`
     );
     expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
+  });
+  // Review fb-tests 6 (the lead's ruling): a value one glyph past its bound, and what the table
+  // does with it today, for the lists page lane to rule on. A fee of 100 CKB, "100.00000000" (12
+  // glyphs at 13 px, 93.6; the bound "99.99999999", 85.8), in the Fee column (102 px, its box 86):
+  // one figure on one line, 7.6 px wider than its box, start-aligned past its right edge (CSS Text
+  // 3) into its own 16 px gap, short of the Size column.
+  it('holds a fee one glyph past its bound on one line, 7.6 px into its gap', () => {
+    wrap(<BlockTransactionsTable transactions={[tx(0, { fee: '10000000000' })]} blockNumber={7} />);
+    const table = screen.getByRole('table');
+    const column = Number.parseFloat(
+      (table.querySelectorAll('col')[5] as HTMLElement).style.minWidth
+    );
+    expect(column).toBe(102);
+    const fee = table.querySelectorAll('tbody td')[5] as HTMLElement;
+    expect(fee).toHaveTextContent(/^100\.00000000$/);
+    expect(fee).toHaveClass('whitespace-nowrap', 'text-right');
+    expect(cellFaults(table).filter((f) => f.rule === 'figure breaks')).toEqual([]);
+    const past = '100.00000000'.length * 7.8 - (column - 16);
+    expect(past).toBeCloseTo(7.6, 10);
+    expect(past).toBeLessThan(16);
   });
   it('writes "+distance" beside the proposing block', () => {
     wrap(
