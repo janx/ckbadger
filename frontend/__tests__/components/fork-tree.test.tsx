@@ -66,14 +66,17 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(svg).not.toHaveAttribute('width', '100%');
   });
 
-  it('fits 358 px: blocks shrink to 72 px, time and miner move under them, nothing scrolls (V4)', () => {
-    stubChartWidth(358);
+  // Re-pinned (readability F3): four 72 px blocks with their 12 px time and miner under them need
+  // 370 px (6 + 4 × 72 + 3 × 20 + the last column's 16 px label run); they fitted 358 at 10 px.
+  // At 358 the oldest heights fold (the seven-deep case below and the layout's own test).
+  it('fits 370 px: blocks shrink to 72 px, time and miner move under them, nothing scrolls (V4)', () => {
+    stubChartWidth(370);
     const model = forkTreeModel(multi as unknown as ReorgDetail);
     const { container } = render(<ForkTree model={model} />);
     const svg = container.querySelector('svg[data-fork-tree]')!;
-    expect(svg).toHaveAttribute('width', '358');
-    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 358 /);
-    expectInside(svg, 358);
+    expect(svg).toHaveAttribute('width', '370');
+    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 370 /);
+    expectInside(svg, 370);
     // the branch line, the dashed lost blocks, the uncle arcs and ① ② are all still drawn
     expect(svg.querySelectorAll('[data-tile][data-dropped] rect')[0]).toHaveAttribute(
       'stroke-dasharray',
@@ -91,18 +94,21 @@ describe('ForkTree (Fork detail V67, FF-D4)', () => {
     expect(Number(box.getAttribute('width'))).toBe(72);
   });
 
-  it.each([1248, 358])(
-    'draws every block tile square at %i px, the dropped ones too (U-02, R1)',
-    (width) => {
-      stubChartWidth(width);
-      const { container } = render(
-        <ForkTree model={forkTreeModel(multi as unknown as ReorgDetail)} />
-      );
-      const svg = container.querySelector('svg[data-fork-tree]')!;
-      expect(rects(svg).length).toBeGreaterThanOrEqual(6);
-      expect(roundedRects(svg)).toEqual([]);
-    }
-  );
+  // re-pinned (readability F3): at 358 the four heights fold to "+2 earlier" and two columns, so
+  // four boxes are drawn there (the fold's, two main tiles, one dropped); 370 draws all six
+  it.each([
+    [1248, 6],
+    [370, 6],
+    [358, 4],
+  ])('draws every block tile square at %i px, the dropped ones too (U-02, R1)', (width, boxes) => {
+    stubChartWidth(width);
+    const { container } = render(
+      <ForkTree model={forkTreeModel(multi as unknown as ReorgDetail)} />
+    );
+    const svg = container.querySelector('svg[data-fork-tree]')!;
+    expect(rects(svg).length).toBeGreaterThanOrEqual(boxes);
+    expect(roundedRects(svg)).toEqual([]);
+  });
 
   it('collapses a seven-deep fork’s oldest blocks into "+N earlier" instead of scrolling (V4)', () => {
     stubChartWidth(358);
@@ -226,23 +232,25 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
     const all = allTextLines(svg);
     for (const line of all) expectLineInside(line, viewBox(svg), 'the tree', 'flush');
     expectApart(all, 'the tree');
-    const gap = FORK_TREE.compact.gap;
     for (const g of [...svg.querySelectorAll('[data-tile], [data-collapsed]')]) {
       const rect = g.querySelector('rect')!;
       const box = rectBox(rect);
       const what = `${g.getAttribute('data-tile') ?? '+N earlier'} (${layout.form})`;
       for (const text of [...g.querySelectorAll('text')]) {
         const under = layout.labelsUnder && Number(text.getAttribute('y')) > box.bottom;
-        // under a compact tile: its column, less the 4 px kept clear of the next one
+        // under a compact tile: its column, the tile and the run into the gap its miner is cut
+        // to, 4 px short of the next column; no edge is drawn there, so a label may start flush
+        // with the tile's side
         const band = under
           ? {
               left: box.left - 0.5,
-              right: box.left - 0.5 + layout.tileW + gap - 4,
+              right: box.left - 0.5 + layout.tileW + FORK_TREE.compact.labelRun,
               top: box.bottom,
               bottom: box.bottom + FORK_TREE.compact.under,
             }
           : box;
-        for (const line of textLines(text)) expectLineInside(line, band, what);
+        for (const line of textLines(text))
+          expectLineInside(line, band, what, under ? 'flush' : 'clear');
       }
     }
     // the miner's 13 characters stand whole in a wide tile
