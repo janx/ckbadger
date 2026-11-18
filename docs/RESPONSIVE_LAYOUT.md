@@ -67,12 +67,20 @@ The 640–767 band has one content width to design for. Below 640 the container 
   row, fixed at the foot of the window, 26 px on the elevated ground under a 1 px line; `body`
   keeps 26 px of bottom padding so no page ends under it. From `md` up it is one row — the mode
   block (`LIVE` / `SYNCING` / `OFFLINE`), the network, the tip, the release, the key hints, the
-  clock — and it must fit at 768 px (measured: 753 of 753 px with 26 px to spare, so a release
-  string five or more characters longer than `0.8.2` would clip the clock). Below `md` it is one
-  row of the mode, the network, the tip and the clock; the release and the hints are the wide
-  form's only (a touch screen has no keys). From `md` the release is in the status line and the
-  clock's zone in the `?` help; below `md` the footer's last row says both — designed, not
-  dropped. Never two rows, never a sideways scroller, never over the page's last prompt.
+  clock. Below `md` it is one row of the mode, the network, the tip and the clock; the release and
+  the hints are the wide form's only (a touch screen has no keys). From `md` the release is in the
+  status line and the clock's zone in the `?` help; below `md` the footer's last row says both —
+  designed, not dropped. Within its form the line draws a part only where its measured width
+  holds it (principle 4; `lib/status-line-fit.ts`: the meta step's 12 px, each part measured from
+  what it writes) and gives its parts up in one order: the key hints from the last (`g b blocks`,
+  `/ search`, `? help`: the help lists them all), the tip's word (the number stays: its `#` says it
+  is a block), the tip (the vitals strip's first figure), the network, the release; the mode and
+  the clock never. At the widest real content (a nine-digit tip, `SYNCING`, `· syncing`) the wide
+  form holds every part from 810 px and gives up `g b blocks` at 768 (713.6 of 768 px: room for a
+  release seven characters longer); the narrow form holds every part down to 390, the tip's
+  number without its word at 360 while the mode is `SYNCING` or `OFFLINE`, and at 320 the number
+  alone while `LIVE`, no tip otherwise. Never two rows, never a part cut at the edge, never a
+  sideways scroller, never over the page's last prompt.
 - **Page end** (every page, the not-found and error pages too): the footer is the page's last
   quiet row, then the empty prompt (the cinnabar square and the cursor), the last thing before the
   status line. The footer's "keyboard shortcuts" is drawn from `md` only; below `md` the footer

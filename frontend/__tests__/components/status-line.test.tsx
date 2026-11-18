@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '../utils/test-utils';
+import { act, cleanup, render, screen, waitFor } from '../utils/test-utils';
 import { server } from '../msw/server';
 import { stubChartWidth } from '../utils/chart-width';
 import { drawnStatusLinePx } from '../utils/shell-budget';
@@ -11,6 +11,8 @@ import { atViewportWidth } from '../utils/viewport';
 import { StatusClock, StatusLine } from '@/components/layout/status-line';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import { formatBlockNumber } from '@/lib/format-block';
+import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
+import { statusLinePx } from '@/lib/status-line-fit';
 
 // Rubbing × Song print, phase 2 (lib.js `status()`): the page is a terminal session and the status
 // line is its last row — fixed at the foot of the window, 26 px, the elevated ground under a 1 px
@@ -192,18 +194,36 @@ describe('StatusLine', () => {
 
   // The designed narrow form: one row of the mode, the network, the tip and the clock. The release
   // and the key hints show from md up only (a touch screen has no keys; the release is in the help).
+  // The form follows md as the footer's release row does (useFromMd); within it the line draws what
+  // its measured width holds (the describe block after this one), so nothing is hidden by a class.
   it('keeps the mode, the network, the tip and the clock below md; the release and keys from md', async () => {
+    atViewportWidth(767);
+    try {
+      mount();
+      await waitFor(() => expect(mode()).toHaveTextContent('LIVE'));
+      const bar = line();
+      expect(Array.from(bar.children).map((c) => c.textContent)).toEqual([
+        'LIVE',
+        'mainnet',
+        'tip#1,000,000',
+        expect.stringMatching(/^\d\d:\d\d:\d\d$/),
+      ]);
+      expect(bar.querySelector('kbd')).toBeNull();
+      expect(bar).not.toHaveTextContent(/ckbadger/);
+      for (const el of Array.from(bar.querySelectorAll('*')))
+        expect(el.className).not.toMatch(/\bhidden\b/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    cleanup();
     mount();
     await waitFor(() => expect(mode()).toHaveTextContent('LIVE'));
-    const bar = line();
-    const [modeCell, network, tip, release] = Array.from(bar.children) as HTMLElement[];
-    for (const el of [modeCell, network, tip]) expect(el.className).not.toMatch(/\bhidden\b/);
-    expect(release).toHaveClass('hidden', 'md:flex');
-    const right = bar.lastElementChild as HTMLElement;
-    const cells = Array.from(right.children) as HTMLElement[];
-    for (const key of cells.slice(0, 3)) expect(key).toHaveClass('hidden', 'md:flex');
-    expect(cells[3].className).not.toMatch(/\bhidden\b/);
-    expect(right.className).not.toMatch(/\bhidden\b/);
+    expect(line().children[3]).toHaveTextContent(/^ckbadger 0\.1\.0 · synced$/);
+    expect(Array.from(line().querySelectorAll('kbd')).map((k) => k.textContent)).toEqual([
+      '?',
+      '/',
+      'g b',
+    ]);
   });
 
   it('is a polite region for its mode, with the tip and the clock kept quiet', async () => {
@@ -282,6 +302,20 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
   it('holds every part but the last key hint at 768 px, where it ran 5 px past the line', async () => {
     const bar = await at(768, vitals());
     expect(drawnStatusLinePx(bar, true)).toBeLessThanOrEqual(768);
+    // what the drawn line measures by its classes is what its budget (lib/status-line-fit) counted
+    expect(bar).toHaveAttribute('data-measured', 'true');
+    expect(drawnStatusLinePx(bar, true)).toBe(
+      statusLinePx(
+        {
+          mode: 'LIVE',
+          network: 'mainnet',
+          tip: '#21,045,159',
+          release: 'ckbadger 0.1.0 · synced',
+          hints: STATUS_KEY_HINTS,
+        },
+        { network: true, tip: 'labelled', release: true, hints: 2 }
+      )
+    );
     expect(mode()).toHaveTextContent(/^LIVE$/);
     expect(bar.children[1]).toHaveTextContent(/^mainnet$/);
     expect(bar.children[2]).toHaveTextContent(/^tip#21,045,159$/);
