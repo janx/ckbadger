@@ -22,8 +22,11 @@ import { CLOCK_BEHIND } from '@/lib/format-age';
  *
  * The property, read from the rendered row with the page's clock two minutes behind the chain:
  * every run of the right part that a line cannot break inside fits the row's line, the page's
- * content width (358 at 390, 328 at 360: the row has no stone), and those runs are the units
- * themselves. At the meta step (12 px, 7.2 a glyph) the committed row's evidence joined the block
+ * content width (358 at 390, 328 at 360, 288 at 320: the row has no stone), and those runs are the
+ * units themselves. Fix round (review-rules-tests, the coordinator's item 5): the right part is a
+ * flex item, and it was `shrink-0`, so it stood at its whole width and broke nowhere: the reader
+ * now reads an item that cannot shrink as one run, and the row is read at 320 too, where the
+ * committed row's 309.6 px and the pool row's 326.4 px pass the 288 px line. At the meta step (12 px, 7.2 a glyph) the committed row's evidence joined the block
  * number to the sentence's first word, "#21,047,791 · this", 18 glyphs, 129.6 px (Utc8Age lets
  * the sentence break inside itself, the row's run did not); the pool row's was one run, the
  * "Confirming" badge (13 px, 10 glyphs, 78, its 8 px sides and 1 px borders: 96), " · " (21.6) and
@@ -87,23 +90,25 @@ function runsOf(container: HTMLElement, viewport: number) {
   };
 }
 
-describe.each([390, 360])(
+describe.each([390, 360, 320])(
   'an activity row’s right part with the clock behind, at %i px (B4)',
   (viewport) => {
     it('the committed row: the block number one unit, the sentence words', () => {
       atViewportWidth(viewport);
       const { container } = render(<ActivityRow activity={row()} age />);
       const { texts, past } = runsOf(container, viewport);
-      expect(texts).toEqual(['#21,047,791', '·', ...SENTENCE]);
+      // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
+      expect(texts).toEqual(['#21,047,791', '·', ...SENTENCE]);
     });
 
     it('the pool row: the status one unit, the sentence words', () => {
       atViewportWidth(viewport);
       const { container } = render(<ActivityRow activity={pool()} age />);
       const { texts, past } = runsOf(container, viewport);
-      expect(texts).toEqual(['Confirming', '·', ...SENTENCE]);
+      // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
+      expect(texts).toEqual(['Confirming', '·', ...SENTENCE]);
     });
 
     it('the folded row: "newest" and the sentence, words', () => {
@@ -123,8 +128,9 @@ describe.each([390, 360])(
       );
       const run = container.querySelector('[data-role="activity-run"]') as HTMLElement;
       const { texts, past } = runsOf(run, viewport);
-      expect(texts).toEqual(['newest', ...SENTENCE]);
+      // the property first (nothing past the line), then the units it is made of
       expect(past).toEqual([]);
+      expect(texts).toEqual(['newest', ...SENTENCE]);
     });
   }
 );

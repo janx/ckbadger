@@ -2,6 +2,8 @@
 // rows with a lock-kind column and the token mark (IV-14), metadata provenance from the API (IV-26),
 // the paged supply events and history line (IV-27, IV-17), holders in the token colour (IV-18), the
 // rail with D8's "Not established" sentences (IV-19, D8), header (IV-16) and tier 2 (IV-20).
+import { ckbAddress, JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
@@ -123,8 +125,9 @@ const event = (i: number, kind: 'mint' | 'burn') => ({
   amount: '100000000',
   supplyAfter: '1000000000000',
   lockHash: other,
-  address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
-  lockCodeHash: `0x${'9b'.repeat(32)}`,
+  // B4 fix round: a real JoyID address (a row reads its lock off its address)
+  address: seededAddress('test', JOYID_CODE_HASH),
+  lockCodeHash: JOYID_CODE_HASH,
   lockKind: 'JoyID',
 });
 describe('Token board (F2 objects)', () => {
@@ -356,13 +359,14 @@ describe('Token board (F2 objects)', () => {
   // Responsive gate (2026-11-01): the issuer's full address inside the args note had no break
   // opportunity and pushed the page 76 px past 640 and 326 px past 390.
   it('wraps the issuer address in the args note inside its box', async () => {
-    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq' + 'x'.repeat(40);
+    // B4 fix round: a real default-lock address with long args, still one run with no break
+    const address = ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args: `0x${'ab'.repeat(40)}` });
     vi.mocked(api.getToken).mockResolvedValue({
       ...mockToken,
       issuer: {
         lockHash: other,
         address,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: DEFAULT_LOCK_CODE_HASH,
         lockKind: 'Default Lock',
       },
     });

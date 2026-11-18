@@ -3,7 +3,7 @@ import { useState, type Ref } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
 import { formatStandard } from '@/components/activity-event-row';
@@ -162,22 +162,19 @@ function terminalWords(end: FlowEnd): { who: string; role: string } {
 function EndText({
   asset,
   end,
-  lockCodeHashes,
   align,
   size,
   onExpand,
 }: {
   asset: FlowAsset;
   end: FlowEnd;
-  lockCodeHashes: ReadonlyMap<string, string>;
   align: 'left' | 'right';
   size: ShortSize;
   onExpand?: () => void;
 }) {
   const alignClass = align === 'right' ? 'text-right' : 'text-left';
   if (end.t === 'party') {
-    const address = end.party.address;
-    const codeHash = address === null ? null : (lockCodeHashes.get(address) ?? null);
+    const lock = partyLock(end.party);
     return (
       <div className={cn('leading-row min-w-0', alignClass)}>
         {/* One line, never two: the address whole, the lock kind truncated if the column is
@@ -195,9 +192,10 @@ function EndText({
             quiet
             className="shrink-0"
           />
-          {codeHash !== null && (
+          {/* no span (and no gap) where the row names no lock (B4) */}
+          {lock && (
             <span className="min-w-0 truncate">
-              <LockKind lockKind={end.party.lockKind ?? null} lockCodeHash={codeHash} size={size} />
+              <LockWordsView words={lock} size={size} />
             </span>
           )}
         </div>
@@ -308,11 +306,9 @@ function side(ends: FlowEnd[], height: number): Side {
 /** The flow in its ribbon form: givers, the field with the ribbons and the plate, receivers. */
 function RibbonStrip({
   flow,
-  lockCodeHashes,
   onHover,
 }: {
   flow: TxFlow;
-  lockCodeHashes: ReadonlyMap<string, string>;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -401,7 +397,6 @@ function RibbonStrip({
               <EndText
                 asset={flow.asset}
                 end={end}
-                lockCodeHashes={lockCodeHashes}
                 align={which === 'from' ? 'right' : 'left'}
                 size="row"
                 onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
@@ -446,11 +441,9 @@ function RibbonStrip({
 /** The flow in its list form (under 700 px): the givers, a step down through the plate, the receivers. */
 function ListStrip({
   flow,
-  lockCodeHashes,
   onHover,
 }: {
   flow: TxFlow;
-  lockCodeHashes: ReadonlyMap<string, string>;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -474,7 +467,6 @@ function ListStrip({
           <EndText
             asset={flow.asset}
             end={end}
-            lockCodeHashes={lockCodeHashes}
             align="left"
             size={size}
             onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
@@ -527,15 +519,12 @@ export function WhatMoved({
   activity,
   fee,
   compensation,
-  lockCodeHashes,
   onHover,
 }: {
   hash: string;
   activity: GlobalActivity;
   fee: string;
   compensation: bigint | null;
-  /** Address → lock code hash, from the transaction's cells (`lockCodeHashesByAddress`). */
-  lockCodeHashes: ReadonlyMap<string, string>;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
@@ -555,7 +544,7 @@ export function WhatMoved({
       <div ref={ref} className="divide-row-rule flex min-w-0 flex-col divide-y px-3">
         {flows.map((flow) => (
           <div key={flow.key} className="py-4">
-            <Strip flow={flow} lockCodeHashes={lockCodeHashes} onHover={onHover} />
+            <Strip flow={flow} onHover={onHover} />
           </div>
         ))}
       </div>

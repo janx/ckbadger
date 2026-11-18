@@ -21,7 +21,7 @@ import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { SHARE_TRACK_PX, formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { rowTagClass } from '@/components/ui/row-tag';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockKind, LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatCount, countNoun } from '@/lib/format-count';
@@ -347,6 +347,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             <LockKind
               lockKind={h.lockKind}
               lockCodeHash={h.lockCodeHash}
+              address={h.address}
               size="row"
               place="column"
               className={rowTagClass('default', 'min-w-0 truncate')}
@@ -399,6 +400,8 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       },
     ];
   };
+  /** A holder's lock beside it on a phone row, or null where none is written (B4). */
+  const phoneLock = (h: TokenHolder) => rowLock(h, 'inline');
   const holderTitle = (h: TokenHolder) =>
     [
       `#${rank(h)}`,
@@ -444,13 +447,15 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                     </AppLink>
                   }
                   lock={
-                    // In the row's own dim small ink, as the kind was written before U-15.
-                    <LockKind
-                      lockKind={h.lockKind}
-                      lockCodeHash={h.lockCodeHash}
-                      size={phoneSize}
-                      className="text-text-dim text-small"
-                    />
+                    // In the row's own dim small ink, as the kind was written before U-15; no
+                    // part where the row names no lock (B4)
+                    phoneLock(h) && (
+                      <LockWordsView
+                        words={phoneLock(h)!}
+                        size={phoneSize}
+                        className="text-text-dim text-small"
+                      />
+                    )
                   }
                   amount={<TokenAmount form="summary" amount={h.balance} decimals={decimals} />}
                   share={share.text}

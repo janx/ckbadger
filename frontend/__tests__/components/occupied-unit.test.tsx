@@ -8,8 +8,9 @@ import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
-import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
-import { ActivityRow, formatOccupiedDelta } from '@/components/activity/activity-row';
+import { BalanceChanges } from '@/components/transaction/balance-changes';
+import { ActivityRow } from '@/components/activity/activity-row';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import type { ParticipantInfo } from '@/lib/api';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 
@@ -65,20 +66,11 @@ describe('the participant line says "occupied ±N B"', () => {
 
 describe('the balance changes write occupied bytes with their unit, in every form', () => {
   const a = feedSamples.objectTransfer;
-  const hashes = () =>
-    lockCodeHashesByAddress(
-      a.participants.map((p) => ({
-        address: p.address!,
-        lock: { codeHash: `0x${'ab'.repeat(32)}`, hashType: 'type', args: '0x' },
-      }))
-    );
   afterEach(() => vi.unstubAllGlobals());
 
   it('in the table: each Occupied cell and the Net row, one unit each, never broken from it', () => {
     stubChartWidth(912);
-    render(
-      <BalanceChanges activity={a} fee="64119" compensation={null} lockCodeHashes={hashes()} />
-    );
+    render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     const table = screen.getByRole('table', { name: 'Balance changes by participant' });
     const occupied = within(table)
       .getAllByRole('row')
@@ -95,9 +87,7 @@ describe('the balance changes write occupied bytes with their unit, in every for
 
   it.each([358, 608])('in the cards at %i px: "occupied ±N B", the Net row too', (width) => {
     stubChartWidth(width);
-    render(
-      <BalanceChanges activity={a} fee="64119" compensation={null} lockCodeHashes={hashes()} />
-    );
+    render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     const list = screen.getByRole('list', { name: 'Balance changes by participant' });
     expect(list).toHaveTextContent(`occupied ${MINUS}502 B`);
     expect(screen.getByTestId('tx-balance-net')).toHaveTextContent('occupied +26 B');

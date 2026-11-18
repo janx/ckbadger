@@ -140,16 +140,28 @@ function getActivityDayLabel(timestamp: string, now: number): string {
 }
 
 /** The rows in their days, in order: consecutive rows under one divider are one group. */
+/**
+ * The stream's rows by day, in order, each group keyed by what it is: its day and which time the
+ * day comes in the stream (a block's time may be earlier than its parent's, so near midnight a day
+ * can come again after the next). A row arriving at the top or an older page at the bottom leaves
+ * every key as it was, so no group is remounted under the reader (lane B4 fix round).
+ */
 function dayGroups(
   items: readonly GlobalActivity[],
   now: number
-): { label: string; items: GlobalActivity[] }[] {
-  const groups: { label: string; items: GlobalActivity[] }[] = [];
+): { key: string; label: string; items: GlobalActivity[] }[] {
+  const groups: { key: string; label: string; items: GlobalActivity[] }[] = [];
+  const seen = new Map<string, number>();
   for (const activity of items) {
     const label = getActivityDayLabel(activity.timestamp, now);
     const last = groups[groups.length - 1];
-    if (last && last.label === label) last.items.push(activity);
-    else groups.push({ label, items: [activity] });
+    if (last && last.label === label) {
+      last.items.push(activity);
+      continue;
+    }
+    const time = seen.get(label) ?? 0;
+    seen.set(label, time + 1);
+    groups.push({ key: `${label}#${time}`, label, items: [activity] });
   }
   return groups;
 }
@@ -581,8 +593,8 @@ export function ActivitiesStreamExplorer({
           <div>
             {/* Readability B4: each day's rows, under its divider, with their runs folded; a run
                 folds within its day and across the older pages appended to it. */}
-            {dayGroups(visibleItems, now).map(({ label, items }) => (
-              <div key={`${label}:${itemKey(items[0])}`}>
+            {dayGroups(visibleItems, now).map(({ key, label, items }) => (
+              <div key={key}>
                 <ActivityDayDivider label={label} />
                 <ActivityRuns
                   age
@@ -594,15 +606,7 @@ export function ActivitiesStreamExplorer({
                       activity,
                       title: <ActivityTitle activity={activity} />,
                       fresh: highlightedKeys.has(key),
-                      // The lock kind gets its own place so it never wraps under the address.
-                      row: (
-                        <ActivityRow
-                          activity={activity}
-                          fresh={highlightedKeys.has(key)}
-                          lockColumn
-                          age
-                        />
-                      ),
+                      row: <ActivityRow activity={activity} fresh={highlightedKeys.has(key)} age />,
                     };
                   })}
                 />

@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { TokenDistributionView, TokenHolders } from '@/components/asset/token-holders';
 import { api } from '@/lib/api';
@@ -7,6 +8,12 @@ import type { TokenDistribution } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+
+// B4 fix round: a row reads its lock off its address, so each holder's address spells the lock
+// its row names (JoyID's real code hash, and an unregistered one).
+const JOY_HOLDER = seededAddress('tllakf', JOYID_CODE_HASH);
+const JOY_HOLDER_2 = seededAddress('ax426h', JOYID_CODE_HASH);
+const UNREGISTERED_HOLDER = seededAddress('ax426h', `0x${'43'.repeat(32)}`);
 
 /** A column head's name: its text, or the name over a bar column's scale ticks. */
 const headText = (h: HTMLElement) => h.firstChild?.firstChild?.textContent ?? h.textContent;
@@ -225,9 +232,9 @@ describe('Token holders (board L5)', () => {
     data: [
       {
         lockScriptHash: `0x${'11'.repeat(32)}`,
-        address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+        address: JOY_HOLDER,
         balance: '56299700000000',
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
       {
@@ -379,7 +386,7 @@ describe('Token holders (board L5)', () => {
     expect(within(first).getByText('JoyID')).toHaveAttribute('data-lock-kind');
     expect(within(first).getByText('JoyID')).toHaveClass('text-meta', 'border');
     expect(within(first).getByText('JoyID')).toHaveClass('truncate');
-    expect(within(first).getByText('JoyID')).toHaveAttribute('title', `0x${'9b'.repeat(32)}`);
+    expect(within(first).getByText('JoyID')).toHaveAttribute('title', JOYID_CODE_HASH);
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
     // the list's summary form: whole from 1,000 up (readability R5, re-pinned on purpose: was
     // "562,997.00", two places)
@@ -387,7 +394,7 @@ describe('Token holders (board L5)', () => {
     expect(first).not.toHaveTextContent('562,997.00');
     expect(first).toHaveAttribute(
       'title',
-      `#1 · ckb1qrgqep8s${'q'.repeat(40)}tllakf · JoyID · 562,997 RGB++ · 2.32% of supply`
+      `#1 · ${JOY_HOLDER} · JoyID · 562,997 RGB++ · 2.32% of supply`
     );
     expect(second).toHaveAttribute(
       'title',
@@ -406,7 +413,7 @@ describe('Token holders (board L5)', () => {
         key: 'holder',
         tone: 'head',
         // U-09 (re-pinned): the phone row's address at the tight size
-        left: '1ckb1…tllakf JoyID',
+        left: `1ckb1…${JOY_HOLDER.slice(-6)} JoyID`,
         // a phone row's summary form (readability R5, re-pinned on purpose: was "562,997.00000000")
         right: '562,997',
       },
@@ -438,14 +445,14 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     data: [
       {
         lockScriptHash: `0x${'11'.repeat(32)}`,
-        address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+        address: JOY_HOLDER,
         balance: '300',
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
       {
         lockScriptHash: `0x${'22'.repeat(32)}`,
-        address: `ckb1qzvenxve${'q'.repeat(40)}ax426h`,
+        address: UNREGISTERED_HOLDER,
         balance: '200',
         lockCodeHash: unregistered,
         lockKind: null,
@@ -484,7 +491,9 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
       scriptPage
     );
     expect(unnamed).toHaveAttribute('title', expect.stringContaining(` · ${unregistered} · `));
-    expect(notIndexed.querySelector('[data-lock-kind]')).toBeNull();
+    // B4 fix round (the coordinator's ruling, re-pinned on purpose): no cell under "Lock" is
+    // empty: a lock that is not indexed says so in words, quiet (it was an empty cell)
+    expect(notIndexed.querySelector('[data-lock-kind]')).toHaveTextContent(/^not indexed$/);
     expect(notIndexed).toHaveAttribute('title', expect.stringContaining(' · lock not indexed · '));
     for (const row of [named, unnamed, notIndexed]) {
       expect(row).not.toHaveTextContent(/lock kind unavailable/i);
@@ -521,16 +530,16 @@ describe('Token holders’ shares at the extremes', () => {
       data: [
         {
           lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+          address: JOY_HOLDER,
           balance: '999999',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockCodeHash: JOYID_CODE_HASH,
           lockKind: 'JoyID',
         },
         {
           lockScriptHash: `0x${'22'.repeat(32)}`,
-          address: `ckb1qzvenxve${'q'.repeat(40)}ax426h`,
+          address: JOY_HOLDER_2,
           balance: '1',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockCodeHash: JOYID_CODE_HASH,
           lockKind: 'JoyID',
         },
       ],
@@ -569,8 +578,8 @@ describe('Token holders name a holder whose lock has no address form by its lock
           lockScriptHash: lockHash,
           address: null,
           balance: '100',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
-          lockKind: 'SECP256K1/blake160',
+          lockCodeHash: JOYID_CODE_HASH,
+          lockKind: 'JoyID',
         },
       ],
       total: 1,
@@ -591,11 +600,8 @@ describe('Token holders name a holder whose lock has no address form by its lock
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
     const [, row] = within(table).getAllByRole('row');
     expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', addressPage);
-    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
-    expect(row).toHaveAttribute(
-      'title',
-      expect.stringContaining(`${lockHash} · SECP256K1/blake160`)
-    );
+    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('JoyID');
+    expect(row).toHaveAttribute('title', expect.stringContaining(`${lockHash} · JoyID`));
     expect(row.getAttribute('title')).not.toMatch(/not indexed/);
   });
 
@@ -604,7 +610,7 @@ describe('Token holders name a holder whose lock has no address form by its lock
     mount();
     const [row] = await screen.findAllByTestId('holder-row-mobile');
     expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', addressPage);
-    expect(phoneLines(row)[0].left).toMatch(/ SECP256K1\/blake160$/);
+    expect(phoneLines(row)[0].left).toMatch(/ JoyID$/);
     expect(row).not.toHaveTextContent(/not indexed/);
   });
 });
@@ -622,7 +628,7 @@ describe('Token holders where the table does not fit (L5)', () => {
           lockScriptHash: `0x${'11'.repeat(32)}`,
           address: null,
           balance: '100',
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockCodeHash: JOYID_CODE_HASH,
           lockKind: 'JoyID',
         },
       ],

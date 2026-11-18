@@ -10,16 +10,25 @@ import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
-import { lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
 
 const HASH = `0x${'54'.repeat(32)}`;
 /** JoyID's code hash, the lock these parties' addresses spell (`ckb1qrgqep…`). */
 const JOYID = '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323';
 /** A lock the registry does not name (the party whose `lockKind` is null). */
-const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}00895d`;
+const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}895d`;
 const NERVAPE = `0x4a2237a7${'00'.repeat(26)}2abf1d`;
 const RGBPP = `0x${'2b'.repeat(32)}`;
+
+/**
+ * A fixture party's address as a row writes it, by its seed: `ckb1…` and its last 8 characters
+ * (`tight`: 6). B4 fix round: real addresses, whose last characters are their checksum.
+ */
+const row = (tail: string, lockKind: string | null = 'JoyID') =>
+  `ckb1…${seededAddress(tail, lockKind === null ? UNNAMED_LOCK : JOYID).slice(-8)}`;
+const tight = (tail: string, lockKind: string | null = 'JoyID') =>
+  `ckb1…${seededAddress(tail, lockKind === null ? UNNAMED_LOCK : JOYID).slice(-6)}`;
 
 function party(
   tail: string,
@@ -28,7 +37,8 @@ function party(
   lockKind: string | null = 'JoyID'
 ): ParticipantInfo {
   return {
-    address: `ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq${tail}`,
+    // B4 fix round: a real address on the lock the fixture names (JoyID, else the unnamed lock)
+    address: seededAddress(tail, lockKind === null ? UNNAMED_LOCK : JOYID),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
     roles: [],
@@ -74,27 +84,11 @@ const sale = () =>
     party('ay02wn', '-63800008888', [suit(1)]),
     party('sp7v9m', '-43200000000', [suit(-1)], null),
   ]);
-const codeHashes = (a: GlobalActivity) =>
-  lockCodeHashesByAddress(
-    a.participants.map((p) => ({
-      address: p.address!,
-      // B4 (re-pinned): each party's lock as its fixture names it; they were all the default lock,
-      // which a row now leaves unnamed (R9), even beside "JoyID"
-      lock: { codeHash: p.lockKind === null ? UNNAMED_LOCK : JOYID, hashType: 'type', args: '0x' },
-    }))
-  );
 
 function renderAt(width: number, a = sale(), onHover?: (h: WhatMovedHover | null) => void) {
   stubChartWidth(width);
   return render(
-    <WhatMoved
-      hash={HASH}
-      activity={a}
-      fee="8888"
-      compensation={null}
-      lockCodeHashes={codeHashes(a)}
-      onHover={onHover}
-    />
+    <WhatMoved hash={HASH} activity={a} fee="8888" compensation={null} onHover={onHover} />
   );
 }
 
@@ -133,8 +127,8 @@ describe('WhatMoved, the ribbon form', () => {
     const from = object.querySelector('[data-flow-side="from"]')!;
     const to = object.querySelector('[data-flow-side="to"]')!;
     // U-09 (re-pinned): the ribbon's parties at the row size; R9 (re-pinned): 4…8
-    expect(from).toHaveTextContent('ckb1…qqsp7v9m');
-    expect(to).toHaveTextContent('ckb1…qqay02wn');
+    expect(from).toHaveTextContent(row('sp7v9m', null));
+    expect(to).toHaveTextContent(row('ay02wn'));
     expect(to).toHaveTextContent('JoyID');
     // a whole object is the ribbon's full weight on both sides
     expect(from.querySelector('[data-flow-end="party"]')).toHaveAttribute('data-weight', '22');
@@ -154,11 +148,11 @@ describe('WhatMoved, the ribbon form', () => {
       ]);
     // U-15 (re-pinned): a lock the registry does not name is 'lock <code hash>'
     expect(ends(from)).toEqual([
-      ['party', '14', 'ckb1…qqay02wnJoyID638.00008888 CKB'],
-      ['party', '10', 'ckb1…qqsp7v9mlock 0x43b2924e…00895d432.00000000 CKB'],
+      ['party', '14', `${row('ay02wn')}JoyID638.00008888 CKB`],
+      ['party', '10', `${row('sp7v9m', null)}lock 0x43b2924e…00895d432.00000000 CKB`],
     ]);
     expect(ends(to)).toEqual([
-      ['party', '22', 'ckb1…qqct4hxvJoyID1,070.00000000 CKB'],
+      ['party', '22', `${row('ct4hxv')}JoyID1,070.00000000 CKB`],
       ['miner', '2', 'the miner fee0.00008888 CKB'],
     ]);
     // the plate's total is what left the givers, so the fee is inside it
@@ -181,7 +175,7 @@ describe('WhatMoved, the ribbon form', () => {
     fireEvent.mouseEnter(object.querySelector('[data-flow-side="to"] [data-flow-end="party"]')!);
     expect(onHover).toHaveBeenLastCalledWith({
       t: 'party',
-      party: expect.objectContaining({ address: expect.stringMatching(/ay02wn$/) }),
+      party: expect.objectContaining({ address: seededAddress('ay02wn', JOYID) }),
     });
     fireEvent.mouseLeave(object.querySelector('[data-flow-side="to"] [data-flow-end="party"]')!);
     expect(onHover).toHaveBeenLastCalledWith(null);
@@ -202,21 +196,13 @@ describe('WhatMoved, the ribbon form', () => {
       party('bbbbbb', '3087622394970', [rgbpp('-2544240236569')]),
     ]);
     stubChartWidth(876);
-    render(
-      <WhatMoved
-        hash={HASH}
-        activity={a}
-        fee="30698"
-        compensation={BigInt('17530634165')}
-        lockCodeHashes={codeHashes(a)}
-      />
-    );
+    render(<WhatMoved hash={HASH} activity={a} fee="30698" compensation={BigInt('17530634165')} />);
     const [token, ckb] = screen.getAllByRole('group');
-    expect(token.querySelector('[data-flow-side="from"]')).toHaveTextContent('bbbbbb');
-    expect(token.querySelector('[data-flow-side="to"]')).toHaveTextContent('aaaaaa');
+    expect(token.querySelector('[data-flow-side="from"]')).toHaveTextContent(row('bbbbbb'));
+    expect(token.querySelector('[data-flow-side="to"]')).toHaveTextContent(row('aaaaaa'));
     expect(token.querySelector('[data-flow-side="to"]')).toHaveTextContent('25,442.40236569 RGB++');
-    expect(ckb.querySelector('[data-flow-side="from"]')).toHaveTextContent('aaaaaa');
-    expect(ckb.querySelector('[data-flow-side="to"]')).toHaveTextContent('bbbbbb');
+    expect(ckb.querySelector('[data-flow-side="from"]')).toHaveTextContent(row('aaaaaa'));
+    expect(ckb.querySelector('[data-flow-side="to"]')).toHaveTextContent(row('bbbbbb'));
     const first = ckb.querySelector('[data-flow-side="from"] [data-flow-end]')!;
     expect(first).toHaveAttribute('data-flow-end', 'compensation');
     expect(first).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
@@ -287,8 +273,10 @@ describe('WhatMoved, the list form', () => {
     const eyebrows = Array.from(object.querySelectorAll('.eyebrow')).map((e) => e.textContent);
     expect(eyebrows).toEqual(['from', 'to']);
     // U-09 (re-pinned): the list's parties at the tight size, on a phone
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sp7v9m');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…ay02wn');
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent(
+      tight('sp7v9m', null)
+    );
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent(tight('ay02wn'));
     expect(ckb.querySelectorAll('[data-flow-side="to"] [data-flow-end]')).toHaveLength(2);
     expect(ckb.querySelector('[data-flow-end="miner"]')).toHaveTextContent(
       'the miner fee0.00008888 CKB'
@@ -301,7 +289,7 @@ describe('WhatMoved, the list form', () => {
     const frame = screen.getByTestId('tx-what-moved');
     expect(frame).toHaveAttribute('data-form', 'list');
     const [object] = within(frame).getAllByRole('group');
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…qqsp7v9m');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…qqay02wn');
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent(row('sp7v9m', null));
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent(row('ay02wn'));
   });
 });

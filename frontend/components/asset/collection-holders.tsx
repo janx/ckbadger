@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockKind, LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -217,6 +217,7 @@ function ScopedCollectionHolders({
           <LockKind
             lockKind={holder.lockKind}
             lockCodeHash={holder.lockCodeHash}
+            address={holder.address}
             size="row"
             place="column"
             className={rowTagClass('default', 'min-w-0 truncate')}
@@ -295,13 +296,11 @@ function ScopedCollectionHolders({
                     <HolderPhoneRow
                       rank={rank(holder)}
                       party={party(holder, phoneSize)}
-                      lock={
-                        <LockKind
-                          lockKind={holder.lockKind}
-                          lockCodeHash={holder.lockCodeHash}
-                          size={phoneSize}
-                        />
-                      }
+                      lock={(() => {
+                        // no part where the row names no lock (B4)
+                        const words = rowLock(holder, 'inline');
+                        return words && <LockWordsView words={words} size={phoneSize} />;
+                      })()}
                       amount={
                         <span className="whitespace-nowrap">
                           <AssetCount value={holder.itemCount} />{' '}

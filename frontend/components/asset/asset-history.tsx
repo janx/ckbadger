@@ -8,7 +8,7 @@ import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-ta
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockKind, LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
@@ -309,6 +309,7 @@ export function AssetHistory({
           <LockKind
             lockKind={e.lockKind}
             lockCodeHash={e.lockCodeHash}
+            address={e.address}
             size="row"
             className="text-text-dim text-meta block"
           />
@@ -583,13 +584,18 @@ export function AssetHistory({
                       copyable={false}
                       className="text-meta"
                     />
-                  </AppLink>{' '}
-                  <LockKind
-                    lockKind={e.lockKind}
-                    lockCodeHash={e.lockCodeHash}
-                    size={phoneSize}
-                    className="text-text-dim text-meta"
-                  />
+                  </AppLink>
+                  {/* no space and no part where the row names no lock (B4) */}
+                  {rowLock(e, 'inline') && (
+                    <>
+                      {' '}
+                      <LockWordsView
+                        words={rowLock(e, 'inline')!}
+                        size={phoneSize}
+                        className="text-text-dim text-meta"
+                      />
+                    </>
+                  )}
                 </span>
               );
               return (

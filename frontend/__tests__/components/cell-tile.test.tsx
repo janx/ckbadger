@@ -1,3 +1,5 @@
+import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
+import { occupiedBytesText } from '@/lib/occupied';
 import { describe, it, expect, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { CellTile } from '@/components/ui/cell-tile';
@@ -29,7 +31,9 @@ vi.mock('@/lib/seal/stones', async (importOriginal) => {
 });
 
 describe('CellTile occupied wording (TX-19)', () => {
-  it('states occupied capacity as whole bytes, as the board does ("occupied 195")', () => {
+  // B4 fix round (re-pinned on purpose, tests MUST-2): "occupied" always carries its unit, as a
+  // figure does ("occupied 195 B"); it was "occupied 195"
+  it('states occupied capacity as whole bytes with their unit ("occupied 195 B")', () => {
     render(
       <CellTile
         cell={sealedTile({
@@ -48,7 +52,7 @@ describe('CellTile occupied wording (TX-19)', () => {
       />
     );
     const tile = screen.getByTestId('tile');
-    expect(tile).toHaveTextContent('occupied 195');
+    expect(tile).toHaveTextContent('occupied 195 B');
     expect(tile).not.toHaveTextContent('occupied 195.00000000');
   });
 
@@ -469,14 +473,17 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
       'href',
       `/mainnet/address/${ADDRESS}`
     );
-    // the change output's lock kind (no lookup: 'change' alone), dim
-    expect(expectEnd(owner.text, /^change$/).firstElementChild).toHaveClass('text-text-dim');
-    // a lock of no known kind: the owner alone, no empty end
+    // B4 fix round (re-pinned on purpose): a tile names its owner's lock by the one decision every
+    // row reads (U-15: a lock the registry does not name is "lock <code hash>"; here no lookup
+    // names the fixture's made-up 0x9b… lock), then "change" on the change output, dim. It wrote
+    // 'change' alone and left an unregistered lock unnamed, so it read as the default lock.
+    expect(
+      expectEnd(owner.text, /^lock 0x9b9b9b9b…9b9b9b · change$/).firstElementChild
+    ).toHaveClass('text-text-dim');
     cleanup();
     render(<CellTile cell={outputs[1]} />);
     const [, other] = tileRows(screen.getByTestId('tx-io-output-1'));
-    expect(other.text.children).toHaveLength(1);
-    expect(other.text.querySelector('[data-tile-end]')).toBeNull();
+    expectEnd(other.text, /^lock 0x9b9b9b9b…9b9b9b$/);
   });
 
   it('reads the content, bright, on the third row, the exact capacity at its right end', () => {
@@ -506,25 +513,32 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     const [bar, bytes] = Array.from(occupied.text.children) as HTMLElement[];
     expect(bar).toHaveAttribute('aria-hidden', 'true');
     expect(bar).toHaveClass('h-1', 'w-14', 'shrink-0');
-    expect(bytes).toHaveTextContent(/^occupied 61$/);
+    expect(bytes).toHaveTextContent(/^occupied 61 B$/);
     expect(bytes).toHaveClass('text-meta', 'text-text-dim');
     const state = expectEnd(occupied.text, /^live$/);
     // re-pinned with readability ruling R3: the state is a value, the reading ink (it was dim)
     expect(state.firstElementChild).toHaveClass('text-meta', 'text-text');
     // the state once in the tile
     expect(within(tile).getAllByText('live')).toHaveLength(1);
-    // the narrowest sheet's text column holds the 56 px bar, 'occupied 231' and 'consumed' at
-    // the meta step with the 6 px gaps. Re-pinned on purpose (readability R6): the tile's content
-    // box at 1024 is 243 px (the recorded 203 px text column, the 30 px mark column and the 10 px
-    // gap), so beside the 18 px column the text has 215; the line is 212 px at 12 px (7.2 a
-    // glyph). This counted it at 11 px (200 px against 203): at 12 px it did not fit beside the
-    // 30 px column.
+    // The line's budget at a stated bound (B4 fix round, tests NOTE-4; it was the sample
+    // 'occupied 231'): a cell's occupied bytes are no more than the transaction that made it, and
+    // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record: it
+    // was MAX_BLOCK_BYTES here, which a genesis cell is not held by), so the widest figure is
+    // "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px. With the 56 px
+    // bar, 'consumed' and the 6 px gaps the line is 269.6 px. The text column is 215 px at its
+    // narrowest (1024: the recorded 203 px column, the 30 px mark column and the 10 px gap, less
+    // the 18 px column and its gap) and 343 at 1280: past its room (at 1024 from "occupied 9 B"
+    // on) the state, the line's right end, drops under the bar on a line of its own, at the right
+    // (TileText's end: ml-auto).
     const narrowest = 203 + 30 + 10 - Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16) - 10;
     expect(narrowest).toBe(215);
-    const line = 56 + 6 + textPx(12, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
-    expect(line).toBeCloseTo(212, 10);
-    expect(line).toBeLessThanOrEqual(narrowest);
-    expect(line).toBeGreaterThan(203);
+    const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES))}`;
+    expect(widest).toBe('occupied 1,236,271 B');
+    const line = 56 + 6 + textPx(widest.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
+    expect(line).toBeCloseTo(269.6, 10);
+    expect(line).toBeGreaterThan(narrowest);
+    expect(line).toBeLessThanOrEqual(343);
+    expect(occupied.text.lastElementChild).toHaveClass('ml-auto');
     // with the cell's anatomy, its byte bar takes the line's free width, the bytes after it
     cleanup();
     render(
@@ -553,7 +567,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
       'in:0: 61 occupied bytes'
     );
     expect(cellBar).toHaveClass('min-w-0', 'flex-1');
-    expect(words).toHaveTextContent(/^occupied 61$/);
+    expect(words).toHaveTextContent(/^occupied 61 B$/);
   });
 });
 

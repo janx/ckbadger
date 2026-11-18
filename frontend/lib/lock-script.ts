@@ -22,9 +22,12 @@ import type { ScriptRefHashType } from '@/lib/script-ref';
 export const DEFAULT_LOCK_CODE_HASH =
   '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 
-/** Whether a lock's code hash is the default lock's: then a row writes no lock name. */
-export function isDefaultLock(codeHash: string): boolean {
-  return codeHash.toLowerCase() === DEFAULT_LOCK_CODE_HASH;
+/**
+ * Whether a lock is the default lock: the pair, its code hash by `type` (a script by `data`,
+ * `data1` or `data2` on that code hash is another lock: no cell's data hashes to it).
+ */
+export function isDefaultLock(codeHash: string, hashType: ScriptRefHashType): boolean {
+  return codeHash.toLowerCase() === DEFAULT_LOCK_CODE_HASH && hashType === 'type';
 }
 
 /** The lock script an address encodes. */
@@ -98,9 +101,10 @@ export function addressScript(address: string): AddressScript {
   if (polymod([...hrpExpand(hrp), ...words]) !== BECH32M)
     throw new Error(`address ${address}: its bech32m checksum does not match`);
   const payload = bytesOf(words.slice(0, -6), address);
+  if (payload.length === 0) throw new Error(`address ${address}: its payload is empty`);
   if (payload[0] !== FULL_FORMAT)
     throw new Error(
-      `address ${address}: format 0x${(payload[0] ?? 0).toString(16).padStart(2, '0')} is not the full format`
+      `address ${address}: format 0x${payload[0].toString(16).padStart(2, '0')} is not the full format`
     );
   if (payload.length < 34)
     throw new Error(`address ${address}: its payload is too short for a code hash and hash type`);

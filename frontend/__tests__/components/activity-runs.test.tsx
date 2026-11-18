@@ -4,15 +4,19 @@
 // "the same" is lib/activity-runs.ts (its own test); this pins how the feeds draw a run.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
-import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
+import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { SCREENS } from '@/__tests__/utils/tailwind-box';
+import resolveConfig from 'tailwindcss/resolveConfig';
+import tailwindConfig from '@/tailwind.config';
 
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -169,6 +173,35 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(4);
   });
 
+  // Lane B4 fix round (review-rules-logic NOTE 1, the coordinator's item 11): a row whose
+  // protocol action cannot be read reports it in its place, so it is never folded: folded, its
+  // error showed only when the run was opened. Three deposits by one party, the middle one's
+  // metadata unreadable: it stands alone, so no two of them are consecutive and nothing folds.
+  it('never folds a row whose protocol action cannot be read: its error stands in its place', async () => {
+    const deposit = (n: number, metadata: Record<string, string>): GlobalActivity => ({
+      ...oracle(n, 'q3q7ue', '0x00', n * 49),
+      typeCalls: [],
+      protocolActions: [
+        { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata },
+      ],
+    });
+    const rows = [
+      deposit(1, { capacity: '10200000000' }),
+      deposit(2, {}),
+      deposit(3, { capacity: '10200000000' }),
+    ];
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page(rows));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
+    expect(
+      [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual(rows.map((a) => a.txHash));
+    expect(screen.getByRole('alert')).toHaveTextContent(`Cannot read tx ${rows[1].txHash}`);
+  });
+
   it('never folds across a day: a run ends at the day’s divider', async () => {
     const day = 86_400;
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
@@ -184,6 +217,268 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     await screen.findAllByRole('article');
     const runs = [...document.querySelectorAll('[data-role="activity-run"]')];
     expect(runs.map((r) => r.getAttribute('data-run-count'))).toEqual(['2', '2']);
+  });
+});
+
+// Lane B4 fix round (review-rules-logic MUST 2 and SHOULD 1, tests NOTE-5; the coordinator's item
+// 3): a live feed adds rows above (a poll near the top) and below (an older page), and neither
+// remounts what the reader has in front of them. A day's rows are keyed by the day, a row by its
+// transaction, a run's head by the first row it was seen with; a run is open while any of its rows
+// is one the reader opened or saw drawn whole, so a row arriving above or below an open run
+// joins it open, and a row drawn whole never folds under the reader.
+describe('a live feed keeps what the reader opened and where their focus is (B4 fix round)', () => {
+  const run = [
+    oracle(1, 'q3q7ue', '0x00', 49),
+    oracle(2, 'q3q7ue', '0x00', 98),
+    oracle(3, 'q3q7ue', '0x00', 147),
+    transfer,
+  ];
+  /** A transfer between seven parties: its row folds two of them under "+2 participants". */
+  const crowd: GlobalActivity = {
+    ...transfer,
+    txHash: `0x${'77'.repeat(32)}`,
+    blockNumber: 21047699,
+    timestamp: String(NOW - 700_000),
+    participants: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((c, i) => ({
+      ...oracleParty(`crowd${c}`),
+      ckbDelta: String((i + 1) * 100_000_000),
+    })),
+  };
+  /** A row newer than all of them, saying something else. */
+  const fresh: GlobalActivity = {
+    ...transfer,
+    txHash: `0x${'f0'.repeat(32)}`,
+    blockNumber: 21047795,
+    timestamp: String(NOW - 5_000),
+  };
+
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => (resolve = r));
+    return { promise, resolve };
+  }
+
+  /** The stream's first page, then the head poll, answered when the test says. */
+  function stream(first: GlobalActivity[]) {
+    const head = deferred<ReturnType<typeof page>>();
+    let calls = 0;
+    vi.mocked(api.getGlobalActivities).mockImplementation(() =>
+      calls++ === 0 ? Promise.resolve(page(first)) : head.promise
+    );
+    return head;
+  }
+
+  const feedRows = () =>
+    [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+      r.getAttribute('data-feed-row')
+    );
+
+  it('a new row at the top leaves an opened run open, its toggle the same node, with the focus', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const head = stream(run);
+    render(<ActivitiesStreamExplorer />);
+    const toggle = await screen.findByRole('button', { name: '3 transactions ↓' });
+    await user.click(toggle);
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    head.resolve(page([fresh, ...run]));
+    await waitFor(() => expect(feedRows()[0]).toBe(fresh.txHash));
+    expect(toggle.isConnected).toBe(true);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(toggle);
+    expect(feedRows()).toEqual([fresh.txHash, ...run.map((a) => a.txHash)]);
+  });
+
+  it('a new row at the top leaves a row’s own state alone: its participants stay opened', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const head = stream([crowd]);
+    render(<ActivitiesStreamExplorer />);
+    const more = await screen.findByRole('button', { name: '+2 participants' });
+    await user.click(more);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    const article = document.querySelector(`article[data-feed-row="${crowd.txHash}"]`)!;
+    head.resolve(page([fresh, crowd]));
+    await waitFor(() => expect(feedRows()).toEqual([fresh.txHash, crowd.txHash]));
+    expect(article.isConnected).toBe(true);
+    expect(more.isConnected).toBe(true);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByRole('button', { name: 'Show fewer participants' })).toBe(more);
+  });
+
+  it('a new row that says the same as an open run joins it, open, its head and focus kept', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const head = stream(run);
+    render(<ActivitiesStreamExplorer />);
+    const toggle = await screen.findByRole('button', { name: '3 transactions ↓' });
+    await user.click(toggle);
+    toggle.focus();
+    const same = oracle(0, 'q3q7ue', '0x00', 5);
+    head.resolve(page([same, ...run]));
+    const runCount = () =>
+      document.querySelector('[data-role="activity-run"]')?.getAttribute('data-run-count');
+    await waitFor(() => expect(runCount()).toBe('4'));
+    expect(toggle.isConnected).toBe(true);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(toggle);
+    expect(feedRows()).toEqual([same, ...run].map((a) => a.txHash));
+  });
+});
+
+describe('an older page that continues the last run (B4 fix round)', () => {
+  /** The stream's first page (more after it), then the older page; the head poll finds nothing. */
+  function pages(first: GlobalActivity[], older: GlobalActivity[]) {
+    vi.mocked(api.getGlobalActivities).mockImplementation(async (params) =>
+      params?.cursor === 'older'
+        ? { data: older, limit: 50, hasMore: false, nextCursor: null }
+        : { data: first, limit: 50, hasMore: true, nextCursor: 'older' }
+    );
+  }
+  const feedRows = () =>
+    [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+      r.getAttribute('data-feed-row')
+    );
+
+  it('draws a row the reader sees whole still whole: the run it starts is drawn open', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const last = oracle(4, 'q3q7ue', '0x00', 200);
+    const next = oracle(5, 'q3q7ue', '0x00', 250);
+    pages([transfer, last], [next]);
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
+    const drawn = document.querySelector(`article[data-feed-row="${last.txHash}"]`)!;
+    await user.click(screen.getByRole('button', { name: 'Older' }));
+    await waitFor(() => expect(feedRows()).toContain(transfer.txHash));
+    await waitFor(() =>
+      expect(document.querySelector('[data-role="activity-run"]')).toHaveAttribute(
+        'data-run-count',
+        '2'
+      )
+    );
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    const toggle = within(folded).getByRole('button');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(drawn.isConnected).toBe(true);
+    expect(feedRows()).toEqual([transfer.txHash, last.txHash, next.txHash]);
+  });
+
+  it('a folded run takes the page’s rows in and stays folded, its head the same node', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    const first = [transfer, oracle(4, 'q3q7ue', '0x00', 200), oracle(5, 'q3q7ue', '0x00', 250)];
+    pages(first, [oracle(6, 'q3q7ue', '0x00', 300)]);
+    render(<ActivitiesStreamExplorer />);
+    const toggle = await screen.findByRole('button', { name: '2 transactions ↓' });
+    await user.click(screen.getByRole('button', { name: 'Older' }));
+    await waitFor(() => expect(toggle).toHaveTextContent('3 transactions ↓'));
+    expect(toggle.isConnected).toBe(true);
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(feedRows()).toEqual([transfer.txHash]);
+  });
+});
+
+// Lane B4 fix round (review-rules-logic NOTE 2, the coordinator's item 12): a folded run's head
+// shows the parties its rows show, by the one rule (`participantsToShow`: over six, the five
+// largest, in the feed's order: paid, then received, each largest first). A run of 7-party
+// transactions with no focus, its parties in an API order that is not that order.
+describe('a folded run shows the parties its rows show (B4 fix round)', () => {
+  it('caps its parties by the rows’ rule: the five largest, in the rows’ order, and the count', async () => {
+    const user = userEvent.setup();
+    const deltas = ['1', '2', '-700', '300', '400', '500', '600'];
+    const crowded = (n: number): GlobalActivity => ({
+      ...oracle(n, 'q3q7ue', '0x00', n * 49),
+      participants: deltas.map((d, i) => ({ ...oracleParty(`cap${i}`), ckbDelta: d })),
+    });
+    const rows = [crowded(1), crowded(2)];
+    render(
+      <ActivityRuns
+        rows={rows.map((a) => ({
+          key: a.txHash,
+          subject: runSubject(a, activityTitleText(a)),
+          activity: a,
+          title: <ActivityTitle activity={a} />,
+          row: <ActivityRow activity={a} />,
+        }))}
+      />
+    );
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    const head = [...folded.querySelectorAll('[data-role="party"]')].map((p) =>
+      p.getAttribute('data-party')
+    );
+    expect(folded.querySelector('[data-role="run-parties"]')).toHaveTextContent(
+      /\+2 participants$/
+    );
+    await user.click(within(folded).getByRole('button', { name: '2 transactions ↓' }));
+    const row = document.querySelector(`article[data-feed-row="${rows[0].txHash}"]`)!;
+    const drawn = [...row.querySelectorAll('[data-role="participant"] [data-party]')].map((p) =>
+      p.getAttribute('data-party')
+    );
+    // paid 700, then received 600, 500, 400, 300; the 2 and the 1 under "+2 participants"
+    expect(drawn).toEqual([2, 6, 5, 4, 3].map((i) => `${rows[0].participants[i].lockHash}:${i}`));
+    expect(head).toEqual(drawn);
+  });
+});
+
+// Lane B4 fix round (review-rules-logic NOTE 8, the coordinator's item 16): the run's toggle is
+// a real button, and on a phone it is a target a finger can take. docs/RESPONSIVE_LAYOUT.md's
+// Touch rule names no size; the size is WCAG 2.2's minimum target (2.5.8), 24 × 24 CSS px, the
+// figure the review measured against and the site's own (the hardfork timeline's DOT_HIT_PX).
+// Below md the toggle stands at least 24 px tall; it stood on its 20 px row line.
+describe('the run’s toggle on a phone (B4 fix round)', () => {
+  const theme = resolveConfig(tailwindConfig).theme as unknown as {
+    minHeight: Record<string, string>;
+    lineHeight: Record<string, string>;
+  };
+  const px = (v: string) => (v.endsWith('rem') ? parseFloat(v) * 16 : parseFloat(v));
+  /**
+   * The height of a button that sets its line and its minimum height in classes and nothing else
+   * vertical (refused otherwise), at a viewport: the larger of its line and its minimum.
+   */
+  function targetPx(el: Element, viewport: number): number {
+    const at = (prefix: string) => {
+      let value: string | undefined;
+      let level = -1;
+      for (const cls of el.classList) {
+        const parts = cls.split(':');
+        const utility = parts.pop()!;
+        if (!utility.startsWith(prefix)) continue;
+        if (parts.length > 1) throw new Error(`targetPx: ${cls} is not read`);
+        const screen = parts[0];
+        const i = screen === undefined ? 0 : SCREENS.findIndex(([n]) => n === screen) + 1;
+        if (i < 0) throw new Error(`targetPx: ${cls} is not read`);
+        if (i > 0 && SCREENS[i - 1][1] > viewport) continue;
+        if (i >= level) {
+          level = i;
+          value = utility.slice(prefix.length);
+        }
+      }
+      return value;
+    };
+    for (const cls of el.classList)
+      if (/^(\w+:)?(h|py|pt|pb|my|border-y|border-t|border-b)-/.test(cls))
+        throw new Error(`targetPx: ${cls} sets a height this does not read`);
+    const line = at('leading-');
+    if (line === undefined) throw new Error('targetPx: the button sets no line');
+    const min = at('min-h-');
+    return Math.max(px(theme.lineHeight[line]), min === undefined ? 0 : px(theme.minHeight[min]));
+  }
+
+  it.each([390, 360])('is at least 24 px tall at %i px', (viewport) => {
+    const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
+    render(
+      <ActivityRuns
+        rows={rows.map((a) => ({
+          key: a.txHash,
+          subject: runSubject(a, activityTitleText(a)),
+          activity: a,
+          title: <ActivityTitle activity={a} />,
+          row: <ActivityRow activity={a} />,
+        }))}
+      />
+    );
+    const toggle = screen.getByRole('button', { name: '2 transactions ↓' });
+    expect(targetPx(toggle, viewport)).toBeGreaterThanOrEqual(24);
+    // from md (no phone) it keeps the row's line
+    expect(targetPx(toggle, 768)).toBe(ROW_LINE_PX);
   });
 });
 
@@ -227,5 +522,57 @@ describe('a run is set back as its rows are (R4)', () => {
       />
     );
     expect(document.querySelector('[data-role="activity-run"]')).toHaveClass('quiet');
+  });
+
+  // Lane B4 fix round (review-rules-tests SHOULD-2, the coordinator's item 8): the feed's own
+  // decision, through the feed. An identity's feed with two of a neighbour's rows and then one of
+  // its own, all three saying ".cell · ring pointer changed" with the same scripts and party: the
+  // neighbour's two fold into one run, set back as their rows are, and the identity's own row is
+  // not in it (its rows are compared apart from a neighbour's).
+  it('folds a neighbour’s rows in an identity’s feed apart from its own, set back', async () => {
+    const relinked = (n: number, actedOn: 'self' | 'neighbour'): ItemActivity => ({
+      ...oracle(n, 'q3q7ue', '0x00', n * 49),
+      itemContext: {
+        itemId: `0x${'a7'.repeat(20)}`,
+        action: 'update',
+        protocolActions: ['ring_relink'],
+        ringRelink: null,
+        actedOn,
+        createdCell: null,
+        consumedCell: null,
+      },
+    });
+    const rows = [relinked(1, 'neighbour'), relinked(2, 'neighbour'), relinked(3, 'self')];
+    render(
+      <AssetFeed
+        queryKey="runs-neighbour"
+        scope="This identity's whole life"
+        item={{ kind: 'identity', protocolName: '.cell' }}
+        loadActivities={async () => ({ ...page(rows), total: 3 })}
+        loadTransactions={async () => ({
+          data: [],
+          total: 0,
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })}
+      />
+    );
+    await waitFor(() =>
+      expect(document.querySelector('[data-role="activity-run"]')).not.toBeNull()
+    );
+    const runs = [...document.querySelectorAll('[data-role="activity-run"]')];
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toHaveAttribute('data-run-count', '2');
+    expect(runs[0]).toHaveClass('quiet');
+    // the identity's own row, drawn alone after the run, in full ink
+    const own = document.querySelector(`article[data-feed-row="${rows[2].txHash}"]`)!;
+    expect(own).not.toBeNull();
+    expect(own).not.toHaveClass('quiet');
+    expect(
+      [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual([rows[2].txHash]);
   });
 });

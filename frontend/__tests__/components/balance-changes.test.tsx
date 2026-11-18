@@ -8,11 +8,15 @@ import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
-import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
+import { BalanceChanges } from '@/components/transaction/balance-changes';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type { GlobalActivity } from '@/lib/api';
+import { WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}895d`;
-const DEFAULT_LOCK = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+/** A lock the registry names (made up: the fixture names it "Nervape Shadow Lock"). */
+const NERVAPE_SHADOW_LOCK = `0x${'ab'.repeat(32)}`;
 
 /** The board's object transfer: two named locks, the third one unnamed in the registry. */
 function activity(): GlobalActivity {
@@ -28,24 +32,18 @@ function activity(): GlobalActivity {
   return {
     ...feedSamples.objectTransfer,
     participants: [
+      // B4 fix round (re-pinned on purpose): each party's lock is read off its address, so each
+      // address spells the lock its fixture names (the sample's are all the default lock's)
       { ...from, lockKind: 'Default Lock', itemDeltas: [object(-1)] },
-      { ...to, lockKind: 'Nervape Shadow Lock', itemDeltas: [object(1)] },
-      { ...third, lockKind: null },
+      {
+        ...to,
+        address: seededAddress('shp3hr', NERVAPE_SHADOW_LOCK),
+        lockKind: 'Nervape Shadow Lock',
+        itemDeltas: [object(1)],
+      },
+      { ...third, address: seededAddress('204m4g', UNNAMED_LOCK), lockKind: null },
     ],
   };
-}
-
-/** The transaction's own cells: each party's lock script, by its address. */
-function codeHashes(a: GlobalActivity) {
-  const [from, to, third] = a.participants;
-  return lockCodeHashesByAddress([
-    { address: from.address!, lock: { codeHash: DEFAULT_LOCK, hashType: 'type', args: '0x01' } },
-    {
-      address: to.address!,
-      lock: { codeHash: `0x${'ab'.repeat(32)}`, hashType: 'type', args: '0x' },
-    },
-    { address: third.address!, lock: { codeHash: UNNAMED_LOCK, hashType: 'type', args: '0x02' } },
-  ]);
 }
 
 /** A sample party's address at the tight size's tail: its last 6 characters (R9). */
@@ -54,9 +52,7 @@ const tight = (i: number) => activity().participants[i].address!.slice(-6);
 function renderAt(width: number) {
   stubChartWidth(width);
   const a = activity();
-  return render(
-    <BalanceChanges activity={a} fee="64119" compensation={null} lockCodeHashes={codeHashes(a)} />
-  );
+  return render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
 }
 
 afterEach(() => {
@@ -76,6 +72,35 @@ describe('BalanceChanges form by measured width', () => {
     expect(within(table).getAllByRole('row')).toHaveLength(5);
     // The table is drawn only where it fits, so nothing around it scrolls sideways.
     expect(document.querySelector('.overflow-x-auto')).toBeNull();
+  });
+
+  // Lane B4 fix round (review-rules-logic NOTE 4, the coordinator's item 14): the Occupied
+  // column holds the widest change a party can make in one transaction, with its unit
+  // (WIDEST_OCCUPIED_CHANGE, "−16,773,724,928 B", 17 glyphs), at the step its cells inherit
+  // from the transaction page, the body step (8.4 px a glyph): 142.8 px. It was a 100 px literal,
+  // which "−1,234,567 B" (100.8 px) already passed. The column is a grid track, read from the
+  // rows the table draws (each row is its own grid, so every row is read).
+  it('budgets the Occupied column at the widest change, with its unit, in every row', () => {
+    renderAt(912);
+    const table = screen.getByRole('table', { name: 'Balance changes by participant' });
+    const tracks = (row: HTMLElement) => {
+      const style = row.style.gridTemplateColumns;
+      if (style) return style.split(' ');
+      const cls = [...row.classList].find((c) => c.startsWith('grid-cols-['));
+      return cls!.slice('grid-cols-['.length, -1).split('_');
+    };
+    const widest = textPx(WIDEST_OCCUPIED_CHANGE.length, fontPx('body'));
+    expect(widest).toBeCloseTo(142.8, 10);
+    const rows = within(table).getAllByRole('row');
+    expect(rows).toHaveLength(5);
+    for (const row of rows) {
+      const occupied = tracks(row)[2];
+      expect(occupied).toMatch(/^\d+px$/);
+      expect(parseFloat(occupied)).toBeGreaterThanOrEqual(widest);
+      // the cells inherit the page's body step: no step of their own
+      const cell = row.children[2] as HTMLElement;
+      expect(cell.className).not.toMatch(/\btext-(meta|small|body|lede)\b/);
+    }
   });
 
   it('renders one three-line card per participant at 358 px, and no sideways scroller', () => {
@@ -99,9 +124,10 @@ describe('BalanceChanges form by measured width', () => {
     // address, and no lock beside it, the default lock (R9); the second party's lock is whole.
     expect(lines[0]).toHaveTextContent(new RegExp(`^ckb1…${tight(0)}$`));
     expect(lines[0].querySelector('[data-role="lock"]')).toBeNull();
-    expect(cards[1].querySelector(':scope > [data-line="party"] [data-role="lock"]')).toHaveClass(
-      'whitespace-nowrap'
-    );
+    // B4 fix round (re-pinned): the lock's words are LockWordsView's, inside the card's lock slot
+    expect(
+      cards[1].querySelector(':scope > [data-line="party"] [data-role="lock"] [data-lock-kind]')
+    ).toHaveClass('whitespace-nowrap');
     // Second line: the CKB change and the occupied change. The list forms are phone rows: the
     // summary form (readability R5, re-pinned on purpose: was "−528.00064119 CKB"), exact in its
     // title.
@@ -158,7 +184,7 @@ describe('BalanceChanges form by measured width', () => {
         'Nervape Shadow Lock',
         width === 358 ? 'lock 0x43b2…895d' : 'lock 0x43b2924e…00895d',
       ]);
-      expect(locks[1]).toHaveAttribute('title', UNNAMED_LOCK);
+      expect(locks[1].querySelector('[data-lock-kind]')).toHaveAttribute('title', UNNAMED_LOCK);
     }
   );
 });
@@ -172,54 +198,5 @@ describe('BalanceChanges names no lock for a party on the default lock (B4 item 
     expect(locks.map((l) => l.textContent)).not.toContain('Default Lock');
     expect(document.body).not.toHaveTextContent('Default Lock');
     expect(locks).toHaveLength(2);
-  });
-});
-
-describe('lockCodeHashesByAddress', () => {
-  it('reads each address its lock code hash from the transaction cells', () => {
-    const map = lockCodeHashesByAddress([
-      { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      { address: 'ckb1b', lock: { codeHash: '0x02', hashType: 'data1', args: '0x' } },
-    ]);
-    expect([...map]).toEqual([
-      ['ckb1a', '0x01'],
-      ['ckb1b', '0x02'],
-    ]);
-  });
-
-  it('passes over an input with no cell behind it: a pool input not resolved yet, or the cellbase null out point', () => {
-    // The API's cellbase input (`/transactions/{hash}/detail`): the null out point, every cell
-    // field `null`. It took the transaction page down ("Cannot read properties of null (reading
-    // 'codeHash')") on every live cellbase.
-    const map = lockCodeHashesByAddress([
-      { address: null, lock: null },
-      {},
-      { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-    ]);
-    expect([...map]).toEqual([['ckb1a', '0x01']]);
-  });
-
-  it('refuses a cell with one of address and lock but not the other (no such shape)', () => {
-    expect(() =>
-      lockCodeHashesByAddress([
-        { address: 'ckb1a', lock: null },
-        { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      ])
-    ).toThrow('cell with address ckb1a and no lock');
-    expect(() =>
-      lockCodeHashesByAddress([
-        { address: undefined, lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-      ])
-    ).toThrow('cell with a lock but no address');
-  });
-
-  it('refuses one address with two lock code hashes (an address encodes its lock)', () => {
-    expect(() =>
-      lockCodeHashesByAddress([
-        { address: 'ckb1a', lock: { codeHash: '0x01', hashType: 'type', args: '0x' } },
-        { address: 'ckb1a', lock: { codeHash: '0x02', hashType: 'type', args: '0x' } },
-      ])
-    ).toThrow('address ckb1a carries two lock code hashes: 0x01 and 0x02');
   });
 });

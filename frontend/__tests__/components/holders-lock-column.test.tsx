@@ -2,6 +2,7 @@
 // silent for the default lock (R9), but a table column headed "Lock" never shows an empty cell.
 // In the two holders tables the default lock is written by its name in the quiet ink, the words
 // the tag used, without the tag's box; every other lock keeps its tag.
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
@@ -55,14 +56,15 @@ describe('a "Lock" column never shows an empty cell (B4, the lead’s ruling)', 
       data: [
         {
           lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: `ckb1qzda0cr08m${'q'.repeat(40)}x7kq8p`,
+          // B4 fix round: real addresses, the lock read off them
+          address: seededAddress('x7kq8p'),
           balance: '300',
           lockCodeHash: DEFAULT_LOCK_CODE_HASH,
           lockKind: 'Default Lock',
         },
         {
           lockScriptHash: `0x${'22'.repeat(32)}`,
-          address: `ckb1qrgqep8s${'q'.repeat(40)}tllakf`,
+          address: seededAddress('tllakf', JOYID),
           balance: '200',
           lockCodeHash: JOYID,
           lockKind: 'JoyID',
@@ -93,7 +95,14 @@ describe('a "Lock" column never shows an empty cell (B4, the lead’s ruling)', 
       lockKind,
     });
     const load = vi.fn().mockResolvedValue({
-      data: [holder('11', DEFAULT_LOCK_CODE_HASH, 'Default Lock'), holder('22', JOYID, 'JoyID')],
+      // B4 fix round: the default lock is the pair, read off the holder's address
+      data: [
+        {
+          ...holder('11', DEFAULT_LOCK_CODE_HASH, 'Default Lock'),
+          address: seededAddress('x7kq8p'),
+        },
+        holder('22', JOYID, 'JoyID'),
+      ],
       limit: 10,
       total: 2,
       hasMore: false,

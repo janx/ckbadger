@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, fireEvent, within, cleanup } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
@@ -9,6 +10,9 @@ const daily = [
   { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
   { date: '2024-01-08', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
 ];
+/** A supply event's party address in the fixture below: its seed spelled from its index. */
+const eventAddress = (i: number, codeHash: string) => seededAddress(String(i).repeat(6), codeHash);
+
 describe('Asset history', () => {
   it('plots 255-decimal token amounts with scientific ticks and exact keyboard readouts', () => {
     stubChartWidth(358);
@@ -294,7 +298,7 @@ describe('Asset history', () => {
                 supplyAfter: '1200000000',
                 lockHash: `0x${'bb'.repeat(32)}`,
                 address: null,
-                lockCodeHash: `0x${'9b'.repeat(32)}`,
+                lockCodeHash: JOYID_CODE_HASH,
                 lockKind: 'JoyID',
               },
             ],
@@ -340,16 +344,14 @@ describe('Asset history', () => {
       amount: '1',
       supplyAfter: '13',
       lockHash: `0x${String(i).repeat(64)}`,
-      address:
-        lockCodeHash === null
-          ? null
-          : `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${String(i).repeat(8)}`,
+      // B4 fix round: a real address on the lock the row names (a row reads its lock off it)
+      address: lockCodeHash === null ? null : seededAddress(String(i).repeat(6), lockCodeHash),
       lockCodeHash,
       lockKind,
     });
     const rows = [
       event(1, 'mint', unregistered, null),
-      event(2, 'burn', `0x${'9b'.repeat(32)}`, 'JoyID'),
+      event(2, 'burn', JOYID_CODE_HASH, 'JoyID'),
       event(3, 'mint', null, null),
     ];
     const mount = () => {
@@ -448,8 +450,12 @@ describe('Asset history', () => {
         mount();
         const [unnamed, named] = screen.getAllByTestId('supply-event-row-mobile');
         expect(phoneLines(unnamed).map((l) => l.key)).toEqual(['change', 'evidence']);
-        expect(phoneLines(unnamed)[1].right).toMatch(/^to ckb1…11111111 lock 0x43434343…434343$/);
-        expect(phoneLines(named)[1].right).toMatch(/^from ckb1…22222222 JoyID$/);
+        expect(phoneLines(unnamed)[1].right).toBe(
+          `to ckb1…${eventAddress(1, unregistered).slice(-8)} lock 0x43434343…434343`
+        );
+        expect(phoneLines(named)[1].right).toBe(
+          `from ckb1…${eventAddress(2, JOYID_CODE_HASH).slice(-8)} JoyID`
+        );
       } finally {
         vi.restoreAllMocks();
         vi.unstubAllGlobals();
@@ -462,12 +468,16 @@ describe('Asset history', () => {
       try {
         mount();
         const [unnamed, named, notIndexed] = screen.getAllByTestId('supply-event-row-mobile');
-        expect(phoneLines(unnamed)[2].right).toMatch(/^to ckb1…111111 lock 0x4343…4343$/);
+        expect(phoneLines(unnamed)[2].right).toBe(
+          `to ckb1…${eventAddress(1, unregistered).slice(-6)} lock 0x4343…4343`
+        );
         expect(within(unnamed).getByRole('link', { name: '0x4343…4343' })).toHaveAttribute(
           'href',
           scriptPage
         );
-        expect(phoneLines(named)[2].right).toMatch(/^from ckb1…222222 JoyID$/);
+        expect(phoneLines(named)[2].right).toBe(
+          `from ckb1…${eventAddress(2, JOYID_CODE_HASH).slice(-6)} JoyID`
+        );
         // A4 Chrome sweep (c): the party is not one nowrap run around its lock name (words); its
         // address is the unit, the name may break
         const party = within(named).getByText('JoyID').closest('span:not([data-lock-kind])');
@@ -511,8 +521,8 @@ describe('Asset history', () => {
                 supplyAfter: '13',
                 lockHash,
                 address: null,
-                lockCodeHash: `0x${'9b'.repeat(32)}`,
-                lockKind: 'SECP256K1/blake160',
+                lockCodeHash: JOYID_CODE_HASH,
+                lockKind: 'JoyID',
               },
             ],
           }}
@@ -525,7 +535,7 @@ describe('Asset history', () => {
       'row'
     );
     expect(within(row).getByRole('link', { name: /^0x8888/ })).toHaveAttribute('href', addressPage);
-    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('SECP256K1/blake160');
+    expect(row.querySelector('[data-lock-kind]')).toHaveTextContent('JoyID');
     cleanup();
     atContainerWidth(358);
     try {
@@ -535,7 +545,7 @@ describe('Asset history', () => {
         'href',
         addressPage
       );
-      expect(phoneLines(phone)[2].right).toMatch(/^to 0x8888.* SECP256K1\/blake160$/);
+      expect(phoneLines(phone)[2].right).toMatch(/^to 0x8888.* JoyID$/);
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();

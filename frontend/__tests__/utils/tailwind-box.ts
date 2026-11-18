@@ -253,7 +253,8 @@ type Prop =
   | 'flex-wrap'
   | 'overflow-wrap'
   | 'word-break'
-  | 'flex-direction';
+  | 'flex-direction'
+  | 'flex-shrink';
 
 /** One declaration a class makes: the property, its value, and how specific the class is for it. */
 interface Decl {
@@ -308,8 +309,7 @@ const NO_LAYOUT: readonly RegExp[] = [
   // a grid item's track (a grid is refused where its width is read)
   /^(col|row)-(start|end|span)-/,
   /^(col|row)-auto$/,
-  /^(shrink|flex-shrink)(-0)?$/,
-  /^(grow-0|flex-none|flex-initial|flex-row)$/,
+  /^(grow-0|flex-row)$/,
   /^-?(h|min-h|max-h|py|pt|pb|my|mt|mb|gap-y|space-y|top|bottom|inset-y)-/,
   /^-?(left|right|inset|inset-x|start|end|z)-/,
   /^(opacity|transition|duration|ease|delay|animate|cursor|select|pointer-events|touch|scroll|snap|will-change|resize|appearance)(-|$)/,
@@ -349,6 +349,12 @@ function utilityDecls(utility: string): Decl[] | null {
   if (utility === 'truncate') return [{ prop: 'white-space', value: 'nowrap', rank: 0 }];
   w = /^flex-(wrap|wrap-reverse|nowrap)$/.exec(utility);
   if (w) return [{ prop: 'flex-wrap', value: w[1], rank: 0 }];
+  // whether a flex item may shrink below its max-content width (`flex: none` is `0 0 auto`,
+  // `flex-initial` `0 1 auto`): one that cannot is a run a line does not break inside
+  if (['shrink-0', 'flex-shrink-0', 'flex-none'].includes(utility))
+    return [{ prop: 'flex-shrink', value: '0', rank: 0 }];
+  if (['shrink', 'flex-shrink', 'flex-initial'].includes(utility))
+    return [{ prop: 'flex-shrink', value: '1', rank: 0 }];
   if (utility === 'break-words') return [{ prop: 'overflow-wrap', value: 'break-word', rank: 0 }];
   if (utility === 'break-all') return [{ prop: 'word-break', value: 'break-all', rank: 0 }];
   if (utility === 'break-keep') return [{ prop: 'word-break', value: 'keep-all', rank: 0 }];
@@ -461,6 +467,7 @@ const CSS_READ: Record<string, Prop> = {
   'overflow-wrap': 'overflow-wrap',
   'word-break': 'word-break',
   'flex-direction': 'flex-direction',
+  'flex-shrink': 'flex-shrink',
 };
 const CSS_HORIZONTAL =
   /^(padding|padding-inline.*|margin|margin-inline.*|border-left|border-right|border-inline.*|border-width|max-width|gap|font|word-spacing|text-indent|inline-size)$/;
@@ -620,6 +627,7 @@ const INLINE: Record<string, Prop> = {
   'overflow-wrap': 'overflow-wrap',
   'word-break': 'word-break',
   'flex-direction': 'flex-direction',
+  'flex-shrink': 'flex-shrink',
 };
 const INLINE_REFUSED =
   /^(padding|margin|border|border-width|gap|font|max-width|padding-inline.*|margin-inline.*|border-inline.*)$/;
@@ -882,6 +890,30 @@ function inheritedAt(el: Element, viewport: number, prop: Prop): string | null {
 export function wrapsAt(el: Element, viewport: number): boolean {
   const ws = inheritedAt(el, viewport, 'white-space') ?? 'normal';
   return !['nowrap', 'pre'].includes(ws);
+}
+
+/** Whether a flex container lays its items in a column at a viewport (else in a row). */
+export function flexColumnAt(el: Element, viewport: number): boolean {
+  return ownDecls(el, viewport).get('flex-direction') === 'column';
+}
+
+/** Whether a flex item may shrink below its max-content width at a viewport (`flex-shrink`). */
+export function shrinksAt(el: Element, viewport: number): boolean {
+  return (ownDecls(el, viewport).get('flex-shrink') ?? '1') !== '0';
+}
+
+/**
+ * How an element's own width is set at a viewport: `auto` (its content's), `capped` (`max-w-full`
+ * alone: its content's, never wider than its container) or `set` (a width, or a class that takes
+ * or bounds its room otherwise: `w-full`, `flex-1`, another `max-w-…`).
+ */
+export function widthRuleAt(el: Element, viewport: number): 'auto' | 'capped' | 'set' {
+  const d = ownDecls(el, viewport);
+  const width = d.get('width');
+  if (width !== undefined && width !== 'auto') return 'set';
+  const flexible = d.get('flexible');
+  if (flexible === undefined) return 'auto';
+  return flexible === 'unread:max-w-full' ? 'capped' : 'set';
 }
 
 /** Whether a flex container lays its items on more than one line at a viewport. */

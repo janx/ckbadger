@@ -3,11 +3,14 @@ import {
   boxPx,
   breaksWordsAt,
   displayAt,
+  flexColumnAt,
   flexWrapsAt,
   gapPx,
   inFlowAt,
   insetsPx,
+  shrinksAt,
   textRunPx,
+  widthRuleAt,
   wrapsAt,
 } from '@/__tests__/utils/tailwind-box';
 
@@ -27,7 +30,12 @@ import {
  *
  * Nothing else breaks: no hyphen, slash or edge of an inline-block. The items of a flex container
  * that does not wrap stand side by side, so its gap joins the last run of one item to the first of
- * the next. A replaced element (an `svg`) or an empty sized box (a status dot) is a piece of its
+ * the next. An item of a row that cannot shrink (`shrink-0`, `flex-none`) stands at its
+ * max-content width, so nothing inside it breaks but a block's edges: its spaces and its own
+ * wrapping rows hold (lane B4 fix round: the activity row's right part, a `shrink-0` item, read as
+ * its words while it stood as one line). One capped at its container (`max-w-full`) is never wider
+ * than its line, so its text breaks as any item's; one that sets its own width otherwise is
+ * refused (its box, not its text, stands in the line). A replaced element (an `svg`) or an empty sized box (a status dot) is a piece of its
  * run as wide as `tailwind-box` reads it. Spaces collapse to one and a run's end spaces hang.
  *
  * What it cannot read it refuses: a word that may break inside itself where it overflows
@@ -55,6 +63,24 @@ const REPLACED = new Set(['svg', 'img', 'canvas', 'video', 'iframe', 'input', 's
 export function lineRuns(root: Element, viewport: number): LineRun[] {
   const runs: LineRun[] = [];
   let pieces: Piece[] = [];
+  /** Inside an item of a row that cannot shrink: no space or wrapping row breaks. */
+  let rigid = 0;
+  /** Whether an element is an item of a flex row that cannot shrink (refused with a set width). */
+  const stands = (el: Element) => {
+    const parent = el.parentElement;
+    if (!parent) return false;
+    const display = displayAt(parent, viewport);
+    if (display !== 'flex' && display !== 'inline-flex') return false;
+    if (flexColumnAt(parent, viewport) || shrinksAt(el, viewport)) return false;
+    const width = widthRuleAt(el, viewport);
+    // capped at its container (`max-w-full`), it is never wider than its line: its text breaks
+    if (width === 'capped') return false;
+    if (width === 'set')
+      throw new Error(
+        `line-runs: <${el.tagName.toLowerCase()} class="${el.className}"> cannot shrink and has a set width; its box, not its text, stands in the line`
+      );
+    return true;
+  };
 
   const flush = () => {
     // a run's end spaces hang past the line (white-space: normal) or collapse at its edge
@@ -89,7 +115,7 @@ export function lineRuns(root: Element, viewport: number): LineRun[] {
       throw new Error(
         `line-runs: "${value.trim()}" may break inside its words where it overflows; its runs have no width to read`
       );
-    const wraps = wrapsAt(parent, viewport);
+    const wraps = rigid === 0 && wrapsAt(parent, viewport);
     const glyph = textRunPx('x', parent, viewport);
     for (const { grapheme, units } of foreignGraphemes(value)) {
       if (units !== MONO_ADVANCE_EM * 1000)
@@ -125,7 +151,7 @@ export function lineRuns(root: Element, viewport: number): LineRun[] {
       display === 'contents' ? { box: 0, margin: 0 } : insetsPx(node, viewport);
     if (box + margin !== 0) pieces.push({ ch: '', px: box + margin, wraps: false });
     if (display === 'flex' || display === 'inline-flex') {
-      const wraps = flexWrapsAt(node, viewport);
+      const wraps = rigid === 0 && flexWrapsAt(node, viewport);
       const gap = gapPx(node, viewport);
       let first = true;
       for (const child of Array.from(node.childNodes)) {
@@ -136,12 +162,17 @@ export function lineRuns(root: Element, viewport: number): LineRun[] {
           else if (gap) pieces.push({ ch: '', px: gap, wraps: false });
         }
         first = false;
+        const rigidItem = child instanceof Element && stands(child);
+        if (rigidItem) rigid++;
         walk(child);
+        if (rigidItem) rigid--;
       }
     } else for (const child of Array.from(node.childNodes)) walk(child);
     if (block) flush();
   };
 
+  // the root read alone is an item of its parent's row too
+  if (stands(root)) rigid++;
   walk(root);
   flush();
   return runs;

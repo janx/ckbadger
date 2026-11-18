@@ -21,12 +21,11 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { PartyLockKind, partyLock } from '@/components/ui/lock-kind';
+import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
-import { formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
-import { withUnit } from '@/lib/format-unit';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
@@ -172,7 +171,7 @@ export function ActivityRowHead({
       {showEvidence && evidence !== undefined && (
         <span
           data-role="evidence"
-          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
+          className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
         >
           {evidence}
         </span>
@@ -180,11 +179,14 @@ export function ActivityRowHead({
       {showEvidence && evidence === undefined && (
         <span
           data-role="evidence"
-          // no run around the parts: each unit owns its white-space (the block number has no space
-          // to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
-          // device's clock is behind" break between its words), so the line breaks only between
-          // them (lane B4)
-          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
+          // An item of the head's wrapping row that may shrink (lane B4 fix round: it was
+          // shrink-0, so it stood at its whole width, one line past a phone's): beside the headline
+          // while both fit, on its own line when not, where it takes the line's room and breaks
+          // between its units. No run around them: each owns its white-space (the block number has
+          // no space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets
+          // "this device's clock is behind" break between its words), so a line breaks only
+          // between them, never inside one.
+          className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
         >
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
@@ -562,6 +564,30 @@ function ProtocolActionList({
  * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
  * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
  */
+/** A protocol action read for its row's note, or the error it cannot be read with. */
+type ProtocolRead =
+  | { facts: ProtocolNoteFact[]; error?: undefined }
+  | { facts?: undefined; error: unknown };
+
+/** The one read of a protocol action for a row (its note's facts). */
+function readProtocolAction(action: Parameters<typeof protocolActionNoteFacts>[0]): ProtocolRead {
+  try {
+    return { facts: protocolActionNoteFacts(action, 'row') };
+  } catch (error) {
+    return { error };
+  }
+}
+
+/**
+ * Whether a row cannot read one of its protocol actions: its row reports the error in its place
+ * (`activityDetails`), so a feed never folds it (lane B4 fix round, review NOTE 1).
+ */
+export function rowReadFails(activity: ActivityBody): boolean {
+  return globalTxEvents(activity).some(
+    (e) => e.kind === 'protocol' && readProtocolAction(e.action).error !== undefined
+  );
+}
+
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
@@ -580,17 +606,16 @@ function activityDetails(
   const errors: ReactNode[] = [];
   events.forEach((e, i) => {
     if (e.kind !== 'protocol') return;
-    let facts: ProtocolNoteFact[];
-    try {
-      facts = protocolActionNoteFacts(e.action, 'row');
-    } catch (error) {
+    const read = readProtocolAction(e.action);
+    if (read.facts === undefined) {
       errors.push(
         <div key={`p${i}`} data-role="detail-error" className="text-small pl-[18px]">
-          <ActivityReadError txHash={activity.txHash} error={error} />
+          <ActivityReadError txHash={activity.txHash} error={read.error} />
         </div>
       );
       return;
     }
+    const { facts } = read;
     actions.push({
       lineKey: protocolLineKey(e.action, e.action === primary),
       action: `${e.action.protocol}:${e.action.action}`,
@@ -632,21 +657,6 @@ function activityDetails(
     calls,
     errors: <>{errors}</>,
   };
-}
-
-/**
- * A change in occupied capacity as the figure it is: bytes, signed and grouped, with their unit
- * ("−61 B"; readability lane B4, docs/RESPONSIVE_LAYOUT.md "Formats": a figure writes the symbol).
- * Occupied capacity is bytes, 1 CKB (10^8 shannons) of capacity for each: a change that is not a
- * whole number of bytes is not one the chain can make, and is refused with its value.
- */
-export function formatOccupiedDelta(usedDelta: string): string {
-  const shannons = BigInt(usedDelta);
-  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
-    throw new Error(
-      `occupied change ${usedDelta} shannons is not a whole number of bytes (10^8 shannons each)`
-    );
-  return withUnit(formatSignedCkbInteger(shannons), 'B');
 }
 
 /**
@@ -856,7 +866,7 @@ function ParticipantLine({
         // controls): plain words at the line's own size, only for a lock that is not the default
         // (R9, lane B4)
         <span data-role="lock-kind">
-          <PartyLockKind lock={lock} size="row" />
+          <LockWordsView words={lock} size="row" />
         </span>
       )}
       {p.lockHash !== null && notes?.has(p.lockHash) && (
@@ -962,6 +972,23 @@ function splitFocus<T extends ActivityParticipant>(
 }
 
 /**
+ * The parties a row's head shows, the one rule for an ordinary row and a folded run (lane B4 fix
+ * round, review NOTE 2): the focus first, always shown (consistency C3), then the others by
+ * `participantsToShow` (over six, the five largest, in the feed's order), and how many are folded.
+ */
+function partiesShown<T extends ActivityParticipant>(
+  participants: T[],
+  focusLockHash: string | undefined,
+  txHash: string,
+  expanded: boolean
+): { focus: (T & { key: string }) | null; shown: (T & { key: string })[]; hidden: number } {
+  const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
+  const { focus, others } = splitFocus(indexed, focusLockHash, txHash);
+  const { shown, hidden } = participantsToShow(others, expanded);
+  return { focus, shown: focus === null ? shown : [focus, ...shown], hidden };
+}
+
+/**
  * Every participant, Layer 1 and Layer 2, one line each (D1: none is dropped). Named parties with
  * no change are listed — their zero is the fact. Over six, the five largest and an explicit "+N"
  * to expand (the homepage rule, unchanged). Consistency C3: with `focusLockHash` that participant
@@ -991,11 +1018,8 @@ function Participants({
   notes?: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
-  const { focus, others } = splitFocus(indexed, focusLockHash, txHash);
-  const { shown: shownOthers, hidden } = participantsToShow(others, expanded);
-  const shown = focus === null ? shownOthers : [focus, ...shownOthers];
-  const foldable = others.length > PARTICIPANT_LIMIT;
+  const { focus, shown, hidden } = partiesShown(participants, focusLockHash, txHash, expanded);
+  const foldable = expanded || hidden > 0;
   if (participants.length === 0) return null;
   return (
     <div data-role="participants" className="flex min-w-0 flex-col">
@@ -1004,7 +1028,7 @@ function Participants({
           key={p.key}
           p={p}
           focus={p === focus}
-          fee={feePayer !== null && p.key === indexed[feePayer].key}
+          fee={feePayer !== null && p.key === partyKey(participants[feePayer], feePayer)}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
           focusTokenTypeHash={focusTokenTypeHash}
@@ -1276,11 +1300,13 @@ export function FoldedActivityRow({
     ...openCalls,
     open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })),
   });
-  const indexed = first.participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
-  const { focus, others } = splitFocus(indexed, focusLockHash, first.txHash);
-  const parties = focus === null ? others : [focus, ...others];
-  const shown =
-    parties.length > PARTICIPANT_LIMIT ? parties.slice(0, PARTICIPANT_LIMIT - 1) : parties;
+  // the parties its rows show, by their rule: the run's parties are the same on every row
+  const { focus, shown, hidden } = partiesShown(
+    first.participants,
+    focusLockHash,
+    first.txHash,
+    false
+  );
   return (
     <article
       data-role="activity-run"
@@ -1319,15 +1345,15 @@ export function FoldedActivityRow({
               {isFocus && <span className="sr-only">this address</span>}
               {lock && (
                 <span data-role="lock-kind">
-                  <PartyLockKind lock={lock} size="row" />
+                  <LockWordsView words={lock} size="row" />
                 </span>
               )}
             </span>
           );
         })}
-        {shown.length < parties.length && (
+        {hidden > 0 && (
           <span className="text-text-dim">
-            {unitNode(`+${formatCount(parties.length - shown.length, 'participant')}`)}
+            {unitNode(`+${formatCount(hidden, 'participant')}`)}
           </span>
         )}
       </div>
@@ -1336,7 +1362,9 @@ export function FoldedActivityRow({
         data-role="run-toggle"
         aria-expanded={open}
         onClick={onToggle}
-        className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
+        // a finger's target on a phone: WCAG 2.2's minimum, 24 px tall (2.5.8; the row line is
+        // 20), its words centred in it; from md the row's line (lane B4 fix round)
+        className="text-interactive hover:text-jade text-small leading-row min-h-6 self-start bg-transparent pl-[18px] transition-colors md:min-h-0"
       >
         {open ? 'fewer ↑' : unitNode(`${formatCount(rows.length, 'transaction')} ↓`)}
       </button>

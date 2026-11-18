@@ -105,16 +105,22 @@ describe('a party written by its lock hash (no address) keeps the name the API s
 
 describe('LockKind: plain words, and nothing for the default lock (B4 item 1)', () => {
   it('draws a name in plain words by default: no small capitals, no case change', () => {
-    render(<LockKind size="row" lockKind="JoyID" lockCodeHash={JOYID_CODE} />);
+    render(<LockKind address={null} size="row" lockKind="JoyID" lockCodeHash={JOYID_CODE} />);
     const kind = screen.getByText('JoyID');
     expect(kind).not.toHaveClass('small-caps');
     expect(kind).not.toHaveClass('lowercase');
     expect(kind).toHaveClass('text-text-dim');
   });
 
+  // B4 fix round (re-pinned on purpose): the default lock is the pair, read off the row's address
   it('writes nothing for the default lock, whatever the form', () => {
     const { container } = render(
-      <LockKind size="row" lockKind="Default Lock" lockCodeHash={DEFAULT_LOCK_CODE_HASH} />
+      <LockKind
+        address={DEFAULT_ADDRESS}
+        size="row"
+        lockKind="Default Lock"
+        lockCodeHash={DEFAULT_LOCK_CODE_HASH}
+      />
     );
     expect(container).toBeEmptyDOMElement();
   });

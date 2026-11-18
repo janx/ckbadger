@@ -17,7 +17,7 @@ import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
-import { LockKind } from '@/components/ui/lock-kind';
+import { LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { AppLink } from '@/components/ui/app-link';
 import { formatCkbAmount } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
@@ -110,6 +110,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       </AssetDetailShell>
     );
   }
+  // the issuer's lock beside its address, or null where none is written (the one decision, B4)
+  const issuerLock = t.issuer && rowLock(t.issuer, 'inline');
   const held =
     t.totalCapacity === null ? null : exactUnsignedInteger(t.totalCapacity, 'token held capacity');
   const occupied =
@@ -290,14 +292,14 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               ) : (
                 <span title={NOT_ESTABLISHED_ISSUER}>Not established</span>
               ),
-              // U-15: a lock the registry does not name reads "lock <code hash>"; a lock that is
-              // not indexed has no kind to write, so the note is the proof alone.
+              // U-15: a lock the registry does not name reads "lock <code hash>". A lock named
+              // nowhere beside its party (the default lock, a lock not indexed) is no part of the
+              // note: the note is the proof alone, one separator (B4)
               note: t.issuer
                 ? [
-                    t.issuer.lockCodeHash !== null && (
-                      <LockKind
-                        lockKind={t.issuer.lockKind}
-                        lockCodeHash={t.issuer.lockCodeHash}
+                    issuerLock && (
+                      <LockWordsView
+                        words={issuerLock}
                         size="row"
                         className="text-text-dim text-small"
                       />
@@ -334,7 +336,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           mark="tokens"
           loadActivities={(p) => api.getTokenActivityFeed(typeHash, p)}
           loadTransactions={(p) => api.getTokenTransactions(typeHash, p)}
-          token={{ typeHash, symbol: t.symbol, decimals: t.decimals }}
+          // the token as the API names it (its rows carry that hash), not the address's spelling
+          token={{ typeHash: t.typeScriptHash, symbol: t.symbol, decimals: t.decimals }}
         />
       }
       tier2={

@@ -23,13 +23,13 @@ import {
   readable,
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { formatOccupiedDelta } from '@/components/activity/activity-row';
+import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
-import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
+import { BalanceChanges } from '@/components/transaction/balance-changes';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
 import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
@@ -815,7 +815,6 @@ export default function TransactionDetailPage() {
     scriptHashes: [...d.scriptHashes, ...d.outputLockScriptHashes],
   }));
   const feePaidBy = required(tx.feePaidBy, hash, 'feePaidBy');
-  const lockCodeHashes = lockCodeHashesByAddress([...(tx.inputs ?? []), ...(tx.outputs ?? [])]);
   // What moved (review 2026-11-03 v2): a hovered party lights its cells, a hovered asset the cells
   // that carry it; CKB, the ground, lights the cells that carry nothing else.
   const flowCells = (h: WhatMovedHover): string[] => {
@@ -1410,7 +1409,6 @@ export default function TransactionDetailPage() {
                   activity={activity}
                   fee={tx.fee}
                   compensation={compensation ?? null}
-                  lockCodeHashes={lockCodeHashes}
                   onHover={(h) => setHover(h ? { t: 'cells', ids: flowCells(h) } : null)}
                 />
               ))}
@@ -1419,12 +1417,7 @@ export default function TransactionDetailPage() {
         )}
         {activity && (
           <div className="min-w-0 lg:col-start-1">
-            <BalanceChanges
-              activity={activity}
-              fee={tx.fee}
-              compensation={compensation ?? null}
-              lockCodeHashes={lockCodeHashes}
-            />
+            <BalanceChanges activity={activity} fee={tx.fee} compensation={compensation ?? null} />
           </div>
         )}
         {tiles && (
@@ -1808,11 +1801,10 @@ export default function TransactionDetailPage() {
             <dd>{capacityFact}</dd>
             {knowledgeDelta !== null && (
               <dd>
-                occupied {occupiedIn!.toLocaleString('en-US')} →{' '}
-                {occupiedOut!.toLocaleString('en-US')}{' '}
+                {/* "occupied" always carries its unit, the pair's once after it (B4) */}
+                occupied {occupiedPairText(occupiedIn!, occupiedOut!)}{' '}
                 <span className="text-text-dim">
-                  · common knowledge{' '}
-                  {formatOccupiedDelta((knowledgeDelta * BigInt(100000000)).toString())}
+                  · common knowledge {occupiedBytesDelta(knowledgeDelta)}
                 </span>
               </dd>
             )}

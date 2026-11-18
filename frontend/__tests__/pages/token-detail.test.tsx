@@ -1,3 +1,5 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
@@ -132,6 +134,33 @@ describe('TokenDetailPage', () => {
     });
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue(empty);
     vi.mocked(api.getTokenTransactions).mockResolvedValue(empty);
+  });
+
+  // Lane B4 fix round (review-rules-logic NOTE 3, the coordinator's item 13): the token that
+  // leads its line is the page's token as the API returned it, not the address's spelling of it.
+  // A link may spell the hash in capitals (the API reads it either way); the feed's rows carry the
+  // API's lowercase type script hash.
+  it('leads each line with the page’s token however the address spells its hash', async () => {
+    const lettered = `0x${'ab'.repeat(32)}`;
+    vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, typeScriptHash: lettered });
+    const moved = {
+      ...activity,
+      participants: [
+        {
+          ...activity.participants[0],
+          itemDeltas: [{ kind: 'token' as const, typeScriptHash: lettered, delta: '100000000000' }],
+        },
+      ],
+    };
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [moved] });
+    render(<TokenDetailPage typeHash={`0x${'AB'.repeat(32)}`} />);
+    await screen.findAllByRole('article');
+    const line = document.querySelector('[data-role="participant"]')!;
+    expect([...line.children].map((e) => e.getAttribute('data-role'))).toEqual([
+      'party',
+      'item',
+      'ckb',
+    ]);
   });
 
   it('uses entity 404 only for the token read, not a secondary history error', async () => {
@@ -301,7 +330,7 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
     });
@@ -320,7 +349,7 @@ describe('TokenDetailPage', () => {
           supplyAfter: '1000000000000',
           lockHash: other,
           address: null,
-          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockCodeHash: JOYID_CODE_HASH,
           lockKind: 'JoyID',
         },
       ],
@@ -351,7 +380,7 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
     });
@@ -384,7 +413,8 @@ describe('TokenDetailPage', () => {
       ...mockToken,
       issuer: {
         lockHash: other,
-        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqtest',
+        // B4 fix round: a real address on the unregistered lock (the lock is read off it)
+        address: seededAddress('test', unregistered),
         lockCodeHash: unregistered,
         lockKind: null,
       },
@@ -398,6 +428,27 @@ describe('TokenDetailPage', () => {
       expect.stringMatching(new RegExp(`/script/${unregistered}$`))
     );
     expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+  // B4 fix round (review-rules MUST 1): the default lock is silent beside the issuer, and the note
+  // leaves that part out: one separator, never "· ·". On the real default lock, by type.
+  it('writes one separator before the proof for an issuer on the default lock', async () => {
+    const address =
+      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4';
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address,
+        lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+        lockKind: 'Default Lock',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).toHaveTextContent('ckb1…eqxwquc4 · owner lock proven by token script');
+    expect(metrics).not.toHaveTextContent(/·\s*·/);
+    expect(metrics).not.toHaveTextContent('Default Lock');
   });
   it('writes no lock kind for an issuer lock that is not indexed (U-15)', async () => {
     vi.mocked(api.getToken).mockResolvedValue({
@@ -421,8 +472,9 @@ describe('TokenDetailPage', () => {
       issuer: {
         lockHash: other,
         address: null,
-        lockCodeHash: `0x${'9b'.repeat(32)}`,
-        lockKind: 'SECP256K1/blake160',
+        // B4 fix round: a real other lock (the made-up 0x9b… is no SECP256K1/blake160)
+        lockCodeHash: JOYID_CODE_HASH,
+        lockKind: 'JoyID',
       },
     });
     render(<TokenDetailPage typeHash={hash} />);
@@ -432,9 +484,7 @@ describe('TokenDetailPage', () => {
       'href',
       expect.stringMatching(new RegExp(`/address/${other}$`))
     );
-    expect(metrics).toHaveTextContent(
-      /343434 · SECP256K1\/blake160 · owner lock proven by token script/
-    );
+    expect(metrics).toHaveTextContent(/343434 · JoyID · owner lock proven by token script/);
   });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));

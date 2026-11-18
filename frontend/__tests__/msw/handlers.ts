@@ -1,3 +1,4 @@
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { http, HttpResponse, ws } from 'msw';
 import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
@@ -473,7 +474,7 @@ export const handlers = [
       contentType: 'image/png',
       contentSize: 1024,
       ownerLockHash: '0xownerhash789',
-      ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xws',
+      ownerAddress: seededAddress('cluster'),
       isLive: true,
       createdAtBlock: 100000,
       typeScriptHash: '0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998',
@@ -493,7 +494,7 @@ export const handlers = [
       name: 'Test Cluster',
       description: 'A test cluster',
       ownerLockHash: '0xownerhash789',
-      ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xws',
+      ownerAddress: seededAddress('cluster'),
       sporesCount: 42,
       holdersCount: 15,
       activitiesCount: 100,

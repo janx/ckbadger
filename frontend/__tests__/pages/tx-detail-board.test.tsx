@@ -744,8 +744,10 @@ describe('Transaction board, tier 2', () => {
       '555.00000000 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
     );
     // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
+    // B4 fix round (re-pinned on purpose, tests MUST-2): the pair carries its unit once, after
+    // it ("occupied 563 → 589 B"); it was bare beside the delta's "+26 B"
     expect(screen.getByText(/^occupied 563 → 589/)).toHaveTextContent(
-      /^occupied 563 → 589 · common knowledge \+26 B$/
+      /^occupied 563 → 589 B · common knowledge \+26 B$/
     );
   });
 
@@ -983,7 +985,10 @@ describe('Transaction board, R2b-a fields', () => {
   it('marks change outputs and reads decoded lock args (TX-22, TX-20)', async () => {
     render(<TransactionDetailPage />);
     const out = await screen.findByTestId('tx-io-output-0');
-    await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'));
+    // B4 fix round (re-pinned on purpose): the default lock is named beside no owner, so a
+    // default-lock change output says 'change' alone (it was 'Default Lock · change')
+    await waitFor(() => expect(out).toHaveTextContent('change'));
+    expect(out).not.toHaveTextContent('Default Lock');
     expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
     expect(document.querySelector(`[data-group-row="lock:run:${INPUT_LOCK}"]`)).toHaveTextContent(
       'pubkey hash 0x11111111…111111'

@@ -1,47 +1,33 @@
 'use client';
 import { ItemDeltaFact, readable } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { formatOccupiedDelta } from '@/components/activity/activity-row';
+import { formatOccupiedDelta } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
+import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { balanceNet } from '@/lib/tx-detail-model';
 import { cn } from '@/lib/utils';
-import { isDefaultLock } from '@/lib/lock-script';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import type { ShortSize } from '@/lib/shorten';
+import { WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
+/** The participant's track and the CKB change's (as they were drawn). */
+const PARTY_PX = 190;
+const CKB_PX = 180;
 /**
- * Each address's lock code hash, read off the transaction's own cells (inputs and outputs). An
- * input with no cell behind it carries neither: a pool transaction's input not resolved yet (the
- * fields absent), or a cellbase's one input, the null out point (the API's `null`). One without the
- * other is not a shape the API has, so it is an error, not a cell to skip.
+ * The Occupied track holds the widest change a party can make in one transaction, with its unit
+ * (WIDEST_OCCUPIED_CHANGE, "−16,773,724,928 B"), at the body step its cells inherit from the
+ * transaction page: 143 px. A change past it is held on its line (nowrap) and runs into the gap.
  */
-export function lockCodeHashesByAddress(
-  cells: readonly {
-    address?: string | null;
-    lock?: { codeHash: string; hashType: string; args: string } | null;
-  }[]
-): ReadonlyMap<string, string> {
-  const map = new Map<string, string>();
-  for (const c of cells) {
-    if (c.address == null && c.lock == null) continue;
-    if (c.address == null || c.lock == null)
-      throw new Error(
-        `cell with ${c.address == null ? 'a lock but no address' : `address ${c.address} and no lock`}`
-      );
-    const seen = map.get(c.address);
-    if (seen !== undefined && seen !== c.lock.codeHash)
-      throw new Error(
-        `address ${c.address} carries two lock code hashes: ${seen} and ${c.lock.codeHash}`
-      );
-    map.set(c.address, c.lock.codeHash);
-  }
-  return map;
-}
-
+const OCCUPIED_PX = columnPx(textPx(WIDEST_OCCUPIED_CHANGE.length, fontPx('body')));
+/** The room the items keep beside them, as the 700 px table left them with a 100 px Occupied. */
+const ITEMS_MIN_PX = 182;
+/** gap-4, between the four tracks. */
+const GAP_PX = 16;
 /** The four columns' minimum: below it the table would have to scroll, so the cards are drawn. */
-const TABLE_MIN_W = 700;
+const TABLE_MIN_W = PARTY_PX + CKB_PX + OCCUPIED_PX + ITEMS_MIN_PX + 3 * GAP_PX;
 /** From here a card holds the party and its CKB change on one line (the 640 board). */
 const TWO_LINE_MIN_W = 480;
 
@@ -57,37 +43,27 @@ function balanceForm(width: number | null): BalanceForm {
 }
 
 /**
- * The participant's lock: its registry name, else its code hash (the transaction's cells carry
- * the script). A party with no cell here (a protocol-named party) or no known script has none.
- */
-/**
- * A party's lock, its code hash at the form's size (U-09) when the registry names none; nothing for
- * the default lock (readability R9, lane B4: a shortened address no longer says its lock, so a lock
- * is named beside it only when it is not the default lock, as `LockKind` does).
+ * A party's lock beside it, as every row writes one (the one decision, `partyLock`: the lock read
+ * off the party's address; nothing for the default lock), at the form's size (U-09).
  */
 function LockLabel({
   participant,
-  lockCodeHashes,
   size,
   className,
 }: {
   participant: ParticipantInfo;
-  lockCodeHashes: ReadonlyMap<string, string>;
   size: ShortSize;
   className?: string;
 }) {
-  const codeHash =
-    participant.address === null ? undefined : lockCodeHashes.get(participant.address);
-  if (codeHash !== undefined && isDefaultLock(codeHash)) return null;
-  const name = participant.lockKind ?? (codeHash ? `lock ${shortenHash(codeHash, size)}` : null);
-  if (name === null) return null;
+  const words = partyLock(participant);
+  if (words === null) return null;
   return (
-    <span
-      data-role="lock"
-      title={codeHash}
-      className={cn('text-text-dim text-meta whitespace-nowrap', className)}
-    >
-      {name}
+    <span data-role="lock" className={className}>
+      <LockWordsView
+        words={words}
+        size={size}
+        className="text-text-dim text-meta whitespace-nowrap"
+      />
     </span>
   );
 }
@@ -102,7 +78,11 @@ function Items({ participant, size }: { participant: ParticipantInfo; size: Shor
   );
 }
 
-const BALANCE_GRID = 'grid grid-cols-[190px_180px_100px_minmax(0,1fr)] gap-4';
+const BALANCE_GRID = 'grid gap-4';
+/** Each row is its own grid on these tracks (the Items track takes the rest). */
+const BALANCE_TRACKS = {
+  gridTemplateColumns: `${PARTY_PX}px ${CKB_PX}px ${OCCUPIED_PX}px minmax(0,1fr)`,
+};
 
 function netNote(note: ReturnType<typeof balanceNet>['note']): string {
   switch (note) {
@@ -122,7 +102,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 /**
  * Balance changes (TX-12, TX-19): every participant, then the Net row that explains the sum.
  * The measured width decides the form (docs/RESPONSIVE_LAYOUT.md rule 4): the four-column table
- * where its 700 px fit, otherwise one card per participant — party and lock, CKB and occupied,
+ * where its tracks fit (TABLE_MIN_W, 743 px), otherwise one card per participant — party and lock, CKB and occupied,
  * the items moved — with the Net row as the last card. Never a sideways scroller. A value the
  * section cannot read fails the section in place, under its heading (review 45fd ruling D7).
  */
@@ -130,13 +110,10 @@ export function BalanceChanges({
   activity,
   fee,
   compensation,
-  lockCodeHashes,
 }: {
   activity: GlobalActivity;
   fee: string;
   compensation: bigint | null;
-  /** Address → lock code hash, from the transaction's cells (`lockCodeHashesByAddress`). */
-  lockCodeHashes: ReadonlyMap<string, string>;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const form = balanceForm(width);
@@ -155,6 +132,7 @@ export function BalanceChanges({
             <div role="table" aria-label="Balance changes by participant">
               <div
                 role="row"
+                style={BALANCE_TRACKS}
                 className={cn(
                   BALANCE_GRID,
                   'border-row-rule text-text-dim text-meta border-b pb-1.5'
@@ -173,16 +151,12 @@ export function BalanceChanges({
                 <div
                   key={partyKey(p, i)}
                   role="row"
+                  style={BALANCE_TRACKS}
                   className={cn(BALANCE_GRID, 'border-row-rule items-baseline border-b py-2')}
                 >
                   <span role="cell" className="min-w-0">
                     <ParticipantRefView participant={p} size="row" compact quiet />
-                    <LockLabel
-                      participant={p}
-                      lockCodeHashes={lockCodeHashes}
-                      size="row"
-                      className="ml-2"
-                    />
+                    <LockLabel participant={p} size="row" className="ml-2" />
                   </span>
                   <span role="cell" className="text-right">
                     <CkbAmount form="column" shannons={BigInt(p.ckbDelta)} />
@@ -198,6 +172,7 @@ export function BalanceChanges({
               <div
                 role="row"
                 data-testid="tx-balance-net"
+                style={BALANCE_TRACKS}
                 className={cn(BALANCE_GRID, 'text-text-dim items-baseline py-2')}
               >
                 {readable(activity.txHash, () => {
@@ -244,7 +219,7 @@ export function BalanceChanges({
                       className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size={size} />
+                      <LockLabel participant={p} size={size} />
                     </div>
                     <div
                       data-line="amounts"
@@ -275,7 +250,7 @@ export function BalanceChanges({
                       className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size={size} />
+                      <LockLabel participant={p} size={size} />
                     </div>
                     <div data-role="ckb" className="text-body text-right">
                       {ckb}

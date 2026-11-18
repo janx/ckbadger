@@ -1,6 +1,7 @@
 import { ckbAmountText } from '@/lib/amount-form';
 import { ELLIPSIS, type ShortForm } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
+import { occupiedBytesDelta } from '@/lib/occupied';
 
 /**
  * The widest value a list column holds (readability plan 2026-11-18, lane F3-e), as the column's
@@ -103,6 +104,20 @@ export const GENESIS_BLOCK_BYTES = 1_236_271;
  * 1,236,271. Source: GENESIS_BLOCK_BYTES.
  */
 export const LARGEST_TX_BYTES = Math.max(MAX_BLOCK_BYTES, GENESIS_BLOCK_BYTES);
+
+/**
+ * Of record: a party's change in occupied bytes in one transaction (or the transaction's net),
+ * with its unit, `−16,773,724,928 B`. A cell's occupied bytes (its capacity field, its scripts,
+ * its data) are fewer than its output's serialized bytes in the transaction that made it, so no
+ * more than LARGEST_TX_BYTES (genesis's cellbase made cells the block limit does not hold; the
+ * cell tile budgets its figure there, `1,236,271 B`). A change grows by no more than what the
+ * transaction makes, at most its bytes, and shrinks by no more than what it consumes, MAX_TX_INPUTS
+ * such cells: 13,568 × 1,236,271 = 16,773,724,928, the wider. Source: LARGEST_TX_BYTES and
+ * MAX_TX_INPUTS.
+ */
+export const WIDEST_OCCUPIED_CHANGE = occupiedBytesDelta(
+  -BigInt(MAX_TX_INPUTS) * BigInt(LARGEST_TX_BYTES)
+);
 
 /**
  * Consensus: the protocol's limit of a block's cycles, `max_block_cycles`, 3,500,000,000, and so of

@@ -1,5 +1,6 @@
 // F2 group `objects` (round 2): the Collection board's Objects section (allele gel + Newest).
 // The two tests of the retired 24-card gallery are kept here against the new list.
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import { CollectionObjects, DecodeCoverage } from '@/components/asset/collection-objects';
 import { api, type CollectionInsights } from '@/lib/api';
@@ -104,16 +105,19 @@ it('names the owner lock kind and dates the mint in UTC+8 on each Newest row', a
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
     emptyPage([
       // 1700000000100 ms = 2023-11-14 22:13:20 UTC = 2023-11-15 06:13:20 UTC+8.
+      // B4 fix round: each owner's address spells the lock the row names (the lock is read off it)
       {
         ...base,
         chainTime: '1700000000100',
-        lockCodeHash: '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323',
+        ownerAddress: seededAddress('joyid1', JOYID_CODE_HASH),
+        lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
       {
         ...base,
         sporeId: `0x${'03'.repeat(32)}`,
         chainTime: '1700000000100',
+        ownerAddress: seededAddress('unreg1', `0x${'43'.repeat(32)}`),
         lockCodeHash: `0x${'43'.repeat(32)}`,
         lockKind: null,
       },
