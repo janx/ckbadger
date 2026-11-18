@@ -14,7 +14,7 @@ import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import { TenureBar } from '@/components/ui/tenure-bar';
 import { useClockTime } from '@/components/ui/utc8-date';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   IdentityName,
   IdentityPositioning,
@@ -371,15 +371,20 @@ export function CanonicalIdentityDetail({
           <p>
             The cell holds{' '}
             <span className="text-text-bright">
-              <ExactCkb shannons={BigInt(held)} signed={false} tone="plain" />
+              <CkbAmount form="column" shannons={BigInt(held)} signed={false} tone="plain" />
             </span>
-            . <ExactCkb shannons={BigInt(occupied)} signed={false} tone="plain" /> pay for its
-            bytes;{' '}
+            . <CkbAmount form="column" shannons={BigInt(occupied)} signed={false} tone="plain" />{' '}
+            pay for its bytes;{' '}
             {BigInt(held) === BigInt(occupied) ? (
               'none is free.'
             ) : (
               <>
-                <ExactCkb shannons={BigInt(held) - BigInt(occupied)} signed={false} tone="plain" />{' '}
+                <CkbAmount
+                  form="column"
+                  shannons={BigInt(held) - BigInt(occupied)}
+                  signed={false}
+                  tone="plain"
+                />{' '}
                 are free.
               </>
             )}

@@ -255,8 +255,9 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
   });
 
   // Re-pinned on purpose (B5, plan §7.6): the CKB column's 8 px bar on the page scale (50B, "0 ·
-  // 25B · 50B") left the list, a 2 px stub on most rows; the amount to 2 dp stays.
-  it('prints CKB in its cells as the amount to 2 dp, with no bar (T4, B5)', async () => {
+  // 25B · 50B") left the list, a 2 px stub on most rows. The amount is the list's summary form
+  // (readability R5, re-pinned on purpose: it was cut to 2 dp).
+  it('prints CKB in its cells as its summary amount, with no bar (T4, B5)', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const head = within(t).getAllByRole('columnheader')[3];
@@ -264,11 +265,15 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     for (const row of within(t).getAllByRole('row').slice(1))
       expect(cells(row)[3].querySelector('[data-track]')).toBeNull();
     const ckb = cells(rowOf(t, 'JoyID'))[3];
-    expect(ckb).toHaveTextContent(/^454,352,694\.86$/);
-    expect(cells(rowOf(t, 'AlwaysSuccess'))[3]).toHaveTextContent(/^0\.00$/);
-    // 2 dp by truncation: .23594289 is .23, never rounded up to .24.
-    expect(cells(rowOf(t, 'Default Lock'))[3].querySelector('[data-ckb-2dp]')!.textContent).toBe(
-      '46,743,236,111.96'
+    // Whole CKB from 1,000 up, cut, never rounded up; the exact value in the title; zero a dim 0.
+    expect(ckb).toHaveTextContent(/^454,352,694$/);
+    expect(ckb.querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '454,352,694.86181731 CKB'
+    );
+    expect(cells(rowOf(t, 'AlwaysSuccess'))[3]).toHaveTextContent(/^0$/);
+    expect(cells(rowOf(t, 'Default Lock'))[3].querySelector('[data-ckb-amount]')!.textContent).toBe(
+      '46,743,236,111'
     );
     expect(ckb.textContent).not.toMatch(/\d\.\d{8}/);
   });
@@ -316,7 +321,8 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     const ckb = cells(rowOf(t, 'JoyID'))[3];
     expect(ckb).toHaveClass('text-right', 'tabular-nums');
     expect(ckb.querySelector('[data-aligned-bar], [data-track]')).toBeNull();
-    expect(ckb).toHaveTextContent(/^454,352,694\.86$/);
+    // the list's summary form (lane B2, readability R5, re-pinned on purpose: "454,352,694.86")
+    expect(ckb).toHaveTextContent(/^454,352,694$/);
   });
 
   it('draws the occupied share on 0 · 50 · 100 %, its name over the figure (B5)', async () => {

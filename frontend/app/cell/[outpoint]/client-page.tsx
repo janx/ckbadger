@@ -11,7 +11,7 @@ import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { kindOf } from '@/components/transaction/transaction-cell-tiles';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
@@ -224,7 +224,7 @@ function CellFacts({
       className="border-base-border text-small flex flex-wrap gap-x-10 gap-y-3.5 border-y py-3.5"
     >
       <Fact label="Capacity">
-        <ExactCkb shannons={capacity} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={capacity} signed={false} tone="plain" />
       </Fact>
       <Fact label="Occupied">
         <span style={{ color: DATA_COLOR }}>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
@@ -233,7 +233,7 @@ function CellFacts({
           {capacity === occupied ? (
             '0'
           ) : (
-            <ExactCkb shannons={capacity - occupied} signed={false} tone="plain" />
+            <CkbAmount form="column" shannons={capacity - occupied} signed={false} tone="plain" />
           )}{' '}
           free
         </span>
@@ -498,7 +498,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
                 <>
                   {' '}
                   · {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
-                  <ExactCkb
+                  <CkbAmount
+                    form="column"
                     shannons={parseCkbDecimal(cell.daoInfo.compensationCkb)}
                     signed={false}
                     tone="plain"

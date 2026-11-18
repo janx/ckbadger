@@ -9,7 +9,7 @@ import { sentenceText } from '@/components/ui/block-link';
 import { BlocksLimitsNote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ListTable } from '@/components/ui/list-table';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { scriptLabel } from '@/components/address/address-history';
@@ -213,7 +213,9 @@ describe('BlockTransactionsTable', () => {
     expect(phoneLines(user).map((l) => [l.key, l.left, l.right])).toEqual([
       // U-09 (re-pinned): the phone row's hash at the tight size
       ['identity', '10x1111…1111', 'proposed in #5 +2'],
-      ['amounts', '0.00000100 CKB', 'fee 0.00030000 CKB'],
+      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+      // decimals)
+      ['amounts', '0.000001 CKB', 'fee 0.0003 CKB'],
       ['figures', '2 → 1\u00a0cell', '300 B · 1,000 cycles'],
     ]);
     expect(phoneLines(base)[0].right).toBe('proposed in cellbase');
@@ -228,7 +230,9 @@ describe('BlockTransactionsTable', () => {
     wrap(<BlockTransactionsTable transactions={[tx(1, { cycles: 1000 })]} blockNumber={7} />);
     const [row] = screen.getAllByTestId('block-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['identity', '10x1111…1111', '0.00000100 CKB'],
+      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
+      // decimals)
+      ['identity', '10x1111…1111', '0.000001 CKB'],
       // Consistency plan C4: a zero fee is "0 CKB" (was "0.00000000 CKB").
       ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1\u00a0cell · 300 B · 1,000 cycles'],
     ]);
@@ -292,8 +296,10 @@ describe('additive shared props (F2 blocks)', () => {
     expect(screen.getByText('50 newest of 9')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
   });
-  it('ExactCkb drops the unit when the header names it', () => {
-    const { container } = render(<ExactCkb shannons={BigInt(150000000)} unit={false} />);
+  it('CkbAmount drops the unit when the header names it', () => {
+    const { container } = render(
+      <CkbAmount form="column" shannons={BigInt(150000000)} unit={false} />
+    );
     expect(container).toHaveTextContent(/^\+1\.50000000$/);
   });
   it('ListTable heads a column with its rich header', () => {

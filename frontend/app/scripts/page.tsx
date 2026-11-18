@@ -23,7 +23,7 @@ import {
   scriptClassLabel,
 } from '@/components/scripts/script-code-evidence';
 import { HeroFigure } from '@/components/scripts/script-hero';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
@@ -242,7 +242,7 @@ function occupiedShare(script: KnownScript): { share: string } {
 }
 
 function capacityText(value: string) {
-  return <ExactCkb shannons={BigInt(value)} signed={false} tone="plain" />;
+  return <CkbAmount form="summary" shannons={BigInt(value)} signed={false} tone="plain" />;
 }
 
 function countText(value: number | undefined): string {
@@ -293,17 +293,6 @@ function ScriptName({ script }: { script: KnownScript }) {
       {!hasName(script) && (
         <span className="text-text-dim text-meta truncate">{refText(script)}</span>
       )}
-    </span>
-  );
-}
-
-/** "454,352,694.86": an exact CKB amount cut (never rounded up) to 2 decimals; the exact one is the row's title. */
-function CkbTwoDp({ shannons }: { shannons: bigint }) {
-  const { integer, decimal } = formatCkbAmount(shannons);
-  return (
-    <span data-ckb-2dp className="whitespace-nowrap">
-      {integer}
-      <span className="text-text-dim text-meta">.{decimal.slice(0, 2)}</span>
     </span>
   );
 }
@@ -472,7 +461,15 @@ export default function ScriptsPage() {
       header: <Head label="CKB in its cells" />,
       minWidth: CKB_DISPLAY + 16,
       numeric: true,
-      render: (s) => <CkbTwoDp shannons={heldCapacity(s).total} />,
+      render: (s) => (
+        <CkbAmount
+          form="summary"
+          shannons={heldCapacity(s).total}
+          signed={false}
+          tone="inherit"
+          unit={false}
+        />
+      ),
     },
     {
       key: 'occupied',

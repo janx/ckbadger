@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import {
   formatUtc8Date,
   formatCkbAmount,
-  formatCkbCompact,
   formatTimeAgo,
   formatDurationMs,
   formatUtc8DateTime,
@@ -12,6 +11,7 @@ import {
   formatUnixSecondsUtc8,
   cn,
 } from '@/lib/utils';
+import { ckbAmountText } from '@/lib/amount-form';
 
 describe('cn and the type scale', () => {
   // twMerge reads an unknown `text-<word>` as a colour: without the scale it dropped
@@ -28,10 +28,14 @@ describe('cn and the type scale', () => {
   });
 });
 
-describe('formatCkbCompact', () => {
-  it('rounds a large shannon amount without losing the threshold bit', () => {
-    expect(formatCkbCompact('100499999999999999999').value).toBe('1.00T');
-    expect(formatCkbCompact('100500000000000000000').value).toBe('1.01T');
+// The compact CKB form moved to lib/amount-form.ts (readability plan R5, lane B2) and is cut, not
+// rounded (re-pinned on purpose: 1,005,000,000,000 CKB was 1.01T, rounded half up).
+describe('the compact CKB form', () => {
+  it('cuts a large shannon amount without losing the threshold bit', () => {
+    expect(ckbAmountText(BigInt('100499999999999999999'), 'compact')).toBe('1.00T');
+    expect(ckbAmountText(BigInt('100500000000000000000'), 'compact')).toBe('1.00T');
+    expect(ckbAmountText(BigInt('100999999999999999999'), 'compact')).toBe('1.00T');
+    expect(ckbAmountText(BigInt('101000000000000000000'), 'compact')).toBe('1.01T');
   });
 });
 

@@ -9,7 +9,7 @@ import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   ScriptCustodyEvidence,
   DEPRECATED_TITLE,
@@ -866,7 +866,8 @@ export function ScriptFamilyPage({
         d.createdAtBlock !== undefined ? blockLink(d.createdAtBlock) : null,
         binarySize(d),
         codeCells.get(outpointKey(d))?.cell ? (
-          <ExactCkb
+          <CkbAmount
+            form="summary"
             shannons={BigInt(codeCells.get(outpointKey(d))!.cell!.capacity)}
             signed={false}
             tone="plain"
@@ -1164,7 +1165,12 @@ export function ScriptFamilyPage({
                       width: '17%',
                       numeric: true,
                       render: (cell) => (
-                        <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
+                        <CkbAmount
+                          form="column"
+                          shannons={BigInt(cell.capacity)}
+                          signed={false}
+                          tone="plain"
+                        />
                       ),
                     },
                     {
@@ -1208,7 +1214,12 @@ export function ScriptFamilyPage({
                       </div>
                       <CellAnatomy cell={cell} />
                       <div className="flex flex-wrap justify-between gap-2">
-                        <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
+                        <CkbAmount
+                          form="summary"
+                          shannons={BigInt(cell.capacity)}
+                          signed={false}
+                          tone="plain"
+                        />
                         <span>
                           <OccupiedBytes cell={cell} /> occupied
                         </span>

@@ -3,8 +3,7 @@
 import { useId, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { ExactCkb } from '@/components/activity-event-row';
-import { AssetAmount } from '@/components/asset/inventory-table';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { FiberSplitBar } from '@/components/fiber/fiber-split-bar';
@@ -18,7 +17,7 @@ import {
   type FiberEpochDelay,
 } from '@/lib/api';
 import { FIBER_STATE_WORDS, epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
-import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
@@ -81,7 +80,7 @@ function PartyLink({ party, className }: { party: Party; className?: string }) {
 }
 
 const ckb = (shannons: string | bigint, signed = false) => (
-  <ExactCkb shannons={BigInt(shannons)} signed={signed} tone="plain" />
+  <CkbAmount form="column" shannons={BigInt(shannons)} signed={signed} tone="plain" />
 );
 
 /** The opening flows of the two observed parties, in their order, when both put CKB in. */
@@ -190,18 +189,17 @@ function ledeSentence(channel: FiberChannelDetail): string {
   }
 }
 
-/** The channel's capacity as the page's display figure (R4): exact, its decimals a step quieter. */
+/** The channel's capacity as the page's display figure (R4), in its summary form (R5). */
 function CapacityFigure({ channel }: { channel: FiberChannelDetail }) {
-  const parts = splitCkbAmount(parseShannons(channel.capacity, `${channel.channelId} capacity`));
   return (
     <div data-role="capacity" className="text-text-bright text-index sm:text-display">
-      <span className="whitespace-nowrap tabular-nums">
-        {parts.integer}
-        <span className="text-hero text-text-dim font-normal">
-          {parts.fraction}
-          <span className="text-text-ghost">{parts.ghost}</span>
-        </span>
-      </span>
+      <CkbAmount
+        form="summary"
+        shannons={parseShannons(channel.capacity, `${channel.channelId} capacity`)}
+        signed={false}
+        tone="inherit"
+        unit={false}
+      />
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
       <span className="text-body text-text-dim font-normal"> CKB</span>
     </div>
@@ -490,7 +488,11 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                   <>
                     {' '}
                     <span className="text-text-dim">· holds</span>{' '}
-                    <AssetAmount amount={channel.udtAmount} decimals={token.decimals} />{' '}
+                    <TokenAmount
+                      form="summary"
+                      amount={channel.udtAmount}
+                      decimals={token.decimals}
+                    />{' '}
                     {token.symbol ?? 'tokens'}
                   </>
                 )}

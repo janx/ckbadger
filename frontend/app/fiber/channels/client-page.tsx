@@ -23,7 +23,7 @@ import { formatCount, countNoun } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
@@ -99,7 +99,12 @@ function openNowFigure(summary: FiberNetwork['summary']): TopicDisplayFigure {
     companion: (
       <>
         locking{' '}
-        <ExactCkb shannons={BigInt(summary.totalCapacityLocked)} signed={false} tone="plain" />
+        <CkbAmount
+          form="summary"
+          shannons={BigInt(summary.totalCapacityLocked)}
+          signed={false}
+          tone="plain"
+        />
       </>
     ),
     tone: 'jade',
@@ -230,7 +235,7 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
   );
   const capacity = (
     <span className="text-text-bright">
-      <ExactCkb shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
+      <CkbAmount form="summary" shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
     </span>
   );
   const when = `opened ${formatUtc8DateTime(channel.openTimestamp).slice(0, 16)} · ${
@@ -444,7 +449,12 @@ export default function FiberChannelsPage() {
                       minWidth: 210,
                       numeric: true,
                       render: (channel) => (
-                        <ExactCkb shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
+                        <CkbAmount
+                          form="column"
+                          shannons={BigInt(channel.capacity)}
+                          signed={false}
+                          tone="plain"
+                        />
                       ),
                     },
                     {

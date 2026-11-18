@@ -1,12 +1,8 @@
 import { afterEach, vi } from 'vitest';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import {
-  InventoryRows,
-  AssetAmount,
-  CkbTwoPlaces,
-  TokenTwoPlaces,
-} from '@/components/asset/inventory-table';
+import { InventoryRows } from '@/components/asset/inventory-table';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import type { Asset } from '@/lib/api';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 const asset: Asset = {
@@ -69,17 +65,20 @@ describe('Inventory rows', () => {
     render(<InventoryRows assetType="token" rows={[asset]} />);
     const table = screen.getByRole('table', { name: 'Tokens' });
     const row = within(table).getAllByRole('row')[1];
-    // Table-rows L2-1: the row shows 2 dp; every digit and the standard are in its title.
+    // Table-rows L2-1: the row shows a shortened form; every digit and the standard are in its
+    // title. Re-pinned on purpose (readability R5): the supply is the summary form, cut ("1",
+    // was the two-place "1.00"), its exact value in its own title.
     expect(row).toHaveAttribute(
       'title',
       'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
     );
-    expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent('1.00');
+    expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent(/^1$/);
     expect(table).not.toHaveTextContent('xUDT');
   });
   it('breaks a long amount only after a thousands separator and ghosts trailing zeros (IV-28/IV-13/IV-05)', () => {
+    // Re-pinned on purpose (R5): AssetAmount's look is the token renderer's column form.
     const { container } = render(
-      <AssetAmount amount="100000000000000000000000000000" decimals={20} />
+      <TokenAmount form="column" amount="100000000000000000000000000000" decimals={20} />
     );
     const root = container.firstElementChild as HTMLElement;
     expect(root).toHaveTextContent('1,000,000,000.00000000000000000000');
@@ -87,23 +86,26 @@ describe('Inventory rows', () => {
     const breaks = Array.from(root.querySelectorAll('wbr'));
     expect(breaks.length).toBe(3);
     for (const wbr of breaks) expect(wbr.previousSibling?.textContent?.endsWith(',')).toBe(true);
-    // the point joins its zeros when no decimal is significant, as ExactCkb's ghost does (R4,
+    // the point joins its zeros when no decimal is significant, as CkbAmount's ghost does (R4,
     // re-pinned on purpose: the point stood alone in the amount's ink)
     expect(screen.getByText('.00000000000000000000')).toHaveClass('text-text-ghost');
     expect(container.querySelector('.text-text-muted')).toBeNull();
   });
-  // UI review 2026-11-14 (DY-06, ruling R4): a token amount's significant decimals are the neutral
-  // fraction ink (text-dim, 4.5:1), never the amount's ink at 80 %.
-  it('sets the significant decimals in the neutral fraction ink, with no opacity', () => {
-    const { container } = render(<AssetAmount amount="123450000" decimals={8} />);
-    const fraction = container.querySelector('[data-fraction]');
-    expect(fraction).toHaveTextContent(/^\.2345$/);
-    expect(fraction).toHaveClass('text-text-dim');
+  // UI review 2026-11-14 (DY-06, ruling R4) set a token amount's significant decimals in the
+  // neutral fraction ink, never the amount's ink at 80 %. Readability R5 (re-pinned on purpose):
+  // one ink per amount, the decimals in the integer's own ink, still with no opacity.
+  it('sets the significant decimals in the amount’s one ink, with no opacity', () => {
+    const { container } = render(<TokenAmount form="column" amount="123450000" decimals={8} />);
+    const amount = container.querySelector('[data-token-amount]')!;
+    expect(amount).toHaveTextContent(/^1\.23450000$/);
+    expect(amount.querySelector('[data-fraction]')).toBeNull();
+    expect(amount.querySelector('.text-text-dim')).toBeNull();
+    expect(amount.querySelector('[data-ghost]')).toHaveTextContent(/^0000$/);
     expect(container.innerHTML).not.toMatch(/opacity-/);
   });
 
   it('labels unknown decimals as raw instead of guessing the unit', () => {
-    render(<AssetAmount amount="12345678901234567890" decimals={null} />);
+    render(<TokenAmount form="column" amount="12345678901234567890" decimals={null} />);
     expect(screen.getByText('12,345,678,901,234,567,890 (raw)')).toBeInTheDocument();
   });
   it('separates live, minted, activity and pending composition', () => {
@@ -228,25 +230,28 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     expect(token.querySelector('svg[data-class="tokens"]')).not.toBeNull();
   });
 
-  it('prints supply dim to 2 dp, exact in its hover', () => {
+  // readability R5, re-pinned on purpose (and renamed: "prints supply dim to 2 dp, exact in its
+  // hover"): a list column is the
+  // summary form, whole from 1,000 up, cut, never rounded up (site precedent, lane D3).
+  it('prints supply dim in its summary form, exact in its hover', () => {
     const table = mount();
     const supply = cellUnder(table, 2, 'Supply');
     expect(supply).toHaveClass('text-text-dim');
-    // Cut at 2 dp, never rounded up (site precedent, lane D3): .56572848 shows as .56.
-    expect(supply).toHaveTextContent('16,063,603.56');
-    expect(supply).not.toHaveTextContent('16,063,603.57');
-    expect(within(supply).getByTitle('16,063,603.56572848')).toBeInTheDocument();
+    expect(supply).toHaveTextContent(/^16,063,603$/);
+    expect(within(supply).getByTitle('16,063,603.56572848')).toHaveTextContent(/^16,063,603$/);
   });
 
   // Re-pinned on purpose (readability B5, plan §7.6): the 8 px token-blue bar on the page's scale
-  // left the list; CKB held is its 2-dp amount alone.
-  it('prints CKB held as its 2-dp amount', () => {
+  // left the list; CKB held is its amount alone, in the list's summary form (readability R5,
+  // re-pinned on purpose: it was the two-place "100.00").
+  it('prints CKB held as its summary amount', () => {
     const table = mount();
     const first = cellUnder(table, 1, 'CKB held in its cells');
     const second = cellUnder(table, 2, 'CKB held in its cells');
     expect(first.querySelector('[data-track]')).toBeNull();
-    expect(first).toHaveTextContent('100.00');
-    expect(second).toHaveTextContent('400.00');
+    expect(first.querySelector('[data-ckb-amount]')).toHaveTextContent(/^100$/);
+    expect(first.querySelector('[data-ckb-amount]')).toHaveAttribute('title', '100.00000001 CKB');
+    expect(second.querySelector('[data-ckb-amount]')).toHaveTextContent(/^400$/);
     expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent('×2.18');
   });
 
@@ -368,7 +373,10 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
     expect(cellUnder(table, 1, 'Live items')).toHaveTextContent(/^93$/);
     expect(cellUnder(table, 2, 'Live items')).toHaveTextContent('2,712 / 2,811');
     expect(cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
-    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent('400.00');
+    // the list's summary form (readability R5, re-pinned on purpose: was "400.00")
+    expect(
+      cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-ckb-amount]')
+    ).toHaveTextContent(/^400$/);
     expect(cellUnder(table, 2, 'Activity')).toHaveTextContent('3,014');
     expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.64');
   });
@@ -438,14 +446,19 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     expect(first.querySelector('svg[data-class="identities"]')).not.toBeNull();
   });
 
-  // Re-pinned on purpose (readability B5, plan §7.6): the rose CKB held bar left the list.
-  it('prints CKB held as its 2-dp amount and keeps occupied on one line', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the rose CKB held bar left the list. CKB
+  // held and occupied are the list's summary form (readability R5, re-pinned on purpose: "100.00",
+  // "133.0000005"), occupied cut to 133 and titled.
+  it('prints CKB held as its summary amount and keeps occupied on one line', () => {
     const table = mount();
     expect(cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
-    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent('100.00');
+    expect(
+      cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-ckb-amount]')
+    ).toHaveTextContent(/^100$/);
     expect(cellUnder(table, 1, 'Occupied')).toHaveTextContent(/^61$/);
     const occupied = cellUnder(table, 2, 'Occupied');
-    expect(occupied).toHaveTextContent('133.0000005');
+    expect(occupied).toHaveTextContent(/^133$/);
+    expect(occupied.querySelector('[data-ckb-amount]')).toHaveAttribute('title', '133.0000005 CKB');
     expect(occupied.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
     expect(cellUnder(table, 2, 'Ever registered')).toHaveTextContent('656');
   });
@@ -475,7 +488,7 @@ describe('CKB held is a right-aligned figure under its head, with no bar (readab
     ['object', 'Object collections'],
     ['identity', 'Identity systems'],
   ] as const;
-  it.each(cases)('draws the %s list’s CKB held as its 2-dp figure alone', (assetType, label) => {
+  it.each(cases)('draws the %s list’s CKB held as its figure alone', (assetType, label) => {
     render(
       <InventoryRows
         assetType={assetType}
@@ -494,32 +507,52 @@ describe('CKB held is a right-aligned figure under its head, with no bar (readab
       expect(cell).toHaveClass('text-right', 'tabular-nums', 'whitespace-nowrap');
       expect(cell.querySelector('[data-aligned-bar], [data-track], [data-segment]')).toBeNull();
     }
-    // the figure as before (lane B2 owns its form): cut to 2 dp
-    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent(/^100\.00$/);
-    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent(/^400\.00$/);
+    // the figure in the list's summary form (lane B2, readability R5; it was cut to 2 dp)
+    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent(/^100$/);
+    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent(/^400$/);
   });
 });
 
-// Table-rows L2 follow-up: a row's 2-dp amount is the exact amount CUT at 2 places, never rounded
-// (a rounded figure can show a digit that is not on chain); the exact value is in the title.
-describe('2-dp row amounts truncate, never round (table-rows L2)', () => {
-  it('cuts 1,234.56789 to 1,234.56 for CKB and token amounts, the exact value in the title', () => {
-    const { container, rerender } = render(<CkbTwoPlaces shannons={BigInt('123456789000')} />);
-    expect(container).toHaveTextContent(/^1,234\.56$/);
-    rerender(<TokenTwoPlaces amount="123456789" decimals={5} />);
-    expect(container).toHaveTextContent(/^1,234\.56$/);
+// Table-rows L2 follow-up: a row's shortened amount is the exact amount CUT, never rounded (a
+// rounded figure can show a digit that is not on chain); the exact value is in the title.
+// Readability R5 (re-pinned on purpose): the row's form is the summary form, which keeps that rule
+// — whole from 1,000 up (was two places: "1,234.56"), two places at most from 1 to 1,000, below 1
+// the exact CKB or a token's four significant digits (was "0.99").
+describe('row amounts truncate, never round (table-rows L2, R5)', () => {
+  it('cuts 1,234.56789 to 1,234 for CKB and token amounts, the exact value in the title', () => {
+    const { container, rerender } = render(
+      <CkbAmount
+        form="summary"
+        shannons={BigInt('123456789000')}
+        signed={false}
+        tone="inherit"
+        unit={false}
+      />
+    );
+    expect(container).toHaveTextContent(/^1,234$/);
+    expect(container.firstElementChild).toHaveAttribute('title', '1,234.56789 CKB');
+    rerender(<TokenAmount form="summary" amount="123456789" decimals={5} />);
+    expect(container).toHaveTextContent(/^1,234$/);
     expect(container.firstElementChild).toHaveAttribute('title', '1,234.56789');
   });
   it('never carries .999 into the next whole unit', () => {
-    const { container, rerender } = render(<CkbTwoPlaces shannons={BigInt('123499900000')} />);
-    expect(container).toHaveTextContent(/^1,234\.99$/);
-    rerender(<TokenTwoPlaces amount="99999999" decimals={8} />);
-    expect(container).toHaveTextContent(/^0\.99$/);
-    rerender(<TokenTwoPlaces amount="1999" decimals={3} />);
+    const { container, rerender } = render(
+      <CkbAmount
+        form="summary"
+        shannons={BigInt('99999900000')}
+        signed={false}
+        tone="inherit"
+        unit={false}
+      />
+    );
+    expect(container).toHaveTextContent(/^999\.99$/);
+    rerender(<TokenAmount form="summary" amount="99999999" decimals={8} />);
+    expect(container).toHaveTextContent(/^0\.9999$/);
+    rerender(<TokenAmount form="summary" amount="1999" decimals={3} />);
     expect(container).toHaveTextContent(/^1\.99$/);
     // A unit with fewer than 2 decimals prints what it has.
-    rerender(<TokenTwoPlaces amount="12349" decimals={1} />);
-    expect(container).toHaveTextContent(/^1,234\.9$/);
+    rerender(<TokenAmount form="summary" amount="9999" decimals={1} />);
+    expect(container).toHaveTextContent(/^999\.9$/);
   });
 });
 
@@ -552,8 +585,10 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       [
         'figures',
         'quiet',
-        // Every digit of the supply, the CKB held and occupied with its exact share.
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
+        // The supply, the CKB held and occupied with its exact share, in a phone row's summary
+        // form (readability R5, re-pinned on purpose: was every digit; each cut figure has its
+        // exact value in its title).
+        'supply 1 T · 100 CKB held · 61 occupied (61.00%)',
         null,
       ],
     ]);
@@ -568,7 +603,8 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'T Token · xUDT', '2 holders'],
       [
         'figures',
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
+        // a phone row's summary form (readability R5, re-pinned on purpose)
+        'supply 1 T · 100 CKB held · 61 occupied (61.00%)',
         '4 transfers · 0 in 24 h · ×1.6393442625',
       ],
     ]);
@@ -585,7 +621,8 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       [
         'figures',
         expect.stringMatching(
-          /^of 93 minted · 100\.00000001 CKB held · 61 occupied \(61\.00%\) · ×1\.6393442625 · 0xabab/
+          // a phone row's summary form (R5, re-pinned on purpose: was "100.00000001")
+          /^of 93 minted · 100 CKB held · 61 occupied \(61\.00%\) · ×1\.6393442625 · 0xabab/
         ),
         null,
       ],
@@ -614,7 +651,8 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '.bit', '5 live'],
       ['activity', '9 ever registered · 2 holders', null],
-      ['figures', '100.00000001 CKB held · 61 occupied (61.00%)', null],
+      // a phone row's summary form (readability R5, re-pinned on purpose: was "100.00000001")
+      ['figures', '100 CKB held · 61 occupied (61.00%)', null],
     ]);
   });
 });

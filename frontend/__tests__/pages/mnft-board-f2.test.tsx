@@ -71,7 +71,11 @@ const detail: MnftItemDetail = {
     name: 'Class A',
     description: 'Class description recorded on chain',
     renderer: 'https://example.com/renderer.png',
-    total: 1000,
+    // 1,500, not 1,000 (readability R5, re-pinned on purpose): the cell's 1,000 CKB is "1,000" in
+    // its
+    // summary form, and the lede rule, which reads numbers without their units, took the class's
+    // "1,000 planned" in the intro for a restatement of the metric.
+    total: 1500,
     issued: 200,
     configure: protocol.decoded.configure,
     permissions: protocol.decoded.permissions,
@@ -171,7 +175,7 @@ describe('Mnft board (F2 objects)', () => {
       'Issuer',
       'Characteristic',
     ]);
-    expect(props).toHaveTextContent('#99 of 200 issued · 1,000 planned');
+    expect(props).toHaveTextContent('#99 of 200 issued · 1,500 planned');
     expect(props).toHaveTextContent('Issuer A · 2 classes');
     expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
   });
@@ -237,7 +241,7 @@ describe('Mnft board (F2 objects)', () => {
     expect(rail).toHaveTextContent('by Issuer A');
     expect(rail).toHaveTextContent('2 transfers since issue');
     const cls = screen.getByRole('region', { name: 'In Class A' });
-    expect(cls).toHaveTextContent('200 issued of 1,000 · 198 live');
+    expect(cls).toHaveTextContent('200 issued of 1,500 · 198 live');
     // Phase 5 (A15): the class, run on its name; the link to it is the note, outside the name.
     const heading = within(cls).getByRole('heading', { name: 'Class Class A' });
     expectPrompt(heading, 'Class', 'Class A');

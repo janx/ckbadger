@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AMOUNT_INK } from '@/components/activity-event-row';
+import { AMOUNT_INK } from '@/components/ui/ckb-amount';
 import { STEP_W } from '@/lib/pipeline/encoding';
 import {
   alpha,
@@ -44,7 +44,7 @@ const TEXT_GRADE: PaletteKey[] = [
   'lavender-dim',
   'amber',
   // the cinnabar text's quiet step, like every other `*-dim` (re-pinned on purpose: it was a 3:1
-  // secondary ink, and it is used as text); the fraction ink of a negative amount (R4, DY-06)
+  // secondary ink, and it is used as text); a quiet cinnabar word (R4, DY-06)
   'rouge-dim',
   'token',
   'object',
@@ -317,14 +317,15 @@ function ink(theme: (typeof THEMES)[number], key: string): string {
   return (PALETTE[theme] as Readonly<Record<string, string>>)[key];
 }
 
-// UI review 2026-11-14, ruling R4 (DY-06, U-08): the digits after an amount's decimal point are a
-// step quieter than its sign's ink, in a named ink of that sign at body contrast on every ground —
-// never the sign's ink at an opacity (78 % put the cinnabar at 3.7:1 by night, the celadon at
-// about 3.2–3.7:1 and the neutral at 3.5:1 by day).
-const FRACTION_INKS = [
-  { sign: 'positive', ink: 'jade', fraction: 'jade-dim' },
-  { sign: 'negative', ink: 'rouge', fraction: 'rouge-dim' },
-  { sign: 'neutral', ink: 'text', fraction: 'text-dim' },
+// Readability plan 2026-11-18, ruling R5 (lane B2), re-pinned on purpose: one ink per amount. The
+// digits after an amount's point were a step quieter than its integer, in the `-dim` ink of its
+// sign (UI review 2026-11-14, R4, DY-06); a number's significant digits are never quieter than its
+// integer now, so the table keeps one ink per sign, each at body contrast on every ground. The
+// ghost stays for a column's padding zeros only (the ink gate holds it).
+const AMOUNT_INKS = [
+  { sign: 'positive', ink: 'jade', className: 'text-positive' },
+  { sign: 'negative', ink: 'rouge', className: 'text-negative' },
+  { sign: 'neutral', ink: 'text', className: 'text-text' },
 ] as const;
 
 // Direction G (round 7, Strap.dc.html, StrapDay.dc.html): the proposal window is a gilt strap
@@ -458,42 +459,37 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
   });
 });
 
-describe('the fraction inks (R4, DY-06)', () => {
-  // Lane E2: the keys pinned here are the ones the renderers read, HTML and SVG alike.
-  it('pins the table every amount renderer reads (AMOUNT_INK), sign by sign', () => {
-    expect(
-      Object.fromEntries(Object.entries(AMOUNT_INK).map(([sign, ink]) => [sign, ink.fractionKey]))
-    ).toEqual(Object.fromEntries(FRACTION_INKS.map((f) => [f.sign, f.fraction])));
+describe('the amount inks (R5: one ink per amount)', () => {
+  it('pins the table every amount renderer reads (AMOUNT_INK): one ink per sign, no fraction ink', () => {
+    expect(AMOUNT_INK).toEqual(Object.fromEntries(AMOUNT_INKS.map((a) => [a.sign, a.className])));
   });
 
-  it('reads every sign’s fraction ink at body contrast on every ground, in both themes', () => {
+  it('reads every sign’s ink at body contrast on every ground, in both themes', () => {
     const short: string[] = [];
     for (const theme of THEMES)
-      for (const { fraction } of FRACTION_INKS)
+      for (const { ink: key } of AMOUNT_INKS)
         for (const ground of GROUNDS) {
-          const hex = ink(theme, fraction);
-          expect(hex, `${theme} ${fraction}`).toMatch(HEX);
+          const hex = ink(theme, key);
+          expect(hex, `${theme} ${key}`).toMatch(HEX);
           const ratio = contrastRatio(hex, PALETTE[theme][ground]);
-          if (ratio < 4.5) short.push(`${theme} ${fraction} on ${ground}: ${ratio.toFixed(2)}`);
+          if (ratio < 4.5) short.push(`${theme} ${key} on ${ground}: ${ratio.toFixed(2)}`);
         }
     expect(short).toEqual([]);
   });
 
-  it('sets each fraction a step quieter than its sign’s ink on the page ground', () => {
-    for (const theme of THEMES)
-      for (const { ink: whole, fraction } of FRACTION_INKS) {
-        const ground = PALETTE[theme]['base-bg'];
-        expect(
-          contrastRatio(ink(theme, fraction), ground),
-          `${theme} ${fraction} under ${whole}`
-        ).toBeLessThan(contrastRatio(ink(theme, whole), ground));
-      }
+  // Re-pinned on purpose (R5): this was "sets each fraction a step quieter than its sign's ink on
+  // the page ground" (jade-dim under jade, rouge-dim under rouge, text-dim under text). The
+  // decimals are never quieter than the integer now: no quieter step is an amount's ink.
+  it('sets no amount’s decimals a step quieter: no `-dim` key is an amount ink', () => {
+    for (const quieter of ['text-jade-dim', 'text-rouge-dim', 'text-text-dim'])
+      expect(Object.values(AMOUNT_INK)).not.toContain(quieter);
   });
 
-  it('gives the negative one rouge-dim, moved in OKLCH lightness only until it reads at 4.5:1', () => {
+  it('keeps rouge-dim, moved in OKLCH lightness only until it reads at 4.5:1', () => {
     // rouge-dim was a secondary ink at 3:1 (#aa503c / #a6594c, 3.05 / 3.92 at worst) and used as
     // text; lightened by night (L +0.094) and darkened by day (L −0.033), hue and chroma kept, it
     // is the cinnabar's quiet step at text grade like every other `*-dim`: one key, one meaning.
+    // It was the negative amount's fraction ink until R5; the key stays, a quiet cinnabar word's.
     expect(PALETTE.dark['rouge-dim']).toBe('#ca6c57');
     expect(PALETTE.light['rouge-dim']).toBe('#9b4f43');
     expect(PALETTE_KEYS as string[]).not.toContain('rouge-fraction');

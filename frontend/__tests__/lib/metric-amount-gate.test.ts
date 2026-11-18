@@ -6,7 +6,8 @@ import { describe, expect, it } from 'vitest';
 /**
  * Gate (readability review 2026-11-18, lane A): a metric's figure is one unit. On a `.cell`
  * identity at 1280 "CKB held in its cell" broke into "240" / ".00000000 CKB": the metric gave its
- * amount `ExactCkb wrap`, which lets a line break between an amount's integer and its decimals.
+ * amount `ExactCkb wrap` (the renderer is `CkbAmount` since lane B2), which lets a line break
+ * between an amount's integer and its decimals.
  * A metric (an object literal with a `label` and a `value`, the shape of `AssetMetric`) never
  * gives its value a wrapping amount; its row holds the figure whole (`AssetMetrics`).
  */
@@ -14,14 +15,14 @@ function parse(code: string): ts.SourceFile {
   return ts.createSourceFile('t.tsx', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 }
 
-/** Whether a JSX element is `ExactCkb` with `wrap` set (bare, or to anything but `false`). */
+/** Whether a JSX element is `CkbAmount` with `wrap` set (bare, or to anything but `false`). */
 function wrappingAmount(node: ts.Node): boolean {
   const el = ts.isJsxElement(node)
     ? node.openingElement
     : ts.isJsxSelfClosingElement(node)
       ? node
       : null;
-  if (!el || el.tagName.getText() !== 'ExactCkb') return false;
+  if (!el || el.tagName.getText() !== 'CkbAmount') return false;
   return el.attributes.properties.some(
     (p) =>
       ts.isJsxAttribute(p) &&
@@ -63,25 +64,33 @@ export function wrappingMetrics(file: ts.SourceFile): string[] {
 describe('the metric amount gate reads the AST exactly (self-tests)', () => {
   const scan = (code: string) => wrappingMetrics(parse(code));
   it('finds a metric whose value is an amount that may wrap, however the value is chosen', () => {
-    expect(scan(`const m = { label: 'CKB held', value: <ExactCkb shannons={h} wrap /> };`)).toEqual(
-      ["1: 'CKB held'"]
-    );
+    expect(
+      scan(`const m = { label: 'CKB held', value: <CkbAmount form="column" shannons={h} wrap /> };`)
+    ).toEqual(["1: 'CKB held'"]);
     expect(
       scan(
-        `const m = { label: 'held', value: h ? <ExactCkb shannons={h} wrap={true} /> : 'none' };`
+        `const m = { label: 'held', value: h ? <CkbAmount form="column" shannons={h} wrap={true} /> : 'none' };`
       )
     ).toEqual(["1: 'held'"]);
   });
   it('passes an amount held whole, a non-metric object and an amount in the note', () => {
-    expect(scan(`const m = { label: 'held', value: <ExactCkb shannons={h} /> };`)).toEqual([]);
     expect(
-      scan(`const m = { label: 'held', value: <ExactCkb shannons={h} wrap={false} /> };`)
+      scan(`const m = { label: 'held', value: <CkbAmount form="column" shannons={h} /> };`)
     ).toEqual([]);
     expect(
-      scan(`const c = { key: 'held', render: () => <ExactCkb shannons={h} wrap /> };`)
+      scan(
+        `const m = { label: 'held', value: <CkbAmount form="column" shannons={h} wrap={false} /> };`
+      )
     ).toEqual([]);
     expect(
-      scan(`const m = { label: 'held', value: '1', note: <ExactCkb shannons={h} wrap /> };`)
+      scan(
+        `const c = { key: 'held', render: () => <CkbAmount form="column" shannons={h} wrap /> };`
+      )
+    ).toEqual([]);
+    expect(
+      scan(
+        `const m = { label: 'held', value: '1', note: <CkbAmount form="column" shannons={h} wrap /> };`
+      )
     ).toEqual([]);
   });
 });

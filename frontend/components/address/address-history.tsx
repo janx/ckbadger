@@ -2,7 +2,8 @@
 
 import type { ReactNode } from 'react';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
-import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
+import { activityHeadline } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
@@ -170,7 +171,9 @@ const columns: ListColumn<AddressTransaction>[] = [
     minWidth: 180,
     numeric: true,
     className: 'whitespace-normal',
-    render: (tx) => <ExactCkb shannons={BigInt(tx.capacityChange)} wrap unit={false} />,
+    render: (tx) => (
+      <CkbAmount form="column" shannons={BigInt(tx.capacityChange)} wrap unit={false} />
+    ),
   },
   {
     key: 'fee',
@@ -179,7 +182,14 @@ const columns: ListColumn<AddressTransaction>[] = [
     numeric: true,
     className: 'whitespace-normal',
     render: (tx) => (
-      <ExactCkb shannons={BigInt(tx.fee)} signed={false} tone="plain" wrap unit={false} />
+      <CkbAmount
+        form="column"
+        shannons={BigInt(tx.fee)}
+        signed={false}
+        tone="plain"
+        wrap
+        unit={false}
+      />
     ),
   },
   {
@@ -333,7 +343,9 @@ const cellColumns: ListColumn<AddressCell>[] = [
     minWidth: 196,
     numeric: true,
     className: 'whitespace-normal',
-    render: (c) => <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" wrap />,
+    render: (c) => (
+      <CkbAmount form="column" shannons={BigInt(c.capacity)} signed={false} tone="plain" wrap />
+    ),
   },
   {
     key: 'occupied',
@@ -343,7 +355,13 @@ const cellColumns: ListColumn<AddressCell>[] = [
     className: 'whitespace-normal',
     render: (c) => (
       <span>
-        <ExactCkb shannons={BigInt(c.occupiedCapacity)} signed={false} tone="plain" wrap />
+        <CkbAmount
+          form="column"
+          shannons={BigInt(c.occupiedCapacity)}
+          signed={false}
+          tone="plain"
+          wrap
+        />
         <span aria-hidden="true" className="bg-bar-track mt-1 block h-1">
           <span
             className="bg-jade block h-1"
@@ -374,7 +392,13 @@ function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
       <Dotted
         parts={[
           <span key="o" className="whitespace-nowrap">
-            occupied <ExactCkb shannons={BigInt(c.occupiedCapacity)} signed={false} tone="plain" />
+            occupied{' '}
+            <CkbAmount
+              form="summary"
+              shannons={BigInt(c.occupiedCapacity)}
+              signed={false}
+              tone="plain"
+            />
           </span>,
           <span key="c" className="whitespace-nowrap">
             created{' '}
@@ -404,7 +428,14 @@ export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
               key: 'cell',
               tone: 'head',
               left: <CellOutPoint cell={c} size="tight" />,
-              right: <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" />,
+              right: (
+                <CkbAmount
+                  form="summary"
+                  shannons={BigInt(c.capacity)}
+                  signed={false}
+                  tone="plain"
+                />
+              ),
             },
             {
               key: 'contains',

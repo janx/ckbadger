@@ -12,7 +12,7 @@ import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/ass
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { AssetFeed } from '@/components/asset/asset-feed';
-import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
+import { AssetCount } from '@/components/asset/inventory-table';
 import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
@@ -24,7 +24,8 @@ import { Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 import { Dotted } from '@/components/ui/phone-row';
 import { formatCount } from '@/lib/format-count';
-import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
+import { formatStandard, activityHeadline } from '@/components/activity-event-row';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
@@ -125,7 +126,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         <span>maximum supply unavailable</span>
       ) : (
         <span>
-          maximum <AssetAmount amount={t.maximumSupply} decimals={t.decimals} />
+          maximum <TokenAmount form="summary" amount={t.maximumSupply} decimals={t.decimals} />
         </span>
       )
     ) : t.maximumSupplyStatus === 'unlimited' ? (
@@ -253,7 +254,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           items={[
             {
               label: 'Supply',
-              value: <AssetAmount amount={t.totalSupply} decimals={t.decimals} />,
+              value: <TokenAmount form="summary" amount={t.totalSupply} decimals={t.decimals} />,
               note: [t.symbol, maximum],
             },
             {
@@ -309,7 +310,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               label: 'CKB held in its cells',
               value:
                 held !== null ? (
-                  <ExactCkb shannons={held} signed={false} tone="plain" />
+                  <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />
                 ) : (
                   <span className="text-text-dim">Capacity unavailable</span>
                 ),

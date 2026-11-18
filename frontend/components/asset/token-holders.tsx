@@ -6,12 +6,8 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
-import {
-  AssetAmount,
-  AssetCount,
-  TokenTwoPlaces,
-  wordHeads,
-} from '@/components/asset/inventory-table';
+import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
+import { TokenAmount } from '@/components/ui/ckb-amount';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -312,7 +308,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         // One line; an amount too long for the column ends in an ellipsis, exact in the hover.
         render: (h) => (
           <span className="block truncate">
-            <TokenTwoPlaces amount={h.balance} decimals={decimals} />
+            <TokenAmount form="summary" amount={h.balance} decimals={decimals} />
           </span>
         ),
       },
@@ -399,7 +395,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                       className="text-text-dim text-small"
                     />
                   }
-                  amount={<AssetAmount amount={h.balance} decimals={decimals} />}
+                  amount={<TokenAmount form="summary" amount={h.balance} decimals={decimals} />}
                   share={share.text}
                   bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
                   axis={rows[0] === h ? formatShareTick(scale) : undefined}
