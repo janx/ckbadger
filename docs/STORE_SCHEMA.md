@@ -678,7 +678,7 @@ The kind is the transaction's global bucket, the one classification behind the a
 transaction filters ([`tx_actions_by_bucket`](#tx_actions_by_bucket-the-global-activity-filter-index)):
 each sync path classifies a transaction once (`ClassifiedTxActions`) and writes its bucket row and
 its kind count from that value, so a kind's count is what its filter lists and the kinds sum to the
-bucket's non-cellbase transactions.
+bucket's non-cellbase transactions (verify `daily_activity_kinds_partition_transactions`, S39).
 `DailyActivityStats::decode` is strict and refuses a row of any other layout — the one before
 2026-11-18 began with eleven overlapping per-layer counters (`transfer_count`, three DAO action
 counts, …, `unknown_count`) — with "written by an older layout, re-sync from genesis": a new binary
