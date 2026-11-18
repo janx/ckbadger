@@ -602,10 +602,19 @@ function variantsOf(token: string): { variants: string[]; utility: string } {
   return { variants: parts, utility: current };
 }
 
-/** The ink a class sets at rest: `text-text-dim`, another ink, or none (a size, a state variant). */
+/** A class's opacity modifier (`/90`, `/[0.9]`), or a size's line height (`text-small/5`). */
+const MODIFIER = /\/(?:[\d.]+|\[[^\]]*\])$/;
+
+/**
+ * The ink a class sets at rest: `text-text-dim`, another ink, or none (a size, a state variant).
+ * Its key is read without the important modifier (`!text-text-dim`) and without an opacity
+ * modifier or a line height (`text-text-dim/90`, `text-small/5`): the quiet ink at an alpha is
+ * still the quiet ink here (the ink gate refuses the alpha itself).
+ */
 function inkOfClass(token: string): 'dim' | 'ink' | null {
-  const { variants, utility } = variantsOf(token);
+  const { variants, utility: written } = variantsOf(token);
   if (!variants.every((v) => AT_REST.test(v))) return null;
+  const utility = written.replace(/^!/, '').replace(MODIFIER, '');
   if (!utility.startsWith('text-')) return null;
   const key = utility.slice('text-'.length);
   if (key === 'text-dim') return 'dim';
@@ -1146,10 +1155,18 @@ describe('the ink-role scan finds what it must, and only that', () => {
         '<dt className="text-text-dim">Height</dt>;',
         '<span className="text-text-dim">occupied</span>;',
         '<div className="text-text-dim"><p className="text-text">explains</p></div>;',
-        '<p className="text-text-dim/60">alpha is the other gate’s</p>;',
         '<div className="text-text-dim"><Link href="/i" className="text-[color:var(--ink)]">i</Link></div>;',
       ])
     ).toEqual([]);
+  });
+
+  // Re-pinned on purpose (review of the fixes, S3): '<p className="text-text-dim/60">' passed this
+  // gate as "alpha is the other gate's"; the class still sets the quiet ink, at an alpha, so it is
+  // a site here as well as an offence of the ink gate's.
+  it('counts the quiet ink at an alpha, which the ink gate refuses besides', () => {
+    expect(sitesOf(['<p className="text-text-dim/60">alpha is the other gate’s too</p>;'])).toEqual(
+      ['1 prose <p>']
+    );
   });
 });
 
