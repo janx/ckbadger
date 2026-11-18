@@ -35,7 +35,7 @@
  * document title) calls the functions here.
  */
 
-import { foreignGraphemes } from '@/lib/type-metrics';
+import { emUnitsPx, foreignGraphemes } from '@/lib/type-metrics';
 
 export type ShortSize = 'head' | 'row' | 'tight';
 export type IdKind = 'hash' | 'address';
@@ -88,14 +88,23 @@ export function shortenOutpoint(txHash: string, index: number | string, size: Sh
 }
 
 /**
- * A text label (a name, a gene, a miner's pool) cut by code to a character budget the caller
- * measured, the ellipsis counted in it. Where the cut is only for width and the element has one,
- * CSS truncation with the whole text in `title` is preferred; this is for SVG and canvas labels.
+ * A text label (a name, a description) cut by code to a budget of characters the caller set, the
+ * ellipsis counted in it; a character is a grapheme (`foreignGraphemes`), so a cut never splits an
+ * emoji or a letter from its accent. Where the cut is only for width and the element has one, CSS
+ * truncation with the whole text in `title` is preferred; a cut to a room in px is
+ * `clipForeignLabel`.
  */
 export function clipLabel(text: string, chars: number): string {
   if (!Number.isInteger(chars) || chars < 2)
     throw new Error(`clipLabel: a budget of ${chars} characters cannot hold a cut label`);
-  return text.length <= chars ? text : `${text.slice(0, chars - 1)}${ELLIPSIS}`;
+  // a character is a grapheme, what a reader sees as one (review fb-logic N4): the text is a
+  // user's, and a cut by code unit split an emoji into a lone surrogate
+  const graphemes = foreignGraphemes(text);
+  if (graphemes.length <= chars) return text;
+  return `${graphemes
+    .slice(0, chars - 1)
+    .map((g) => g.grapheme)
+    .join('')}${ELLIPSIS}`;
 }
 
 /**
@@ -108,7 +117,7 @@ export function clipLabel(text: string, chars: number): string {
  */
 export function clipForeignLabel(text: string, px: number, room: number): string {
   const graphemes = foreignGraphemes(text);
-  const width = (units: number) => (units * px) / 1000;
+  const width = (units: number) => emUnitsPx(units, px);
   if (width(graphemes.reduce((sum, g) => sum + g.units, 0)) <= room) return text;
   let units = foreignGraphemes(ELLIPSIS)[0].units;
   let kept = '';

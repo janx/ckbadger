@@ -147,14 +147,36 @@ const SERVED_LATIN: readonly (readonly [number, number])[] = [
 const FALLBACK_UNITS = 1250;
 
 const served = (cp: number) => SERVED_LATIN.some(([from, to]) => cp >= from && cp <= to);
-const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/**
+ * The grapheme segmenter, built where text that is not ours is first measured and kept (review
+ * fb-logic N7): every page loads this module, so built at load it took every page from a browser
+ * without `Intl.Segmenter` (Firefox before 125, Safari before 14.1); there, the figure that needs
+ * it throws and says why, and nothing stands in for it.
+ */
+let graphemeSegmenter: Intl.Segmenter | null = null;
+function graphemeSegments(text: string): Intl.Segments {
+  if (graphemeSegmenter === null) {
+    if (typeof Intl.Segmenter !== 'function')
+      throw new Error(
+        'type-metrics: this browser has no Intl.Segmenter, so text that is not ours cannot be cut into the graphemes it is measured by'
+      );
+    graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+  }
+  return graphemeSegmenter.segment(text);
+}
+
+/** The width of `units` thousandths of an em at `px`: the one path from font units to pixels. */
+export function emUnitsPx(units: number, px: number): number {
+  return (units * px) / UNITS_PER_EM;
+}
 
 /**
  * A text that is not ours as its grapheme clusters, each with the most it advances in units of
  * the em (thousandths): 600 for a cluster of the served Latin subset, 1,250 for any other.
  */
 export function foreignGraphemes(text: string): { grapheme: string; units: number }[] {
-  return Array.from(GRAPHEMES.segment(text), ({ segment }) => ({
+  return Array.from(graphemeSegments(text), ({ segment }) => ({
     grapheme: segment,
     units: Array.from(segment).every((ch) => served(ch.codePointAt(0)!))
       ? ADVANCE_UNITS
@@ -167,8 +189,10 @@ export function foreignGraphemes(text: string): { grapheme: string; units: numbe
  * `textPx(length, px)` for a text of the served Latin subset.
  */
 export function foreignTextPx(text: string, px: number): number {
-  const units = foreignGraphemes(text).reduce((sum, g) => sum + g.units, 0);
-  return (units * px) / UNITS_PER_EM;
+  return emUnitsPx(
+    foreignGraphemes(text).reduce((sum, g) => sum + g.units, 0),
+    px
+  );
 }
 
 /**

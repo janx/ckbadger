@@ -13,6 +13,7 @@ import {
   charPx,
   columnPx,
   descentPx,
+  emUnitsPx,
   fontPx,
   foreignGraphemes,
   foreignTextPx,
@@ -123,6 +124,16 @@ describe('text that is not ours: an upper bound by grapheme', () => {
     expect(foreignTextPx('é', 12)).toBe(7.2);
     // an accent the subset does not hold (U+0302) takes its letter to the fallback bound
     expect(foreignTextPx('ê', 12)).toBe(15);
+  });
+});
+
+// Review fb-logic N3 (its second part): one path from thousandths of an em to px, which
+// foreignTextPx and clipForeignLabel (lib/shorten.ts) both take.
+describe('thousandths of an em', () => {
+  it('turns them into px at a size by one function', () => {
+    expect(emUnitsPx(600, 12)).toBe(7.2);
+    expect(emUnitsPx(1250, 12)).toBe(15);
+    expect(emUnitsPx(600 + 1250, 13)).toBe(foreignTextPx('a猫', 13));
   });
 });
 
