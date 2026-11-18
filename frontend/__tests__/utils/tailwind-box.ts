@@ -25,7 +25,12 @@ import { MONO_ADVANCE_EM } from '@/lib/type-metrics';
  * `fixed`. What it cannot read it refuses, so a change it does not understand fails loudly instead
  * of measuring nothing: two classes setting one property at one breakpoint, a stylesheet class and
  * a utility setting one property, a horizontal declaration of a stylesheet class it does not read,
- * a part whose width is the room it is given (`w-full`, `flex-1`), a grid, a value it cannot convert.
+ * a part whose width is the room it is given (`w-full`, `flex-1`, `container`), a grid, a value it
+ * cannot convert (a `var()`, an unknown key). Every class is placed (review fb-tests SHOULD-2): a
+ * utility it reads, one it knows sets no width (`NO_LAYOUT`), or a class of app/globals.css, else
+ * it is refused by name; every variant is placed: a screen or an arbitrary breakpoint at its
+ * width, a structural one (`first:`, `last:`) where the element is what it names, a state or a
+ * pseudo-element box only for a class that sets no width; any other is refused by name.
  */
 
 type Theme = Record<string, Record<string, unknown>>;
@@ -35,17 +40,17 @@ const theme = resolveConfig(tailwindConfig).theme as unknown as Theme;
 /** The root font size the rem values are relative to (no rule in app/globals.css changes it). */
 const ROOT_PX = 16;
 
-/** A CSS length in px; `em` against `em` px. */
+/** A CSS length in px; `em` against `em` px, `ch` against its "0", the face's 0.6 em. */
 function lengthPx(value: string, em?: number): number {
   const v = value.trim();
   if (v === '0') return 0;
-  const m = /^(-?\d*\.?\d+)(px|rem|em)$/.exec(v);
+  const m = /^(-?\d*\.?\d+)(px|rem|em|ch)$/.exec(v);
   if (!m) throw new Error(`tailwind-box: cannot read the length "${value}"`);
   const n = parseFloat(m[1]);
   if (m[2] === 'px') return n;
   if (m[2] === 'rem') return n * ROOT_PX;
   if (em === undefined) throw new Error(`tailwind-box: "${value}" needs a font size`);
-  return n * em;
+  return m[2] === 'ch' ? n * MONO_ADVANCE_EM * em : n * em;
 }
 
 /** The breakpoints of Tailwind's theme, smallest first. */
@@ -53,24 +58,18 @@ export const SCREENS: readonly (readonly [string, number])[] = Object.entries(th
   .map(([name, v]) => [name, lengthPx(String(v))] as const)
   .sort((a, b) => a[1] - b[1]);
 
-/**
- * The page's content width at a viewport: Tailwind's `container` (tailwind.config.ts) — the
- * widest of its screens the viewport reaches, the full width below the first — less its padding
- * at the viewport, each side.
- */
-export function containerContentPx(viewport: number): number {
-  const container = theme.container as {
-    screens: Record<string, string>;
-    padding: Record<string, string>;
-  };
+const container = theme.container as {
+  screens: Record<string, string>;
+  padding: Record<string, string>;
+};
+
+/** Tailwind's `container`'s padding at a viewport, each side (tailwind.config.ts). */
+function containerPaddingPx(viewport: number): number {
   const screen = (name: string) => {
     const at = SCREENS.find(([n]) => n === name);
     if (!at) throw new Error(`tailwind-box: no screen ${name}`);
     return at[1];
   };
-  const widths = Object.values(container.screens).map((v) => lengthPx(v));
-  const reached = widths.filter((w) => w <= viewport);
-  const width = reached.length ? Math.max(...reached) : viewport;
   let padding = 0;
   let level = -1;
   for (const [name, value] of Object.entries(container.padding)) {
@@ -80,7 +79,19 @@ export function containerContentPx(viewport: number): number {
       padding = lengthPx(value);
     }
   }
-  return width - 2 * padding;
+  return padding;
+}
+
+/**
+ * The page's content width at a viewport: Tailwind's `container` (tailwind.config.ts) — the
+ * widest of its screens the viewport reaches, the full width below the first — less its padding
+ * at the viewport, each side.
+ */
+export function containerContentPx(viewport: number): number {
+  const widths = Object.values(container.screens).map((v) => lengthPx(v));
+  const reached = widths.filter((w) => w <= viewport);
+  const width = reached.length ? Math.max(...reached) : viewport;
+  return width - 2 * containerPaddingPx(viewport);
 }
 
 /** A class split into its variants and its utility, outside brackets (`md:pr-9`, `text-[a:b]`). */
@@ -104,50 +115,118 @@ function splitVariants(cls: string): { variants: string[]; utility: string; impo
   };
 }
 
+/** A state variant: the class is drawn while the element (or its group, its peer) is in it. */
+const STATE =
+  /^(hover|focus|focus-visible|focus-within|active|visited|disabled|enabled|checked|open|motion-safe|motion-reduce|dark|print|contrast-more|(group|peer)-[a-z-]+(\/[\w-]+)?|(group-|peer-)?(aria|data)-.+)$/;
+/** A pseudo-element variant: the class sets a box of its own beside the element's content. */
+const PSEUDO = /^(before|after|placeholder|selection|marker|file|first-letter|first-line)$/;
+
+/** Whether an element is what a structural variant names, among its parent's elements. */
+function structural(variant: string, el: Element): boolean | null {
+  const siblings = el.parentElement ? Array.from(el.parentElement.children) : [el];
+  const i = siblings.indexOf(el);
+  switch (variant) {
+    case 'first':
+      return i === 0;
+    case 'last':
+      return i === siblings.length - 1;
+    case 'only':
+      return siblings.length === 1;
+    case 'odd':
+      return i % 2 === 0;
+    case 'even':
+      return i % 2 === 1;
+    default:
+      return null;
+  }
+}
+
 /**
- * Where a class applies at a viewport: null when it does not (a state such as `hover:`, or a
- * breakpoint the viewport is under), else its level, the breakpoint it starts at (0 for none), by
- * which a later breakpoint's class wins.
+ * Where a class applies at a viewport (review fb-tests SHOULD-2: what the reader cannot read it
+ * refuses): its level, the breakpoint it starts at (0 for none), by which a later breakpoint's
+ * class wins; null where it does not apply — a breakpoint the viewport is under, a structural
+ * variant the element is not (`last:` on a cell that is not the last), a state at rest or a pseudo
+ * box out of the flow, when what the class sets bears on no width. A state or an in-flow pseudo box
+ * whose class bears on a width, and any variant it does not know (`*:`, `[&>a]:`), are refused by
+ * name.
  */
-function levelAt(variants: readonly string[], viewport: number): number | null {
+function levelAt(
+  cls: string,
+  variants: readonly string[],
+  viewport: number,
+  el: Element,
+  bearsOnWidth: () => boolean
+): number | null {
   let level = 0;
+  let applies = true;
   for (const v of variants) {
     const max = /^max-(.+)$/.exec(v);
     const screen = SCREENS.find(([name]) => name === (max ? max[1] : v));
-    if (!screen) return null;
-    if (max) {
-      if (viewport >= screen[1]) return null;
-    } else {
-      if (viewport < screen[1]) return null;
-      level = Math.max(level, screen[1]);
-    }
+    const arbitrary = /^(min|max)-\[(\d+)px\]$/.exec(v);
+    if (screen) {
+      if (max ? viewport >= screen[1] : viewport < screen[1]) applies = false;
+      else if (!max) level = Math.max(level, screen[1]);
+    } else if (arbitrary) {
+      const at = Number(arbitrary[2]);
+      if (arbitrary[1] === 'min' ? viewport < at : viewport >= at) applies = false;
+      else if (arbitrary[1] === 'min') level = Math.max(level, at);
+    } else if (structural(v, el) !== null) {
+      // Tailwind writes a pseudo-class variant after the plain utilities and before the screens:
+      // over a plain class at its breakpoint, under the next breakpoint
+      if (!structural(v, el)) applies = false;
+      else level += 0.5;
+    } else if (STATE.test(v)) {
+      if (bearsOnWidth())
+        throw new Error(
+          `tailwind-box: ${cls} changes a width under the state ${v}:, which the reader cannot place`
+        );
+      applies = false;
+    } else if (PSEUDO.test(v)) {
+      const outOfFlow = ['absolute', 'fixed'].some((p) => el.classList.contains(`${v}:${p}`));
+      if (!outOfFlow && bearsOnWidth())
+        throw new Error(`tailwind-box: ${cls} sets a width of the ${v} box, which is not read`);
+      applies = false;
+    } else throw new Error(`tailwind-box: cannot read the variant ${v}: of ${cls}`);
   }
-  return level;
+  return applies ? level : null;
 }
 
 /** A length, or one of the keywords a width or a margin may take. */
 const LENGTH_OR_KEYWORD =
-  /^(-?\d*\.?\d+(px|rem|em)|0|auto|fit-content|max-content|min-content|100%|100vw)$/;
+  /^(-?\d*\.?\d+(px|rem|em|ch)|0|auto|fit-content|max-content|min-content|100%|100vw)$/;
 
 /**
- * A theme value of a key, or an arbitrary `[…]` value, as a string; undefined when neither or when
- * it is no length (`border-[color:…]`, `text-[var(--c-text)]` are colours, not sizes).
+ * A theme value of a key, or an arbitrary `[…]` value, as a string. Undefined for a colour: the
+ * type and border scales share their prefix with the colours (`text-jade`, `border-row-rule`,
+ * `border-[color:…]`, `text-[var(--c-text)]`). Any other value of a size scale it cannot read is
+ * refused: an unknown key, a `var()` (review fb-tests SHOULD-2: `px-[var(--gap)]` read as no
+ * padding), a percentage, a calc.
  */
 function themeValue(scale: string, key: string): string | undefined {
+  const colourShared = scale === 'fontSize' || scale === 'borderWidth';
   const arbitrary = /^\[(.+)\]$/.exec(key);
   let v: string | undefined;
-  if (arbitrary) v = arbitrary[1].replace(/^length:/, '').replace(/_/g, ' ');
-  else {
+  if (arbitrary) {
+    if (/^color:/.test(arbitrary[1])) return undefined;
+    v = arbitrary[1].replace(/^length:/, '').replace(/_/g, ' ');
+    if (/var\(/.test(v) && !(scale === 'fontSize' && !/^length:/.test(arbitrary[1])))
+      throw new Error(
+        `tailwind-box: cannot read [${arbitrary[1]}] as a ${scale}: a var() has no value here`
+      );
+  } else {
     const t = theme[scale]?.[key];
     if (t !== undefined) v = Array.isArray(t) ? String(t[0]) : String(t);
   }
-  if (v === undefined) return undefined;
+  if (v === undefined) {
+    if (colourShared) return undefined;
+    throw new Error(`tailwind-box: no ${scale} ${key} in the theme`);
+  }
   if (!LENGTH_OR_KEYWORD.test(v.trim())) {
-    // an arbitrary value of a size scale that is not a length is a colour or a calc: refuse what
-    // could be a size the reader cannot read, pass what is plainly not one
-    if (arbitrary && /\d(px|rem|em)|calc|clamp|min\(|max\(/.test(v) && scale !== 'fontSize')
-      throw new Error(`tailwind-box: cannot read [${arbitrary[1]}] as a ${scale}`);
-    return undefined;
+    // a value of the type scale that is not a length is a colour; any other is refused
+    if (scale === 'fontSize') return undefined;
+    throw new Error(
+      `tailwind-box: cannot read ${arbitrary ? `[${arbitrary[1]}]` : key} as a ${scale}`
+    );
   }
   return v.trim();
 }
@@ -173,7 +252,8 @@ type Prop =
   | 'white-space'
   | 'flex-wrap'
   | 'overflow-wrap'
-  | 'word-break';
+  | 'word-break'
+  | 'flex-direction';
 
 /** One declaration a class makes: the property, its value, and how specific the class is for it. */
 interface Decl {
@@ -205,9 +285,58 @@ const SIDES: Record<string, Side[]> = {
   e: ['right'],
 };
 
-/** The declarations of one Tailwind utility that bear on a row's width ([] for the rest). */
-function utilityDecls(utility: string): Decl[] {
+/**
+ * Utilities that set nothing a row's width depends on (review fb-tests SHOULD-2: a class the
+ * reader does not classify is refused, not read as nothing): colour and paint, the weight and case
+ * of a monospaced face (every glyph 0.6 em), the vertical axis, alignment and placement across a
+ * line that leave its widths alone, positions (an offset moves a box where it stands or out of the
+ * flow), motion, interaction, transforms (drawn, not laid out), overflow and the line-breaking
+ * utilities read elsewhere (`wrapsAt`).
+ */
+const NO_LAYOUT: readonly RegExp[] = [
+  /^(bg|fill|stroke|from|via|to|accent|caret)-/,
+  /^(shadow|ring|ring-offset|outline|decoration)(-|$)/,
+  /^(underline|no-underline|overline|line-through)$/,
+  /^underline-offset-/,
+  /^font-(thin|extralight|light|normal|medium|semibold|bold|extrabold|black|mono|sans|serif)$/,
+  /^(italic|not-italic|uppercase|lowercase|capitalize|normal-case|antialiased|subpixel-antialiased)$/,
+  /^(tabular-nums|lining-nums|oldstyle-nums|proportional-nums|ordinal|slashed-zero|normal-nums)$/,
+  /^leading-/,
+  /^text-(left|center|right|justify|start|end|ellipsis|clip|balance|pretty)$/,
+  /^(align|list|hyphens)-/,
+  /^(items|justify|content|self|place|order)-/,
+  // a grid item's track (a grid is refused where its width is read)
+  /^(col|row)-(start|end|span)-/,
+  /^(col|row)-auto$/,
+  /^(shrink|flex-shrink)(-0)?$/,
+  /^(grow-0|flex-none|flex-initial|flex-row)$/,
+  /^-?(h|min-h|max-h|py|pt|pb|my|mt|mb|gap-y|space-y|top|bottom|inset-y)-/,
+  /^-?(left|right|inset|inset-x|start|end|z)-/,
+  /^(opacity|transition|duration|ease|delay|animate|cursor|select|pointer-events|touch|scroll|snap|will-change|resize|appearance)(-|$)/,
+  /^rounded(-|$)/,
+  /^(visible|invisible|collapse|isolate|transform|transform-gpu|transform-none)$/,
+  /^-?(rotate|scale|scale-x|scale-y|translate-x|translate-y|skew-x|skew-y|origin)-/,
+  /^(filter|blur|brightness|contrast|grayscale|hue-rotate|invert|saturate|sepia|drop-shadow|backdrop|mix-blend|bg-blend)(-|$)/,
+  /^(overflow|overflow-x|overflow-y|overscroll|object)-/,
+  /^border-(solid|dashed|dotted|double|collapse|separate)$/,
+  /^table-(auto|fixed)$/,
+  /^(group|peer)(\/[\w-]+)?$/,
+  /^content-(none|\[.+\])$/,
+  /^\[(clip-path|color|text-decoration[a-z-]*|grid-area|background[a-z-]*|opacity|fill|stroke|mask[a-z-]*|font-variant-numeric|text-underline-offset|cursor|transition[a-z-]*):.+\]$/,
+];
+
+/**
+ * The declarations of one Tailwind utility that bear on a row's width: [] for one it reads that
+ * sets none of them (a colour of the type or border scale), null for one it does not read.
+ */
+function utilityDecls(utility: string): Decl[] | null {
   if (utility in DISPLAYS) return [{ prop: 'display', value: DISPLAYS[utility], rank: 0 }];
+  if (utility === 'flex-col' || utility === 'flex-col-reverse')
+    return [{ prop: 'flex-direction', value: 'column', rank: 0 }];
+  // Tailwind's container: the full width (a part that takes its room) and the theme's gutters
+  if (utility === 'container') return [{ prop: 'flexible', value: 'container', rank: 0 }];
+  if (utility === 'text-nowrap') return [{ prop: 'white-space', value: 'nowrap', rank: 0 }];
+  if (utility === 'text-wrap') return [{ prop: 'white-space', value: 'normal', rank: 0 }];
   if (utility === 'sr-only' || utility === 'absolute' || utility === 'fixed')
     return [{ prop: 'position', value: 'absolute', rank: 0 }];
   if (['relative', 'static', 'sticky', 'not-sr-only'].includes(utility))
@@ -232,8 +361,7 @@ function utilityDecls(utility: string): Decl[] {
   if (w) return [{ prop: w[1] as Prop, value: w[2], rank: 0 }];
   let m = /^(p|px|pl|ps|pr|pe)-(.+)$/.exec(utility);
   if (m) {
-    const v = themeValue('padding', m[2]);
-    if (v === undefined) return [];
+    const v = themeValue('padding', m[2])!;
     const sides = SIDES[m[1].slice(1)];
     return sides.map((side) => ({
       prop: `padding-${side}` as Prop,
@@ -243,8 +371,7 @@ function utilityDecls(utility: string): Decl[] {
   }
   m = /^(-?)(m|mx|ml|ms|mr|me)-(.+)$/.exec(utility);
   if (m) {
-    const v = themeValue('margin', m[3]);
-    if (v === undefined) return [];
+    const v = themeValue('margin', m[3])!;
     const sides = SIDES[m[2].slice(1)];
     return sides.map((side) => ({
       prop: `margin-${side}` as Prop,
@@ -254,14 +381,12 @@ function utilityDecls(utility: string): Decl[] {
   }
   m = /^gap(-x)?-(.+)$/.exec(utility);
   if (m && !utility.startsWith('gap-y-')) {
-    const v = themeValue('gap', m[2]);
-    if (v === undefined) return [];
+    const v = themeValue('gap', m[2])!;
     return [{ prop: 'column-gap', value: v, rank: m[1] ? 1 : 0 }];
   }
   m = /^space-x-(.+)$/.exec(utility);
   if (m) {
-    const v = themeValue('space', m[1]);
-    if (v === undefined) return [];
+    const v = themeValue('space', m[1])!;
     return [{ prop: 'space-x', value: v, rank: 0 }];
   }
   if (utility === 'border-none' || utility === 'border-hidden')
@@ -279,16 +404,14 @@ function utilityDecls(utility: string): Decl[] {
       rank: side === '' ? 0 : side === 'x' ? 1 : 2,
     }));
   }
-  m = /^w-(.+)$/.exec(utility);
+  m = /^(w|size)-(.+)$/.exec(utility);
   if (m) {
-    const v = themeValue('width', m[1]);
-    if (v === undefined) return [];
+    const v = themeValue(m[1] === 'w' ? 'width' : 'size', m[2])!;
     return [{ prop: 'width', value: v, rank: 0 }];
   }
   m = /^min-w-(.+)$/.exec(utility);
   if (m) {
-    const v = themeValue('minWidth', m[1]);
-    if (v === undefined) return [];
+    const v = themeValue('minWidth', m[1])!;
     return [{ prop: 'min-width', value: v, rank: 0 }];
   }
   m = /^text-(.+)$/.exec(utility);
@@ -299,13 +422,15 @@ function utilityDecls(utility: string): Decl[] {
   }
   m = /^tracking-(.+)$/.exec(utility);
   if (m) {
-    const v = themeValue('letterSpacing', m[1]);
-    if (v === undefined) return [];
+    const v = themeValue('letterSpacing', m[1])!;
     return [{ prop: 'letter-spacing', value: v, rank: 0 }];
   }
-  if (/^(divide-x|indent-|basis-|columns-|grid-cols-|max-w-|inline-size)/.test(utility))
+  if (/^(divide-x|-?indent-|basis-|columns-|grid-cols-|max-w-|inline-size)/.test(utility))
     return [{ prop: 'flexible', value: `unread:${utility}`, rank: 0 }];
-  return [];
+  // inline-size containment: the box's width is the room it is given, never its content's
+  if (utility === '[contain:inline-size]') return [{ prop: 'flexible', value: utility, rank: 0 }];
+  if (NO_LAYOUT.some((r) => r.test(utility))) return [];
+  return null;
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -335,9 +460,16 @@ const CSS_READ: Record<string, Prop> = {
   'flex-wrap': 'flex-wrap',
   'overflow-wrap': 'overflow-wrap',
   'word-break': 'word-break',
+  'flex-direction': 'flex-direction',
 };
 const CSS_HORIZONTAL =
   /^(padding|padding-inline.*|margin|margin-inline.*|border-left|border-right|border-inline.*|border-width|max-width|gap|font|word-spacing|text-indent|inline-size)$/;
+
+/** Whether a class is the stylesheet's own: app/globals.css names it in a selector. */
+function STYLESHEET_CLASS(cls: string): boolean {
+  const escaped = cls.replace(/[.*+?^${}()|[\]\\/:]/g, '\\$&');
+  return new RegExp(`\\.${escaped}(?![\\w-])`).test(CSS);
+}
 
 /** The rules of the stylesheet whose selector list names `.cls` alone, with where they stand. */
 function cssRules(cls: string): { body: string; inAtRule: string | null }[] {
@@ -487,6 +619,7 @@ const INLINE: Record<string, Prop> = {
   'flex-wrap': 'flex-wrap',
   'overflow-wrap': 'overflow-wrap',
   'word-break': 'word-break',
+  'flex-direction': 'flex-direction',
 };
 const INLINE_REFUSED =
   /^(padding|margin|border|border-width|gap|font|max-width|padding-inline.*|margin-inline.*|border-inline.*)$/;
@@ -499,18 +632,39 @@ function ownDecls(el: Element, viewport: number): Map<Prop, string> {
   const fromCss = new Map<Prop, string>();
   for (const cls of Array.from(el.classList)) {
     const { variants, utility, important } = splitVariants(cls);
-    const level = levelAt(variants, viewport);
+    // what the class sets: a utility the reader reads (or knows sets no width), or a class of the
+    // stylesheet; anything else is refused by name (review fb-tests SHOULD-2)
+    const read = utilityDecls(utility);
+    if (read === null && !STYLESHEET_CLASS(utility))
+      throw new Error(
+        `tailwind-box: cannot read ${cls} on <${el.tagName.toLowerCase()}>: no utility the reader knows and no class of app/globals.css`
+      );
+    const decls = read ?? cssDecls(utility);
+    const level = levelAt(cls, variants, viewport, el, () => decls.length > 0);
     if (level === null) continue;
-    const decls = utilityDecls(utility);
-    if (decls.length === 0 && variants.length === 0) {
-      for (const d of cssDecls(cls)) {
+    if (read === null) {
+      if (variants.length)
+        throw new Error(`tailwind-box: ${cls}, a stylesheet class under a variant, is not read`);
+      for (const d of decls) {
         if (fromCss.has(d.prop) && fromCss.get(d.prop) !== d.value)
           throw new Error(`tailwind-box: two stylesheet classes set ${d.prop} on <${el.tagName}>`);
         fromCss.set(d.prop, d.value);
       }
       continue;
     }
-    for (const d of decls) {
+    const withGutters =
+      utility === 'container'
+        ? [
+            ...decls,
+            ...(['left', 'right'] as const).map((side) => ({
+              prop: `padding-${side}` as Prop,
+              value: `${containerPaddingPx(viewport)}px`,
+              // under any padding class on the element: Tailwind's components layer
+              rank: -1,
+            })),
+          ]
+        : decls;
+    for (const d of withGutters) {
       const before = won.get(d.prop);
       // a part that takes its room is so whatever else says it (`w-full max-w-…`)
       if (d.prop === 'flexible' && before) continue;
@@ -660,6 +814,9 @@ export function contentPx(el: Element, viewport: number): number {
       line = 0;
     } else line += w;
   }
+  // a column of items is as wide as its widest; a row is its items and the gaps between them
+  if (flex && ownDecls(el, viewport).get('flex-direction') === 'column')
+    return Math.max(0, ...items);
   if (flex) return items.reduce((a, b) => a + b, 0) + Math.max(0, items.length - 1) * o.gap;
   return Math.max(widest, line);
 }

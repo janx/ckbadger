@@ -810,7 +810,7 @@ describe('the gels measure the creator’s text as an upper bound (review F-B, l
   });
 
   // tN1: a turned caption is cut to the turned head. A gene of ten CJK characters and a digit
-  // (161.4 px at 12 px) keeps six and the ellipsis, 97.2 px of its 100.8 px room.
+  // (157.2 px at 12 px) keeps six and the ellipsis, 97.2 px of its 100.8 px room.
   it('cuts a long CJK caption to the turned head', () => {
     stubChartWidth(400);
     const long = cjkLanes.map((lane, i) => ({ ...lane, gene: `颜色和图案的名字很长${i}` }));
