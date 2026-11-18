@@ -206,24 +206,42 @@ export const HOVER_HEAD_Y = SVG_TEXT.label + 5;
 export const HOVER_LINE = tightLinePx(SVG_TEXT.reading);
 /** The hover reading's padding, left and right of its widest line. */
 export const HOVER_PAD = 10;
+/** The box's foot under its head's baseline when it has no figure: each figure adds a line. */
+const HOVER_FOOT = 6;
 /** The hover reading's distance from its point. */
 const HOVER_GAP = 14;
+/** The box's top under the plot's top. */
+const HOVER_DROP = 4;
 /** Half the box's 1 px border: the border stays inside the svg too. */
 const HOVER_EDGE = 0.5;
 
 /**
- * Where the hover reading's box, `boxWidth` wide, stands for a point at `px` in an svg `svgWidth`
- * wide: right of the point where the svg holds it there, else left of it, else against the svg's
- * nearer edge (over the crosshair). `null` where the svg cannot hold it at all: the reading is
- * drawn whole or not at all, and the readout line and the key under the plot read the point.
+ * Where the hover reading's box (`box`, its width and height) stands for a point at `px` in an svg
+ * of `svg`'s size whose plot starts at `top`, decided in both dimensions at once: its top a few
+ * pixels under the plot's, and right of the point where the svg holds it there, else left of it,
+ * else against the svg's nearer edge (over the crosshair). `null` where the svg cannot hold the
+ * box and its border whole, in either dimension (a history of 21 bands in a 260 px chart): the
+ * reading is drawn whole or not at all, and the readout line and the key under the plot read the
+ * point.
  */
-function hoverBoxX(px: number, boxWidth: number, svgWidth: number): number | null {
+function hoverBoxPlace(
+  px: number,
+  top: number,
+  box: { width: number; height: number },
+  svg: { width: number; height: number }
+): { x: number; y: number } | null {
+  const y = top + HOVER_DROP;
+  if (
+    box.width + 2 * HOVER_EDGE > svg.width ||
+    y - HOVER_EDGE < 0 ||
+    y + box.height + HOVER_EDGE > svg.height
+  )
+    return null;
   const first = HOVER_EDGE;
-  const last = svgWidth - HOVER_EDGE - boxWidth;
-  if (last < first) return null;
-  if (px + HOVER_GAP <= last) return px + HOVER_GAP;
-  if (px - HOVER_GAP - boxWidth >= first) return px - HOVER_GAP - boxWidth;
-  return px < svgWidth / 2 ? first : last;
+  const last = svg.width - HOVER_EDGE - box.width;
+  if (px + HOVER_GAP <= last) return { x: px + HOVER_GAP, y };
+  if (px - HOVER_GAP - box.width >= first) return { x: px - HOVER_GAP - box.width, y };
+  return { x: px < svg.width / 2 ? first : last, y };
 }
 /**
  * A target line, drawn alike in the plot and as its key's sample (CH-21): a dash in the bright ink
@@ -1021,17 +1039,23 @@ export function Chart({
                   const head = formatLabel(data[activeIndex].label);
                   // Drawn whole or not at all: as wide as its widest line, each line measured at
                   // its own size (the head at the label size, the figures at the reading size),
-                  // and its padding; placed by hoverBoxX, or not drawn where the svg cannot hold it.
+                  // and its padding; as tall as its head and a line a figure; placed by
+                  // hoverBoxPlace, or not drawn where the svg cannot hold it.
                   const boxWidth =
                     Math.max(
                       textPx(head.length, SVG_TEXT.label),
                       ...rows.map((r) => textPx(r.length, SVG_TEXT.reading))
                     ) +
                     2 * HOVER_PAD;
-                  const bx = hoverBoxX(x(activeIndex), boxWidth, width);
-                  if (bx === null) return null;
-                  const boxHeight = HOVER_HEAD_Y + 6 + rows.length * HOVER_LINE;
-                  const by = top + 4;
+                  const boxHeight = HOVER_HEAD_Y + HOVER_FOOT + rows.length * HOVER_LINE;
+                  const place = hoverBoxPlace(
+                    x(activeIndex),
+                    top,
+                    { width: boxWidth, height: boxHeight },
+                    { width, height: svgHeight }
+                  );
+                  if (place === null) return null;
+                  const { x: bx, y: by } = place;
                   return (
                     <g data-hover-reading pointerEvents="none">
                       <rect

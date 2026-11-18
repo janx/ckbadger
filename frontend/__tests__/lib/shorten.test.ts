@@ -142,6 +142,24 @@ describe('a text label cut to a width takes the same ellipsis', () => {
     expect(() => clipLabel('Nervape', 1)).toThrow(/budget/);
     expect(() => clipLabel('Nervape', 2.5)).toThrow(/budget/);
   });
+
+  // Review fb-logic N4 (lane rd/fb-fixes-2): a cluster's description is the creator's text and was
+  // cut by UTF-16 unit, so an emoji across the cut left a lone surrogate, drawn as U+FFFD. It is
+  // cut at whole graphemes (what a reader sees as one character), a grapheme one of the budget.
+  it('cuts at whole graphemes, never inside an emoji or a letter and its accent', () => {
+    const lone = (s: string) =>
+      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(s);
+    // 'ab' and a cat (two code units): the cut keeps two graphemes and the ellipsis
+    expect(clipLabel('ab🐱cd', 3)).toBe('ab…');
+    expect(clipLabel('a🐱bcd', 3)).toBe('a🐱…');
+    expect(lone(clipLabel('a🐱bcd', 3))).toBe(false);
+    // a family of three (one grapheme of eight code units) is one of the budget, kept or not whole
+    const family = '👨‍👩‍👧';
+    expect(clipLabel(`${family}${family}x`, 3)).toBe(`${family}${family}x`);
+    expect(clipLabel(`${family}${family}xy`, 3)).toBe(`${family}${family}…`);
+    // an e and its combining accent are one character
+    expect(clipLabel('ééé', 2)).toBe('é…');
+  });
 });
 
 // Review F-B (logic finding 5): a text that is not ours in a figure is cut to a room in px by the

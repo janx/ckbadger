@@ -108,7 +108,11 @@ describe('formatDecimalBytes', () => {
 describe('exactCkbText', () => {
   it('writes the digits CkbAmount prints in its column form: every decimal, the sign only when signed, zero as 0', () => {
     expect(exactCkbText(BigInt(1647), false)).toBe('0.00001647');
-    expect(exactCkbText(BigInt(-30000), false)).toBe('0.00030000');
+    // a negative where no sign is written is refused, as CkbAmount refuses it (re-pinned, review
+    // of the fixes M2: this wrote its magnitude, '0.00030000')
+    expect(() => exactCkbText(BigInt(-30000), false)).toThrow(
+      'CKB amount -30000 shannons is negative where a sign is not written'
+    );
     expect(exactCkbText(BigInt(-30000), true)).toBe(`${MINUS}0.00030000`);
     expect(exactCkbText(BigInt('75000000000'), true)).toBe('+750.00000000');
     expect(exactCkbText(BigInt('193912572831'), false)).toBe('1,939.12572831');

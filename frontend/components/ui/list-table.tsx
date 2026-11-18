@@ -14,7 +14,9 @@ export interface ListColumn<T> {
   width?: string;
   numeric?: boolean;
   /**
-   * The cells' own classes: ink, size, vertical padding, white-space, truncation. Never a class that
+   * The cells' own classes, and only these families, with no variant (`cellClassOwner`): ink and
+   * size (`text-*`), vertical padding (`py-*`, `pt-*`, `pb-*`), white-space (`whitespace-*`),
+   * truncation (`truncate`), alignment (`text-left` … `text-right`, `align-*`). Never a class that
    * takes a horizontal pixel (a padding, a margin, a width, a side border): the table owns those
    * (`CELL_HORIZONTAL_CLASSES`), and a mark a column draws beside its content is in its minWidth.
    */
@@ -139,27 +141,60 @@ const NUMERIC_CELL = 'whitespace-nowrap text-right tabular-nums';
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';
 
 /**
- * A class that takes a horizontal pixel of a cell, read without its variant (`md:`, `last:`) and
- * its `!`: a padding or a margin on a horizontal side (`p-*` sets all four), a width, a border of
- * a horizontal side (`border` and `border-2` set all four), or the same written as an arbitrary
- * property.
+ * What a column may write on its cells (`ListColumn.className`), family by family, each a bare
+ * utility with no variant and no arbitrary value (`!` important allowed): ink, size and text
+ * alignment (`text-` and a word: a palette colour, a step of the type scale, `text-right`),
+ * vertical padding, vertical alignment, white-space, truncation. Every column of the site sets
+ * only these (read 2026-11-19: `whitespace-nowrap`, `!whitespace-normal`, `truncate`,
+ * `text-text-dim`, `text-body`, `py-1.5`, `py-[9px]`, `py-3`, `align-top`).
  */
-const HORIZONTAL_SPACE =
-  /^-?(p|px|pl|pr|ps|pe|m|mx|ml|mr|ms|me|w|min-w|max-w|size)-|^border(-[xlrse])?(-(\d+|\[\d[^\]]*\]))?$|^\[(padding|margin|width|min-width|max-width|border)(-(left|right|inline|inline-start|inline-end))?(-width)?:/;
+const COLUMN_CLASS_FAMILIES: readonly RegExp[] = [
+  /^text-[a-z]+(?:-[a-z0-9]+)*(?:\/\d{1,3})?$/,
+  /^p[ytb]-(?:px|\d+(?:\.\d+)?|\[\d+(?:\.\d+)?px\])$/,
+  /^align-(?:baseline|top|middle|bottom|text-top|text-bottom|sub|super)$/,
+  /^whitespace-(?:normal|nowrap|pre|pre-line|pre-wrap|break-spaces)$/,
+  /^truncate$/,
+];
+
+/** Every class the table writes on its heads and cells itself. */
+const TABLE_CELL_CLASSES: ReadonlySet<string> = new Set(
+  [
+    HEAD_CLASS,
+    ...Object.values(HEAD_TOP),
+    ...Object.values(CELL_CLASS),
+    NUMERIC_CELL,
+    'text-left',
+    'text-right',
+  ].flatMap((classes) => classes.split(/\s+/))
+);
 
 /**
- * A column's own classes take no horizontal pixel of its cells (review fb-tests 5, the lead's
- * ruling): the table writes `pl-0` and the gap on every cell, and a column's `px-2` would replace
- * both through cn() and draw its content in pixels its minWidth never counted.
+ * Whose a class on a head or a cell is (review fb-logic N2, the lead's ruling: one rule, an
+ * allow-list): `column` for a class a column may set (`COLUMN_CLASS_FAMILIES`), `table` for one
+ * the table writes itself (its `pl-0`, its gap, its head's stickiness), null for anything else.
+ * The table refuses a column's class that is not `column`; the after-test check
+ * (`__tests__/utils/list-table-cells.ts`) refuses a cell's class that is neither.
  */
-function refuseHorizontalSpace<T>(label: string, column: ListColumn<T>): void {
-  for (const cls of column.className?.split(/\s+/) ?? []) {
-    const bare = cls.replace(/^([a-z0-9-]+:)*/, '').replace(/^!/, '');
-    if (HORIZONTAL_SPACE.test(bare))
+export function cellClassOwner(cls: string): 'column' | 'table' | null {
+  const important = cls.replace(/^!/, '');
+  if (COLUMN_CLASS_FAMILIES.some((family) => family.test(important))) return 'column';
+  return TABLE_CELL_CLASSES.has(cls) ? 'table' : null;
+}
+
+/**
+ * A column's own classes take no horizontal pixel of its cells, and nothing else a column's doc
+ * does not permit (review fb-tests 5 and fb-logic N2, the lead's rulings): the table writes `pl-0`
+ * and the gap on every cell, and a column's `px-2` would replace both through cn() and draw its
+ * content in pixels its minWidth never counted; a class the rule cannot place is refused too.
+ */
+function refuseColumnClasses<T>(label: string, column: ListColumn<T>): void {
+  for (const cls of column.className?.split(/\s+/).filter(Boolean) ?? []) {
+    if (cellClassOwner(cls) !== 'column')
       throw new Error(
-        `${label}: column ${column.key} sets its own horizontal space (${cls}); a cell's ` +
-          `horizontal space is the table's, its ${CELL_GAP_PX} px gap, and a column budgets what ` +
-          'it draws beside its content in minWidth'
+        `${label}: column ${column.key} sets a class a column may not (${cls}): a column sets its ` +
+          "cells' ink, size, vertical padding, white-space, truncation and alignment, with no " +
+          `variant; a cell's horizontal space is the table's, its ${CELL_GAP_PX} px gap, and a ` +
+          'column budgets what it draws beside its content in minWidth'
       );
   }
 }
@@ -169,7 +204,7 @@ export function minimumWidth<T>(label: string, columns: readonly ListColumn<T>[]
   for (const c of columns) {
     if (!Number.isFinite(c.minWidth) || c.minWidth <= 0)
       throw new Error(`${label}: invalid minimum width for ${c.key}`);
-    refuseHorizontalSpace(label, c);
+    refuseColumnClasses(label, c);
     sum += c.minWidth;
   }
   return sum;

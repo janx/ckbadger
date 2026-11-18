@@ -4,7 +4,7 @@ import { useSyncExternalStore } from 'react';
 import { NoBreak } from '@/components/ui/no-break';
 import { clockNow, subscribeClock } from '@/lib/clock';
 import { CLOCK_BEHIND } from '@/lib/format-age';
-import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { cn, formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 
 /**
  * A chain time as its UTC+8 date, the relative age its hover (consistency C3 and lane P): the form
@@ -63,15 +63,28 @@ export function Utc8DateTime({
  * `Utc8Date`. An age is a figure, one unit, as every time is; "this device's clock is behind" is
  * not an age but a sentence, words that break between them wherever it stands (review fb-logic 3,
  * the lead's ruling: in an Age column it stood 226 px on one line and drew over the next column).
+ *
+ * This is the one owner of both rules: each form sets its own white-space, so no ancestor decides
+ * it (white-space is inherited). A phone row that held its block and this age in one nowrap run
+ * held the sentence on one 335.4 px line in a 301.5 px line (review fb-logic 2); a caller holds
+ * its own figures as units (`NoBreak`) and never a run around this one.
  */
 export function Utc8Age({ timestamp, className }: { timestamp: string; className?: string }) {
   const age = useAge(timestamp);
-  const time = (
-    <time className={className} title={formatUtc8DateTime(timestamp)}>
-      {age}
-    </time>
+  const title = formatUtc8DateTime(timestamp);
+  if (age === CLOCK_BEHIND)
+    return (
+      <time className={cn(className, 'whitespace-normal')} title={title}>
+        {age}
+      </time>
+    );
+  return (
+    <NoBreak>
+      <time className={className} title={title}>
+        {age}
+      </time>
+    </NoBreak>
   );
-  return age === CLOCK_BEHIND ? time : <NoBreak>{time}</NoBreak>;
 }
 
 /**

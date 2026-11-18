@@ -325,12 +325,38 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
     // never cut again: the row form, 13 characters (93.6 px at 12 px), where it stands whole — in
     // a wide tile, its width less 8 px each side (110 − 16 = 94), or under a compact tile, its
     // column (the tile and 16 px) — else the tight form, 11 characters (79.2 px): under a 72 px
-    // tile the column is 88 px. Each has the one ellipsis.
+    // tile the column is 88 px. Each has the one ellipsis. Review fb-logic 1: the gap before the
+    // last column is run into from both sides where the tiles on both sides of it in one row draw
+    // labels; there each has half of it less the 4 px kept clear, (20 − 4) / 2 = 8 px.
     const miners = all.filter((l) => l.text.startsWith('ckb1'));
     expect(miners.length).toBeGreaterThan(0);
-    const room = layout.form === 'wide' ? layout.tileW - 16 : layout.tileW + RUN;
-    for (const miner of miners)
-      expect(miner.text).toBe(13 * 7.2 <= room ? 'ckb1…qs93hhsj' : 'ckb1…93hhsj');
+    const drawsLabels = (n: number, y: string) =>
+      tiles.some(
+        (g) =>
+          g.getAttribute('data-tile') === String(n) &&
+          g.querySelector('rect')!.getAttribute('y') === y &&
+          g.querySelector('[data-time]') !== null
+      );
+    let checked = 0;
+    for (const g of tiles) {
+      const n = Number(g.getAttribute('data-tile'));
+      const y = g.querySelector('rect')!.getAttribute('y')!;
+      const shared =
+        (n === model.last || n === model.last - 1) &&
+        drawsLabels(model.last, y) &&
+        drawsLabels(model.last - 1, y);
+      const room =
+        layout.form === 'wide' ? layout.tileW - 16 : layout.tileW + (shared ? (GAP - 4) / 2 : RUN);
+      for (const text of [...g.querySelectorAll('text')].filter((t) =>
+        t.textContent!.startsWith('ckb1')
+      )) {
+        expect(text.textContent, `${n} in ${room} px`).toBe(
+          13 * 7.2 <= room ? 'ckb1…qs93hhsj' : 'ckb1…93hhsj'
+        );
+        checked++;
+      }
+    }
+    expect(checked).toBe(miners.length);
   });
 });
 
@@ -426,5 +452,38 @@ describe('ForkTree: a pool’s name in any script (review F-B, logic finding 5)'
     expect(pools).toHaveLength(3);
     for (const text of pools) expect(text.textContent).toBe(drawn);
     expect(px).toBeLessThanOrEqual(width === 358 ? 88 : 94);
+  });
+});
+
+// Review fb-logic 1 (lane rd/fb-fixes-2, L1): in Chrome on /forks/21022666/07c5ad4e and
+// /forks/21006834/7b4ee8ae the last two miners overlapped by 11.2 / 5.2 / 3.2 px at 414 / 428 /
+// 430 px windows (containers 382 / 396 / 398). The last column's labels end at its tile's right
+// edge and run back into the gap before it, while the column before it runs its labels into the
+// same gap: each claimed 16 of its 20 px, and the id form was chosen against that claim, so from a
+// 78 px tile both wrote the row form (93.6 px) where 2 × 93.6 > 2 × TW + 20 (below 83.6). Every
+// width a phone or a narrow window gives the tree, 1 px apart, for #21,022,666's shape (today's +1
+// to +3 with unnamed miners, the dropped +1): no two miners meet.
+describe('ForkTree: the miners of the last two columns never meet (review fb-logic 1)', () => {
+  it('keeps every miner clear of every other at each container width from 326 to 460 px', () => {
+    const met: string[] = [];
+    for (let width = 326; width <= 460; width++) {
+      stubChartWidth(width);
+      const { container, unmount } = render(<ForkTree model={full} />);
+      const svg = container.querySelector('svg[data-fork-tree]')!;
+      // the last two main tiles name their miners at every width
+      for (const n of [FP + 2, FP + 3]) {
+        const tile = svg.querySelector(`[data-tile="${n}"]:not([data-dropped])`)!;
+        expect(
+          [...tile.querySelectorAll('text')].filter((t) => t.textContent!.startsWith('ckb1')),
+          `${n} at ${width}`
+        ).toHaveLength(1);
+      }
+      const miners = allTextLines(svg).filter((line) => line.text.startsWith('ckb1'));
+      for (const m of meetings(miners)) met.push(`${width} px: ${m.a} and ${m.b} by ${m.by}`);
+      unmount();
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+    expect(met).toEqual([]);
   });
 });

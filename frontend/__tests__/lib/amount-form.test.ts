@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { amountDigits, ckbAmountText, ckbAmountTitle, type AmountForm } from '@/lib/amount-form';
+import {
+  amountDigits,
+  ckbAmountText,
+  ckbAmountTitle,
+  ckbShortenedTitle,
+  tokenAmountText,
+  type AmountForm,
+} from '@/lib/amount-form';
 import { MINUS } from '@/lib/chart-ticks';
 
 /**
@@ -128,8 +135,10 @@ describe('the four forms of a CKB amount, at their boundaries (R5)', () => {
     // a compact figure that shows only zeros has no sign; its title keeps it
     expect(signed('-0.00000001', 'compact')).toBe('0.00');
     expect(ckbAmountTitle(ckb('-0.00000001'), true)).toBe(`${MINUS}0.00000001 CKB`);
-    // unsigned, the magnitude
-    expect(ckbAmountText(ckb('-999.995'), 'summary')).toBe('999.99');
+    // unsigned, refused, never its magnitude (re-pinned, review of the fixes M2: this wrote '999.99')
+    expect(() => ckbAmountText(ckb('-999.995'), 'summary')).toThrow(
+      'CKB amount -99999500000 shannons is negative where a sign is not written'
+    );
   });
 
   it('keeps a 20-digit integer part whole, in BigInt, with no float anywhere', () => {
@@ -148,6 +157,28 @@ describe('the four forms of a CKB amount, at their boundaries (R5)', () => {
     expect(ckbAmountTitle(ckb('1000.99999999'), false)).toBe('1,000.99999999 CKB');
     expect(ckbAmountTitle(ckb('1000.99999999'), true)).toBe('+1,000.99999999 CKB');
     expect(ckbAmountTitle(ckb('1000'), false)).toBe('1,000 CKB');
+  });
+
+  // Review of the fixes (2026-11-19, M2): the renderer refused a negative where no sign is
+  // written, while the texts it shares its forms with wrote the magnitude, so a sentence or a
+  // title could read a broken invariant upstream (a cell's free CKB, held minus occupied) as a
+  // plausible positive figure. The rule is the module's: every text of a CKB amount refuses it,
+  // with the renderer's message, whether or not the figure is shortened.
+  it('refuses a negative where no sign is written, in every text and form', () => {
+    const negative = ckb('-999.995');
+    const refusal = `CKB amount ${negative} shannons is negative where a sign is not written`;
+    for (const form of ['exact', 'column', 'summary', 'compact'] as const) {
+      expect(() => ckbAmountText(negative, form), form).toThrow(refusal);
+      expect(() => ckbShortenedTitle(negative, form), form).toThrow(refusal);
+    }
+    expect(() => ckbAmountTitle(negative, false)).toThrow(refusal);
+    // a figure that is not shortened has no title to write, and is refused all the same
+    expect(() => ckbShortenedTitle(ckb('-1'), 'summary')).toThrow(
+      `CKB amount ${ckb('-1')} shannons is negative where a sign is not written`
+    );
+    // signed, each writes the minus sign
+    expect(ckbShortenedTitle(negative, 'summary', true)).toBe(`${MINUS}999.995 CKB`);
+    expect(ckbShortenedTitle(ckb('-1'), 'summary', true)).toBeUndefined();
   });
 });
 
@@ -184,5 +215,21 @@ describe('the four forms of a token amount: its own decimals', () => {
 
   it('refuses a negative number of decimals', () => {
     expect(() => amountDigits(BigInt(1), -1, 'exact')).toThrow(/decimals/);
+  });
+});
+
+describe('a token amount as text (the widest figure of a column)', () => {
+  it('writes the amount in a form at its decimals, without a sign or a unit', () => {
+    expect(tokenAmountText(BigInt(10) ** BigInt(17) - BigInt(1), 8, 'column')).toBe(
+      '999,999,999.99999999'
+    );
+    expect(tokenAmountText(BigInt(999_999_999), 0, 'exact')).toBe('999,999,999');
+    expect(tokenAmountText(BigInt(0), 8, 'exact')).toBe('0');
+  });
+
+  it('refuses a negative amount: it is never written as its absolute value', () => {
+    expect(() => tokenAmountText(BigInt(-1), 8, 'exact')).toThrow(
+      'token amount -1 is negative where a sign is not written'
+    );
   });
 });

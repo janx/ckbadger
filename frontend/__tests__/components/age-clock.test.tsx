@@ -5,6 +5,7 @@ import { StatusClock } from '@/components/layout/status-line';
 import { TimeInPool } from '@/components/ui/pool-status';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { CLOCK_BEHIND } from '@/lib/format-age';
+import { lineRuns } from '@/__tests__/utils/line-runs';
 
 /**
  * The review's item H: an age that is shown must tick. Utc8Age wrote "20s ago" at render and
@@ -187,5 +188,30 @@ describe('an age is one unit, the clock-behind sentence is words', () => {
     expect(behind.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
     // the date-time stays its hover in both
     expect(behind).toHaveAttribute('title', formatUtc8DateTime(String(T0 + 60_000)));
+  });
+
+  // Review fb-logic 2 (lane rd/fb-fixes-2, L2): Utc8Age owns how its text breaks, so a caller
+  // cannot undo it by accident. Three phone rows held the age in a run-wide `whitespace-nowrap`
+  // (white-space is inherited), and the sentence stood on one 335.4 px line in a 301.5 px phone
+  // line. Under a nowrap ancestor the sentence still breaks between its words, and the age is
+  // still one unit where its ancestor lets the line wrap.
+  it('keeps both rules under any ancestor: the sentence breaks under a nowrap run, the age does not', () => {
+    vi.useFakeTimers({ now: T0 });
+    const words = (jsx: React.ReactElement) =>
+      lineRuns(render(jsx).container.firstElementChild!, 390).map((r) => r.text);
+    expect(
+      words(
+        <span className="text-small whitespace-nowrap">
+          #21,045,845 · <Utc8Age timestamp={String(T0 + 60_000)} />
+        </span>
+      )
+    ).toEqual(['#21,045,845 · this', "device's", 'clock', 'is', 'behind']);
+    expect(
+      words(
+        <span className="text-small whitespace-normal">
+          #21,045,845 · <Utc8Age timestamp={String(T0 - 20_000)} />
+        </span>
+      )
+    ).toEqual(['#21,045,845', '·', '20s ago']);
   });
 });

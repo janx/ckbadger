@@ -285,9 +285,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     return { text: percentOf(amount, total), hundredths };
   };
   // Board L5 on the row rules (table-rows L2-4): rank and address bright, the lock a tag, the
-  // amount to 2 dp and the share as an 8 px bar on the page's scale — 552 px of minimums, so the
-  // table holds in the token page's 554 px column at 1280; the two-line phone row takes over below
-  // it. Every digit of the amount is in the row's title.
+  // amount to 2 dp and the share as an 8 px bar on the page's scale — 554 px of minimums (rank 55,
+  // address 159, lock 115, balance 110, share 115), so the table holds in the token page's 554 px
+  // column at 1280; the two-line phone row takes over below it. Every digit of the amount is in the row's title.
   /** R7: the one scale of the page's share bars, the table's and the phone rows' alike. */
   const shareScaleOf = (rows: readonly TokenHolder[]) =>
     resourceScale(rows.map((h) => holderShare(h).hundredths));

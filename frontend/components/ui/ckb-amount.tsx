@@ -3,6 +3,7 @@ import { MINUS } from '@/lib/chart-ticks';
 import {
   amountDigits,
   ckbAmountTitle,
+  ckbDigits,
   shownSign,
   type AmountDigits,
   type AmountForm,
@@ -55,7 +56,8 @@ function Padding({ d }: { d: AmountDigits }) {
  * never an operand. Zero is "0 CKB" in every form (consistency plan C4): nothing moved, so there
  * are no decimals to read, and that 0 is a datum in the dim ink (R4). Where no sign is written
  * (`signed={false}`) the amount is never negative: one that is fails, as a `TokenAmount` does,
- * rather than read as its absolute value.
+ * rather than read as its absolute value; the rule is the amount module's (`ckbDigits`), which
+ * the texts of an amount (`ckbAmountText`, `exactCkbText`, a title) hold to as this does.
  */
 export function CkbAmount({
   shannons,
@@ -78,8 +80,8 @@ export function CkbAmount({
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
 }) {
-  if (!signed && shannons < BigInt(0))
-    throw new Error(`CKB amount ${shannons} shannons is negative where a sign is not written`);
+  // The module's rule: where no sign is written the amount is never negative (`ckbDigits` fails).
+  const d = ckbDigits(shannons, form, signed);
   const unitEl = unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>;
   if (shannons === BigInt(0))
     return (
@@ -90,7 +92,6 @@ export function CkbAmount({
         {unitEl}
       </span>
     );
-  const d = amountDigits(shannons, 8, form);
   return (
     <span
       data-ckb-amount

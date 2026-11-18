@@ -123,6 +123,8 @@ const COMPACT_PAD = 3;
 /** Under a compact tile: its time over its miner, 4 px under the tile and 4 px over the next row. */
 const UNDER_PAD = 4;
 const COMPACT_GAP = 20;
+/** The least two columns' labels under compact tiles keep between them. */
+const LABEL_CLEAR = 4;
 /** A compact tile's words, and the "+N earlier" box's, stand this far in from its side. */
 const FOLD_INSET = 6;
 /** The width a "+N earlier" box needs: its words at the label size and the inset each side. */
@@ -160,7 +162,10 @@ export const FORK_TREE = {
    * edge and run into the gap after it, except in the last column, where they end at the tile's
    * right edge and run into the gap before it (the ruling on F3-d: the svg keeps 4 px after the
    * last tile, so a fork of four heights draws its four columns at a 390 phone, 6 + 4 × 72 + 3 ×
-   * 20 + 4 = 358, its dropped block among them).
+   * 20 + 4 = 358, its dropped block among them). That gap, before the last column, is the one two
+   * columns' labels run into from both sides: where both draw labels in a row, each takes half of
+   * it less the clearance, `sharedRun` (8 px: 8 + 4 + 8 = 20), and a miner's form is chosen by
+   * that room (review fb-logic 1; `ForkTreeLayout.labelRoom`).
    */
   compact: {
     minTile: 72,
@@ -174,7 +179,8 @@ export const FORK_TREE = {
     inset: FOLD_INSET,
     x0: 6,
     gap: COMPACT_GAP,
-    labelRun: COMPACT_GAP - 4,
+    labelRun: COMPACT_GAP - LABEL_CLEAR,
+    sharedRun: (COMPACT_GAP - LABEL_CLEAR) / 2,
     right: 4,
     /** Under a box: its time and miner lines, 4 px over and under them: 38 px (34 at 10 px). */
     under: UNDER_PAD + 2 * TICK_LINE + UNDER_PAD,
@@ -188,14 +194,14 @@ export const FORK_TREE = {
 
 /*
  * An unnamed miner is its address in an id form, never cut again (review F-B, logic finding 4): a
- * wide tile holds the row form by its width (WIDE_TILE), and the narrowest compact tile's column,
- * the tile and its run into the gap (88 px), holds the tight form (11 characters, 79.2 px at
- * 12 px). Checked once, at load.
+ * wide tile holds the row form by its width (WIDE_TILE), and the narrowest room under a compact
+ * tile, the tile and its share of a gap two columns' labels run into (72 + 8 = 80 px; review
+ * fb-logic 1), holds the tight form (11 characters, 79.2 px at 12 px). Checked once, at load.
  */
 const TIGHT_ADDRESS = SHORT_FORMS.tight.address.head + 1 + SHORT_FORMS.tight.address.tail;
-if (textPx(TIGHT_ADDRESS, SVG_TEXT.tick) > FORK_TREE.compact.minTile + FORK_TREE.compact.labelRun)
+if (textPx(TIGHT_ADDRESS, SVG_TEXT.tick) > FORK_TREE.compact.minTile + FORK_TREE.compact.sharedRun)
   throw new Error(
-    `fork tree: a ${FORK_TREE.compact.minTile} px tile's column cannot hold a tight address (${textPx(TIGHT_ADDRESS, SVG_TEXT.tick)} px)`
+    `fork tree: a ${FORK_TREE.compact.minTile} px tile's narrowest room cannot hold a tight address (${textPx(TIGHT_ADDRESS, SVG_TEXT.tick)} px)`
   );
 
 export interface ForkTreeLayout {
@@ -216,7 +222,18 @@ export interface ForkTreeLayout {
   labelsUnder: boolean;
   /** A height's column x; a folded height gives the "+N earlier" column. */
   x: (number: number) => number;
+  /**
+   * The width a tile's time and miner may take (review fb-logic 1): inside a wide tile, its width
+   * less its insets; under a compact one, the tile and its run into a gap, 16 px, or 8 where the
+   * gap before the last column is run into from both sides, by this tile's labels and by those of
+   * its neighbour in the same row (`FORK_TREE.compact`). A miner's form is chosen by it.
+   */
+  labelRoom: (tile: ForkTreeTile) => number;
 }
+
+/** Whether a tile draws a time or a miner (the fork point's stub and a later uncle's block do not). */
+const labelled = (tile: ForkTreeTile | undefined): boolean =>
+  tile !== undefined && (tile.timestamp !== null || tile.minerAddress !== null);
 
 /**
  * Where the fork tree's columns go in a box `width` px wide (V4, `docs/RESPONSIVE_LAYOUT.md`
@@ -246,6 +263,7 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
       collapsed: null,
       labelsUnder: false,
       x: (n) => w.x0 + (n - model.first) * w.pitch,
+      labelRoom: () => w.tile - 2 * w.inset,
     };
   }
   const c = FORK_TREE.compact;
@@ -280,6 +298,24 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
   const pitchY = c.tileH + c.under + c.rowGap;
   const yMain = c.top + k * pitchY;
   const lead = folded ? 1 : 0;
+  // Under a compact tile the labels run into the gap after it, and the last column's back into
+  // the gap before it: there, where both sides draw labels in one row, each has its share. A
+  // folded height draws none under the "+N earlier" box.
+  const rooms = new Map<string, number>();
+  for (const tiles of [model.main, ...model.rows.map((row) => row.tiles)]) {
+    const atHeight = (n: number) =>
+      n >= model.first + folded ? tiles.find((tile) => tile.number === n) : undefined;
+    const shared = labelled(atHeight(model.last - 1)) && labelled(atHeight(model.last));
+    for (const tile of tiles) {
+      const edge = tile.number === model.last - 1 || tile.number === model.last;
+      rooms.set(tile.hash, tileW + (shared && edge ? c.sharedRun : c.labelRun));
+    }
+  }
+  const labelRoom = (tile: ForkTreeTile) => {
+    const room = rooms.get(tile.hash);
+    if (room === undefined) throw new Error(`Fork tree: ${tile.hash} is not a tile of the tree`);
+    return room;
+  };
   return {
     form: 'compact',
     tileW,
@@ -294,5 +330,6 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
       : null,
     labelsUnder: true,
     x: (n) => c.x0 + (n < model.first + folded ? 0 : lead + n - model.first - folded) * pitch,
+    labelRoom,
   };
 }

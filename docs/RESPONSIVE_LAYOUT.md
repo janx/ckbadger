@@ -196,10 +196,14 @@ The 640–767 band has one content width to design for. Below 640 the container 
   whole. The ellipsis is the one character `…`, never `...`. A renderer takes a size, never a
   length, and `head` and `tight` are chosen only where the gate lists them with their reason
   (`__tests__/lib/shorten-gate.test.ts`). Text that is not ours in a figure (a gene's name, rule
-  and trait value, a pool's name, an organisation) is measured by an upper bound, not by its
-  length: a grapheme of the served Latin subset is 0.6 em, any other 1.25 em (the fallback faces
-  measured on the development machine draw CJK at up to 1.2 em and emoji at 1.245 em), and it
-  is cut at whole graphemes with the one ellipsis (`foreignTextPx`, `clipForeignLabel`). A
+  and trait value, a pool's name, an organisation) is measured by a bound, not by its length: a
+  grapheme of the served Latin subset is 0.6 em, any other 1.25 em, the widest advance measured of
+  the fallback faces on the development machine for CJK (1.2 em) and emoji (1.245 em). It is not
+  an upper bound: single graphemes are known that draw wider (U+FDFD, 4.6 to 12.2 em; an emoji ZWJ
+  sequence outside the recommended set, about 2.5 em; U+2E3B, 3 em). Such a text is cut at whole
+  graphemes with the one ellipsis (`foreignTextPx`, `clipForeignLabel`), but for an organisation,
+  which is drawn whole or dropped, never cut (the hosting bar writes it with its share where the
+  segment holds both, else the share alone, else nothing). A
   percentage has two decimals and its sign with no space (`24.79%`); a compact count or CKB amount
   takes a lowercase `k` for thousands, then `M`, `B`, `T`; a physical quantity keeps its SI prefix
   with its symbol (`PH/s`, `kB`); a figure writes the symbol (`s`, `h`, `d`, `B`), prose the word.

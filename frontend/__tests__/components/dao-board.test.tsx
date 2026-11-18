@@ -1291,10 +1291,24 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
       .find((a) => ts.isJsxAttribute(a) && a.name.getText(source) === 'className')!
       .getText(source);
     expect(classes).toBe('className="container mx-auto pb-16 pt-6"');
+    // Re-pinned on purpose (review fb-tests SHOULD-2, lane rd/fb-fixes-2 T2): tailwind-box read
+    // `container` as no class at all, so this held "no inset" only because the container's own
+    // gutters were not read. It reads them now (16 px a side, 24 from lg); the page adds none of
+    // its own: <main>'s insets are a bare container's, and its content is containerContentPx.
     const el = document.createElement('main');
     el.className = 'container mx-auto pb-16 pt-6';
-    for (const viewport of [1280, 1024, 640, 390, 360])
-      expect(insetsPx(el, viewport)).toEqual({ box: 0, margin: 0 });
+    const bare = document.createElement('main');
+    bare.className = 'container';
+    for (const [viewport, gutters] of [
+      [1280, 48],
+      [1024, 48],
+      [640, 32],
+      [390, 32],
+      [360, 32],
+    ] as const) {
+      expect(insetsPx(el, viewport)).toEqual({ box: gutters, margin: 0 });
+      expect(insetsPx(el, viewport)).toEqual(insetsPx(bare, viewport));
+    }
   });
 
   it.each([
