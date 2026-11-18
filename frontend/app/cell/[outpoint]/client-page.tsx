@@ -12,7 +12,7 @@ import { CellTransactions } from '@/components/cell/cell-transactions';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import { parseCkbDecimal } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -492,27 +492,21 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           // The command runs on the status the API gives (deposited, withdrawing, withdrawn); the
           // heading says it, so the line under it does not say it again.
           <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
+            {/* F-9: the API sends every DAO cell's exact compensation (shannons) with its state
+                and block; an answer without them is a broken read and fails here, by name. */}
             <p className="text-text-dim text-small">
-              deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} />
-              {cell.daoInfo.compensationCkb != null ? (
-                <>
-                  {' '}
-                  · {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
-                  <CkbAmount
-                    form="column"
-                    shannons={parseCkbDecimal(cell.daoInfo.compensationCkb)}
-                    signed={false}
-                    tone="plain"
-                  />
-                  <DaoCompensationAt cell={cell} dao={cell.daoInfo} />
-                </>
-              ) : cell.daoInfo.compensation != null ? (
-                (() => {
-                  throw new Error(
-                    `DAO cell ${cell.txHash}:${cell.outputIndex} has compensation shannons without compensationCkb`
-                  );
-                })()
-              ) : null}
+              deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} /> ·{' '}
+              {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
+              <CkbAmount
+                form="column"
+                shannons={parseShannons(
+                  cell.daoInfo.compensation,
+                  `DAO cell ${cell.txHash}:${cell.outputIndex} compensation`
+                )}
+                signed={false}
+                tone="plain"
+              />
+              <DaoCompensationAt cell={cell} dao={cell.daoInfo} />
             </p>
           </DetailSection>
         )}

@@ -346,6 +346,13 @@ describe('Cell page against the Cell board', () => {
         daoStatus: 'withdrawn',
         depositBlockNumber: 20311586,
         depositTimestamp: '2026-01-01T00:00:00Z',
+        // Re-pinned on purpose (review of main..fix/readability, test finding 2): the API sends
+        // every DAO cell's compensation with its state and block (F-9); this mock lacked them, and
+        // the line it endorsed had no compensation. A DAO answer without them now fails.
+        compensation: '2245001108',
+        compensationCkb: '22.45001108',
+        compensationState: 'claimed',
+        compensationAtBlock: 20400000,
       },
     } as Cell);
     view();
@@ -354,6 +361,9 @@ describe('Cell page against the Cell board', () => {
     expect(screen.getByRole('heading', { name: 'Nervos DAO withdrawn' })).toBeInTheDocument();
     expect(dao).not.toHaveTextContent('withdrawn');
     expect(dao).toHaveTextContent('deposit block #20,311,586');
+    expect(dao).toHaveTextContent(
+      /^deposit block #20,311,586 · compensation 22\.45001108 CKB, claimed at block #20,400,000$/
+    );
     expect(within(dao).getByRole('link', { name: '#20,311,586' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/20311586'
