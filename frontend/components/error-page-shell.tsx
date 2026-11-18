@@ -21,7 +21,7 @@ import { Header } from '@/components/layout/header';
 import { PromptEnd } from '@/components/layout/prompt-end';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { Wordmark } from '@/components/layout/wordmark';
-import { NoBreak } from '@/components/ui/no-break';
+import { Dotted } from '@/components/ui/phone-row';
 import { ShortId } from '@/components/ui/short-id';
 import { BlockLink } from '@/components/ui/block-link';
 import { Comment } from '@/components/ui/comment';
@@ -194,13 +194,20 @@ function TipSeal() {
           />
         </Suspense>
       </div>
-      {/* a note under the seal, quiet; the block's link and its hash in it read (R3) */}
+      {/* a note under the seal, quiet; the block's link and its hash in it read (R3). The two
+          figures are one separated list (Dotted, the one owner of a separator between parts) set
+          inline after the words: where it does not fit the rest of the line it moves to the next
+          line whole, so no line opens with its " · " (at 320, 360 and 390 px and in the stone's
+          256 px column: "the seal of the newest block," / "#… · 0x…") */}
       <figcaption data-seal-caption="" className="text-text-dim text-meta mt-8 min-w-0">
-        the seal of the newest block, <BlockLink number={block.number} className="text-text" />{' '}
-        {/* U-16: the shortened hash is one unit, and the dot goes with it to a new line */}
-        <NoBreak>
-          · <ShortId value={block.hash} kind="hash" size="row" className="text-text" />
-        </NoBreak>
+        the seal of the newest block,{' '}
+        <Dotted
+          inline
+          parts={[
+            <BlockLink key="block" number={block.number} className="text-text" />,
+            <ShortId key="hash" value={block.hash} kind="hash" size="row" className="text-text" />,
+          ]}
+        />
       </figcaption>
     </figure>
   );
