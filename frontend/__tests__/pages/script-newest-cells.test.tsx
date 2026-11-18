@@ -368,5 +368,13 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         },
       ])
     );
+    // The coordinator's sweep (F3-e): a phone row's line is budgeted as a column is. The created
+    // line's widest, "tx 0xfa30…31b9 · #99,999,999 · date unavailable" (47 characters at 12 px,
+    // 338.4 px), is past a 328 px row, so it breaks between its facts, never inside one: no
+    // nowrap run holds the whole line (each fact keeps its own).
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    expect(at('tx 0xfa30…31b9 · #99,999,999 · date unavailable', 12)).toBeGreaterThan(328);
+    const created = rows[0].querySelector('[data-line="created"] > [data-part="left"]')!;
+    expect(created.querySelector('[data-dotted]')!.closest('.whitespace-nowrap')).toBeNull();
   });
 });

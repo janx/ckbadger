@@ -13,12 +13,39 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     expect(BlockVisualScaleHeader).toBe(ScaleHeader);
   });
 
+  // Readability F3-e, the coordinator's ruling: a head's ticks are axis labels, and an axis label
+  // is written in the tick form everywhere on the site (formatTick); the head's unit stays in its
+  // label. So the widest tick row of a count scale up to the cycle limit, "0 4B" or "0 1.5M" (at
+  // most 6 characters at 12 px, 43.2 px), stands whole over the 48 px a bar keeps at least.
+  it('writes its ticks in the tick form, whole over a 48 px track, its unit in its label', () => {
+    for (const [scale, end] of [
+      [4_000, '4k'],
+      [600_000, '600k'],
+      [1_500_000, '1.5M'],
+      [4_000_000_000, '4B'],
+      [10, '10'],
+    ] as const) {
+      const { container, unmount } = render(
+        <ScaleHeader label="Size, bytes" scale={scale} trackWidth={48} />
+      );
+      const head = container.firstElementChild as HTMLElement;
+      expect(head.firstElementChild).toHaveTextContent(/^Size, bytes$/);
+      const ticks = Array.from(ticksOf(head).children).map((t) => t.textContent!);
+      expect(ticks).toEqual(['0', end]);
+      // "0", a glyph, the end tick, at 7.2 px a glyph, inside the track
+      expect((ticks.join(' ').length * 12 * 3) / 5 <= 48).toBe(true);
+      unmount();
+    }
+  });
+
   it('draws the name over 0 … scale, as wide as the track, 3 px apart by default (Blocks)', () => {
     const { container } = render(<ScaleHeader label="Size, bytes" scale={4000} />);
     const head = container.firstElementChild as HTMLElement;
     expect(head).toHaveClass('flex', 'flex-col');
     expect(head.style.gap).toBe('3px');
-    expect(head).toHaveTextContent(/^Size, bytes04,000$/);
+    // re-pinned on purpose (readability F3-e, the coordinator's ruling): the ticks in the tick
+    // form ("4k"; it was the exact "4,000"), the unit in the name
+    expect(head).toHaveTextContent(/^Size, bytes04k$/);
     // T5 (coordinator ruling, lane M): the name is a column head, 11 px like every head.
     expect(head.firstElementChild).toHaveTextContent(/^Size, bytes$/);
     expect(head.firstElementChild).toHaveClass('text-meta');
@@ -26,7 +53,7 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     expect(ticks).toHaveAttribute('aria-hidden', 'true');
     expect(ticks).toHaveClass('text-meta', 'flex', 'justify-between');
     expect(ticks.style.width).toBe('120px');
-    expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '4,000']);
+    expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '4k']);
   });
 
   it('takes the track width and the gap a table has always drawn (transactions: 80 px, 2 px)', () => {
@@ -36,7 +63,8 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     const head = container.firstElementChild as HTMLElement;
     expect(head.style.gap).toBe('2px');
     expect(ticksOf(head).style.width).toBe('80px');
-    expect(head).toHaveTextContent(/^Cycles02,000,000$/);
+    // re-pinned on purpose (F3-e): "2M" in the tick form (it was "2,000,000")
+    expect(head).toHaveTextContent(/^Cycles02M$/);
   });
 
   it('formats its ticks and can mark the middle of the scale ("0 · 25B · 50B")', () => {

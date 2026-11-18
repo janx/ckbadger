@@ -1,7 +1,12 @@
 import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import {
+  AlignedBar,
+  BAR_FIGURE_GAP,
+  COUNT_TRACK_PX,
+  ScaleHeader,
+} from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
@@ -9,8 +14,36 @@ import { parseShannons } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { Transaction } from '@/lib/api';
 import { formatCount } from '@/lib/format-count';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import {
+  GENESIS_BLOCK_BYTES,
+  TX_CYCLES_BOUND,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_TX_FEE,
+  WIDEST_TX_OUTPUT,
+  shortChars,
+} from '@/lib/list-bounds';
 
-const TRACK = 96;
+/**
+ * The bars' track (readability F3-e, the coordinator's ruling): the heads write their ticks in
+ * the tick form ("0 … 1.5M", "0 … 750M"), so each track is COUNT_TRACK_PX, 48 px; it was 96, under
+ * heads whose exact "0 … 600,000" its 12 px ticks overran.
+ */
+const TRACK = COUNT_TRACK_PX;
+
+/** A cell's text measured at the small step, the table's. */
+const cell = (text: string) => textPx(text.length, fontPx('small'));
+
+/**
+ * The widest scales the bars' figures write: a transaction is no larger than its block, and the
+ * largest block is genesis's 1,236,271 bytes (a 1,500,000 scale); a transaction's cycles under a
+ * billion, as the committed list's (a 750,000,000 scale).
+ */
+const SIZE_SCALE = resourceScale([GENESIS_BLOCK_BYTES]).toLocaleString('en-US');
+const CYCLES_SCALE = resourceScale([TX_CYCLES_BOUND]).toLocaleString('en-US');
 
 /** Output capacity with its unit, for the phone row. */
 function capacity(tx: Transaction) {
@@ -111,13 +144,17 @@ export function BlockTransactionsTable({
     {
       key: 'index',
       label: '#',
-      minWidth: 32,
+      // A transaction's index in its block, four digits as written ("9999"), and the gap. It was
+      // 32, which held two digits.
+      minWidth: columnPx(cell(WIDEST_COUNT_DIGITS) + CELL_GAP_PX),
       render: (tx) => <span className="text-text-dim">{tx.index}</span>,
     },
     {
       key: 'transaction',
       label: 'Transaction',
-      minWidth: 140,
+      // The hash at the row size, 17 characters at 13 px (132.6), and the gap; alone in its cell,
+      // so not the tight size. It was 140.
+      minWidth: columnPx(textPx(shortChars(SHORT_FORMS.row.hash), fontPx('small')) + CELL_GAP_PX),
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
           <Hash hash={tx.hash} size="row" copyable={false} className="text-small" />
@@ -127,13 +164,20 @@ export function BlockTransactionsTable({
     {
       key: 'proposal',
       label: 'Proposed in',
-      minWidth: 120,
+      // The proposing block and how far before it was, "#99,999,999 +10 · uncle" (a proposal is
+      // committed 2 to 10 blocks after it; 23 characters at 13 px, 179.4), and the gap. It was
+      // 120, which held the block alone.
+      minWidth: columnPx(cell(`${WIDEST_BLOCK_NUMBER} +10 · uncle`) + CELL_GAP_PX),
       render: proposedIn,
     },
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 70,
+      // Four digits a side as written, "9999", the arrow between its 6 px margins, "9,999"
+      // (90 px), and the gap. It was 70.
+      minWidth: columnPx(
+        cell(WIDEST_COUNT_DIGITS) + 6 + cell('→') + 6 + cell(WIDEST_COUNT) + CELL_GAP_PX
+      ),
       render: (tx) => (
         <span className="whitespace-nowrap">
           <span className={tx.isCellbase ? 'text-text-dim' : undefined}>
@@ -149,7 +193,10 @@ export function BlockTransactionsTable({
     {
       key: 'capacity',
       label: 'Output capacity',
-      minWidth: 140,
+      // The CKB a transaction outputs, every decimal: eleven whole digits, the genesis
+      // transactions' first issuance ("99,999,999,999.99999999", 23 characters at 13 px, 179.4),
+      // and the gap. It was 140.
+      minWidth: columnPx(cell(WIDEST_TX_OUTPUT) + CELL_GAP_PX),
       numeric: true,
       render: (tx) => (
         <CkbAmount
@@ -164,7 +211,8 @@ export function BlockTransactionsTable({
     {
       key: 'fee',
       label: 'Fee',
-      minWidth: 104,
+      // A fee under 100 CKB, "99.99999999" (85.8), and the gap. It was 104.
+      minWidth: columnPx(cell(WIDEST_TX_FEE) + CELL_GAP_PX),
       numeric: true,
       render: (tx) => (
         <CkbAmount
@@ -180,7 +228,9 @@ export function BlockTransactionsTable({
       key: 'size',
       label: 'Size, bytes',
       header: <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={TRACK} />,
-      minWidth: 160,
+      // The 48 px track, the bar's 10 px gap, the scale's figure ("1,500,000", 70.2) and the gap.
+      // It was 160.
+      minWidth: columnPx(TRACK + BAR_FIGURE_GAP + cell(SIZE_SCALE) + CELL_GAP_PX),
       className: 'whitespace-nowrap',
       render: (tx) => (
         <AlignedBar
@@ -202,7 +252,9 @@ export function BlockTransactionsTable({
       key: 'cycles',
       label: 'Cycles',
       header: <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={TRACK} />,
-      minWidth: 172,
+      // The 48 px track, the bar's 10 px gap and the scale's figure ("750,000,000", 85.8); the last
+      // column, no gap after it. It was 172.
+      minWidth: columnPx(TRACK + BAR_FIGURE_GAP + cell(CYCLES_SCALE)),
       className: 'whitespace-nowrap',
       render: (tx) =>
         tx.cycles === null ? (

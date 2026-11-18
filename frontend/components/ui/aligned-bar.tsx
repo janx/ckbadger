@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { fontPx, textPx } from '@/lib/type-metrics';
+import { formatTick } from '@/lib/chart-ticks';
+import { WIDEST_COMPACT_TICK } from '@/lib/list-bounds';
 
 export interface AlignedBarSegment {
   key: string;
@@ -51,15 +53,29 @@ export const BAR_FIGURE_GAP = 10;
 export const MIN_TRACK_PX = 48;
 
 /**
- * The track a bar column needs: its head's tick row (`ScaleHeader`, the meta step) whole over it,
- * one glyph between neighbouring ticks so "0" and "600,000" never read as one number, and never
- * shorter than `MIN_TRACK_PX`. `ticks` are the widest the column's scale writes.
+ * The rule of a bar column's head (readability F3-e, the coordinator's ruling): a head's tick row
+ * is in the tick form and stands whole over its track. Its ticks are axis labels, and an axis
+ * label is written in the tick form everywhere on the site (`formatTick`: "600k", "1.5M", "4B");
+ * the head's unit stays in its label ("Size, bytes", "Cycles"), and the exact figure beside each
+ * bar stays exact. The track holds the row whole, one glyph between neighbouring ticks so "0" and
+ * "600k" never read as one number, and is never shorter than `MIN_TRACK_PX`: `trackPx` measures it
+ * from the widest ticks the column's scale writes.
  */
 export function trackPx(ticks: readonly string[]): number {
   if (!ticks.length || ticks.some((t) => !t)) throw new Error('trackPx: an empty tick row');
   const glyphs = ticks.reduce((n, t) => n + t.length, 0) + ticks.length - 1;
   return Math.max(MIN_TRACK_PX, textPx(glyphs, fontPx('meta')));
 }
+
+/** A head's tick in the tick form: the default of every `ScaleHeader`. */
+export const tickForm = (value: number) => formatTick(value, value);
+
+/**
+ * The track of a bar on a count scale (bytes, cycles, holders, items): "0" and the widest tick the
+ * tick form writes for any such scale up to the cycle limit ("750M", four characters), 43.2 px,
+ * so the 48 px a bar keeps at least.
+ */
+export const COUNT_TRACK_PX = trackPx(['0', WIDEST_COMPACT_TICK]);
 
 const TONE = {
   overhead: CLASS_COLORS.ckb,
@@ -145,7 +161,7 @@ export interface ScaleHeaderProps {
   trackWidth?: number;
   /** px between the name and the ticks (Blocks: 3; the transactions table has always drawn 2). */
   tickGap?: number;
-  /** A tick's text; default the exact integer, en-US grouped ("4,000"). */
+  /** A tick's text; default the tick form (`tickForm`, "4k"), the rule at `trackPx`. */
   format?: (value: number) => string;
   /** Also mark the middle of the scale: "0 · 25B · 50B" instead of "0 … 50B". */
   midpoint?: boolean;
@@ -160,14 +176,15 @@ export interface ScaleHeaderProps {
 
 /**
  * A bar column's header (F2 blocks, BA-02; lifted here in table-rows R2): "Size, bytes" over
- * "0 … 4,000", the column's shared scale, as wide as its bar track.
+ * "0 … 4k", the column's shared scale in the tick form, as wide as its bar track (the rule at
+ * `trackPx`).
  */
 export function ScaleHeader({
   label,
   scale,
   trackWidth = 120,
   tickGap = 3,
-  format = fmt,
+  format = tickForm,
   midpoint = false,
   figureWidth,
 }: ScaleHeaderProps) {

@@ -24,14 +24,19 @@ import { rowTagClass } from '@/components/ui/row-tag';
 import { LockKind } from '@/components/ui/lock-kind';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { formatTick } from '@/lib/chart-ticks';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
+import {
+  AlignedBar,
+  BAR_FIGURE_GAP,
+  COUNT_TRACK_PX,
+  ScaleHeader,
+  trackPx,
+} from '@/components/ui/aligned-bar';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
-import { WIDEST_COMPACT_TICK, shortChars } from '@/lib/list-bounds';
+import { shortChars } from '@/lib/list-bounds';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
@@ -53,7 +58,7 @@ const tag = (chars: number) => textPx(chars, fontPx('meta')) + 2 * 5 + 2 * 1;
  * track holds its head's ticks ("0" … "750M", the tick form; "0" … "100%") whole, under the 48 px a
  * bar keeps at least, so 48 (the bands' was 40).
  */
-const BUCKET_TRACK = trackPx(['0', WIDEST_COMPACT_TICK]);
+const BUCKET_TRACK = COUNT_TRACK_PX;
 const SHARE_TRACK = trackPx(['0', formatShareTick(10_000)]);
 /**
  * The figures right of those bars: a range's holder count, "99,999" (it was 44, five
@@ -135,7 +140,6 @@ export function TokenDistributionView({
           label="Holders"
           scale={holderScale}
           trackWidth={BUCKET_TRACK}
-          format={(n) => formatTick(n, n)}
           figureWidth={BUCKET_FIGURE}
         />
       ),

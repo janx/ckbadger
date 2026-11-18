@@ -51,6 +51,12 @@ export const WIDEST_AGE = '10y 364d ago';
  */
 export const WIDEST_COUNT = nines(4).toLocaleString('en-US');
 
+/**
+ * A block's proposals: up to the consensus limit, 1,500 (ckb's `max_block_proposals_limit`).
+ * `1,500`.
+ */
+export const WIDEST_PROPOSALS = (1_500).toLocaleString('en-US');
+
 /** The same four digits where a list writes a count ungrouped (the pool's cells): `9999`. */
 export const WIDEST_COUNT_DIGITS = nines(4).toString();
 
@@ -84,6 +90,12 @@ export const WIDEST_BLOCK_FEES = ckbAmountText(ckbNines(3), 'column');
 
 /** A transaction's value, under a billion CKB (bound of record). */
 export const WIDEST_TX_VALUE = ckbAmountText(ckbNines(9), 'column');
+
+/**
+ * The CKB a transaction outputs, every decimal: eleven whole digits (the genesis transactions
+ * output the 33.6 billion CKB first issued).
+ */
+export const WIDEST_TX_OUTPUT = ckbAmountText(ckbNines(11), 'column');
 
 /** A transaction's fee, under 100 CKB (bound of record). */
 export const WIDEST_TX_FEE = ckbAmountText(ckbNines(2), 'column');

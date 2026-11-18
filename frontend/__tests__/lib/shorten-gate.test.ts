@@ -389,14 +389,14 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
   'app/blocks/page.tsx': [
     {
       reason:
-        'the hash beside the block number in the blocks table’s key cell: at the row size (17 characters at 11 px, 112.2 px) the Block column needs 256 px and the table 1,257, wider than the 1,232 px container at 1280',
+        'the hash beside the block number in the blocks table’s key cell: at the row size (17 characters at 12 px, 122.4 px; tight, 11 characters, 79.2) the Block column needs 273 px and the table 1,236, wider than the 1,232 px container at 1280',
       anchor: 'hash={block.hash}',
     },
     phoneRow("miner(block, 'tight')"),
     phoneRow('hash={block.hash}'),
     {
       reason:
-        'the hash under the block number in the 608 px table’s Height column: the row size (17 characters at 11 px, 112.2 px) is wider than the column’s 88 px of text; the same tight form as the wide table',
+        'the hash under the block number in the 608 px table’s Height column: the row size (17 characters at 12 px, 122.4 px) is wider than the column’s 92.4 px of text, the height at 14 px; the same tight form as the wide table',
       anchor: 'hash={block.hash}',
     },
   ],

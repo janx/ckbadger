@@ -175,7 +175,12 @@ function createdDate(detail: Cell | undefined): ReactNode {
   );
 }
 
-/** "tx 0x1234…abcd · #20,911,313 · 2026-11-02": where and when the cell was made. */
+/**
+ * "tx 0x1234…abcd · #20,911,313 · 2026-11-02": where and when the cell was made. Its facts break
+ * between them, never inside one: on a phone its widest, "tx 0x1234…abcd · #99,999,999 · date
+ * unavailable" (47 characters at 12 px, 338.4 px), is past a 328 px row (the coordinator's sweep,
+ * F3-e); the table's numeric cell keeps it on one line.
+ */
 function Created({
   cell,
   detail,
@@ -186,7 +191,7 @@ function Created({
   size: ShortSize;
 }) {
   return (
-    <span className="text-text-dim whitespace-nowrap">
+    <span className="text-text-dim">
       <Dotted
         parts={[
           <>

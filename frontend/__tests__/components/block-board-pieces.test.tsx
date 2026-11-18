@@ -7,6 +7,7 @@ import { BlockTransactionsTable } from '@/components/blocks/block-transactions-t
 import { positionParts } from '@/components/blocks/block-position';
 import { sentenceText } from '@/components/ui/block-link';
 import { BlocksLimitsNote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
+import { formatTick } from '@/lib/chart-ticks';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -140,17 +141,91 @@ describe('BlockTransactionsTable', () => {
       wrap(<BlockTransactionsTable transactions={[tx(0, { blockNumber: 8 })]} blockNumber={7} />)
     ).toThrow('is not in block 7');
   });
-  it('fits the block page main column at 1440 (visual pass: the Cycles column was cut off)', () => {
+  // Readability F3-e, the coordinator's ruling: budgeted honestly with the lane's levers (the bar
+  // heads in the tick form on 48 px tracks, no spare, the hash alone at the row size), the table
+  // needs 1,086 px; the block page gives it 968 at 1440, so there it is its rows, by ListTable's
+  // rule (whether the page gives it its full width is the chain page lane's call).
+  it('budgets every column from what it holds: 1,086 px, its rows at the 968 px column', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // a block's index, four digits as written
+      ceil(at('9999', 13) + 16),
+      // the hash at the row size
+      ceil(at('0x01010101…010101', 13) + 16),
+      // "#99,999,999" and " +10 · uncle" (the proposal window is 2 to 10 blocks)
+      ceil(at('#99,999,999 +10 · uncle', 13) + 16),
+      // "9999", the arrow between its 6 px margins, "9,999"
+      ceil(at('9999', 13) + 6 + at('→', 13) + 6 + at('9,999', 13) + 16),
+      // the genesis transactions' 33.6 billion CKB: eleven whole digits, every decimal
+      ceil(at('99,999,999,999.99999999', 13) + 16),
+      // a fee under 100 CKB
+      ceil(at('99.99999999', 13) + 16),
+      // a 48 px track, the bar's 10 px gap and genesis's scale, "1,500,000"
+      ceil(48 + 10 + at('1,500,000', 13) + 16),
+      // a 48 px track and a scale under a billion cycles, "750,000,000"; the last column
+      ceil(48 + 10 + at('750,000,000', 13)),
+    ];
+    expect(budgets).toEqual([48, 149, 196, 106, 196, 102, 145, 144]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(1086);
+    const { unmount } = wrap(
+      <BlockTransactionsTable
+        transactions={[tx(0), tx(1, { cycles: 1000, txSize: 700 })]}
+        blockNumber={7}
+      />
+    );
+    const table = screen.getByRole('table');
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    const heads = Array.from(table.querySelectorAll('thead th'));
+    for (const [i, values] of [
+      [6, [300, 700]],
+      [7, [0, 1000]],
+    ] as const) {
+      const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
+      const scale = resourceScale([...values]);
+      expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual([
+        '0',
+        formatTick(scale, scale),
+      ]);
+      expect(ticks.style.width).toBe('48px');
+    }
+    unmount();
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1086, 'table'],
+      [1085, 'rows'],
+      [968, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount: drop } = wrap(
+        <BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />
+      );
+      expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  // Re-pinned on purpose (readability F3-e, the coordinator's ruling on the block page's table): the
+  // columns' minimums were literals for 12 / 13 px text (32 + 140 + 120 + 70 + 140 + 104 + 160 +
+  // 172 = 938 px, which the 968 px main column at 1440 held); budgeted from what they hold they are
+  // 1,086 px, so in that column the table takes its rows, by ListTable's rule, 118 px short
+  // (renamed: it was "fits the block page main column at 1440").
+  it('takes its rows in the block page main column at 1440, 118 px short of its 1,086 px', () => {
     wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
-    // the columns' minimums, 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172 = 938 px (re-pinned by
-    // lane E3 from the table's own constant, which nothing in the app read)
     const minWidth = screen.getByRole('table').style.minWidth;
-    expect(minWidth).toBe('938px');
-    expect(parseFloat(minWidth)).toBeLessThanOrEqual(968);
+    expect(minWidth).toBe('1086px');
+    expect(parseFloat(minWidth) - 968).toBe(118);
   });
   // Table-rows R2: the bar heads are the shared ScaleHeader, at the geometry this table has always
   // drawn (a 96 px tick row 3 px under the name), so the lift changes no pixel.
-  it('heads its bars with the shared ScaleHeader: 96 px ticks, 3 px under the name', () => {
+  // Re-pinned on purpose (readability F3-e, the coordinator's ruling): the ticks in the tick form
+  // on the 48 px track a count bar keeps (renamed: "96 px ticks").
+  it('heads its bars with the shared ScaleHeader: 48 px ticks, 3 px under the name', () => {
     wrap(
       <BlockTransactionsTable
         transactions={[tx(0), tx(1, { cycles: 1000, txSize: 700 })]}
@@ -158,8 +233,10 @@ describe('BlockTransactionsTable', () => {
       />
     );
     const heads = Array.from(screen.getByRole('table').querySelectorAll('thead th'));
-    const size = resourceScale([300, 700]).toLocaleString('en-US');
-    const cycles = resourceScale([0, 1000]).toLocaleString('en-US');
+    const sizeScale = resourceScale([300, 700]);
+    const cyclesScale = resourceScale([0, 1000]);
+    const size = formatTick(sizeScale, sizeScale);
+    const cycles = formatTick(cyclesScale, cyclesScale);
     expect(heads.map((h) => h.textContent)).toEqual([
       '#',
       'Transaction',
@@ -175,16 +252,16 @@ describe('BlockTransactionsTable', () => {
       [7, cycles],
     ] as const) {
       const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
-      expect(ticks.style.width).toBe('96px');
+      expect(ticks.style.width).toBe('48px');
       expect((ticks.parentElement as HTMLElement).style.gap).toBe('3px');
       expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', end]);
     }
-    // Its row bars: 8 px, exact width, no minimum (300 of the size scale on 96 px).
+    // Its row bars: 8 px, exact width, no minimum (300 of the size scale on 48 px).
     const fill = screen
       .getByRole('table')
       .querySelector('tbody tr [data-segment="size"]') as HTMLElement;
     expect(fill.style.width).toBe(
-      `${Math.round((300 / resourceScale([300, 700])) * 96 * 100) / 100}px`
+      `${Math.round((300 / resourceScale([300, 700])) * 48 * 100) / 100}px`
     );
     expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
   });
@@ -240,9 +317,11 @@ describe('BlockTransactionsTable', () => {
 });
 
 describe('Blocks list pieces', () => {
+  // re-pinned on purpose (readability F3-e, the coordinator's ruling): the tick form, "8M" (it was
+  // "8,000,000"), on the 48 px track a count bar keeps
   it('heads a bar column with 0 … scale as wide as its track', () => {
-    render(<ScaleHeader label="Cycles" scale={8_000_000} trackWidth={96} />);
-    expect(screen.getByText('8,000,000').parentElement).toHaveStyle({ width: '96px' });
+    render(<ScaleHeader label="Cycles" scale={8_000_000} trackWidth={48} />);
+    expect(screen.getByText('8M').parentElement).toHaveStyle({ width: '48px' });
     expect(() => ScaleHeader({ label: 'x', scale: 0 })).toThrow('invalid column scale');
   });
   it('rejects a page whose blocks disagree on the consensus limits', () => {

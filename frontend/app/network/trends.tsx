@@ -4,7 +4,12 @@ import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type LabelCount, type NetworkHistory } from '@/lib/api';
 import { Chart, type ChartGap, type ChartPoint, type ChartSeries } from '@/components/ui/chart';
-import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
+import {
+  AlignedBar,
+  BAR_FIGURE_GAP,
+  COUNT_TRACK_PX,
+  ScaleHeader,
+} from '@/components/ui/aligned-bar';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { PhoneRow } from '@/components/ui/phone-row';
@@ -176,11 +181,12 @@ function shareDayWords(row: ShareDay): string {
 
 /**
  * The widest scale a day's count bar writes (readability F3-e): a day retains under 10,000
- * observations (the crawler sees a few thousand nodes), whose scale is at most 10,000. The bar's
- * track holds its head's ticks, "0" and "10,000", whole (57.6 px; it was 80).
+ * observations (the crawler sees a few thousand nodes), whose scale is at most 10,000, its figure
+ * "10,000". The head writes its ticks in the tick form ("0 … 10k"; the rule at `trackPx`), so the
+ * bar's track is COUNT_TRACK_PX, 48 px (it was 80, then 57.6 for "0 10,000").
  */
 const COUNT_SCALE = resourceScale([9_999]).toLocaleString('en-US');
-const SHARE_TRACK = trackPx(['0', COUNT_SCALE]);
+const SHARE_TRACK = COUNT_TRACK_PX;
 /** The day's columns at the cells' small step (13 px); a head or a quiet sentence at 12. */
 const cell = (chars: number) => textPx(chars, fontPx('small'));
 const meta = (chars: number) => textPx(chars, fontPx('meta'));

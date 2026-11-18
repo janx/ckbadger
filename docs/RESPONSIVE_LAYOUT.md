@@ -125,7 +125,17 @@ The 640–767 band has one content width to design for. Below 640 the container 
   proposal window). Never scaled, never folded, a plate never narrower than 99 px.
 - **Lists and tables**: a table is shown when the measured container holds every column's minimum
   width; otherwise each row is a designed phone row of two or three lines that keeps every column
-  (no generic label/value dump). Twenty rows per page below `md`.
+  (no generic label/value dump). Twenty rows per page below `md`. A column's minimum is budgeted
+  from the widest value its formatter writes for real chain data (`frontend/lib/list-bounds.ts`
+  names each bound and its reason: an eight-digit height, an age to "10y 364d ago", the consensus
+  limits of size and cycles), measured at its step (0.6 em a glyph, `lib/type-metrics.ts`), with
+  the 16 px gap after every column but the last; no spare is kept. The one column whose content is
+  unbounded (a name, what a transaction did) is the table's flexible column: a stated minimum, the
+  rest of the container, a longer value ending in the one ellipsis with its title. A bar's track
+  is at least 48 px and holds its head's tick row whole, the ticks written in the tick form as
+  every axis is ("0 … 600k"), the unit in the head's label, the exact figure beside the bar. A
+  table changes form exactly where its budgets stop fitting (`ListTable`); two lists of one page
+  change at one width, the larger of their sums.
 - **Analytic tables** that explain a page (balance changes, script groups, peer evidence) get a
   phone form of their own; they are never a sideways scroller in a first screen.
 - **Scrollbars**: painted in the page's palette and thin inside the page (`app/globals.css`), so a

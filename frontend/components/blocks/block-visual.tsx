@@ -115,7 +115,11 @@ interface ResourceBarProps {
   overhead?: number;
   /** Keep the exact count above its bar when a table column is narrow. */
   stacked?: boolean;
-  /** The inline bar's track in px, its column's (its head's ticks fit it); AlignedBar's default. */
+  /**
+   * The bar's track in px, its column's: its head's ticks stand whole over it (the rule at
+   * `trackPx`). Inline, AlignedBar's default when not given; stacked, required (it was a fixed 80
+   * px under heads whose ticks ran 120).
+   */
   trackWidth?: number;
 }
 
@@ -143,6 +147,8 @@ export function ResourceBar({
   ) {
     throw new Error(`${label}: overhead ${overhead} exceeds resource value ${value}`);
   }
+  if (stacked && !(trackWidth !== undefined && Number.isFinite(trackWidth) && trackWidth > 0))
+    throw new Error(`${label}: a stacked bar needs its column's track, got ${trackWidth}`);
   // Inline: the shared aligned bar, so every row starts at one left baseline (BA-01).
   if (!stacked)
     return (
@@ -170,7 +176,8 @@ export function ResourceBar({
       <span
         role="img"
         aria-label={`${label}: ${value.toLocaleString('en-US')}${overhead === undefined ? '' : `, ${overhead.toLocaleString('en-US')} overhead, ${(value - overhead).toLocaleString('en-US')} user transactions`}`}
-        className="bg-bar-track flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
+        className="bg-bar-track flex h-2 shrink-0 overflow-hidden"
+        style={{ width: `${trackWidth}px` }}
       >
         {overhead !== undefined && (
           <span

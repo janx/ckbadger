@@ -172,10 +172,20 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
       )}
     </span>
   );
-  const cells = (
+  // The counts as two facts, each whole: from 560 px one line beside the description (50
+  // characters at most, 390 px); below it two lines by construction, live of ever over the occupied
+  // share (the coordinator's sweep, F3-e: one line of 45 glyphs, 351 px, stood past a 328 px row),
+  // the widest "99,999,999 live · of 99,999,999" (31 characters at 13 px, 241.8).
+  const liveOf = `${countText(s.liveCellsCount)} live · of ${countText(s.cellsCount)}`;
+  const occupied = `${occupiedShare(s).share} occupied`;
+  const cells = wide ? (
     <span className="whitespace-nowrap">
-      {countText(s.liveCellsCount)} live · of {countText(s.cellsCount)} · {occupiedShare(s).share}{' '}
-      occupied
+      {liveOf} · {occupied}
+    </span>
+  ) : (
+    <span className="inline-flex flex-col items-end">
+      <span className="whitespace-nowrap">{liveOf}</span>
+      <span className="whitespace-nowrap">{occupied}</span>
     </span>
   );
   const name = (
