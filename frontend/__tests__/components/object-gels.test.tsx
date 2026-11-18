@@ -36,10 +36,11 @@ describe('SequencingGel (Object board, OB-7)', () => {
     );
     const bands = container.querySelectorAll('[data-nibble]');
     expect(bands).toHaveLength(106);
-    // a9 → nibble 0 in lane a, nibble 1 in lane 9; lanes are 15 px wide from x = 38 (V3: the
-    // ruler gutter gave 26 px to the gene columns so they fit the 896 px plate 1:1).
-    expect(Number(bands[0].getAttribute('x'))).toBeCloseTo(38 + 10 * 15 + 2.5, 5);
-    expect(Number(bands[1].getAttribute('x'))).toBeCloseTo(38 + 9 * 15 + 2.5, 5);
+    // a9 → nibble 0 in lane a, nibble 1 in lane 9; lanes are 15 px wide from x = 42 (V3: the
+    // ruler gutter gave 26 px to the gene columns so they fit the 896 px plate 1:1; re-pinned with
+    // readability F3: the gutter holds its "byte", 1 + 29 + 12 = 42, was 38)
+    expect(Number(bands[0].getAttribute('x'))).toBeCloseTo(42 + 10 * 15 + 2.5, 5);
+    expect(Number(bands[1].getAttribute('x'))).toBeCloseTo(42 + 9 * 15 + 2.5, 5);
     expect(screen.getByText('byte')).toBeInTheDocument();
     expect(container.querySelectorAll('[data-ruler]').length).toBeGreaterThanOrEqual(7);
     expect(
@@ -249,7 +250,9 @@ describe('SequencingGel at the measured width (V3)', () => {
   // the arrow's 16 and the 2 px end. 896 − 692.2 = 203.8 px holds 26 characters of 7.8 (202.8)
   // and not 27 (210.6): the budget is 26. A value of 40 characters is cut to it and still fits.
   // Re-pinned (readability R4): the gene text is 13 and 12.5 px at 0.6 em (was 12 and 11.5 px at
-  // a measured 0.636 em), so the budget is 26 (was 27).
+  // a measured 0.636 em), so the budget is 26 (was 27). Re-pinned (readability F3): the ruler's
+  // gutter holds its "byte" (42 px, was 38), the gene columns start at 308 and the value at 696.2,
+  // and 896 − 696.2 = 199.8 px holds 25 characters (195) and not 26 (202.8): the budget is 25.
   it('draws the wide gel at the 896 px plate with a value cut to the full budget', () => {
     stubChartWidth(896);
     const long = 'N'.repeat(40);
@@ -265,8 +268,8 @@ describe('SequencingGel at the measured width (V3)', () => {
     const words = Array.from(container.querySelectorAll('[data-gene="Serial"] text')).map(
       (t) => t.textContent
     );
-    expect(words).toContain(`${'N'.repeat(25)}…`);
-    expect(words.some((w) => w!.includes('N'.repeat(26)))).toBe(false);
+    expect(words).toContain(`${'N'.repeat(24)}…`);
+    expect(words.some((w) => w!.includes('N'.repeat(25)))).toBe(false);
     expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
       'inscription a94617…79e0i0'
     );
