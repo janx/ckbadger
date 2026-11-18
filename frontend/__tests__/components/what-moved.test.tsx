@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
 import { lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
@@ -270,6 +271,7 @@ describe('WhatMoved, the list form', () => {
   });
 
   it('lists each flow as from, a step down through the plate, to — and nothing scrolls sideways', () => {
+    atViewportWidth(390);
     renderAt(358);
     const frame = screen.getByTestId('tx-what-moved');
     expect(frame).toHaveAttribute('data-form', 'list');
@@ -279,12 +281,22 @@ describe('WhatMoved, the list form', () => {
     expect(object.querySelector('svg[aria-hidden="true"] path[d="M6 0v15"]')).not.toBeNull();
     const eyebrows = Array.from(object.querySelectorAll('.eyebrow')).map((e) => e.textContent);
     expect(eyebrows).toEqual(['from', 'to']);
-    // U-09 (re-pinned): the list's parties at the tight size
+    // U-09 (re-pinned): the list's parties at the tight size, on a phone
     expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sp7v9m');
     expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…ay02wn');
     expect(ckb.querySelectorAll('[data-flow-side="to"] [data-flow-end]')).toHaveLength(2);
     expect(ckb.querySelector('[data-flow-end="miner"]')).toHaveTextContent(
       'the miner fee0.00008888 CKB'
     );
+  });
+  // R9: the list is drawn at 1024 too (the transaction's 640 px column), beside the summary, the
+  // balances and the tiles, which write the same parties at the row size: tight only below sm.
+  it('writes the parties at the row size where the list is drawn from sm', () => {
+    renderAt(640);
+    const frame = screen.getByTestId('tx-what-moved');
+    expect(frame).toHaveAttribute('data-form', 'list');
+    const [object] = within(frame).getAllByRole('group');
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…qqsp7v9m');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…qqay02wn');
   });
 });
