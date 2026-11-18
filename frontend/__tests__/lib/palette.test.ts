@@ -6,6 +6,7 @@ import {
   color,
   contrastRatio,
   fade,
+  FILL_SCAN,
   glowAlpha,
   hexAlpha,
   hexToRgb,
@@ -249,6 +250,18 @@ describe('the rubbing / Song print finish', () => {
     expect(MATERIALS.dark['scanline-ink']).toBe('transparent');
     expect(MATERIALS.light['scanline-ink']).toBe(hexAlpha(PALETTE.light['text-bright'], 0.045));
     expect(rgbaAlpha(MATERIALS.light['scanline-ink'])).toBeGreaterThan(0);
+  });
+
+  // Readability R1: the night's scan is cut into a figure's fills, in the window layer's rhythm
+  // and at the strength it had on a fill: of every 3 px, 1 px lets the ground through at 22 %.
+  // `fill-scan` is the HTML fill's mask image (an alpha mask from the fill's foot up); by day
+  // there is none, the ruled paper being the window's.
+  it('cuts the scan into a fill by night, 1 px in 3 at the layer’s 22 %, and none by day', () => {
+    expect(FILL_SCAN).toEqual({ period: 3, row: 1, strength: 0.22 });
+    expect(MATERIALS.dark['fill-scan']).toBe(
+      'repeating-linear-gradient(0deg, rgba(0, 0, 0, 1) 0px, rgba(0, 0, 0, 1) 2px, rgba(0, 0, 0, 0.78) 2px, rgba(0, 0, 0, 0.78) 3px)'
+    );
+    expect(MATERIALS.light['fill-scan']).toBe('none');
   });
 
   it('sets a frame flat: the surface, opaque, with no sheen, no lit edges and no outer ring', () => {

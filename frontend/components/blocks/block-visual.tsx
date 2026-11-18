@@ -156,6 +156,7 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
       >
         {overhead !== undefined && (
           <span
+            className="scan-fill"
             style={{
               width: `${(overhead / scale) * 100}%`,
               backgroundColor: CLASS_COLORS.ckb,
@@ -163,7 +164,7 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
           />
         )}
         <span
-          className="bg-jade"
+          className="bg-jade scan-fill"
           style={{
             width: `${((overhead === undefined ? value : value - overhead) / scale) * 100}%`,
           }}

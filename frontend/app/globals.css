@@ -312,6 +312,16 @@ body * {
   z-index: 9999;
 }
 
+/* The scan of a fill (readability R1): by night a bar's fill is cut by the scan — of every 3 px
+   from its foot up, 1 px lets the ground behind it through at 22 %, the strength the window's
+   layer had on a fill (lib/palette.ts `fill-scan`, FILL_SCAN); by day the mask is none. Only on an
+   element that holds no words (__tests__/lib/scan-fill-gate.test.ts); a chart's SVG fills take the
+   mask of components/ui/scan-fill.tsx. Outside a layer, so the build keeps it whatever uses it. */
+.scan-fill {
+  -webkit-mask-image: var(--m-fill-scan);
+  mask-image: var(--m-fill-scan);
+}
+
 .crt-vignette {
   position: fixed;
   inset: 0;

@@ -102,7 +102,7 @@ export function AlignedBar({
           <span
             key={s.key}
             data-segment={s.key}
-            className="h-full"
+            className="scan-fill h-full"
             style={{ width: `${width(s.value)}px`, backgroundColor: TONE[s.tone] }}
           />
         ))}

@@ -117,7 +117,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                 </span>
               </div>
               <div className="bg-bar-track mt-1 h-1">
-                <div className="bg-jade h-1" style={{ width: `${width}%` }} />
+                <div className="bg-jade scan-fill h-1" style={{ width: `${width}%` }} />
               </div>
             </li>
           );

@@ -77,6 +77,7 @@ export function CapacityPartition({
               <div
                 key={p.label}
                 data-part={p.label}
+                className="scan-fill"
                 style={{
                   flexGrow: Number(p.value) / Number(sum),
                   flexBasis: 0,
@@ -94,6 +95,7 @@ export function CapacityPartition({
             <div
               key={p.label}
               data-part={p.label}
+              className="scan-fill"
               style={{
                 width: `${(Number(p.value) / Number(sum)) * 100}%`,
                 backgroundColor: p.color,

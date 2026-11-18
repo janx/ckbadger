@@ -11,6 +11,7 @@ import {
 } from 'react';
 import Link from '@/components/ui/link';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { useScanFill } from '@/components/ui/scan-fill';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import {
@@ -560,6 +561,8 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
   const domain: [number, number] = [0, ticks.values[ticks.values.length - 1]];
   const y = yScale(domain);
   const n = bars.length;
+  // Readability R1: by night the solid bars are cut by the scan; null by day.
+  const scan = useScanFill();
   return (
     <ChartCanvas
       ariaLabel={ariaLabel}
@@ -575,6 +578,7 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
         const mid = Math.floor(n / 2);
         return (
           <>
+            {scan?.defs}
             <path
               data-role="grid"
               d={ticks.values
@@ -619,6 +623,7 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
                       height={f1(BOTTOM - top)}
                       fill={C.data}
                       fillOpacity={on || b.state === 'highlight' ? 1 : 0.45}
+                      mask={scan?.mask}
                     />
                   )}
                 </g>
@@ -757,6 +762,8 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
       ? ariaLabel
       : `${ariaLabel}; beyond the ±${formatTick(cap, capStep)} axis, drawn clipped: ${clipped.join(', ')}`;
   const n = points.length;
+  // Readability R1: by night the bars are cut by the scan (never a clip mark or its value).
+  const scan = useScanFill();
   return (
     <ChartCanvas
       ariaLabel={label}
@@ -772,6 +779,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
         const mid = Math.floor(n / 2);
         return (
           <>
+            {scan?.defs}
             <path
               data-role="grid"
               d={`M${LEFT} ${TOP}H${f1(right)}M${LEFT} ${BOTTOM}H${f1(right)}`}
@@ -807,6 +815,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
                     height={f1(Math.abs(end - zero))}
                     fill={color}
                     fillOpacity={on ? 1 : 0.75}
+                    mask={scan?.mask}
                   />
                   {b.clipped && (
                     <ClipMark

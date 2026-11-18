@@ -52,7 +52,10 @@ function RankedPreview({ model }: { model: ChartModel }) {
             <span className="shrink-0 tabular-nums">{row.share}</span>
           </div>
           <div className="bg-bar-track mt-1 h-1">
-            <div className="bg-jade h-1" style={{ width: `${shareWidth(row, model.title)}%` }} />
+            <div
+              className="bg-jade scan-fill h-1"
+              style={{ width: `${shareWidth(row, model.title)}%` }}
+            />
           </div>
         </li>
       ))}

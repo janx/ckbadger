@@ -219,7 +219,10 @@ function scanSites(code: string): { fills: Site[]; masks: Site[]; stray: number[
 
   // a class name anywhere else in the code (not in a comment) is one the gate cannot judge
   const stray: number[] = [];
-  const scanTokens = (node: ts.Node) => {
+  const scanTokens = (node: ts.Node): void => {
+    // a module's path names a file, not a class (`@/components/ui/scan-fill`)
+    if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return;
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) return;
     if (
       ts.isStringLiteralLike(node) ||
       ts.isTemplateHead(node) ||
@@ -303,8 +306,11 @@ describe('the scan gate finds what it must, and only that', () => {
       "const cls = cn('bg-jade', `scan-fill ${x}`);",
       '// a comment may name scan-fill',
       '<span className="scan-fill" />;',
+      "import { useScanFill } from '@/components/ui/scan-fill';",
+      "const Lazy = lazy(() => import('@/components/ui/scan-fill'));",
+      'const id = `scan-fill${n}`;',
     ]);
-    expect(stray).toEqual([1, 3]);
+    expect(stray).toEqual([1, 3, 8]);
   });
 });
 
