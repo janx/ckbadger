@@ -21,27 +21,76 @@ import { cn } from '@/lib/utils';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
-import { SVG_TEXT } from '@/lib/chart-type';
-import { advancePx } from '@/lib/type-metrics';
+import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { advancePx, columnPx, descentPx, fontPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
+/*
+ * The map's words stand in tight lines of their roles (readability plan 2026-11-18, lane F3): the
+ * lane digits and the byte ruler at the tick size, a gene's reading row at the head size.
+ */
+const TICK_LINE = tightLinePx(SVG_TEXT.tick);
+/** The ruler's column holds its widest word, "byte" (28.8 px at 12 px; it ran 2.8 px past the svg). */
+const RULER_WORD = textPx('byte'.length, SVG_TEXT.tick);
+/** The ruler's words end this far left of the lanes, the side-by-side map's and the stacked one's. */
+const RULER_GAP = { wide: 12, narrow: 8 } as const;
+/** The ruler's column: a pixel, its widest word and its gap to the lanes (42 px, was 38). */
+const RULER_COLUMN = (gap: number) => 1 + Math.ceil(RULER_WORD) + gap;
+/**
+ * The lane digits over the lanes, a tick line 4 px under the top of the side-by-side map (a pixel
+ * on the stacked one); its wells 5 px under them, the bands 16 px under the wells (44 px).
+ */
+const DIGITS_TOP = 4;
+const WELL_Y = DIGITS_TOP + TICK_LINE + 5;
 /** The side-by-side map: lanes from LX, brackets at GX, the gene columns from TX. */
-const WIDE = { LX: 38, LANE: 15, TOP: 44, STEP: 3.3, LABEL_GAP: 15 } as const;
+const WIDE = {
+  LX: RULER_COLUMN(RULER_GAP.wide),
+  LANE: 15,
+  TOP: WELL_Y + 4 + 16,
+  STEP: 3.3,
+  /** Two genes' reading rows stand a head line apart, at least (16 px, was 15). */
+  LABEL_GAP: tightLinePx(SVG_TEXT.head),
+} as const;
 const GX = WIDE.LX + 16 * WIDE.LANE + 10;
 const TX = GX + 16;
 /** One character of a gene's name, arrow and value (the head size) and of its bytes and raw (the value size). */
 const CHAR_12 = advancePx(SVG_TEXT.head);
 const CHAR_115 = advancePx(SVG_TEXT.value);
-// A value that is longer is a label cut to this budget. 26 is the most the wide gel holds at the
+// A value that is longer is a label cut to this budget. 25 is the most the wide gel holds at the
 // DNA plate at 1280 (896 px) for the flagship DNA (Nervape): its columns before the value end at
-// 692.2 px (the gene columns from 304; the longest name, "prev.type", 9 × 7.8 + 10; the longest
+// 696.2 px (the gene columns from 308; the longest name, "prev.type", 9 × 7.8 + 10; the longest
 // bytes · rule, "bytes 51–52 · nervapeNote", 25 × 7.5 + 12; the raw at the tight size, 11 × 7.5
-// + 8; the arrow's 16; the 2 px end), and 896 − 692.2 = 203.8 px holds 26 characters (202.8) but
-// not 27 (210.6). It was 27 when the gene text was 12 and 11.5 px, measured at 0.636 em. An
-// inscription, "inscription a94617…79e0i0" (25, its txid at the tight size, U-09), is never cut.
-const VALUE_MAX = 26;
+// + 8; the arrow's 16; the 2 px end), and 896 − 696.2 = 199.8 px holds 25 characters (195) but
+// not 26 (202.8). It was 26 while the ruler's column was 38 px, 4 px short of its "byte", and 27
+// when the gene text was 12 and 11.5 px, measured at 0.636 em. An inscription, "inscription
+// a94617…79e0i0" (25, its txid at the tight size, U-09), is never cut.
+const VALUE_MAX = 25;
 const NAME_MAX = 11;
-/** The stacked map: a ruler column, then lanes of up to 20 px and never under 14. */
-const NARROW = { RULER: 34, MAX_LANE: 20, MIN_LANE: 14, TOP: 26, STEP: 7 } as const;
+/** The stacked map: a ruler column (38 px, was 34), then lanes of up to 20 px and never under 14. */
+const NARROW = {
+  RULER: RULER_COLUMN(RULER_GAP.narrow),
+  MAX_LANE: 20,
+  MIN_LANE: 14,
+  /** The lane digits a pixel under the top, the lanes' plate 6 px under them (26 px). */
+  TOP: 1 + TICK_LINE + 6 + 4,
+  STEP: 7,
+} as const;
+/**
+ * The one-line gene rows under a stacked map: the name's column holds a name at the wide map's cut
+ * (11 characters at the small step, 85.8 px) and 2 px (88; a longer name breaks in it, as it did);
+ * the bytes' column, as the wide map's columns, its longest text: a gene's bytes over its rule at
+ * the meta step, and 4 px (Nervape's "nervapeColor", 86.4 px: 91; it was 84, the rule running out
+ * of it).
+ */
+const NAME_COLUMN = columnPx(textPx(NAME_MAX, fontPx('small')), 2);
+const bytesColumn = (genes: readonly SequencingGene[]) =>
+  columnPx(
+    Math.max(
+      ...genes.flatMap((g) => [bytesOf(g), g.rule]).map((t) => textPx(t.length, fontPx('meta')))
+    ),
+    4
+  );
+/** A ruler's number centred on its tick, and its "byte" a tick line under the last one. */
+const RULER_SHIFT = centreShift(SVG_TEXT.tick);
 
 const r = (v: number) => Math.round(v * 10) / 10;
 
@@ -159,12 +208,13 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
   let floor = -Infinity;
   const labelY = new Map<string, number>();
   for (const g of genes) {
-    const mid = (yOf(g.offset * 2) + yOf((g.offset + g.length) * 2 - 1)) / 2 + 4;
+    const mid =
+      (yOf(g.offset * 2) + yOf((g.offset + g.length) * 2 - 1)) / 2 + centreShift(SVG_TEXT.head);
     const y = Math.max(mid, floor + LABEL_GAP);
     labelY.set(g.key, y);
     floor = y;
   }
-  const labelsEnd = Math.max(height, floor + 12);
+  const labelsEnd = Math.max(height, floor + descentPx(SVG_TEXT.head) + 8);
   return (
     <svg
       role="img"
@@ -180,7 +230,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
           <g key={d} aria-hidden>
             <text
               x={r(x + LANE / 2)}
-              y="16"
+              y={DIGITS_TOP + lineAscentPx(SVG_TEXT.tick)}
               textAnchor="middle"
               fontSize={SVG_TEXT.tick}
               fill={GEL_COLORS.label}
@@ -189,7 +239,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             </text>
             <rect
               x={r(x + 2)}
-              y="24"
+              y={WELL_Y}
               width={LANE - 4}
               height="4"
               fill="none"
@@ -218,8 +268,8 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             stroke={GEL_COLORS.ruler}
           />
           <text
-            x={LX - 12}
-            y={r(yOf(b * 2) + 3.5)}
+            x={LX - RULER_GAP.wide}
+            y={r(yOf(b * 2) + RULER_SHIFT)}
             textAnchor="end"
             fontSize={SVG_TEXT.tick}
             fill={GEL_COLORS.rulerText}
@@ -230,8 +280,8 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
       ))}
       <text
         data-ruler={bytes.length}
-        x={LX - 12}
-        y={r(yOf(n) + 4)}
+        x={LX - RULER_GAP.wide}
+        y={r(yOf(n) + RULER_SHIFT)}
         textAnchor="end"
         fontSize={SVG_TEXT.tick}
         fill={GEL_COLORS.rulerText}
@@ -239,8 +289,8 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
         {bytes.length}
       </text>
       <text
-        x={LX - 12}
-        y={r(yOf(n) + 18)}
+        x={LX - RULER_GAP.wide}
+        y={r(yOf(n) + RULER_SHIFT + TICK_LINE)}
         textAnchor="end"
         fontSize={SVG_TEXT.tick}
         fill={GEL_COLORS.rulerText}
@@ -318,7 +368,13 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
                 />
               </>
             )}
-            <rect x={TX - 2} y={r(ly - 13)} width={width - TX + 2} height="17" fill="transparent" />
+            <rect
+              x={TX - 2}
+              y={r(ly - lineAscentPx(SVG_TEXT.head))}
+              width={width - TX + 2}
+              height={tightLinePx(SVG_TEXT.head)}
+              fill="transparent"
+            />
             <text x={col.name} y={r(ly)} fontSize={SVG_TEXT.head} fill={g.color}>
               {clipLabel(g.name, NAME_MAX)}
             </text>
@@ -362,7 +418,8 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
   const digits = bytes.join('').split('');
   const n = digits.length;
   const bottom = TOP + n * STEP;
-  const height = bottom + 26;
+  // the ruler's last number and its "byte" under the map, and 4 px
+  const height = bottom + RULER_SHIFT + TICK_LINE + descentPx(SVG_TEXT.tick) + 4;
   const byKey = new Map(genes.map((g) => [g.key, g]));
   const litGenes = genes.filter((g) => g.name === lit);
   const inLit = (byte: number) =>
@@ -374,7 +431,8 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
     0,
     ...genes.map((g) => (shortenHash(g.raw, 'tight').length + 3 + valueOf(g).length) * CHAR_12)
   );
-  const oneLine = width - 88 - 84 - 2 * 10 >= readingWidth;
+  const bytesCol = bytesColumn(genes);
+  const oneLine = width - NAME_COLUMN - bytesCol - 2 * 10 >= readingWidth;
   return (
     <>
       <svg
@@ -397,7 +455,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           <g key={d} aria-hidden>
             <text
               x={RULER + d * lane + lane / 2}
-              y="12"
+              y={1 + lineAscentPx(SVG_TEXT.tick)}
               textAnchor="middle"
               fontSize={SVG_TEXT.tick}
               fill={GEL_COLORS.label}
@@ -420,8 +478,8 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           <text
             key={b}
             data-ruler={b}
-            x={RULER - 8}
-            y={r(yOf(b * 2) + 3.5)}
+            x={RULER - RULER_GAP.narrow}
+            y={r(yOf(b * 2) + RULER_SHIFT)}
             textAnchor="end"
             fontSize={SVG_TEXT.tick}
             fill={GEL_COLORS.rulerText}
@@ -431,8 +489,8 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
         ))}
         <text
           data-ruler={bytes.length}
-          x={RULER - 8}
-          y={r(bottom + 4)}
+          x={RULER - RULER_GAP.narrow}
+          y={r(bottom + RULER_SHIFT)}
           textAnchor="end"
           fontSize={SVG_TEXT.tick}
           fill={GEL_COLORS.rulerText}
@@ -440,8 +498,8 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           {bytes.length}
         </text>
         <text
-          x={RULER - 8}
-          y={r(bottom + 18)}
+          x={RULER - RULER_GAP.narrow}
+          y={r(bottom + RULER_SHIFT + TICK_LINE)}
           textAnchor="end"
           fontSize={SVG_TEXT.tick}
           fill={GEL_COLORS.rulerText}
@@ -529,11 +587,16 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
                 {...bind(g.name)}
                 className={cn(
                   '-mx-2 grid cursor-pointer items-baseline gap-x-2.5 px-2 py-2',
-                  oneLine
-                    ? 'grid-cols-[88px_84px_minmax(0,1fr)]'
-                    : 'grid-cols-[minmax(0,1fr)_auto] gap-y-0.5',
+                  !oneLine && 'grid-cols-[minmax(0,1fr)_auto] gap-y-0.5',
                   on && 'bg-base-surface'
                 )}
+                style={
+                  oneLine
+                    ? {
+                        gridTemplateColumns: `${NAME_COLUMN}px ${bytesCol}px minmax(0,1fr)`,
+                      }
+                    : undefined
+                }
               >
                 <span className="min-w-0 [overflow-wrap:anywhere]" style={{ color: g.color }}>
                   {g.name}

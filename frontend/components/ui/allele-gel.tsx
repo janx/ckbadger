@@ -37,13 +37,19 @@ import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
 import { clipLabel } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
-import { SVG_TEXT } from '@/lib/chart-type';
+import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { descentPx, tightLinePx } from '@/lib/type-metrics';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
 const OUTLINE_GAP = 1.5;
 const ROW_GAP = 18;
 const MIN_ROW_BAND = 120;
+/** A band's name, a variant count and a tag are tick lines (readability plan 2026-11-18, lane F3). */
+const TICK_LINE = tightLinePx(SVG_TEXT.tick);
+/** The count of a lane's variants stands 4 px under its bands, and the row ends 5 px under it. */
+const COUNT_GAP = 4;
+const COUNT_FOOT = 5;
 /** The ranked list shows this many genes before its "more genes" control. */
 const LIST_FIRST = 10;
 
@@ -200,7 +206,7 @@ function Gel({
     rows.length === 1 ? bandHeight : Math.max(MIN_ROW_BAND, Math.round(bandHeight / rows.length));
   /** Inside a lane, bands keep this much air on each side; a narrow lane keeps 2 px. */
   const inset = lw >= 28 ? 7 : 2;
-  const rowH = head + 14 + h + 24;
+  const rowH = head + 14 + h + COUNT_GAP + TICK_LINE + COUNT_FOOT;
   const height = rows.length * rowH + (rows.length - 1) * ROW_GAP;
   const slot = new Map<number, { row: number; k: number }>();
   rows.forEach((row, ri) => row.forEach((lane, k) => slot.set(lane, { row: ri, k })));
@@ -277,9 +283,10 @@ function Gel({
                   <text
                     data-gene-caption
                     {...(captions === 'across'
-                      ? { x: r(cx), y: rowTop(ri) + 12, textAnchor: 'middle' }
+                      ? { x: r(cx), y: rowTop(ri) + ALLELE_GEL.captionY, textAnchor: 'middle' }
                       : {
-                          transform: `translate(${r(cx + 3)} ${rowTop(ri) + head - 6}) rotate(-90)`,
+                          // turned on end, its line centred across the lane
+                          transform: `translate(${r(cx + (TICK_LINE - 2 * descentPx(SVG_TEXT.tick)) / 2)} ${rowTop(ri) + head - 6}) rotate(-90)`,
                         })}
                     fontSize={SVG_TEXT.tick}
                     fill={lane.gene === activeGene ? GEL_COLORS.well : GEL_COLORS.heading}
@@ -327,7 +334,7 @@ function Gel({
                         >
                           <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${percentOf(BigInt(b.count), BigInt(total))})`}</title>
                         </rect>
-                        {p.h >= 13 &&
+                        {p.h > TICK_LINE &&
                           lw >= ALLELE_GEL.labelledLane &&
                           !b.isColour &&
                           (() => {
@@ -345,7 +352,7 @@ function Gel({
                             return (
                               <text
                                 x={r(cx)}
-                                y={r(p.y + p.h / 2 + 3.5)}
+                                y={r(p.y + (p.h - TICK_LINE) / 2 + lineAscentPx(SVG_TEXT.tick))}
                                 textAnchor="middle"
                                 fontSize={SVG_TEXT.tick}
                                 pointerEvents="none"
@@ -361,7 +368,7 @@ function Gel({
                   <text
                     data-variants
                     x={r(cx)}
-                    y={r(top + h + 16)}
+                    y={r(top + h + COUNT_GAP + lineAscentPx(SVG_TEXT.tick))}
                     textAnchor="middle"
                     fontSize={SVG_TEXT.tick}
                     fill={GEL_COLORS.label}
@@ -430,7 +437,7 @@ function Gel({
                     {o.persistent && (
                       <text
                         x={LX - 4}
-                        y={r(boxes[0].y + boxes[0].h / 2 + 3.5)}
+                        y={r(boxes[0].y + boxes[0].h / 2 + centreShift(SVG_TEXT.tick))}
                         textAnchor="end"
                         fontSize={SVG_TEXT.tick}
                         fill={GEL_COLORS.overlay}

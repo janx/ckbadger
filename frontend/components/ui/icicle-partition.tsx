@@ -3,8 +3,8 @@ import { CLASS_KEYS, type AssetClass } from '@/lib/design-tokens';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { color, inkOnFill, type FillInk, type PaletteKey } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
-import { textPx } from '@/lib/type-metrics';
-import { SVG_TEXT } from '@/lib/chart-type';
+import { textPx, tightLinePx } from '@/lib/type-metrics';
+import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
 
 export interface IcicleNode {
   key: string;
@@ -70,8 +70,32 @@ const FILL_INK_CLASS: Record<FillInk, string> = {
 
 const W = 900;
 const BOX = 28;
-const ROW = 84;
-const LABELS = 44;
+/*
+ * The words follow from their roles (readability plan 2026-11-18, lane F3): each is a tight line
+ * (lib/chart-type.ts), a line written in a box is centred in it, and the labels under a box are
+ * its name (label), its value (value) and its note (note) stacked 3 px under the box: 3 + 15 +
+ * 15.5 + 15 and 3 under them, 52 px up to the pixel (was 44, where the three lines met and the
+ * last row's note ran past the svg); a row of boxes with labels under them is the box, its labels
+ * and 4 px: 84 px as before.
+ */
+const LABEL_GAP = 3;
+const LABEL_Y = LABEL_GAP + lineAscentPx(SVG_TEXT.label);
+const VALUE_Y = LABEL_GAP + tightLinePx(SVG_TEXT.label) + lineAscentPx(SVG_TEXT.value);
+const NOTE_Y =
+  LABEL_GAP +
+  tightLinePx(SVG_TEXT.label) +
+  tightLinePx(SVG_TEXT.value) +
+  lineAscentPx(SVG_TEXT.note);
+const LABELS = Math.ceil(
+  LABEL_GAP +
+    tightLinePx(SVG_TEXT.label) +
+    tightLinePx(SVG_TEXT.value) +
+    tightLinePx(SVG_TEXT.note) +
+    LABEL_GAP
+);
+const ROW = BOX + LABELS + 4;
+/** The baseline of a line set at `px` centred in a box `h` tall. */
+const centredY = (h: number, px: number) => (h - tightLinePx(px)) / 2 + lineAscentPx(px);
 
 interface Placed {
   node: IcicleNode;
@@ -99,13 +123,18 @@ function place(node: IcicleNode, depth: number, x: number, width: number, out: P
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
-/** The words of a `boxLabel` that fit a box `width` wide at `px`, padded `pad` on each side. */
+/**
+ * The words of a `boxLabel` that fit a box `width` by `height` at `px`, padded `pad` on each side:
+ * none where the box is lower than their line.
+ */
 function fittedLabel(
   label: NonNullable<IcicleNode['boxLabel']>,
   width: number,
+  height: number,
   px: number,
   pad: number
 ): { name: boolean; note: boolean } | 'share' | null {
+  if (tightLinePx(px) > height) return null;
   const fits = (text: string) => textPx(text.length, px) + 2 * pad <= width;
   const share = `${label.share}${label.unit ? ` ${label.unit}` : ''}`;
   const core = `${label.name} ${share}`;
@@ -165,7 +194,7 @@ export function IciclePartition({
         const px = h >= 40 ? SVG_TEXT.reading : SVG_TEXT.label;
         const pad = h >= 40 ? 12 : 6;
         const fitted =
-          !hideLabels && node.boxLabel ? fittedLabel(node.boxLabel, width, px, pad) : null;
+          !hideLabels && node.boxLabel ? fittedLabel(node.boxLabel, width, h, px, pad) : null;
         const end = node.align === 'end';
         const tx = end ? x + width - 10 : x + 2;
         const anchor = end ? 'end' : 'start';
@@ -184,7 +213,7 @@ export function IciclePartition({
               <text
                 data-label={node.key}
                 x={x + pad}
-                y={rowY[d] + h / 2 + Math.round(px * 0.35)}
+                y={rowY[d] + centredY(h, px)}
                 fontSize={px}
                 className={boxInk}
               >
@@ -211,7 +240,7 @@ export function IciclePartition({
               <text
                 data-label={node.key}
                 x={x + 8}
-                y={rowY[d] + 19}
+                y={rowY[d] + centredY(h, SVG_TEXT.head)}
                 fontSize={SVG_TEXT.head}
                 className={boxInk}
               >
@@ -229,7 +258,7 @@ export function IciclePartition({
                 <text
                   data-label={node.key}
                   x={tx}
-                  y={rowY[d] + BOX + 15}
+                  y={rowY[d] + BOX + LABEL_Y}
                   textAnchor={anchor}
                   fontSize={SVG_TEXT.label}
                   className="fill-text"
@@ -238,7 +267,7 @@ export function IciclePartition({
                 </text>
                 <text
                   x={tx}
-                  y={rowY[d] + BOX + 30}
+                  y={rowY[d] + BOX + VALUE_Y}
                   textAnchor={anchor}
                   fontSize={SVG_TEXT.value}
                   className="fill-text-bright"
@@ -249,7 +278,7 @@ export function IciclePartition({
                   <text
                     data-note={node.key}
                     x={tx}
-                    y={rowY[d] + BOX + 44}
+                    y={rowY[d] + BOX + NOTE_Y}
                     textAnchor={anchor}
                     fontSize={SVG_TEXT.note}
                     className="fill-text-dim"
@@ -273,7 +302,7 @@ export function IciclePartition({
                 {!hideLabels && (
                   <text
                     x={x + 8}
-                    y={rowY[d + 1] + 19}
+                    y={rowY[d + 1] + centredY(boxH(d + 1), SVG_TEXT.note)}
                     fontSize={SVG_TEXT.note}
                     className="fill-text-dim"
                   >

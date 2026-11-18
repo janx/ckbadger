@@ -3,6 +3,13 @@ import { stubChartWidth } from '../utils/chart-width';
 import { act, fireEvent, render, screen } from '../utils/test-utils';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 const days = [
   { date: '2026-10-20', canonicalBlocks: 9000, uncles: 230, nodeSwitches: 0 },
@@ -193,6 +200,55 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
       // each key's words end inside the column (7.2 px a character at 12 px; re-pinned from 6.6)
       for (const text of Array.from(svg.querySelectorAll('[data-role="chart-name"] text')))
         expect(Number(text.getAttribute('x')) + text.textContent!.length * 7.2).toBeLessThan(358);
+    });
+  });
+
+  // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every
+  // word of the plot stands whole in its band (the key in the name band over the plot, a value
+  // inside the plot over its own gridline, the first and last day in the axis band under it),
+  // touches no other word and no line it is not written on, measured by the type modules (0.6 em
+  // a glyph; a tight line over its baseline, its descent under it). The real cases: three days to
+  // 263 uncles, and a month to 1,476 a day (a four-character value in its lane), at the hero
+  // column at 1280 (1248), at 640 (608) and on a phone (358), where the key takes two lines.
+  describe('every word in its band (readability F3)', () => {
+    const month = Array.from({ length: 30 }, (_, i) => ({
+      date: `2026-10-${String(i + 1).padStart(2, '0')}`,
+      canonicalBlocks: 9000,
+      uncles: 200 + i * 44,
+      nodeSwitches: i % 3,
+    }));
+    it.each(
+      [1248, 608, 358].flatMap((width) => [
+        [width, 'three days', days] as const,
+        [width, 'a month', month] as const,
+      ])
+    )('at %i px, %s', (width, _name, list) => {
+      stubChartWidth(width);
+      const { container } = render(<Chart days={list} />);
+      const svg = container.querySelector('svg')!;
+      const frame = viewBox(svg);
+      // the plot's band: each day's hit area spans it, from the plot's top to its foot
+      const hit = container.querySelector('[data-day] rect')!;
+      const top = Number(hit.getAttribute('y'));
+      const base = top + Number(hit.getAttribute('height'));
+      const band = (from: number, to: number) => ({ ...frame, top: from, bottom: to });
+      const key = allTextLines(svg.querySelector('[data-role="chart-name"]')!);
+      expect(key).toHaveLength(2);
+      for (const line of key) expectInside(line, band(0, top), 'the key', 'flush');
+      for (const tick of [...svg.querySelectorAll('[data-role="y-tick"]')]) {
+        const gridline = Number(tick.parentElement!.querySelector('line')!.getAttribute('y1'));
+        for (const line of textLines(tick)) {
+          expectInside(line, band(top, base), 'a value', 'flush');
+          expect(line.bottom, `"${line.text}" stands over its gridline`).toBeLessThan(gridline);
+        }
+      }
+      const ends = [...svg.querySelectorAll('[data-day] text')].flatMap(textLines);
+      expect(ends).toHaveLength(2);
+      for (const line of ends) {
+        expectInside(line, band(base, frame.bottom), 'a day', 'flush');
+        expect(line.top, `"${line.text}" clears the axis`).toBeGreaterThan(base);
+      }
+      expectApart(allTextLines(svg), 'the plot');
     });
   });
 });

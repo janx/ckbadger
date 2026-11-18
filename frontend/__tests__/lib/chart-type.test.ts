@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SVG_TEXT, SVG_TEXT_FLOOR, centreShift, wrapWords } from '@/lib/chart-type';
-import { fontPx } from '@/lib/type-metrics';
+import { SVG_TEXT, SVG_TEXT_FLOOR, centreShift, lineAscentPx, wrapWords } from '@/lib/chart-type';
+import { descentPx, fontPx, tightLinePx } from '@/lib/type-metrics';
 
 /**
  * SVG text by role (readability plan 2026-11-18, lane F3, step 1): the sizes the figures used as
@@ -48,6 +48,13 @@ describe('what follows from a size', () => {
   it('centres digits on a line 0.3 em under it', () => {
     expect(centreShift(10)).toBe(3);
     expect(centreShift(SVG_TEXT.tick)).toBe(3.6);
+  });
+
+  // readability F3 (the figures' text budgets): a figure stacks its words in tight lines
+  it('stands a tight line on its baseline: the line less its descent over it', () => {
+    for (const px of Object.values(SVG_TEXT))
+      expect(lineAscentPx(px) + descentPx(px)).toBeCloseTo(tightLinePx(px), 10);
+    expect([12, 12.5, 13, 13.5, 14].map(lineAscentPx)).toEqual([11.4, 11.75, 12.1, 12.45, 12.8]);
   });
 });
 

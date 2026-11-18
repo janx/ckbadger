@@ -14,15 +14,29 @@ import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { shortenHash } from '@/lib/shorten';
 import { ShortId } from '@/components/ui/short-id';
-import { SVG_TEXT } from '@/lib/chart-type';
-import { textPx } from '@/lib/type-metrics';
+import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
+import { textPx, tightLinePx } from '@/lib/type-metrics';
 
 type Point = NetworkMap['points'][number];
 
 const DOT_R = 3.6;
 const RING_R = 6.2;
-/** Hierarchy v3 (R13): the band above the clusters that holds the map's name, inside the plot. */
-const NAME_BAND = 24;
+/**
+ * Hierarchy v3 (R13): the band above the clusters that holds the map's name, inside the plot: its
+ * label line 2 px under the top and 7 px over the clusters (24 px).
+ */
+const NAME_PAD = 2;
+const NAME_Y = NAME_PAD + lineAscentPx(SVG_TEXT.label);
+const NAME_BAND = NAME_PAD + tightLinePx(SVG_TEXT.label) + 7;
+/**
+ * A country's label (the tick size) stands a pixel under its cluster's reach: its baseline that and
+ * its line's ascent under the cluster's radius, its line's foot a tight line under the pixel
+ * (readability plan 2026-11-18, lane F3: the baseline was 11 px under the radius, its line 0.4 px
+ * over it, and the band kept under a cluster, 14 px, 0.6 px short of the line).
+ */
+const PLACE_GAP = 1;
+const PLACE_Y = PLACE_GAP + lineAscentPx(SVG_TEXT.tick);
+const PLACE_FOOT = PLACE_GAP + tightLinePx(SVG_TEXT.tick);
 /** The map's own floor: with its name band the picture is at least 280 px tall on a phone. */
 const MIN_MAP_HEIGHT = 256;
 
@@ -93,7 +107,7 @@ export function layoutCountryClusters(
     // a place's label, at the tick size
     const label = `${country} ${byCountry.get(country)!.length}`;
     const half = Math.max(r, textPx(label.length, SVG_TEXT.tick) / 2);
-    return { r, half, below: r + 14 };
+    return { r, half, below: r + PLACE_FOOT };
   };
   for (let round = 0; round < 400; round++) {
     for (let i = 0; i < countries.length; i++)
@@ -146,7 +160,7 @@ export function layoutCountryClusters(
       });
     });
     if (labelled(country))
-      labels.push({ country, count: peers.length, x: cx, y: cy + radius(peers.length) + 11 });
+      labels.push({ country, count: peers.length, x: cx, y: cy + radius(peers.length) + PLACE_Y });
     else listed.push({ country, count: peers.length });
   }
   dots.sort((a, b) => a.point.peerId.localeCompare(b.point.peerId));
@@ -209,7 +223,8 @@ function Legend({
       `heard of, never verified · ${neverVerified}`,
     ],
   ];
-  const ROW = 20;
+  // a row: its words' tight line at the head size and 4 px (20 px), the glyph on its middle
+  const ROW = tightLinePx(SVG_TEXT.head) + 4;
   return (
     <svg
       role="img"
@@ -221,7 +236,7 @@ function Legend({
       {rows.map(([glyph, words], i) => (
         <g key={words} transform={`translate(0 ${i * ROW + ROW / 2})`}>
           {glyph}
-          <text x="22" y="4" fontSize={SVG_TEXT.head} fill="var(--c-text)">
+          <text x="22" y={centreShift(SVG_TEXT.head)} fontSize={SVG_TEXT.head} fill="var(--c-text)">
             {words}
           </text>
         </g>
@@ -404,7 +419,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                   <text
                     data-role="chart-name"
                     x="8"
-                    y="14"
+                    y={NAME_Y}
                     fontSize={SVG_TEXT.label}
                     fill="var(--c-text-dim)"
                   >

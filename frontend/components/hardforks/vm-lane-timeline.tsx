@@ -13,8 +13,8 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2, HardforkScriptDeployment } from '@/lib/api';
-import { SVG_TEXT, wrapWords } from '@/lib/chart-type';
-import { advancePx, tightLinePx } from '@/lib/type-metrics';
+import { SVG_TEXT, lineAscentPx, wrapWords } from '@/lib/chart-type';
+import { advancePx, descentPx, tightLinePx } from '@/lib/type-metrics';
 
 export interface EditionMark {
   shortName: string;
@@ -55,27 +55,55 @@ const CHAR_PX = advancePx(SVG_TEXT.note);
  */
 const PLOT_TITLE = 'which VM runs a script, over time';
 const PLOT_HINT = 'dots: when each known script version was deployed';
+/*
+ * The figure's words stand in tight lines of their roles (lib/chart-type.ts), so its bands and
+ * baselines follow from the roles (readability plan 2026-11-18, lane F3).
+ */
 /** The plot's name at the label size. */
 const NAME_PX = SVG_TEXT.label;
 const NAME_CHAR_PX = advancePx(NAME_PX);
-const PLOT_NAME_Y = 13;
-/** The hint under the title, a tight label line below it (14 px). */
+/** The hint under the title, a tight label line below it (15 px). */
 const PLOT_NAME_LINE = tightLinePx(NAME_PX);
+/** The name's first line stands 2 px under the svg's top. */
+const PLOT_NAME_PAD = 2;
+const PLOT_NAME_Y = PLOT_NAME_PAD + lineAscentPx(NAME_PX);
 /** Clear space between the name band and the edition labels under it. */
-const PLOT_NAME_GAP = 9;
+const PLOT_NAME_GAP = 5;
 /** Glyph width of the edition names, set at the title size. */
 const EDITION_CHAR_PX = advancePx(SVG_TEXT.title);
-/** Baselines of an edition block's name and epoch on the first row, and the clear space kept
- * between two blocks side by side. */
-const NAME_Y = 18;
-const SUB_Y = 33;
+/**
+ * An edition block: its name (the title size) over its epoch (the note size), 6 px under the
+ * name band: their baselines 18.45 and 33.9 under it (were 18 and 33, where the two lines met);
+ * the clear space kept between two blocks side by side.
+ */
+const BLOCK_PAD = 6;
+const EDITION_LINES = tightLinePx(SVG_TEXT.title) + tightLinePx(SVG_TEXT.note);
+const NAME_Y = BLOCK_PAD + lineAscentPx(SVG_TEXT.title);
+const SUB_Y = BLOCK_PAD + tightLinePx(SVG_TEXT.title) + lineAscentPx(SVG_TEXT.note);
 const BLOCK_GAP = 8;
 /**
  * A block that would crowd the one before it drops a whole row — name over epoch, together —
  * so its epoch never reads as the other edition's (390 px: Meepo's epoch sat under Mirana's).
- * A row's name baseline is 34 px under the row above it: 19 px clear of that row's epoch.
+ * A row is the block's two lines and 3 px: 34.5 px (was 34).
  */
-const BLOCK_ROW = 34;
+const BLOCK_ROW = EDITION_LINES + 3;
+/**
+ * Under the edition rows, on the desktop, the count column's head ("live references", a note
+ * line) 3 px under them and 8.5 px over the lanes; on a phone 24.5 px of air.
+ */
+const LIVE_HEAD = { gap: 3, over: 8.5 } as const;
+const PHONE_AIR = 24.5;
+/**
+ * A desktop lane's head (the head size) over its note, 4 px under the lane's top: baselines 16.1
+ * and 31.4 (were 17 and 31, where the two lines met).
+ */
+const LANE_PAD = 4;
+const HEAD_Y = LANE_PAD + lineAscentPx(SVG_TEXT.head);
+const NOTE_Y = LANE_PAD + tightLinePx(SVG_TEXT.head) + lineAscentPx(SVG_TEXT.note);
+/** A phone lane's header line, at the lane's top. */
+const HEADER_Y = lineAscentPx(SVG_TEXT.label);
+/** The years under the lanes, 5 px under them, and "now" a label line under the years. */
+const YEAR_GAP = 5;
 
 /** An edition's activation day as an instant on the axis: that UTC+8 day's start. */
 export function dayStartMs(day: string): number {
@@ -170,13 +198,30 @@ export function VmLaneTimeline({
   const nameLines = nameOneLine
     ? [`${PLOT_TITLE} · ${PLOT_HINT}`]
     : [...wrapWords(PLOT_TITLE, NAME_PX, w), ...wrapWords(PLOT_HINT, NAME_PX, w)];
-  const band = PLOT_NAME_Y + (nameLines.length - 1) * PLOT_NAME_LINE + PLOT_NAME_GAP;
-  const top = band + (narrow ? 62 : 64) + (labelRows - 1) * BLOCK_ROW;
+  const band = PLOT_NAME_PAD + nameLines.length * PLOT_NAME_LINE + PLOT_NAME_GAP;
+  const top =
+    band +
+    BLOCK_PAD +
+    EDITION_LINES +
+    (labelRows - 1) * BLOCK_ROW +
+    (narrow ? PHONE_AIR : LIVE_HEAD.gap + tightLinePx(SVG_TEXT.note) + LIVE_HEAD.over);
   const laneH = narrow ? 64 : 46;
-  /** Where a lane's bar and its dot rows sit, from the lane's top. */
-  const bar = narrow ? { y: 18, h: 14, dots: [40, 48] } : { y: 6, h: 16, dots: [30, 38] };
+  /**
+   * Where a lane's bar and its dot rows sit, from the lane's top: a bar holds its VM's note line
+   * and half a pixel over and under it (16 px; a phone's was 14, under the 15 px line), on a
+   * phone 3 px under the header line.
+   */
+  const barH = tightLinePx(SVG_TEXT.note) + 1;
+  const bar = narrow
+    ? { y: tightLinePx(SVG_TEXT.label) + 3, h: barH, dots: [42, 50] }
+    : { y: 6, h: barH, dots: [30, 38] };
+  /** A word in a bar stands on the line centred in it. */
+  const barLabelY = (barH - tightLinePx(SVG_TEXT.note)) / 2 + lineAscentPx(SVG_TEXT.note);
   const bottom = top + laneH * LANE_ORDER.length;
-  const height = bottom + 44;
+  const yearY = bottom + YEAR_GAP + lineAscentPx(SVG_TEXT.label);
+  const nowY = yearY + tightLinePx(SVG_TEXT.label);
+  // the years' line and "now"'s, 5 px under the lanes and 9 px over the foot: 44 px as before
+  const height = bottom + YEAR_GAP + 2 * tightLinePx(SVG_TEXT.label) + 9;
   /**
    * PB-02: the vertical spans a rule may run through. On a phone each lane's header line (its label
    * and count) is its own line, so the edition and year rules run behind the bars and dots only.
@@ -242,7 +287,7 @@ export function VmLaneTimeline({
                 <text
                   data-year
                   x={at + 3}
-                  y={bottom + 16}
+                  y={yearY}
                   fontSize={SVG_TEXT.label}
                   fill="var(--c-text-dim)"
                 >
@@ -312,7 +357,7 @@ export function VmLaneTimeline({
           {!narrow && (
             <text
               x={width}
-              y={top - 12}
+              y={top - LIVE_HEAD.over - descentPx(SVG_TEXT.note)}
               textAnchor="end"
               fontSize={SVG_TEXT.note}
               fill="var(--c-text-dim)"
@@ -337,7 +382,7 @@ export function VmLaneTimeline({
                   <>
                     <text
                       x="0"
-                      y={y + 11}
+                      y={y + HEADER_Y}
                       fontSize={SVG_TEXT.label}
                       fill="var(--c-text-bright)"
                       stroke="var(--c-base-bg)"
@@ -348,7 +393,7 @@ export function VmLaneTimeline({
                     </text>
                     <text
                       x={width}
-                      y={y + 11}
+                      y={y + HEADER_Y}
                       textAnchor="end"
                       fontSize={SVG_TEXT.note}
                       fill="var(--c-text)"
@@ -365,15 +410,15 @@ export function VmLaneTimeline({
                   </>
                 ) : (
                   <>
-                    <text x="0" y={y + 17} fontSize={SVG_TEXT.head} fill="var(--c-text-bright)">
+                    <text x="0" y={y + HEAD_Y} fontSize={SVG_TEXT.head} fill="var(--c-text-bright)">
                       {`hash_type ${hashType}`}
                     </text>
-                    <text x="0" y={y + 31} fontSize={SVG_TEXT.note} fill="var(--c-text-dim)">
+                    <text x="0" y={y + NOTE_Y} fontSize={SVG_TEXT.note} fill="var(--c-text-dim)">
                       {LANE_TEXT[hashType]}
                     </text>
                     <text
                       x={width}
-                      y={y + 17}
+                      y={y + HEAD_Y}
                       textAnchor="end"
                       fontSize={SVG_TEXT.head}
                       fill="var(--c-text-bright)"
@@ -382,7 +427,7 @@ export function VmLaneTimeline({
                     </text>
                     <text
                       x={width}
-                      y={y + 31}
+                      y={y + NOTE_Y}
                       textAnchor="end"
                       fontSize={SVG_TEXT.note}
                       fill="var(--c-text-dim)"
@@ -404,7 +449,7 @@ export function VmLaneTimeline({
                     {!narrow && (
                       <text
                         x={(x(noteFrom) + x(pinnedFrom)) / 2}
-                        y={y + 30}
+                        y={y + bar.y + bar.h / 2 + 4 + lineAscentPx(SVG_TEXT.tick)}
                         textAnchor="middle"
                         fontSize={SVG_TEXT.tick}
                         fill="var(--c-text-dim)"
@@ -426,7 +471,7 @@ export function VmLaneTimeline({
                     />
                     <text
                       x={x(from) + 6}
-                      y={y + bar.y + bar.h - 4}
+                      y={y + bar.y + barLabelY}
                       fontSize={SVG_TEXT.note}
                       fill="var(--c-text-bright)"
                     >
@@ -438,7 +483,7 @@ export function VmLaneTimeline({
                 {lane.knownVersions === 0 && !narrow && (
                   <text
                     x={x(segments[hashType][0][0]) + 40}
-                    y={y + bar.y + bar.h - 4}
+                    y={y + bar.y + barLabelY}
                     fontSize={SVG_TEXT.note}
                     fill="var(--c-text-bright)"
                   >
@@ -488,7 +533,7 @@ export function VmLaneTimeline({
           })}
           <text
             x={width}
-            y={bottom + 32}
+            y={nowY}
             textAnchor="end"
             fontSize={SVG_TEXT.label}
             fill="var(--c-text-bright)"
