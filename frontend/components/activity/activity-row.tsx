@@ -972,6 +972,23 @@ function splitFocus<T extends ActivityParticipant>(
 }
 
 /**
+ * The parties a row's head shows, the one rule for an ordinary row and a folded run (lane B4 fix
+ * round, review NOTE 2): the focus first, always shown (consistency C3), then the others by
+ * `participantsToShow` (over six, the five largest, in the feed's order), and how many are folded.
+ */
+function partiesShown<T extends ActivityParticipant>(
+  participants: T[],
+  focusLockHash: string | undefined,
+  txHash: string,
+  expanded: boolean
+): { focus: (T & { key: string }) | null; shown: (T & { key: string })[]; hidden: number } {
+  const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
+  const { focus, others } = splitFocus(indexed, focusLockHash, txHash);
+  const { shown, hidden } = participantsToShow(others, expanded);
+  return { focus, shown: focus === null ? shown : [focus, ...shown], hidden };
+}
+
+/**
  * Every participant, Layer 1 and Layer 2, one line each (D1: none is dropped). Named parties with
  * no change are listed — their zero is the fact. Over six, the five largest and an explicit "+N"
  * to expand (the homepage rule, unchanged). Consistency C3: with `focusLockHash` that participant
@@ -1001,11 +1018,8 @@ function Participants({
   notes?: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
-  const { focus, others } = splitFocus(indexed, focusLockHash, txHash);
-  const { shown: shownOthers, hidden } = participantsToShow(others, expanded);
-  const shown = focus === null ? shownOthers : [focus, ...shownOthers];
-  const foldable = others.length > PARTICIPANT_LIMIT;
+  const { focus, shown, hidden } = partiesShown(participants, focusLockHash, txHash, expanded);
+  const foldable = expanded || hidden > 0;
   if (participants.length === 0) return null;
   return (
     <div data-role="participants" className="flex min-w-0 flex-col">
@@ -1014,7 +1028,7 @@ function Participants({
           key={p.key}
           p={p}
           focus={p === focus}
-          fee={feePayer !== null && p.key === indexed[feePayer].key}
+          fee={feePayer !== null && p.key === partyKey(participants[feePayer], feePayer)}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
           focusTokenTypeHash={focusTokenTypeHash}
@@ -1286,11 +1300,13 @@ export function FoldedActivityRow({
     ...openCalls,
     open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })),
   });
-  const indexed = first.participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
-  const { focus, others } = splitFocus(indexed, focusLockHash, first.txHash);
-  const parties = focus === null ? others : [focus, ...others];
-  const shown =
-    parties.length > PARTICIPANT_LIMIT ? parties.slice(0, PARTICIPANT_LIMIT - 1) : parties;
+  // the parties its rows show, by their rule: the run's parties are the same on every row
+  const { focus, shown, hidden } = partiesShown(
+    first.participants,
+    focusLockHash,
+    first.txHash,
+    false
+  );
   return (
     <article
       data-role="activity-run"
@@ -1335,9 +1351,9 @@ export function FoldedActivityRow({
             </span>
           );
         })}
-        {shown.length < parties.length && (
+        {hidden > 0 && (
           <span className="text-text-dim">
-            {unitNode(`+${formatCount(parties.length - shown.length, 'participant')}`)}
+            {unitNode(`+${formatCount(hidden, 'participant')}`)}
           </span>
         )}
       </div>
