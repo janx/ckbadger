@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render } from '../utils/test-utils';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { MINUS } from '@/lib/chart-ticks';
@@ -265,5 +265,25 @@ describe('the forms of a CKB amount (R5)', () => {
       expect(amount).not.toHaveAttribute('title');
       unmount();
     }
+  });
+
+  // Review of main..fix/readability (2026-11-18, logic finding 5): with signed={false} the one CKB
+  // renderer printed a negative amount's absolute value, the sign nowhere, in the figure or the
+  // title — a broken invariant upstream (a cell's free CKB, held minus occupied) would read as a
+  // plausible positive figure. Where no sign is written an amount is never negative: it fails, as
+  // TokenAmount does.
+  it('refuses a negative amount where no sign is written, in every form', () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const form of ['exact', 'column', 'summary', 'compact'] as const)
+        expect(() =>
+          render(<CkbAmount form={form} shannons={BigInt(-123456789)} signed={false} />)
+        ).toThrow('CKB amount -123456789 shannons is negative where a sign is not written');
+    } finally {
+      quiet.mockRestore();
+    }
+    // signed, it is written with its minus sign
+    const { container } = render(<CkbAmount form="summary" shannons={BigInt(-123456789)} />);
+    expect(amountOf(container)).toHaveTextContent(`${MINUS}1.23 CKB`);
   });
 });
