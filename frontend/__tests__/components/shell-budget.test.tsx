@@ -1,7 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '../utils/test-utils';
+import { act, fireEvent, render, screen, within } from '../utils/test-utils';
+import { atViewportWidth } from '../utils/viewport';
 import {
   PLACEHOLDER,
   SHELL_WIDTHS,
@@ -29,9 +30,10 @@ import {
   NAVBAR_LINK_CLASS,
 } from '@/components/layout/navbar-dropdown-styles';
 
-// The network switcher reads the search and hash it keeps across a switch.
+// The network switcher reads the search and hash it keeps across a switch; the shortcuts push.
+const push = vi.hoisted(() => vi.fn());
 vi.mock('@/src/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), replace: vi.fn(), prefetch: vi.fn() }),
+  useRouter: () => ({ push, replace: vi.fn(), prefetch: vi.fn() }),
   useSearchParams: () => new URLSearchParams(),
   useSearchAndHash: () => '',
   usePathname: () => '/',
@@ -92,58 +94,70 @@ describe('the shell measured as Chrome measured it (one network, the scale at 12
 
 describe('the header row per width, one network and two', () => {
   /**
-   * What the row leaves the field and which placeholder it holds. With two networks the switcher
-   * stands first in the nav from md; below md it is a row of the phone menu and the header row is
-   * the same as with one. OPEN: from 768 to 1023 with two networks the row leaves the field 10.52
-   * px, under its 116.4 px floor — RESPONSIVE_LAYOUT does not say whether the nav links or the
-   * switcher yield, so no arrangement is chosen here (the lane's hand-back gives the options).
+   * What the row leaves the field and which placeholder it holds (ruling on F3-f, option B: the nav
+   * stands in the row while the field keeps its floor, 116.4 px from md; where it would not, the
+   * nav goes into the menu and the row takes its form below md: the wordmark, the menu button,
+   * the section word, the field). With two networks the switcher stands first in the nav; in the
+   * row that would leave the field 10.52 px at 768–1023 (the container is 736 px across that
+   * band), so there the nav is in the menu and the field is its cap: 288 px at 768, 36vw above,
+   * the long placeholder from 977 px (36vw ≥ 351.6). With one network the nav stands at 768 (144
+   * px ≥ 116.4). Below md the switcher is a row of the menu, as it always was.
    */
-  const TABLE: Record<number, [one: [number, 'long' | 'short'], two: [number, 'long' | 'short']]> =
-    {
-      1280: [
-        [460.8, 'long'],
-        [460.8, 'long'],
-      ],
-      1024: [
-        [352, 'long'],
-        [210.52, 'short'],
-      ],
-      768: [
-        [144, 'short'],
-        [10.52, 'short'],
-      ],
-      640: [
-        [288, 'short'],
-        [288, 'short'],
-      ],
-      390: [
-        [212, 'short'],
-        [212, 'short'],
-      ],
-      360: [
-        [182, 'short'],
-        [182, 'short'],
-      ],
-      320: [
-        [142, 'short'],
-        [142, 'short'],
-      ],
-    };
-  const OPEN = (width: number, networks: number) => networks === 2 && width >= 768 && width < 1024;
+  const WIDTHS = [1280, 1024, 1023, 900, 768, 640, 390, 360, 320] as const;
+  const TABLE: Record<
+    (typeof WIDTHS)[number],
+    [one: [number, 'long' | 'short'], two: [number, 'long' | 'short']]
+  > = {
+    1280: [
+      [460.8, 'long'],
+      [460.8, 'long'],
+    ],
+    1024: [
+      [352, 'long'],
+      [210.52, 'short'],
+    ],
+    1023: [
+      [144, 'short'],
+      [368.28, 'long'],
+    ],
+    900: [
+      [144, 'short'],
+      [324, 'short'],
+    ],
+    768: [
+      [144, 'short'],
+      [288, 'short'],
+    ],
+    640: [
+      [288, 'short'],
+      [288, 'short'],
+    ],
+    390: [
+      [212, 'short'],
+      [212, 'short'],
+    ],
+    360: [
+      [182, 'short'],
+      [182, 'short'],
+    ],
+    320: [
+      [142, 'short'],
+      [142, 'short'],
+    ],
+  };
 
-  it.each(SHELL_WIDTHS.flatMap((w) => [1, 2].map((n) => [w, n] as const)))(
+  it.each(WIDTHS.flatMap((w) => [1, 2].map((n) => [w, n] as const)))(
     'at %i px with %i network(s): the field, its placeholder, its floor',
     (width, networks) => {
       const row = headerRow(width, {
         nav: NAV,
-        switcher: networks === 2 && width >= 768 ? WIDEST_NETWORK : null,
+        switcher: networks === 2 ? WIDEST_NETWORK : null,
         word: WIDEST_WORD,
       });
       const [field, placeholder] = TABLE[width][networks - 1];
       expect(row.field).toBe(field);
       expect(row.placeholder).toBe(placeholder);
-      if (OPEN(width, networks)) expect(row.field).toBeLessThan(row.floor);
-      else expect(row.field).toBeGreaterThanOrEqual(row.floor);
+      expect(row.field).toBeGreaterThanOrEqual(row.floor);
     }
   );
 
@@ -158,6 +172,210 @@ describe('the header row per width, one network and two', () => {
     expect(px(contentPx(640) - WORDMARK_PX - 8 - 40 - 8 - runPx(WIDEST_WORD, 'body') - 8)).toBe(
       353.2
     );
+  });
+});
+
+/**
+ * The header's row measured at `row` px (its content box: the container's width less its gutter)
+ * in a window `viewport` px wide. jsdom lays nothing out: the row reports `row`, every other box
+ * nothing, so only the row's form is decided by a measurement.
+ */
+function atRow(viewport: number, row: number) {
+  atViewportWidth(viewport);
+  const widthOf = (el: Element) =>
+    el.querySelector(':scope > nav[aria-label="Main"]') !== null ? row : 0;
+  class ResizeObserverStub {
+    constructor(private readonly cb: ResizeObserverCallback) {}
+    observe(el: Element) {
+      this.cb(
+        [{ contentRect: { width: widthOf(el) } } as ResizeObserverEntry],
+        this as unknown as ResizeObserver
+      );
+    }
+    unobserve() {}
+    disconnect() {}
+  }
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+    this: HTMLElement
+  ) {
+    const width = widthOf(this);
+    return { width, height: 0, top: 0, left: 0, right: width, bottom: 0, x: 0, y: 0 } as DOMRect;
+  });
+}
+
+const TWO = { networks: [{ name: 'mainnet' }, { name: 'testnet' }], defaultNetwork: 'mainnet' };
+
+/** The header's parts by what they are: the row, the nav, the menu button's group, the theme. */
+function header() {
+  const banner = screen.getByRole('banner');
+  const nav = within(banner).getByRole('navigation', { name: 'Main' });
+  const toggle = within(banner).getByRole('button', { name: 'Toggle menu' });
+  return {
+    banner,
+    row: nav.parentElement as HTMLElement,
+    nav,
+    menuGroup: toggle.parentElement as HTMLElement,
+    toggle,
+    theme: within(banner).getByTestId('theme-switcher'),
+  };
+}
+
+/** Tailwind's breakpoints the header's classes use. */
+const BREAKPOINTS = { sm: 640, md: 768, lg: 1024 } as const;
+
+/** The classes of an element that apply in the window jsdom has (`atViewportWidth`). */
+function applied(el: HTMLElement): string[] {
+  return Array.from(el.classList).flatMap((c) => {
+    const at = /^(sm|md|lg):(.+)$/.exec(c);
+    if (!at) return [c];
+    return window.innerWidth >= BREAKPOINTS[at[1] as keyof typeof BREAKPOINTS] ? [at[2]] : [];
+  });
+}
+
+/** Drawn in this window, by its classes: the last display class that applies is not `hidden`. */
+function drawn(el: HTMLElement): boolean {
+  const display = applied(el).filter((c) => ['hidden', 'flex', 'block', 'inline'].includes(c));
+  return display.at(-1) !== 'hidden';
+}
+
+/** The row's gap in this window: 8 px (`gap-2`) or 32 (`gap-8`). */
+function rowGap(el: HTMLElement): number {
+  const gap = applied(el).filter((c) => c === 'gap-2' || c === 'gap-8');
+  return gap.at(-1) === 'gap-8' ? 32 : 8;
+}
+
+describe('the header row takes its form from its measured width (ruling on F3-f, option B)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+    push.mockReset();
+  });
+
+  it.each([768, 900, 1023])(
+    'puts the nav into the menu at %i px with two networks: in the row the field would keep 10.52 px',
+    (viewport) => {
+      window.__CKBADGER_RUNTIME_CONFIG__ = TWO;
+      atRow(viewport, contentPx(viewport));
+      render(<Header />);
+      const h = header();
+      expect(drawn(h.nav)).toBe(false);
+      expect(drawn(h.menuGroup)).toBe(true);
+      expect(drawn(h.theme)).toBe(false);
+      // the row's form below md: the 8 px gap
+      expect(rowGap(h.row)).toBe(8);
+    }
+  );
+
+  it('keeps the nav in the row at 768 px with one network (144 px ≥ 116.4) and at 1024 with two', () => {
+    for (const [viewport, config] of [
+      [768, undefined],
+      [1024, TWO],
+    ] as const) {
+      if (config) window.__CKBADGER_RUNTIME_CONFIG__ = config;
+      atRow(viewport, contentPx(viewport));
+      const { unmount } = render(<Header />);
+      const h = header();
+      expect(drawn(h.nav), `${viewport}`).toBe(true);
+      expect(drawn(h.menuGroup), `${viewport}`).toBe(false);
+      expect(rowGap(h.row)).toBe(32);
+      expect(drawn(h.theme)).toBe(true);
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('opens the phone menu as it is in the md band: the same entries in the same order, the switcher a row', () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = TWO;
+    atRow(900, contentPx(900));
+    render(<Header />);
+    fireEvent.click(header().toggle);
+    const phoneNav = screen
+      .getAllByRole('navigation')
+      .find((n) => n.getAttribute('aria-label') !== 'Main')!;
+    const panel = phoneNav.parentElement as HTMLElement;
+    expect(drawn(panel)).toBe(true);
+    const switcher = within(phoneNav).getByTestId('network-switcher');
+    expect(switcher).toHaveAttribute('data-placement', 'menu');
+    expect(
+      Array.from(phoneNav.querySelectorAll('a, [data-testid="network-switcher"], span.block')).map(
+        (el) =>
+          el.getAttribute('data-testid') === 'network-switcher' ? 'switcher' : el.textContent
+      )
+    ).toEqual([
+      'Home',
+      'switcher',
+      'DAO',
+      'Activities',
+      'Transactions',
+      'Blocks',
+      'Forks',
+      'Inventory',
+      'Tokens',
+      'Objects',
+      'Identities',
+      'Scripts',
+      'Charts',
+    ]);
+    expect(within(phoneNav).getByTestId('theme-segments')).toBeInTheDocument();
+    // it closes as it does below md: on a choice, and on its button
+    fireEvent.click(within(phoneNav).getByRole('link', { name: 'Scripts' }));
+    expect(screen.getAllByRole('navigation')).toHaveLength(1);
+    fireEvent.click(header().toggle);
+    expect(screen.getAllByRole('navigation')).toHaveLength(2);
+    fireEvent.click(header().toggle);
+    expect(screen.getAllByRole('navigation')).toHaveLength(1);
+  });
+
+  it('draws the form it has today before the row is measured: the nav from md, the menu below it', () => {
+    window.__CKBADGER_RUNTIME_CONFIG__ = TWO;
+    atViewportWidth(768);
+    const { unmount } = render(<Header />);
+    let h = header();
+    expect(drawn(h.nav)).toBe(true);
+    expect(drawn(h.menuGroup)).toBe(false);
+    unmount();
+    atViewportWidth(390);
+    render(<Header />);
+    h = header();
+    expect(drawn(h.nav)).toBe(false);
+    expect(drawn(h.menuGroup)).toBe(true);
+  });
+
+  it('keeps the keys in both forms: "/" focuses the field, "g b" opens the blocks, the field after the nav or the toggle', () => {
+    for (const viewport of [900, 1280]) {
+      window.__CKBADGER_RUNTIME_CONFIG__ = TWO;
+      atRow(viewport, contentPx(viewport));
+      const { unmount } = render(<Header />);
+      const field = within(screen.getByRole('banner')).getByRole('textbox');
+      act(() => {
+        fireEvent.keyDown(window, { key: '/' });
+      });
+      expect(field, `${viewport}`).toHaveFocus();
+      act(() => field.blur());
+      act(() => {
+        fireEvent.keyDown(window, { key: 'g' });
+      });
+      act(() => {
+        fireEvent.keyDown(window, { key: 'b' });
+      });
+      expect(push, `${viewport}`).toHaveBeenCalledWith('/blocks');
+      // in reading order the wordmark, then the nav or the menu button (whichever is drawn), then
+      // the field
+      const h = header();
+      const lead = drawn(h.nav) ? h.nav : h.toggle;
+      expect(drawn(h.nav), `${viewport}`).toBe(viewport >= 1024);
+      expect(
+        lead.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING,
+        `${viewport}`
+      ).toBeTruthy();
+      unmount();
+      push.mockReset();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 });
 
