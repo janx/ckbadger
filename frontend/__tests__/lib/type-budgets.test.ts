@@ -5,6 +5,8 @@ import { cn } from '@/lib/utils';
 import { NODE_H } from '@/components/transaction/what-moved';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { CHAR_10 as FORK_CHAR_10 } from '@/components/forks/fork-tree';
+import { CHAR_12 as GEL_CHAR_12, CHAR_115 as GEL_CHAR_115 } from '@/components/ui/sequencing-gel';
+import { ALLELE_GEL } from '@/lib/allele-gel-layout';
 import {
   CHAR_PX as VM_CHAR_PX,
   NAME_CHAR_PX as VM_NAME_CHAR_PX,
@@ -169,6 +171,25 @@ const LITERALS: [file: string, literal: string, was: number, now: number][] = [
     'PLOT_NAME_LINE = 14',
     14,
     tightLinePx(SVG_TEXT.label),
+  ],
+  // the gels (objects)
+  ['components/ui/sequencing-gel.tsx', 'fontSize="10" (8 sites)', 10, SVG_TEXT.tick],
+  ['components/ui/sequencing-gel.tsx', 'fontSize="12" (3 sites)', 12, SVG_TEXT.head],
+  ['components/ui/sequencing-gel.tsx', 'fontSize="11.5" (2 sites)', 11.5, SVG_TEXT.value],
+  ['components/ui/sequencing-gel.tsx', 'CHAR_12 = 7.64 (head +0.44, allowance)', 7.64, GEL_CHAR_12],
+  [
+    'components/ui/sequencing-gel.tsx',
+    'CHAR_115 = 7.32 (value +0.42, allowance)',
+    7.32,
+    GEL_CHAR_115,
+  ],
+  ['components/ui/allele-gel.tsx', 'fontSize="10" (4 sites)', 10, SVG_TEXT.tick],
+  ['lib/allele-gel-layout.ts', 'charWidth: 6.4 (0.64 em, observed)', 6.4, ALLELE_GEL.charWidth],
+  [
+    'lib/allele-gel-layout.ts',
+    'headRotated: 98 (14 characters and margin)',
+    98,
+    ALLELE_GEL.headRotated,
   ],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
