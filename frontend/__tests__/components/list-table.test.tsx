@@ -9,6 +9,9 @@ import {
   type ListTableProps,
 } from '@/components/ui/list-table';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 type Row = { name: string; amount: string };
 const ROWS: Row[] = [
@@ -205,6 +208,78 @@ describe('ListTable measures its container (R1, R7)', () => {
     expectTypeOf<ListTableProps<Row>['mobileRow']>().toEqualTypeOf<
       (row: Row, wide: boolean) => ReactNode
     >();
+  });
+});
+
+// Readability 2026-11-18, lane B5 (pJ): a long table's column heads scrolled away with its first
+// rows, so from the second screen on fifty rows of figures had no names. The head stays in view
+// under the site's sticky header and vitals strip.
+describe('ListTable keeps its head in view (readability B5)', () => {
+  const headsOf = (t: HTMLElement) => Array.from(t.querySelectorAll('thead th')) as HTMLElement[];
+  /** The z-index the site header's sticky block takes (header.tsx: the md+ wrapper, the row). */
+  const headerLayers = () => {
+    const source = readFileSync(join(__dirname, '../../components/layout/header.tsx'), 'utf8');
+    const layers = [
+      ...source.matchAll(/md:sticky md:top-0 md:z-(\d+)/g),
+      ...source.matchAll(/ sticky top-0 z-(\d+)/g),
+    ].map((m) => Number(m[1]));
+    expect(layers).toHaveLength(2);
+    return layers;
+  };
+  const layerOf = (el: HTMLElement) => {
+    const z = el.className.match(/(?:^|\s)z-(\d+)(?:\s|$)/);
+    if (!z) throw new Error(`no z-index class on ${el.className}`);
+    return Number(z[1]);
+  };
+
+  it('sticks every head right under the header, on the strip’s opaque ground, below the header', () => {
+    stubChartWidth(608);
+    render(table());
+    const heads = headsOf(screen.getByRole('table', { name: 'Holdings' }));
+    expect(heads).toHaveLength(2);
+    for (const th of heads) {
+      // the offset the header publishes (row + strip from md, the row alone below it)
+      expect(th).toHaveClass('sticky', BELOW_STICKY_HEADER);
+      // the vitals strip's own ground (opaque by palette.test): a row never shows through
+      expect(th).toHaveClass('bg-[var(--m-header-strip)]');
+      for (const header of headerLayers()) expect(layerOf(th)).toBeLessThan(header);
+    }
+  });
+
+  it('draws the head’s rule with the head, so a stuck head keeps its rule over the rows', () => {
+    // A collapsed table border is painted by the table and stays where the row was; the head's
+    // own line, in the row-rule ink, moves with it.
+    stubChartWidth(608);
+    render(table());
+    for (const th of headsOf(screen.getByRole('table', { name: 'Holdings' }))) {
+      expect(th).toHaveClass('after:absolute', 'after:inset-x-0', 'after:bottom-0', 'after:h-px');
+      expect(th).toHaveClass('after:bg-row-rule');
+      expect(th).not.toHaveClass('border-b');
+    }
+  });
+
+  it('sticks the narrower table’s head the same way, and the phone rows have none', () => {
+    stubChartWidth(300);
+    const { unmount } = render(table({ narrowColumns: NARROW }));
+    for (const th of headsOf(screen.getByRole('table', { name: 'Holdings' })))
+      expect(th).toHaveClass('sticky', BELOW_STICKY_HEADER, 'bg-[var(--m-header-strip)]');
+    unmount();
+    vi.restoreAllMocks();
+    stubChartWidth(200);
+    const { container } = render(table({ narrowColumns: NARROW }));
+    expect(container.querySelector('th, thead, .sticky')).toBeNull();
+  });
+
+  it('sticks to the top of the caller’s own scroll box when the list scrolls inside one', () => {
+    // Under the header inside a scroll box, the head would stand the header's height down into
+    // the box at rest.
+    stubChartWidth(608);
+    // @ts-expect-error the prop comes with the fix (red first: lane B5)
+    render(table({ headSticksTo: 'box' }));
+    for (const th of headsOf(screen.getByRole('table', { name: 'Holdings' }))) {
+      expect(th).toHaveClass('sticky', 'top-0', 'bg-[var(--m-header-strip)]');
+      expect(th).not.toHaveClass(BELOW_STICKY_HEADER);
+    }
   });
 });
 
