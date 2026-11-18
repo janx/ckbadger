@@ -564,6 +564,30 @@ function ProtocolActionList({
  * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
  * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
  */
+/** A protocol action read for its row's note, or the error it cannot be read with. */
+type ProtocolRead =
+  | { facts: ProtocolNoteFact[]; error?: undefined }
+  | { facts?: undefined; error: unknown };
+
+/** The one read of a protocol action for a row (its note's facts). */
+function readProtocolAction(action: Parameters<typeof protocolActionNoteFacts>[0]): ProtocolRead {
+  try {
+    return { facts: protocolActionNoteFacts(action, 'row') };
+  } catch (error) {
+    return { error };
+  }
+}
+
+/**
+ * Whether a row cannot read one of its protocol actions: its row reports the error in its place
+ * (`activityDetails`), so a feed never folds it (lane B4 fix round, review NOTE 1).
+ */
+export function rowReadFails(activity: ActivityBody): boolean {
+  return globalTxEvents(activity).some(
+    (e) => e.kind === 'protocol' && readProtocolAction(e.action).error !== undefined
+  );
+}
+
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
@@ -582,17 +606,16 @@ function activityDetails(
   const errors: ReactNode[] = [];
   events.forEach((e, i) => {
     if (e.kind !== 'protocol') return;
-    let facts: ProtocolNoteFact[];
-    try {
-      facts = protocolActionNoteFacts(e.action, 'row');
-    } catch (error) {
+    const read = readProtocolAction(e.action);
+    if (read.facts === undefined) {
       errors.push(
         <div key={`p${i}`} data-role="detail-error" className="text-small pl-[18px]">
-          <ActivityReadError txHash={activity.txHash} error={error} />
+          <ActivityReadError txHash={activity.txHash} error={read.error} />
         </div>
       );
       return;
     }
+    const { facts } = read;
     actions.push({
       lineKey: protocolLineKey(e.action, e.action === primary),
       action: `${e.action.protocol}:${e.action.action}`,

@@ -1,6 +1,10 @@
 'use client';
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
-import { FoldedActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
+import {
+  FoldedActivityRow,
+  rowReadFails,
+  type ActivityRowData,
+} from '@/components/activity/activity-row';
 import { foldRuns, runKey, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
 
@@ -26,13 +30,16 @@ export interface FeedRow {
 
 /**
  * What a row is compared on: the title in words (`activityTitleText`), its scripts and its parties
- * (the row's own, unless the feed knows more of them: the address page's other parties).
+ * (the row's own, unless the feed knows more of them: the address page's other parties). Null for
+ * a row that cannot read one of its protocol actions (`rowReadFails`): it reports the error in its
+ * place, so it is never folded (lane B4 fix round, review NOTE 1).
  */
 export function runSubject(
   activity: ActivityRowData,
   title: string,
   parties: readonly ParticipantRef[] = activity.participants
-): RunSubject {
+): RunSubject | null {
+  if (rowReadFails(activity)) return null;
   return {
     title,
     txHash: activity.txHash,
