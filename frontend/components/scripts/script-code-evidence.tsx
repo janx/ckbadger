@@ -12,7 +12,9 @@ import type {
 import { formatCkbAmount } from '@/lib/utils';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatCount, countNoun } from '@/lib/format-count';
-import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
+import { CODE_CLASS_COLORS, CODE_CLASS_KEYS } from '@/lib/design-tokens';
+import { color, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { partitionSpans } from '@/lib/partition-geometry';
@@ -133,10 +135,6 @@ const SEGMENT_LABEL_PX = 12;
 const SEGMENT_LABEL_PAD = 10;
 /** A monospace advance: whole pixels where the browser snaps them (Chromium), else 0.6 em. */
 const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
-/** Words inside a segment: dark on the light grey fill, light on the darker ones. */
-const SEGMENT_INK: Partial<Record<ScriptCodeClassTotalApi['class'], string>> = {
-  fixed: 'text-base-bg',
-};
 
 /**
  * "Who can change the code" as the Scripts index's picture (hierarchy v3, C1, R12, R15): a 28 px
@@ -145,6 +143,7 @@ const SEGMENT_INK: Partial<Record<ScriptCodeClassTotalApi['class'], string>> = {
  */
 export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeClassTotalApi[] }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  const { resolved: theme } = useTheme();
   const { held, total } = codeClassTotals(classes);
   if (total === BigInt(0)) return null;
   const spans = partitionSpans(
@@ -176,13 +175,14 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
             title={`${scriptClassLabel(row.class)}: ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`}
             className={cn(
               'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap',
-              inside && 'px-2.5',
-              SEGMENT_INK[row.class] ?? 'text-text-bright'
+              inside && 'px-2.5'
             )}
             style={{
               width: `${spans[i].width}%`,
               backgroundColor: CODE_CLASS_COLORS[row.class].fill,
               boxShadow: `inset 0 0 0 1px ${CODE_CLASS_COLORS[row.class].edge}`,
+              // DY-03: the words take the ink the fill's own luminance calls for, in this theme.
+              color: color(inkOnFill(theme, CODE_CLASS_KEYS[row.class].fill, 1).ink),
             }}
           >
             {inside && <span>{inside}</span>}

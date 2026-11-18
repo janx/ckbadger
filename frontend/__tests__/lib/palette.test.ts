@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { AMOUNT_INK } from '@/components/ui/ckb-amount';
 import { STEP_W } from '@/lib/pipeline/encoding';
+import { CODE_CLASS_KEYS } from '@/lib/design-tokens';
 import {
   alpha,
   apcaLc,
@@ -11,6 +12,7 @@ import {
   glowAlpha,
   hexAlpha,
   hexToRgb,
+  inkOnFill,
   material,
   MATERIAL_KEYS,
   MATERIALS,
@@ -118,6 +120,12 @@ const RUBBING = {
   token: '#9ec6fe',
   object: '#d0b8fe',
   identity: '#fcaec2',
+  // The darker code-class grey, set by its words (readability F1 follow-up): the bright ink at Lc
+  // 70 on it. It was the mix dim ghost 0.4, #8a8175 since the ruling (#665d53 before), unpinned.
+  codeUnspendableFill: '#6a6155',
+  // The plain-CKB slate, set by the words on it the same way: text-bright at Lc 70. It was the mix
+  // dim ghost 0.12, #72695f since the ruling (#524941 before), unpinned.
+  slateCkb: '#6a6157',
 };
 
 /** The alpha of an `rgba(r, g, b, a)` material. */
@@ -167,6 +175,8 @@ describe('the palette: one source for both themes', () => {
     expect(dark.token).toBe(RUBBING.token);
     expect(dark.object).toBe(RUBBING.object);
     expect(dark.identity).toBe(RUBBING.identity);
+    expect(dark['code-unspendable-fill']).toBe(RUBBING.codeUnspendableFill);
+    expect(dark['slate-ckb']).toBe(RUBBING.slateCkb);
     expect(MATERIALS.dark.glow).toBe('1');
   });
 
@@ -509,6 +519,51 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
         contrastRatio(ink(theme, 'pipeline-plate'), PALETTE[theme]['base-bg']),
         theme
       ).toBeGreaterThanOrEqual(1.25);
+  });
+});
+
+// Readability F1 follow-up: the "Who can change the code" bar on /scripts writes each class's name
+// and share inside its fill, in the ink the fill-ink rule gives (inkOnFill). By night that ink reads
+// at the night's word grade on every code-class fill; it did not on the unspendable grey, a mix of
+// two inks that drifted to a mid grey (#8a8175) when the inks moved lighter: the rule's ink there
+// read 5.06:1 but Lc 38, the bright ink 3.11:1 and Lc 56. By day the WCAG pin stands; the day
+// pairs measure Lc 74.9 (base-void on the fixed grey #7a7163, 4.57:1), 60.4 (text-bright on the
+// unspendable grey #bbb1a0, 8.07:1), 94.1 on the paper and 83.3 on the hair.
+describe('words on the code-class fills (the scripts bar)', () => {
+  const fills = [...new Set(Object.values(CODE_CLASS_KEYS).map((k) => k.fill))];
+
+  it('reads the fill-ink rule’s ink on every code-class fill at Lc 60 or more by night', () => {
+    const short: string[] = [];
+    for (const fill of fills) {
+      const { ink: key } = inkOnFill('dark', fill, 1);
+      const lc = Math.abs(apcaLc(PALETTE.dark[key], PALETTE.dark[fill]));
+      if (lc < 60) short.push(`${key} on ${fill}: Lc ${lc.toFixed(1)}`);
+    }
+    expect(short).toEqual([]);
+  });
+
+  it('reads it at 4.5:1 or more on every code-class fill in both themes', () => {
+    for (const theme of THEMES)
+      for (const fill of fills)
+        expect(inkOnFill(theme, fill, 1).contrast, `${theme} ${fill}`).toBeGreaterThanOrEqual(4.5);
+  });
+});
+
+// Readability F1 follow-up, found by the survey of words on fills: the plain-CKB slate is a word's
+// ground in two bars, the address balance bar's "free" part and the holder timeline's current
+// holder, both writing in text-bright. As the mix dim ghost 0.12 it drifted with the night inks
+// to #72695f, where text-bright read 4.37:1 (6.82 on main) and the dark ink 3.5:1. By day the pair
+// is #1f1b17 on #a69c8c, 6.32:1 and Lc 49.5 (no day Lc floor is pinned).
+describe('words on the plain-CKB slate (the balance bar, the holder timeline)', () => {
+  it('reads text-bright on it at 4.5:1 in both themes and at Lc 60 or more by night', () => {
+    for (const theme of THEMES)
+      expect(
+        contrastRatio(PALETTE[theme]['text-bright'], PALETTE[theme]['slate-ckb']),
+        theme
+      ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      Math.abs(apcaLc(PALETTE.dark['text-bright'], PALETTE.dark['slate-ckb']))
+    ).toBeGreaterThanOrEqual(60);
   });
 });
 
