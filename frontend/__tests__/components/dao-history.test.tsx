@@ -22,7 +22,7 @@ import {
   textLines,
   viewBox,
 } from '@/__tests__/utils/svg-text-boxes';
-import { factsOf } from '@/__tests__/utils/facts';
+import { factRows, factsOf } from '@/__tests__/utils/facts';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2024, 0, 1);
@@ -234,6 +234,29 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
       expect(a.querySelector('.text-text-dim, .text-jade-dim')).toBeNull();
     }
     expect(reading.innerHTML).not.toMatch(/opacity-/);
+  });
+
+  // The rules branch's review, logic NOTE 6: hover never moves layout (ReadoutRow). Before the
+  // first whole week of a range the reading has no "week from" fact; its row keeps its place,
+  // unseen, so the reading is as tall as its fullest form below md and from md.
+  it('stands as tall with and without its week fact, below md and from md', () => {
+    stubChartWidth(1200);
+    stubSvgWidth(1200);
+    stubPointerEvents();
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const share = container.querySelector('svg[data-panel="share"]')!;
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    const full = factRows(reading);
+    expect(factsOf(reading).map(([label]) => label)).toContain('week from');
+    fireEvent.pointerMove(share, { clientX: 0 });
+    expect(factsOf(reading).map(([label]) => label)).not.toContain('week from');
+    expect(factRows(reading)).toEqual(full);
+    // the row that keeps the place says nothing and is not read out
+    const reserved = reading.querySelectorAll('dl > [aria-hidden="true"]');
+    expect(reserved).toHaveLength(1);
+    expect(reserved[0]).toHaveClass('invisible');
+    expect(reserved[0].textContent!.trim()).toBe('');
   });
 
   it('moves the one reading with the pointer across all panels; a tap pins the day, a second tap lets go (R6)', () => {
