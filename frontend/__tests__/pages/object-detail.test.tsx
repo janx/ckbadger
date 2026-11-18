@@ -252,6 +252,7 @@ it('refreshes media classification when pending VM work completes, then stops po
     dnaHex: '0x01',
     traits: [{ name: 'Face', value: 'Blue' }],
     media: [],
+    render: null,
     issues: [],
   };
   vi.mocked(api.getSporeObjectDecoded)

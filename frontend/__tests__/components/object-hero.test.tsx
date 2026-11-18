@@ -150,13 +150,13 @@ it('lists the decoder output beside the DNA evidence (OB-14)', () => {
         media: [
           {
             mediaType: 'application/json',
-            role: null,
             size: 379,
             hash: '968c587811f54682910668c41573198061a8fc923457eb63ba8559f0e97af74e',
             step: 0,
             url: '/spore/objects/0x51c7/media/968c5878',
           },
         ],
+        render: null,
         issues: [],
       }}
     />

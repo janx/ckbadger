@@ -2,7 +2,8 @@
 // picture as an SVG, read from /spore/objects/{id}/decode on 2026-11-18; the traits are cut to
 // two and the SVG to its frame. Its page did not render (the owner's report): the picture /render
 // draws stood in `media` with size 0 and hash '', and the decoder output list refused the empty
-// hash ("shorten: an empty hash").
+// hash ("shorten: an empty hash"). The answer now names that picture apart, as `render`, with no
+// size and no hash; `media` is the two stored outputs.
 import type { SporeDobDecoded } from '@/lib/api';
 export const DOB1_SVG_ID = '0x707532f6bc2be3b13df205315ba96e149d095276d2706e4d9a2dabce635ac7ba';
 export const DOB1_SVG_STEP0_HASH =
@@ -26,7 +27,6 @@ export function dob1SvgDecoded(sporeId: string = DOB1_SVG_ID): SporeDobDecoded {
     media: [
       {
         mediaType: 'application/json',
-        role: null,
         size: 456,
         hash: DOB1_SVG_STEP0_HASH,
         step: 0,
@@ -34,21 +34,13 @@ export function dob1SvgDecoded(sporeId: string = DOB1_SVG_ID): SporeDobDecoded {
       },
       {
         mediaType: 'application/json',
-        role: null,
         size: 22953,
         hash: DOB1_SVG_STEP1_HASH,
         step: 1,
         url: `/spore/objects/${sporeId}/media/${DOB1_SVG_STEP1_HASH}`,
       },
-      {
-        mediaType: 'image/svg+xml',
-        role: 'render',
-        size: 0,
-        hash: '',
-        step: null,
-        url: `/spore/objects/${sporeId}/render`,
-      },
     ],
+    render: { mediaType: 'image/svg+xml', url: `/spore/objects/${sporeId}/render` },
     issues: [],
   };
 }

@@ -14,12 +14,14 @@ function fakePngBytes(size: number = 64): Uint8Array {
 }
 
 describe('detectPreview', () => {
+  // The decode answer names the decoder's stored outputs (`media`, each with its step) and, when
+  // none is an image, the picture /render draws from the traits (`render`) apart from them.
   describe('DOB decoded media', () => {
     it('returns media-url preview when dobMedia has an image entry', () => {
       const media = [
         { mediaType: 'image/svg+xml', url: '/api/v1/spore/objects/0x1/media/abc', step: 0 },
       ];
-      const result = detectPreview('dob/1', undefined, media);
+      const result = detectPreview('dob/1', undefined, { media, render: null });
       expect(result).toEqual({
         type: 'media-url',
         url: '/api/v1/spore/objects/0x1/media/abc',
@@ -32,7 +34,7 @@ describe('detectPreview', () => {
         { mediaType: 'image/png', url: '/api/v1/spore/objects/0x1/media/low', step: 0 },
         { mediaType: 'image/svg+xml', url: '/api/v1/spore/objects/0x1/media/high', step: 1 },
       ];
-      const result = detectPreview('dob/0', undefined, media);
+      const result = detectPreview('dob/0', undefined, { media, render: null });
       expect(result).toEqual({
         type: 'media-url',
         url: '/api/v1/spore/objects/0x1/media/high',
@@ -42,9 +44,9 @@ describe('detectPreview', () => {
 
     it('prefers DOB media over binary image content', () => {
       const media = [
-        { mediaType: 'image/svg+xml', url: '/api/v1/spore/objects/0x1/media/abc', step: null },
+        { mediaType: 'image/svg+xml', url: '/api/v1/spore/objects/0x1/media/abc', step: 0 },
       ];
-      const result = detectPreview('image/png', fakePngBytes(), media);
+      const result = detectPreview('image/png', fakePngBytes(), { media, render: null });
       expect(result).toEqual({
         type: 'media-url',
         url: '/api/v1/spore/objects/0x1/media/abc',
@@ -55,9 +57,9 @@ describe('detectPreview', () => {
     it('picks image media over non-image media at higher step', () => {
       const media = [
         { mediaType: 'application/json', url: '/api/v1/spore/objects/0x1/media/json', step: 1 },
-        { mediaType: 'image/svg+xml', url: '/api/v1/spore/objects/0x1/render', step: null },
       ];
-      const result = detectPreview('dob/1', undefined, media);
+      const render = { mediaType: 'image/svg+xml', url: '/api/v1/spore/objects/0x1/render' };
+      const result = detectPreview('dob/1', undefined, { media, render });
       expect(result).toEqual({
         type: 'media-url',
         url: '/api/v1/spore/objects/0x1/render',
@@ -69,12 +71,12 @@ describe('detectPreview', () => {
       const media = [
         { mediaType: 'application/json', url: '/api/v1/spore/objects/0x1/media/json', step: 1 },
       ];
-      const result = detectPreview('dob/1', undefined, media);
+      const result = detectPreview('dob/1', undefined, { media, render: null });
       expect(result).toBeNull();
     });
 
     it('returns null when dobMedia is empty array', () => {
-      const result = detectPreview('dob/0', undefined, []);
+      const result = detectPreview('dob/0', undefined, { media: [], render: null });
       expect(result).toBeNull();
     });
 

@@ -4,6 +4,7 @@
  * Determines whether cell content can be rendered as a visual preview
  * (image or SVG) and returns the data needed for rendering.
  */
+import type { DecodedMediaItem, DecodedRender } from '@/lib/api';
 
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024; // 2 MB
 const MAX_SVG_BYTES = 256 * 1024; // 256 KB
@@ -55,22 +56,26 @@ function extractSvgFromText(text: string): string | null {
  * Detect whether on-chain content can be visually previewed.
  *
  * Priority:
- * 1. DOB decoded media blobs (highest step = final product)
+ * 1. DOB decode: the decoder's stored image output (highest step = final product), else the
+ *    picture `/render` draws from the traits (the API names one only when no stored output is
+ *    an image)
  * 2. Binary image (PNG, JPEG, GIF, WebP, AVIF) → data: URL
  * 3. SVG content (image/svg+xml or text containing <svg>)
  */
 export function detectPreview(
   contentType: string,
   contentBytes: Uint8Array | undefined,
-  dobMedia: Array<{ mediaType: string; url: string; step: number | null }> | undefined
+  dob:
+    | {
+        media: ReadonlyArray<Pick<DecodedMediaItem, 'mediaType' | 'url' | 'step'>>;
+        render: DecodedRender | null;
+      }
+    | undefined
 ): PreviewKind {
-  // DOB decoded media — prefer image media (the renderable artifact)
-  if (dobMedia && dobMedia.length > 0) {
-    const imageMedia = dobMedia.filter((m) => m.mediaType.startsWith('image/'));
-    if (imageMedia.length > 0) {
-      const sorted = [...imageMedia].sort((a, b) => (b.step ?? 0) - (a.step ?? 0));
-      return { type: 'media-url', url: sorted[0].url, mediaType: sorted[0].mediaType };
-    }
+  if (dob) {
+    const images = dob.media.filter((m) => m.mediaType.startsWith('image/'));
+    const picture = images.length > 0 ? [...images].sort((a, b) => b.step - a.step)[0] : dob.render;
+    if (picture) return { type: 'media-url', url: picture.url, mediaType: picture.mediaType };
   }
 
   if (!contentBytes || contentBytes.length === 0) {
