@@ -222,8 +222,8 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   const [all, setAll] = useState(false),
     pagination = useCursorPagination();
   // The phone row is drawn wherever the holders' column is narrower than the table's 552 px: on a
-  // phone, and in a desktop column (it is 554 px beside the balance bands at 1280, two px from
-  // the phone row): tight only below sm (R9).
+  // phone, and in a desktop column (the 3fr beside the balance bands from 1280 is within a few px
+  // of it): tight only below sm (R9).
   const phoneSize = useTightBelowSm();
   const distribution = useQuery({
     queryKey: ['token-distribution', typeHash],
