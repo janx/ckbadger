@@ -109,8 +109,9 @@ export function clipLabel(text: string, chars: number): string {
 
 /**
  * A text that is not ours in a figure — a gene's name, rule or trait value, a pool's name, an
- * organisation (review F-B, logic finding 5) — cut to `room` px at `px` by the upper bound
- * `foreignGraphemes` (lib/type-metrics.ts) gives each of its grapheme clusters: as many whole
+ * organisation (review F-B, logic finding 5) — cut to `room` px at `px` by the bound
+ * `foreignGraphemes` (lib/type-metrics.ts) gives each of its grapheme clusters (1.25 em outside the
+ * served Latin subset; not an upper bound, as a few graphemes draw wider): as many whole
  * clusters as fit with the one ellipsis, so a cut never splits an emoji or a letter from its
  * accent. Whole where it fits. A room that cannot hold the first cluster and the ellipsis is
  * refused.

@@ -93,13 +93,17 @@ export const LABEL_LINE_PX = tightLinePx(fontPx('meta'));
  * collection creator's), a pool's name (the operator's pools.toml), an organisation (the ASN
  * registry's), an asset's name in a figure. It may be in any script, and only the face's Latin
  * subset is served at every weight: a character outside it is drawn from a fallback face, whose
- * advance the site does not know. Such a text is measured by an upper bound, not a measurement:
- * walking its grapheme clusters (what a reader sees as one character: a letter and its accents,
- * an emoji with its modifier or a ZWJ sequence of several), a cluster of the served Latin subset
- * at the face's 0.6 em and any other at 1.25 em, the widest fallback advance measured: 1.2 em for
- * CJK in Maple Mono NF CN (what `monospace` resolves to on the owner's machine) and 1 em in Noto
- * Sans CJK, 1.245 em for an emoji in Noto Color Emoji. Our own text — labels we write, numbers,
- * hashes — is measured exactly by `textPx`. A cut of such a text walks the same clusters
+ * advance the site does not know. Such a text is measured by a bound, not a measurement: walking
+ * its grapheme clusters (what a reader sees as one character: a letter and its accents, an emoji
+ * with its modifier or a ZWJ sequence of several), a cluster of the served Latin subset at the
+ * face's 0.6 em and any other at 1.25 em, the widest advance measured of the fallback faces for
+ * CJK and emoji: 1.2 em for CJK in Maple Mono NF CN (what `monospace` resolves to on the owner's
+ * machine) and 1 em in Noto Sans CJK, 1.245 em for an emoji in Noto Color Emoji. It is not an
+ * upper bound (review fb-logic N1): single graphemes are known that draw wider — U+FDFD from 4.6
+ * em (Noto Nastaliq Urdu) to 12.2 em (Noto Naskh Arabic), an emoji ZWJ sequence that is not
+ * recommended for general interchange and draws as its parts (about 2.5 em), U+2E3B (3 em) — and
+ * a text holding one draws past the room it was measured for. Our own text — labels we write,
+ * numbers, hashes — is measured exactly by `textPx`. A cut of such a text walks the same clusters
  * (`clipForeignLabel`, lib/shorten.ts), so it never splits one.
  */
 
@@ -143,7 +147,10 @@ const SERVED_LATIN: readonly (readonly [number, number])[] = [
   [0xfeff, 0xfeff],
 ];
 
-/** The most a grapheme outside the served Latin subset advances, in units of the em (1.25 em). */
+/**
+ * What a grapheme outside the served Latin subset is counted at, in units of the em (1.25 em): the
+ * widest advance measured of the fallback faces for CJK and emoji, not the most any grapheme draws.
+ */
 const FALLBACK_UNITS = 1250;
 
 const served = (cp: number) => SERVED_LATIN.some(([from, to]) => cp >= from && cp <= to);
@@ -172,7 +179,7 @@ export function emUnitsPx(units: number, px: number): number {
 }
 
 /**
- * A text that is not ours as its grapheme clusters, each with the most it advances in units of
+ * A text that is not ours as its grapheme clusters, each with what it is counted at in units of
  * the em (thousandths): 600 for a cluster of the served Latin subset, 1,250 for any other.
  */
 export function foreignGraphemes(text: string): { grapheme: string; units: number }[] {
@@ -185,8 +192,9 @@ export function foreignGraphemes(text: string): { grapheme: string; units: numbe
 }
 
 /**
- * The most a text that is not ours can draw at `px` (an upper bound, see above): exactly
- * `textPx(length, px)` for a text of the served Latin subset.
+ * What a text that is not ours is counted to draw at `px`, by the bound above (not an upper bound:
+ * a few graphemes draw wider, see above): exactly `textPx(length, px)` for a text of the served
+ * Latin subset.
  */
 export function foreignTextPx(text: string, px: number): number {
   return emUnitsPx(
