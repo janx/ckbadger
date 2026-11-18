@@ -199,6 +199,8 @@ export const INSIDE_TICK_ROOM = SVG_TEXT.label + 1;
  */
 export const HOVER_HEAD_Y = SVG_TEXT.label + 5;
 export const HOVER_LINE = tightLinePx(SVG_TEXT.reading);
+/** The hover reading's padding, left and right of its widest line. */
+export const HOVER_PAD = 10;
 /**
  * A target line, drawn alike in the plot and as its key's sample (CH-21): a dash in the bright ink
  * over a knock-out of the same dash in the page's ground, drawn after the data, so it reads where
@@ -977,7 +979,7 @@ export function Chart({
                   // at the reading size: a long figure overruns the box's 10 px padding)
                   const boxWidth =
                     textPx(Math.max(head.length, ...rows.map((r) => r.length)), SVG_TEXT.label) +
-                    20;
+                    2 * HOVER_PAD;
                   const boxHeight = HOVER_HEAD_Y + 6 + rows.length * HOVER_LINE;
                   const px = x(activeIndex);
                   const bx = px + 14 + boxWidth > right ? px - 14 - boxWidth : px + 14;
@@ -993,7 +995,7 @@ export function Chart({
                         stroke="var(--c-base-border)"
                       />
                       <text
-                        x={bx + 10}
+                        x={bx + HOVER_PAD}
                         y={by + HOVER_HEAD_Y}
                         fill="var(--c-text-dim)"
                         fontSize={SVG_TEXT.label}
@@ -1003,7 +1005,7 @@ export function Chart({
                       {rows.map((row, i) => (
                         <text
                           key={row}
-                          x={bx + 10}
+                          x={bx + HOVER_PAD}
                           y={by + HOVER_HEAD_Y + 1 + (i + 1) * HOVER_LINE}
                           fill="var(--c-text-bright)"
                           fontSize={SVG_TEXT.reading}
