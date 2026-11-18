@@ -12,7 +12,7 @@ import { StatusClock, StatusLine } from '@/components/layout/status-line';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import { formatBlockNumber } from '@/lib/format-block';
 import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
-import { statusLinePx } from '@/lib/status-line-fit';
+import { statusLinePx, type StatusLineContent, type StatusLineParts } from '@/lib/status-line-fit';
 
 // Rubbing × Song print, phase 2 (lib.js `status()`): the page is a terminal session and the status
 // line is its last row — fixed at the foot of the window, 26 px, the elevated ground under a 1 px
@@ -299,22 +299,31 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
   const rightCells = (bar: HTMLElement) =>
     Array.from((bar.lastElementChild as HTMLElement).children).map((c) => c.textContent);
 
+  /**
+   * The line as drawn, read off its classes and its inline style (shell-budget's drawnStatusLinePx,
+   * which reads Tailwind's theme and never lib/status-line-fit.ts), is the line its budget counted
+   * for the parts it drew, and fits the window.
+   */
+  function expectDrawnAsBudgeted(
+    bar: HTMLElement,
+    viewport: number,
+    content: Omit<StatusLineContent, 'hints'>,
+    parts: StatusLineParts
+  ) {
+    const drawn = drawnStatusLinePx(bar, viewport);
+    expect(drawn).toBe(statusLinePx({ ...content, hints: STATUS_KEY_HINTS }, parts));
+    expect(drawn).toBeLessThanOrEqual(viewport);
+  }
+
   it('holds every part but the last key hint at 768 px, where it ran 5 px past the line', async () => {
     const bar = await at(768, vitals());
-    expect(drawnStatusLinePx(bar, true)).toBeLessThanOrEqual(768);
     // what the drawn line measures by its classes is what its budget (lib/status-line-fit) counted
     expect(bar).toHaveAttribute('data-measured', 'true');
-    expect(drawnStatusLinePx(bar, true)).toBe(
-      statusLinePx(
-        {
-          mode: 'LIVE',
-          network: 'mainnet',
-          tip: '#21,045,159',
-          release: 'ckbadger 0.1.0 · synced',
-          hints: STATUS_KEY_HINTS,
-        },
-        { network: true, tip: 'labelled', release: true, hints: 2 }
-      )
+    expectDrawnAsBudgeted(
+      bar,
+      768,
+      { mode: 'LIVE', network: 'mainnet', tip: '#21,045,159', release: 'ckbadger 0.1.0 · synced' },
+      { network: true, tip: 'labelled', release: true, hints: 2 }
     );
     expect(mode()).toHaveTextContent(/^LIVE$/);
     expect(bar.children[1]).toHaveTextContent(/^mainnet$/);
@@ -330,7 +339,17 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
   it('holds all of them from 1024 px, syncing and with a nine-digit tip', async () => {
     const served = vitals({ latestBlock: 999_999_999, isSyncing: true });
     const bar = await at(1024, served);
-    expect(drawnStatusLinePx(bar, true)).toBeLessThanOrEqual(1024);
+    expectDrawnAsBudgeted(
+      bar,
+      1024,
+      {
+        mode: 'SYNCING',
+        network: 'mainnet',
+        tip: '#999,999,999',
+        release: 'ckbadger 0.1.0 · syncing',
+      },
+      { network: true, tip: 'labelled', release: true, hints: 3 }
+    );
     expect(mode()).toHaveTextContent(/^SYNCING$/);
     expect(bar.children[3]).toHaveTextContent(/^ckbadger 0\.1\.0 · syncing$/);
     expect(rightCells(bar).slice(0, 3)).toEqual(['?help', '/search', 'g bblocks']);
@@ -338,7 +357,12 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
 
   it('keeps the clock whole at 320 px: the tip says its number without its word', async () => {
     const bar = await at(320, vitals());
-    expect(drawnStatusLinePx(bar, false)).toBeLessThanOrEqual(320);
+    expectDrawnAsBudgeted(
+      bar,
+      320,
+      { mode: 'LIVE', network: 'mainnet', tip: '#21,045,159', release: '' },
+      { network: true, tip: 'number', release: false, hints: 0 }
+    );
     expect(mode()).toHaveTextContent(/^LIVE$/);
     expect(bar.children[1]).toHaveTextContent(/^mainnet$/);
     const tip = bar.children[2] as HTMLElement;
@@ -351,7 +375,12 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
 
   it('holds the mode, the network, the tip and the clock at 360 px while syncing, the tip without its word', async () => {
     const bar = await at(360, vitals({ isSyncing: true }));
-    expect(drawnStatusLinePx(bar, false)).toBeLessThanOrEqual(360);
+    expectDrawnAsBudgeted(
+      bar,
+      360,
+      { mode: 'SYNCING', network: 'mainnet', tip: '#21,045,159', release: '' },
+      { network: true, tip: 'number', release: false, hints: 0 }
+    );
     expect(mode()).toHaveTextContent(/^SYNCING$/);
     expect(bar.children[1]).toHaveTextContent(/^mainnet$/);
     expect((bar.children[2] as HTMLElement).querySelector('.sr-only')).toHaveTextContent(/^tip$/);
@@ -360,7 +389,12 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
 
   it('keeps the tip with its word where the line holds it: 390 px, live', async () => {
     const bar = await at(390, vitals());
-    expect(drawnStatusLinePx(bar, false)).toBeLessThanOrEqual(390);
+    expectDrawnAsBudgeted(
+      bar,
+      390,
+      { mode: 'LIVE', network: 'mainnet', tip: '#21,045,159', release: '' },
+      { network: true, tip: 'labelled', release: false, hints: 0 }
+    );
     expect(bar.children[2]).toHaveTextContent(/^tip#21,045,159$/);
     expect((bar.children[2] as HTMLElement).querySelector('.sr-only')).toBeNull();
   });
