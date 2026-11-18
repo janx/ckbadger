@@ -44,7 +44,16 @@ export function ckbAddress({
   network?: 'ckb' | 'ckt';
 }): string {
   if (bytes(codeHash).length !== 32) throw new Error(`a code hash is 32 bytes: ${codeHash}`);
-  const payload = [0x00, ...bytes(codeHash), HASH_TYPE_BYTE[hashType], ...bytes(args)];
+  return bech32mAddress(network, [
+    0x00,
+    ...bytes(codeHash),
+    HASH_TYPE_BYTE[hashType],
+    ...bytes(args),
+  ]);
+}
+
+/** Any payload under a CKB prefix with its bech32m checksum (a decoder's refusals are tested on it). */
+export function bech32mAddress(network: 'ckb' | 'ckt', payload: readonly number[]): string {
   const words: number[] = [];
   let acc = 0;
   let bits = 0;

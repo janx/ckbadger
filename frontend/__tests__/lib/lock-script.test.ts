@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ckbAddress, seededAddress } from '@/__tests__/utils/ckb-address';
+import { bech32mAddress, ckbAddress, seededAddress } from '@/__tests__/utils/ckb-address';
 import { addressScript, DEFAULT_LOCK_CODE_HASH, isDefaultLock } from '@/lib/lock-script';
 
 // RFC 0021's own example: the default lock (SECP256K1/blake160 by type) over these args.
@@ -65,6 +65,11 @@ describe('addressScript (RFC 0021, full format)', () => {
     ).toThrow(/hash type byte 3/);
     // a payload too short to hold a code hash
     expect(() => addressScript('ckb1qzda0cr08m85hc8jlsfcdtqu')).toThrow(/too short/);
+    // no payload at all under a good checksum: said so, not as a format it does not have (lane B4
+    // fix round, review-rules-logic NOTE 7: it read "format 0x00 is not the full format")
+    const empty = bech32mAddress('ckb', []);
+    expect(empty).toMatch(/^ckb1[a-z0-9]{6}$/);
+    expect(() => addressScript(empty)).toThrow(`address ${empty}: its payload is empty`);
     // a character outside bech32, and a string too short for its checksum
     expect(() => addressScript('ckb1qzda0b')).toThrow(/"b" is not bech32/);
     expect(() => addressScript('ckb1qq')).toThrow(/shorter than its checksum/);
