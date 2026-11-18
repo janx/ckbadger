@@ -78,19 +78,22 @@ export type ListTableDensity = 'default' | 'row';
  * collapsed table border is painted by the table and would stay behind where the head was.
  */
 const HEAD_CLASS =
-  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 pr-4 font-normal last:pr-0 after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule';
+  'sticky z-20 bg-[var(--m-header-strip)] text-text-dim text-meta py-3 pl-0 pr-4 font-normal last:pr-0 after:absolute after:inset-x-0 after:bottom-0 after:h-px after:bg-row-rule';
 const HEAD_TOP = { page: BELOW_STICKY_HEADER, box: 'top-0' } as const;
 
 /**
  * The gap a column keeps after its content, its cells' `pr-4` (the last column keeps none,
- * `last:pr-0`): every column but the last budgets it in its minimum width.
+ * `last:pr-0`): every column but the last budgets it in its minimum width. It is a cell's ONLY
+ * horizontal padding: `pl-0` is written out because a browser gives a table cell 1 px of padding
+ * on every side by default, and a pixel the budget does not count breaks the column that is
+ * budgeted to the pixel.
  */
 export const CELL_GAP_PX = 16;
 
 /** `td` classes per density; `th` is the same in both. */
 const CELL_CLASS: Record<ListTableDensity, string> = {
-  default: 'min-w-0 py-3 pr-4 align-top last:pr-0',
-  row: 'min-w-0 py-[11px] pr-4 align-middle last:pr-0',
+  default: 'min-w-0 py-3 pl-0 pr-4 align-top last:pr-0',
+  row: 'min-w-0 py-[11px] pl-0 pr-4 align-middle last:pr-0',
 };
 
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';

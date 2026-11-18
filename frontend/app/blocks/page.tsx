@@ -578,7 +578,8 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
       <div className="flex items-start">
         <RowSeal id={blockSeal(block)} />
         <div className="min-w-0">
-          <Link href={`/blocks/${block.number}`} className={KEY}>
+          {/* a block number is one figure: it never breaks inside itself */}
+          <Link href={`/blocks/${block.number}`} className={`${KEY} whitespace-nowrap`}>
             {formatBlockNumber(block.number)}
           </Link>
           <Hash
