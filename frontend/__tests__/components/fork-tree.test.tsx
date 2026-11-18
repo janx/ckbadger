@@ -397,3 +397,34 @@ describe('ForkTree at 358 px: four heights, every column and the branch (ruling 
     expectApart(allTextLines(svg), 'the tree at 358');
   });
 });
+
+// Review F-B (logic finding 5): a pool's name is the operator's text (docs/metadata/pools.toml)
+// and may be in any script. It was cut by UTF-16 unit and measured at 0.6 em a unit; no face the
+// site serves holds a CJK character or an emoji, which draw from a fallback face. It is measured
+// as an upper bound, 1.25 em a grapheme outside the served faces' Latin subset (15 px at 12 px; a
+// Latin glyph 7.2), and cut at whole graphemes with the one ellipsis. Under a 72 px tile the
+// miner's column is 88 px; in a wide tile, 94 px between its insets.
+describe('ForkTree: a pool’s name in any script (review F-B, logic finding 5)', () => {
+  it.each([
+    [358, '蚂蚁矿池 AntPool 🐜', '蚂蚁矿池 A…', 4 * 15 + 3 * 7.2],
+    [1248, '蚂蚁矿池 AntPool 🐜', '蚂蚁矿池 An…', 4 * 15 + 4 * 7.2],
+    [358, '🐜'.repeat(8), `${'🐜'.repeat(5)}…`, 5 * 15 + 7.2],
+  ])('cuts it at %i px to whole graphemes within its room: %s', (width, pool, drawn, px) => {
+    stubChartWidth(width);
+    const named: ForkTreeModel = {
+      ...usual,
+      main: usual.main.map((t) => (t.minerAddress ? { ...t, minerPool: pool } : t)),
+      rows: usual.rows.map((r) => ({
+        ...r,
+        tiles: r.tiles.map((t) => ({ ...t, minerPool: pool })),
+      })),
+    };
+    const { container } = render(<ForkTree model={named} />);
+    const svg = container.querySelector('svg[data-fork-tree]')!;
+    const pools = [...svg.querySelectorAll('text')].filter((t) => t.textContent!.endsWith('…'));
+    // today's +1 and +2 and the dropped +1 carry a miner
+    expect(pools).toHaveLength(3);
+    for (const text of pools) expect(text.textContent).toBe(drawn);
+    expect(px).toBeLessThanOrEqual(width === 358 ? 88 : 94);
+  });
+});
