@@ -136,6 +136,33 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getTokenTransactions).mockResolvedValue(empty);
   });
 
+  // Lane B4 fix round (review-rules-logic NOTE 3, the coordinator's item 13): the token that
+  // leads its line is the page's token as the API returned it, not the address's spelling of it.
+  // A link may spell the hash in capitals (the API reads it either way); the feed's rows carry the
+  // API's lowercase type script hash.
+  it('leads each line with the page’s token however the address spells its hash', async () => {
+    const lettered = `0x${'ab'.repeat(32)}`;
+    vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, typeScriptHash: lettered });
+    const moved = {
+      ...activity,
+      participants: [
+        {
+          ...activity.participants[0],
+          itemDeltas: [{ kind: 'token' as const, typeScriptHash: lettered, delta: '100000000000' }],
+        },
+      ],
+    };
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [moved] });
+    render(<TokenDetailPage typeHash={`0x${'AB'.repeat(32)}`} />);
+    await screen.findAllByRole('article');
+    const line = document.querySelector('[data-role="participant"]')!;
+    expect([...line.children].map((e) => e.getAttribute('data-role'))).toEqual([
+      'party',
+      'item',
+      'ckb',
+    ]);
+  });
+
   it('uses entity 404 only for the token read, not a secondary history error', async () => {
     vi.mocked(api.getToken).mockRejectedValue(
       new ApiRequestError(404, 'not_found', 'token absent')
