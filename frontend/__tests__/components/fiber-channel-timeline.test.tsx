@@ -6,6 +6,13 @@ import fixture from '../fixtures/fiber-channel-c07e.json';
 import openChannel from '../fixtures/fiber-open.json';
 import forceClosed from '../fixtures/fiber-force-closed.json';
 import type { FiberChannelDetail } from '@/lib/api';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  meets,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
   it('places opened → force-closed → settled on a time axis with block, date, and the wait', () => {
@@ -109,6 +116,73 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
       // the label above the line sits clear of the segment label; the wait reads beside it
       expect(Number(screen.getByText('settled').getAttribute('y'))).toBeLessThanOrEqual(-30);
       expect(screen.getByText('6 epochs')).toHaveAttribute('text-anchor', 'start');
+    });
+  });
+
+  // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every
+  // word of the timeline — a point's name and its block and date, the open segment's words, the
+  // wait — stands whole inside the svg, touches no other word, and clears the line and every
+  // point's circle, measured by the type modules (0.6 em a glyph; a tight line over its baseline,
+  // its descent under it). The real cases: a settled channel, an open one, one force-closed and
+  // waiting (mainnet's #19,153,812 → #21,025,146), and one closed together, at the board width
+  // (1232), at 640 (608) and on phones (358, 326).
+  describe('every word clear of the line, the points and each other (readability F3)', () => {
+    afterEach(() => vi.unstubAllGlobals());
+    const waiting = {
+      ...(forceClosed as FiberChannelDetail),
+      openBlock: 19153812,
+      openTimestamp: '1777000092000',
+      closeBlock: 21025146,
+      closeTimestamp: '1794795722000',
+      observedLifetimeMs: '17795630000',
+      lifetimeAnchorBlock: 21025146,
+    } satisfies FiberChannelDetail;
+    const together = {
+      ...(fixture.channel as FiberChannelDetail),
+      state: 'cooperativelyClosed',
+      settlementTimestamp: null,
+      settlementBlock: null,
+    } as FiberChannelDetail;
+    const channels = [
+      ['settled', fixture.channel as FiberChannelDetail],
+      ['open', openChannel as FiberChannelDetail],
+      ['force-closed, waiting', waiting],
+      ['closed together', together],
+    ] as const;
+    // Not held at 326: a settled channel's wait ("6 epochs", 57.6 px) is written from 10 px right
+    // of the close on a phone, and the close stands where its time puts it; at 326 the word runs
+    // 1.08 px past the svg (a channel open for months and settled within days: about 26 px at
+    // 358 too). The figure has no rule for a wait that does not fit there: it is handed back for
+    // a ruling, not given one here.
+    it.each(
+      [1232, 608, 358, 326].flatMap((w) =>
+        channels
+          .filter(([n]) => !(w === 326 && n === 'settled'))
+          .map(([n, c]) => [w, n, c] as const)
+      )
+    )('at %i px, %s', (width, _name, channel) => {
+      stubChartWidth(width);
+      const { container } = render(<FiberChannelTimeline channel={channel} />);
+      const svg = container.querySelector('svg')!;
+      const lines = allTextLines(svg);
+      for (const line of lines) expectInside(line, viewBox(svg), 'the timeline', 'flush');
+      expectApart(lines, `the timeline at ${width}`);
+      // the line's stroke and every point's circle (its stroke too)
+      const marks = [
+        ...[...svg.querySelectorAll('line[data-segment]')].map((l) => {
+          const [x1, x2, y] = ['x1', 'x2', 'y1'].map((a) => Number(l.getAttribute(a)));
+          const half = Number(l.getAttribute('stroke-width')) / 2;
+          return { left: x1, right: x2, top: y - half, bottom: y + half };
+        }),
+        ...[...svg.querySelectorAll('circle[data-point]')].map((c) => {
+          const [cx, cy, r] = ['cx', 'cy', 'r'].map((a) => Number(c.getAttribute(a)));
+          const reach = r + Number(c.getAttribute('stroke-width')) / 2;
+          return { left: cx - reach, right: cx + reach, top: cy - reach, bottom: cy + reach };
+        }),
+      ];
+      for (const line of lines)
+        for (const mark of marks)
+          expect(meets(line, mark), `"${line.text}" meets the line or a point`).toBe(false);
     });
   });
 });
