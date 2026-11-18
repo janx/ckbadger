@@ -2,6 +2,7 @@ import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { TokenDistributionView, TokenHolders } from '@/components/asset/token-holders';
 import { api } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import type { TokenDistribution } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
@@ -233,6 +234,7 @@ describe('Token holders (board L5)', () => {
 
   it('gives each holder two lines at 358 px: rank inline with address, lock and amount · the bar', async () => {
     atContainerWidth(358);
+    atViewportWidth(390);
     mount();
     const [first] = await screen.findAllByTestId('holder-row-mobile');
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
@@ -328,6 +330,7 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
 
   it('writes the phone row’s lock "lock <code hash>" beside the holder', async () => {
     atContainerWidth(358);
+    atViewportWidth(390);
     mount();
     const [named, unnamed, notIndexed] = await screen.findAllByTestId('holder-row-mobile');
     expect(phoneLines(named)[0].left).toMatch(/ JoyID$/);
@@ -472,8 +475,11 @@ describe('Token holders where the table does not fit (L5)', () => {
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
     // Re-pinned with ruling R7: 10.00 % is drawn on the page's rounded maximum (10 %), the axis
     // mark over the bar, the number beside it — no longer full because 10 % was the clamp.
+    // R9 (re-pinned): a container just under the table is a desktop column (the holders beside the
+    // balance bands from 1280, 545 px), so at jsdom's 1024 px viewport the holder takes the row
+    // size, 10…6 for a lock hash (it was the tight 6…4)
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '10x1111…1111 JoyID', right: '100' },
+      { key: 'holder', tone: 'head', left: '10x11111111…111111 JoyID', right: '100' },
       { key: 'axis', tone: 'quiet', left: '010%', right: null },
       { key: 'share', tone: 'quiet', left: '10.00%', right: null },
     ]);

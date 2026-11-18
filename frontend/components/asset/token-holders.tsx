@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type TokenDistribution, type TokenHolder } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import {
   AssetAmount,
@@ -207,6 +208,10 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   const distributionSource = `holder distribution from /tokens/${typeHash}/distribution`;
   const [all, setAll] = useState(false),
     pagination = useCursorPagination();
+  // The phone row is drawn wherever the holders' column is narrower than the table's 552 px: on a
+  // phone, and in a desktop column (it is 554 px beside the balance bands at 1280, two px from
+  // the phone row): tight only below sm (R9).
+  const phoneSize = useTightBelowSm();
   const distribution = useQuery({
     queryKey: ['token-distribution', typeHash],
     queryFn: () => api.getTokenDistribution(typeHash),
@@ -359,12 +364,13 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                   rank={rank(h)}
                   party={
                     <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
-                      {/* The phone row's tight size (U-09), 11 characters for an address, 4…6 (it
-                          was 10…6, 17): rank, address, lock and amount share a 358 px line (L5). */}
+                      {/* Below sm the tight size, 11 characters for an address, 4…6: rank,
+                          address, lock and amount share a 358 px line (L5); from sm the row
+                          size, the table's (R9). */}
                       <Hash
                         hash={h.address ?? h.lockScriptHash}
                         kind={h.address ? 'address' : 'hash'}
-                        size="tight"
+                        size={phoneSize}
                         copyable={false}
                         className="text-body"
                       />
@@ -375,7 +381,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                     <LockKind
                       lockKind={h.lockKind}
                       lockCodeHash={h.lockCodeHash}
-                      size="tight"
+                      size={phoneSize}
                       className="text-text-dim text-small"
                     />
                   }
