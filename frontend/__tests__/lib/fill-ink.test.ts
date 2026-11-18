@@ -9,7 +9,7 @@ import {
   overGround,
   type PaletteKey,
 } from '@/lib/palette';
-import { CLASS_KEYS, DATA_KEY } from '@/lib/design-tokens';
+import { CLASS_KEYS, CODE_CLASS_KEYS, DATA_KEY } from '@/lib/design-tokens';
 import { CONCENTRATION_STEPS } from '@/components/ui/concentration-bar';
 import { PROVIDER_OPACITY } from '@/app/network/distributions';
 
@@ -20,6 +20,14 @@ const BARS: { name: string; key: PaletteKey; steps: readonly number[] }[] = [
   { name: 'network "where they run"', key: DATA_KEY, steps: PROVIDER_OPACITY },
   // dao-board.tsx CLAIMABLE_FILL: the claimable part of the requested withdrawals
   { name: 'DAO claimable', key: CLASS_KEYS.dao, steps: [0.45] },
+  // script-code-evidence.tsx ScriptCodeClassBar (/scripts, "Who can change the code"): every class's
+  // opaque fill writes its name and share inside it where they fit (readability F1 follow-up: the bar
+  // was missing here, and its words had a hand-picked ink)
+  ...Object.entries(CODE_CLASS_KEYS).map(([cls, { fill }]) => ({
+    name: `scripts "who can change the code" ${cls}`,
+    key: fill,
+    steps: [1],
+  })),
 ];
 
 describe('overGround', () => {

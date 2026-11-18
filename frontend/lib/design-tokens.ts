@@ -215,17 +215,26 @@ export const FORK_COLORS = {
 /**
  * "Who can change the code" (Scripts board): one fixed swatch per API code class. Immutable code
  * is filled grey, replaceable code is an outline (lighter edge = fewer signers), never by index.
+ * The keys, for a drawer that picks the ink of words on these fills (`inkOnFill`).
  */
-export const CODE_CLASS_COLORS = {
-  fixed: { fill: color('code-fixed-fill'), edge: color('text') },
-  unspendable: { fill: color('code-unspendable-fill'), edge: color('text-dim') },
-  multisig: { fill: color('base-bg'), edge: color('text') },
-  one_key: { fill: color('base-bg'), edge: color('text-bright') },
-  unsupported: { fill: color('base-bg'), edge: color('ink-quiet') },
-  mixed: { fill: color('base-bg'), edge: color('board-link') },
-  ambiguous: { fill: color('base-bg'), edge: color('identity') },
-  retired: { fill: color('base-border-subtle'), edge: color('text-ghost') },
-} as const;
+export const CODE_CLASS_KEYS = {
+  fixed: { fill: 'code-fixed-fill', edge: 'text' },
+  unspendable: { fill: 'code-unspendable-fill', edge: 'text-dim' },
+  multisig: { fill: 'base-bg', edge: 'text' },
+  one_key: { fill: 'base-bg', edge: 'text-bright' },
+  unsupported: { fill: 'base-bg', edge: 'ink-quiet' },
+  mixed: { fill: 'base-bg', edge: 'board-link' },
+  ambiguous: { fill: 'base-bg', edge: 'identity' },
+  retired: { fill: 'base-border-subtle', edge: 'text-ghost' },
+} as const satisfies Record<string, { fill: PaletteKey; edge: PaletteKey }>;
+export const CODE_CLASS_COLORS = Object.fromEntries(
+  Object.entries(CODE_CLASS_KEYS).map(([cls, { fill, edge }]) => [
+    cls,
+    { fill: color(fill), edge: color(edge) },
+  ])
+) as {
+  readonly [K in keyof typeof CODE_CLASS_KEYS]: { readonly fill: string; readonly edge: string };
+};
 /**
  * Free capacity in a cell anatomy bar (the Script board's "free" swatch): the bar's empty part, in
  * the bar-track ink, which clears the ruled paper by day (R5).

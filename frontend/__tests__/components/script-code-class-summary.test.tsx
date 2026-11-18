@@ -7,8 +7,10 @@ import {
   ScriptCodeClassSummary,
   scriptClassLabel,
 } from '@/components/scripts/script-code-evidence';
-import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
+import { CODE_CLASS_COLORS, CODE_CLASS_KEYS } from '@/lib/design-tokens';
 import { percentOf } from '@/lib/format-unit';
+import { color, inkOnFill, PALETTE_KEYS, type ThemeName } from '@/lib/palette';
+import { resetThemeForTests } from '@/lib/theme';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 // Scripts board (Version 50): of 49.77B CKB under the lock scripts, 96.5% immutable, 3.47% a
@@ -101,6 +103,18 @@ function hasEdge(node: HTMLElement, color: string): boolean {
   return node.style.boxShadow.includes(color);
 }
 
+/** A Tailwind text-colour class of a palette key (`text-text-bright`, `text-base-bg`), not a size. */
+function isInkClass(name: string): boolean {
+  const m = /^text-(.+?)(?:\/\d+)?$/.exec(name);
+  return m !== null && (PALETTE_KEYS as string[]).includes(m[1]);
+}
+
+function inTheme(theme: ThemeName) {
+  localStorage.setItem('ckbadger.theme', theme);
+  resetThemeForTests();
+  document.documentElement.setAttribute('data-theme', theme);
+}
+
 describe('ScriptCodeClassSummary · visual pass (R2b-b familyCount, D6, 390 px)', () => {
   it('counts scripts per class from familyCount, in the sentence and the legend (SC-L3)', () => {
     render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
@@ -161,6 +175,9 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    localStorage.clear();
+    resetThemeForTests();
+    document.documentElement.setAttribute('data-theme', 'dark');
   });
 
   it('writes the name and share inside a segment that fits, dark on the light fill, and pads only a labelled segment', () => {
@@ -176,7 +193,10 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
       '',
       '',
     ]);
-    expect(segments[0]).toHaveClass('text-base-bg', 'px-2.5');
+    // re-pinned on purpose (readability F1 follow-up): the dark ink is the fill-ink rule's, the
+    // well, set as the segment's colour; it was the class text-base-bg, named by hand
+    expect(segments[0]).toHaveClass('px-2.5');
+    expect(segments[0].style.color).toBe('var(--c-base-void)');
     // An unlabelled sliver is not widened by padding: 0.075 % stays a sliver.
     expect(segments[2]).not.toHaveClass('px-2.5');
     expect(segments[2]).toHaveClass('min-w-[3px]');
@@ -199,7 +219,9 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
       'Immutable · code cell unspendable 40.00%',
       'A multisig can replace 60.00%',
     ]);
-    for (const s of segments) expect(s).toHaveClass('text-text-bright');
+    // re-pinned on purpose (readability F1 follow-up): the bright ink comes from the fill-ink rule
+    // as the segment's colour; it was the class text-text-bright, named by hand
+    for (const s of segments) expect(s.style.color).toBe('var(--c-text-bright)');
   });
 
   it('keeps the words of the wide segment at 358 px and holds none at 240 px', () => {
@@ -238,6 +260,40 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
     ]);
     expect(legend.textContent).not.toMatch(/\d\.\d{8}|scripts/);
   });
+
+  // Readability F1 follow-up (DY-03's rule): the words inside a segment take the ink the segment's
+  // own fill calls for in the theme in force (inkOnFill), never an ink the component names per
+  // class; on the unspendable grey the hand-picked bright ink fell to 3.11:1 by night.
+  it.each(['dark', 'light'] as const)(
+    'writes every segment’s words in the ink the fill-ink rule gives for its fill: %s',
+    (theme) => {
+      inTheme(theme);
+      stubChartWidth(4000);
+      const drawn = ['fixed', 'unspendable', 'multisig', 'retired'] as const;
+      const { container } = render(
+        <ScriptCodeClassBar
+          classes={drawn.map((cls) => ({
+            class: cls,
+            lockCellsCount: 1,
+            lockOwnedCapacitySum: '250',
+            referenceCount: 1,
+            familyCount: 1,
+          }))}
+        />
+      );
+      const segments = [...container.querySelectorAll<HTMLElement>('[data-code-class-segment]')];
+      expect(segments.map((s) => s.dataset.codeClassSegment)).toEqual(drawn);
+      for (const s of segments) {
+        const cls = s.dataset.codeClassSegment as (typeof drawn)[number];
+        expect(s.textContent, cls).toMatch(/ 25\.00%$/);
+        const rule = inkOnFill(theme, CODE_CLASS_KEYS[cls].fill, 1).ink;
+        expect(s.style.color, `${theme} ${cls}`).toBe(color(rule));
+        // no ink class on the segment or on its words: the rule's ink is the only one
+        for (const el of [s, ...s.querySelectorAll<HTMLElement>('*')])
+          expect([...el.classList].filter(isInkClass), `${theme} ${cls}`).toEqual([]);
+      }
+    }
+  );
 
   it('fails loudly on an unknown class, as the summary does', () => {
     expect(() =>
