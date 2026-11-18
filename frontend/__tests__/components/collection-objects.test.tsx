@@ -211,6 +211,26 @@ it('titles a Newest row with its owner’s lock as its tag writes it', async () 
   expect(defaultRow.getAttribute('title')).toContain(`owner ${base.ownerAddress} · minted`);
 });
 
+// B4 second fix round (review-rules-fixes-logic NOTE 8, the coordinator's item 14, ruling D7): a
+// row whose owner address spells another lock than it says is refused by the lock decision, and
+// the refusal fails the Newest list in its place, never the page.
+it('says in its place that it cannot read the newest objects when an owner’s lock is refused', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const joy = seededAddress('joyown', JOYID_CODE_HASH);
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([{ ...base, ownerAddress: joy }])
+  );
+  render(
+    <main>
+      <h1>The collection page</h1>
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    </main>
+  );
+  const alert = await screen.findByText(/^Could not read the newest objects: /);
+  expect(alert).toHaveTextContent(`address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`);
+  expect(screen.getByRole('heading', { name: 'The collection page' })).toBeInTheDocument();
+});
+
 it('writes each Newest row on one line with the name bright and the rest in its title (L2-4, C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(

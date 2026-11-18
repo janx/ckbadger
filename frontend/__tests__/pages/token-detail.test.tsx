@@ -163,6 +163,30 @@ describe('TokenDetailPage', () => {
     ]);
   });
 
+  // B4 second fix round (review-rules-fixes-logic NOTE 8, the coordinator's item 14, ruling D7):
+  // an issuer whose address spells another lock than it says is refused by the lock decision, and
+  // the refusal fails the issuer's note in its place, never the page.
+  it('says in the issuer’s note that its lock cannot be read, and draws the page', async () => {
+    const joy = seededAddress('issuer', JOYID_CODE_HASH);
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address: joy,
+        lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+        lockKind: 'Default Lock',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { level: 1 });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    const alert = within(metrics).getByRole('alert');
+    expect(alert).toHaveTextContent(
+      `Could not read the issuer’s lock: address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`
+    );
+    expect(metrics).toHaveTextContent('owner lock proven by token script');
+  });
+
   it('uses entity 404 only for the token read, not a secondary history error', async () => {
     vi.mocked(api.getToken).mockRejectedValue(
       new ApiRequestError(404, 'not_found', 'token absent')
