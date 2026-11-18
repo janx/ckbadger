@@ -140,8 +140,11 @@ export function shownSign(d: AmountDigits): AmountDigits['sign'] {
   return /^[0,.]*$/.test(`${d.integer}${d.fraction}`) ? '' : d.sign;
 }
 
-/** The text of an amount's digits: the sign when `signed`. */
-export function amountText(d: AmountDigits, signed: boolean): string {
+/**
+ * The text of an amount's digits: the sign when `signed`. The module's own: its callers below
+ * settle the sign before they write.
+ */
+function amountText(d: AmountDigits, signed: boolean): string {
   return `${signed ? shownSign(d) : ''}${d.integer}${d.fraction}${d.suffix}${d.padding}`;
 }
 
@@ -180,4 +183,14 @@ export function parseDecimalAmount(raw: string): {
   const [, sign, whole, fraction = ''] = m;
   const abs = BigInt(`${whole}${fraction}`);
   return { value: sign === '-' ? -abs : abs, decimals: fraction.length, plus: sign === '+' };
+}
+
+/**
+ * A decimal amount in display units as served (a chart's CKB value `"8131306075.44505907"`, an
+ * exact delta `"+30.5"`) as text in `form`, exactly as served: no digit dropped before the form
+ * cuts it, the minus of a negative and the `+` of a delta kept.
+ */
+export function decimalAmountText(raw: string, form: AmountForm): string {
+  const { value, decimals, plus } = parseDecimalAmount(raw);
+  return amountText(amountDigits(value, decimals, form), value < ZERO || plus);
 }

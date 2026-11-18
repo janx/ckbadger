@@ -30,7 +30,7 @@ import {
 } from '@/lib/design-tokens';
 import { shortenAddress, shortenHash } from '@/lib/shorten';
 import { formatPercent } from '@/lib/ckb-decimal';
-import { amountDigits, amountText, parseDecimalAmount, type AmountForm } from '@/lib/amount-form';
+import { decimalAmountText } from '@/lib/amount-form';
 
 export interface RankedPreviewRow {
   /** Short display label; `title` keeps the full identity. */
@@ -286,23 +286,13 @@ const COUNT_UNITS = new Set([
 const CKB_UNITS = new Set(['CKB', 'CKB/day']);
 
 /**
- * A CKB value of a chart in an amount form (R5), exactly as served: no digit dropped before the
- * form cuts it, the sign kept for a negative and for an exact delta's `+`.
- */
-function chartCkb(value: string, form: AmountForm): string {
-  const { value: amount, decimals, plus } = parseDecimalAmount(value);
-  const d = amountDigits(amount, decimals, form);
-  return amountText(d, amount < BigInt(0) || plus);
-}
-
-/**
  * The chart readout of a card headline, card "Last change" and the hover readout (CH-02): rates
  * at two decimals, exact whole counts as integers, a CKB amount in the compact form (R5, cut),
  * everything else compact at two decimals. A leading `+` (an exact delta) is kept. The exact value
  * is `formatChartExact`.
  */
 export function formatChartReadout(value: string, unit: string): string {
-  if (CKB_UNITS.has(unit)) return chartCkb(value, 'compact');
+  if (CKB_UNITS.has(unit)) return decimalAmountText(value, 'compact');
   const plus = value.startsWith('+');
   const [numerator, denominator] = exactSignedDecimalRatio(
     plus ? value.slice(1) : value,
@@ -335,7 +325,7 @@ export function formatChartExact(value: string, unit: string): string {
  * exact.
  */
 export function formatChartHover(value: string, unit: string): string {
-  if (CKB_UNITS.has(unit)) return chartCkb(value, 'exact');
+  if (CKB_UNITS.has(unit)) return decimalAmountText(value, 'exact');
   return RATE_UNITS.has(unit) ? formatChartReadout(value, unit) : formatChartExact(value, unit);
 }
 
@@ -345,7 +335,7 @@ export function formatChartHover(value: string, unit: string): string {
  * value in the figure's title (`chart-detail.tsx`); every other unit as its readout reads.
  */
 export function formatChartHead(value: string, unit: string): string {
-  return CKB_UNITS.has(unit) ? chartCkb(value, 'summary') : formatChartHover(value, unit);
+  return CKB_UNITS.has(unit) ? decimalAmountText(value, 'summary') : formatChartHover(value, unit);
 }
 
 function summary(value: string, unit: string): string {
