@@ -20,7 +20,9 @@
  * tight (a tight hash's width).
  *
  * A page writes one id in one form: prose takes the row form, for a hash too, so a party named in
- * a lede is the same string as in the table under it; `head` is for the page's own name.
+ * a lede is the same string as in the table under it; `head` is for the page's own name. A phone
+ * row that is also drawn in a desktop column, or a tile under 200 px only on a phone, takes its
+ * size from `useTightBelowSm` (tight below `sm`, the row size from it).
  *
  * Counts are characters of the value as written (`0x` and `ckb1` included). The ellipsis is the
  * one character `…`. A value no longer than its shortened form is written whole. An out point is

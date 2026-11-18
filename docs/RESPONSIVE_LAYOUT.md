@@ -113,10 +113,13 @@ The 640–767 band has one content width to design for. Below 640 the container 
   prose (a lede, a sentence, a note) takes the `row` form, for a hash too, as do tables, feeds and
   tiles; `tight` only below `sm` (a phone row) and in an SVG or tile label under 200 px. A page
   writes one id in one form at `sm` and wider; a list with a table and a phone row takes the size
-  of the form it is drawn in. Any other hex id takes the hash's sizes; an out point is its hash
-  and `:N`; a value no longer than its shortened form is written whole. The ellipsis is the one
-  character `…`, never `...`. A renderer takes a size, never a length, and `head` and `tight` are
-  chosen only where the gate lists them with their reason (`__tests__/lib/shorten-gate.test.ts`). A
+  of the form it is drawn in, and a phone row that is also drawn in a desktop column (a list whose
+  table needs more than its column) or a tile under 200 px only on a phone asks
+  `useTightBelowSm` (tight below `sm`, the row size from it). Any other hex id takes the hash's
+  sizes; an out point is its hash and `:N`; a value no longer than its shortened form is written
+  whole. The ellipsis is the one character `…`, never `...`. A renderer takes a size, never a
+  length, and `head` and `tight` are chosen only where the gate lists them with their reason
+  (`__tests__/lib/shorten-gate.test.ts`). A
   percentage has two decimals and its sign with no space (`24.79%`); a compact count or CKB amount
   takes a lowercase `k` for thousands, then `M`, `B`, `T`; a physical quantity keeps its SI prefix
   with its symbol (`PH/s`, `kB`); a figure writes the symbol (`s`, `h`, `d`, `B`), prose the word.
