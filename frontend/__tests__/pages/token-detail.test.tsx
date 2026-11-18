@@ -1,3 +1,4 @@
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
@@ -398,6 +399,27 @@ describe('TokenDetailPage', () => {
       expect.stringMatching(new RegExp(`/script/${unregistered}$`))
     );
     expect(metrics).not.toHaveTextContent(/lock kind unavailable/i);
+  });
+  // B4 fix round (review-rules MUST 1): the default lock is silent beside the issuer, and the note
+  // leaves that part out: one separator, never "· ·". On the real default lock, by type.
+  it('writes one separator before the proof for an issuer on the default lock', async () => {
+    const address =
+      'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdnnw7qkdnnclfkg59uzn8umtfd2kwxceqxwquc4';
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: {
+        lockHash: other,
+        address,
+        lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+        lockKind: 'Default Lock',
+      },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).toHaveTextContent('ckb1…eqxwquc4 · owner lock proven by token script');
+    expect(metrics).not.toHaveTextContent(/·\s*·/);
+    expect(metrics).not.toHaveTextContent('Default Lock');
   });
   it('writes no lock kind for an issuer lock that is not indexed (U-15)', async () => {
     vi.mocked(api.getToken).mockResolvedValue({
