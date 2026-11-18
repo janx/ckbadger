@@ -100,7 +100,7 @@ describe('ParticipantRefView', () => {
     );
     expect(screen.queryByRole('link')).toBeNull();
     const text = screen.getByTitle(address);
-    expect(text).toHaveTextContent(/^ckb1qzda0c…wj5clj$/);
+    expect(text).toHaveTextContent(/^ckb1…d9wj5clj$/); // R9 (re-pinned): 4…8 at the row size
     expect(text).toHaveClass('text-text-dim', 'font-mono');
     expect(screen.getByText('owner')).toBeInTheDocument();
     unmount();

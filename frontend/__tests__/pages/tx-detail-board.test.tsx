@@ -375,8 +375,9 @@ describe('Transaction board, tier 1', () => {
     expect(h1.querySelector('[data-class]')).toBeNull();
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
-      // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size
-      'Nervape 3x 0x51c75a0000…000096f2 moved from ckb1qzda0cr0…sqcjk9lz to ckb1qzda0cr0…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
+      // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size;
+      // R9 (re-pinned): an address is `ckb1…` and its last 8 characters
+      'Nervape 3x 0x51c75a0000…000096f2 moved from ckb1…sqcjk9lz to ckb1…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
@@ -546,7 +547,7 @@ describe('Transaction board, tier 1', () => {
     expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
     expect(rail).toHaveTextContent('0.00064119 CKB');
-    expect(rail).toHaveTextContent('paid by ckb1qzda0c…cjk9lz');
+    expect(rail).toHaveTextContent('paid by ckb1…sqcjk9lz'); // R9 (re-pinned): 4…8
   });
 
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
@@ -1074,7 +1075,8 @@ describe('Transaction board, R2b-a fields', () => {
     });
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
-      'It ran .bit Time Index State and .bit Time Info. ckb1qzda0cr0…sqcjk9lz paid a 0.00064119 CKB fee.'
+      // R9 (re-pinned): the payer is `ckb1…` and its last 8 characters
+      'It ran .bit Time Index State and .bit Time Info. ckb1…sqcjk9lz paid a 0.00064119 CKB fee.'
     );
   });
 });
@@ -1089,9 +1091,9 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
       'ckb',
     ]);
     const [object, ckb] = groups;
-    // U-09 (re-pinned): the ribbon's parties at the row size
-    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qzda0c…cjk9lz');
-    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qzda0c…shp3hr');
+    // U-09 (re-pinned): the ribbon's parties at the row size; R9 (re-pinned): 4…8
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sqcjk9lz');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…sqshp3hr');
     expect(object.querySelector('[data-flow-plate]')).toHaveTextContent('Nervape 3x');
     expect(object.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
     // the CKB flow: cjk9lz gave 528.00064119; shp3hr and 204m4g received; the miner the fee

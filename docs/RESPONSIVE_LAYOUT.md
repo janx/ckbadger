@@ -102,15 +102,21 @@ The 640–767 band has one content width to design for. Below 640 the container 
   then the last 32 indented 2ch; an address in as few equal lines as hold it), never a scroller;
   full ids in the evidence tier and in tables keep their own-box scroller.
 - **Formats** (`frontend/lib/shorten.ts`, `frontend/lib/format-unit.ts`; UI review 2026-11-14,
-  U-09, CH-14, PA-22): a shortened id has three sizes, counted in characters of the value as
-  written (`0x` and `ckb1` included) — `head` 12…8 for an h1 or a lede, `row` 10…6 in tables, feeds
-  and tiles, `tight` 6…4 for a hash and 4…6 for an address (the network and the identity: the
-  characters after `ckb1` start the lock's code hash, the same for every address of a lock) in a
-  phone row, a chart label or a tile under 200 px; a list with a table and a phone row takes the size
-  of the form it is drawn in. Any
-  other hex id takes the hash's sizes; an out point is its hash and `:N`; a value no longer than
-  its shortened form is written whole. The ellipsis is the one character `…`, never `...`. A
-  renderer takes a size, never a length (gate `__tests__/lib/shorten-gate.test.ts`). A
+  U-09, CH-14, PA-22; readability 2026-11-18, R9): a shortened id has three sizes, counted in
+  characters of the value as written (`0x` and `ckb1` included). A hash is `head` 12…8, `row`
+  10…6 and `tight` 6…4. An address keeps its network and its identity: `ckb1…` and its last 8
+  characters at `head` and `row` (`ckb1…4s93hhsj`, 13 characters), its last 6 at `tight`
+  (`ckb1…93hhsj`, 11), never more of its head: the characters after `ckb1` are the address format
+  and the lock's code hash, the same for every address of a lock (two default-lock addresses share
+  their first 58 characters), so they tell no two rows apart. A lock is named beside the address
+  (the row's lock label), never by the head of it. `head` is for an h1 and a title line only;
+  prose (a lede, a sentence, a note) takes the `row` form, for a hash too, as do tables, feeds and
+  tiles; `tight` only below `sm` (a phone row) and in an SVG or tile label under 200 px. A page
+  writes one id in one form at `sm` and wider; a list with a table and a phone row takes the size
+  of the form it is drawn in. Any other hex id takes the hash's sizes; an out point is its hash
+  and `:N`; a value no longer than its shortened form is written whole. The ellipsis is the one
+  character `…`, never `...`. A renderer takes a size, never a length, and `head` and `tight` are
+  chosen only where the gate lists them with their reason (`__tests__/lib/shorten-gate.test.ts`). A
   percentage has two decimals and its sign with no space (`24.79%`); a compact count or CKB amount
   takes a lowercase `k` for thousands, then `M`, `B`, `T`; a physical quantity keeps its SI prefix
   with its symbol (`PH/s`, `kB`); a figure writes the symbol (`s`, `h`, `d`, `B`), prose the word.

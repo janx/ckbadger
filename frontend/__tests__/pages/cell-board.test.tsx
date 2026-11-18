@@ -233,7 +233,8 @@ describe('Cell page against the Cell board', () => {
       '/mainnet/blocks/20834844'
     );
     // Lane L: the lock's owner, the cell's address, is named and linked under the lock.
-    const owner = within(facts).getByRole('link', { name: /^ckb1qp3kr4/ });
+    // R9 (re-pinned): at the row size, `ckb1…` and the last 8 characters (it was 10…6)
+    const owner = within(facts).getByRole('link', { name: 'ckb1…t0shp3hr' });
     expect(owner).toHaveAttribute('href', `/mainnet/address/${cell.address}`);
     expect(owner).toHaveAttribute('title', cell.address);
   });

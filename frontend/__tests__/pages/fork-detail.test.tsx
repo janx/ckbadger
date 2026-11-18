@@ -338,11 +338,12 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     const { container } = render(<ForkDetailPage />);
     expect(await screen.findByTestId('fork-narrative')).toHaveTextContent(
       // U-09 (re-pinned): an unnamed miner is its address at the place's size, head and tail (it
-      // was the tail alone): the narrative's head size, the table's row size, the tree's tight
-      'On 2023-11-15 two blocks were found at #11, 50 ms apart, both by the same miner (ckb1qzda0cr0…qw93hhsj).'
+      // was the tail alone): the narrative's head size, the table's row size, the tree's tight;
+      // R9 (re-pinned): an address is `ckb1…` and its last 8 at the head and row sizes
+      'On 2023-11-15 two blocks were found at #11, 50 ms apart, both by the same miner (ckb1…qw93hhsj).'
     );
     const table = screen.getByRole('table', { name: 'Blocks' });
-    expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })).toHaveLength(3);
+    expect(within(table).getAllByRole('link', { name: 'ckb1…qw93hhsj' })).toHaveLength(3);
     expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('ckb1…93hhsj');
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier2).getByRole('link', { name: address })).toHaveAttribute(

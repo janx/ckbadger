@@ -155,12 +155,12 @@ describe('DaoBoard', () => {
     for (const width of [1248, 358]) {
       stubChartWidth(width);
       const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
-      // U-09 (re-pinned): the table's row size (10…6), the phone card's tight size (4…6, the
-      // lead's ruling; it was 8…6)
+      // U-09 (re-pinned): the table's row size, the phone card's tight size (4…6, the lead's
+      // ruling; it was 8…6); R9 (re-pinned): the row size is 4…8 (it was 10…6)
       const links = screen.getAllByRole('link', {
         name:
           width === 1248
-            ? `${owner.address.slice(0, 10)}…${owner.address.slice(-6)}`
+            ? `${owner.address.slice(0, 4)}…${owner.address.slice(-8)}`
             : `${owner.address.slice(0, 4)}…${owner.address.slice(-6)}`,
       });
       expect(links).toHaveLength(1);

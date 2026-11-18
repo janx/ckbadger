@@ -320,7 +320,7 @@ const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
 
 /**
  * Who mined the block, linked to its address (the full address its title): the pool `pools.toml`
- * names, else the address at the form's size (U-09): `ckb1qzda0c…93hhsj` in the tables (row),
+ * names, else the address at the form's size (U-09): `ckb1…4s93hhsj` in the tables (row),
  * `ckb1…93hhsj` in the phone row (tight). Genesis is mined by no one.
  */
 function miner(block: Block, size: ShortSize) {
@@ -544,11 +544,10 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
   {
     key: 'miner',
     label: 'Miner',
-    // An unnamed miner, "ckb1qzda0c…93hhsj" (17 characters at 12 px, 122.4 px; it was 19 with
-    // three dots), and the 16 px gap: 138.4 px, 15.6 to spare. A pool's name may be as long here
-    // as at 156 (19 characters: 138 px holds 19.2), so the column gave 2 of the block stone's 7 px
-    // from its 156.
-    minWidth: 154,
+    // An unnamed miner, "ckb1…4s93hhsj" (13 characters at 12 px, 93.6 px; R9, it was
+    // "ckb1qzda0c…93hhsj", 17 characters, 122.4 px, in a 154 px column), and the 16 px gap:
+    // 109.6 px. A pool's name holds as many characters here as the address, 13 (94 px of text).
+    minWidth: 110,
     className: 'whitespace-nowrap',
     render: (block) => miner(block, 'row'),
   },
@@ -564,7 +563,8 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     label: 'Size · cycles',
     // The most cycles a block may take, "3,500,000,000" (13 characters at 12 px, 93.6 px; "replay
     // failed" is as long), and no gap (the last column): 96 keeps 2.4 to spare. It gave the old
-    // hash seal's 19 px from its 120, then 5 of the block stone's 7, so the table keeps 608 px.
+    // hash seal's 19 px from its 120, then 5 of the block stone's 7, so the table kept 608 px
+    // (564 since the address's row form is 13 characters, R9: this column takes the rest).
     minWidth: 96,
     // The column that takes the free width (the board's 1fr).
     width: 'auto',

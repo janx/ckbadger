@@ -121,8 +121,9 @@ describe('DAO depositors page (DAO-12)', () => {
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1], null));
     render(<DaoDepositorsPage />);
     const table = await screen.findByRole('table', { name: 'DAO depositors' });
-    // U-09 (re-pinned): the table's depositor at the row size, 10…6 (it was 12…7)
-    const depositor = within(table).getByRole('link', { name: 'ckb1qzda0c…sd2hqn' });
+    // U-09 (re-pinned): the table's depositor at the row size, 10…6 (it was 12…7); R9
+    // (re-pinned): an address's row size is 4…8
+    const depositor = within(table).getByRole('link', { name: 'ckb1…gssd2hqn' });
     expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
     const [rank, , deposits, capacity, share] = Array.from(table.querySelectorAll('tbody td'));
     expect(rank.firstElementChild).toHaveClass('text-text-dim');

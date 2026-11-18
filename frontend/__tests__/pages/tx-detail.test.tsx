@@ -618,7 +618,8 @@ describe('TransactionDetailPage', () => {
     const from = flows[0].querySelector('[data-flow-side="from"]')!;
     const to = flows[0].querySelector('[data-flow-side="to"]')!;
     expect([...from.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
-      expect.stringMatching(/^ckb1qpcf70…gh76tz.*234\.00000000 CKB$/),
+      // R9 (re-pinned): the party at the row size, `ckb1…` and its last 8 characters
+      expect.stringMatching(/^ckb1…cqgh76tz.*234\.00000000 CKB$/),
     ]);
     expect([...to.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
       expect.stringMatching(/4maw7d.*234\.00000000 CKB$/),

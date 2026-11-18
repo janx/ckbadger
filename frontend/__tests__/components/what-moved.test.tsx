@@ -126,9 +126,9 @@ describe('WhatMoved, the ribbon form', () => {
     expect(plate.querySelector('[data-flow-total]')).toBeNull();
     const from = object.querySelector('[data-flow-side="from"]')!;
     const to = object.querySelector('[data-flow-side="to"]')!;
-    // U-09 (re-pinned): the ribbon's parties at the row size
-    expect(from).toHaveTextContent('ckb1qrgqep…sp7v9m');
-    expect(to).toHaveTextContent('ckb1qrgqep…ay02wn');
+    // U-09 (re-pinned): the ribbon's parties at the row size; R9 (re-pinned): 4…8
+    expect(from).toHaveTextContent('ckb1…qqsp7v9m');
+    expect(to).toHaveTextContent('ckb1…qqay02wn');
     expect(to).toHaveTextContent('JoyID');
     // a whole object is the ribbon's full weight on both sides
     expect(from.querySelector('[data-flow-end="party"]')).toHaveAttribute('data-weight', '22');
@@ -148,11 +148,11 @@ describe('WhatMoved, the ribbon form', () => {
       ]);
     // U-15 (re-pinned): a lock the registry does not name is 'lock <code hash>'
     expect(ends(from)).toEqual([
-      ['party', '14', 'ckb1qrgqep…ay02wnJoyID638.00008888 CKB'],
-      ['party', '10', 'ckb1qrgqep…sp7v9mlock 0x9bd7e06f…a3cce8432.00000000 CKB'],
+      ['party', '14', 'ckb1…qqay02wnJoyID638.00008888 CKB'],
+      ['party', '10', 'ckb1…qqsp7v9mlock 0x9bd7e06f…a3cce8432.00000000 CKB'],
     ]);
     expect(ends(to)).toEqual([
-      ['party', '22', 'ckb1qrgqep…ct4hxvJoyID1,070.00000000 CKB'],
+      ['party', '22', 'ckb1…qqct4hxvJoyID1,070.00000000 CKB'],
       ['miner', '2', 'the miner fee0.00008888 CKB'],
     ]);
     // the plate's total is what left the givers, so the fee is inside it
