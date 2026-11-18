@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { SVG_TEXT, SVG_TEXT_FLOOR, centreShift, lineAscentPx, wrapWords } from '@/lib/chart-type';
+import {
+  SVG_TEXT,
+  SVG_TEXT_FLOOR,
+  centreShift,
+  lineAscentPx,
+  wrapPhrases,
+  wrapWords,
+} from '@/lib/chart-type';
 import { descentPx, fontPx, tightLinePx } from '@/lib/type-metrics';
 
 /**
@@ -76,5 +83,51 @@ describe('wrapWords: an SVG text broken into lines that fit', () => {
   it('gives a word longer than the room a line of its own', () => {
     expect(wrapWords('a verylongword b', 12, 50)).toEqual(['a', 'verylongword', 'b']);
     expect(wrapWords('', 12, 50)).toEqual([]);
+  });
+});
+
+// Review F-B (logic findings 1 and 2): a plot's name made of phrases breaks between them first,
+// so every line it takes is measured and the band over the plot grows a line at a time.
+describe('wrapPhrases: a name of phrases broken into lines that fit', () => {
+  const phrases = ['CKB deposited', 'every complete day since 2019-05-24'];
+
+  it('keeps the phrases on one line, joined by " · ", where the whole fits', () => {
+    // 51 characters at 12 px: 367.2 px
+    expect(wrapPhrases(phrases, 12, 367.2)).toEqual([
+      'CKB deposited · every complete day since 2019-05-24',
+    ]);
+  });
+
+  it('starts each phrase on a line of its own where the whole does not fit', () => {
+    // 35 characters, 252 px, fit 294 (the deposited plot at 358 px)
+    expect(wrapPhrases(phrases, 12, 367.1)).toEqual([
+      'CKB deposited',
+      'every complete day since 2019-05-24',
+    ]);
+    expect(wrapPhrases(phrases, 12, 294)).toEqual([
+      'CKB deposited',
+      'every complete day since 2019-05-24',
+    ]);
+  });
+
+  it('wraps a phrase by its words where it does not fit a line', () => {
+    // the deposited plot at a 320 px window: 288 − 48 − 16 = 224 px hold 31 characters
+    expect(wrapPhrases(phrases, 12, 224)).toEqual([
+      'CKB deposited',
+      'every complete day since',
+      '2019-05-24',
+    ]);
+    // the network map at 270 px: 262 px hold 36 characters, the whole name is 40
+    expect(wrapPhrases(['verified nodes', 'approximate GeoIP place'], 12, 262)).toEqual([
+      'verified nodes',
+      'approximate GeoIP place',
+    ]);
+  });
+
+  it('refuses a word wider than the room', () => {
+    // "approximate" is 11 characters, 79.2 px at 12 px
+    expect(() => wrapPhrases(['verified nodes', 'approximate GeoIP place'], 12, 79)).toThrow(
+      /"approximate" is 79\.2 px at 12 px, wider than its 79 px/
+    );
   });
 });

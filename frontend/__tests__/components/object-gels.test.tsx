@@ -646,3 +646,166 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     );
   });
 });
+
+/*
+ * Review F-B (logic finding 5): a gene's name, its rule and its trait value are the collection
+ * creator's text, and the gels measured them at 0.6 em a UTF-16 unit. No face the site serves
+ * holds a CJK character or an emoji: the browser draws them from a fallback face, 1.2 em for
+ * CJK in the monospace face the owner's machine falls back to and 1.245 em for its emoji. Such a
+ * text is measured as an upper bound, 1.25 em a grapheme that is not in the served faces' Latin
+ * subset, and cut at whole graphemes. The bounds here are literal arithmetic over the characters
+ * of each test string: at the head size (13 px) a Latin glyph is 7.8 px and any other 16.25.
+ */
+const LATIN = 0.6;
+const WIDE = 1.25;
+/** The bound of a text of `latin` Latin glyphs and `wide` other graphemes at `px`. */
+const bound = (latin: number, wide: number, px: number) => latin * LATIN * px + wide * WIDE * px;
+/** A text with a high surrogate not followed by its low half (a cut through an emoji). */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
+describe('the gels measure the creator’s text as an upper bound (review F-B, logic finding 5)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  /** Nervape 3x's DNA with the Color gene renamed and given a value, and Serial given one. */
+  const creators = (color: { name?: string; rule?: string; value?: string }, serial?: string) => ({
+    ...layout,
+    genes: layout.genes.map((g) =>
+      g.name === 'Color'
+        ? { ...g, ...color }
+        : g.name === 'Serial' && serial !== undefined
+          ? { ...g, value: serial }
+          : g
+    ),
+  });
+
+  it('starts the wide gel’s bytes column after a CJK name’s bound', () => {
+    // at 1232 px (at the 896 px plate the wider name column leaves too little for the widest
+    // value, and the gel takes its narrow form)
+    stubChartWidth(1232);
+    // "颜色和图案", 5 CJK characters: 81.25 px at 13 px (it was counted 39)
+    const { container } = render(
+      <SequencingGel
+        layout={creators({ name: '颜色和图案' })}
+        subject="Nervape 3x"
+        active={null}
+        onActive={() => {}}
+      />
+    );
+    const texts = [...container.querySelectorAll('[data-gene="颜色和图案"] text')];
+    expect(texts[0].textContent).toBe('颜色和图案');
+    const [nameX, bytesX] = [0, 1].map((i) => Number(texts[i].getAttribute('x')));
+    expect(bytesX - nameX).toBeGreaterThanOrEqual(bound(0, 5, 13) + 10);
+  });
+
+  it('cuts a CJK value to its room and keeps it inside the svg', () => {
+    stubChartWidth(896);
+    // 20 CJK characters (325 px) were 20 code units, under the 25 of the budget, so drawn whole
+    // from x 696.2 to 1021; the room is 25 Latin glyphs, 195 px: 11 of them and the ellipsis
+    const { container } = render(
+      <SequencingGel
+        layout={creators({ value: '猫'.repeat(20) })}
+        subject="Nervape 3x"
+        active={null}
+        onActive={() => {}}
+      />
+    );
+    const value = [...container.querySelectorAll('[data-gene="Color"] text')].at(-1)!;
+    expect(value.textContent).toBe(`${'猫'.repeat(11)}…`);
+    expect(Number(value.getAttribute('x')) + bound(1, 11, 13)).toBeLessThanOrEqual(896);
+  });
+
+  it('never cuts through an emoji: a value ends at a whole grapheme and the one ellipsis', () => {
+    stubChartWidth(896);
+    // 23 Latin glyphs, then a family emoji (a ZWJ sequence of 8 UTF-16 units): the cut at 24
+    // units kept its first surrogate alone; the emoji does not fit what is left of 195 px
+    const { container } = render(
+      <SequencingGel
+        layout={creators({}, `${'N'.repeat(23)}👨‍👩‍👧tail`)}
+        subject="Nervape 3x"
+        active={null}
+        onActive={() => {}}
+      />
+    );
+    const value = [...container.querySelectorAll('[data-gene="Serial"] text')].at(-1)!;
+    expect(value.textContent).not.toMatch(LONE_SURROGATE);
+    expect(value.textContent).toBe(`${'N'.repeat(23)}…`);
+  });
+
+  it('takes two-line gene rows under a narrow map when a CJK reading does not fit', () => {
+    stubChartWidth(608);
+    // the reading "<raw> → <value>": Color's one byte and the arrow, 5 Latin glyphs (39 px), and
+    // 26 CJK characters (422.5), 461.5 px, more than the third column's 608 − 88 − 91 − 20 = 409
+    // (it was counted 241.8)
+    render(
+      <SequencingGel
+        layout={creators({ value: '猫'.repeat(26) })}
+        subject="Nervape 3x"
+        active={null}
+        onActive={() => {}}
+      />
+    );
+    expect(screen.getByRole('list', { name: 'Genes' })).toHaveAttribute('data-rows', 'two-line');
+  });
+
+  it('makes the bytes column under a narrow map as wide as a CJK rule’s bound', () => {
+    stubChartWidth(608);
+    // the rule "颜色规则颜色规则", 8 CJK characters at the meta step (12 px), is 120 px, wider
+    // than "nervapeColor" (86.4; it was counted 57.6)
+    render(
+      <SequencingGel
+        layout={creators({ rule: '颜色规则颜色规则' })}
+        subject="Nervape 3x"
+        active={null}
+        onActive={() => {}}
+      />
+    );
+    const list = screen.getByRole('list', { name: 'Genes' });
+    expect(list).toHaveAttribute('data-rows', 'one-line');
+    const row = within(list).getAllByRole('listitem')[0].firstElementChild as HTMLElement;
+    const bytesCol = Number(/^\d+px (\d+)px/.exec(row.style.gridTemplateColumns)![1]);
+    expect(bytesCol).toBeGreaterThanOrEqual(bound(0, 8, 12));
+  });
+
+  /** Six lanes of CJK genes and band labels: at 400 px, lanes of (400 − 22) / 6 = 63 px. */
+  const cjkLanes: AlleleLane[] = Array.from({ length: 6 }, (_, i) => ({
+    gene: `颜色和图${i}`,
+    bands: [
+      { value: 'a', label: '红色的猫咪', count: 4, share: 4 / 6, isColour: false, colour: null },
+      { value: 'b', label: 'b', count: 2, share: 2 / 6, isColour: false, colour: null },
+    ],
+    variants: 2,
+    conserved: false,
+    ordered: true,
+  }));
+
+  it('turns a CJK caption on end where its bound does not fit across its lane', () => {
+    stubChartWidth(400);
+    // "颜色和图0": 4 CJK characters and a digit at the tick size (12 px), 67.2 px, and 6 px
+    // more than the 63 px lane (it was counted 36)
+    const { container } = render(<AlleleGel lanes={cjkLanes} total={6} subject="deeds" />);
+    const captions = [...container.querySelectorAll('[data-gene-caption]')];
+    expect(captions).toHaveLength(6);
+    for (const caption of captions) {
+      const lane = caption.closest('[data-lane]')!.querySelector('rect')!;
+      const laneWidth = Number(lane.getAttribute('width')) + 2;
+      expect(laneWidth).toBeCloseTo(63, 5);
+      if (!caption.hasAttribute('transform'))
+        expect(bound(1, 4, 12) + 6, caption.textContent!).toBeLessThanOrEqual(laneWidth);
+    }
+  });
+
+  it('cuts a CJK band label to its band', () => {
+    stubChartWidth(400);
+    // a 63 px lane writes its labels in a band of 63 − 2 × 7 = 49 px, 4 px clear each side: 41
+    // px; "红色的猫咪" (5 CJK characters, 75 px at 12 px) was 5 code units, within the 5 glyphs
+    // that fit, and drawn whole across the band's edges; 2 of them and the ellipsis are 37.2 px
+    const { container } = render(<AlleleGel lanes={cjkLanes} total={6} subject="deeds" />);
+    const labels = [...container.querySelectorAll('[data-lane] text[pointer-events="none"]')];
+    const cut = labels.filter((l) => l.textContent !== 'b');
+    expect(cut.map((l) => l.textContent)).toEqual(Array(6).fill('红色…'));
+    expect(bound(1, 2, 12)).toBeLessThanOrEqual(63 - 2 * 7 - 8);
+  });
+});

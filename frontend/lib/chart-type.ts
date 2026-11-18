@@ -70,3 +70,22 @@ export function wrapWords(text: string, px: number, room: number): string[] {
   }
   return lines;
 }
+
+/**
+ * The lines a plot's name takes in `room` px when it is phrases joined by " · " ("CKB deposited ·
+ * every complete day since …"): one line where the whole fits; else each phrase starts a line of
+ * its own and wraps by its words (`wrapWords`), so the band over the plot grows a line at a time
+ * and every line is measured (review F-B, logic findings 1 and 2). A word wider than the room
+ * cannot be placed and is refused. The phrases are the figure's own words, measured at 0.6 em.
+ */
+export function wrapPhrases(phrases: readonly string[], px: number, room: number): string[] {
+  const whole = phrases.join(' · ');
+  if (textPx(whole.length, px) <= room) return [whole];
+  const lines = phrases.flatMap((phrase) => wrapWords(phrase, px, room));
+  for (const line of lines)
+    if (textPx(line.length, px) > room)
+      throw new Error(
+        `chart-type: "${line}" is ${textPx(line.length, px)} px at ${px} px, wider than its ${room} px`
+      );
+  return lines;
+}

@@ -6,9 +6,9 @@
  * hold them as lanes a reader can tell apart. Pure, so the forms are tested without a browser.
  */
 
-import { clipLabel } from '@/lib/shorten';
+import { clipForeignLabel } from '@/lib/shorten';
 import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
-import { advancePx, tightLinePx } from '@/lib/type-metrics';
+import { advancePx, foreignTextPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
 /** A gene caption's glyph, set at the tick size. */
 const CHAR_WIDTH = advancePx(SVG_TEXT.tick);
@@ -47,7 +47,10 @@ export const ALLELE_GEL = {
   headAcross: CAPTION_PAD + CAPTION_LINE + 6,
   /** The baseline of a caption written across its lane. */
   captionY: CAPTION_PAD + lineAscentPx(SVG_TEXT.tick),
-  /** Head of a row whose gene names are turned on end (14 characters at the tick size, and margin): 98. */
+  /**
+   * Head of a row whose gene names are turned on end: a caption's room (14 Latin glyphs at the
+   * tick size, 100.8 px; a caption is cut to it, `geneCaption`) and margin: 109 (98 at 11 px).
+   */
   headRotated: Math.ceil(CAPTION_CHARS * CHAR_WIDTH) + ROTATED_MARGIN,
 } as const;
 
@@ -63,9 +66,13 @@ export type AlleleGelLayout =
       head: number;
     };
 
-/** A gene name as drawn on the gel: a label cut to the gel's caption budget. */
+/**
+ * A gene name as drawn on the gel: the collection creator's text, cut to the room of the gel's
+ * caption budget (14 Latin glyphs at the tick size, 100.8 px) at whole graphemes, measured by the
+ * upper bound of lib/type-metrics.ts (review F-B, logic finding 5).
+ */
 export function geneCaption(gene: string): string {
-  return clipLabel(gene, ALLELE_GEL.captionChars);
+  return clipForeignLabel(gene, SVG_TEXT.tick, textPx(ALLELE_GEL.captionChars, SVG_TEXT.tick));
 }
 
 export function alleleGelLayout({
@@ -111,7 +118,9 @@ export function alleleGelLayout({
   const rows: number[][] = [];
   for (let i = 0; i < n; i += perRow)
     rows.push(Array.from({ length: Math.min(perRow, n - i) }, (_, k) => i + k));
-  const across = genes.every((gene) => geneCaption(gene).length * g.charWidth + 6 <= laneWidth);
+  const across = genes.every(
+    (gene) => foreignTextPx(geneCaption(gene), SVG_TEXT.tick) + 6 <= laneWidth
+  );
   return {
     form: 'gel',
     rows,

@@ -557,16 +557,18 @@ describe('DaoHistory: every word in its band (readability F3)', () => {
     return { svg, band: Number(cursor.getAttribute('y1')), frame: viewBox(svg) };
   }
 
-  it.each([1232, 608, 604, 358, 292])('at %i px', (width) => {
+  // Review F-B (logic finding 1): at a 320 px window the column is 288 px, and the deposited
+  // plot and both multiples (stacked below sm) are drawn across it.
+  it.each([1232, 608, 604, 358, 292, 288])('at %i px', (width) => {
     stubChartWidth(width);
     stubSvgWidth(width);
     const { deposited, ratio } = mainnet();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
     // a tap pins a day: its cursor is drawn in every panel, from the top of the panel's data
     fireEvent.click(container.querySelector('[data-panel="share"]')!, { clientX: 40 });
-    const multiples = [604, 292, 358].includes(width);
+    const multiples = [604, 292, 358, 288].includes(width);
     const panels = [
-      ...([1232, 608, 358].includes(width) ? ['deposited'] : []),
+      ...([1232, 608, 358, 288].includes(width) ? ['deposited'] : []),
       ...(multiples ? ['share', 'weekly'] : []),
     ];
     for (const name of panels) {

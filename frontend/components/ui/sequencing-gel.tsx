@@ -11,7 +11,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import type { SequencingGene, SequencingLayout } from '@/lib/dob-genes';
 import { GEL_COLORS } from '@/lib/design-tokens';
-import { clipLabel, shortenHash } from '@/lib/shorten';
+import { clipForeignLabel, shortenHash } from '@/lib/shorten';
 import { ShortId } from '@/components/ui/short-id';
 import { TraitText } from '@/components/asset/trait-text';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -22,7 +22,14 @@ import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
 import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
-import { advancePx, columnPx, descentPx, fontPx, textPx, tightLinePx } from '@/lib/type-metrics';
+import {
+  columnPx,
+  descentPx,
+  fontPx,
+  foreignTextPx,
+  textPx,
+  tightLinePx,
+} from '@/lib/type-metrics';
 
 /*
  * The map's words stand in tight lines of their roles (readability plan 2026-11-18, lane F3): the
@@ -52,9 +59,11 @@ const WIDE = {
 } as const;
 const GX = WIDE.LX + 16 * WIDE.LANE + 10;
 const TX = GX + 16;
-/** One character of a gene's name, arrow and value (the head size) and of its bytes and raw (the value size). */
-const CHAR_12 = advancePx(SVG_TEXT.head);
-const CHAR_115 = advancePx(SVG_TEXT.value);
+// A gene's name, its rule and its value are the collection creator's text, measured by the upper
+// bound of lib/type-metrics.ts (`foreignTextPx`: a Latin glyph 0.6 em, any other grapheme 1.25)
+// and cut by it at whole graphemes (`clipForeignLabel`; review F-B, logic finding 5); a name to
+// the room of NAME_MAX Latin glyphs, a value to VALUE_MAX's, at the head size. Its bytes and its
+// raw are ours, measured exactly.
 // A value that is longer is a label cut to this budget. 25 is the most the wide gel holds at the
 // DNA plate at 1280 (896 px) for the flagship DNA (Nervape): its columns before the value end at
 // 696.2 px (the gene columns from 308; the longest name, "prev.type", 9 × 7.8 + 10; the longest
@@ -65,6 +74,10 @@ const CHAR_115 = advancePx(SVG_TEXT.value);
 // a94617…79e0i0" (25, its txid at the tight size, U-09), is never cut.
 const VALUE_MAX = 25;
 const NAME_MAX = 11;
+const geneName = (g: SequencingGene) =>
+  clipForeignLabel(g.name, SVG_TEXT.head, textPx(NAME_MAX, SVG_TEXT.head));
+const geneValue = (g: SequencingGene) =>
+  clipForeignLabel(valueOf(g), SVG_TEXT.head, textPx(VALUE_MAX, SVG_TEXT.head));
 /** The stacked map: a ruler column (38 px, was 34), then lanes of up to 20 px and never under 14. */
 const NARROW = {
   RULER: RULER_COLUMN(RULER_GAP.narrow),
@@ -85,7 +98,10 @@ const NAME_COLUMN = columnPx(textPx(NAME_MAX, fontPx('small')), 2);
 const bytesColumn = (genes: readonly SequencingGene[]) =>
   columnPx(
     Math.max(
-      ...genes.flatMap((g) => [bytesOf(g), g.rule]).map((t) => textPx(t.length, fontPx('meta')))
+      ...genes.flatMap((g) => [
+        textPx(bytesOf(g).length, fontPx('meta')),
+        foreignTextPx(g.rule, fontPx('meta')),
+      ])
     ),
     4
   );
@@ -104,12 +120,21 @@ const quiet = (g: SequencingGene) => g.value === 'empty' || g.value === null;
  * raw, the arrow, then the value; `needed` is the canvas width that holds every reading whole.
  */
 function wideColumns(genes: readonly SequencingGene[]) {
-  const longest = (texts: string[]) => Math.max(0, ...texts.map((t) => t.length));
-  const bytes = TX + longest(genes.map((g) => clipLabel(g.name, NAME_MAX))) * CHAR_12 + 10;
-  const raw = bytes + longest(genes.map((g) => `${bytesOf(g)} · ${g.rule}`)) * CHAR_115 + 12;
-  const arrow = raw + longest(genes.map((g) => shortenHash(g.raw, 'tight'))) * CHAR_115 + 8;
+  const widest = (texts: string[], px: number) =>
+    Math.max(0, ...texts.map((t) => foreignTextPx(t, px)));
+  const bytes = TX + widest(genes.map(geneName), SVG_TEXT.head) + 10;
+  // "bytes N–M · <rule>": ours, then the creator's rule, one upper bound over both
+  const raw =
+    bytes +
+    widest(
+      genes.map((g) => `${bytesOf(g)} · ${g.rule}`),
+      SVG_TEXT.value
+    ) +
+    12;
+  const tight = Math.max(0, ...genes.map((g) => shortenHash(g.raw, 'tight').length));
+  const arrow = raw + textPx(tight, SVG_TEXT.value) + 8;
   const value = arrow + 16;
-  const needed = value + longest(genes.map((g) => clipLabel(valueOf(g), VALUE_MAX))) * CHAR_12 + 2;
+  const needed = value + widest(genes.map(geneValue), SVG_TEXT.head) + 2;
   const at = (x: number) => Math.ceil(x);
   return { name: TX, bytes: at(bytes), raw: at(raw), arrow: at(arrow), value: at(value), needed };
 }
@@ -376,7 +401,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
               fill="transparent"
             />
             <text x={col.name} y={r(ly)} fontSize={SVG_TEXT.head} fill={g.color}>
-              {clipLabel(g.name, NAME_MAX)}
+              {geneName(g)}
             </text>
             <text x={col.bytes} y={r(ly)} fontSize={SVG_TEXT.value} fill={GEL_COLORS.label}>
               {bytesOf(g)} · {g.rule}
@@ -393,7 +418,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
               fontSize={SVG_TEXT.head}
               fill={quiet(g) ? GEL_COLORS.rulerText : GEL_COLORS.well}
             >
-              {clipLabel(valueOf(g), VALUE_MAX)}
+              {geneValue(g)}
             </text>
           </g>
         );
@@ -426,10 +451,15 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
     litGenes.some((g) => byte >= g.offset && byte < g.offset + g.length);
   const mapW = 16 * lane;
   // One line a gene (name · bytes · raw → value) while the longest reading fits its column;
-  // otherwise the reading takes a line of its own, so the value is the last to lose room.
+  // otherwise the reading takes a line of its own, so the value is the last to lose room. The
+  // raw and its arrow are ours; the value is the creator's, its upper bound.
   const readingWidth = Math.max(
     0,
-    ...genes.map((g) => (shortenHash(g.raw, 'tight').length + 3 + valueOf(g).length) * CHAR_12)
+    ...genes.map(
+      (g) =>
+        textPx(shortenHash(g.raw, 'tight').length + 3, SVG_TEXT.head) +
+        foreignTextPx(valueOf(g), SVG_TEXT.head)
+    )
   );
   const bytesCol = bytesColumn(genes);
   const oneLine = width - NAME_COLUMN - bytesCol - 2 * 10 >= readingWidth;

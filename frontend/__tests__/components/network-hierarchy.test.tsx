@@ -15,7 +15,13 @@ import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import type { NetworkMap } from '@/lib/api';
-import { allTextLines, expectApart, expectInside } from '@/__tests__/utils/svg-text-boxes';
+import {
+  allTextLines,
+  expectApart,
+  expectInside,
+  textLines,
+  viewBox,
+} from '@/__tests__/utils/svg-text-boxes';
 
 // Hierarchy v3 on /network (plan 2026-11-02 lane N, rulings R11–R16): the DAO page's anatomy —
 // title row, one short lede, one display figure with its companion, the picture right under it,
@@ -316,6 +322,26 @@ describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', 
       unmount();
       vi.restoreAllMocks();
     }
+  });
+
+  // Review F-B (logic finding 2): at a 320 px window the map stands in the 288 px column inside
+  // its frame (a 1 px border and p-2 each side): 288 − 2 − 16 = 270 px. Its name, 40 glyphs at
+  // 12 px (288 px) from x 8, ran 26 px past the svg, which clips it: "…GeoIP p". It breaks after
+  // "verified nodes" where the whole does not fit, every line inside the svg, and the clusters
+  // stand under its last line.
+  it('breaks the map’s name where it does not fit the svg, the clusters under it (320 px window)', async () => {
+    const { svg } = await renderMap(270);
+    expect(svg).toHaveAttribute('width', '270');
+    const name = svg.querySelector('[data-role="chart-name"]')!;
+    const lines = textLines(name);
+    expect(lines.map((l) => l.text)).toEqual(['verified nodes', 'approximate GeoIP place']);
+    for (const line of lines) expectInside(line, viewBox(svg), 'the map’s name', 'flush');
+    const foot = Math.max(...lines.map((l) => l.bottom));
+    const dots = [...svg.querySelectorAll('[data-dot]')];
+    expect(dots.length).toBeGreaterThan(0);
+    for (const dot of dots)
+      expect(Number(dot.getAttribute('cy')) - Number(dot.getAttribute('r'))).toBeGreaterThan(foot);
+    expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
   });
 
   it('keys the map in a drawn legend beside it, with no hint and no prose in the panel', async () => {

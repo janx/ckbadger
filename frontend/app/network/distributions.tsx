@@ -12,7 +12,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { TopicSection } from '@/app/network/topic-section';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { charPx } from '@/lib/type-metrics';
+import { fontPx, foreignTextPx } from '@/lib/type-metrics';
 
 const TOP_N = 8;
 /**
@@ -192,7 +192,9 @@ function HostingSection({
   const inside = (org: string, count: number, i: number): string => {
     if (width === null) return '';
     const room = (width * spans[i].width) / 100;
-    const fits = (text: string) => text.length * charPx('small') + 2 * LABEL_PAD <= room;
+    // an organisation is the ASN registry's text, in any script: measured by the upper bound of
+    // lib/type-metrics.ts (review F-B, logic finding 5)
+    const fits = (text: string) => foreignTextPx(text, fontPx('small')) + 2 * LABEL_PAD <= room;
     const full = `${org} ${share(count)}`;
     return fits(full) ? full : fits(share(count)) ? share(count) : '';
   };

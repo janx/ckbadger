@@ -102,8 +102,9 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
 /*
  * The tree's words (readability plan 2026-11-18, lane F3): a tile's number at the label size, its
  * hash, time and miner at the tick size, each a tight line (lib/chart-type.ts), so a tile's height
- * and width follow from them. A miner is named by its address in the row form (13 characters) or
- * by its pool's name, cut to the room it is given (U-09).
+ * and width follow from them. A miner is named by its address in the id form its room holds (the
+ * row form, 13 characters, else the tight form, 11; never cut again) or by its pool's name, cut to
+ * the room it is given (U-09).
  */
 const LABEL_LINE = tightLinePx(SVG_TEXT.label);
 const TICK_LINE = tightLinePx(SVG_TEXT.tick);
@@ -151,7 +152,8 @@ export const FORK_TREE = {
     top: 46,
   },
   /**
-   * Narrow widths (V4 board): tiles shrink from 96 to no less than 72 px with 20 px between them,
+   * Narrow widths (V4 board): tiles shrink from 96 to no less than 72 px with 20 px between them
+   * (past 96 only where a fold's "+N earlier" needs it, from "+100 earlier"),
    * and carry only the number and hash, 6 px in from the tile's side; the time and miner hang under
    * the box, in its column: the tile and 16 px of the gap (`labelRun`), so a clock to the
    * millisecond (86.4 px at 12 px) stands whole under a 72 px tile. They start at the tile's left
@@ -183,6 +185,18 @@ export const FORK_TREE = {
     top: 40,
   },
 } as const;
+
+/*
+ * An unnamed miner is its address in an id form, never cut again (review F-B, logic finding 4): a
+ * wide tile holds the row form by its width (WIDE_TILE), and the narrowest compact tile's column,
+ * the tile and its run into the gap (88 px), holds the tight form (11 characters, 79.2 px at
+ * 12 px). Checked once, at load.
+ */
+const TIGHT_ADDRESS = SHORT_FORMS.tight.address.head + 1 + SHORT_FORMS.tight.address.tail;
+if (textPx(TIGHT_ADDRESS, SVG_TEXT.tick) > FORK_TREE.compact.minTile + FORK_TREE.compact.labelRun)
+  throw new Error(
+    `fork tree: a ${FORK_TREE.compact.minTile} px tile's column cannot hold a tight address (${textPx(TIGHT_ADDRESS, SVG_TEXT.tick)} px)`
+  );
 
 export interface ForkTreeLayout {
   form: 'wide' | 'compact';
@@ -238,11 +252,12 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
   const room = width - c.x0 - c.right;
   const tileFor = (columns: number) => (room - (columns - 1) * c.gap) / columns;
   let shown = heights;
+  // The least a tile may be: 72 px, or where the tree folds, its "+N earlier" box's words.
+  let least: number = c.minTile;
   if (tileFor(shown) < c.minTile) {
     // Fold the oldest heights into one column. Every column is one tile wide, and the fold's box
     // holds its "+N earlier" (84 px at 12 px for a one-digit count, more than a 72 px tile), so
     // the tiles are at least that wide wherever the tree folds: fewer, wider columns.
-    let least: number = c.minTile;
     for (;;) {
       shown = Math.floor((room + c.gap) / (least + c.gap));
       if (shown < 2)
@@ -254,7 +269,11 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
       least = need;
     }
   }
-  const tileW = Math.min(c.maxTile, Math.floor(tileFor(shown)));
+  // Tiles grow to 96 px where there is room, and never under the least: from "+100 earlier"
+  // (99 px) the fold's box is as wide as its words (review F-B, logic finding 8). The columns
+  // hold it: `shown` columns of a whole `least` px and their gaps fit the room, so a tile's
+  // share, rounded down, is at least `least`.
+  const tileW = Math.min(Math.max(c.maxTile, least), Math.floor(tileFor(shown)));
   const folded = shown < heights ? heights - (shown - 1) : 0;
   const columns = all.slice(folded);
   const pitch = tileW + c.gap;

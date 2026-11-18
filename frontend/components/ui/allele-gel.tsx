@@ -35,10 +35,10 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { TraitText } from '@/components/asset/trait-text';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
-import { clipLabel } from '@/lib/shorten';
+import { clipForeignLabel } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
 import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
-import { descentPx, tightLinePx } from '@/lib/type-metrics';
+import { descentPx, foreignTextPx, tightLinePx } from '@/lib/type-metrics';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
@@ -237,7 +237,10 @@ function Gel({
   const rowActive = activeOverlay !== null && overlays.some((o) => o.key === activeOverlay);
   const laneOpacity = (gene: string) =>
     activeGene !== null ? (gene === activeGene ? 1 : 0.2) : rowActive ? 0.4 : 1;
-  const labelChars = Math.floor((lw - 2 * inset - 8) / ALLELE_GEL.charWidth);
+  // A band's label (a trait value, the collection creator's text) stands 4 px clear of its
+  // band's sides, cut to that room at whole graphemes by the upper bound of lib/type-metrics.ts
+  // (review F-B, logic finding 5).
+  const labelRoom = lw - 2 * inset - 8;
   return (
     <>
       <svg
@@ -338,9 +341,9 @@ function Gel({
                           lw >= ALLELE_GEL.labelledLane &&
                           !b.isColour &&
                           (() => {
-                            const label = clipLabel(b.label, labelChars);
+                            const label = clipForeignLabel(b.label, SVG_TEXT.tick, labelRoom);
                             // words on a fill: the ink the band calls for under the label's run
-                            const half = (label.length * ALLELE_GEL.charWidth) / 2;
+                            const half = foreignTextPx(label, SVG_TEXT.tick) / 2;
                             const fill = bandLabelInk(
                               theme,
                               GEL_INK_KEYS[ink],
