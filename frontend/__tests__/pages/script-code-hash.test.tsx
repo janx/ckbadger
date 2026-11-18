@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
+import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import ScriptByCodeHashPage from '@/app/script/[codeHash]/client-page';
 import { api } from '@/lib/api';
 
@@ -226,6 +227,116 @@ describe('ScriptByCodeHashPage', () => {
         `/scripts/${encodeURIComponent('Default Lock')}?ref=${mockCodeHash}&hashType=type&kind=lock`
       );
     });
+  });
+
+  // Readability F3-e: every column of the code reference's tables budgeted from what it holds, at
+  // 0.6 em a glyph (the cells 13 px, units, legends and heads 12) and the 16 px gap after every
+  // column but the last. A full id that breaks anywhere is a flexible column: at its minimum it
+  // takes lines of 22 characters (a hash in three); its column takes the rest of the container.
+  it('budgets every column of its tables from what it holds and changes form at their sums (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const sum = (budgets: number[]) => budgets.reduce((s, w) => s + w, 0);
+    const idLine = ceil(at('x'.repeat(22), 13) + 16);
+    const block = ceil(at('#99,999,999', 13) + 16);
+    const versions = [
+      idLine,
+      block,
+      // a count of four digits, wider than the head's words ("Code" / "cells")
+      ceil(Math.max(at('9,999', 13), at('cells', 12)) + 16),
+      // eight digits of live cells, or "unavailable"
+      ceil(Math.max(at('99,999,999', 13), at('unavailable', 13)) + 16),
+      // the compact CKB and its unit, "999.99M CKB", or "unavailable"; the last column
+      ceil(Math.max(at('999.99M', 13) + at(' CKB', 12), at('unavailable', 13))),
+    ];
+    const deployments = [
+      idLine,
+      // "Consumed", or "Status unavailable" breaking between its words
+      ceil(Math.max(at('Consumed', 13), at('unavailable', 13)) + 16),
+      // the holder's evidence, in lines of 22 characters
+      idLine,
+      ceil(Math.max(at('#99,999,999', 13), at('unavailable', 13))),
+    ];
+    const cells = [
+      idLine,
+      idLine,
+      idLine,
+      // one line under a million CKB with its unit; a larger amount breaks before its decimals
+      ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
+      ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
+      block,
+      // the bar over its legend, whose widest part is its 8 px swatch, its 6 px gap and
+      // "data 9,999,999 B"; the last column
+      ceil(8 + 6 + at('data 9,999,999 B', 12)),
+    ];
+    expect([versions, deployments, cells]).toEqual([
+      [188, 102, 55, 102, 86],
+      [188, 102, 188, 86],
+      [188, 188, 188, 170, 170, 102, 130],
+    ]);
+    expect([sum(versions), sum(deployments), sum(cells)]).toEqual([533, 564, 1136]);
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
+      ...emptyCells,
+      total: 1,
+      data: [
+        {
+          txHash: mockDeploymentTxHash,
+          outputIndex: 1,
+          capacity: '16100000000',
+          commonKnowledgeSize: '6100000000',
+          lockScriptHash: '0x01',
+          dataSize: 0,
+          createdAtBlock: 123456,
+          status: 'live',
+        },
+      ],
+    });
+    const minWidths = (label: string) =>
+      Array.from(screen.getByRole('table', { name: label }).querySelectorAll('col')).map((c) =>
+        Number.parseFloat((c as HTMLElement).style.minWidth)
+      );
+    const formOf = async (label: string) =>
+      (
+        await waitFor(() => {
+          const list =
+            screen.queryByRole('table', { name: label }) ??
+            screen.queryByRole('list', { name: `${label}, compact` });
+          if (!list) throw new Error(`no ${label}`);
+          return list;
+        })
+      )
+        .closest('[data-list-form]')!
+        .getAttribute('data-list-form');
+    try {
+      for (const [list, expected] of [
+        [1232, ['table', 'table', 'table']],
+        [1136, ['table', 'table', 'table']],
+        [1135, ['table', 'table', 'rows']],
+        [608, ['table', 'table', 'rows']],
+        [358, ['rows', 'rows', 'rows']],
+      ] as const) {
+        stubLayoutWidths({ chart: 900, list });
+        const { unmount } = render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+        const forms = [
+          await formOf('Code versions'),
+          await formOf('Code cell deployments'),
+          await formOf('Its cells'),
+        ];
+        expect(forms, `at ${list}`).toEqual(expected);
+        if (list === 1232) {
+          expect(minWidths('Code versions')).toEqual(versions);
+          expect(minWidths('Code cell deployments')).toEqual(deployments);
+          expect(minWidths('Its cells')).toEqual(cells);
+        }
+        unmount();
+        // the globals only: restoring the mocks would empty the api's (vitest 2), which this
+        // page reads again at the next width
+        vi.unstubAllGlobals();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it('redirects /script/<name> alias to the named detail page', async () => {

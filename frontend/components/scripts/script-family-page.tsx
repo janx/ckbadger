@@ -6,7 +6,7 @@ import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -36,7 +36,16 @@ import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/a
 import type { CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { fontPx, textPx } from '@/lib/type-metrics';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { ckbAmountText } from '@/lib/amount-form';
+import { MIN_TRACK_PX } from '@/components/ui/aligned-bar';
+import {
+  UNAVAILABLE,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT_DIGITS,
+  WIDEST_ROW_COUNT,
+  shortChars,
+} from '@/lib/list-bounds';
 import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { cn } from '@/lib/utils';
@@ -53,7 +62,7 @@ import {
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { useFromMd } from '@/hooks/useFromMd';
 import { ShortId } from '@/components/ui/short-id';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, shortenHash, type ShortSize } from '@/lib/shorten';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
 
@@ -278,6 +287,25 @@ function headBudget(label: string): number {
 }
 
 /**
+ * What the family's tables hold (readability F3-e): each column's widest value, measured at its
+ * step through columnPx, with the 16 px gap after every column but the last.
+ */
+const small = (text: string) => textPx(text.length, fontPx('small'));
+const meta = (text: string) => textPx(text.length, fontPx('meta'));
+/** A hash at the row size, as a run of its characters ("0x12345678…abcdef"). */
+const ROW_HASH = 'x'.repeat(shortChars(SHORT_FORMS.row.hash));
+/** A code cell's out point: a deployment transaction writes a few cells, an index under 100. */
+const CODE_CELL_OUTPOINT = `${ROW_HASH}:99`;
+/** A live cell's out point: a transaction's outputs are under 10,000 (four digits). */
+const CELL_OUTPOINT = `${ROW_HASH}:${WIDEST_COUNT_DIGITS}`;
+/** A version's number: two digits. */
+const VERSION_NUMBER = 'v99';
+/** A cell's capacity: under ten billion CKB (the genesis allocation's cells hold billions). */
+const WIDEST_CELL_CAPACITY = ckbAmountText(BigInt('999999999999999999'), 'column');
+/** A cell's occupied bytes: under ten million (the genesis's largest cell holds a 1 MB table). */
+const WIDEST_OCCUPIED = `${(9_999_999).toLocaleString('en-US')} B`;
+
+/**
  * Tier 2's "The script" (consistency C6, board ScriptDetail): its cells in one line, the script's
  * shape drawn once (code_hash 32 · hash_type 1, then the args each cell sets), and one row per
  * registered reference — hash type, code hash, live cells, the cell dep that serves it, who holds
@@ -336,14 +364,16 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'codeHash',
       label: 'code hash',
-      // the row size, 17 characters at 12 px (122.4 px), and the padding
-      minWidth: 140,
+      // the row size, 17 characters at 13 px (132.6), and the gap (readability F3-e: it was 140,
+      // the hash at 12 px)
+      minWidth: columnPx(small(ROW_HASH) + CELL_GAP_PX),
       render: (r) => <ShortId value={r.referenceHash} kind="hash" size="row" />,
     },
     {
       key: 'cells',
       label: 'live cells',
-      // the head, and with it a count of up to 9 characters at 12 px ("1,234,567", 64.8 px)
+      // the head, wider than a reference's live cells, seven digits at 13 px ("9,999,999", 70.2:
+      // the default lock's family, the largest, holds under two million)
       minWidth: headBudget('live cells'),
       numeric: true,
       render: (r) => r.liveCellsCount.toLocaleString('en-US'),
@@ -351,18 +381,22 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'dep',
       label: 'cell dep',
-      // the out point at the row size, 19 characters at 12 px (136.8 px), and the padding
-      minWidth: 154,
+      // The code cell's out point at the row size, an index of two digits, and " +9" more live
+      // cells (23 characters at 13 px, 179.4), and the gap (readability F3-e: it was 154, the out
+      // point at 12 px without its count).
+      minWidth: columnPx(small(`${CODE_CELL_OUTPOINT} +9`) + CELL_GAP_PX),
       render: (r) => <span className="whitespace-nowrap">{depOf(r, 'row')}</span>,
     },
     {
       key: 'holder',
       label: 'held by',
-      // The table keeps the 576 px it had, so it stays a table in the 588 px of tier 2's right
-      // column at 1280: this column gives the two heads the 26 px they lacked (150 → 124; the
-      // others hold 76 + 140 + 82 + 154 at the meta step of 11 px). Its words end in an ellipsis
-      // and stand whole in the row's title and in "Each reference in full".
-      minWidth: 124,
+      // The table's flexible column, the last (readability F3-e): its head and nine characters of
+      // the holder's words at 13 px (70.2) at its minimum, the rest of the container beyond the
+      // sum, so the table, 585 px, stays a table in the 588 px of tier 2's right column at 1280.
+      // Its words end in an ellipsis and stand whole in the row's title and in "Each reference in
+      // full". It was 124.
+      minWidth: columnPx(Math.max(meta('held by'), small('x'.repeat(9)))),
+      width: 'auto',
       render: (r) => <span className="block truncate">{holder(r)}</span>,
     },
   ];
@@ -661,7 +695,10 @@ export function ScriptFamilyPage({
       key: 'version',
       label: 'Version',
       header: <Head label="Version" />,
-      minWidth: 64,
+      // its head (7 characters at 12 px, 50.4), wider than "v99" at 14 px, and the gap (F3-e)
+      minWidth: columnPx(
+        Math.max(meta('Version'), textPx(VERSION_NUMBER.length, fontPx('body'))) + CELL_GAP_PX
+      ),
       className: ROW,
       render: (row) => {
         const lead = leadOf(row);
@@ -682,7 +719,8 @@ export function ScriptFamilyPage({
       key: 'deployed',
       label: 'Deployed',
       header: <Head label="Deployed" />,
-      minWidth: 110,
+      // the date (10 characters at 13 px, 78) and the gap (F3-e: it was 110)
+      minWidth: columnPx(small(formatUtc8Date(0)) + CELL_GAP_PX),
       className: ROW,
       render: (row) => {
         const lead = leadOf(row);
@@ -699,7 +737,8 @@ export function ScriptFamilyPage({
       key: 'block',
       label: 'Block',
       header: <Head label="Block" />,
-      minWidth: 120,
+      // "#99,999,999" (11 characters at 13 px, 85.8) and the gap (F3-e: it was 120)
+      minWidth: columnPx(small(WIDEST_BLOCK_NUMBER) + CELL_GAP_PX),
       numeric: true,
       className: ROW,
       render: (row) => {
@@ -717,8 +756,10 @@ export function ScriptFamilyPage({
       key: 'cell',
       label: 'Code cell',
       header: <Head label="Code cell" />,
-      minWidth: 160,
-      width: '22%',
+      // The out point at the row size (20 characters at 13 px, 156), its 8 px gap and a "+9" tag
+      // (its words at 12 px and the tag's 12 px of sides and border), and the gap (F3-e: it was 160
+      // and 22 % of the table).
+      minWidth: columnPx(small(CODE_CELL_OUTPOINT) + 8 + meta('+9') + 12 + CELL_GAP_PX),
       className: ROW,
       render: (row) => {
         const lead = leadOf(row);
@@ -744,8 +785,13 @@ export function ScriptFamilyPage({
       key: 'held',
       label: 'Held by',
       header: <Head label="Held by" />,
-      minWidth: 190,
-      // The column that takes the free width.
+      // The column that takes the free width (F3-e): at its minimum a holder by its kind and its
+      // tight id, "multisig 0x1234…abcd" (20 characters at 13 px, 156), and the gap; a longer one
+      // ("no one (pinned by data hash)") ends in the one ellipsis, the row's title holding it.
+      // It was 190.
+      minWidth: columnPx(
+        small(`multisig ${'x'.repeat(shortChars(SHORT_FORMS.tight.hash))}`) + CELL_GAP_PX
+      ),
       width: 'auto',
       className: `${ROW} truncate`,
       render: (row) => {
@@ -763,8 +809,10 @@ export function ScriptFamilyPage({
       key: 'status',
       label: 'Status',
       header: <Head label="Status" />,
-      minWidth: 200,
-      width: '18%',
+      // "consumed in" and the replacing transaction at the row size (29 characters at 13 px,
+      // 226.2), wider than "replaced at #99,999,999" and the "live · current" tag, and the
+      // gap (F3-e: it was 200 and 18 % of the table).
+      minWidth: columnPx(small(`consumed in ${ROW_HASH}`) + CELL_GAP_PX),
       className: `${ROW} truncate`,
       render: (row) =>
         row.current ? (
@@ -780,7 +828,9 @@ export function ScriptFamilyPage({
       key: 'usage',
       label: 'Live cells',
       header: <Head label="Live cells" />,
-      minWidth: 100,
+      // eight digits of live cells, or "unavailable" (11 characters at 13 px, 85.8, the wider); the
+      // last column, no gap after it (F3-e: it was 100)
+      minWidth: columnPx(Math.max(small(WIDEST_ROW_COUNT), small(UNAVAILABLE))),
       numeric: true,
       className: ROW,
       render: (row) => versionUsage(row.version.versionHash),
@@ -790,11 +840,21 @@ export function ScriptFamilyPage({
   const NARROW = 'py-3 align-top';
   /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
   const narrowColumns: ListColumn<Row>[] = [
-    { key: 'version', label: 'v', minWidth: 64, className: NARROW, render: versionCell },
+    {
+      key: 'version',
+      label: 'v',
+      // "v99", and "current" under it at 12 px (50.4, the wider), and the gap (F3-e: it was 64)
+      minWidth: columnPx(Math.max(small(VERSION_NUMBER), meta('current')) + CELL_GAP_PX),
+      className: NARROW,
+      render: versionCell,
+    },
     {
       key: 'deployed',
       label: 'Deployed',
-      minWidth: 96,
+      // the date, and the block under it at 12 px (79.2, the wider), and the gap
+      minWidth: columnPx(
+        Math.max(small(formatUtc8Date(0)), meta(WIDEST_BLOCK_NUMBER)) + CELL_GAP_PX
+      ),
       className: NARROW,
       render: (row) =>
         row.version.deployments.length ? (
@@ -813,9 +873,11 @@ export function ScriptFamilyPage({
     {
       key: 'cell',
       label: 'Code cell · version hash',
-      minWidth: 228,
+      // The column that takes the free width (the board's 1fr). At its minimum the out point at
+      // the row size (20 characters at 13 px, 156) and the gap; its notes break between their words
+      // and the version hash anywhere under it (F3-e: it was 228).
+      minWidth: columnPx(small(CODE_CELL_OUTPOINT) + CELL_GAP_PX),
       className: NARROW,
-      // The column that takes the free width (the board's 1fr).
       width: 'auto',
       render: (row) => (
         <>
@@ -836,7 +898,9 @@ export function ScriptFamilyPage({
     {
       key: 'status',
       label: 'Status',
-      minWidth: 112,
+      // A status breaks before the transaction it names; that hash at the row size is one unit (17
+      // characters at 13 px, 132.6), and the gap (F3-e: it was 112).
+      minWidth: columnPx(small(ROW_HASH) + CELL_GAP_PX),
       className: `text-text-dim ${NARROW}`,
       render: (row) =>
         row.version.deployments.map((d) => (
@@ -848,7 +912,8 @@ export function ScriptFamilyPage({
     {
       key: 'usage',
       label: 'Live cells',
-      minWidth: 80,
+      // as in the wide table, the last column (F3-e: it was 80)
+      minWidth: columnPx(Math.max(small(WIDEST_ROW_COUNT), small(UNAVAILABLE))),
       className: NARROW,
       numeric: true,
       render: (row) => versionUsage(row.version.versionHash),
@@ -1119,10 +1184,12 @@ export function ScriptFamilyPage({
                       key: 'cell',
                       label: 'Cell',
                       header: <Head label="Cell" />,
-                      // the out point at the row size, 20 characters at 13 px (156 px), and
-                      // the padding
-                      minWidth: 176,
-                      width: '15%',
+                      // The out point at the row size and an index of four digits (22
+                      // characters at the key's 14 px, 184.8), and the gap (readability F3-e: it
+                      // was 176, the out point at 13 px with a one-digit index, and 15 %).
+                      minWidth: columnPx(
+                        textPx(CELL_OUTPOINT.length, fontPx('body')) + CELL_GAP_PX
+                      ),
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
@@ -1137,32 +1204,43 @@ export function ScriptFamilyPage({
                       key: 'owner',
                       label: 'Owner',
                       header: <Head label="Owner" />,
-                      minWidth: 170,
-                      width: '16%',
+                      // the address at the row size (13 characters at 13 px, 101.4) and the gap
+                      // (F3-e: it was 170 and 16 %)
+                      minWidth: columnPx(
+                        textPx(shortChars(SHORT_FORMS.row.address), fontPx('small')) + CELL_GAP_PX
+                      ),
                       render: (cell) => <CellOwner cell={cell} size="row" />,
                     },
                     {
                       key: 'type',
                       label: 'Also guarded by',
                       header: <Head label="Also guarded by" />,
-                      minWidth: 140,
-                      width: '13%',
+                      // The table's flexible column (F3-e): a type's code hash at the row size
+                      // (17 characters at 13 px, 132.6) and the gap at its minimum; a registry
+                      // name takes the rest of the container, breaking between its words. It
+                      // was 140 and 13 %.
+                      minWidth: columnPx(small(ROW_HASH) + CELL_GAP_PX),
+                      width: 'auto',
                       render: (cell) => <AlsoGuardedBy cell={cell} size="row" />,
                     },
                     {
                       key: 'anatomy',
                       label: 'What it holds',
                       header: <Head label="What it holds" />,
-                      minWidth: 150,
-                      width: '14%',
+                      // The bar, no shorter than a bar's track (48), or "Cell anatomy
+                      // unavailable" breaking between its words ("unavailable", 85.8, the wider),
+                      // and the gap (F3-e: it was 150 and 14 %).
+                      minWidth: columnPx(Math.max(MIN_TRACK_PX, small(UNAVAILABLE)) + CELL_GAP_PX),
                       render: (cell) => <CellAnatomy cell={cell} />,
                     },
                     {
                       key: 'capacity',
                       label: 'Capacity',
                       header: <Head label="Capacity" />,
-                      minWidth: 180,
-                      width: '17%',
+                      // A cell's capacity under ten billion CKB, every decimal (22 characters at
+                      // 13 px, 171.6), its unit " CKB" at 12 px (28.8) and the gap (F3-e: it was
+                      // 180 and 17 %).
+                      minWidth: columnPx(small(WIDEST_CELL_CAPACITY) + meta(' CKB') + CELL_GAP_PX),
                       numeric: true,
                       render: (cell) => (
                         <CkbAmount
@@ -1177,8 +1255,11 @@ export function ScriptFamilyPage({
                       key: 'occupied',
                       label: 'Occupied',
                       header: <Head label="Occupied" />,
-                      minWidth: 90,
-                      width: '9%',
+                      // occupied bytes under ten million, "9,999,999 B", or "unavailable" (85.8
+                      // each), and the gap (F3-e: it was 90 and 9 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_OCCUPIED), small(UNAVAILABLE)) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (cell) => <OccupiedBytes cell={cell} />,
                     },
@@ -1186,8 +1267,9 @@ export function ScriptFamilyPage({
                       key: 'created',
                       label: 'Created',
                       header: <Head label="Created" />,
-                      minWidth: 170,
-                      width: '16%',
+                      // "#99,999,999 · 2026-11-02" (24 characters at 13 px, 187.2), the last
+                      // column, no gap after it (F3-e: it was 170 and 16 %)
+                      minWidth: columnPx(small(`${WIDEST_BLOCK_NUMBER} · ${formatUtc8Date(0)}`)),
                       numeric: true,
                       render: (cell) => (
                         <span className="text-text-dim">

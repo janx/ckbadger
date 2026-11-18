@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { cleanup, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/newest-cells.json';
@@ -218,6 +218,49 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     expect(document.getElementById('its-cells')).toHaveAttribute('aria-label', 'Its cells');
     expect(within(footer).getAllByRole('link')).toHaveLength(1);
     expect(section.querySelector('a[href*="/activities"]')).toBeNull();
+  });
+
+  // Readability F3-e: every column budgeted from the widest value it writes, at 0.6 em a glyph (the
+  // out point 14 px, the cells 13) and the 16 px gap after every column but the last. What it is is
+  // the flexible column: 20 characters at its minimum, the rest of the container beyond the sum.
+  it('budgets every column from what it holds and changes form at their sum (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // the out point at the row size, an output index of four digits
+      ceil(at('0x12345678…abcdef:9999', 14) + 16),
+      // the flexible column: 20 characters of what the cell is
+      ceil(at('x'.repeat(20), 13) + 16),
+      // an owner's address at the row size
+      ceil(at('ckb1…4s93hhsj', 13) + 16),
+      // "tx", the hash at the row size, the block and the date, the last column
+      ceil(at('tx 0x12345678…abcdef · #99,999,999 · 2026-11-02', 13)),
+    ];
+    expect(budgets).toEqual([201, 172, 118, 367]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(858);
+    serve('Default Lock');
+    const section = await renderPage();
+    const table = within(section).getByRole('table', { name: 'Newest cells' });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols.map((c) => c.width)).toEqual(['201px', 'auto', '118px', '367px']);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    for (const [width, form] of [
+      [1232, 'table'],
+      [sum, 'table'],
+      [sum - 1, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      stubLayoutWidths({ chart: 900, list: width });
+      serve('Default Lock');
+      cleanup();
+      const shown = await renderPage();
+      expect(shown.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+    }
   });
 
   it('names DAO cells as deposits and requests, says "types", and links the DAO feed', async () => {

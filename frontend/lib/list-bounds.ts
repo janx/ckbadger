@@ -112,5 +112,5 @@ export const WIDEST_CKB_HELD = ckbAmountText(ckbNines(11), 'summary');
 /** A count an inventory or scripts row states (holders, transfers, live cells): eight digits. */
 export const WIDEST_ROW_COUNT = nines(8).toLocaleString('en-US');
 
-/** What a count the API has not derived says in its place. */
+/** What a count or figure the API has not derived says in its place (a list writes it either case). */
 export const UNAVAILABLE = 'Unavailable';
