@@ -16,6 +16,22 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 
 const MINUS = '−';
 
+// Lane B4 second fix round (review-rules-fixes-logic NOTE 4, the coordinator's item 10): a change
+// that is not whole bytes is refused naming the transaction it stands in, so the upstream fault is
+// found from the message alone.
+describe('an occupied change that is not whole bytes names its transaction', () => {
+  it('in an activity row', () => {
+    const a = feedSamples.objectTransfer;
+    const bad = {
+      ...a,
+      participants: [{ ...a.participants[0], usedDelta: '150000001' }, ...a.participants.slice(1)],
+    };
+    expect(() => render(<ActivityRow activity={bad} />)).toThrow(
+      new RegExp(`${bad.txHash}.*occupied change 150000001 shannons is not a whole number of bytes`)
+    );
+  });
+});
+
 describe('formatOccupiedDelta writes bytes with their unit (B4 item 2)', () => {
   it('writes a signed, grouped whole number of bytes and "B"', () => {
     expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61 B`);

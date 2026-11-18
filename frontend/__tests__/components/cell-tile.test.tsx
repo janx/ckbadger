@@ -57,6 +57,15 @@ describe('CellTile occupied wording (TX-19)', () => {
     expect(tile).not.toHaveTextContent('occupied 195.00000000');
   });
 
+  // B4 second fix round (review-rules-fixes-logic NOTE 4, the coordinator's item 10): a cell's
+  // occupied bytes reach the tile as the API gives them (commonKnowledgeSize), with no shannons
+  // between (the tiles multiplied by 10^8 and the tile divided again)
+  it('takes the cell’s occupied bytes as the API gives them, no shannons between', () => {
+    const { outputs } = cellTiles(transfer('committed'), undefined);
+    expect(outputs[0]).toMatchObject({ occupiedBytes: '61' });
+    expect(outputs[0]).not.toHaveProperty('occupied');
+  });
+
   it('refuses an occupied amount that is not whole bytes', () => {
     expect(() =>
       render(

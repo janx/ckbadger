@@ -9,6 +9,19 @@ import {
 
 const MINUS = '−';
 
+// Lane B4 second fix round (review-rules-fixes-logic NOTE 4, the coordinator's item 10): a figure
+// and its unit never break apart (docs/RESPONSIVE_LAYOUT.md, "Non-breaking units"): the one writer
+// joins them with a no-break space, U+00A0 (the pair's unit after its second figure).
+describe('lib/occupied keeps a figure with its unit', () => {
+  const NBSP = '\u00a0';
+  it('joins every figure to its "B" with a no-break space', () => {
+    expect(occupiedBytesText(BigInt(61))).toBe(`61${NBSP}B`);
+    expect(occupiedPairText(BigInt(563), BigInt(589))).toBe(`563 → 589${NBSP}B`);
+    expect(occupiedBytesDelta(BigInt(-61))).toBe(`${MINUS}61${NBSP}B`);
+    expect(formatOccupiedDelta('2600000000')).toBe(`+26${NBSP}B`);
+  });
+});
+
 describe('lib/occupied', () => {
   it('writes a count of bytes with its unit, grouped', () => {
     expect(occupiedBytesText(BigInt(61))).toBe('61 B');
