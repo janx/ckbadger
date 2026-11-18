@@ -14,11 +14,12 @@ import { fontPx, textPx } from '@/lib/type-metrics';
  * number staying (its `#` says it is a block; the word stays for a screen reader); the tip (the
  * vitals strip's first figure on every page); the network (said nowhere else on a phone with one
  * network); the release (from md said only here). The mode and the clock never go: they close the
- * line at its two ends. At the meta step's 12 px and the widest real content (a nine-digit tip,
- * `SYNCING`, `· syncing`) the wide form holds everything from 810 px and gives up `g b blocks` at
- * 768; the narrow form holds everything down to 390, gives up the tip's word at 360 while the mode
- * is a long word, and at 320 keeps the tip's number while `LIVE` and gives up the tip while
- * `SYNCING` or `OFFLINE` (__tests__/lib/status-line-fit.test.ts states each width).
+ * line at its two ends. At the meta step's 12 px and the widest real content (the tip at the height
+ * the lists budget, lib/list-bounds.ts `WIDEST_BLOCK_NUMBER`, `#99,999,999`; `SYNCING`,
+ * `· syncing`) the wide form holds everything from 802.2 px and gives up `g b blocks` at 768
+ * (706.4 px); the narrow form holds everything down to 390, gives up the tip's word at 360 while
+ * the mode is a long word, and at 320 keeps the tip's number while `LIVE` and gives up the tip
+ * while `SYNCING` or `OFFLINE` (__tests__/lib/status-line-fit.test.ts states each width).
  */
 
 /** What each part writes, as the line writes it. */

@@ -11,6 +11,7 @@ import { atViewportWidth } from '../utils/viewport';
 import { StatusClock, StatusLine } from '@/components/layout/status-line';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import { formatBlockNumber } from '@/lib/format-block';
+import { WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 import { STATUS_KEY_HINTS } from '@/lib/shortcuts';
 import { statusLinePx, type StatusLineContent, type StatusLineParts } from '@/lib/status-line-fit';
 
@@ -347,8 +348,11 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
     ]);
   });
 
-  it('holds all of them from 1024 px, syncing and with a nine-digit tip', async () => {
-    const served = vitals({ latestBlock: 999_999_999, isSyncing: true });
+  // Re-pinned (one bound for one quantity, 2026-11-19): the tip was a nine-digit 999,999,999; it is
+  // the height the lists budget, lib/list-bounds.ts WIDEST_BLOCK_NUMBER.
+  it('holds all of them from 1024 px, syncing and with the widest tip the lists budget', async () => {
+    const served = vitals({ latestBlock: 99_999_999, isSyncing: true });
+    expect(formatBlockNumber(served.latestBlock)).toBe(WIDEST_BLOCK_NUMBER);
     const bar = await at(1024, served);
     expectDrawnAsBudgeted(
       bar,
@@ -356,7 +360,7 @@ describe('StatusLine holds its parts at its width (readability F3-f)', () => {
       {
         mode: 'SYNCING',
         network: 'mainnet',
-        tip: '#999,999,999',
+        tip: WIDEST_BLOCK_NUMBER,
         release: 'ckbadger 0.1.0 · syncing',
       },
       { network: true, tip: 'labelled', release: true, hints: 3 }

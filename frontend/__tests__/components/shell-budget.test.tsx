@@ -518,20 +518,26 @@ describe('the header as drawn is the header its budget counts', () => {
   });
 });
 
+// Re-pinned (one bound for one quantity, 2026-11-19): the strip's block was a nine-digit height
+// (`#999,999,999`); it is the height the lists budget, lib/list-bounds.ts WIDEST_BLOCK_NUMBER
+// (`#99,999,999`), one glyph less at the value's body step, 8.4 px: 1,223.8 → 1,215.4 at 1280,
+// 945.2 → 936.8 at 1024, 581.8 → 573.4 at 768; below md 325.2 → 316.8 at 640, 289.2 → 280.8 at
+// 390 and 360, 308.2 → 299.8 with the live dot; at 320 one line of 280.8 where the ninth digit
+// had put the epoch under the block. No line wraps differently from md.
 describe('the vitals strip per width, at its widest real content', () => {
   it('is one row at 1280 and wraps as before at 1024 and 768, each item whole', () => {
     expect(stripFromMd(1280)).toEqual([
       {
         items: ['block', 'epoch', 'block time', 'hash rate', 'difficulty', 'live'],
-        px: 1223.8,
+        px: 1215.4,
       },
     ]);
     expect(stripFromMd(1024)).toEqual([
-      { items: ['block', 'epoch', 'block time', 'hash rate'], px: 945.2 },
+      { items: ['block', 'epoch', 'block time', 'hash rate'], px: 936.8 },
       { items: ['difficulty', 'live'], px: 254.6 },
     ]);
     expect(stripFromMd(768)).toEqual([
-      { items: ['block', 'epoch'], px: 581.8 },
+      { items: ['block', 'epoch'], px: 573.4 },
       { items: ['block time', 'hash rate', 'difficulty', 'live'], px: 618 },
     ]);
     for (const w of [1280, 1024, 768])
@@ -539,24 +545,18 @@ describe('the vitals strip per width, at its widest real content', () => {
   });
 
   it('holds one line below md on every page but home: the block and the epoch with its bar', () => {
-    // nine digits, the widest; the live mark is drawn only where the page holds the realtime
-    // socket, which only the home page does, and the home page has its three lines
-    const nine = { block: WIDEST.block, live: false };
-    expect(stripLine(640, nine)).toEqual([{ items: ['block', 'epoch'], px: 325.2 }]);
-    expect(stripLine(390, nine)).toEqual([{ items: ['block', 'epoch'], px: 289.2 }]);
-    expect(stripLine(360, nine)).toEqual([{ items: ['block', 'epoch'], px: 289.2 }]);
-    // with the live dot it would be 308.2 of 328 at 360
-    expect(stripLine(360, { ...nine, live: true })).toEqual([
-      { items: ['block', 'epoch', 'live'], px: 308.2 },
+    // the widest height the lists budget; the live mark is drawn only where the page holds the
+    // realtime socket, which only the home page does, and the home page has its three lines
+    const widest = { block: WIDEST.block, live: false };
+    expect(stripLine(640, widest)).toEqual([{ items: ['block', 'epoch'], px: 316.8 }]);
+    expect(stripLine(390, widest)).toEqual([{ items: ['block', 'epoch'], px: 280.8 }]);
+    expect(stripLine(360, widest)).toEqual([{ items: ['block', 'epoch'], px: 280.8 }]);
+    // with the live dot it would be 299.8 of 328 at 360
+    expect(stripLine(360, { ...widest, live: true })).toEqual([
+      { items: ['block', 'epoch', 'live'], px: 299.8 },
     ]);
-    // at 320 eight digits hold the line (280.8 of 288); the ninth puts the epoch under the block
-    expect(stripLine(320, { block: WIDEST.blockToday, live: false })).toEqual([
-      { items: ['block', 'epoch'], px: 280.8 },
-    ]);
-    expect(stripLine(320, nine)).toEqual([
-      { items: ['block'], px: 142.8 },
-      { items: ['epoch'], px: 134.4 },
-    ]);
+    // at 320 the line holds both (280.8 of 288)
+    expect(stripLine(320, widest)).toEqual([{ items: ['block', 'epoch'], px: 280.8 }]);
   });
 
   it('holds the home page’s three lines below md; the epoch takes two from 360 down', () => {
