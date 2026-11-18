@@ -114,7 +114,9 @@ describe('IciclePartition (DAO-7)', () => {
       <IciclePartition root={root} label="Where secondary issuance goes" formatValue={String} />
     );
     const svg = container.querySelector('svg')!;
-    expect(svg.getAttribute('viewBox')).toBe('0 0 900 240');
+    // re-pinned (readability F3): the last row's labels under its boxes are a 52 px band (3 + a
+    // label line, a value line, a note line + 3, up to the pixel), not 44: 168 + 28 + 52
+    expect(svg.getAttribute('viewBox')).toBe('0 0 900 248');
     expect(svg).toHaveAttribute('width', '100%');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
     expect(box('total').getAttribute('width')).toBe('900');
@@ -185,13 +187,15 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     );
     const svg = container.querySelector('svg')!;
     // The root's words sit inside it, so row 1 follows 16 px below it, not a label band.
-    expect(svg.getAttribute('viewBox')).toBe('0 0 1200 116');
+    // re-pinned (readability F3): 44 + 28 + the 52 px band of labels under the last row (was 44)
+    expect(svg.getAttribute('viewBox')).toBe('0 0 1200 124');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
     expect(box('total').getAttribute('fill')).toBe('var(--c-ink-quiet)');
     expect(box('c').getAttribute('x')).toBe('120');
     // inside: one line in the box; end: right-aligned under the box; default: left under it
     const label = (key: string) => container.querySelector(`[data-label="${key}"]`)!;
-    expect(label('total').getAttribute('y')).toBe('19');
+    // re-pinned (readability F3): the line is centred in the 28 px box, (28 − 16) / 2 + 12.1 (was 19)
+    expect(label('total').getAttribute('y')).toBe('18.1');
     expect(label('total')).toHaveTextContent(
       'Secondary issuance since genesis 100 · 1.344 billion CKB a year'
     );
@@ -203,7 +207,7 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
     expect(label('c').getAttribute('x')).toBe('350');
     expect(container.querySelector('[data-note="c"]')).toHaveTextContent('20.00% · via AR');
     expect(label('m').getAttribute('text-anchor')).toBe('start');
-    expect(label('b').getAttribute('y')).toBe(String(44 + 19));
+    expect(label('b').getAttribute('y')).toBe(String(44 + 18.1));
   });
   it('can leave every word to an HTML legend at narrow widths', () => {
     const { container } = render(
@@ -296,7 +300,9 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     );
     const label = (key: string) => container.querySelector(`[data-label="${key}"]`);
     expect(label('total')).toHaveTextContent('secondary issuance since genesis 100 CKB');
-    expect(label('total')!.getAttribute('y')).toBe('29');
+    // re-pinned (readability F3): the 14 px line centred in the 48 px box, (48 − 17) / 2 + 12.8
+    // (was 24 + round(14 × 0.35) = 29)
+    expect(label('total')!.getAttribute('y')).toBe('28.3');
     // 119 px holds "10.00%" but not "miners 10.00%" at 14 px (the reading role, the body step)
     expect(label('m')!.textContent).toBe('10.00%');
     expect(label('c')!.textContent).toBe('depositors 20.00%');
@@ -758,7 +764,8 @@ describe('IciclePartition: every word where it is written (readability F3)', () 
     const parts = [...svg.querySelectorAll('g')].filter((g) =>
       [...g.children].some((c) => c.hasAttribute('data-node'))
     );
-    expect(parts.length).toBeGreaterThanOrEqual(6);
+    // the DAO page's six parts and the original drawing's; four in the inside form
+    expect(parts.length).toBeGreaterThanOrEqual(4);
     for (const part of parts)
       expectApart(
         allTextLines(part),
