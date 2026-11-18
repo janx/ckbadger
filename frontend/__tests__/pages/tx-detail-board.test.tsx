@@ -377,7 +377,8 @@ describe('Transaction board, tier 1', () => {
     expect(summary).toHaveTextContent(
       // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size;
       // R9 (re-pinned): an address is `ckb1…` and its last 8 characters
-      'Nervape 3x 0x51c75a0000…000096f2 moved from ckb1…sqcjk9lz to ckb1…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
+      // R9 (re-pinned): prose takes the row form, the object's id 10…6
+      'Nervape 3x 0x51c75a00…0096f2 moved from ckb1…sqcjk9lz to ckb1…sqshp3hr. The sender paid a 0.00064119 CKB fee.'
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));

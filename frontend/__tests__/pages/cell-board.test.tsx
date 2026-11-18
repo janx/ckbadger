@@ -127,8 +127,9 @@ describe('Cell page against the Cell board', () => {
     const { container } = view();
     const line = await screen.findByTestId('cell-inventory');
     expect(await within(line).findByText(/Nervape 3x/)).toBeInTheDocument();
-    // U-09 (re-pinned): the hero's lede line writes the id at the head size
-    expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6c5…002796f2 BTC\+CKB$/);
+    // U-09 (re-pinned): the hero's lede line writes the id at the head size; R9 (re-pinned):
+    // prose takes the row form
+    expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6…2796f2 BTC\+CKB$/);
     expect(within(line).getByRole('link')).toHaveAttribute(
       'href',
       `/mainnet/objects/${cell.type!.args}`
@@ -201,10 +202,11 @@ describe('Cell page against the Cell board', () => {
     await waitFor(() => expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger'));
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);
     const origin = screen.getByTestId('cell-origin');
+    // R9 (re-pinned): the origin line is the lede, prose at the row size (it was the head size)
     expect(origin).toHaveTextContent(
-      /^output 1 of transaction 0xbe1b9761b6…df936cd8 · live since #20,801,533$/
+      /^output 1 of transaction 0xbe1b9761…936cd8 · live since #20,801,533$/
     );
-    expect(within(origin).getByRole('link', { name: '0xbe1b9761b6…df936cd8' })).toHaveAttribute(
+    expect(within(origin).getByRole('link', { name: '0xbe1b9761…936cd8' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${cell.txHash}`
     );

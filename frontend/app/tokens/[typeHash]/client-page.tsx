@@ -232,7 +232,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                     <AppLink href={`/tokens/${other.typeScriptHash}`}>
                       <Hash
                         hash={other.typeScriptHash}
-                        size="head"
+                        size="row"
                         copyable={false}
                         className="text-small"
                       />
@@ -241,8 +241,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   </span>
                 ))}
                 . Tell them apart by type hash; this one is{' '}
-                {/* U-16: the shortened type hash is one unit; the head's note (U-09: head) */}
-                <ShortId value={t.typeScriptHash} kind="hash" size="head" />.
+                {/* U-16: the shortened type hash is one unit; a note: prose, the row size (R9) */}
+                <ShortId value={t.typeScriptHash} kind="hash" size="row" />.
               </p>
             )
           )}

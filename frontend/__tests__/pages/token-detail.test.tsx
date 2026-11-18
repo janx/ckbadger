@@ -350,8 +350,9 @@ describe('TokenDetailPage', () => {
     });
     render(<TokenDetailPage typeHash={hash} />);
     const note = await screen.findByText(/Another token also calls itself/);
-    // U-09 (re-pinned): the head's note writes the type hash at the head size, 12…8
-    const self = within(note).getByText(`${hash.slice(0, 12)}…${hash.slice(-8)}`);
+    // U-09 (re-pinned): the head's note writes the type hash at the head size, 12…8; R9
+    // (re-pinned): a note is prose, the row size, 10…6
+    const self = within(note).getByText(`${hash.slice(0, 10)}…${hash.slice(-6)}`);
     expect(self.closest('[data-nobreak]')).not.toBeNull();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     // every dot of the metrics row belongs to the item after it: none is loose text

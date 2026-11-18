@@ -456,8 +456,9 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
         'Branch evidence needs the node store: this API runs without the node reader, so the blocks of both branches, their miners and what became of them are not shown. Below is what this node recorded when it switched.'
       );
       expect(screen.getByTestId('fork-narrative')).toHaveTextContent(
-        // U-09 (re-pinned): the story is the page's lede, its hashes at the head size
-        'This node switched from #11 0x1740479523…39a3e72a to #12 0xb057fd605c…e29a2ef4 and rolled back 1 block and 2 transactions, starting with #11′.'
+        // U-09 (re-pinned): the story is the page's lede, its hashes at the head size; R9
+        // (re-pinned): prose takes the row form
+        'This node switched from #11 0x17404795…a3e72a to #12 0xb057fd60…9a2ef4 and rolled back 1 block and 2 transactions, starting with #11′.'
       );
       expect(container.querySelector('svg[data-fork-tree]')).toBeNull();
       expect(screen.queryByRole('table', { name: 'Blocks' })).toBeNull();

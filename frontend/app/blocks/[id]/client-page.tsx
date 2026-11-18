@@ -282,8 +282,8 @@ export default function BlockDetailPage() {
                   <MinerLink
                     address={block.minerAddress}
                     pool={block.minerPool}
-                    size="head"
-                    unnamed={<Address address={block.minerAddress} size="head" />}
+                    size="row"
+                    unnamed={<Address address={block.minerAddress} size="row" />}
                   />
                 </>
               )}{' '}

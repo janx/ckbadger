@@ -326,8 +326,9 @@ describe('CellDetailPage', () => {
     expect(screen.queryByText(/2024-01-02T00:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
     // Lane U (U3): a spent cell's origin line names the block that spent it.
+    // R9 (re-pinned): the origin line is prose, at the row size (it was the head size)
     expect(screen.getByTestId('cell-origin')).toHaveTextContent(
-      /^output 0 of transaction 0xababababab…abababab · spent at #125$/
+      /^output 0 of transaction 0xabababab…ababab · spent at #125$/
     );
     // Lane L: the "only name" sentence links both blocks of the cell's life.
     const onlyName = screen.getByText(/The out point is the cell's only name/);

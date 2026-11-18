@@ -88,15 +88,15 @@ export function ScriptHeading({ family }: { family: ScriptFamilyDetail }) {
   );
 }
 
-/** The holder as the hero's sentence names it, the page's lede (U-09: head). */
+/** The holder as the hero's sentence names it, the page's lede: prose, the row size (R9). */
 function holderSentence(custody: ScriptCustodyApi): string {
   if (custody.class === 'multisig')
     return custody.witnessState === 'never_signed'
       ? 'a multisig that has never signed'
-      : `${holderName(custody, 'head')}`;
+      : `${holderName(custody, 'row')}`;
   if (custody.class === 'one_key') return 'a single key';
   if (custody.class === 'unspendable') return 'a lock that can never be unlocked';
-  return holderName(custody, 'head');
+  return holderName(custody, 'row');
 }
 
 /** The board's summary sentence: what the script guards, since when, and who can change it. */

@@ -209,13 +209,13 @@ function ForkHeading({ event }: { event: ReorgEvent }) {
  * stored event alone and there is no branch evidence. Say so, and tell what the event records.
  */
 function StoredFork({ event }: { event: ReorgEvent }) {
-  // U-16: each shortened hash is one unit; the story is the page's lede (U-09: head)
+  // U-16: each shortened hash is one unit; the story is the page's lede: prose, the row size (R9)
   const story = (
     <>
       This node switched from {formatBlockNumber(event.oldTipNumber)}{' '}
-      <ShortId value={event.oldTipHash} kind="hash" size="head" /> to{' '}
+      <ShortId value={event.oldTipHash} kind="hash" size="row" /> to{' '}
       {formatBlockNumber(event.newTipNumber)}{' '}
-      <ShortId value={event.newTipHash} kind="hash" size="head" />
+      <ShortId value={event.newTipHash} kind="hash" size="row" />
       {unitNode(
         ` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.`
       )}
@@ -259,7 +259,7 @@ function narrative(data: ReorgDetail): SentencePart[][] {
         block.minerLockHash !== null && block.competingBlock!.minerLockHash === block.minerLockHash;
       const miner = same
         ? i === 0
-          ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool, 'head')})`
+          ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool, 'row')})`
           : ', again both by it'
         : '';
       push(
