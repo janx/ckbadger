@@ -491,6 +491,8 @@ describe('TransactionDetailPage', () => {
     const line = await screen.findByText(/position 1/);
     expect(line).toHaveTextContent(/committed 2 blocks later/);
     expect(line).toHaveTextContent(/window 2–10/);
+    // readability 2026-11-18: the range is one unit; the line broke after its dash ("2–" / "10")
+    expect(within(line).getByText('2–10')).toHaveAttribute('data-nobreak');
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
   });
 
