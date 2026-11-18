@@ -358,6 +358,61 @@ describe('Asset history', () => {
       fireEvent.click(screen.getByText('Every change to the supply (3)'));
     };
 
+    // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (the cells
+    // 13 px, heads and notes 12) and the 16 px gap after every column but the last. The amounts
+    // hold one line under a billion whole units at the token's own decimals (none here); a larger
+    // one breaks after a thousands separator.
+    it('budgets every column from what it holds and changes form at their sum (F3-e)', () => {
+      const at = (text: string, px: number) => (text.length * px * 3) / 5;
+      const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+      const budgets = [
+        // a date, "2024-01-02", wider than the head's words
+        ceil(at('2024-01-02', 13) + 16),
+        // the head "Change", wider than "Mint" or "Burn"
+        ceil(Math.max(at('Change', 12), at('Burn', 13)) + 16),
+        // "#99,999,999" over "tx 9999 · sequence 9999" at 12 px, the wider
+        ceil(Math.max(at('#99,999,999', 13), at('tx 9999 · sequence 9999', 12)) + 16),
+        // its sign and a billion whole units less one, at the token's 0 decimals
+        ceil(at('+999,999,999', 13) + 16),
+        ceil(at('999,999,999', 13) + 16),
+        // the party's lock hash at the row size over "lock 0x43434343…434343" at 12 px; the last
+        ceil(Math.max(at('0x11111111…111111', 13), at('lock 0x43434343…434343', 12))),
+      ];
+      expect(budgets).toEqual([94, 60, 182, 110, 102, 159]);
+      const sum = budgets.reduce((s, w) => s + w, 0);
+      expect(sum).toBe(707);
+      mount();
+      const table = screen.getByRole('table', { name: 'Mints and burns' });
+      const cols = [...table.querySelectorAll('col')].map((c) =>
+        Number.parseFloat((c as HTMLElement).style.minWidth)
+      );
+      expect(cols).toEqual(budgets);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+      cleanup();
+      try {
+        for (const [width, form] of [
+          [1232, 'table'],
+          [707, 'table'],
+          [706, 'rows'],
+          [608, 'rows'],
+          [358, 'rows'],
+        ] as const) {
+          atContainerWidth(width);
+          mount();
+          const list = screen
+            .getAllByRole(form === 'table' ? 'table' : 'list')
+            .find((l) => l.getAttribute('aria-label')?.startsWith('Mints and burns'))!;
+          expect(list.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+          cleanup();
+          vi.unstubAllGlobals();
+          vi.restoreAllMocks();
+        }
+      } finally {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    });
+
     it('in the table', () => {
       mount();
       const table = screen.getByRole('table', { name: 'Mints and burns' });

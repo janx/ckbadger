@@ -14,6 +14,7 @@ import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
+import { TRANSACTION_LIST_MIN_PX } from '@/components/transaction/transaction-list-table';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -183,7 +184,9 @@ describe('Transactions pool view', () => {
     fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the table is drawn from 1,272 px (was within 1,248)
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1272);
+    // re-pinned on purpose (readability F3-e): every column its content, 1,220 px, which the
+    // widest 1,232 px container holds
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
     expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
     expect(table).toHaveTextContent('0.00012345 CKB');
     expect(table).toHaveTextContent('3,500,000,000');
@@ -196,13 +199,16 @@ describe('Transactions pool view', () => {
     // took 1,200), so every other column keeps its width and the table is 1,230 px, the committed
     // table's width; the most cycles still fit.
     const cols = Array.from(table.querySelectorAll('col')).map((c) =>
-      Number.parseFloat((c as HTMLElement).style.width)
+      Number.parseFloat((c as HTMLElement).style.minWidth)
     );
     // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the derived columns grow with their text, 1,272 px, more than the
     // widest 1,232 px container holds
-    expect(cols).toEqual([247, 180, 184, 64, 164, 128, 131, 72, 102]);
-    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1272);
-    expect(Number.parseFloat(table.style.minWidth)).toBe(1272);
+    // re-pinned on purpose (readability F3-e): every column its content (the spares gone; What it
+    // does, Cells, Value and Fee hold their widest values; What it does is the flexible column,
+    // its minimum read from minWidth): 1,220 px
+    expect(cols).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
+    expect(cols.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
     // U-09 (re-pinned): the row size, "0x" and 8 digits, the one ellipsis, 6 digits: 17
     // characters of JetBrains Mono at 14 px since R4 (8.4; 7.8 at 13 px; it was 21, 12 + 6 with
     // three dots)
@@ -213,9 +219,11 @@ describe('Transactions pool view', () => {
     // the stone, the hash and the 16 px gap fit the 247 px with 31.7 px to spare (the 31 px the
     // column kept so both lists changed form at one width; re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8), the pool's table at
     // 1,272 and the committed one at 1,286)
+    // re-pinned on purpose (readability F3-e): the column is its content, 216 px, 0.7 of rounding
+    // up to a whole pixel; both lists change form at 1,220 px, their sums being equal
     const used = ROW_SEAL.tx.footprint + chars * 8.4 + 16;
     expect(used).toBeCloseTo(215.3, 6);
-    expect(247 - used).toBeCloseTo(31.7, 6);
+    expect(cols[0] - used).toBeCloseTo(0.7, 6);
   });
 
   // Old issue C, round 2: at 1,200 px the pool's columns lived on the 32 px the 1,232 px container
@@ -305,7 +313,8 @@ describe('Transactions pool view', () => {
     const rate = heads.findIndex((th) => th.textContent === 'Fee rate, shannon/KB');
     const colWidth = (i: number) =>
       Number.parseFloat((table.querySelectorAll('col')[i] as HTMLElement).style.width);
-    expect(colWidth(size)).toBe(72);
+    // re-pinned on purpose (readability F3-e): 71 px, its 1 px spare gone
+    expect(colWidth(size)).toBe(71);
     expect(within(table).getAllByText('597,000')).toHaveLength(3);
     expect('597,000'.length * 7.8).toBeLessThanOrEqual(colWidth(size) - 16);
     expect('Size, bytes'.length * 7.2).toBeGreaterThan(colWidth(size) - 16);
@@ -316,7 +325,9 @@ describe('Transactions pool view', () => {
   // Old issue C: the pool's table changed form at 1,230 px, where the committed one did, and the
   // widest container (1,232 px from 1280) held both. re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the pool's table is
   // drawn from 1,272 px, the committed one from 1,286; the widest container holds neither.
-  it('lays the pool out as a table from 1,272 px, phone rows below', async () => {
+  // Re-pinned on purpose (readability F3-e): the pool's table is drawn from 1,220 px, as the
+  // committed one is, so the widest container draws both.
+  it('lays the pool out as a table from 1,220 px, phone rows below', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -349,10 +360,9 @@ describe('Transactions pool view', () => {
       vi.restoreAllMocks();
     });
     for (const [width, form] of [
-      [1274, 'table'],
-      [1272, 'table'],
-      [1271, 'rows'],
-      [1232, 'rows'],
+      [1232, 'table'],
+      [1220, 'table'],
+      [1219, 'rows'],
       [976, 'rows'],
     ] as const) {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
@@ -368,6 +378,99 @@ describe('Transactions pool view', () => {
         form === 'table' ? /^0xabababab…ababab$/ : /^0xabab…abab$/
       );
       unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Readability F3-e: every pool column budgeted from the widest value its formatter writes
+  // (lib/list-bounds.ts), at 0.6 em a glyph (the hash 14 px, the cells 13, the units and heads 12)
+  // and the 16 px gap after every column but the last. What it does is the flexible column: its
+  // longest word whole, the rest of the container beyond the sum. The pool and the committed list
+  // are one page and change form at one width, the larger of their sums: both are 1,220 px.
+  it('budgets every pool column from what it holds; both lists change form at 1,220 px', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // the stone and its gap, the hash at the row size at 14 px
+      ceil(ROW_SEAL.tx.footprint + at('0xabababab…ababab', 14) + 16),
+      // the longest word a headline or "Interpretation unavailable" breaks around
+      ceil(at('Interpretation', 13) + 16),
+      // the dot, its gap, "Confirming", the gap and the longest wait under 100 days
+      ceil(7 + 6 + at('Confirming', 13) + 6 + at('· 99d ago', 13) + 16),
+      // four digits a side, as the pool writes them (ungrouped)
+      ceil(at('9999 → 9999', 13) + 16),
+      // a value under a million CKB on one line with its unit; a larger one breaks before its
+      // decimals
+      ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
+      // a fee under 100 CKB with its unit
+      ceil(at('99.99999999', 13) + at(' CKB', 12) + 16),
+      // a rate up to 1,000,000,000 (its head's longest word, "shannon/KB", is narrower)
+      ceil(Math.max(at('1,000,000,000', 13), at('shannon/KB', 12)) + 16),
+      // a transaction no larger than a block
+      ceil(at('597,000', 13) + 16),
+      // the most a transaction may take, the last column
+      ceil(at('3,500,000,000', 13)),
+    ];
+    expect(budgets).toEqual([216, 126, 184, 102, 170, 131, 118, 71, 102]);
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBe(1220);
+    // the committed list's sum is the larger (or equal), so the pool takes it
+    expect(TRANSACTION_LIST_MIN_PX).toBe(1220);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const poolPage = {
+      ...emptyPool,
+      total: 1,
+      totals: { pending: 1, proposed: 0, awaitingIndex: 0 },
+      data: [
+        {
+          hash: `0x${'ab'.repeat(32)}`,
+          status: 'pending' as const,
+          value: '100000000',
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '1709221',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation: { status: 'complete' as const, reasons: [] },
+          activity: feedSamples.eightParties,
+        },
+      ],
+    };
+    vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
+    const { unmount } = render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[1].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(1220);
+    unmount();
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    for (const [width, form] of [
+      [1232, 'table'],
+      [1220, 'table'],
+      [1219, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
+      atContainerWidth(width);
+      const shown = render(<TransactionsPage />);
+      fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+      const list = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
+      });
+      expect(list.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      shown.unmount();
       vi.unstubAllGlobals();
     }
   });

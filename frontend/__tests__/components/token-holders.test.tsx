@@ -53,6 +53,45 @@ describe('Token distribution', () => {
       '100,000,000 (raw)'
     );
   });
+  // Readability F3-e: the bands' columns budgeted from what they hold, at 0.6 em a glyph (the range
+  // 14 px, the cells 13, ticks 12) and the 16 px gap after every column but the last. The range is
+  // the flexible column: "10,000 – under 100,000" whole at its minimum.
+  it('budgets every band column from what it holds: 377 px, a table from it (F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('10,000 – under 100,000', 14) + 16),
+      // the 48 px track (its widest ticks, "0 750M", are 43.2), the 10 px gap, "99,999" holders
+      48 + 10 + ceil(at('99,999', 13)) + 16,
+      // "100.00%", wider than the head's word "supply"; the last column
+      ceil(Math.max(at('100.00%', 13), at('supply', 12))),
+    ];
+    expect(budgets).toEqual([201, 121, 55]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(377);
+    for (const [width, form] of [
+      [1232, 'table'],
+      [377, 'table'],
+      [376, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      const { container, unmount } = render(
+        <TokenDistributionView distribution={distribution} symbol="T" />
+      );
+      const list = container.querySelector('[data-list-form]')!;
+      expect(list).toHaveAttribute('data-list-form', form);
+      if (form === 'table') {
+        const table = within(list as HTMLElement).getByRole('table');
+        const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+        expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+        expect(cols[0].width).toBe('auto');
+      }
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('keeps each range on one line so a number never breaks mid-digits (IV-13, L2-4)', () => {
     render(<TokenDistributionView distribution={distribution} symbol="T" />);
     const table = screen.getByRole('table', { name: 'Holders by balance' });
@@ -92,11 +131,13 @@ describe('Token distribution', () => {
     const scale = resourceScale([36, 5]);
     const [, under, above] = within(table).getAllByRole('row');
     expect(under.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
+    // Re-pinned on purpose (readability F3-e): the track is 48 px, its head's ticks whole over it
+    // under the 48 px a bar keeps at least (it was 40)
     expect(under.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(36, scale, 40),
+      width: barWidth(36, scale, 48),
       backgroundColor: CLASS_COLORS.tokens,
     });
-    expect(above.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(5, scale, 40) });
+    expect(above.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(5, scale, 48) });
     expect(above).toHaveTextContent('5');
     expect(above).toHaveTextContent('>99.99%');
   });
@@ -236,6 +277,36 @@ describe('Token holders (board L5)', () => {
     expect(second.querySelector('[data-segment]')).toHaveStyle({
       width: barWidth(4123, scale, 48),
     });
+  });
+
+  // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (the address
+  // 14 px, the cells 13, tags and ticks 12) and the 16 px gap after every column but the last.
+  // Lock is the flexible column (a name that ends in the ellipsis): its tag holds 12 characters at
+  // its minimum. The table still holds in the token page's 554 px column at 1280.
+  it('budgets every holder column from what it holds: 552 px, a table from it (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // a rank of five digits (a token's holders under 100,000), as the rank is written
+      ceil(at('99999', 13) + 16),
+      // a holder with no address, its lock hash at the row size (an address is 13 characters)
+      ceil(at('0x11111111…111111', 14) + 16),
+      // the lock's tag: 12 characters at 12 px, 5 px sides and a 1 px border
+      ceil(at('x'.repeat(12), 12) + 12 + 16),
+      // 12 characters of the balance; a longer one ends in the ellipsis, exact in its title
+      ceil(at('x'.repeat(12), 13) + 16),
+      // the 48 px track (its ticks "0 100%" are 43.2), the 10 px gap, "100.00%"; the last column
+      48 + 10 + ceil(at('100.00%', 13)),
+    ];
+    expect(budgets).toEqual([55, 159, 115, 110, 113]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(552);
+    atContainerWidth(554);
+    mount();
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[2].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(552);
   });
 
   // Readability B5: the Share head stands over the share, not over its bar.

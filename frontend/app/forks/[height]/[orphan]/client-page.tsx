@@ -7,7 +7,9 @@ import Link from '@/components/ui/link';
 import { HexCode } from '@/components/ui/hex-code';
 import { NoBreak } from '@/components/ui/no-break';
 import { ShortId } from '@/components/ui/short-id';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, shortenHash, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_BLOCK_NUMBER, WIDEST_COUNT, WIDEST_TX_VALUE, shortChars } from '@/lib/list-bounds';
 import { useParams } from '@/src/navigation';
 import {
   api,
@@ -24,7 +26,7 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
-import { ListTable } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ForkTree, TIP_MARKS } from '@/components/forks/fork-tree';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -85,6 +87,15 @@ const blockAt = (number: number) => (
     {formatBlockNumber(number)}
   </Link>
 );
+
+/**
+ * The two tables' columns, each budgeted from the widest value it holds (readability F3-e) at the
+ * cells' small step (13 px), a head or a unit at the meta step (12) and the gap after every column
+ * but the last.
+ */
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+/** A dropped block's height and its prime, "#99,999,999′". */
+const DROPPED_HEIGHT = `${WIDEST_BLOCK_NUMBER}′`;
 
 /** What `parseForkRoute` accepts, as the not-an-id page says it. */
 const FORK_ROUTE_RULE =
@@ -585,14 +596,16 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               {
                 key: 'height',
                 label: 'Height',
-                minWidth: 120,
+                // a dropped height and its prime (12 characters, 93.6) and the gap; it was 120
+                minWidth: columnPx(cell(DROPPED_HEIGHT.length) + CELL_GAP_PX),
                 render: (row) =>
                   row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number),
               },
               {
                 key: 'hash',
                 label: 'Hash',
-                minWidth: 170,
+                // the hash at the row size (17 characters, 132.6) and the gap; it was 170
+                minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
                 render: (row) => (
                   <span
                     className="text-[color:var(--ink)]"
@@ -606,23 +619,42 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               {
                 key: 'time',
                 label: 'Time (UTC+8)',
-                minWidth: 120,
+                // the clock to the millisecond, "09:12:32.761" (12 characters, 93.6), wider than
+                // the head's "(UTC+8)", and the gap; it was 120
+                minWidth: columnPx(
+                  Math.max(
+                    cell(blockClock('1970-01-01T00:00:00Z').length),
+                    textPx('(UTC+8)'.length, fontPx('meta'))
+                  ) + CELL_GAP_PX
+                ),
                 render: (row) => <span className="text-text-dim">{blockClock(row.timestamp)}</span>,
               },
               {
                 key: 'miner',
                 label: 'Miner',
-                minWidth: 150,
+                // The flexible column (a pool name has no bound): an unnamed miner at the row size
+                // (13 characters, 101.4) and the gap at its minimum, the rest of the container
+                // beyond the sum. It was 150.
+                minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.address)) + CELL_GAP_PX),
+                width: 'auto',
                 render: (row) => <Miner block={row} size="row" />,
               },
               {
                 key: 'txs',
                 label: 'Txs',
-                minWidth: 60,
+                // four digits, "9,999" (39), and the gap; it was 60
+                minWidth: columnPx(cell(WIDEST_COUNT.length) + CELL_GAP_PX),
                 numeric: true,
                 render: (row) => row.transactionsCount.toLocaleString('en-US'),
               },
-              { key: 'fate', label: 'Fate', minWidth: 200, render: (row) => row.fate },
+              {
+                key: 'fate',
+                label: 'Fate',
+                // the widest fate on its line, "uncle inclusion still possible" (30 characters,
+                // 234); the last column, no gap. It was 200.
+                minWidth: columnPx(cell('uncle inclusion still possible'.length)),
+                render: (row) => row.fate,
+              },
             ]}
             // No board for this list: board L1's rules — identity and time, who mined it and how
             // many transactions, then the fate in full.
@@ -684,7 +716,11 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 {
                   key: 'tx',
                   label: 'Transaction',
-                  minWidth: 300,
+                  // The flexible column: the full hash breaks anywhere, so at its minimum two lines
+                  // of 33 characters (257.4) and the gap; one line where the container gives the
+                  // hash's 66. It was 300.
+                  minWidth: columnPx(cell(66 / 2) + CELL_GAP_PX),
+                  width: 'auto',
                   render: (tx: OrphanedTransaction) =>
                     tx.committedAt ? (
                       <Link
@@ -700,26 +736,37 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 {
                   key: 'origin',
                   label: 'Dropped block',
-                  minWidth: 110,
+                  // a dropped height and its prime (93.6) and the gap
+                  minWidth: columnPx(cell(DROPPED_HEIGHT.length) + CELL_GAP_PX),
                   render: (tx: OrphanedTransaction) => `${formatBlockNumber(tx.blockNumber)}′`,
                 },
                 {
                   key: 'fate',
                   label: 'Fate now',
-                  minWidth: 170,
+                  // the widest fate on its line, "committed on canonical branch" (29 characters,
+                  // 226.2), and the gap; it was 170
+                  minWidth: columnPx(cell('committed on canonical branch'.length) + CELL_GAP_PX),
                   render: (tx: OrphanedTransaction) => tx.fate.replaceAll('_', ' '),
                 },
                 {
                   key: 'commit',
                   label: 'Committed in',
-                  minWidth: 130,
+                  // "#99,999,999" (85.8) and the gap; it was 130
+                  minWidth: columnPx(cell(WIDEST_BLOCK_NUMBER.length) + CELL_GAP_PX),
                   render: (tx: OrphanedTransaction) =>
                     tx.committedAt ? blockAt(tx.committedAt.blockNumber) : '—',
                 },
                 {
                   key: 'capacity',
                   label: 'Output capacity',
-                  minWidth: 170,
+                  // an output under a billion CKB, every decimal (156), and its unit " CKB" at 12
+                  // px (28.8), wider than "Unavailable"; the last column, no gap. It was 170.
+                  minWidth: columnPx(
+                    Math.max(
+                      cell(WIDEST_TX_VALUE.length) + textPx(' CKB'.length, fontPx('meta')),
+                      cell('Unavailable'.length)
+                    )
+                  ),
                   numeric: true,
                   render: (tx: OrphanedTransaction) =>
                     tx.totalCapacity == null ? (

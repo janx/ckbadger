@@ -303,24 +303,111 @@ describe('Address v3 components', () => {
 
     // The seal's 38 px (30 + the 8 px gap) are budgeted in the Cell column and taken from
     // Occupied's and Created at's measured slack (see cellColumns): the table keeps its 992 px.
-    it('budgets the seal in the Cell column and keeps the table at 992 px', () => {
+    // Re-pinned on purpose (readability F3-e): every column is its content (Cell 238 → 226, the
+    // out point at 13 px and its 12.4 px of spare gone; Contains the flexible column, 280 → 282
+    // minimum; Capacity 196 → 201 and Occupied 178 → 170 with their units at 12 px; Created at
+    // 100 → 86), so the table is 965 px (renamed: it said "keeps the table at 992 px").
+    it('budgets the seal in the Cell column and keeps the table at 965 px', () => {
       render(<AddressLiveCells rows={cells} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const widths = Array.from(table.querySelectorAll('col')).map(
-        (c) => (c as HTMLElement).style.width
+        (c) => (c as HTMLElement).style.minWidth
       );
-      expect(widths).toEqual(['238px', '280px', '196px', '178px', '100px']);
-      expect(238 - 200).toBe(ROW_SEAL.cell.footprint);
-      expect(Number.parseFloat(table.style.minWidth)).toBe(992);
+      expect(widths).toEqual(['226px', '282px', '201px', '170px', '86px']);
+      // the out point and its gap, 187.6 rounded up with the stone's footprint
+      expect(226 - 188).toBe(ROW_SEAL.cell.footprint);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(965);
     });
 
+    // Re-pinned on purpose (readability F3-e): the table changes form at its 965 px (was 992).
     it.each([
-      [992, 'table'],
-      [991, 'rows'],
+      [965, 'table'],
+      [964, 'rows'],
     ])('changes form where it did: at %i px it is %s', (width, form) => {
       atContainerWidth(width);
       const { container } = render(<AddressLiveCells rows={cells} />);
       expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+    });
+  });
+
+  // Readability F3-e: every column of both address tables budgeted from what it holds, at 0.6 em a
+  // glyph (13 px cells, 12 px notes and units) and the 16 px gap after every column but the last.
+  // Contains (what a cell holds) and Scripts (the scripts a transaction calls) are the flexible
+  // columns.
+  describe('budgets every column from what it holds (F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('the live cells: 965 px, a table from it', () => {
+      const budgets = [
+        // the stone and its gap, the out point at the row size with a four-digit index
+        ceil(ROW_SEAL.cell.footprint + at('0xdce40476…3993e1:9999', 13) + 16),
+        // the class form whole: the 16 px mark, "Other scripts", the type script's hash
+        ceil(16 + 8 + at('Other scripts', 13) + 8 + at('0x00000000…000000', 13) + 16),
+        // under a billion CKB on one line with its unit at 12 px
+        ceil(at('999,999,999.99999999', 13) + at(' CKB', 12) + 16),
+        // a cell is at most a block's 597,000 bytes
+        ceil(at('597,000.00000000', 13) + at(' CKB', 12) + 16),
+        // "#99,999,999", the last column
+        ceil(at('#99,999,999', 13)),
+      ];
+      expect(budgets).toEqual([226, 282, 201, 170, 86]);
+      expect(budgets.reduce((s, w) => s + w, 0)).toBe(965);
+      render(<AddressLiveCells rows={addressProducerCells.data} />);
+      const table = screen.getByRole('table', { name: 'Live cells' });
+      const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+      expect(cols[1].width).toBe('auto');
+      expect(Number.parseFloat(table.style.minWidth)).toBe(965);
+    });
+
+    it('the transactions: 1,006 px, a table from it', () => {
+      const budgets = [
+        // the hash at the row size
+        ceil(at('0x00000000…000000', 13) + 16),
+        // a pool transaction's wait on one line, wider than "#99,999,999", a date or its badge
+        ceil(at('in pool for 99d', 13) + 16),
+        // four digits a side (the inputs as written, the outputs grouped)
+        ceil(at('9999 → 9,999', 13) + 16),
+        // a change under a billion CKB with its sign
+        ceil(at('+999,999,999.99999999', 13) + 16),
+        // a fee under 100 CKB
+        ceil(at('99.99999999', 13) + 16),
+        // "Unavailable", wider than a size of "597,000"
+        ceil(at('Unavailable', 13) + 16),
+        // the cycle limit, "3,500,000,000"
+        ceil(at('3,500,000,000', 13) + 16),
+        // a script: its 12 px mark, its 6 px gap and 12 characters of its name; the last column
+        ceil(12 + 6 + at('x'.repeat(12), 13)),
+      ];
+      expect(budgets).toEqual([149, 133, 110, 180, 102, 102, 118, 112]);
+      expect(budgets.reduce((s, w) => s + w, 0)).toBe(1006);
+      render(<AddressTransactions rows={addressTransactionsFixture} />);
+      const table = screen.getByRole('table');
+      const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+      expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+      expect(cols[7].width).toBe('auto');
+      expect(Number.parseFloat(table.style.minWidth)).toBe(1006);
+      for (const [width, form] of [
+        [1232, 'table'],
+        [1006, 'table'],
+        [1005, 'rows'],
+        [608, 'rows'],
+        [358, 'rows'],
+      ] as const) {
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+        atContainerWidth(width);
+        const { container, unmount } = render(
+          <AddressTransactions rows={addressTransactionsFixture} />
+        );
+        expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+        unmount();
+      }
     });
   });
 

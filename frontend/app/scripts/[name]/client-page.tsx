@@ -11,7 +11,15 @@ import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
-import { ListTable } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { ckbAmountText } from '@/lib/amount-form';
+import {
+  UNAVAILABLE,
+  WIDEST_BLOCK_NUMBER,
+  WIDEST_COUNT,
+  WIDEST_ROW_COUNT,
+} from '@/lib/list-bounds';
 import {
   ScriptCustodyEvidence,
   ScriptCapacityEvidenceChart,
@@ -38,6 +46,26 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { NEWEST_CELLS_COUNT, mergeNewestFirst, newestCellsKind } from '@/lib/script-newest-cells';
+
+/**
+ * What a code reference's tables hold (readability F3-e): each column's widest value measured at
+ * its step through columnPx, with the 16 px gap after every column but the last. A full id here
+ * breaks anywhere (`break-all`), so its column is a flexible one: at its minimum a line of 22
+ * characters (a hash in three), the rest of the container beyond the table's sum.
+ */
+const small = (text: string) => textPx(text.length, fontPx('small'));
+const meta = (text: string) => textPx(text.length, fontPx('meta'));
+const ID_LINE_PX = columnPx(textPx(22, fontPx('small')) + CELL_GAP_PX);
+const BLOCK_PX = columnPx(small(WIDEST_BLOCK_NUMBER) + CELL_GAP_PX);
+/**
+ * An amount on one line with its unit: under a million CKB, "999,999.99999999 CKB"; a larger one
+ * breaks before its decimals (`wrap`).
+ */
+const AMOUNT_LINE_PX = columnPx(
+  small(ckbAmountText(BigInt('99999999999999'), 'column')) + meta(' CKB') + CELL_GAP_PX
+);
+/** A version's CKB in its compact form, under a billion CKB: "999.99M". */
+const WIDEST_COMPACT_CKB = ckbAmountText(BigInt('99999999999999999'), 'compact');
 
 function CellOccupiedValue({ cell }: { cell: Cell }) {
   if (cell.cellType === 'genesis_special_burn') {
@@ -1373,8 +1401,10 @@ export default function ScriptDetailPage({
                     {
                       key: 'version',
                       label: 'Version · bytecode hash',
-                      minWidth: 225,
-                      width: '30%',
+                      // the full hash, breaking anywhere: a flexible column (F3-e: it was 225 and
+                      // 30 %)
+                      minWidth: ID_LINE_PX,
+                      width: 'auto',
                       render: (row) => (
                         <button
                           type="button"
@@ -1388,8 +1418,9 @@ export default function ScriptDetailPage({
                     {
                       key: 'deployed',
                       label: 'First observed',
-                      minWidth: 130,
-                      width: '17%',
+                      // the block; "No deployment observed" breaks between its words (F3-e: it was
+                      // 130 and 17 %)
+                      minWidth: BLOCK_PX,
                       render: (row) =>
                         row.firstDeploymentCell ? (
                           <Link
@@ -1405,24 +1436,32 @@ export default function ScriptDetailPage({
                     {
                       key: 'deployments',
                       label: 'Code cells',
-                      minWidth: 110,
-                      width: '12%',
+                      // a count of four digits, wider than its head's words (F3-e: it was 110 and
+                      // 12 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_COUNT), meta('cells')) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (row) => row.deploymentsCount.toLocaleString(),
                     },
                     {
                       key: 'cells',
                       label: 'Live cells using it',
-                      minWidth: 120,
-                      width: '17%',
+                      // eight digits of live cells, or "unavailable" (F3-e: it was 120 and 17 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_ROW_COUNT), small(UNAVAILABLE)) + CELL_GAP_PX
+                      ),
                       numeric: true,
                       render: (row) => <VersionUsageCell usage={row.usage} field="cells" />,
                     },
                     {
                       key: 'capacity',
                       label: 'CKB in its cells',
-                      minWidth: 150,
-                      width: '24%',
+                      // the compact CKB and its unit, "999.99M CKB", or "unavailable" (the wider);
+                      // the last column, no gap after it (F3-e: it was 150 and 24 %)
+                      minWidth: columnPx(
+                        Math.max(small(WIDEST_COMPACT_CKB) + meta(' CKB'), small(UNAVAILABLE))
+                      ),
                       numeric: true,
                       render: (row) => <VersionUsageCell usage={row.usage} field="capacity" />,
                     },
@@ -1455,8 +1494,10 @@ export default function ScriptDetailPage({
                       {
                         key: 'outpoint',
                         label: 'Outpoint',
-                        minWidth: 235,
-                        width: '28%',
+                        // the full out point, breaking anywhere: a flexible column (F3-e: it was
+                        // 235 and 28 %)
+                        minWidth: ID_LINE_PX,
+                        width: 'auto',
                         render: (row) =>
                           row.outpointKey ? (
                             <Link
@@ -1472,15 +1513,20 @@ export default function ScriptDetailPage({
                       {
                         key: 'status',
                         label: 'Status',
-                        minWidth: 90,
-                        width: '12%',
+                        // "Consumed", or "Status unavailable" breaking between its words (F3-e: it
+                        // was 90 and 12 %)
+                        minWidth: columnPx(
+                          Math.max(small('Consumed'), small(UNAVAILABLE)) + CELL_GAP_PX
+                        ),
                         render: (row) => renderDeploymentStatus(row.codeCell),
                       },
                       {
                         key: 'holder',
                         label: 'Code cell holder',
-                        minWidth: 220,
-                        width: '36%',
+                        // the holder's evidence, sentences and ids that break: a flexible column
+                        // in lines of 22 characters (F3-e: it was 220 and 36 %)
+                        minWidth: ID_LINE_PX,
+                        width: 'auto',
                         render: (row) => {
                           const custody = row.outpointKey
                             ? custodyByOutpoint.get(row.outpointKey)
@@ -1495,8 +1541,11 @@ export default function ScriptDetailPage({
                       {
                         key: 'block',
                         label: 'Created at',
-                        minWidth: 120,
-                        width: '24%',
+                        // the block, or "unavailable"; the last column, no gap after it (F3-e: it
+                        // was 120 and 24 %)
+                        minWidth: columnPx(
+                          Math.max(small(WIDEST_BLOCK_NUMBER), small(UNAVAILABLE))
+                        ),
                         render: (row) =>
                           row.codeCell ? (
                             <Link
@@ -1550,8 +1599,10 @@ export default function ScriptDetailPage({
                         {
                           key: 'cell',
                           label: 'Cell',
-                          minWidth: 220,
-                          width: '26%',
+                          // the full out point, breaking anywhere: a flexible column (F3-e: it was
+                          // 220 and 26 %)
+                          minWidth: ID_LINE_PX,
+                          width: 'auto',
                           render: (cell) => (
                             <Link
                               href={`/cell/${cell.txHash}-${cell.outputIndex}`}
@@ -1565,22 +1616,26 @@ export default function ScriptDetailPage({
                         {
                           key: 'owner',
                           label: 'Owner',
-                          minWidth: 200,
-                          width: '18%',
+                          // the full address, breaking anywhere: a flexible column (F3-e: it was
+                          // 200 and 18 %)
+                          minWidth: ID_LINE_PX,
+                          width: 'auto',
                           render: (cell) => <CellOwner cell={cell} />,
                         },
                         {
                           key: 'type',
                           label: 'Type reference',
-                          minWidth: 165,
-                          width: '15%',
+                          // a protocol's name or the full code hash, breaking: a flexible column
+                          // (F3-e: it was 165 and 15 %)
+                          minWidth: ID_LINE_PX,
+                          width: 'auto',
                           render: (cell) => <CellTypeReference cell={cell} />,
                         },
                         {
                           key: 'capacity',
                           label: 'Capacity',
-                          minWidth: 120,
-                          width: '11%',
+                          // one line under a million CKB with its unit (F3-e: it was 120 and 11 %)
+                          minWidth: AMOUNT_LINE_PX,
                           numeric: true,
                           // Material pass v2 leftovers: the shared exact figure (ink, dim unit), not gold.
                           render: (cell) => (
@@ -1596,16 +1651,16 @@ export default function ScriptDetailPage({
                         {
                           key: 'knowledge',
                           label: 'Occupied',
-                          minWidth: 120,
-                          width: '11%',
+                          // as Capacity (F3-e: it was 120 and 11 %)
+                          minWidth: AMOUNT_LINE_PX,
                           numeric: true,
                           render: (cell) => <CellOccupiedValue cell={cell} />,
                         },
                         {
                           key: 'created',
                           label: 'Created',
-                          minWidth: 95,
-                          width: '9%',
+                          // the block (F3-e: it was 95 and 9 %)
+                          minWidth: BLOCK_PX,
                           numeric: true,
                           render: (cell) => (
                             <Link href={`/blocks/${cell.createdAtBlock}`} className="text-emphasis">
@@ -1616,8 +1671,12 @@ export default function ScriptDetailPage({
                         {
                           key: 'anatomy',
                           label: 'Cell anatomy',
-                          minWidth: 180,
-                          width: '10%',
+                          // The bar over its legend, whose widest part is its 8 px swatch, its 6 px
+                          // gap and "data 9,999,999 B" at 12 px (115.2); the last column, no gap
+                          // after it (F3-e: it was 180 and 10 %).
+                          minWidth: columnPx(
+                            8 + 6 + meta(`data ${(9_999_999).toLocaleString('en-US')} B`)
+                          ),
                           render: (cell) => <CellAnatomyBar cell={cell} />,
                         },
                       ]}

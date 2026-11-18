@@ -44,6 +44,94 @@ describe('AssetTransactions board columns', () => {
     expect(headers.slice(0, 4)).toEqual(['Transaction', 'Block · age', 'Cells', 'Nervapes']);
   });
 
+  // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (13 px cells,
+  // 12 px notes, units and ticks) and the 16 px gap after every column but the last. The bar
+  // columns hold their heads' 120 px tick rows; a feed's own words (a context, an identity's
+  // action) hold 12 characters at their minimum and wrap.
+  describe('budgets every column from what it holds (F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const minWidths = () =>
+      [...screen.getByRole('table', { name: 'Asset transactions' }).querySelectorAll('col')].map(
+        (c) => Number.parseFloat((c as HTMLElement).style.minWidth)
+      );
+    const base = {
+      // the hash at the row size
+      tx: ceil(at('0x01010101…010101', 13) + 16),
+      // "#99,999,999 · 10y 364d ago" on its line, "tx 9999 in block" under it
+      block: ceil(Math.max(at('#99,999,999 · 10y 364d ago', 13), at('tx 9999 in block', 12)) + 16),
+      // four digits a side, as written
+      cells: ceil(at('9999 → 9999', 13) + 16),
+      // under a million CKB on one line with its unit; more breaks before the decimals
+      output: ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
+      // a fee under 100 CKB with its unit
+      fee: ceil(at('99.99999999', 13) + at(' CKB', 12) + 16),
+      // the head's 120 px tick row ("0 600,000" in it), wider than the bar's 80 and its count
+      size: 120 + 16,
+      // the head's 120 px tick row ("0 4,000,000,000", 108 px, in it); the last column
+      cycles: 120,
+    };
+
+    it('in the plain feed: 1,027 px, a table from it', () => {
+      expect(Object.values(base)).toEqual([149, 219, 102, 170, 131, 136, 120]);
+      render(<AssetTransactions rows={[tx(1, 1930, 1_923_713), tx(2, 640, 0)]} />);
+      expect(minWidths()).toEqual(Object.values(base));
+      expect(minWidths().reduce((s, w) => s + w, 0)).toBe(1027);
+    });
+
+    it('with a token and a collection column: the token’s decimals, a stated context', () => {
+      // a token feed's row carries its activity (what moved is read from it): none moved here
+      const moved = {
+        ...tx(1, 1930, 1_923_713),
+        activity: { participants: [] } as unknown as Transaction['activity'],
+      };
+      render(
+        <AssetTransactions
+          rows={[moved]}
+          token={{ typeHash: '0xabc', symbol: 'T', decimals: 8 }}
+          context={{ label: 'Nervapes', placement: 'after-cells', render: () => '3 minted' }}
+        />
+      );
+      expect(minWidths()).toEqual([
+        base.tx,
+        base.block,
+        base.cells,
+        // the collection's words: 12 characters
+        ceil(at('x'.repeat(12), 13) + 16),
+        // under a billion whole tokens at the token's 8 decimals, on one line
+        ceil(at('999,999,999.99999999', 13) + 16),
+        base.output,
+        base.fee,
+        base.size,
+        base.cycles,
+      ]);
+    });
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('changes form where the plain feed’s sum stops fitting', () => {
+      for (const [width, form] of [
+        [1232, 'table'],
+        [1027, 'table'],
+        [1026, 'rows'],
+        [608, 'rows'],
+        [358, 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        const { container, unmount } = render(
+          <AssetTransactions rows={[tx(1, 1930, 1_923_713)]} />
+        );
+        expect(container.querySelector('[data-list-form]')).toHaveAttribute('data-list-form', form);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    });
+  });
+
   it('keeps an item context at the end of the row (OB-13)', () => {
     render(
       <AssetTransactions

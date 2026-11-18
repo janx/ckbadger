@@ -194,3 +194,163 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     expect(dd('held by')).toHaveTextContent('Lock args 0x65983f1d7520543a6f182a50354fb4ae2deed696');
   });
 });
+
+// Readability F3-e: every column of the family page's tables budgeted from the widest value it
+// writes, at 0.6 em a glyph (keys 14 px, cells 13, heads, tags and notes 12) and the 16 px gap after
+// every column but the last; a table's flexible column takes a stated minimum and the rest of the
+// container. Each list changes form where the sum of its columns stops fitting.
+describe('Script page · the family tables budgeted from what they hold (readability F3-e)', () => {
+  const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+  const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+  const sum = (budgets: number[]) => budgets.reduce((s, w) => s + w, 0);
+  const references = [
+    // its head, wider than "data1"
+    ceil(at('hash type', 12)) + 16,
+    // the code hash at the row size
+    ceil(at('0x12345678…abcdef', 13) + 16),
+    // its head, wider than a reference's live cells (seven digits)
+    ceil(Math.max(at('live cells', 12), at('9,999,999', 13))) + 16,
+    // the code cell's out point at the row size (an index of two digits) and " +9" more
+    ceil(at('0x12345678…abcdef:99 +9', 13) + 16),
+    // the flexible column, the last: its head, and nine characters of the holder's words
+    ceil(Math.max(at('held by', 12), at('x'.repeat(9), 13))),
+  ];
+  const versions = [
+    // its head, wider than "v99" at 14 px
+    ceil(Math.max(at('v99', 14), at('Version', 12)) + 16),
+    // the date
+    ceil(at('2023-10-07', 13) + 16),
+    // the block
+    ceil(at('#99,999,999', 13) + 16),
+    // the out point at the row size, its 8 px gap and a "+9" tag
+    ceil(at('0x12345678…abcdef:99', 13) + 8 + at('+9', 12) + 12 + 16),
+    // the flexible column: a holder by its kind and its tight id, "multisig 0x1234…abcd"
+    ceil(at('multisig 0x1234…abcd', 13) + 16),
+    // "consumed in" and the replacing transaction at the row size
+    ceil(at('consumed in 0x12345678…abcdef', 13) + 16),
+    // eight digits of live cells, or "unavailable"; the last column
+    ceil(Math.max(at('99,999,999', 13), at('unavailable', 13))),
+  ];
+  const narrowVersions = [
+    // "v99", "current" under it at 12 px
+    ceil(Math.max(at('v99', 13), at('current', 12)) + 16),
+    // the date, the block under it at 12 px
+    ceil(Math.max(at('2023-10-07', 13), at('#99,999,999', 12)) + 16),
+    // the flexible column: the out point at the row size; its notes and the hash wrap under it
+    ceil(at('0x12345678…abcdef:99', 13) + 16),
+    // a status breaks before the hash it names; the hash is one unit
+    ceil(at('0x12345678…abcdef', 13) + 16),
+    ceil(Math.max(at('99,999,999', 13), at('unavailable', 13))),
+  ];
+  const cells = [
+    // the out point at 14 px, an index of four digits
+    ceil(at('0x12345678…abcdef:9999', 14) + 16),
+    // the owner's address at the row size
+    ceil(at('ckb1…4s93hhsj', 13) + 16),
+    // the flexible column: a type's code hash at the row size (a name takes the rest, wrapping)
+    ceil(at('0x12345678…abcdef', 13) + 16),
+    // the anatomy bar (48 px at least), or "unavailable" when it is not known
+    ceil(Math.max(48, at('unavailable', 13)) + 16),
+    // a cell's capacity under ten billion CKB, every decimal, and its unit
+    ceil(at('9,999,999,999.99999999', 13) + at(' CKB', 12) + 16),
+    // occupied bytes under ten million, or "unavailable"
+    ceil(Math.max(at('9,999,999 B', 13), at('unavailable', 13)) + 16),
+    // the block and the date, the last column
+    ceil(at('#99,999,999 · 2026-11-02', 13)),
+  ];
+
+  const mount = async (list: number) => {
+    stubLayoutWidths({ chart: 900, list });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+    const shown = render(<ScriptDetailPage name="JoyID" />);
+    await screen.findByRole('heading', { name: 'JoyID', level: 1 });
+    return shown;
+  };
+  /** The form the list labelled `label` chose. */
+  const formOf = async (label: string) =>
+    (
+      await waitFor(() => {
+        const list =
+          screen.queryByRole('table', { name: label }) ??
+          screen.queryByRole('list', { name: `${label}, compact` });
+        if (!list) throw new Error(`no ${label}`);
+        return list;
+      })
+    )
+      .closest('[data-list-form]')!
+      .getAttribute('data-list-form');
+  const minWidths = (label: string) =>
+    Array.from(screen.getByRole('table', { name: label }).querySelectorAll('col')).map((c) =>
+      Number.parseFloat((c as HTMLElement).style.minWidth)
+    );
+  /** At each container width, the form each named list chose. */
+  const formsAt = async (cases: readonly (readonly [number, Record<string, string>])[]) => {
+    for (const [list, expected] of cases) {
+      const { unmount } = await mount(list);
+      for (const [label, form] of Object.entries(expected))
+        expect(await formOf(label), `${label} at ${list}`).toBe(form);
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('pins every column of the four tables to its content', async () => {
+    expect(references).toEqual([81, 149, 88, 196, 71]);
+    expect(versions).toEqual([67, 94, 102, 207, 172, 243, 86]);
+    expect(narrowVersions).toEqual([67, 96, 172, 149, 86]);
+    expect(cells).toEqual([201, 118, 149, 102, 217, 102, 188]);
+    expect([sum(references), sum(versions), sum(narrowVersions), sum(cells)]).toEqual([
+      585, 971, 570, 1077,
+    ]);
+    await mount(1248);
+    await formOf('Its cells');
+    expect(minWidths('Registered references')).toEqual(references);
+    expect(minWidths('Code versions')).toEqual(versions);
+    expect(minWidths('Its cells')).toEqual(cells);
+    // Registered references stays a table in tier 2's right column at 1280, (1232 − 56) / 2
+    expect(sum(references)).toBeLessThanOrEqual((1232 - 56) / 2);
+  });
+
+  it('draws the 608 px versions table from its own columns', async () => {
+    await mount(608);
+    expect(await formOf('Code versions')).toBe('narrow-table');
+    expect(minWidths('Code versions')).toEqual(narrowVersions);
+  });
+
+  it('changes Its cells and the versions to their next form where their sums stop fitting', async () => {
+    await formsAt([
+      [1232, { 'Its cells': 'table', 'Code versions': 'table' }],
+      [1077, { 'Its cells': 'table' }],
+      [1076, { 'Its cells': 'rows' }],
+    ]);
+  });
+
+  it('changes the versions to the 608 px table below 971 and to rows below 570', async () => {
+    await formsAt([
+      [971, { 'Code versions': 'table' }],
+      [970, { 'Code versions': 'narrow-table' }],
+      [570, { 'Code versions': 'narrow-table' }],
+      [569, { 'Code versions': 'rows' }],
+    ]);
+  });
+
+  it('changes Registered references to rows below 585, and every list on a phone', async () => {
+    await formsAt([
+      [585, { 'Registered references': 'table' }],
+      [584, { 'Registered references': 'rows' }],
+      [358, { 'Its cells': 'rows', 'Code versions': 'rows', 'Registered references': 'rows' }],
+    ]);
+  });
+});

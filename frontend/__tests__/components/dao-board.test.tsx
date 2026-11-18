@@ -1240,6 +1240,61 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     );
   });
 
+  // Readability F3-e: every column of the largest depositors budgeted from the widest value it
+  // holds, at 0.6 em a glyph (the rows' 14 px, the heads' 12) and the 16 px gap after every column
+  // but the last. The lock is the flexible column (a lock's name has no bound): its code hash at the
+  // row size at its minimum.
+  it('budgets every depositor column from what it holds and changes form at their sum (F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // a rank of the topic page's five
+      ceil(at('5', 14) + 16),
+      // an address at the row size
+      ceil(at('ckb1…4s93hhsj', 14) + 16),
+      // a lock's code hash at the row size
+      ceil(at('0x9bd7e06f…a3cce8', 14) + 16),
+      // the head's "Deposits", wider than four digits
+      ceil(Math.max(at('Deposits', 12), at('9,999', 14)) + 16),
+      // one depositor's CKB under ten billion, every decimal
+      ceil(at('9,999,999,999.99999999', 14) + 16),
+      // "100.00%"; the last column
+      ceil(at('100.00%', 14)),
+    ];
+    expect(budgets).toEqual([25, 126, 159, 74, 201, 59]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(644);
+    stubCalculator();
+    stubChartWidth(1248);
+    const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const table = within(who()).getByRole('table', { name: 'Largest depositors' });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[2].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    unmount();
+    for (const [width, form] of [
+      [1232, 'table'],
+      [644, 'table'],
+      [643, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+      stubCalculator();
+      stubChartWidth(width);
+      const { unmount: drop } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+      const shown = within(who()).getByRole(form === 'table' ? 'table' : 'list', {
+        name: form === 'table' ? 'Largest depositors' : 'Largest depositors, compact',
+      });
+      expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+    }
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   it('lists the largest depositors as rows on desktop and as compact cards at phone width', () => {
     stubCalculator();
     stubChartWidth(1248);

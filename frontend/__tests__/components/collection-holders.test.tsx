@@ -342,6 +342,96 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
   });
   // Re-pinned with PB-12 (UI review 2026-11-14): every collection gives its class colour (an
   // identity collection no longer prints plain counts); the count still ends the row.
+  // Readability F3-e: every column budgeted from what it holds, at 0.6 em a glyph (the holder and
+  // cells 13 px, tags and ticks 12, the range 14) and the 16 px gap after every column but the
+  // last. Lock is the holder table's flexible column (a name that ends in the ellipsis): its tag
+  // holds 12 characters at its minimum.
+  it('budgets every column of both tables from what it holds (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const holders = [
+      // a rank of five digits (a collection's holders under 100,000)
+      ceil(at('99999', 13) + 16),
+      // the widest holder: a prefix-only owner at the row size, its 8 px gap and the
+      // "unresolved" badge (13 px words, 8 px sides, a 1 px border)
+      ceil(at('0x34343434…343434', 13) + 8 + at('unresolved', 13) + 16 + 2 + 16),
+      // the lock's tag: 12 characters at 12 px, 5 px sides and a 1 px border
+      ceil(at('x'.repeat(12), 12) + 12 + 16),
+      // the 48 px track (ticks "0 750M" are 43.2), the 10 px gap, "99,999" items; the last column
+      48 + 10 + ceil(at('99,999', 13)),
+    ];
+    const bands = [
+      // the head "Holds", wider than the widest range, "3–5" at 14 px
+      ceil(Math.max(at('Holds', 12), at('3–5', 14)) + 16),
+      // the track, the gap and "99,999" holders
+      48 + 10 + ceil(at('99,999', 13)) + 16,
+      // a range's items under a million, "999,999"; the last column
+      ceil(at('999,999', 13)),
+    ];
+    expect(holders).toEqual([55, 253, 115, 105]);
+    expect(bands).toEqual([52, 121, 55]);
+    expect(holders.reduce((s, w) => s + w, 0)).toBe(528);
+    expect(bands.reduce((s, w) => s + w, 0)).toBe(228);
+    const load = vi.fn().mockResolvedValue(page([joyid, named]));
+    render(
+      <CollectionHolders
+        load={load}
+        queryKey="budgets"
+        distribution={distribution}
+        assetClass="objects"
+      />
+    );
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(holders);
+    expect(cols[2].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(528);
+    const bandTable = screen.getByRole('table', { name: 'Holders by how many items they hold' });
+    expect(
+      [...bandTable.querySelectorAll('col')].map((c) =>
+        Number.parseFloat((c as HTMLElement).style.minWidth)
+      )
+    ).toEqual(bands);
+    expect(Number.parseFloat(bandTable.style.minWidth)).toBe(228);
+  });
+
+  it('changes each table’s form where its sum stops fitting (F3-e)', async () => {
+    try {
+      for (const [width, holders, bands] of [
+        [1232, 'table', 'table'],
+        [528, 'table', 'table'],
+        [527, 'rows', 'table'],
+        [358, 'rows', 'table'],
+        [228, 'rows', 'table'],
+        [227, 'rows', 'rows'],
+      ] as const) {
+        atContainerWidth(width);
+        // a fresh read each width (restoring the mocks resets a mock's answer)
+        const load = vi.fn().mockResolvedValue(page([joyid, named]));
+        const { container, unmount } = render(
+          <CollectionHolders
+            load={load}
+            queryKey={`forms-${width}`}
+            distribution={distribution}
+            assetClass="objects"
+          />
+        );
+        // the holders arrive from their read; the distribution is drawn at once
+        await waitFor(() => expect(container.querySelectorAll('[data-list-form]')).toHaveLength(2));
+        const forms = [...container.querySelectorAll('[data-list-form]')].map((l) =>
+          l.getAttribute('data-list-form')
+        );
+        expect(forms).toEqual([holders, bands]);
+        unmount();
+        vi.unstubAllGlobals();
+        vi.restoreAllMocks();
+      }
+    } finally {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('draws the counts of an identity collection as bars in the identity rose', async () => {
     const load = vi.fn().mockResolvedValue(page([joyid]));
     render(<CollectionHolders assetClass="identities" load={load} queryKey="plain" />);
@@ -420,13 +510,16 @@ describe('Collection holders phone rows (board L5)', () => {
       'data-share-bar',
       `${Math.round((2 / resourceScale([6, 2])) * 10000) / 100}%`
     );
-    // The three-column distribution (265 px) still fits a phone as a table (R1) …
+    // The three-column distribution (228 px; 265 before readability F3-e) still fits a phone as
+    // a table (R1) …
     expect(
       screen.getByRole('table', { name: 'Holders by how many items they hold' })
     ).toBeInTheDocument();
   });
+  // Re-pinned on purpose (readability F3-e): the distribution's three columns, each its content,
+  // need 228 px (they were 265), so one pixel under, 227 (it was 240), is where it folds.
   it('folds the distribution into one-line rows where even it does not fit', async () => {
-    atContainerWidth(240);
+    atContainerWidth(227);
     const load = vi.fn().mockResolvedValue(page([named]));
     render(
       <CollectionHolders

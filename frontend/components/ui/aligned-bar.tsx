@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 export interface AlignedBarSegment {
   key: string;
@@ -41,7 +42,24 @@ export interface AlignedBarProps {
 export const ALIGNED_BAR_HEIGHT = 8;
 
 /** px between an AlignedBar's track and its figure, its `gap-2.5`; a head over the figure spans it. */
-const FIGURE_GAP = 10;
+export const BAR_FIGURE_GAP = 10;
+
+/**
+ * The shortest track a list bar is drawn on (readability plan 2026-11-18, lane F3-e): a share or a
+ * count still reads as a length on it, and the figure beside it keeps its full width.
+ */
+export const MIN_TRACK_PX = 48;
+
+/**
+ * The track a bar column needs: its head's tick row (`ScaleHeader`, the meta step) whole over it,
+ * one glyph between neighbouring ticks so "0" and "600,000" never read as one number, and never
+ * shorter than `MIN_TRACK_PX`. `ticks` are the widest the column's scale writes.
+ */
+export function trackPx(ticks: readonly string[]): number {
+  if (!ticks.length || ticks.some((t) => !t)) throw new Error('trackPx: an empty tick row');
+  const glyphs = ticks.reduce((n, t) => n + t.length, 0) + ticks.length - 1;
+  return Math.max(MIN_TRACK_PX, textPx(glyphs, fontPx('meta')));
+}
 
 const TONE = {
   overhead: CLASS_COLORS.ckb,
@@ -170,7 +188,7 @@ export function ScaleHeader({
       ) : (
         <span
           className="text-meta flex justify-end whitespace-nowrap"
-          style={{ width: `${trackWidth + FIGURE_GAP + figureWidth}px` }}
+          style={{ width: `${trackWidth + BAR_FIGURE_GAP + figureWidth}px` }}
         >
           {label}
         </span>

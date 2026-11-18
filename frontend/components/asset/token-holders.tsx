@@ -10,7 +10,7 @@ import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { TokenAmount } from '@/components/ui/ckb-amount';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -20,7 +20,6 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { LockKind } from '@/components/ui/lock-kind';
 import { resourceScale } from '@/components/blocks/block-visual';
@@ -29,15 +28,39 @@ import { formatTick } from '@/lib/chart-ticks';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { WIDEST_COMPACT_TICK, shortChars } from '@/lib/list-bounds';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
-/** The holders-per-range bar of "Holders by balance", and the share bar of the holder list. */
-const BUCKET_TRACK = 40;
-const SHARE_TRACK = 48;
-/** The figures right of those bars: a range's holder count, a holder's share ("41.23%"). */
-const BUCKET_FIGURE = 44;
-const SHARE_FIGURE = 48;
+// Readability F3-e: every column budgeted from what it holds (lib/list-bounds.ts), the 13 px cells
+// at 0.6 em a glyph and the 16 px gap after every column but the last.
+/**
+ * A token's holders: under 100,000, so a holder's rank is five digits ("99999", as the rank is
+ * written) and a range's holder count six characters ("99,999").
+ */
+const WIDEST_RANK = '99999';
+const WIDEST_HOLDERS = '99,999';
+/** A name a column ends in the one ellipsis (a lock's kind, a balance): 12 characters of it. */
+const NAME_CHARS = 12;
+const cell = (chars: number) => textPx(chars, fontPx('small'));
+/** A row tag (`rowTagClass`): its words at the meta step, 5 px sides and a 1 px border. */
+const tag = (chars: number) => textPx(chars, fontPx('meta')) + 2 * 5 + 2 * 1;
+/**
+ * The holders-per-range bar of "Holders by balance", and the share bar of the holder list: each
+ * track holds its head's ticks ("0" … "750M", the tick form; "0" … "100%") whole, under the 48 px a
+ * bar keeps at least, so 48 (the bands' was 40).
+ */
+const BUCKET_TRACK = trackPx(['0', WIDEST_COMPACT_TICK]);
+const SHARE_TRACK = trackPx(['0', formatShareTick(10_000)]);
+/**
+ * The figures right of those bars: a range's holder count, "99,999" (it was 44, five
+ * characters), and a holder's share, "100.00%" (it was 48, "41.23%").
+ */
+const BUCKET_FIGURE = columnPx(cell(WIDEST_HOLDERS.length));
+const SHARE_FIGURE = columnPx(cell('100.00%'.length));
 /** "Under 1", "1 – under 10", "100,000 and above": exact bounds, trailing zeros dropped. */
 function bucketRange(lowerBound: string, upperBound: string | null, decimals: number | null) {
   const bound = (amount: string) => formatTokenBalanceWithRawMarker(amount, decimals);
@@ -87,18 +110,26 @@ export function TokenDistributionView({
     {
       key: 'range',
       label: `Balance${d.unit === 'raw' ? ' · raw' : symbol ? `, ${symbol}` : ''}`,
-      // "10,000 – under 100,000" on one 13 px line.
-      minWidth: 188,
-      render: (b) => (
-        <span className="text-body text-text-bright leading-row whitespace-nowrap">
-          {bucketRange(b.lowerBound, b.upperBound, d.decimals)}
-        </span>
-      ),
+      // The flexible column (readability F3-e): "10,000 – under 100,000" whole on its 14 px line
+      // (22 characters, 184.8) and the gap at its minimum (it was 188, with no gap); a wider range
+      // ends in the one ellipsis, whole in its title.
+      minWidth: columnPx(textPx('10,000 – under 100,000'.length, fontPx('body')) + CELL_GAP_PX),
+      width: 'auto',
+      className: 'truncate',
+      render: (b) => {
+        const range = bucketRange(b.lowerBound, b.upperBound, d.decimals);
+        return (
+          <span title={range} className="text-body text-text-bright leading-row whitespace-nowrap">
+            {range}
+          </span>
+        );
+      },
     },
     {
       key: 'holders',
       label: 'Holders',
-      minWidth: BUCKET_TRACK + 10 + BUCKET_FIGURE + 16,
+      // The track, the bar's 10 px gap, the count and the gap.
+      minWidth: columnPx(BUCKET_TRACK + BAR_FIGURE_GAP + BUCKET_FIGURE + CELL_GAP_PX),
       header: (
         <ScaleHeader
           label="Holders"
@@ -127,7 +158,9 @@ export function TokenDistributionView({
     {
       key: 'share',
       label: 'Of supply',
-      minWidth: 64,
+      // "100.00%" (7 characters at 13 px, 54.6), wider than the head's word "supply"; the last
+      // column, no gap after it (it counted 16).
+      minWidth: columnPx(Math.max(cell('100.00%'.length), textPx('supply'.length, fontPx('meta')))),
       numeric: true,
       render: (b) => <span>{share(BigInt(b.balance))}</span>,
     },
@@ -257,14 +290,22 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'rank',
         label: '#',
-        minWidth: 32,
+        // A rank of five digits, "99999" (39 at 13 px), and the gap; it was 32, two digits.
+        minWidth: columnPx(cell(WIDEST_RANK.length) + CELL_GAP_PX),
         className: 'whitespace-nowrap',
         render: (h) => <span className="text-text-bright">{rank(h)}</span>,
       },
       {
         key: 'address',
         label: 'Address',
-        minWidth: 170,
+        // The key at 14 px: an address at the row size (13 characters) or a lock no address
+        // encodes by its hash at the row size (17, 142.8, the wider), and the gap. It was 170.
+        minWidth: columnPx(
+          textPx(
+            Math.max(shortChars(SHORT_FORMS.row.address), shortChars(SHORT_FORMS.row.hash)),
+            fontPx('body')
+          ) + CELL_GAP_PX
+        ),
         render: (h) => (
           <AppLink
             href={`/address/${h.address ?? h.lockScriptHash}`}
@@ -284,7 +325,11 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'lock',
         label: 'Lock',
-        minWidth: 116,
+        // The flexible column (readability F3-e): its tag holds 12 characters of the kind at its
+        // minimum (98.4 with its sides and border) and the gap, and takes what the container gives
+        // beyond the sum. It was 116.
+        minWidth: columnPx(tag(NAME_CHARS) + CELL_GAP_PX),
+        width: 'auto',
         // A flex line holds the chip at its own 18 px, so the row stays 41 px; a long lock kind
         // ends in an ellipsis, whole in the row's hover (the chip's hover is the code hash).
         // U-15: a lock the registry does not name reads "lock <code hash>", as on the collection
@@ -303,7 +348,8 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'balance',
         label: symbol ?? 'Balance',
-        minWidth: 112,
+        // 12 characters of the amount (93.6 at 13 px) and the gap. It was 112.
+        minWidth: columnPx(cell(NAME_CHARS) + CELL_GAP_PX),
         numeric: true,
         // One line; an amount too long for the column ends in an ellipsis, exact in the hover.
         render: (h) => (
@@ -315,7 +361,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'share',
         label: 'Share',
-        minWidth: SHARE_TRACK + 10 + SHARE_FIGURE + 16,
+        // The track, the bar's 10 px gap and the share; the last column, no gap after it (it
+        // counted 16).
+        minWidth: columnPx(SHARE_TRACK + BAR_FIGURE_GAP + SHARE_FIGURE),
         header: (
           <ScaleHeader
             label="Share"

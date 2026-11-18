@@ -4,12 +4,12 @@ import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { formatShareTick, percentHundredths } from '@/components/ui/share-bar';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
@@ -21,7 +21,9 @@ import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_COUNT, WIDEST_DAO_DEPOSIT, WIDEST_RANK, shortChars } from '@/lib/list-bounds';
 
 /** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
@@ -65,9 +67,13 @@ function Depositor({
   );
 }
 
-/** The share column's bar track and the width of its number (as the token holders' table). */
-const SHARE_TRACK = 48;
-const SHARE_TEXT = 48;
+/**
+ * The share column's bar track and the width of its number (readability F3-e): the track holds its
+ * head's ticks, "0" and at most "100%", under the 48 px a bar keeps at least, so 48; the number,
+ * "100.00%" (7 characters at 13 px, 54.6; it was 48, which held "12.34%").
+ */
+const SHARE_TRACK = trackPx(['0', formatShareTick(10_000)]);
+const SHARE_TEXT = columnPx(textPx('100.00%'.length, fontPx('small')));
 
 /** R7: the one scale of the page's share bars — its rounded maximum — in both forms. */
 const shareScale = (rows: readonly DaoDepositorRow[]) =>
@@ -77,33 +83,53 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
   {
     key: 'rank',
     label: '#',
-    minWidth: 56,
+    // A rank under a million, "999,999" (7 characters at 13 px, 54.6), and the gap. It was 56.
+    minWidth: columnPx(textPx(WIDEST_RANK.length, fontPx('small')) + CELL_GAP_PX),
     render: (d) => <span className="text-text-dim">{d.rank.toLocaleString('en-US')}</span>,
   },
   {
     key: 'depositor',
     label: 'Depositor',
-    minWidth: 260,
+    // The key at 14 px: an address at the row size (13 characters) or, for a lock no address
+    // encodes, its lock hash at the row size, "0x12345678…abcdef" (17, 142.8, the wider), and the
+    // gap. It was 260.
+    minWidth: columnPx(
+      textPx(
+        Math.max(shortChars(SHORT_FORMS.row.address), shortChars(SHORT_FORMS.row.hash)),
+        fontPx('body')
+      ) + CELL_GAP_PX
+    ),
     render: (d) => <Depositor row={d} size="row" className="text-body leading-row" />,
   },
   {
     key: 'deposits',
     label: 'Deposits',
-    minWidth: 80,
+    // Its head, "Deposits" (8 characters at 12 px, 57.6), wider than a count of four digits,
+    // "9,999" (39), and the gap. It was 80.
+    minWidth: columnPx(
+      Math.max(
+        textPx('Deposits'.length, fontPx('meta')),
+        textPx(WIDEST_COUNT.length, fontPx('small'))
+      ) + CELL_GAP_PX
+    ),
     numeric: true,
     render: (d) => d.depositCount.toLocaleString('en-US'),
   },
   {
     key: 'capacity',
     label: 'CKB deposited',
-    minWidth: 220,
+    // One depositor's CKB under ten billion, every decimal, "9,999,999,999.99999999" (22
+    // characters at 13 px, 171.6), and the gap. It was 220.
+    minWidth: columnPx(textPx(WIDEST_DAO_DEPOSIT.length, fontPx('small')) + CELL_GAP_PX),
     numeric: true,
     render: (d) => <Ckb form="column" shannons={d.capacity} />,
   },
   {
     key: 'share',
     label: 'Share',
-    minWidth: SHARE_TRACK + 10 + SHARE_TEXT + 16,
+    // The track, the bar's 10 px gap and the share; the last column, no gap after it (it counted
+    // 16).
+    minWidth: columnPx(SHARE_TRACK + BAR_FIGURE_GAP + SHARE_TEXT),
     header: (
       <ScaleHeader
         label="Share"

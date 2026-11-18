@@ -271,6 +271,57 @@ describe('Fiber channel phone row (board L8)', () => {
       )
     );
 
+  // Readability F3-e: every column budgeted from the widest value it holds, at 0.6 em a glyph (the
+  // row's 14 px, a meta line's and the unit's 12) and the 16 px gap after every column but the
+  // last. The parties are the flexible column: one party whole at its minimum (a lock hash at the
+  // row size, the wider form), the pair on one line where the container gives more.
+  it('budgets every column from what it holds and changes form at their sum (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      // the channel id at the row size, or the widest state under it ("all" lists the state)
+      ceil(Math.max(at('0x01010101…010101', 14), at('force-closed · not settled', 12)) + 16),
+      // one party, its lock hash at the row size
+      ceil(at('0xbbbbbbbb…bbbbbb', 14) + 16),
+      // a capacity under a billion CKB, every decimal, and its unit
+      ceil(at('999,999,999.99999999', 14) + at(' CKB', 12) + 16),
+      // the date it opened
+      ceil(at('2023-11-15', 14) + 16),
+      // four digits of days and the hours; the last column
+      ceil(at('9999d 23h', 14)),
+    ];
+    expect(budgets).toEqual([204, 159, 213, 100, 76]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(752);
+    serve();
+    const { unmount } = render(<FiberChannelsPage />);
+    const table = await screen.findByRole('table', { name: 'Open channels' });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[1].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    unmount();
+    for (const [width, form] of [
+      [1232, 'table'],
+      [752, 'table'],
+      [751, 'rows'],
+      [608, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      atViewportWidth(width < 608 ? 390 : 1280);
+      serve();
+      const { unmount: drop } = render(<FiberChannelsPage />);
+      const shown = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name: form === 'table' ? 'Open channels' : 'Open channels, compact',
+      });
+      expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('labels the date and the duration and names the pair by address suffix at 358 px', async () => {
     atContainerWidth(358);
     atViewportWidth(390);

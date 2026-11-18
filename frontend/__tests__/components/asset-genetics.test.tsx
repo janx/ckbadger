@@ -480,12 +480,99 @@ describe('How an object is read · a pattern declared in the description (Nervap
   });
 });
 
+// Readability F3-e: every column of the gene table budgeted from what it holds, at 0.6 em a glyph
+// (13 px cells) and the 16 px gap after every column but the last. Names, rules and what the
+// objects show are pattern text that ends in the one ellipsis (the row's title holds it): each
+// holds 12 characters at its minimum, the last ("found") is the flexible column; a byte range is
+// whole.
+describe('The DOB blueprint’s columns (readability F3-e)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const sample = {
+    id: HEADWEAR_OBJECT,
+    href: `/objects/${HEADWEAR_OBJECT}`,
+    dnaHex: headwearGenetics.dnaHex,
+    traits: headwearGenetics.cachedVmTraits.traits,
+    decodeStatus: 'decoded',
+  };
+  it('budgets every column of the gene table and changes form at their sum', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('x'.repeat(12), 13) + 16),
+      // a range of a DNA under 1,000 bytes
+      ceil(at('bytes 999–999', 13) + 16),
+      ceil(at('x'.repeat(12), 13) + 16),
+      ceil(at('x'.repeat(12), 13)),
+    ];
+    expect(budgets).toEqual([110, 118, 110, 94]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(432);
+    for (const [width, form] of [
+      [560, 'table'],
+      [432, 'table'],
+      [431, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      stubChartWidth(width);
+      const { container, unmount } = render(
+        <CurrentPatternEvidence
+          pattern={headwearInsights.currentPattern}
+          genetics={headwearInsights.genetics}
+          sample={sample}
+          description={headwearDescription}
+        />
+      );
+      const list = container.querySelector('[data-list-form]')!;
+      expect(list).toHaveAttribute('data-list-form', form);
+      if (form === 'table') {
+        const cols = [...list.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+        expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+        expect(cols[3].width).toBe('auto');
+      }
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe('The object page reads a declared pattern too (Nervape Headwear object)', () => {
   beforeEach(() => stubChartWidth(896));
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+  // Readability F3-e: the DNA genes table's columns budgeted from what they hold (13 px cells, the
+  // 16 px gap after every column but the last): a name, a rule and this object's value hold 12
+  // characters at their minimum and end in the one ellipsis (the value is the flexible column);
+  // a byte range is whole, " · clipped" with it.
+  it('budgets every column of the DNA genes table (F3-e)', () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5;
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('x'.repeat(12), 13) + 16),
+      ceil(at('bytes 999–999 · clipped', 13) + 16),
+      ceil(at('x'.repeat(12), 13) + 16),
+      ceil(at('x'.repeat(12), 13)),
+    ];
+    expect(budgets).toEqual([110, 196, 110, 94]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(510);
+    render(
+      <ObjectGeneticsEvidence
+        evidence={headwearGenetics}
+        subject="Nervape Headwear"
+        description={headwearDescription}
+      />
+    );
+    const genes = screen.getByRole('table', { name: 'DNA genes' });
+    const cols = [...genes.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[3].width).toBe('auto');
+    expect(Number.parseFloat(genes.style.minWidth)).toBe(510);
+  });
+
   it('runs the DNA command on its number too, when the object has one (phase 5, A13)', () => {
     render(
       <ObjectGeneticsView

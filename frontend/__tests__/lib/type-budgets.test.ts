@@ -297,7 +297,9 @@ const LITERALS: [file: string, literal: string, was: number, now: number, value:
   ['lib/pipeline/layout.ts', 'NUMBER_TEXT_PX = 12', 12, 12, NUMBER_TEXT_PX],
   // the hand-computed minimum widths of the ListTable columns whose comment records what they
   // hold (the rendered widths are pinned exactly by blocks-page, transactions-page and
-  // transaction-list-table: 1,230 and 564 px as before)
+  // transaction-list-table: 1,230 and 564 px as before). The record of step 2: lane F3-e then
+  // budgeted every column of the list tables from the widest value it holds (lib/list-bounds.ts),
+  // the spares kept here going; those budgets are pinned by each table's own test.
   [
     'app/blocks/page.tsx',
     'Block: 195 + ROW_SEAL.block.footprint',

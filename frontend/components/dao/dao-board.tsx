@@ -19,7 +19,7 @@ import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs } from '@/lib/utils';
-import type { ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -38,7 +38,8 @@ import {
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { WIDEST_COUNT, WIDEST_DAO_DEPOSIT, shortChars } from '@/lib/list-bounds';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
@@ -48,7 +49,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { fontPx, textPx } from '@/lib/type-metrics';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -1003,20 +1004,29 @@ const OWNER_CELL = 'text-body py-1.5';
 /** Board v3: the column heads at meta (11 px), under which the rows read at body. */
 const ownerHead = (label: string) => <span className="text-meta">{label}</span>;
 
+/**
+ * The largest depositors' columns, each budgeted from the widest value it holds (readability F3-e)
+ * at the rows' body step (14 px), a head at the meta step (12) and the gap after every column but
+ * the last.
+ */
+const ownerCell = (chars: number) => textPx(chars, fontPx('body'));
+
 const OWNER_COLUMNS: ListColumn<Owner>[] = [
   {
     key: 'rank',
     className: OWNER_CELL,
     label: '#',
     header: ownerHead('#'),
-    minWidth: 40,
+    // a rank of the topic page's five (one digit, 8.4) and the gap; it was 40
+    minWidth: columnPx(ownerCell(String(TOPIC_ROWS).length) + CELL_GAP_PX),
     render: (o) => <span className="text-text-dim">{o.rank}</span>,
   },
   {
     key: 'depositor',
     label: 'Depositor',
     header: ownerHead('Depositor'),
-    minWidth: 190,
+    // an address at the row size (13 characters, 109.2) and the gap; it was 190
+    minWidth: columnPx(ownerCell(shortChars(SHORT_FORMS.row.address)) + CELL_GAP_PX),
     className: OWNER_CELL,
     render: (o) => ownerLink(o, 'row'),
   },
@@ -1024,7 +1034,11 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     key: 'lock',
     label: 'Lock',
     header: ownerHead('Lock'),
-    minWidth: 170,
+    // The flexible column (a lock's name has no bound): at its minimum a lock's code hash at the
+    // row size (17 characters, 142.8) and the gap, the rest of the container beyond the sum. It
+    // was 170.
+    minWidth: columnPx(ownerCell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
+    width: 'auto',
     className: OWNER_CELL,
     render: (o) => lockLink(o, 'row'),
   },
@@ -1033,7 +1047,12 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     className: OWNER_CELL,
     label: 'Deposits',
     header: ownerHead('Deposits'),
-    minWidth: 80,
+    // the head's "Deposits" (57.6 at 12 px), wider than four digits ("9,999", 42), and the gap;
+    // it was 80
+    minWidth: columnPx(
+      Math.max(textPx('Deposits'.length, fontPx('meta')), ownerCell(WIDEST_COUNT.length)) +
+        CELL_GAP_PX
+    ),
     numeric: true,
     render: (o) => o.depositCount.toLocaleString('en-US'),
   },
@@ -1042,7 +1061,9 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     className: OWNER_CELL,
     label: 'CKB deposited',
     header: ownerHead('CKB deposited'),
-    minWidth: 210,
+    // one depositor's CKB under ten billion, every decimal (22 characters, 184.8), and the gap;
+    // it was 210
+    minWidth: columnPx(ownerCell(WIDEST_DAO_DEPOSIT.length) + CELL_GAP_PX),
     numeric: true,
     render: (o) => <Amount form="column" value={o.capacity} />,
   },
@@ -1051,7 +1072,8 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     className: OWNER_CELL,
     label: 'Share',
     header: ownerHead('Share'),
-    minWidth: 70,
+    // "100.00%" (58.8); the last column, no gap. It was 70.
+    minWidth: columnPx(ownerCell('100.00%'.length)),
     numeric: true,
     render: (o) => <span className="text-text-dim">{o.sharePercent}%</span>,
   },

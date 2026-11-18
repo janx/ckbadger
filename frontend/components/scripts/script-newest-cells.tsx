@@ -3,7 +3,7 @@ import type { ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { BlockLink } from '@/components/ui/block-link';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { api, type Cell, type ScriptFamilyDetail } from '@/lib/api';
@@ -17,7 +17,9 @@ import { formatUtc8Date } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { SHORT_FORMS, shortenHash, type ShortSize } from '@/lib/shorten';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { WIDEST_BLOCK_NUMBER, WIDEST_COUNT_DIGITS, shortChars } from '@/lib/list-bounds';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
 
@@ -274,16 +276,25 @@ export function ScriptNewestCells({
       key: 'cell',
       label: 'Cell',
       header: <Head label="Cell" />,
-      // the out point at row size, 20 characters at 13 px (156 px) and the cell padding
-      minWidth: 176,
-      width: '15%',
+      // The out point at the row size and an output index of four digits, ":9999" (22
+      // characters at the key's 14 px, 184.8), and the gap (readability F3-e: it was 176, the
+      // out point at 13 px with a one-digit index, and 15 % of the table).
+      minWidth: columnPx(
+        textPx(
+          shortChars(SHORT_FORMS.row.hash) + `:${WIDEST_COUNT_DIGITS}`.length,
+          fontPx('body')
+        ) + CELL_GAP_PX
+      ),
       render: (row) => key(row, 'row'),
     },
     {
       key: 'what',
       label: 'What it is',
       header: <Head label="What it is" />,
-      minWidth: 190,
+      // The table's flexible column (F3-e): 20 characters of what the cell is (a token amount and
+      // its symbol, a name) at its minimum, the rest of the container beyond the sum; a longer one
+      // ends in the one ellipsis, the row's title holding it. It was 190.
+      minWidth: columnPx(textPx(20, fontPx('small')) + CELL_GAP_PX),
       width: 'auto',
       className: 'truncate',
       render: (row) => <WhatItIs what={whatOf(row, 'row')} />,
@@ -292,17 +303,26 @@ export function ScriptNewestCells({
       key: 'owner',
       label: 'Owner',
       header: <Head label="Owner" />,
-      minWidth: 170,
-      width: '17%',
+      // The owner's address at the row size (13 characters at 13 px, 101.4) and the gap; "Owner
+      // address unavailable" breaks between its words. It was 170 and 17 % of the table.
+      minWidth: columnPx(
+        textPx(shortChars(SHORT_FORMS.row.address), fontPx('small')) + CELL_GAP_PX
+      ),
       render: ({ cell }) => <Owner cell={cell} size="row" />,
     },
     {
       key: 'created',
       label: 'Created in',
       header: <Head label="Created in" />,
-      // "tx 0x12345678…abcdef · #20,911,313 · 2026-11-02": 47 characters at 12 px (338 px) and the padding
-      minWidth: 356,
-      width: '30%',
+      // "tx 0x12345678…abcdef · #99,999,999 · 2026-11-02": 47 characters at 13 px (366.6), the last
+      // column, no gap after it (F3-e: it was 356 at 12 px with the gap, and 30 % of the table).
+      minWidth: columnPx(
+        textPx(
+          `tx ${'x'.repeat(shortChars(SHORT_FORMS.row.hash))} · ${WIDEST_BLOCK_NUMBER} · ${formatUtc8Date(0)}`
+            .length,
+          fontPx('small')
+        )
+      ),
       numeric: true,
       render: ({ cell, detail }) => <Created cell={cell} detail={detail} size="row" />,
     },

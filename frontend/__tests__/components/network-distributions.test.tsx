@@ -542,6 +542,85 @@ describe('NetworkTrends', () => {
     }
   });
 
+  // Readability F3-e: every column budgeted from the widest value it holds, at 0.6 em a glyph (the
+  // day's 14 px, the cells' 13, heads, ticks and the quiet sentence 12) and the 16 px gap after
+  // every column but the last. A day retains under 10,000 observations (the crawler sees a few
+  // thousand nodes), so the count bar's widest scale is 10,000 and its track holds "0 10,000".
+  // Most common is the flexible column: "No retained round observation" whole at its minimum.
+  it('budgets every daily column from what it holds and changes form at their sum (F3-e)', async () => {
+    const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
+    const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
+    const budgets = [
+      ceil(at('2025-07-01', 14) + 16),
+      // the track ("0 10,000" at 12 px), the bar's 10 px gap and the scale's figure
+      ceil(at('0 10,000', 12) + 10 + at('10,000', 13) + 16),
+      // three digits of labels, under the head's word
+      ceil(Math.max(at('999', 13), at('Labels', 12)) + 16),
+      // the quiet sentence whole, wider than 12 characters of a label and its count; the last
+      ceil(
+        Math.max(
+          at('No retained round observation', 12),
+          at('x'.repeat(12), 13) + 8 + at('9,999', 13)
+        )
+      ),
+    ];
+    expect(budgets).toEqual([100, 131, 60, 209]);
+    const sum = budgets.reduce((s, w) => s + w, 0);
+    expect(sum).toBe(500);
+    const ts = 1751299200;
+    const serve = () =>
+      server.use(
+        http.get(`${API_BASE}/network/history`, ({ request }) =>
+          HttpResponse.json({
+            metric: new URL(request.url).searchParams.get('metric') ?? '',
+            granularity: 'day',
+            dailyCoverage: [{ ts, hasRetainedObservation: true, roundsPerDay: null }],
+            coverageFrom: ts,
+            coverageTo: ts,
+            roundCountAvailability: 'notRecorded',
+            points: [{ ts, scalar: 0, buckets: [{ label: '0.210.0', count: 3 }] }],
+          })
+        )
+      );
+    serve();
+    const { unmount } = render(<NetworkShareHistory />);
+    const table = await screen.findByRole('table', {
+      name: 'Client Version Share daily observations',
+    });
+    const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
+    expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
+    expect(cols[3].width).toBe('auto');
+    expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
+    expect(
+      Number.parseFloat((table.querySelector('tbody [data-track]') as HTMLElement).style.width)
+    ).toBe(at('0 10,000', 12));
+    unmount();
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    for (const [width, form] of [
+      [1232, 'table'],
+      [500, 'table'],
+      [499, 'rows'],
+      [358, 'rows'],
+    ] as const) {
+      atContainerWidth(width);
+      serve();
+      const { unmount: drop } = render(<NetworkShareHistory />);
+      const shown = await screen.findByRole(form === 'table' ? 'table' : 'list', {
+        name:
+          form === 'table'
+            ? 'Client Version Share daily observations'
+            : 'Client Version Share daily observations, compact',
+      });
+      expect(shown.closest('[data-list-form]')).toHaveAttribute('data-list-form', form);
+      drop();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
+
   // A title is no hover on a touch screen: the phone row also says every label, quietly, last.
   it('keeps every column of a day on its phone row, and every label in a quiet last line', async () => {
     const days = [1751299200, 1751385600];

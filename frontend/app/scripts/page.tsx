@@ -8,9 +8,10 @@ import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { WIDEST_CKB_HELD, WIDEST_ROW_COUNT } from '@/lib/list-bounds';
 import { PhoneRow } from '@/components/ui/phone-row';
-import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
 import { RowTag } from '@/components/ui/row-tag';
 import {
   ScriptCodeClassBar,
@@ -303,22 +304,17 @@ function Head({ label }: { label: string }) {
   return <span className="text-meta">{label}</span>;
 }
 
-/**
- * The printed amount: the board's 118 px plus the room "46,743,011,404.23" takes at 12 px with its
- * 11 px decimals, so the largest amount on the page never wraps.
- */
-const CKB_DISPLAY = 128;
+/** The occupied share's bar runs on parts per million of the CKB in the cells. */
+const SHARE_SCALE = 1_000_000;
 
 /**
  * The list's one bar, the occupied share (readability B5: the CKB bar left and with it the "bar:"
- * switch of ruling D2). Its track: the ticks "0 · 50 · 100%" (at most 4 characters at 11 px) fit
- * with room between them. Its figure: "100.00%", 7 characters at 12 px (50.4 px).
+ * switch of ruling D2). Its track: its head's ticks, "0", "50" and "100%", whole over it a glyph
+ * apart at 12 px (64.8; readability F3-e: it was 80). Its figure: "100.00%", 7 characters at 13 px
+ * (54.6).
  */
-const SHARE_TRACK = 80;
-const SHARE_FIGURE = columnPx(textPx(7, fontPx('small')));
-
-/** The occupied share's bar runs on parts per million of the CKB in the cells. */
-const SHARE_SCALE = 1_000_000;
+const SHARE_TRACK = trackPx(['0', shareTick(SHARE_SCALE / 2), shareTick(SHARE_SCALE)]);
+const SHARE_FIGURE = columnPx(textPx('100.00%'.length, fontPx('small')));
 
 /**
  * Occupied ÷ CKB in the cells, in ppm, for the bar's geometry: rounded up, so a nonzero share is
@@ -435,7 +431,19 @@ export default function ScriptsPage() {
       key: 'script',
       label: 'Script',
       header: <Head label="Script" />,
-      minWidth: 220,
+      // The flexible column (readability F3-e): at its minimum the default lock's name whole,
+      // "Secp256k1 Blake160" (18 characters at 14 px, 151.2), its 8 px gap and the widest role tag,
+      // "unregistered" (86.4 and the tag's 12 px of sides and border), and the gap: 273.6; it takes
+      // what the container gives beyond the sum, a longer name ending in the one ellipsis (the
+      // row's title holds it). It was 220.
+      minWidth: columnPx(
+        textPx('Secp256k1 Blake160'.length, fontPx('body')) +
+          8 +
+          textPx('unregistered'.length, fontPx('meta')) +
+          2 * 5 +
+          2 * 1 +
+          CELL_GAP_PX
+      ),
       width: 'auto',
       render: (s) => <ScriptName script={s} />,
     },
@@ -443,14 +451,27 @@ export default function ScriptsPage() {
       key: 'code',
       label: 'Code',
       header: <Head label="Code" />,
-      minWidth: 220,
+      // The pip (10 px), its 8 px gap and "upgradable · 99 versions" (24 characters at 13 px,
+      // 187.2), wider than "code evidence unavailable" (195, no pip) and the "immutable" tag, and
+      // the gap: 221.2. It was 220.
+      minWidth: columnPx(
+        Math.max(
+          10 + 8 + textPx('upgradable · 99 versions'.length, fontPx('small')),
+          textPx('code evidence unavailable'.length, fontPx('small'))
+        ) + CELL_GAP_PX
+      ),
       render: (s) => <ScriptCodeClass script={s} />,
     },
     {
       key: 'cells',
       label: 'Live cells',
       header: <Head label="Live cells" />,
-      minWidth: 110,
+      // Eight digits of live cells, or "unavailable" (11 characters at 13 px, 85.8, the wider),
+      // and the gap. It was 110.
+      minWidth: columnPx(
+        textPx(Math.max(WIDEST_ROW_COUNT.length, 'unavailable'.length), fontPx('small')) +
+          CELL_GAP_PX
+      ),
       numeric: true,
       render: (s) => <span title={cellsEverText(s)}>{countText(s.liveCellsCount)}</span>,
     },
@@ -458,9 +479,11 @@ export default function ScriptsPage() {
       key: 'capacity',
       label: 'CKB in its cells',
       // B5 (plan §7.6): the amount alone, right aligned under its head; its linear bar, scaled to
-      // the page's largest (50B), was a 1 px stub on most rows. The printed amount + the 16 px gap.
+      // the page's largest (50B), was a 1 px stub on most rows. The printed amount, whole CKB under
+      // 100 billion in the summary form ("99,999,999,999", 14 characters at 13 px, 109.2), and the
+      // gap (readability F3-e: it was 144 for a two-decimal form the list no longer writes).
       header: <Head label="CKB in its cells" />,
-      minWidth: CKB_DISPLAY + 16,
+      minWidth: columnPx(textPx(WIDEST_CKB_HELD.length, fontPx('small')) + CELL_GAP_PX),
       numeric: true,
       render: (s) => (
         <CkbAmount
@@ -476,8 +499,8 @@ export default function ScriptsPage() {
       key: 'occupied',
       label: 'Occupied',
       // The occupied share beside its bar on 0 · 50 · 100 %, the name over the share (B5): the
-      // track, the bar's 10 px gap, the share and the 16 px gap.
-      minWidth: SHARE_TRACK + 10 + SHARE_FIGURE + 16,
+      // track, the bar's 10 px gap and the share; the last column, no gap after it (it counted 16).
+      minWidth: columnPx(SHARE_TRACK + BAR_FIGURE_GAP + SHARE_FIGURE),
       header: (
         <ScaleHeader
           label="Occupied"
