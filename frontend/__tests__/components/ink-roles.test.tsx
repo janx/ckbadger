@@ -19,6 +19,12 @@ import { Header } from '@/components/layout/header';
 import { SealedHead } from '@/components/ui/page-seal';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { SEAL_IDS } from '@/__tests__/utils/seals';
+import { ListTable } from '@/components/ui/list-table';
+import { CapacityPartition } from '@/components/ui/capacity-partition';
+import { CellBar } from '@/components/ui/cell-bar';
+import { ParticipantRefView } from '@/components/participant-ref';
+import { ItemDeltaFact } from '@/components/activity-event-row';
+import { ScriptNames } from '@/components/ui/script-byte-map';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 import { fullText } from '@/__tests__/utils/full-text';
 import { BRIGHT, QUIET, READING, inkOf } from '@/__tests__/utils/ink-role';
@@ -327,6 +333,131 @@ describe('the id line under an h1: the full id is a value', () => {
       </DetailLayout>
     );
     expect(inkOf(screen.getByText('Everything people hold on CKB'))).toBe(READING);
+  });
+});
+
+describe('ListTable: an empty list says so in a sentence', () => {
+  it('reads the empty sentence in the reading ink', () => {
+    render(
+      <ListTable
+        label="Blocks"
+        columns={[{ key: 'n', label: 'Height', render: (r: { n: number }) => r.n, minWidth: 80 }]}
+        rows={[]}
+        rowKey={(r) => String(r.n)}
+        empty="No blocks in this range."
+        mobileRow={(r) => r.n}
+      />
+    );
+    expect(inkOf(screen.getByText('No blocks in this range.'))).toBe(READING);
+  });
+});
+
+describe('CapacityPartition and CellBar: their numbers read, their labels and units are quiet', () => {
+  it('reads a part’s share, a percentage, in the reading ink; its name is a label', () => {
+    render(
+      <CapacityPartition
+        subject="cell"
+        total="20000000000"
+        occupied="6100000000"
+        free="13900000000"
+      />
+    );
+    expect(inkOf(screen.getByText('30.50%'))).toBe(READING);
+    expect(inkOf(screen.getByText('Occupied'))).toBe(QUIET);
+  });
+
+  it('reads a part’s bytes in the reading ink; the unit after them is quiet', () => {
+    const { container } = render(
+      <CellBar subject="cell" anatomy={{ lock: '53', type: '0', data: '12' }} />
+    );
+    const lock = container.querySelector('[data-part-legend="lock"]')!;
+    expect(inkOfText(lock, '53')).toBe(READING);
+    expect(inkOfText(lock, 'B')).toBe(QUIET);
+  });
+});
+
+describe('ParticipantRefView: a party is a link, its roles and "unresolved" are labels', () => {
+  const LOCK = `0x${'57'.repeat(32)}`;
+  const party = (p: { address?: string; lockHash?: string; lockHashPrefix?: string }) => ({
+    address: p.address ?? null,
+    lockHash: p.lockHash ?? null,
+    lockHashPrefix: p.lockHashPrefix ?? null,
+    roles: ['owner'],
+  });
+
+  it('reads a party linked by its lock hash in the reading ink, in a row or alone', () => {
+    const { unmount } = render(
+      <ParticipantRefView size="row" compact participant={party({ lockHash: LOCK })} />
+    );
+    expect(inkOf(screen.getByRole('link'))).toBe(READING);
+    expect(inkOf(screen.getByText('owner'))).toBe(QUIET);
+    unmount();
+    render(<ParticipantRefView size="row" participant={party({ lockHash: LOCK })} />);
+    expect(inkOf(screen.getByRole('link'))).toBe(READING);
+  });
+
+  it('reads a compact link to an address that is not a CKB address in the reading ink', () => {
+    render(<ParticipantRefView size="row" compact participant={party({ address: 'xyz1qqq' })} />);
+    expect(inkOf(screen.getByRole('link'))).toBe(READING);
+  });
+
+  it('reads a party known by its prefix alone, a value, in the reading ink; "unresolved" is a label', () => {
+    render(
+      <ParticipantRefView
+        size="row"
+        participant={party({ lockHashPrefix: `0x${'ab'.repeat(20)}` })}
+      />
+    );
+    expect(inkOf(screen.getByTitle(`0x${'ab'.repeat(20)}`))).toBe(READING);
+    expect(inkOf(screen.getByText('unresolved'))).toBe(QUIET);
+  });
+
+  it('keeps the page’s own party, written on every row, quiet (as a repeated unit)', () => {
+    render(
+      <ParticipantRefView
+        size="row"
+        compact
+        linked={false}
+        participant={party({ lockHash: LOCK })}
+      />
+    );
+    expect(inkOf(screen.getByTitle(LOCK))).toBe(QUIET);
+  });
+});
+
+describe('ItemDeltaFact: an object or an identity arrived or departed, a value', () => {
+  it('reads "arrived" and "departed" in the reading ink', () => {
+    render(
+      <>
+        <ItemDeltaFact
+          size="row"
+          item={{ kind: 'object', objectId: `0x${'cd'.repeat(32)}`, delta: 1 }}
+        />
+        <ItemDeltaFact
+          size="row"
+          item={{
+            kind: 'identity',
+            standard: 'dotbit',
+            identityId: `0x${'ef'.repeat(32)}`,
+            delta: -1,
+          }}
+        />
+      </>
+    );
+    expect(inkOf(screen.getByText('arrived'))).toBe(READING);
+    expect(inkOf(screen.getByText('departed'))).toBe(READING);
+  });
+});
+
+describe('ScriptNames: its chain tiles and its last sentence explain', () => {
+  it('reads the tiles’ words and the closing sentence in the reading ink; the tile titles stay bright', () => {
+    render(<ScriptNames lockHash={`0x${'12'.repeat(32)}`} address="ckb1qyq" />);
+    expect(inkOf(screen.getByText('blake2b-256 of it; what the indexes are keyed by'))).toBe(
+      READING
+    );
+    expect(inkOf(screen.getByText(/^Change one byte of args and both names change/))).toBe(READING);
+    expect(inkOf(screen.getAllByText('lock hash')[0])).toBe(BRIGHT);
+    expect(inkOf(screen.getByText('both derived, neither stored'))).toBe(QUIET);
   });
 });
 
