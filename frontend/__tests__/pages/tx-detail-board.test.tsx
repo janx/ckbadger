@@ -4,6 +4,8 @@
  * group identity, resolved cell deps, the proposal ruler, the capacity equation, header deps,
  * the cellbase and DAO-withdrawal variants and the pending wording.
  */
+import { addressScript } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -104,7 +106,9 @@ function committed(): TransactionDetail {
         display: null,
         lock: lockScript(`0x${'11'.repeat(20)}`),
         type: typeScript,
-        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({ codeHash: LOCK_CODE_HASH, args: `0x${'11'.repeat(20)}` }),
         lockArgsDecoded: { lock: 'secp256k1_blake160', pubkeyHash: `0x${'11'.repeat(20)}` },
       },
     ],
@@ -118,7 +122,9 @@ function committed(): TransactionDetail {
         display: null,
         lock: lockScript(`0x${'22'.repeat(20)}`),
         type: typeScript,
-        address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({ codeHash: LOCK_CODE_HASH, args: `0x${'22'.repeat(20)}` }),
       },
     ],
     scriptGroups: [
@@ -1155,7 +1161,10 @@ describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
 
   it('lights a hovered party’s cells in the cells diagram and dims the rest', async () => {
     const tx = committed();
-    tx.inputs![0].address = feedSamples.objectTransfer.participants[0].address!;
+    // the giver's cell: its address and the lock it spells (B4 second fix round: one cell's)
+    const giverAddress = feedSamples.objectTransfer.participants[0].address!;
+    tx.inputs![0].address = giverAddress;
+    tx.inputs![0].lock = addressScript(giverAddress);
     vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
     render(<TransactionDetailPage />);
     const frame = await screen.findByTestId('tx-what-moved');

@@ -1,3 +1,4 @@
+import { addressScript } from '@/lib/lock-script';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -30,6 +31,8 @@ vi.mock('@/components/transaction/tx-structure', async (importOriginal) => {
 
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
 const lock = { codeHash: `0x${'22'.repeat(32)}`, hashType: 'type', args: '0x' };
+// B4 second fix round: a tile's cell carries the lock its captured address spells (a tile refuses
+// an address that spells another lock); `lock` stays the lock groups' script
 const typeId = { codeHash: TYPE_ID_CODE_HASH, hashType: 'type', args: '0x' };
 /** The real script hash of `lock` (blake2b, CKB personalisation). */
 const LOCK_HASH = '0x0ee949b7b3d3e5e40183668bc71108c144424658397dcc2b20e25e8c261f8865';
@@ -85,7 +88,7 @@ function tx(hash: string, cellbase = false): TransactionDetail {
             capacity: '10000000000',
             commonKnowledgeSize: '61',
             address: spentFixture.address,
-            lock,
+            lock: addressScript(spentFixture.address),
             type: typeId,
             display: null,
           },
@@ -94,7 +97,7 @@ function tx(hash: string, cellbase = false): TransactionDetail {
       capacity: '10000000000',
       commonKnowledgeSize: '61',
       address: liveFixture.address,
-      lock,
+      lock: addressScript(liveFixture.address),
       ...(index === 0 ? { type: typeId } : {}),
       status: 'live',
       display: null,

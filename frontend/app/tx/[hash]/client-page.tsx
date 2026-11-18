@@ -27,7 +27,7 @@ import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
-import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
+import { cellTiles, kindOf, registeredName } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
 import { BalanceChanges } from '@/components/transaction/balance-changes';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
@@ -120,10 +120,6 @@ function PendingValue() {
   return <span className="text-text-dim">pending…</span>;
 }
 /** The registry's name for a code hash, or null when it has none. */
-function registeredName(lookup: ScriptLookupResponse | undefined, codeHash: string) {
-  const name = lookup?.[codeHash]?.name;
-  return name && name.toLowerCase() !== 'unknown' ? name : null;
-}
 function groupLabel(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
   return registeredName(lookup, g.script.codeHash) ?? shortenHash(g.script.codeHash, 'row');
 }
