@@ -67,8 +67,30 @@ export function trackPx(ticks: readonly string[]): number {
   return Math.max(MIN_TRACK_PX, textPx(glyphs, fontPx('meta')));
 }
 
-/** A head's tick in the tick form: the default of every `ScaleHeader`. */
-export const tickForm = (value: number) => formatTick(value, value);
+/** The value a tick in the tick form says: "1.5M" is 1,500,000, read from its decimal digits. */
+function tickValue(text: string): number {
+  const m = /^(\d+(?:\.\d+)?)([kMB]?)$/.exec(text);
+  if (!m) return Number.NaN;
+  const power = { '': 0, k: 3, M: 6, B: 9 }[m[2] as '' | 'k' | 'M' | 'B'];
+  return Number(`${m[1]}e${power}`);
+}
+
+/**
+ * A head's tick in the tick form: the default of every `ScaleHeader`. An axis maximum states the
+ * scale its bars are drawn on (review fb-logic 7, the lead's ruling), so a tick whose text is not
+ * exactly its value would be a wrong figure: the form rounds through `toFixed(3)` ("1.235M" for
+ * 1,234,567), and a value it cannot write exactly is refused, naming it. Every head is given a
+ * `resourceScale` (1, 1.5, 2, 3, 4, 6 or 7.5 times a power of ten), which it writes exactly.
+ */
+export function tickForm(value: number): string {
+  const text = formatTick(value, value);
+  if (tickValue(text) !== value)
+    throw new Error(
+      `tick form: ${value.toLocaleString('en-US')} would read "${text}", not exactly its value: ` +
+        'a head states the scale its bars are drawn on, so its scale is one resourceScale gives'
+    );
+  return text;
+}
 
 /**
  * The track of a bar on a count scale (bytes, cycles, holders, items): "0" and the widest tick the

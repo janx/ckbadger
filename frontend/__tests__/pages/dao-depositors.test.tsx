@@ -201,7 +201,10 @@ describe('DAO depositors page (DAO-12)', () => {
 
   // Readability F3-e: every column budgeted from the widest value it writes (lib/list-bounds.ts),
   // at 0.6 em a glyph (the depositor 14 px, the cells 13, heads and ticks 12) and the 16 px gap
-  // after every column but the last: 605 px, so the 608 px band draws the table.
+  // after every column but the last: 605 px, so the 608 px band draws the table. Re-pinned on
+  // purpose (review fb-logic 7, the lead's ruling): the share's track is 50.4 px, "0" and the
+  // widest tick its head writes, "0.75%" (it was measured from "100%", 48), and the column rounds
+  // once, track, gap and figure together (the figure's box was rounded to 55 first): 115, 607 px.
   it('budgets every column from what it holds and changes form at their sum (F3-e)', async () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
@@ -214,12 +217,13 @@ describe('DAO depositors page (DAO-12)', () => {
       ceil(Math.max(at('Deposits', 12), at('9,999', 13)) + 16),
       // under ten billion CKB, every decimal
       ceil(at('9,999,999,999.99999999', 13) + 16),
-      // the track (its tick row "0 100%" is under 48 px), the 10 px gap, "100.00%"; the last column
-      ceil(48 + 10 + Math.ceil(at('100.00%', 13))),
+      // the track (its widest tick row, "0 0.75%", 7 glyphs at 12 px), the 10 px gap, "100.00%";
+      // the last column
+      ceil(at('0 0.75%', 12) + 10 + at('100.00%', 13)),
     ];
-    expect(budgets).toEqual([71, 159, 74, 188, 113]);
+    expect(budgets).toEqual([71, 159, 74, 188, 115]);
     const sum = budgets.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(605);
+    expect(sum).toBe(607);
     vi.mocked(api.getDaoDepositors).mockResolvedValue(page([1, 2], null));
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -234,8 +238,8 @@ describe('DAO depositors page (DAO-12)', () => {
     for (const [width, form] of [
       [1232, 'table'],
       [608, 'table'],
-      [605, 'table'],
-      [604, 'rows'],
+      [607, 'table'],
+      [606, 'rows'],
       [358, 'rows'],
     ] as const) {
       atContainerWidth(width);
