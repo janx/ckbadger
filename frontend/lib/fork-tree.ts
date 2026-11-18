@@ -122,6 +122,11 @@ const COMPACT_PAD = 3;
 /** Under a compact tile: its time over its miner, 4 px under the tile and 4 px over the next row. */
 const UNDER_PAD = 4;
 const COMPACT_GAP = 20;
+/** A compact tile's words, and the "+N earlier" box's, stand this far in from its side. */
+const FOLD_INSET = 6;
+/** The width a "+N earlier" box needs: its words at the label size and the inset each side. */
+const foldTile = (count: number) =>
+  Math.ceil(2 * FOLD_INSET + textPx(`+${count} earlier`.length, SVG_TEXT.label));
 
 export const FORK_TREE = {
   /**
@@ -147,9 +152,13 @@ export const FORK_TREE = {
   },
   /**
    * Narrow widths (V4 board): tiles shrink from 96 to no less than 72 px with 20 px between them,
-   * and carry only the number and hash; the time and miner hang under the box, in its column: the
-   * tile and 16 px of the gap after it (`labelRun`), the last column too (`right`), so a clock to
-   * the millisecond (86.4 px at 12 px) stands whole under a 72 px tile.
+   * and carry only the number and hash, 6 px in from the tile's side; the time and miner hang under
+   * the box, in its column: the tile and 16 px of the gap (`labelRun`), so a clock to the
+   * millisecond (86.4 px at 12 px) stands whole under a 72 px tile. They start at the tile's left
+   * edge and run into the gap after it, except in the last column, where they end at the tile's
+   * right edge and run into the gap before it (the ruling on F3-d: the svg keeps 4 px after the
+   * last tile, so a fork of four heights draws its four columns at a 390 phone, 6 + 4 × 72 + 3 ×
+   * 20 + 4 = 358, its dropped block among them).
    */
   compact: {
     minTile: 72,
@@ -160,10 +169,11 @@ export const FORK_TREE = {
     numberY: COMPACT_PAD + lineAscentPx(SVG_TEXT.label),
     hashY: COMPACT_PAD + LABEL_LINE + lineAscentPx(SVG_TEXT.tick),
     markR: 8,
+    inset: FOLD_INSET,
     x0: 6,
     gap: COMPACT_GAP,
     labelRun: COMPACT_GAP - 4,
-    right: COMPACT_GAP - 4,
+    right: 4,
     /** Under a box: its time and miner lines, 4 px over and under them: 38 px (34 at 10 px). */
     under: UNDER_PAD + 2 * TICK_LINE + UNDER_PAD,
     /** The baselines of the time and the miner, from the tile's foot. */
@@ -229,11 +239,20 @@ export function forkTreeLayout(model: ForkTreeModel, width: number): ForkTreeLay
   const tileFor = (columns: number) => (room - (columns - 1) * c.gap) / columns;
   let shown = heights;
   if (tileFor(shown) < c.minTile) {
-    shown = Math.floor((room + c.gap) / (c.minTile + c.gap));
-    if (shown < 2)
-      throw new Error(
-        `Fork tree: a ${width} px canvas cannot hold a "+N earlier" column and one ${c.minTile} px block`
-      );
+    // Fold the oldest heights into one column. Every column is one tile wide, and the fold's box
+    // holds its "+N earlier" (84 px at 12 px for a one-digit count, more than a 72 px tile), so
+    // the tiles are at least that wide wherever the tree folds: fewer, wider columns.
+    let least: number = c.minTile;
+    for (;;) {
+      shown = Math.floor((room + c.gap) / (least + c.gap));
+      if (shown < 2)
+        throw new Error(
+          `Fork tree: a ${width} px canvas cannot hold a "+N earlier" column and one ${least} px block`
+        );
+      const need = foldTile(heights - (shown - 1));
+      if (need <= least) break;
+      least = need;
+    }
   }
   const tileW = Math.min(c.maxTile, Math.floor(tileFor(shown)));
   const folded = shown < heights ? heights - (shown - 1) : 0;

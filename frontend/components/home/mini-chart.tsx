@@ -39,16 +39,31 @@ import { SVG_TEXT, centreShift } from '@/lib/chart-type';
 
 /*
  * The geometry, from the axis text (the tick role, lib/chart-type.ts): the plot from TOP to BOTTOM;
- * the y ticks end at TICK_X, a 4 px margin and the widest tick the charts write (4 characters:
- * "1.5k", "−10k") to their left, the plot 6 px after them; the x labels' baseline a tick line and
- * 7 px under the plot, the chart ending under their descent (0.3 em). At the 10 px tick these were
- * 28, 34, 101 and 104; at 12 px they are 33, 39, 103 and 107.
+ * each chart's y ticks end at its gutter's `tickX`, a 4 px margin and the widest tick that chart
+ * writes, sign included, to their left, and its plot starts 6 px after them (`left`); the x
+ * labels' baseline a tick line and 7 px under the plot, the chart ending under their descent
+ * (0.3 em): 103 and 107 at the 12 px tick. The gutter was one for every chart, sized for four
+ * glyphs (33 px), and the signed axis's "−1.5M", five, stood 3 px past the svg's left edge.
  */
 const TOP = 10;
 const BOTTOM = 84;
-const TICK_X = Math.ceil(textPx(4, SVG_TEXT.tick)) + 4;
-const LEFT = TICK_X + 6;
 const RIGHT_PAD = 8;
+/** Where a chart's y ticks end, and where its plot begins. */
+interface Gutter {
+  tickX: number;
+  left: number;
+}
+/** The gutter that holds `ticks`, the y ticks a chart writes: "−1.5M" ends at 40, its plot at 46. */
+function gutterFor(ticks: readonly string[]): Gutter {
+  const widest = Math.max(...ticks.map((t) => textPx(t.length, SVG_TEXT.tick)));
+  const tickX = Math.ceil(widest) + 4;
+  return { tickX, left: tickX + 6 };
+}
+/**
+ * The sparkline writes no y tick: its first bucket stands where a chart whose widest tick is four
+ * glyphs ("1.5k") begins its plot, 39 px in, where it stood before the gutters were each chart's.
+ */
+const SPARK_GUTTER = gutterFor(['1.5k']);
 const X_LABEL_Y = BOTTOM + 7 + SVG_TEXT.tick;
 export const CHART_H = X_LABEL_Y + Math.ceil(descentPx(SVG_TEXT.tick));
 const PLOT_H = BOTTOM - TOP;
@@ -352,11 +367,17 @@ interface XLabel {
 }
 
 /** First, middle and last labels, anchored so none is clipped at an edge. */
-function xLabels(labels: string[], midIndex: number, midX: number, right: number): XLabel[] {
+function xLabels(
+  labels: string[],
+  midIndex: number,
+  midX: number,
+  left: number,
+  right: number
+): XLabel[] {
   const n = labels.length;
   if (n === 0) return [];
   if (n === 1) return [{ x: right, text: labels[0], anchor: 'end' }];
-  const out: XLabel[] = [{ x: LEFT, text: labels[0], anchor: 'start' }];
+  const out: XLabel[] = [{ x: left, text: labels[0], anchor: 'start' }];
   if (n >= 3) out.push({ x: midX, text: labels[midIndex], anchor: 'middle' });
   out.push({ x: right, text: labels[n - 1], anchor: 'end' });
   return out;
@@ -380,13 +401,13 @@ interface YTick {
   emphasis?: boolean;
 }
 
-function YAxisLabels({ ticks }: { ticks: YTick[] }) {
+function YAxisLabels({ ticks, gutter }: { ticks: YTick[]; gutter: Gutter }) {
   return (
     <g fontSize={SVG_TEXT.tick} textAnchor="end" data-axis="y">
       {ticks.map((t, i) => (
         <text
           key={i}
-          x={TICK_X}
+          x={gutter.tickX}
           y={f1(t.y + centreShift(SVG_TEXT.tick))}
           fill={t.emphasis ? C.reference : C.tick}
         >
@@ -398,11 +419,11 @@ function YAxisLabels({ ticks }: { ticks: YTick[] }) {
 }
 
 /** Slot geometry shared by both bar kinds: `n` equal slots, bars `fill` of a slot wide. */
-function slots(width: number, n: number, fill: number) {
+function slots(width: number, n: number, fill: number, left: number) {
   const right = width - RIGHT_PAD;
-  const slot = (right - LEFT) / n;
+  const slot = (right - left) / n;
   const bw = slot * fill;
-  const bx = (i: number) => LEFT + slot * i + (slot - bw) / 2;
+  const bx = (i: number) => left + slot * i + (slot - bw) / 2;
   return { right, bw, bx, centre: (i: number) => bx(i) + bw / 2 };
 }
 
@@ -429,10 +450,10 @@ interface LineChartProps {
   formatValue: (v: number) => string;
 }
 
-function lineXs(width: number, n: number): number[] {
+function lineXs(width: number, n: number, left: number): number[] {
   const right = width - RIGHT_PAD;
   return Array.from({ length: n }, (_, i) =>
-    n === 1 ? right : LEFT + (i * (right - LEFT)) / (n - 1)
+    n === 1 ? right : left + (i * (right - left)) / (n - 1)
   );
 }
 
@@ -442,13 +463,16 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
   const lo = Math.min(...values, ...(reference === undefined ? [] : [reference]));
   const hi = Math.max(...values, ...(reference === undefined ? [] : [reference]));
   const ticks = niceTicks(lo, hi, 4, reference ?? 0);
+  const tickTexts = ticks.values.map((v) => formatTick(v, ticks.step));
+  const gutter = gutterFor(tickTexts);
+  const { left } = gutter;
   const domain: [number, number] = [ticks.values[0], ticks.values[ticks.values.length - 1]];
   const y = yScale(domain);
   const n = points.length;
   return (
     <ChartCanvas
       ariaLabel={ariaLabel}
-      xsFor={(w) => lineXs(w, n)}
+      xsFor={(w) => lineXs(w, n, left)}
       readoutOf={(i) => {
         const text = points[i].display ?? formatValue(points[i].value);
         return { value: text, text, label: points[i].label };
@@ -457,7 +481,7 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
     >
       {(width, hovered) => {
         const right = width - RIGHT_PAD;
-        const xs = lineXs(width, n);
+        const xs = lineXs(width, n, left);
         const mid = Math.floor((n - 1) / 2);
         const isRef = (v: number) => reference !== undefined && Math.abs(v - reference) < 1e-9;
         const last = points[n - 1];
@@ -467,23 +491,24 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
               data-role="grid"
               d={ticks.values
                 .filter((v) => !isRef(v))
-                .map((v) => `M${LEFT} ${f1(y(v))}H${f1(right)}`)
+                .map((v) => `M${left} ${f1(y(v))}H${f1(right)}`)
                 .join('')}
               stroke={C.grid}
             />
             {reference !== undefined && (
               <path
                 data-role="reference"
-                d={`M${LEFT} ${f1(y(reference))}H${f1(right)}`}
+                d={`M${left} ${f1(y(reference))}H${f1(right)}`}
                 stroke={C.reference}
                 strokeOpacity={0.7}
                 strokeDasharray="4 3"
               />
             )}
             <YAxisLabels
-              ticks={ticks.values.map((v) => ({
+              gutter={gutter}
+              ticks={ticks.values.map((v, i) => ({
                 y: y(v),
-                text: formatTick(v, ticks.step),
+                text: tickTexts[i],
                 emphasis: isRef(v),
               }))}
             />
@@ -518,6 +543,7 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
                 points.map((p) => p.label),
                 mid,
                 xs[mid],
+                left,
                 right
               )}
             />
@@ -572,6 +598,9 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
   });
   // Three ticks, as the mockup draws bars: 0 / 500 / 1k.
   const ticks = niceTicks(0, Math.max(...bars.map((b) => b.value)), 3);
+  const tickTexts = ticks.values.map((v) => formatTick(v, ticks.step));
+  const gutter = gutterFor(tickTexts);
+  const { left } = gutter;
   const domain: [number, number] = [0, ticks.values[ticks.values.length - 1]];
   const y = yScale(domain);
   const n = bars.length;
@@ -581,14 +610,14 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
     <ChartCanvas
       ariaLabel={ariaLabel}
       xsFor={(w) => {
-        const g = slots(w, n, BAR_FILL);
+        const g = slots(w, n, BAR_FILL, left);
         return bars.map((_, i) => g.centre(i));
       }}
       readoutOf={barReadout(bars, formatValue)}
       signature={signatureOf(bars)}
     >
       {(width, hovered) => {
-        const { right, bw, bx, centre } = slots(width, n, BAR_FILL);
+        const { right, bw, bx, centre } = slots(width, n, BAR_FILL, left);
         const mid = Math.floor(n / 2);
         return (
           <>
@@ -597,13 +626,14 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
               data-role="grid"
               d={ticks.values
                 .filter((v) => v !== 0)
-                .map((v) => `M${LEFT} ${f1(y(v))}H${f1(right)}`)
+                .map((v) => `M${left} ${f1(y(v))}H${f1(right)}`)
                 .join('')}
               stroke={C.grid}
             />
-            <path data-role="base" d={`M${LEFT} ${BOTTOM}H${f1(right)}`} stroke={C.base} />
+            <path data-role="base" d={`M${left} ${BOTTOM}H${f1(right)}`} stroke={C.base} />
             <YAxisLabels
-              ticks={ticks.values.map((v) => ({ y: y(v), text: formatTick(v, ticks.step) }))}
+              gutter={gutter}
+              ticks={ticks.values.map((v, i) => ({ y: y(v), text: tickTexts[i] }))}
             />
             {bars.map((b, i) => {
               const top = y(b.value);
@@ -648,6 +678,7 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
                 bars.map((b) => b.label),
                 mid,
                 centre(mid),
+                left,
                 right
               )}
             />
@@ -691,14 +722,14 @@ export function SparkChart({ bars, ariaLabel, formatValue }: BarChartProps) {
     <ChartCanvas
       ariaLabel={ariaLabel}
       xsFor={(w) => {
-        const g = slots(w, n, 1);
+        const g = slots(w, n, 1, SPARK_GUTTER.left);
         return bars.map((_, i) => g.centre(i));
       }}
       readoutOf={barReadout(bars, formatValue)}
       signature={signatureOf(bars)}
     >
       {(width, hovered) => {
-        const { right, bw, centre } = slots(width, n, 1);
+        const { right, bw, centre } = slots(width, n, 1, SPARK_GUTTER.left);
         // one glyph a slot wide, never taller than the plot
         const size = Math.min(bw / MONO_ADVANCE_EM, PLOT_H / GLYPH_HEIGHT);
         const mid = Math.floor(n / 2);
@@ -725,6 +756,7 @@ export function SparkChart({ bars, ariaLabel, formatValue }: BarChartProps) {
                 bars.map((b) => b.label),
                 mid,
                 centre(mid),
+                SPARK_GUTTER.left,
                 right
               )}
             />
@@ -766,6 +798,9 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
     cap
   );
   const capStep = cap;
+  const tickTexts = [formatTick(cap, capStep), '0', formatTick(-cap, capStep)];
+  const gutter = gutterFor(tickTexts);
+  const { left } = gutter;
   const zero = (TOP + BOTTOM) / 2;
   const half = PLOT_H / 2;
   const yOf = (v: number) => zero - (v / cap) * half;
@@ -783,29 +818,30 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
     <ChartCanvas
       ariaLabel={label}
       xsFor={(w) => {
-        const g = slots(w, n, SIGNED_FILL);
+        const g = slots(w, n, SIGNED_FILL, left);
         return points.map((_, i) => g.centre(i));
       }}
       readoutOf={(i) => ({ ...points[i].readout, label: points[i].label })}
       signature={signatureOf(points)}
     >
       {(width, hovered) => {
-        const { right, bw, bx, centre } = slots(width, n, SIGNED_FILL);
+        const { right, bw, bx, centre } = slots(width, n, SIGNED_FILL, left);
         const mid = Math.floor(n / 2);
         return (
           <>
             {scan?.defs}
             <path
               data-role="grid"
-              d={`M${LEFT} ${TOP}H${f1(right)}M${LEFT} ${BOTTOM}H${f1(right)}`}
+              d={`M${left} ${TOP}H${f1(right)}M${left} ${BOTTOM}H${f1(right)}`}
               stroke={C.grid}
             />
-            <path data-role="base" d={`M${LEFT} ${zero}H${f1(right)}`} stroke={C.base} />
+            <path data-role="base" d={`M${left} ${zero}H${f1(right)}`} stroke={C.base} />
             <YAxisLabels
+              gutter={gutter}
               ticks={[
-                { y: TOP, text: formatTick(cap, capStep) },
-                { y: zero, text: '0' },
-                { y: BOTTOM, text: formatTick(-cap, capStep) },
+                { y: TOP, text: tickTexts[0] },
+                { y: zero, text: tickTexts[1] },
+                { y: BOTTOM, text: tickTexts[2] },
               ]}
             />
             {bars.map((b, i) => {
@@ -850,6 +886,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
                 points.map((p) => p.label),
                 mid,
                 centre(mid),
+                left,
                 right
               )}
             />
