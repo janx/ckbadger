@@ -354,6 +354,16 @@ describe('the pipeline gilt (direction G)', () => {
     expect(contrastRatio(PALETTE.light.text, PALETTE.light['pipeline-gilt'])).toBeCloseTo(4.77, 2);
   });
 
+  // Ruling R2: the same words measured perceptually (|Lc|), with the night's ruled inks.
+  it('measures the number and the counts on the gilt perceptually, by night and by day', () => {
+    const on = (theme: (typeof THEMES)[number], key: 'text-bright' | 'text') =>
+      Math.abs(apcaLc(PALETTE[theme][key], PALETTE[theme]['pipeline-gilt']));
+    expect(on('dark', 'text-bright')).toBeCloseTo(78.39, 1);
+    expect(on('dark', 'text')).toBeCloseTo(65.79, 1);
+    expect(on('light', 'text-bright')).toBeCloseTo(62.2, 1);
+    expect(on('light', 'text')).toBeCloseTo(50.78, 1);
+  });
+
   it('stands the gilt off the plate it lies on by 1.25:1, in both themes', () => {
     for (const theme of THEMES)
       expect(
@@ -399,6 +409,16 @@ describe('the pipeline plate, its cut and its dots (direction F)', () => {
         const ratio = contrastRatio(PALETTE[theme][key], ink(theme, 'pipeline-plate'));
         expect(ratio, `${theme} ${key} on the plate`).toBeGreaterThanOrEqual(4.5);
       }
+  });
+
+  // Ruling R2: the same words measured perceptually (|Lc|), with the night's ruled inks.
+  it('measures the number and the counts on the plate perceptually, by night and by day', () => {
+    const on = (theme: (typeof THEMES)[number], key: 'text-bright' | 'text') =>
+      Math.abs(apcaLc(PALETTE[theme][key], ink(theme, 'pipeline-plate')));
+    expect(on('dark', 'text-bright')).toBeCloseTo(85.75, 1);
+    expect(on('dark', 'text')).toBeCloseTo(73.16, 1);
+    expect(on('light', 'text-bright')).toBeCloseTo(79.41, 1);
+    expect(on('light', 'text')).toBeCloseTo(67.99, 1);
   });
 
   // A step is the stage colour mixed toward the theme's step-to ink by STEP_W
@@ -776,5 +796,140 @@ describe('apcaLc: the perceptual contrast (APCA-W3 0.0.98G-4g)', () => {
     // under the low clamp (|Lc| below 10 before the offset) there is no contrast to speak of
     expect(apcaLc('#16130f', '#15120f')).toBe(0);
     expect(() => apcaLc('#fff', '#000000')).toThrow('#fff is not #rrggbb');
+  });
+});
+
+/** The perceptual grade (|Lc|) of a key read on a ground key, in a theme. */
+function lcOn(theme: (typeof THEMES)[number], key: PaletteKey, ground: PaletteKey): number {
+  return Math.abs(apcaLc(PALETTE[theme][key], PALETTE[theme][ground]));
+}
+
+/** The grounds the full floors hold on (the page, the surface, the well); the elevated tint is a little lower. */
+const FLOOR_GROUNDS: PaletteKey[] = ['base-bg', 'base-surface', 'base-void'];
+
+/** Every ink that carries a word besides the bright and the reading ink: the quiet ink, every accent, class, cell part and region of the text grade. */
+const WORD_INKS = TEXT_GRADE.filter((key) => key !== 'text-bright' && key !== 'text');
+
+/** The inks of marks, never words, from the quietest up. */
+const MARK_INKS = ['text-ghost', 'ink-quiet', 'ink-muted'] as const satisfies readonly PaletteKey[];
+
+// Readability plan 2026-11-18, ruling R2 (the owner's Gate F0: the night ladder as the prototype
+// showed it, accents at Lc 70): a word is graded by its perceptual contrast on the ground it is
+// read on. The reading ink reads at Lc 75 or more and every other word ink at 60 or more on the
+// page, the surface and the well, at 72 and 58 on the elevated tint; the marks stay under 60. The
+// floors are the night's grade, and a floor the day values already clear: the day keeps its
+// values. WCAG's 4.5:1 (above) stays the second floor.
+describe('the text grade by perceptual contrast (ruling R2)', () => {
+  it.each(THEMES)(
+    'reads the reading ink at Lc 75 and every other word ink at Lc 60 on the page, the surface and the well, 72 and 58 on the elevated tint: %s',
+    (theme) => {
+      const short: string[] = [];
+      const floor = (key: PaletteKey, ground: PaletteKey, min: number) => {
+        const lc = lcOn(theme, key, ground);
+        if (lc < min) short.push(`${key} on ${ground}: Lc ${lc.toFixed(1)} < ${min}`);
+      };
+      for (const ground of FLOOR_GROUNDS) {
+        floor('text', ground, 75);
+        for (const key of WORD_INKS) floor(key, ground, 60);
+      }
+      floor('text', 'base-elevated', 72);
+      for (const key of WORD_INKS) floor(key, 'base-elevated', 58);
+      expect(short).toEqual([]);
+    }
+  );
+
+  it.each(THEMES)(
+    'sets the bright, the reading and the quiet ink at least 10 Lc apart, in that order, on every ground: %s',
+    (theme) => {
+      for (const ground of GROUNDS) {
+        const bright = lcOn(theme, 'text-bright', ground);
+        const reading = lcOn(theme, 'text', ground);
+        const quiet = lcOn(theme, 'text-dim', ground);
+        expect(bright - reading, `bright over reading on ${ground}`).toBeGreaterThanOrEqual(10);
+        expect(reading - quiet, `reading over quiet on ${ground}`).toBeGreaterThanOrEqual(10);
+      }
+    }
+  );
+
+  // By day the muted ink reads over the word floor on the paper, the sheet and the well (Lc 64.4,
+  // 69.6, 70.7; 57.5 on the elevated tint), as it did before this ruling: the day values are not
+  // this ruling's to move, so it is reported (readability lane F1) and held here as the one known
+  // exception, which a fix of the day ink or a new exception will both show.
+  it('keeps the ghost, the quiet and the muted ink under Lc 60 on every ground in both themes, in rising order: marks, never words', () => {
+    const over: string[] = [];
+    for (const theme of THEMES)
+      for (const ground of GROUNDS) {
+        const marks = MARK_INKS.map((key) => lcOn(theme, key, ground));
+        marks.forEach((lc, i) => {
+          if (lc >= 60) over.push(`${theme} ${MARK_INKS[i]} on ${ground}`);
+        });
+        expect(marks[0], `${theme} ghost under quiet on ${ground}`).toBeLessThan(marks[1]);
+        expect(marks[1], `${theme} quiet under muted on ${ground}`).toBeLessThan(marks[2]);
+      }
+    expect(over).toEqual([
+      'light ink-muted on base-void',
+      'light ink-muted on base-bg',
+      'light ink-muted on base-surface',
+    ]);
+  });
+
+  // An accent's quiet step (`-dim`) reads under it and its bright step (`-bright`) over it. By day
+  // the old gold's quiet step reads a hair over the gold itself (Lc 69.3 against 69.1 on the paper,
+  // on every ground), as it did before this ruling: reported (readability lane F1) and held here as
+  // the one known exception.
+  it('reads an accent’s -dim step under it and its -bright step over it, on every ground in both themes', () => {
+    const steps = (suffix: '-dim' | '-bright') =>
+      PALETTE_KEYS.filter((key) => key.endsWith(suffix) && key !== `text${suffix}`).map((key) => {
+        const accent = key.slice(0, -suffix.length) as PaletteKey;
+        expect(PALETTE_KEYS, `${key}'s accent`).toContain(accent);
+        return [key, accent] as const;
+      });
+    const dims = steps('-dim');
+    const brights = steps('-bright');
+    expect(dims.map(([key]) => key).sort()).toEqual([
+      'amber-dim',
+      'aqua-dim',
+      'gold-dim',
+      'jade-dim',
+      'lavender-dim',
+      'rouge-dim',
+    ]);
+    expect(brights.map(([key]) => key).sort()).toEqual([
+      'aqua-bright',
+      'gold-bright',
+      'jade-bright',
+      'rouge-bright',
+      'token-bright',
+    ]);
+    const wrong: string[] = [];
+    for (const theme of THEMES)
+      for (const ground of GROUNDS) {
+        for (const [dim, accent] of dims)
+          if (!(lcOn(theme, dim, ground) < lcOn(theme, accent, ground)))
+            wrong.push(`${theme} ${dim} on ${ground}`);
+        for (const [bright, accent] of brights)
+          if (!(lcOn(theme, bright, ground) > lcOn(theme, accent, ground)))
+            wrong.push(`${theme} ${bright} on ${ground}`);
+      }
+    expect(wrong).toEqual([
+      'light gold-dim on base-void',
+      'light gold-dim on base-bg',
+      'light gold-dim on base-surface',
+      'light gold-dim on base-elevated',
+    ]);
+  });
+
+  // By night a rule, a track and a frame take the day's rule (R5, below): a row rule, the hair and a
+  // bar's track clear the page ground by 1.25:1, a frame by 1.40:1 (the owner's Gate F0); before,
+  // they were the boards' hair (1.11:1), elevated tint (1.14:1) and line (1.21:1).
+  it.each([
+    ['row-rule', 1.25],
+    ['row-rule-deep', 1.25],
+    ['base-border-subtle', 1.25],
+    ['bar-track', 1.25],
+    ['bar-track-deep', 1.25],
+    ['base-border', 1.4],
+  ] as const)('stands %s off the night page ground by %s:1', (key, ratio) => {
+    expect(contrastRatio(PALETTE.dark[key], PALETTE.dark['base-bg'])).toBeGreaterThanOrEqual(ratio);
   });
 });
