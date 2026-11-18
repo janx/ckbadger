@@ -378,32 +378,40 @@ describe('ConcentrationBar with the group names inside its segments (hierarchy v
     { label: 'next 90', value: BigInt(311) },
     { label: 'the other 16,541', value: BigInt(427) },
   ];
-  const bar = (width: number) => {
+  /** A largest group of 11 %, whose words fit its segment at the DAO page's widest column. */
+  const fitting = [
+    { label: 'largest', value: BigInt(110) },
+    { label: 'next 9', value: BigInt(179) },
+    { label: 'next 90', value: BigInt(311) },
+    { label: 'the other 16,541', value: BigInt(400) },
+  ];
+  const bar = (width: number, of = groups) => {
     stubChartWidth(width);
     return render(
       <ConcentrationBar
         label="Share of deposits"
         assetClass="dao"
         total={BigInt(1000)}
-        groups={groups}
+        groups={of}
         labelsInside
       />
     );
   };
 
   it('draws a 28 px bar with each name and share inside its segment, and no legend row', () => {
-    // re-pinned (readability R4): the words are text-small, 13 px since R4 (7.8 px a glyph, was
-    // 7 px snapped at 12): "largest 8.3%"'s 13 characters and 20 px padding need 121.4 px, 8.3 %
-    // of a 1,463 px bar (was 1,338), so the bar is drawn 1,480 px wide here (was 1,408)
-    const { container } = bar(1480);
+    // Re-pinned (review-fb-tests finding 3): the bar was drawn 1,480 px wide (1,408 before R4) so
+    // that a largest group of 8.3 % held its words, a width no page gives it (the DAO page's
+    // column is at most 1,232 px). Drawn at 1,232 with a largest group of 11 %: "largest 11.00%"
+    // is 14 glyphs at 13 px and 2 × 10 px of padding, 129.2 px of the segment's 135.5.
+    const { container } = bar(1232, fitting);
     const img = screen.getByRole('img', { name: /^Share of deposits/ });
     expect(img).toHaveClass('h-[28px]');
     const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
     expect(segments.map((s) => s.textContent)).toEqual([
-      'largest 8.30%',
+      'largest 11.00%',
       'next 9 · 17.90%',
       'next 90 · 31.10%',
-      'the other 16,541 · 42.70%',
+      'the other 16,541 · 40.00%',
     ]);
     // The fade is the background's, so the words keep full ink. Re-pinned with DY-03 (UI review
     // 2026-11-14): the ink is the one the fill's own luminance calls for in the theme (by night the
