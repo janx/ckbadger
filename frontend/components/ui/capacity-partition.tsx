@@ -1,6 +1,6 @@
 'use client';
 import { useState, type ReactNode } from 'react';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { percentOf } from '@/lib/format-unit';
@@ -63,7 +63,7 @@ export function CapacityPartition({
       {showTotal && (
         <div className="text-small mb-3 flex flex-wrap justify-between gap-2">
           <span className="text-text-dim">CKB held</span>
-          <ExactCkb shannons={sum} signed={false} tone="plain" />
+          <CkbAmount form="column" shannons={sum} signed={false} tone="plain" />
         </div>
       )}
       {sum > BigInt(0) && minSegmentWidth !== undefined && (
@@ -115,7 +115,7 @@ export function CapacityPartition({
           >
             <dt className="text-text-dim">{p.label}</dt>
             <dd>
-              <ExactCkb shannons={p.value} signed={false} tone="plain" />
+              <CkbAmount form="column" shannons={p.value} signed={false} tone="plain" />
               {sum > BigInt(0) && (
                 <span className="text-text-dim ml-2">{percentOf(p.value, sum)}</span>
               )}

@@ -127,7 +127,9 @@ describe('protocol display names', () => {
 });
 
 describe('ItemDeltaFact', () => {
-  it('states a token change exactly with its sign and symbol', () => {
+  // Readability R5 (re-pinned on purpose): a feed line's token change is the summary form, cut,
+  // its exact value in its title (it was every digit: "−36,583.46853885 Seal").
+  it('states a token change in its summary form with its sign and symbol, exact in its title', () => {
     render(
       <ItemDeltaFact
         size="row"
@@ -140,9 +142,11 @@ describe('ItemDeltaFact', () => {
         }}
       />
     );
-    expect(screen.getByRole('link', { name: `${MINUS}36,583.46853885 Seal` })).toHaveAttribute(
-      'href',
-      '/mainnet/tokens/0xseal'
+    const link = screen.getByRole('link', { name: `${MINUS}36,583 Seal` });
+    expect(link).toHaveAttribute('href', '/mainnet/tokens/0xseal');
+    expect(link.querySelector('[data-token-amount]')).toHaveAttribute(
+      'title',
+      `${MINUS}36,583.46853885`
     );
   });
 
@@ -399,7 +403,8 @@ describe('row parts (F2-tx)', () => {
     // Default: the symbol shares the amount's ink (Address board, unchanged).
     expect(screen.getByText(/iCKB$/)).toBe(screen.getByRole('link'));
     rerender(<ItemDeltaFact size="row" tone="sign" symbol="dim" item={item} />);
-    const link = screen.getByRole('link', { name: `${MINUS}84,651.87699473 iCKB` });
+    // the summary form (R5, re-pinned on purpose: was every digit)
+    const link = screen.getByRole('link', { name: `${MINUS}84,651 iCKB` });
     expect(link).toHaveClass('text-negative');
     expect(within(link).getByText('iCKB')).toHaveClass('text-text-dim');
   });

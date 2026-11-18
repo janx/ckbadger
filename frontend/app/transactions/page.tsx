@@ -14,7 +14,7 @@ import { Hash } from '@/components/ui/hash';
 import { RowSeal } from '@/components/ui/row-seal';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { activityHeadline } from '@/components/activity-event-row';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
 import type { PoolStatus } from '@/lib/api';
@@ -121,7 +121,8 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
     tx.value === null ? (
       <span className="text-text-dim">Interpretation partial</span>
     ) : (
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
         signed={false}
         tone="plain"
@@ -130,7 +131,8 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
   const fee = (
     <span className="whitespace-nowrap">
       fee{' '}
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
         signed={false}
         tone="plain"
@@ -357,7 +359,8 @@ export default function TransactionsPage() {
         tx.value === null ? (
           <span className="text-text-dim whitespace-normal">Interpretation partial</span>
         ) : (
-          <ExactCkb
+          <CkbAmount
+            form="column"
             shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
             signed={false}
             tone="plain"
@@ -371,7 +374,8 @@ export default function TransactionsPage() {
       minWidth: 128,
       numeric: true,
       render: (tx) => (
-        <ExactCkb
+        <CkbAmount
+          form="column"
           shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
           signed={false}
           tone="plain"

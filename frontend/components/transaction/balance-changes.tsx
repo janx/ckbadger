@@ -1,6 +1,6 @@
 'use client';
 import { ItemDeltaFact, readable } from '@/components/activity-event-row';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -179,7 +179,7 @@ export function BalanceChanges({
                     />
                   </span>
                   <span role="cell" className="text-right">
-                    <ExactCkb shannons={BigInt(p.ckbDelta)} />
+                    <CkbAmount form="column" shannons={BigInt(p.ckbDelta)} />
                   </span>
                   <span role="cell" className="text-right tabular-nums">
                     {formatOccupiedDelta(p.usedDelta)}
@@ -200,7 +200,7 @@ export function BalanceChanges({
                     <>
                       <span role="cell">Net</span>
                       <span role="cell" className="text-right">
-                        <ExactCkb shannons={n.ckb} tone="plain" />
+                        <CkbAmount form="column" shannons={n.ckb} tone="plain" />
                       </span>
                       <span role="cell" className="text-right tabular-nums">
                         {formatOccupiedDelta(n.occupied.toString())}
@@ -216,7 +216,7 @@ export function BalanceChanges({
               {activity.participants.map((p, i) => {
                 // the list forms are phone rows: tight (U-09)
                 const party = <ParticipantRefView participant={p} size="tight" compact quiet />;
-                const ckb = <ExactCkb shannons={BigInt(p.ckbDelta)} />;
+                const ckb = <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />;
                 const occupied = (
                   <>
                     occupied{' '}
@@ -295,7 +295,7 @@ export function BalanceChanges({
                   return (
                     <>
                       <span>
-                        Net <ExactCkb shannons={n.ckb} tone="plain" /> · occupied{' '}
+                        Net <CkbAmount form="summary" shannons={n.ckb} tone="plain" /> · occupied{' '}
                         <span className="text-text tabular-nums">
                           {formatOccupiedDelta(n.occupied.toString())}
                         </span>

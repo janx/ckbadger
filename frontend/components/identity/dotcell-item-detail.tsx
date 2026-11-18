@@ -7,7 +7,7 @@ import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
 import { AppLink } from '@/components/ui/app-link';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
@@ -169,7 +169,13 @@ function ScopedName({ itemRef }: { itemRef: string }) {
       {item.sale && (
         <section aria-label="For sale" className="space-y-3">
           <PromptHeading command="For sale" />
-          <ExactCkb shannons={BigInt(item.sale.priceShannons)} signed={false} tone="plain" wrap />
+          <CkbAmount
+            form="column"
+            shannons={BigInt(item.sale.priceShannons)}
+            signed={false}
+            tone="plain"
+            wrap
+          />
           <dl>
             <NamedParty party={item.sale.seller} label="Seller" />
           </dl>

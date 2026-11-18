@@ -447,8 +447,15 @@ describe('Tokens Inventory Page', () => {
 
     render(<TokensPage />);
 
+    // The supply is the list's summary form: exactly 1, so it is not cut and carries no title
+    // (readability R5, re-pinned on purpose: TokenTwoPlaces titled every amount, "1"); a float would have made it
+    // 1.000000000000000016777216, cut to "1" and titled with that.
     await waitFor(() => {
-      expect(screen.getAllByTitle('1').length).toBeGreaterThan(0);
+      expect(
+        [...document.querySelectorAll('[data-token-amount]')].some(
+          (el) => el.textContent === '1' && !el.hasAttribute('title')
+        )
+      ).toBe(true);
     });
     expect(screen.queryByText(/1\.000000000000000016777216/)).toBeNull();
   });

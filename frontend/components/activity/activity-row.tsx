@@ -19,7 +19,7 @@ import {
   protocolActionNoteFacts,
   type ProtocolNoteFact,
 } from '@/components/activity-event-row';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
@@ -449,7 +449,7 @@ function protocolRunSummary(
           data-role="protocol-total"
           title={`${formatCkbAmount(total).full} CKB, the sum of ${count}`}
         >
-          <ExactCkb shannons={total} signed={false} tone="plain" />
+          <CkbAmount form="column" shannons={total} signed={false} tone="plain" />
         </span>
       ),
     ]),
@@ -494,7 +494,7 @@ function ProtocolActionLine({
             className="inline-block text-right tabular-nums"
             style={{ minWidth: `${amountWidth}ch` }}
           >
-            <ExactCkb shannons={f.shannons} signed={false} tone="plain" />
+            <CkbAmount form="column" shannons={f.shannons} signed={false} tone="plain" />
           </span>
           {f.suffix}
         </>
@@ -818,7 +818,8 @@ function ParticipantLine({
         </span>
       )}
       <span data-role="ckb">
-        <ExactCkb shannons={BigInt(p.ckbDelta)} />
+        {/* A feed line: the summary form (R5), the exact change in its title. */}
+        <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
       </span>
       {phoneObjects && (
         <span

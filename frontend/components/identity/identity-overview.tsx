@@ -3,7 +3,7 @@ import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } fro
 import { AppLink } from '@/components/ui/app-link';
 import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
 import { describeIdentityRecords } from '@/lib/identity-records';
@@ -51,13 +51,14 @@ function heldFact(protocol: IdentityProtocol, isLive: boolean): AssetMetric {
   if (occupied > held) throw new Error(`${protocol.itemId}: occupied exceeds the cell's capacity`);
   return {
     label: 'CKB held in its cell',
-    value: <ExactCkb shannons={held} signed={false} tone="plain" wrap />,
+    value: <CkbAmount form="summary" shannons={held} signed={false} tone="plain" wrap />,
     note: isLive ? (
       <>
         <span className="text-text">
-          <ExactCkb shannons={occupied} signed={false} tone="plain" />
+          <CkbAmount form="summary" shannons={occupied} signed={false} tone="plain" />
         </span>{' '}
-        occupied · <ExactCkb shannons={held - occupied} signed={false} tone="plain" /> free
+        occupied ·{' '}
+        <CkbAmount form="summary" shannons={held - occupied} signed={false} tone="plain" /> free
       </>
     ) : (
       'no live cell'

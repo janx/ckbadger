@@ -11,7 +11,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { AppLink } from '@/components/ui/app-link';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ShortId } from '@/components/ui/short-id';
 
 /**
@@ -299,7 +299,7 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
           tail={
             <>
               {item.stage === 'deposit' ? ' of ' : ' for '}
-              <ExactCkb shannons={item.capacity} signed={false} tone="plain" />
+              <CkbAmount form="column" shannons={item.capacity} signed={false} tone="plain" />
             </>
           }
         />

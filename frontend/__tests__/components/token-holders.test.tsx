@@ -219,8 +219,9 @@ describe('Token holders (board L5)', () => {
     expect(within(first).getByText('JoyID')).toHaveClass('truncate');
     expect(within(first).getByText('JoyID')).toHaveAttribute('title', `0x${'9b'.repeat(32)}`);
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
-    expect(first).toHaveTextContent('562,997.00');
-    expect(first).not.toHaveTextContent('562,997.00000000');
+    // the list's summary form: whole from 1,000 up (readability R5, re-pinned on purpose: was "562,997.00", two places)
+    expect(first).toHaveTextContent('JoyID562,9972.32%');
+    expect(first).not.toHaveTextContent('562,997.00');
     expect(first).toHaveAttribute(
       'title',
       `#1 · ckb1qrgqep8s${'q'.repeat(40)}tllakf · JoyID · 562,997 RGB++ · 2.32% of supply`
@@ -242,7 +243,8 @@ describe('Token holders (board L5)', () => {
         tone: 'head',
         // U-09 (re-pinned): the phone row's address at the tight size
         left: '1ckb1…tllakf JoyID',
-        right: '562,997.00000000',
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "562,997.00000000")
+        right: '562,997',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
       // mark (41.23 % at most: 60 %, the table's), and the share's number sits right after its

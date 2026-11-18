@@ -25,7 +25,7 @@ import {
   scriptClassLabel,
 } from '@/components/scripts/script-code-evidence';
 import { HeroFigure } from '@/components/scripts/script-hero';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
@@ -245,7 +245,7 @@ function occupiedShare(script: KnownScript): { share: string } {
 }
 
 function capacityText(value: string) {
-  return <ExactCkb shannons={BigInt(value)} signed={false} tone="plain" />;
+  return <CkbAmount form="summary" shannons={BigInt(value)} signed={false} tone="plain" />;
 }
 
 function countText(value: number | undefined): string {
@@ -296,21 +296,6 @@ function ScriptName({ script }: { script: KnownScript }) {
       {!hasName(script) && (
         <span className="text-text-dim text-meta truncate">{refText(script)}</span>
       )}
-    </span>
-  );
-}
-
-/** "454,352,694.86": an exact CKB amount cut (never rounded up) to 2 decimals; the exact one is the row's title. */
-function CkbTwoDp({ shannons }: { shannons: bigint }) {
-  return (
-    <span data-ckb-2dp className="whitespace-nowrap">
-      <ExactCkb
-        shannons={shannons}
-        signed={false}
-        tone="inherit"
-        unit={false}
-        look={{ zero: 'padded', decimals: 'text-text-dim text-meta', padding: 'run', places: 2 }}
-      />
     </span>
   );
 }
@@ -547,7 +532,15 @@ export default function ScriptsPage() {
                 ? { key: 'occupied', label: 'occupied', value: occupiedPpm(s), tone: 'data' }
                 : { key: 'ckb', label: 'CKB', value: wholeCkb(total), tone: 'data' },
             ]}
-            display={<CkbTwoDp shannons={total} />}
+            display={
+              <CkbAmount
+                form="summary"
+                shannons={total}
+                signed={false}
+                tone="inherit"
+                unit={false}
+              />
+            }
             displayWidth={CKB_DISPLAY}
           />
         );

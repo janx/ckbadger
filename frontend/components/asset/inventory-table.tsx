@@ -4,10 +4,10 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
 import { formatStandard } from '@/components/activity-event-row';
-import { AMOUNT_INK, ExactCkb } from '@/components/ui/ckb-amount';
-import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
+import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { exactUnsignedInteger, formatDecimal } from '@/lib/exact-integer';
-import { trimmedCkbText } from '@/lib/ckb-decimal';
+import { ckbAmountText } from '@/lib/amount-form';
 import { formatTick } from '@/lib/chart-ticks';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
@@ -27,37 +27,6 @@ import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { percentOf } from '@/lib/format-unit';
 
-export interface AssetAmountProps {
-  amount: string;
-  decimals: number | null;
-}
-export function AssetAmount({ amount, decimals }: AssetAmountProps) {
-  exactUnsignedInteger(amount, 'asset amount');
-  const { integer, fraction } = splitTokenAmount(amount, decimals);
-  const significant = fraction.replace(/0+$/, '');
-  const groups = integer.split(',');
-  // A digit run never breaks by itself; the only soft breaks are after thousands separators
-  // (IV-28 / IV-13), so a wrapped amount never strands a digit or splits the fraction.
-  return (
-    <span className="tabular-nums" title={formatTokenBalanceWithRawMarker(amount, decimals)}>
-      {groups.flatMap((group, i) =>
-        i < groups.length - 1 ? [`${group},`, <wbr key={i} />] : [group]
-      )}
-      {fraction && (
-        <>
-          <span data-fraction className={AMOUNT_INK.neutral.fraction}>
-            {significant ? `.${significant}` : ''}
-          </span>
-          <span data-ghost className="text-text-ghost">
-            {significant ? '' : '.'}
-            {fraction.slice(significant.length)}
-          </span>
-        </>
-      )}
-      {decimals === null && ' (raw)'}
-    </span>
-  );
-}
 export function AssetCount({ value }: { value: number | string | null | undefined }) {
   if (value === null || value === undefined)
     return <span className="text-text-dim">Unavailable</span>;
@@ -79,13 +48,13 @@ export interface InventoryRowsProps {
 // ── F2 objects (round 2): the Inventory board's rows ──
 const SHANNONS = BigInt(100000000);
 /**
- * Occupied capacity is bytes, so whole CKB; an amount with a fraction is shown exactly (IV-06).
- * `wrap` lets a phone line break it before the decimals; a table row keeps it on one line.
+ * Occupied capacity in a row: the summary form (R5), whole CKB from 1,000 up (it is bytes, so
+ * mostly whole), an amount with a fraction cut and titled with its exact value (IV-06).
  */
-function OccupiedCkb({ shannons, wrap = true }: { shannons: bigint; wrap?: boolean }) {
-  if (shannons % SHANNONS === BigInt(0))
-    return <>{(shannons / SHANNONS).toLocaleString('en-US')}</>;
-  return <ExactCkb shannons={shannons} signed={false} tone="plain" wrap={wrap} />;
+function OccupiedCkb({ shannons }: { shannons: bigint }) {
+  return (
+    <CkbAmount form="summary" shannons={shannons} signed={false} tone="inherit" unit={false} />
+  );
 }
 /** The thumbnail frame of a collection row: crystal / copper for the fully on-chain tiers (IV-10). */
 function thumbFrame(tier: Asset['compositionTier']): CSSProperties | undefined {
@@ -106,7 +75,7 @@ function heldAndOccupiedParts(a: Asset): ReactNode[] {
   if (held === null) return ['CKB held unavailable'];
   return [
     <span key="held" className="whitespace-nowrap">
-      <ExactCkb shannons={held} signed={false} tone="plain" /> held
+      <CkbAmount form="summary" shannons={held} signed={false} tone="plain" /> held
     </span>,
     occupied === null ? (
       'occupied unavailable'
@@ -167,7 +136,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
         {a.totalSupply === null ? (
           'unavailable'
         ) : (
-          <AssetAmount amount={a.totalSupply} decimals={a.decimals} />
+          <TokenAmount form="summary" amount={a.totalSupply} decimals={a.decimals} />
         )}{' '}
         {a.symbol}
       </span>
@@ -328,58 +297,6 @@ export function wordHeads<T>(columns: readonly ListColumn<T>[]): ListColumn<T>[]
 const TRACK = 120;
 const AMOUNT_WIDTH = 118;
 
-/**
- * An exact amount of `unitDecimals` decimals CUT to 2 places (fewer when the unit has fewer): the
- * row's form of it (T1). Never rounded — a rounded figure can show a digit that is not on chain
- * (site precedent, hierarchy lane D3); the exact amount stays in the row's title.
- */
-function twoPlaces(value: bigint, unitDecimals: number): { whole: string; fraction: string } {
-  if (value < BigInt(0) || !Number.isInteger(unitDecimals) || unitDecimals < 0)
-    throw new Error(`invalid amount ${value} with ${unitDecimals} decimals`);
-  const places = Math.min(unitDecimals, 2);
-  const kept = value / BigInt(10) ** BigInt(unitDecimals - places);
-  const unit = BigInt(10) ** BigInt(places);
-  return {
-    whole: (kept / unit).toLocaleString('en-US'),
-    fraction: places === 0 ? '' : (kept % unit).toString().padStart(places, '0'),
-  };
-}
-
-/** CKB to 2 dp, the 2 decimals 11 px dim (board: "2,885,438.81"). */
-export function CkbTwoPlaces({ shannons }: { shannons: bigint }) {
-  if (shannons < BigInt(0)) throw new Error(`invalid amount ${shannons} with 8 decimals`);
-  return (
-    <span data-ckb-two-places>
-      <ExactCkb
-        shannons={shannons}
-        signed={false}
-        tone="inherit"
-        unit={false}
-        look={{ zero: 'padded', decimals: 'text-text-dim text-meta', padding: 'run', places: 2 }}
-      />
-    </span>
-  );
-}
-
-/** A token amount to 2 dp, its decimals in the dim ink; unknown decimals print the raw integer. */
-export function TokenTwoPlaces({ amount, decimals }: { amount: string; decimals: number | null }) {
-  const value = exactUnsignedInteger(amount, 'token amount');
-  const exact = formatTokenBalanceWithRawMarker(amount, decimals);
-  if (decimals === null)
-    return (
-      <span className="tabular-nums" title={exact}>
-        {exact}
-      </span>
-    );
-  const { whole, fraction } = twoPlaces(value, decimals);
-  return (
-    <span className="tabular-nums" title={exact}>
-      {whole}
-      {fraction && <span className="text-text-dim text-meta">.{fraction}</span>}
-    </span>
-  );
-}
-
 /** CKB held and occupied, parsed once; occupied above held is an upstream bug. */
 function heldAndOccupied(a: Asset): { held: bigint | null; occupied: bigint | null } {
   const held =
@@ -391,7 +308,7 @@ function heldAndOccupied(a: Asset): { held: bigint | null; occupied: bigint | nu
   return { held, occupied };
 }
 
-/** Whole CKB, the bar's geometry only (the printed amount is `CkbTwoPlaces`). */
+/** Whole CKB, the bar's geometry only (the printed amount is the summary form beside it). */
 function wholeCkb(shannons: bigint, context: string): number {
   const whole = Number(shannons / SHANNONS);
   if (!Number.isSafeInteger(whole))
@@ -402,11 +319,13 @@ function wholeCkb(shannons: bigint, context: string): number {
 /** "100.00000001 CKB held · 61 CKB occupied (61.0%)" for a row's title. */
 function heldTitle(a: Asset): string {
   const { held, occupied } = heldAndOccupied(a);
-  const parts = [held === null ? 'CKB held unavailable' : `${trimmedCkbText(held)} CKB held`];
+  const parts = [
+    held === null ? 'CKB held unavailable' : `${ckbAmountText(held, 'exact')} CKB held`,
+  ];
   if (occupied === null) parts.push('occupied unavailable');
   else
     parts.push(
-      `${trimmedCkbText(occupied)} CKB occupied${held !== null && held > BigInt(0) ? ` (${percentOf(occupied, held)})` : ''}`
+      `${ckbAmountText(occupied, 'exact')} CKB occupied${held !== null && held > BigInt(0) ? ` (${percentOf(occupied, held)})` : ''}`
     );
   return parts.join(' · ');
 }
@@ -457,7 +376,9 @@ function heldColumn(
           trackWidth={TRACK}
           minFill={2}
           segments={[{ key: 'held', label: 'CKB held', value: wholeCkb(held, a.id), tone: mark }]}
-          display={<CkbTwoPlaces shannons={held} />}
+          display={
+            <CkbAmount form="summary" shannons={held} signed={false} tone="inherit" unit={false} />
+          }
           displayWidth={AMOUNT_WIDTH}
         />
       );
@@ -543,7 +464,7 @@ function tokenColumns(rows: readonly Asset[]): ListColumn<Asset>[] {
           <span>Unavailable</span>
         ) : (
           <span className="block truncate">
-            <TokenTwoPlaces amount={a.totalSupply} decimals={a.decimals} />
+            <TokenAmount form="summary" amount={a.totalSupply} decimals={a.decimals} />
           </span>
         ),
     },
@@ -740,9 +661,7 @@ function identityColumns(rows: readonly Asset[]): ListColumn<Asset>[] {
       render: (a) => {
         const { occupied } = heldAndOccupied(a);
         return (
-          <span>
-            {occupied === null ? 'Unavailable' : <OccupiedCkb shannons={occupied} wrap={false} />}
-          </span>
+          <span>{occupied === null ? 'Unavailable' : <OccupiedCkb shannons={occupied} />}</span>
         );
       },
     },

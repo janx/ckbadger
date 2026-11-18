@@ -80,11 +80,9 @@ const arrow = (anchor: string): Allowed => ({ reason: ARROW, anchor });
 /** `text-text-ghost` sites, each the padding zeros of a number or pure decoration. */
 const GHOST_ALLOWLIST: Allowlist = {
   'app/fiber/channels/[id]/client-page.tsx': [separator('>/</span>')],
-  'components/address/address-holdings.tsx': [padding('data-ghost')],
   'components/asset/asset-feed.tsx': [separator('> · </span>')],
   'components/asset/detail-shell.tsx': [separator('>/</span>')],
   'components/asset/genetics.tsx': [arrow('aria-hidden="true"')],
-  'components/asset/inventory-table.tsx': [padding('data-ghost')],
   // the mechanism chain's arrow (the amounts' padding zeros are ckb-amount.tsx's)
   'components/dao/dao-board.tsx': [arrow('aria-hidden="true"')],
   'components/scripts/script-family-page.tsx': [separator('>/</span>')],

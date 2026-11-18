@@ -86,7 +86,8 @@ describe('FiberChannelsPage', () => {
     const companion = within(hero).getByText(/^locking/);
     expect(
       Array.from(companion.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
-    ).toEqual(['3,000.00000000 CKB']);
+      // the figure's companion in the summary form (readability R5, re-pinned on purpose: was "3,000.00000000 CKB")
+    ).toEqual(['3,000 CKB']);
     // the other three figures: one quiet row under the reading, outside the hero section
     await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(3));
     expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
@@ -280,7 +281,8 @@ describe('Fiber channel phone row (board L8)', () => {
         'pair',
         'body',
         'ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
-        '3,000.00000000 CKB',
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "3,000.00000000 CKB")
+        '3,000 CKB',
       ],
       [
         'time',
@@ -308,7 +310,8 @@ describe('Fiber channel phone row (board L8)', () => {
       [
         'channel',
         '0x0101…0101 · ckb1…pr3prn ⇄ 0xbbbb…bbbb Default Lock · unnamed lock',
-        '3,000.00000000 CKB',
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "3,000.00000000 CKB")
+        '3,000 CKB',
       ],
       ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3m 20s$/), 'open'],
     ]);

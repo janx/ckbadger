@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { formatCompactInteger, formatCompactRatio } from '@/lib/exact-integer';
-import { formatCkbCompact } from '@/lib/utils';
+import { ckbAmountText } from '@/lib/amount-form';
 import { formatTick } from '@/lib/chart-ticks';
 import { percentFigure, percentOf, withUnit } from '@/lib/format-unit';
 
@@ -16,25 +16,30 @@ describe('compact numbers: one form (CH-14)', () => {
     expect(formatTick(500_000, 100_000)).toBe('500k');
     expect(formatCompactInteger('123456', 'count')).toBe('123.46k');
     expect(formatCompactRatio(BigInt(1234567), BigInt(1000))).toBe('1.23k');
-    expect(formatCkbCompact(BigInt('12345600000000')).value).toBe('123.46k');
+    // re-pinned on purpose (R5): a CKB amount's compact form is cut, 123,456 CKB is 123.45k
+    expect(ckbAmountText(BigInt('12345600000000'), 'compact')).toBe('123.45k');
   });
 
   it('keeps M, B and T for the larger magnitudes', () => {
     expect(formatCompactInteger('123456789', 'count')).toBe('123.46M');
-    expect(formatCkbCompact(BigInt('3360000000000000000')).value).toBe('33.60B');
-    expect(formatCkbCompact(BigInt('120000000000000000000')).value).toBe('1.20T');
+    expect(ckbAmountText(BigInt('3360000000000000000'), 'compact')).toBe('33.60B');
+    expect(ckbAmountText(BigInt('120000000000000000000'), 'compact')).toBe('1.20T');
   });
 
-  // The review's item J: the unit is chosen for the ROUNDED value, as formatCompactInteger does;
-  // 999,995 CKB rounds to 1,000.00k at two decimals of k, which is 1.00M (it printed '1000.00k')
-  it('chooses the unit for the rounded amount at every boundary', () => {
+  // The review's item J chose the unit for the ROUNDED value ('1.00M' for 999,995 CKB, never
+  // '1000.00k'). Readability plan R5 (re-pinned on purpose): a CKB amount is cut, never rounded,
+  // so the unit is the one the amount itself reaches and no figure shows a digit that is not on
+  // chain: 999,995 CKB is 999.99k, 999.995 CKB is 999.99.
+  it('chooses the unit the cut amount reaches at every boundary', () => {
     const ckb = (n: string) => BigInt(n) * BigInt(100000000);
-    expect(formatCkbCompact(ckb('999994')).value).toBe('999.99k');
-    expect(formatCkbCompact(ckb('999995')).value).toBe('1.00M');
-    expect(formatCkbCompact(ckb('999999995')).value).toBe('1.00B');
-    expect(formatCkbCompact(ckb('999999999995')).value).toBe('1.00T');
-    expect(formatCkbCompact(BigInt('99999500000')).value).toBe('1.00k'); // 999.995 CKB
-    expect(formatCkbCompact(BigInt('99999400000')).value).toBe('999.99'); // 999.994 CKB
+    const compact = (shannons: bigint) => ckbAmountText(shannons, 'compact');
+    expect(compact(ckb('999994'))).toBe('999.99k');
+    expect(compact(ckb('999995'))).toBe('999.99k');
+    expect(compact(ckb('999999995'))).toBe('999.99M');
+    expect(compact(ckb('999999999995'))).toBe('999.99B');
+    expect(compact(ckb('1000000'))).toBe('1.00M');
+    expect(compact(BigInt('99999500000'))).toBe('999.99'); // 999.995 CKB
+    expect(compact(BigInt('99999400000'))).toBe('999.99'); // 999.994 CKB
   });
 });
 

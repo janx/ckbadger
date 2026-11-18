@@ -22,14 +22,13 @@ import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
-import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatUtc8Date } from '@/lib/utils';
 import { Utc8Age } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -169,7 +168,11 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       numeric: true,
       className: '!whitespace-normal',
       render: (r) => (
-        <AssetAmount amount={tokenMoved(r, token.typeHash)} decimals={token.decimals} />
+        <TokenAmount
+          form="column"
+          amount={tokenMoved(r, token.typeHash)}
+          decimals={token.decimals}
+        />
       ),
     });
   columns.push(
@@ -180,7 +183,13 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       numeric: true,
       className: '!whitespace-normal',
       render: (r) => (
-        <ExactCkb shannons={BigInt(r.outputCapacity!)} signed={false} tone="plain" wrap />
+        <CkbAmount
+          form="column"
+          shannons={BigInt(r.outputCapacity!)}
+          signed={false}
+          tone="plain"
+          wrap
+        />
       ),
     },
     {
@@ -189,7 +198,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       minWidth: 140,
       numeric: true,
       className: '!whitespace-normal',
-      render: (r) => <ExactCkb shannons={BigInt(r.fee)} signed={false} tone="plain" wrap />,
+      render: (r) => (
+        <CkbAmount form="column" shannons={BigInt(r.fee)} signed={false} tone="plain" wrap />
+      ),
     },
     {
       key: 'size',
@@ -245,20 +256,29 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
           ) : null,
           token ? (
             <span className="whitespace-nowrap">
-              <AssetAmount amount={tokenMoved(r, token.typeHash)} decimals={token.decimals} />{' '}
+              <TokenAmount
+                form="summary"
+                amount={tokenMoved(r, token.typeHash)}
+                decimals={token.decimals}
+              />{' '}
               {token.symbol ?? 'token'} moved
             </span>
           ) : null,
         ];
         const output = identity ? null : (
-          <ExactCkb shannons={BigInt(r.outputCapacity!)} signed={false} tone="plain" />
+          <CkbAmount
+            form="summary"
+            shannons={BigInt(r.outputCapacity!)}
+            signed={false}
+            tone="plain"
+          />
         );
         const figures = [
           <span key="cells" className="whitespace-nowrap">
             {r.inputsCount} → {formatCount(r.outputsCount, 'cell')}
           </span>,
           <span key="fee" className="whitespace-nowrap">
-            fee <ExactCkb shannons={BigInt(r.fee)} signed={false} tone="plain" />
+            fee <CkbAmount form="summary" shannons={BigInt(r.fee)} signed={false} tone="plain" />
           </span>,
           <span key="size" className="whitespace-nowrap">
             {r.txSize!.toLocaleString('en-US')} B

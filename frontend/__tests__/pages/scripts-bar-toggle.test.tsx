@@ -116,7 +116,10 @@ describe('Scripts bar: CKB or occupied share (table-rows L1-2, D2)', () => {
     );
     expect(await fill('None')).toBe(0);
     // The printed amount is still the CKB in the cells.
-    expect(row.querySelector('[data-ckb-2dp]')).toHaveTextContent('40,000,000,000.00');
+    // the list's summary form (readability R5, re-pinned on purpose: was the two-place "40,000,000,000.00" in [data-ckb-2dp])
+    expect(row.querySelector('[data-aligned-bar] [data-ckb-amount]')).toHaveTextContent(
+      /^40,000,000,000$/
+    );
   });
 
   it('writes the choice to the URL by replace, and CKB drops it', async () => {

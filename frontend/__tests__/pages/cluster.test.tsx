@@ -76,7 +76,8 @@ it('keeps live, created and burned counts separate and never adds the cluster ce
   expect(hero.querySelector('[data-role="figure"]')).toHaveTextContent(
     'objects live8 all live · none burned'
   );
-  expect(hero).toHaveTextContent('4,000.00000000 CKB held in their cells');
+  // the hero's figure in the summary form (readability R5, re-pinned on purpose: was "4,000.00000000")
+  expect(hero).toHaveTextContent('4,000 CKB held in their cells');
 });
 it('applies exact whole-collection trait filtering before pagination and resets the cursor', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue({

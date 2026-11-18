@@ -111,7 +111,8 @@ describe('FiberNetworkGraph', () => {
     expect(within(p).getByText('…aaaaaa ↔ …bbbbbb')).toBeInTheDocument();
     expect(
       Array.from(p.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
-    ).toContain('3,000.00000000 CKB');
+      // a stat in the summary form (readability R5, re-pinned on purpose: was "3,000.00000000 CKB")
+    ).toContain('3,000 CKB');
     expect(within(p).getByText('0 settled · 0 not yet')).toBeInTheDocument();
     expect(within(p).getByText('1m 40s')).toBeInTheDocument();
     expect(within(p).getAllByRole('link', { name: '#10' })).toHaveLength(2);

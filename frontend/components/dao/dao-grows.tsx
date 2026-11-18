@@ -6,11 +6,12 @@ import { Chart } from '@/components/ui/chart';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { api, type DaoArHistory, type DaoEvidence } from '@/lib/api';
-import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { formatPercent, parseShannons } from '@/lib/ckb-decimal';
+import { ckbAmountText } from '@/lib/amount-form';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatUtc8Date } from '@/lib/utils';
 import { unitNode } from '@/components/ui/units';
@@ -19,10 +20,10 @@ import { unitNode } from '@/components/ui/units';
 const EXAMPLE_DEPOSIT = '1000000000000';
 /** The example deposit as the page writes it, from the one constant: `10,000 CKB`, whole CKB. */
 const EXAMPLE_DEPOSIT_CKB = (() => {
-  const parts = splitCkbAmount(parseShannons(EXAMPLE_DEPOSIT, 'DAO example deposit'));
-  if (parts.fraction !== '')
+  const text = ckbAmountText(parseShannons(EXAMPLE_DEPOSIT, 'DAO example deposit'), 'exact');
+  if (text.includes('.'))
     throw new Error(`DAO example deposit ${EXAMPLE_DEPOSIT} shannons is not a whole CKB amount`);
-  return `${parts.integer} CKB`;
+  return `${text} CKB`;
 })();
 const DAY_MS = 86_400_000;
 /** A hovered day asks the calculator once the pointer rests this long, not on every pixel. */
@@ -223,17 +224,7 @@ function arAtFourPlaces(exact: string): string {
   return m[1];
 }
 
+/** The calculator's answer, a readout: the summary form (R5), its exact value in the title. */
 function OwedAmount({ shannons }: { shannons: bigint }) {
-  return (
-    <span className="whitespace-nowrap">
-      +
-      <ExactCkb
-        shannons={shannons}
-        signed={false}
-        tone="inherit"
-        unit={false}
-        look={{ zero: 'padded' }}
-      />
-    </span>
-  );
+  return <CkbAmount form="summary" shannons={shannons} tone="inherit" unit={false} />;
 }

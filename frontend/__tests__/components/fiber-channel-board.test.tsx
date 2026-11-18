@@ -122,13 +122,14 @@ describe('FiberChannelBoard', () => {
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
-    // the display figure: the channel's capacity, exact, bright (R4, R11)
+    // the display figure: the channel's capacity, bright (R4, R11), in the summary form, one run
+    // (readability R5, re-pinned on purpose: was "1,062.00000000", its decimals a hero-sized dim run)
     const capacity = within(hero).getByText(
       (_, el) => el?.getAttribute('data-role') === 'capacity'
     );
-    expect(capacity).toHaveTextContent(/^1,062\.00000000 CKB$/);
+    expect(capacity).toHaveTextContent(/^1,062 CKB$/);
     expect(capacity).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
-    expect(capacity.querySelector('.text-hero')).toHaveTextContent('.00000000');
+    expect(capacity.querySelector('.text-hero')).toBeNull();
     // the pair on the figure's baseline row
     const pair = screen.getByTestId('channel-pair');
     expect(pair.parentElement).toHaveClass('flex', 'items-baseline', 'justify-between');
@@ -410,6 +411,7 @@ describe('FiberChannelBoard', () => {
         token={{ symbol: 'USDI', decimals: 6 }}
       />
     );
-    expect(screen.getByTestId('channel-pair')).toHaveTextContent('holds 123.450000 USDI');
+    // the token beside the figure in its summary form (readability R5, re-pinned on purpose: was "123.450000")
+    expect(screen.getByTestId('channel-pair')).toHaveTextContent('holds 123.45 USDI');
   });
 });

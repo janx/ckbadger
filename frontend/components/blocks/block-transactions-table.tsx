@@ -3,7 +3,7 @@ import { Hash } from '@/components/ui/hash';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -16,7 +16,8 @@ const TRACK = 96;
 function capacity(tx: Transaction) {
   return (
     <span className="text-text-bright">
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(tx.outputCapacity!, `transaction ${tx.hash} output capacity`)}
         signed={false}
         tone="plain"
@@ -29,7 +30,8 @@ function fee(tx: Transaction) {
   return (
     <span className="whitespace-nowrap">
       fee{' '}
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
         signed={false}
         tone="plain"
@@ -150,7 +152,8 @@ export function BlockTransactionsTable({
       minWidth: 140,
       numeric: true,
       render: (tx) => (
-        <ExactCkb
+        <CkbAmount
+          form="column"
           shannons={parseShannons(tx.outputCapacity!, `transaction ${tx.hash} output capacity`)}
           signed={false}
           tone="plain"
@@ -164,7 +167,8 @@ export function BlockTransactionsTable({
       minWidth: 104,
       numeric: true,
       render: (tx) => (
-        <ExactCkb
+        <CkbAmount
+          form="column"
           shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
           signed={false}
           tone="plain"

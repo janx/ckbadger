@@ -40,7 +40,8 @@ import {
   shannonsToCkbNumber,
 } from '@/lib/ckb-decimal';
 import { dailyDeltas, dayLabel } from '@/lib/daily-series';
-import { cn, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
+import { cn, formatCkbAmount } from '@/lib/utils';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
@@ -397,7 +398,19 @@ function AllocationReady({ view }: { view: AllocationView }) {
           swatch="bg-gold"
           name="Nervos DAO"
           value={daoFree}
-          note={`${pct(daoFree)}% · ${formatCkbCompact(daoCapacity).value} locked`}
+          note={
+            <>
+              {pct(daoFree)}% ·{' '}
+              <CkbAmount
+                form="compact"
+                shannons={daoCapacity}
+                signed={false}
+                tone="inherit"
+                unit={false}
+              />{' '}
+              locked
+            </>
+          }
           {...legend('dao')}
         />
       </div>
@@ -414,7 +427,7 @@ interface LegendItemProps {
   swatchColor?: string;
   name: string;
   value: bigint;
-  note: string;
+  note: ReactNode;
   /** Highlighted: the name and amount brighten and the amount reads out exactly. */
   active: boolean;
   onPointerDown: (e: ReactPointerEvent) => void;
@@ -435,7 +448,6 @@ function LegendItem({
   active,
   ...events
 }: LegendItemProps) {
-  const compact = formatCkbCompact(value);
   return (
     <button
       type="button"
@@ -451,7 +463,12 @@ function LegendItem({
       />
       <span className={active ? 'text-text-bright' : 'text-text'}>{name}</span>
       <span className="text-text-bright tabular-nums">
-        {active ? formatCkbAmount(value).full : compact.value} CKB
+        {active ? (
+          formatCkbAmount(value).full
+        ) : (
+          <CkbAmount form="compact" shannons={value} signed={false} tone="inherit" unit={false} />
+        )}{' '}
+        CKB
       </span>
       <span className={cn('tabular-nums', active ? 'text-text' : 'text-text-dim')}>{note}</span>
     </button>

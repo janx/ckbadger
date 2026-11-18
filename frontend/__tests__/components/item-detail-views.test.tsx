@@ -88,8 +88,9 @@ it('retains collection evidence and reports a failed background refresh', async 
     await screen.findByText(/Could not refresh collection: secondary failed/)
   ).toBeInTheDocument();
   // C7: the retained collection still shows its CKB held in the hero (no rail any more).
+  // the hero's figure in the summary form (readability R5, re-pinned on purpose: was "4,000.00000000")
   expect(document.querySelector('[data-role="hero"]')).toHaveTextContent(
-    '4,000.00000000 CKB held in their cells'
+    '4,000 CKB held in their cells'
   );
 });
 it('shows an m-NFT class its real holder buckets and no DOB blueprint line (#3)', async () => {

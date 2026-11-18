@@ -30,6 +30,7 @@ import {
 } from '@/lib/design-tokens';
 import { shortenAddress, shortenHash } from '@/lib/shorten';
 import { formatPercent } from '@/lib/ckb-decimal';
+import { amountDigits, amountText, parseDecimalAmount, type AmountForm } from '@/lib/amount-form';
 
 export interface RankedPreviewRow {
   /** Short display label; `title` keeps the full identity. */
@@ -269,12 +270,27 @@ const COUNT_UNITS = new Set([
   'transactions',
 ]);
 
+/** Units that are CKB amounts: written in the forms of `lib/amount-form.ts`, cut, never rounded. */
+const CKB_UNITS = new Set(['CKB', 'CKB/day']);
+
 /**
- * The rounded chart readout of a card headline, card "Last change" and the hover readout (CH-02):
- * rates at two decimals, exact whole counts as integers, everything else compact at two decimals.
- * A leading `+` (an exact delta) is kept. The exact value is `formatChartExact`.
+ * A CKB value of a chart in an amount form (R5), exactly as served: no digit dropped before the
+ * form cuts it, the sign kept for a negative and for an exact delta's `+`.
+ */
+function chartCkb(value: string, form: AmountForm): string {
+  const { value: amount, decimals, plus } = parseDecimalAmount(value);
+  const d = amountDigits(amount, decimals, form);
+  return amountText(d, amount < BigInt(0) || plus);
+}
+
+/**
+ * The chart readout of a card headline, card "Last change" and the hover readout (CH-02): rates
+ * at two decimals, exact whole counts as integers, a CKB amount in the compact form (R5, cut),
+ * everything else compact at two decimals. A leading `+` (an exact delta) is kept. The exact value
+ * is `formatChartExact`.
  */
 export function formatChartReadout(value: string, unit: string): string {
+  if (CKB_UNITS.has(unit)) return chartCkb(value, 'compact');
   const plus = value.startsWith('+');
   const [numerator, denominator] = exactSignedDecimalRatio(
     plus ? value.slice(1) : value,
@@ -299,8 +315,13 @@ export function formatChartExact(value: string, unit: string): string {
   return formatExactDecimal(value, `chart ${unit} exact value`).replace(/^-/, MINUS);
 }
 
-/** Detail-page hover readout: rates at the design's two decimals, every other value exact. */
+/**
+ * The detail page's head figure, readouts and "Last change": rates at the design's two decimals, a
+ * CKB amount in the summary form (R5: whole CKB from 1,000 up, cut; the head's title carries the
+ * exact value), every other value exact.
+ */
 export function formatChartHover(value: string, unit: string): string {
+  if (CKB_UNITS.has(unit)) return chartCkb(value, 'summary');
   return RATE_UNITS.has(unit) ? formatChartReadout(value, unit) : formatChartExact(value, unit);
 }
 

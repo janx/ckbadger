@@ -22,7 +22,7 @@ import {
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -721,7 +721,12 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     tx.totalCapacity == null ? (
                       'Unavailable'
                     ) : (
-                      <ExactCkb shannons={BigInt(tx.totalCapacity)} signed={false} tone="plain" />
+                      <CkbAmount
+                        form="column"
+                        shannons={BigInt(tx.totalCapacity)}
+                        signed={false}
+                        tone="plain"
+                      />
                     ),
                 },
               ]}
@@ -762,7 +767,8 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                         tx.totalCapacity == null ? (
                           'output capacity unavailable'
                         ) : (
-                          <ExactCkb
+                          <CkbAmount
+                            form="summary"
                             shannons={BigInt(tx.totalCapacity)}
                             signed={false}
                             tone="plain"

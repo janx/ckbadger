@@ -248,7 +248,8 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     );
   });
 
-  it('draws CKB in its cells as the page one 8 px bar on the page scale, the amount to 2 dp (T4)', async () => {
+  // readability R5, re-pinned on purpose (and renamed: "..., the amount to 2 dp (T4)"): the amount is the list's summary form.
+  it('draws CKB in its cells as the page one 8 px bar on the page scale, the amount in its summary form (T4)', async () => {
     render(<ScriptsPage />);
     const t = await table();
     // The page's largest, 46,743,236,111 CKB, rounded up to a round 1 / 1.5 / 2 / 2.5 / 3 / 4 / 5 /
@@ -276,11 +277,15 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
           .width
       )
     ).toBe(0);
-    expect(ckb).toHaveTextContent(/^454,352,694\.86$/);
-    expect(cells(rowOf(t, 'AlwaysSuccess'))[3]).toHaveTextContent(/^0\.00$/);
-    // 2 dp by truncation: .23594289 is .23, never rounded up to .24.
-    expect(cells(rowOf(t, 'Default Lock'))[3].querySelector('[data-ckb-2dp]')!.textContent).toBe(
-      '46,743,236,111.96'
+    // Whole CKB from 1,000 up, cut, never rounded up; the exact value in the title; zero a dim 0.
+    expect(ckb).toHaveTextContent(/^454,352,694$/);
+    expect(ckb.querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '454,352,694.86181731 CKB'
+    );
+    expect(cells(rowOf(t, 'AlwaysSuccess'))[3]).toHaveTextContent(/^0$/);
+    expect(cells(rowOf(t, 'Default Lock'))[3].querySelector('[data-ckb-amount]')!.textContent).toBe(
+      '46,743,236,111'
     );
     expect(ckb.textContent).not.toMatch(/\d\.\d{8}/);
   });

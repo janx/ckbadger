@@ -6,7 +6,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   ScriptCustodyEvidence,
   immutableHow,
@@ -129,7 +129,12 @@ export function ScriptSummarySentence({
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
       <span className="text-text-bright">
-        <ExactCkb shannons={BigInt(family.ownedCapacitySum)} signed={false} tone="plain" />
+        <CkbAmount
+          form="column"
+          shannons={BigInt(family.ownedCapacitySum)}
+          signed={false}
+          tone="plain"
+        />
       </span>
       ; <span className="text-text-bright">{family.cellsCount.toLocaleString('en-US')}</span> cells
       have used it
@@ -543,7 +548,8 @@ export function ScriptHistoryReading({
             {active === null && <span className="text-text-dim"> · last full day</span>}
           </span>
           <span className="flex items-baseline gap-1.5">
-            <span>CKB held</span> <ExactCkb shannons={used + unused} signed={false} tone="plain" />
+            <span>CKB held</span>{' '}
+            <CkbAmount form="column" shannons={used + unused} signed={false} tone="plain" />
           </span>
           <span className="flex items-baseline gap-1.5">
             <span
@@ -551,7 +557,8 @@ export function ScriptHistoryReading({
               className="inline-block h-2 w-2"
               style={{ backgroundColor: DATA_COLOR }}
             />
-            <span>occupied</span> <ExactCkb shannons={used} signed={false} tone="plain" />
+            <span>occupied</span>{' '}
+            <CkbAmount form="column" shannons={used} signed={false} tone="plain" />
           </span>
           <span className="flex items-baseline gap-1.5">
             <span
@@ -559,7 +566,8 @@ export function ScriptHistoryReading({
               className="inline-block h-2 w-2"
               style={{ backgroundColor: HELD_CAPACITY_COLOR }}
             />
-            <span>free</span> <ExactCkb shannons={unused} signed={false} tone="plain" />
+            <span>free</span>{' '}
+            <CkbAmount form="column" shannons={unused} signed={false} tone="plain" />
           </span>
           {deployment && (
             <span className="flex items-baseline gap-1.5">
@@ -610,16 +618,15 @@ export function ScriptHistoryNotes({
       {inline && peak && ' '}
       {peak && (
         <Sentence data-testid="script-history-peak" className={block}>
-          CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
-          on {unitNode(peak.date)}
+          CKB held peaked at{' '}
+          <CkbAmount form="column" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
+          {unitNode(peak.date)}
           {capacity > BigInt(0) && (
             <>
               {' '}
-              · occupied is now <ExactCkb
-                shannons={occupiedNow}
-                signed={false}
-                tone="plain"
-              />, {percentOf(occupiedNow, capacity)} of what the cells hold
+              · occupied is now{' '}
+              <CkbAmount form="column" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
+              {percentOf(occupiedNow, capacity)} of what the cells hold
             </>
           )}
           {inline && '.'}
@@ -842,9 +849,20 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
   return (
     <span data-testid="script-cells-summary" className="text-text-dim text-small">
       {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
-      <ExactCkb shannons={BigInt(family.ownedCapacitySum)} signed={false} tone="plain" />,{' '}
-      <ExactCkb shannons={BigInt(family.ownedKnowledgeSum)} signed={false} tone="plain" /> of it
-      occupied
+      <CkbAmount
+        form="column"
+        shannons={BigInt(family.ownedCapacitySum)}
+        signed={false}
+        tone="plain"
+      />
+      ,{' '}
+      <CkbAmount
+        form="column"
+        shannons={BigInt(family.ownedKnowledgeSum)}
+        signed={false}
+        tone="plain"
+      />{' '}
+      of it occupied
     </span>
   );
 }

@@ -331,12 +331,15 @@ describe('Address v3', () => {
     });
     const { container } = render(<AddressDetailPage />);
     await loaded();
-    expect(screen.getByLabelText('Balance')).toHaveTextContent('9,651,178.35338057');
+    // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
+    // purpose: was every decimal)
+    expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
     expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent(
       '54,571.35338057'
     );
     expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent(
-      '9,589,480.00000000'
+      // the exact parts line, exact form (readability R5, re-pinned on purpose: was padded)
+      'DAO free 9,589,480, free part'
     );
     expect(container.querySelector('[data-tier="2"]')).toHaveClass(
       'mt-24',
@@ -821,7 +824,10 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     await loaded();
-    expect((await screen.findAllByText(/1.23456789/)).length).toBeGreaterThan(0);
+    // a feed line's token change in the summary form, its exact value in its title (readability
+    // R5, re-pinned on purpose: the text was every decimal)
+    expect((await screen.findAllByTitle('+1.23456789')).length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle('+1.23456789')[0]).toHaveTextContent(/^\+1\.23$/);
     expect(
       screen.getAllByRole('link').some((l) => l.getAttribute('href')?.includes('/scripts/xUDT'))
     ).toBe(true);
@@ -834,7 +840,9 @@ describe('Address v3', () => {
     render(<AddressDetailPage />);
     await loaded();
     expect(screen.getByLabelText('Unconfirmed')).toHaveTextContent('2 tx');
-    expect(screen.getByLabelText('Balance')).toHaveTextContent('9,651,178.35338057');
+    // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
+    // purpose: was every decimal)
+    expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
     await tab('Live cells');
     expect(screen.getByLabelText('Unconfirmed')).toBeInTheDocument();
   });
@@ -1059,7 +1067,9 @@ describe('Address v3', () => {
         el.textContent?.includes('Showing previously loaded')
       )
     ).toBe(true);
-    expect(screen.getByLabelText('Balance')).toHaveTextContent('9,651,178.35338057');
+    // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
+    // purpose: was every decimal)
+    expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
   });
   it('names every identity standard with its canonical label', async () => {
     render(<AddressDetailPage />);
@@ -1517,8 +1527,13 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(
       metrics.compareDocumentPosition(holdings) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+    // the summary form (R5, re-pinned on purpose: was "9,651,178.35338057 CKB")
     expect(balance.querySelector('[data-role="balance-figure"]')).toHaveTextContent(
-      /^9,651,178\.35338057 CKB$/
+      /^9,651,178 CKB$/
+    );
+    expect(balance.querySelector('[data-role="balance-figure"] [data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '9,651,178.35338057 CKB'
     );
     expect([...metrics.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
       'Holdings',

@@ -1,28 +1,27 @@
 import { cn } from '@/lib/utils';
 import { MINUS } from '@/lib/chart-ticks';
-import { splitCkbAmount, type CkbAmountParts } from '@/lib/ckb-decimal';
-import type { PaletteKey } from '@/lib/palette';
-import type { AmountForm } from '@/lib/amount-form';
+import {
+  amountDigits,
+  ckbAmountTitle,
+  shownSign,
+  type AmountDigits,
+  type AmountForm,
+} from '@/lib/amount-form';
 
 /**
- * The ink of an amount by its sign: the integer in the sign's own ink, the fraction digits a step
- * quieter in a named ink of that sign (UI review 2026-11-14, R4, DY-06) — each at 4.5:1 on every
- * ground in both themes (`__tests__/lib/palette.test.ts`), never the sign's ink at an opacity.
- * The one table every amount renderer reads: HTML takes the class (`fraction`), SVG text the
- * palette key as a fill (`color(fractionKey)`); the type keeps the class the key's.
+ * The ink of an amount by its sign, the one table every amount renderer reads. The whole amount,
+ * its integer and its decimals, is one ink (readability plan 2026-11-18, ruling R5): a number's
+ * significant digits are never quieter than its integer. The ghost is for a column's padding
+ * zeros only; the palette pins each ink at text grade on every ground in both themes.
  */
 export const AMOUNT_INK = {
-  positive: { integer: 'text-positive', fraction: 'text-jade-dim', fractionKey: 'jade-dim' },
-  negative: { integer: 'text-negative', fraction: 'text-rouge-dim', fractionKey: 'rouge-dim' },
-  neutral: { integer: 'text-text', fraction: 'text-text-dim', fractionKey: 'text-dim' },
-} as const satisfies Record<string, AmountInk>;
-/** An amount's inks: the fraction's class is its palette key's text class, a literal for Tailwind. */
-type AmountInk = {
-  [K in PaletteKey]: { integer: string; fraction: `text-${K}`; fractionKey: K };
-}[PaletteKey];
+  positive: 'text-positive',
+  negative: 'text-negative',
+  neutral: 'text-text',
+} as const;
 export type AmountSign = keyof typeof AMOUNT_INK;
 
-/** The sign of a split amount (`+`, `−` or none) as an {@link AMOUNT_INK} key. */
+/** The sign of an amount (`+`, `−` or none) as an {@link AMOUNT_INK} key. */
 export function amountSign(sign: string): AmountSign {
   if (sign === '+') return 'positive';
   if (sign === MINUS) return 'negative';
@@ -31,44 +30,44 @@ export function amountSign(sign: string): AmountSign {
 }
 
 /**
- * The look of an amount the hand-rolled CKB renderers drew before they came here (lane B2 of the
- * readability plan, step 1: routed through this renderer with their output unchanged; the forms
- * of step 2 replace it).
+ * How an amount is inked: `sign` by its sign (`AMOUNT_INK`), `plain` in the reading ink,
+ * `inherit` in its parent's (a display figure in its class colour, a value in a brighter line).
  */
-interface HandRolledLook {
-  /** Zero as any amount ("0.00000000", the padding ghosted), not the datum "0" of C4. */
-  zero?: 'padded';
-  /**
-   * The point and the decimals as one run with these classes (a display figure's smaller step and
-   * its ink, a row's 11 px dim decimals): the fraction takes the run's ink, not `AMOUNT_INK`'s.
-   */
-  decimals?: string;
-  /** The padding zeros in the run's ink, not the ghost (the decimals read as one run). */
-  padding?: 'run';
-  /** Two decimals, cut (never rounded): the row form of `CkbTwoPlaces`. */
-  places?: 2;
+export type AmountTone = 'sign' | 'plain' | 'inherit';
+
+function inkOf(tone: AmountTone, sign: string): string | undefined {
+  if (tone === 'inherit') return undefined;
+  return AMOUNT_INK[tone === 'sign' ? amountSign(sign) : 'neutral'];
+}
+
+/** A column's padding zeros, the one part of an amount in the ghost (R4, R5). */
+function Padding({ d }: { d: AmountDigits }) {
+  return d.padding ? (
+    <span data-ghost className="text-text-ghost">
+      {d.padding}
+    </span>
+  ) : null;
 }
 
 /**
- * Exact CKB, all 8 decimals: integer, the significant decimals, then the trailing zeros ghosted,
- * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign, the
- * fraction in the sign's quieter ink (`AMOUNT_INK`); `tone="inherit"` leaves the integer in its
- * parent's ink (a display figure, a value inside a brighter line), the fraction in the neutral
- * quieter ink. Zero is "0 CKB" with no fraction, for every caller (consistency plan C4): nothing
- * moved, so there are no decimals to read. That 0 is a datum, in the dim ink; the ghost is only
- * for the padding zeros of a non-zero amount (R4).
+ * A CKB amount in the form its context names (`lib/amount-form.ts`: exact, column, summary,
+ * compact), in one ink. A shortened figure carries its exact value and unit in `title`, and is
+ * never an operand. Zero is "0 CKB" in every form (consistency plan C4): nothing moved, so there
+ * are no decimals to read, and that 0 is a datum in the dim ink (R4).
  */
-export function ExactCkb({
+export function CkbAmount({
   shannons,
+  form,
   signed = true,
   tone = 'sign',
   wrap = false,
   unit = true,
-  look,
 }: {
   shannons: bigint;
+  /** The context's form, never a default: see the guidelines' "Amounts". */
+  form: AmountForm;
   signed?: boolean;
-  tone?: 'sign' | 'plain' | 'inherit';
+  tone?: AmountTone;
   /**
    * Allow a line break before the decimal, preserving every digit. The unit stays with the last
    * digits: a number never parts from its unit (U-16).
@@ -76,73 +75,93 @@ export function ExactCkb({
   wrap?: boolean;
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
-  look?: HandRolledLook;
-  /** Lane B2: the form a call site names; not read yet (its tests come first). */
-  form?: AmountForm;
 }) {
   const unitEl = unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>;
-  if (shannons === BigInt(0) && look?.zero !== 'padded')
+  if (shannons === BigInt(0))
     return (
-      <span data-ckb-amount className="whitespace-nowrap tabular-nums">
+      <span data-ckb-amount data-form={form} className="whitespace-nowrap tabular-nums">
         <span data-zero className="text-text-dim">
           0
         </span>
         {unitEl}
       </span>
     );
-  const parts = cutTo(splitCkbAmount(shannons), look?.places);
-  const ink = AMOUNT_INK[tone === 'sign' ? amountSign(parts.sign) : 'neutral'];
-  const run = look?.decimals;
-  const ghost = (
-    <span data-ghost className="text-text-ghost">
-      {parts.ghost}
-    </span>
-  );
-  // A hand-rolled run holds its digits as its own text, the padding after them (step 1 only).
-  const decimals =
-    run === undefined ? (
-      <>
-        <span data-fraction className={ink.fraction}>
-          {parts.fraction}
-        </span>
-        {ghost}
-      </>
-    ) : (
-      <span className={run || undefined}>
-        {parts.fraction}
-        {look?.padding === 'run' ? parts.ghost : ghost}
-      </span>
-    );
+  const d = amountDigits(shannons, 8, form);
   return (
     <span
       data-ckb-amount
+      data-form={form}
+      title={d.shortened ? ckbAmountTitle(shannons, signed) : undefined}
       className={cn(
         wrap
           ? 'inline-flex max-w-full flex-wrap justify-end tabular-nums'
           : 'whitespace-nowrap tabular-nums',
-        tone !== 'inherit' && ink.integer
+        inkOf(tone, d.sign)
       )}
     >
+      {/* The sign and the whole part, then (where a line may break, with `wrap`) the decimals, a
+          compact unit, a column's padding and the unit after them. */}
       <span className="whitespace-nowrap">
-        {signed ? parts.sign : ''}
-        {parts.integer}
+        {signed ? shownSign(d) : ''}
+        {d.integer}
       </span>
       <span className="whitespace-nowrap">
-        {decimals}
+        {d.fraction}
+        {d.suffix}
+        <Padding d={d} />
         {unitEl}
       </span>
     </span>
   );
 }
 
-/** A split amount cut (never rounded) to `places` decimals; all 8 when none is given. */
-function cutTo(parts: CkbAmountParts, places: 2 | undefined): CkbAmountParts {
-  if (places === undefined) return parts;
-  const digits = `${parts.fraction.slice(1)}${parts.ghost.replace('.', '')}`.slice(0, places);
-  const significant = digits.replace(/0+$/, '');
-  return {
-    ...parts,
-    fraction: significant === '' ? '' : `.${significant}`,
-    ghost: significant === '' ? `.${digits}` : digits.slice(significant.length),
-  };
+/**
+ * A token amount (base units, an integer; a change may be negative) in the form its context
+ * names, with the token's own decimals: the same forms as CKB, a summary below 1 keeping four
+ * significant digits. Unknown decimals (`null`) are written as the raw integer, whole and marked
+ * "(raw)" in every form, never scaled by a guess. A long amount breaks only after a thousands
+ * separator. A shortened figure carries its exact value in `title`.
+ */
+export function TokenAmount({
+  amount,
+  decimals,
+  form,
+  signed = false,
+  tone = 'inherit',
+}: {
+  amount: string;
+  decimals: number | null;
+  form: AmountForm;
+  signed?: boolean;
+  tone?: AmountTone;
+}) {
+  if (!/^-?\d+$/.test(amount)) throw new Error(`token amount "${amount}" is not an integer`);
+  const value = BigInt(amount);
+  if (!signed && value < BigInt(0))
+    throw new Error(`token amount ${amount} is negative where a sign is not written`);
+  const d =
+    decimals === null
+      ? amountDigits(value, 0, 'exact')
+      : amountDigits(value, decimals, form, 'significant');
+  // A digit run never breaks by itself. A long form (exact, column) may break after a thousands
+  // separator and nowhere else, so a wrapped amount never strands a digit or splits its decimals;
+  // a shortened one is short and stays whole.
+  const groups = form === 'exact' || form === 'column' ? d.integer.split(',') : [d.integer];
+  return (
+    <span
+      data-token-amount
+      data-form={form}
+      title={d.shortened ? `${signed ? d.sign : ''}${d.exact}` : undefined}
+      className={cn('tabular-nums', inkOf(tone, d.sign))}
+    >
+      {signed ? shownSign(d) : ''}
+      {groups.flatMap((group, i) =>
+        i < groups.length - 1 ? [`${group},`, <wbr key={i} />] : [group]
+      )}
+      {d.fraction}
+      {d.suffix}
+      <Padding d={d} />
+      {decimals === null && ' (raw)'}
+    </span>
+  );
 }

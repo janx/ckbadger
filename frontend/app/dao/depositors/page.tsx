@@ -13,7 +13,8 @@ import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
+import type { AmountForm } from '@/lib/amount-form';
 import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
@@ -24,14 +25,15 @@ import type { ShortSize } from '@/lib/shorten';
 /** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
 
-function Ckb({ shannons }: { shannons: string }) {
+/** A depositor's CKB in its line's ink: a column in the table, a summary on a phone row (R5). */
+function Ckb({ shannons, form }: { shannons: string; form: AmountForm }) {
   return (
-    <ExactCkb
+    <CkbAmount
+      form={form}
       shannons={parseShannons(shannons, 'DAO depositor capacity')}
       signed={false}
       tone="inherit"
       unit={false}
-      look={{ zero: 'padded' }}
     />
   );
 }
@@ -95,7 +97,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
     label: 'CKB deposited',
     minWidth: 220,
     numeric: true,
-    render: (d) => <Ckb shannons={d.capacity} />,
+    render: (d) => <Ckb form="column" shannons={d.capacity} />,
   },
   {
     key: 'share',
@@ -204,7 +206,8 @@ export default function DaoDepositorsPage() {
                     party={<Depositor row={d} size="tight" />}
                     amount={
                       <span className="whitespace-nowrap">
-                        <Ckb shannons={d.capacity} /> <span className="text-text-dim">CKB</span>
+                        <Ckb form="summary" shannons={d.capacity} />{' '}
+                        <span className="text-text-dim">CKB</span>
                       </span>
                     }
                     share={`${d.sharePercent}%`}

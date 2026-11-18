@@ -2,7 +2,7 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import Link from '@/components/ui/link';
 import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT } from '@/components/ui/page-seal';
 import { Seal } from '@/components/ui/seal';
@@ -501,7 +501,8 @@ function SheetHead({
       </h3>
       {total !== undefined && (
         <span data-sheet-total="" className="text-small">
-          <ExactCkb
+          <CkbAmount
+            form="column"
             shannons={exactUnsignedInteger(total, `${txHash}: ${side} capacity`)}
             signed={false}
             tone="plain"
@@ -570,7 +571,8 @@ function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
       className="text-small border-text-dim/60 text-text border border-dashed px-3 py-2"
     >
       <span className="block">fee</span>
-      <ExactCkb
+      <CkbAmount
+        form="column"
         shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
         signed={false}
         tone="plain"
@@ -593,7 +595,8 @@ function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) 
       )}
     >
       <span className="block">{inflow.label}</span>
-      <ExactCkb
+      <CkbAmount
+        form="column"
         shannons={exactUnsignedInteger(inflow.amount, `${txHash}: ${inflow.label}`)}
         signed={false}
         tone="plain"

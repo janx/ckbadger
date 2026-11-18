@@ -24,7 +24,7 @@ import {
   AddressLiveCells,
 } from '@/components/address/address-history';
 import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
@@ -370,7 +370,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 <span>{a.pendingSummary.txCount.toLocaleString('en-US')} tx</span>
                 {BigInt(a.pendingSummary.capacityDelta) !== BigInt(0) && (
                   <span>
-                    <ExactCkb shannons={BigInt(a.pendingSummary.capacityDelta)} wrap /> pending
+                    <CkbAmount
+                      form="column"
+                      shannons={BigInt(a.pendingSummary.capacityDelta)}
+                      wrap
+                    />{' '}
+                    pending
                   </span>
                 )}
               </aside>
@@ -453,7 +458,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           </Link>
                         ))}
                       </span>
-                      <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" wrap />
+                      <CkbAmount
+                        form="column"
+                        shannons={BigInt(c.capacity)}
+                        signed={false}
+                        tone="plain"
+                        wrap
+                      />
                     </div>
                   ))}
                 </DetailSection>

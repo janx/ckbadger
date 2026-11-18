@@ -10,7 +10,7 @@ import type {
   StackedAreaChartResponse,
 } from '@/lib/api';
 import { formatCkbAmount } from '@/lib/utils';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
@@ -260,8 +260,8 @@ export function ScriptCodeClassSummary({
       {total > BigInt(0) && (
         <Prose className="mb-3">
           <p data-testid="code-class-sentence">
-            Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
-            {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
+            Of the <CkbAmount form="column" shannons={total} signed={false} tone="plain" /> under
+            these {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
             {joinClauses(
               groups.map(
                 (group) =>
@@ -280,11 +280,13 @@ export function ScriptCodeClassSummary({
           <li key={row.class} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
             <CodeClassSwatch value={row.class} />
             <span>{scriptClassLabel(row.class)}</span>·
-            <ExactCkb
+            <CkbAmount
+              form="column"
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
-            />· {unitNode(formatCount(row.familyCount!, 'script'))}
+            />
+            · {unitNode(formatCount(row.familyCount!, 'script'))}
           </li>
         ))}
       </ul>

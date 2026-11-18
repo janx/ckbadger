@@ -7,7 +7,7 @@ import { Address } from '@/components/ui/address';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatCount } from '@/lib/format-count';
 
 /**
@@ -152,9 +152,15 @@ describe('a number and its unit are one unit', () => {
     expect(formatCount(1, 'binary', 'binaries')).toBe('1 binary');
   });
 
-  it('ExactCkb keeps its unit with its digits, also where it may wrap', () => {
+  it('CkbAmount keeps its unit with its digits, also where it may wrap', () => {
     const { container } = render(
-      <ExactCkb shannons={BigInt('86460521911728318')} signed={false} tone="plain" wrap />
+      <CkbAmount
+        form="column"
+        shannons={BigInt('86460521911728318')}
+        signed={false}
+        tone="plain"
+        wrap
+      />
     );
     const unit = screen.getByText('CKB');
     const group = nowrapOf(unit) as HTMLElement;

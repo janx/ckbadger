@@ -4,7 +4,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { CellBar, type CellAnatomy } from '@/components/ui/cell-bar';
 import { OwnerSeal } from '@/components/ui/owner-seal';
 import { RowSeal } from '@/components/ui/row-seal';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import type { CellSeal } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
@@ -136,7 +136,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         <span data-tile-mark className="flex items-start justify-center pt-px">
           <ClassMark kind={cell.kind} />
         </span>
-        <TileText end={<ExactCkb shannons={capacity} signed={false} tone="plain" />}>
+        <TileText end={<CkbAmount form="column" shannons={capacity} signed={false} tone="plain" />}>
           <span className="text-text-bright min-w-0 max-w-full">{cell.content}</span>
         </TileText>
       </div>

@@ -5,7 +5,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { CellBar } from '@/components/ui/cell-bar';
 import { Hash } from '@/components/ui/hash';
 import { DetailSection } from '@/components/ui/detail-layout';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { cn } from '@/lib/utils';
@@ -180,9 +180,15 @@ export function CellVersions({
                 </div>
               </div>
               <div className="text-text-bright min-w-0 sm:text-right">
-                <ExactCkb shannons={BigInt(v.capacity)} signed={false} tone="plain" wrap />
+                <CkbAmount
+                  form="column"
+                  shannons={BigInt(v.capacity)}
+                  signed={false}
+                  tone="plain"
+                  wrap
+                />
                 <div className="text-text-dim text-meta mt-1">
-                  <ExactCkb shannons={free} signed={false} tone="plain" wrap /> free
+                  <CkbAmount form="column" shannons={free} signed={false} tone="plain" wrap /> free
                 </div>
                 {v.consumedByTx && (
                   <AppLink

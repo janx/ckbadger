@@ -4,7 +4,8 @@ import { useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import type { ChartResponse, DaoEvidence, DaoStatistics } from '@/lib/api';
-import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { formatPercent, parseCkbDecimal, parseShannons } from '@/lib/ckb-decimal';
+import { ckbAmountText, type AmountForm } from '@/lib/amount-form';
 import { DaoSources } from '@/components/dao/dao-sources';
 import {
   DaoHistoryFigure,
@@ -21,7 +22,7 @@ import { formatCapacity, formatDurationMs } from '@/lib/utils';
 import type { ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
-import { AMOUNT_INK, ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   IciclePartition,
   icicleNodePaint,
@@ -64,21 +65,15 @@ interface Props {
   historyError?: boolean;
 }
 
-function Amount({
-  value,
-  plain = false,
-}: {
-  value: string;
-  /** On a fill (DY-03): every digit in the fill's one ink, no dim fraction. */
-  plain?: boolean;
-}) {
+/** A DAO amount in its line's ink, in the form its place names (R5); the line names the unit. */
+function Amount({ value, form }: { value: string; form: AmountForm }) {
   return (
-    <ExactCkb
+    <CkbAmount
+      form={form}
       shannons={parseShannons(value, 'DAO amount')}
       signed={false}
       tone="inherit"
       unit={false}
-      look={plain ? { zero: 'padded', decimals: '', padding: 'run' } : { zero: 'padded' }}
     />
   );
 }
@@ -142,17 +137,18 @@ function Metric({
 
 /**
  * The page's one figure (R4, R11): display from 640 up, index below, in the DAO gold — the only
- * gold text in tier 1; the fraction hero in the dim gold, the unit body.
+ * gold text in tier 1 — in its summary form (R5: whole CKB, its exact value in the title), the
+ * unit body.
  */
 function DepositedFigure({ shannons }: { shannons: string }) {
   return (
     <div data-role="deposited" className="text-gold text-index sm:text-display">
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(shannons, 'DAO deposited')}
         signed={false}
         tone="inherit"
         unit={false}
-        look={{ zero: 'padded', decimals: 'text-hero text-gold-dim font-normal' }}
       />
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
       <span className="text-body text-text-dim font-normal"> CKB</span>
@@ -160,12 +156,9 @@ function DepositedFigure({ shannons }: { shannons: string }) {
   );
 }
 
-/**
- * A signed CKB decimal in its sign's hue: the fraction in the sign's quieter ink (`AMOUNT_INK`, a
- * named key at 4.5:1), the padding zeros ghost.
- */
+/** The figure's 24 h change, signed in its sign's ink, in the summary form beside the figure (R5). */
 function SignedCkbDecimal({ value }: { value: string }) {
-  return <ExactCkb shannons={parseCkbDecimal(value)} unit={false} look={{ zero: 'padded' }} />;
+  return <CkbAmount form="summary" shannons={parseCkbDecimal(value)} unit={false} />;
 }
 
 /** A signed whole count: "+9", "−9" (U+2212), "0". */
@@ -331,20 +324,6 @@ function exactSafeMs(value: string, context: string): number {
   return Number(ms);
 }
 
-/**
- * An exact CKB amount inside SVG text: whole part, then the significant decimals in the neutral
- * fraction ink as a fill (`AMOUNT_INK`), at full strength.
- */
-function SvgCkb({ shannons }: { shannons: bigint }) {
-  const parts = splitCkbAmount(shannons);
-  return (
-    <>
-      {parts.integer}
-      <tspan fill={color(AMOUNT_INK.neutral.fractionKey)}>{parts.fraction}</tspan>
-    </>
-  );
-}
-
 const ICICLE_LABEL_MIN_PX = 1000;
 /** Hierarchy v3 (board): the icicle's rows — the whole, its three parts, compensation's two. */
 const ICICLE_ROWS = { heights: [48, 48, 32], gap: 3 } as const;
@@ -407,7 +386,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         // exact parts are the line under the icicle.
         boxLabel: {
           name: 'secondary issuance since genesis',
-          share: splitCkbAmount(total).integer,
+          share: ckbAmountText(total, 'summary'),
           unit: 'CKB',
         },
         children: [
@@ -487,7 +466,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             <IciclePartition
               root={root}
               label="Secondary issuance since genesis, split three ways: to miners, compensation for depositors, burnt; the compensation is paid out or still owed to live deposits"
-              formatValue={(v) => <SvgCkb shannons={v} />}
+              formatValue={(v) => ckbAmountText(v, 'summary')}
               width={width}
               rows={ICICLE_ROWS}
             />
@@ -503,7 +482,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             {swatchOf('total')}
             secondary issuance since genesis{' '}
             <span className="text-text">
-              <Amount value={total.toString()} />
+              <Amount form="column" value={total.toString()} />
             </span>{' '}
             CKB
           </li>
@@ -511,28 +490,28 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             {swatchOf('miners')}
             miners {share(mining)} ·{' '}
             <span className="text-text">
-              <Amount value={mining.toString()} />
+              <Amount form="column" value={mining.toString()} />
             </span>
           </li>
           <li>
             {swatchOf('compensation')}
             depositors {share(compensation)} ·{' '}
             <span className="text-text">
-              <Amount value={compensation.toString()} />
+              <Amount form="column" value={compensation.toString()} />
             </span>
             <ul className="mt-1 space-y-1 pl-5">
               <li>
                 {swatchOf('paid')}
                 paid out {ofCompensation(claimed)} ·{' '}
                 <span className="text-text">
-                  <Amount value={claimed.toString()} />
+                  <Amount form="column" value={claimed.toString()} />
                 </span>
               </li>
               <li>
                 {swatchOf('owed')}
                 still owed {ofCompensation(unclaimed)} ·{' '}
                 <span className="text-text">
-                  <Amount value={unclaimed.toString()} />
+                  <Amount form="column" value={unclaimed.toString()} />
                 </span>{' '}
                 to {liveCells} live cells
               </li>
@@ -542,7 +521,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             {swatchOf('burnt')}
             burnt {share(burnt)} ·{' '}
             <span className="text-text">
-              <Amount value={burnt.toString()} />
+              <Amount form="column" value={burnt.toString()} />
             </span>{' '}
             · no cell can ever claim it
           </li>
@@ -557,23 +536,23 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           <span>
             to miners{' '}
             <span className="text-text">
-              <Amount value={mining.toString()} />
+              <Amount form="column" value={mining.toString()} />
             </span>
           </span>
           <span>
             {' '}
             · for depositors{' '}
             <span className="text-text">
-              <Amount value={compensation.toString()} />
+              <Amount form="column" value={compensation.toString()} />
             </span>{' '}
-            (paid out <Amount value={claimed.toString()} /> · still owed{' '}
-            <Amount value={unclaimed.toString()} /> to {liveCells} live cells)
+            (paid out <Amount form="column" value={claimed.toString()} /> · still owed{' '}
+            <Amount form="column" value={unclaimed.toString()} /> to {liveCells} live cells)
           </span>
           <span>
             {' '}
             · burnt{' '}
             <span className="text-text">
-              <Amount value={burnt.toString()} />
+              <Amount form="column" value={burnt.toString()} />
             </span>{' '}
             CKB
           </span>
@@ -714,7 +693,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
       <div className="text-text-dim text-meta">
         How all{' '}
         <span className="text-text">
-          <Amount value={issued.toString()} />
+          <Amount form="column" value={issued.toString()} />
         </span>{' '}
         CKB issued so far is used at block <BlockLink number={statistics.tipBlockNumber} /> · every
         block splits its issuance in these proportions
@@ -820,7 +799,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     <>
       claimable now{' '}
       <span className={onFill ? undefined : 'text-text-bright'}>
-        <Amount value={ready.capacity} plain={onFill} /> CKB
+        <Amount form="exact" value={ready.capacity} /> CKB
       </span>{' '}
       <span className={onFill ? undefined : 'text-text-dim'}>· {plural(ready.count, 'cell')}</span>
     </>
@@ -884,7 +863,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           idle={
             <>
               <span className="text-text-bright">
-                <Amount value={first.capacity} /> CKB
+                <Amount form="column" value={first.capacity} /> CKB
               </span>{' '}
               in {plural(first.count, 'deposit')} ends its cycle within a day
             </>
@@ -897,7 +876,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 return (
                   <span className="text-text-bright">
                     Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
-                    {row.throughEpochOffset} · <Amount value={row.capacity} /> CKB in{' '}
+                    {row.throughEpochOffset} · <Amount form="column" value={row.capacity} /> CKB in{' '}
                     {unitNode(formatCount(row.count, 'deposit'))}
                   </span>
                 );
@@ -938,7 +917,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               <span>
                 waiting for its window{' '}
                 <span className="text-text">
-                  <Amount value={waiting.capacity} /> CKB
+                  <Amount form="exact" value={waiting.capacity} /> CKB
                 </span>{' '}
                 · {plural(waiting.count, 'cell')}
               </span>
@@ -1069,7 +1048,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     header: ownerHead('CKB deposited'),
     minWidth: 210,
     numeric: true,
-    render: (o) => <Amount value={o.capacity} />,
+    render: (o) => <Amount form="column" value={o.capacity} />,
   },
   {
     key: 'share',
@@ -1127,7 +1106,7 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               {lockLink(o, 'tight')}
               <span className="text-text-bright">
-                <Amount value={o.capacity} /> CKB
+                <Amount form="column" value={o.capacity} /> CKB
                 <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>
               </span>
             </div>
@@ -1182,7 +1161,7 @@ function RawEvidence({
       bytes: '0..8',
       value: (
         <>
-          <Amount value={header.c} /> CKB issued in total
+          <Amount form="column" value={header.c} /> CKB issued in total
         </>
       ),
     },
@@ -1196,8 +1175,8 @@ function RawEvidence({
       bytes: '16..24',
       value: (
         <>
-          <Amount value={header.s} /> CKB: compensation still owed to live deposits + the burnt
-          share, which no cell can ever claim
+          <Amount form="column" value={header.s} /> CKB: compensation still owed to live deposits +
+          the burnt share, which no cell can ever claim
         </>
       ),
     },
@@ -1206,7 +1185,7 @@ function RawEvidence({
       bytes: '24..32',
       value: (
         <>
-          <Amount value={header.u} /> CKB occupied (incl. genesis virtual occupied)
+          <Amount form="column" value={header.u} /> CKB occupied (incl. genesis virtual occupied)
         </>
       ),
     },
@@ -1251,10 +1230,11 @@ function RawEvidence({
           <ShortId value={anchor.blockHash} kind="hash" size="row" />
         </span>
         ), S (
-        <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (
-        <Amount value={owed.toString()} />) plus the burnt share (
-        <Amount value={burnt.toString()} />) to the shannon: S only counts the burnt share, it does
-        not hold it for anyone. Compensation paid + still owed equals the depositors’ share.
+        <Amount form="column" value={statsS.toString()} /> CKB) equals the compensation still owed (
+        <Amount form="column" value={owed.toString()} />) plus the burnt share (
+        <Amount form="column" value={burnt.toString()} />) to the shannon: S only counts the burnt
+        share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’
+        share.
       </p>
       {evidence.ar.year365 && (
         <div className="text-text-dim text-meta mt-2 font-mono">

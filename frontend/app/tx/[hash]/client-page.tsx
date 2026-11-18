@@ -22,7 +22,7 @@ import {
   protocolActionNoteParts,
   readable,
 } from '@/components/activity-event-row';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
@@ -345,7 +345,7 @@ function TxSummary({
       {feeShannons > BigInt(0) && (
         <>
           <FeePayer payers={feePaidBy} sender={sender} /> paid a{' '}
-          <ExactCkb shannons={feeShannons} signed={false} tone="plain" /> fee.
+          <CkbAmount form="column" shannons={feeShannons} signed={false} tone="plain" /> fee.
         </>
       )}
     </p>
@@ -1034,7 +1034,8 @@ export default function TransactionDetailPage() {
         </>
       )}
       ,{' '}
-      <ExactCkb
+      <CkbAmount
+        form="column"
         shannons={exactUnsignedInteger(
           required(tx.outputsCapacity, hash, 'outputsCapacity'),
           `${hash}: outputs capacity`
@@ -1064,7 +1065,8 @@ export default function TransactionDetailPage() {
   ) : tx.isCellbase ? (
     <>
       block reward{' '}
-      <ExactCkb
+      <CkbAmount
+        form="column"
         shannons={exactUnsignedInteger(
           required(tx.outputsCapacity, hash, 'outputsCapacity'),
           `${hash}: outputs capacity`
@@ -1091,16 +1093,22 @@ export default function TransactionDetailPage() {
       });
       return (
         <span data-testid="tx-capacity-equation">
-          <ExactCkb shannons={eq.inputs} signed={false} tone="plain" /> in
+          <CkbAmount form="column" shannons={eq.inputs} signed={false} tone="plain" /> in
           {eq.compensation !== null && (
             <>
               {' + '}
-              <ExactCkb shannons={eq.compensation} signed={false} tone="plain" /> compensation
+              <CkbAmount
+                form="column"
+                shannons={eq.compensation}
+                signed={false}
+                tone="plain"
+              />{' '}
+              compensation
             </>
           )}
           {' = '}
-          <ExactCkb shannons={eq.outputs} signed={false} tone="plain" /> out +{' '}
-          <ExactCkb shannons={eq.fee} signed={false} tone="plain" /> fee
+          <CkbAmount form="column" shannons={eq.outputs} signed={false} tone="plain" /> out +{' '}
+          <CkbAmount form="column" shannons={eq.fee} signed={false} tone="plain" /> fee
         </span>
       );
     })
@@ -1348,7 +1356,7 @@ export default function TransactionDetailPage() {
             <div className="flex flex-col gap-0.5">
               <dt className="text-text-dim text-small">Fee</dt>
               <dd className="text-body">
-                <ExactCkb shannons={feeShannons} signed={false} tone="plain" />
+                <CkbAmount form="column" shannons={feeShannons} signed={false} tone="plain" />
               </dd>
               {feePaidBy.length > 0 && (
                 <dd className="text-text-dim text-small">

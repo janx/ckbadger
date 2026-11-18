@@ -15,7 +15,7 @@ import {
   formatScriptRef,
   ActivityReadError,
 } from '@/components/activity-event-row';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
@@ -132,7 +132,8 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
         </>,
         <>
           reward{' '}
-          <ExactCkb
+          <CkbAmount
+            form="summary"
             shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
             signed={false}
             tone="plain"
@@ -154,7 +155,8 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
     <span className="whitespace-nowrap">
       fee{' '}
       <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
-        <ExactCkb
+        <CkbAmount
+          form="summary"
           shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
           signed={false}
           tone="plain"
@@ -164,7 +166,8 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
   );
   const value = tx.isCellbase ? null : (
     <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
         signed={false}
         tone="plain"
@@ -339,7 +342,8 @@ export function TransactionListTable({
           <span data-reward className="text-text-dim">
             reward{' '}
             <span className="[&_[data-ckb-amount]]:text-text-dim">
-              <ExactCkb
+              <CkbAmount
+                form="column"
                 shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
                 signed={false}
                 tone="plain"
@@ -349,7 +353,8 @@ export function TransactionListTable({
           </span>
         ) : (
           <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
-            <ExactCkb
+            <CkbAmount
+              form="column"
               shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
               signed={false}
               tone="plain"
@@ -366,7 +371,8 @@ export function TransactionListTable({
       numeric: true,
       render: (tx) => (
         <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
-          <ExactCkb
+          <CkbAmount
+            form="column"
             shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
             signed={false}
             tone="plain"

@@ -10,9 +10,7 @@ import {
 } from '@/lib/detail-routes';
 import { cn } from '@/lib/utils';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
-import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { classifyActivity, type ActivityBody } from '@/lib/activity-classify';
-import { MINUS } from '@/lib/chart-ticks';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import type {
   ItemDelta,
@@ -26,7 +24,7 @@ import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { AssetClass } from '@/lib/design-tokens';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
-import { ExactCkb } from '@/components/ui/ckb-amount';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -286,8 +284,6 @@ export function ItemDeltaFact({
   switch (item.kind) {
     case 'token': {
       const delta = BigInt(item.delta);
-      const sign = delta > BigInt(0) ? '+' : delta < BigInt(0) ? MINUS : '';
-      const abs = item.delta.startsWith('-') ? item.delta.slice(1) : item.delta;
       const label = item.symbol?.trim() || (
         <ShortId value={item.typeScriptHash} kind="hash" size={size} />
       );
@@ -308,8 +304,14 @@ export function ItemDeltaFact({
             )}
             onClick={(e) => e.stopPropagation()}
           >
-            {sign}
-            {formatTokenBalanceWithRawMarker(abs, item.decimals ?? null)}{' '}
+            {/* A feed line: the summary form (R5), the exact change in its title. */}
+            <TokenAmount
+              form="summary"
+              amount={item.delta}
+              decimals={item.decimals ?? null}
+              signed
+              tone="inherit"
+            />{' '}
             {symbol === 'dim' ? <span className="text-text-dim">{label}</span> : label}
           </Link>
         </span>
@@ -409,7 +411,7 @@ export function protocolActionNoteFacts(
       suffix,
       node: (
         <>
-          <ExactCkb shannons={meta.capacity} signed={false} tone="plain" />
+          <CkbAmount form="column" shannons={meta.capacity} signed={false} tone="plain" />
           {suffix}
         </>
       ),
@@ -439,7 +441,8 @@ export function protocolActionNoteFacts(
       kind: 'other',
       node: (
         <>
-          +<ExactCkb shannons={meta.compensation} signed={false} tone="plain" /> compensation
+          +<CkbAmount form="column" shannons={meta.compensation} signed={false} tone="plain" />{' '}
+          compensation
         </>
       ),
     });
