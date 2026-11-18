@@ -388,11 +388,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     {
       label: 'CKB held',
       value:
-        held !== null ? (
-          <ExactCkb shannons={held} signed={false} tone="plain" wrap />
-        ) : (
-          'Not recorded'
-        ),
+        held !== null ? <ExactCkb shannons={held} signed={false} tone="plain" /> : 'Not recorded',
       note:
         held !== null && occupied !== null && held > BigInt(0)
           ? `${percentOf(occupied, held)} occupied`

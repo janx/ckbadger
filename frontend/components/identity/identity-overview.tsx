@@ -51,7 +51,7 @@ function heldFact(protocol: IdentityProtocol, isLive: boolean): AssetMetric {
   if (occupied > held) throw new Error(`${protocol.itemId}: occupied exceeds the cell's capacity`);
   return {
     label: 'CKB held in its cell',
-    value: <ExactCkb shannons={held} signed={false} tone="plain" wrap />,
+    value: <ExactCkb shannons={held} signed={false} tone="plain" />,
     note: isLive ? (
       <>
         <span className="text-text">
