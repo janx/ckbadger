@@ -52,6 +52,46 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', '25B', '50B']);
   });
 
+  // Readability 2026-11-18, lane B5: in a column that holds a bar and its figure, the head's name
+  // stood over the bar and the figure had none. Given the figure's width, the name ends where the
+  // figure ends (right of the track and the bar's 10 px gap); the ticks stay over the track.
+  it('stands its name over the figure when it is told the figure’s width (B5)', () => {
+    const { container } = render(
+      // @ts-expect-error the prop comes with the fix (red first: lane B5)
+      <ScaleHeader label="Occupied" scale={1_000_000} trackWidth={80} figureWidth={51} />
+    );
+    const bar = render(
+      <AlignedBar
+        label="Occupied"
+        scale={1_000_000}
+        trackWidth={80}
+        segments={[{ key: 'o', label: 'occupied', value: 42_000, tone: 'data' }]}
+        display="4.20%"
+        displayWidth={51}
+      />
+    ).container;
+    const head = container.firstElementChild as HTMLElement;
+    const name = head.firstElementChild as HTMLElement;
+    expect(name).toHaveTextContent(/^Occupied$/);
+    expect(name).toHaveClass('text-meta', 'flex', 'justify-end', 'whitespace-nowrap');
+    // the bar's own geometry: its track, its 10 px gap, its figure
+    const row = bar.querySelector('[data-aligned-bar]') as HTMLElement;
+    expect(row).toHaveClass('gap-2.5');
+    const track = row.querySelector<HTMLElement>('[data-track]')!;
+    const figure = row.lastElementChild as HTMLElement;
+    expect(name.style.width).toBe(
+      `${Number.parseFloat(track.style.width) + 10 + Number.parseFloat(figure.style.width)}px`
+    );
+    expect(ticksOf(head).style.width).toBe(track.style.width);
+  });
+
+  it('refuses a figure width it cannot draw', () => {
+    // @ts-expect-error the prop comes with the fix (red first: lane B5)
+    expect(() => ScaleHeader({ label: 'x', scale: 10, figureWidth: 0 })).toThrow(
+      'x: invalid figure width 0'
+    );
+  });
+
   it('refuses a scale or a gap it cannot draw', () => {
     expect(() => ScaleHeader({ label: 'x', scale: 0 })).toThrow('x: invalid column scale 0');
     expect(() => ScaleHeader({ label: 'x', scale: 2.5 })).toThrow('x: invalid column scale 2.5');
