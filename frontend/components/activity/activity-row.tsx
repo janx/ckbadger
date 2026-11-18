@@ -181,41 +181,46 @@ export function ActivityRowHead({
           data-role="evidence"
           // An item of the head's wrapping row that may shrink (lane B4 fix round: it was
           // shrink-0, so it stood at its whole width, one line past a phone's): beside the headline
-          // while both fit, on its own line when not, where it takes the line's room and breaks
-          // between its units. No run around them: each owns its white-space (the block number has
-          // no space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets
-          // "this device's clock is behind" break between its words), so a line breaks only
-          // between them, never inside one.
+          // while both fit, on its own line when not, where it takes the line's room. Its parts are
+          // a separated list (second fix round: the separators have one owner, and a line never
+          // starts or ends with one): it breaks between the parts, each separator hung before the
+          // part after it, and inside a part only where the part lets it (the block number has no
+          // space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
+          // device's clock is behind" break between its words).
           className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
         >
-          {blockNumber !== null ? (
-            <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
-              {formatBlockNumber(blockNumber)}
-            </Link>
-          ) : poolStatus ? (
-            <PoolStatusBadge status={poolStatus} />
-          ) : (
-            <span>Unconfirmed</span>
-          )}
-          {' · '}
-          {!linked && (
-            <>
-              <Link
-                href={`/tx/${hash}`}
-                className="hover:text-jade text-text-dim transition-colors"
-              >
-                <ShortId value={hash} kind="hash" size="row" />
-              </Link>
-              {' · '}
-            </>
-          )}
-          {timestamp !== null ? (
-            <RowDate timestamp={timestamp} age={age} />
-          ) : timeAddedToPool ? (
-            <TimeInPool since={timeAddedToPool} />
-          ) : (
-            'Time unavailable'
-          )}
+          <Dotted
+            parts={[
+              blockNumber !== null ? (
+                // its ink said on itself, the evidence's quiet ink (a part handed to the list)
+                <Link
+                  href={`/blocks/${blockNumber}`}
+                  className="text-text-dim hover:text-text transition-colors"
+                >
+                  {formatBlockNumber(blockNumber)}
+                </Link>
+              ) : poolStatus ? (
+                <PoolStatusBadge status={poolStatus} />
+              ) : (
+                <span>Unconfirmed</span>
+              ),
+              !linked && (
+                <Link
+                  href={`/tx/${hash}`}
+                  className="hover:text-jade text-text-dim transition-colors"
+                >
+                  <ShortId value={hash} kind="hash" size="row" />
+                </Link>
+              ),
+              timestamp !== null ? (
+                <RowDate timestamp={timestamp} age={age} />
+              ) : timeAddedToPool ? (
+                <TimeInPool since={timeAddedToPool} />
+              ) : (
+                'Time unavailable'
+              ),
+            ]}
+          />
         </span>
       )}
     </div>
