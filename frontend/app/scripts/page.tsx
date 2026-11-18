@@ -586,7 +586,7 @@ export default function ScriptsPage() {
                 <h1 className="text-text-bright text-index font-medium">Scripts</h1>
                 {searchForm}
               </div>
-              <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
+              <p data-role="lede" className="text-text-dim text-body max-w-measure mt-1.5">
                 Locks decide who can spend a cell; types, what it is.{' '}
                 <a href="#evidence" className="hover:text-text-bright hover:underline">
                   How it works<span className="whitespace-nowrap"> ↓</span>
@@ -608,7 +608,7 @@ export default function ScriptsPage() {
                 <div className="mt-2.5">
                   <ScriptCodeClassLegend classes={summary.data.classSummary} />
                 </div>
-                <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+                <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
                   Code pinned by its data hash, or held in a code cell no one can spend, can never
                   change; whoever can spend any other code cell can replace its code.
                 </p>

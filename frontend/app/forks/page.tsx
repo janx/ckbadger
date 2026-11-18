@@ -425,7 +425,7 @@ export default function ForksPage() {
               data.days.length > 0 && (
                 <div data-role="reading">
                   <ForkDaysReading days={data.days} pin={pin} />
-                  <p className="text-text text-body mt-3.5 max-w-[640px]">
+                  <p className="text-text text-body max-w-measure mt-3.5">
                     Uncles are the complete record; this node sees only the forks it had to switch.
                   </p>
                 </div>

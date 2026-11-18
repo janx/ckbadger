@@ -44,13 +44,13 @@ export function CompositionLine({
   lede = false,
 }: {
   tier: CompositionTier;
-  /** Hierarchy v3 (R13): set as the page's lede — dim, at most 560 px. */
+  /** Hierarchy v3 (R13): set as the page's lede — dim, on the measure (readability R4). */
   lede?: boolean;
 }) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <CompositionBadge tier={tier} />
-      <span className={cn('text-body', lede ? 'text-text-dim max-w-[560px]' : 'text-text')}>
+      <span className={cn('text-body', lede ? 'text-text-dim max-w-measure' : 'text-text')}>
         {COMPOSITION_SENTENCES[tier]}
       </span>
     </div>

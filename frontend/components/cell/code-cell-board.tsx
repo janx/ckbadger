@@ -49,7 +49,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         command="Code"
         args={names.length ? names.join(' · ') : undefined}
       />
-      <p className="text-body max-w-[860px] leading-relaxed">
+      <p className="text-body max-w-measure leading-relaxed">
         Its data is a RISC-V program. A script names it in one of two ways, and each way decides
         what happens when the code changes.
       </p>

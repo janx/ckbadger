@@ -295,7 +295,7 @@ function TxSummary({
       : [];
   const sender = moves.length > 0 && moves[0].from.length === 1 ? moves[0].from[0] : null;
   return (
-    <p data-testid="tx-summary" className="text-text text-body max-w-[80ch]">
+    <p data-testid="tx-summary" className="text-text text-body max-w-measure">
       {moves.length === 0 && mark && <ClassMark kind={mark} size={12} className="mr-1.5" />}
       {ran.length > 0 && `It ran ${listWords(ran)}. `}
       {moves.map((m, i) => (
@@ -1014,7 +1014,7 @@ export default function TransactionDetailPage() {
       indexed.
     </p>
   ) : tx.isCellbase ? (
-    <p data-testid="tx-summary" className="text-text text-body max-w-[80ch]">
+    <p data-testid="tx-summary" className="text-text text-body max-w-measure">
       The first transaction of block{' '}
       <BlockLink
         number={required(tx.blockNumber, hash, 'blockNumber')}
@@ -1285,7 +1285,7 @@ export default function TransactionDetailPage() {
             below={
               <>
                 {summary}
-                {comment !== null && <Comment lines={comment} className="mt-4 max-w-[60ch]" />}
+                {comment !== null && <Comment lines={comment} className="mt-4" />}
               </>
             }
           >

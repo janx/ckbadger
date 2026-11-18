@@ -141,7 +141,8 @@ it('opens with one hero section — name, status, id and the composition sentenc
   const lede = within(hero).getByText(
     'Fully on-chain: its record lives in a CKB cell, its image in a Bitcoin inscription.'
   );
-  expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+  // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+  expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
   expect(lede.textContent!.length).toBeLessThanOrEqual(90);
   const traits = screen.getByLabelText('Traits');
   expect(hero.contains(traits)).toBe(false);
@@ -193,7 +194,8 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   expect(caption).toHaveTextContent(
     'Its traits are read from 53 bytes of DNA; its prev.bg gene points to a Bitcoin inscription, which makes it BTC+CKB.'
   );
-  expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+  // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+  expect(caption).toHaveClass('text-body', 'max-w-measure');
   expect(caption.textContent!.length).toBeLessThanOrEqual(160);
   const plate = container.querySelector('[data-nibble]')!;
   expect(plate.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -265,7 +267,8 @@ it('shows its cell at minting and now, to scale, with what changed (OB-9)', asyn
   expect(caption).toHaveTextContent(
     'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved.'
   );
-  expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+  // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+  expect(caption).toHaveClass('text-body', 'max-w-measure');
   expect(caption).toBe(cell.lastElementChild);
   expect(cell.textContent).not.toMatch(/Lock: secp256k1/);
   expect(document.querySelector('[data-tier="2"]')).toHaveTextContent(

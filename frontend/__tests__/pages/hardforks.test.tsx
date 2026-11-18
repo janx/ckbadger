@@ -514,7 +514,8 @@ describe('HardforksPage', () => {
       /^Editions change CKB's rules; a script's hash type picks its VM\.$/
     );
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
     // No figure: the timeline follows the lede directly, with no h2 of its own (it is the hero).
     expect(hero).toContainElement(timeline);
     expect(lede.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -572,7 +573,8 @@ describe('HardforksPage', () => {
     );
     expect(hero.nextElementSibling).toBe(caption);
     expect(caption.tagName).toBe('P');
-    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
     // The way down to the whole explanation.
     const how = within(caption).getByRole('link', { name: 'How it works ↓' });
@@ -596,7 +598,8 @@ describe('HardforksPage', () => {
     const story = (card: HTMLElement, opening: RegExp) => {
       const p = within(card).getByText(opening);
       expect(p.tagName).toBe('P');
-      expect(p).toHaveClass('text-body', 'max-w-[640px]');
+      // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+      expect(p).toHaveClass('text-body', 'max-w-measure');
       expect(p.textContent!.length).toBeLessThanOrEqual(160);
       expect(p.textContent!.match(/[.!?](?=\s|$)/g)!.length).toBeLessThanOrEqual(2);
       return p;
@@ -668,7 +671,8 @@ describe('HardforksPage', () => {
       within(consensus).getByText(
         "Today's node applies RFC 0029, 0030, 0031, 0036 and 0038 from epoch 0, so they do not show as switching on with an edition."
       )
-    ).toHaveClass('text-meta', 'text-text-dim', 'max-w-[640px]');
+      // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    ).toHaveClass('text-meta', 'text-text-dim', 'max-w-measure');
     // Rhythm: hero → caption → the editions 64 px under it → the consensus 72 px under them.
     const hero = screen.getByRole('region', { name: 'Hardforks' });
     const caption = hero.nextElementSibling as HTMLElement;

@@ -40,7 +40,8 @@ describe('ForksPage', () => {
     // R13: one short lede, ≤ 90 characters, with the way down to tier 2; in the reading ink, a
     // sentence that explains (re-pinned with readability ruling R3; it was dim)
     const lede = within(hero).getByText(/^Two blocks, one height: one stays, one is an uncle\./);
-    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
@@ -167,7 +168,8 @@ describe('ForksPage', () => {
     const under = reading.closest('[data-role="reading"]') as HTMLElement;
     expect(Array.from(under.children).map((el) => el.tagName)).toEqual(['DIV', 'P']);
     const caption = under.querySelector('p')!;
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     // the paragraph and the scope note moved to tier 2, every sentence kept
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;

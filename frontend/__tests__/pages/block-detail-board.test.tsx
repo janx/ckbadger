@@ -423,8 +423,14 @@ describe('Block board · first tier', () => {
     const { head, plate, below } = expectNamePlate(container, 'Block');
     expect(head).toContainElement(summary);
     expect(plate).not.toContainElement(summary);
+    // re-pinned with readability R4 (lane B7): the summary stands in the lede's one holder, which
+    // sets it on the measure (it was below's own child, at no width of its own)
     expect(below!.children).toHaveLength(1);
-    expect(below!.firstElementChild).toBe(summary);
+    const holder = below!.firstElementChild!;
+    expect(holder).toHaveAttribute('data-detail-lede');
+    expect(holder).toHaveClass('max-w-measure');
+    expect(holder.children).toHaveLength(1);
+    expect(holder.firstElementChild).toBe(summary);
     expect(container.querySelector('[data-tier="1"]')).not.toContainElement(summary);
     expectBefore(screen.getByText(block.hash), summary);
     expectBefore(summary, screen.getByRole('group', { name: 'Block contents' }));

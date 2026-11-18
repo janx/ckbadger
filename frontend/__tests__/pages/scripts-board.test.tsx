@@ -326,7 +326,8 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
     // ≤ 90 (R13), and one line: 71 characters of 13 px mono (7.8 px each) fill the 560 px measure.
     expect(lede.textContent!.length).toBeLessThanOrEqual(71);
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'
@@ -401,7 +402,8 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     for (const share of within(legend).getAllByText(/%$/)) expect(share).toHaveClass('text-text');
     expect(legend.textContent).not.toMatch(/\d\.\d{8}/);
     const caption = tier1().querySelector('[data-role="caption"]') as HTMLElement;
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
     expect(legend.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

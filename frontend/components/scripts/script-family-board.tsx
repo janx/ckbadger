@@ -125,7 +125,7 @@ export function ScriptSummarySentence({
   return (
     <Sentence
       data-testid="script-summary"
-      className={inline ? undefined : 'text-body max-w-[640px]'}
+      className={inline ? undefined : 'text-body max-w-measure'}
     >
       {family.name} {verb}{' '}
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
@@ -616,7 +616,7 @@ export function ScriptHistoryNotes({
   const capacity = BigInt(family.ownedCapacitySum);
   const occupiedNow = BigInt(family.ownedKnowledgeSum);
   const Sentence = inline ? 'span' : 'p';
-  const block = inline ? undefined : 'text-body max-w-[640px]';
+  const block = inline ? undefined : 'text-body max-w-measure';
   return (
     <>
       <Sentence className={block}>
@@ -674,7 +674,7 @@ export function ScriptCustodyFigure({
     const classes = family.codeClasses ?? [];
     if (classes.length && classes.every((row) => isImmutableClass(row.class)))
       return (
-        <p data-role="caption" className="text-body max-w-[640px]">
+        <p data-role="caption" className="text-body max-w-measure">
           No one. {family.name} cells name their code by its data hash, or through a code cell that
           can never be spent, so the code they run cannot be replaced.
         </p>
@@ -797,7 +797,7 @@ export function ScriptCustodyFigure({
           {handover.total - handover.common} of {handover.total}
         </p>
       ))}
-      <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+      <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
         Whoever can spend its code cell can put new code in it, and every {family.name} cell runs it
         from the next block. {NUMBER_WORDS[holders.length] ?? holders.length}{' '}
         {allMultisig
@@ -834,14 +834,14 @@ export function ScriptCustodyMechanism({
   return (
     <>
       {lineage && (
-        <Sentence className={inline ? undefined : 'text-body max-w-[640px]'}>
+        <Sentence className={inline ? undefined : 'text-body max-w-measure'}>
           {family.name} cells point at their code through one code cell&apos;s type id, not at a
           fixed binary. Whoever can spend that cell can put new code in it, and every {family.name}{' '}
           cell runs the new code from the next block.
         </Sentence>
       )}
       {inline && lineage && ' '}
-      <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-[640px]'}>
+      <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-measure'}>
         Code versions: {unitText(binaries)}.
       </Sentence>
     </>

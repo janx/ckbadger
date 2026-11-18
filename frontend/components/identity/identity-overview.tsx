@@ -563,7 +563,7 @@ export function IdentitySummary({
     <p
       data-testid="identity-summary"
       aria-label={`${subject} in brief`}
-      className="text-text text-body mt-1.5 max-w-[820px] leading-relaxed"
+      className="text-text text-body max-w-measure mt-1.5 leading-relaxed"
     >
       {body}
     </p>

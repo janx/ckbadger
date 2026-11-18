@@ -321,7 +321,8 @@ describe('FiberNetworkGraph', () => {
   it('writes one caption under the reading: one sentence within 640 px (R13, R14)', () => {
     render(<Graph network={mainnet as FiberNetwork} />);
     const caption = screen.getByTestId('under').querySelector('p[data-role="caption"]')!;
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     // one line inside 640 px (13 px mono, about 8 px a character)
     expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     expect(caption.textContent).toMatch(/^Each circle is a party, each line a pair/);

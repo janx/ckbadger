@@ -467,7 +467,8 @@ describe('no font size outside the scale in the stylesheet, one size for every e
     const p = css.match(/\.prose-tier2 p\s*\{([^}]*)\}/)![1];
     expect(p).toContain('font-size: 14px;');
     expect(p).toContain('line-height: 1.7;');
-    expect(p).toContain('max-width: 72ch;');
+    // re-pinned (R4, lane B7): the one measure, max-w-measure, 76 characters (was max-width: 72ch)
+    expect(p).toContain('@apply max-w-measure;');
   });
 
   it('sets every eyebrow at text-meta', () => {

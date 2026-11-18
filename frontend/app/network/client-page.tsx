@@ -196,7 +196,7 @@ function NetworkHeading() {
 /** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
 function NetworkLede() {
   return (
-    <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
+    <p data-role="lede" className="text-text-dim text-body max-w-measure mt-1.5">
       Nodes find each other by word of mouth; unreachable is not gone.{' '}
       <a href="#evidence" className="hover:text-text-bright hover:underline">
         How it works<span className="whitespace-nowrap"> ↓</span>

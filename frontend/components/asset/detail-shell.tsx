@@ -127,7 +127,10 @@ export function AssetDetailShell({
     <>
       <section aria-labelledby={titleId} className="min-w-0 space-y-3">
         {named}
-        <div data-role="lede">{lede}</div>
+        {/* the page's one sentence, on the measure (readability R4, lane B7) */}
+        <div data-role="lede" className="max-w-measure">
+          {lede}
+        </div>
         {hero && (
           <div data-role="hero" className="min-w-0 pt-6">
             {hero}

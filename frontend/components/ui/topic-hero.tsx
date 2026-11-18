@@ -66,7 +66,7 @@ function GridHero({ title, lede, figures, breadcrumb }: TopicHeroProps) {
       <div className="flex min-w-0 flex-col gap-2.5">
         {breadcrumb}
         <h1 className="text-text-bright text-index">{title}</h1>
-        <p className="text-text text-body max-w-[720px] leading-relaxed">{lede}</p>
+        <p className="text-text text-body max-w-measure leading-relaxed">{lede}</p>
       </div>
       {figures && (
         <dl className="grid min-w-0 grid-cols-2 gap-x-7 gap-y-4">
@@ -95,7 +95,8 @@ function GridHero({ title, lede, figures, breadcrumb }: TopicHeroProps) {
 
 /**
  * Hierarchy v3 (R13), after the DAO page: the hero section holds the title, one short lede (the
- * reading ink since R3, ≤ 90 characters, 560 px), the one display figure with its companion on the same baseline row, and
+ * reading ink since R3, ≤ 90 characters, on the measure: 76 characters, readability R4, lane B7),
+ * the one display figure with its companion on the same baseline row, and
  * the picture right under it; the picture's reading and the other figures (one quiet row: meta
  * label, section value, inline dim note) follow the section.
  */
@@ -121,7 +122,7 @@ function FigureHero({
         </div>
         {/* A sentence that explains: the reading ink (R3). The eyebrow, the unit and the notes
             below are labels and notes: quiet. */}
-        <p className="text-text text-body mt-1.5 max-w-[560px]">{lede}</p>
+        <p className="text-text text-body max-w-measure mt-1.5">{lede}</p>
         {figure && (
           <div data-role="figure" className="mt-9 min-w-0">
             <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">
@@ -145,7 +146,9 @@ function FigureHero({
               </div>
               {/* the figure's companion: a value in words, the reading ink (R3) */}
               {figure.companion && (
-                <p className="text-body text-text min-w-0">{unitNode(figure.companion)}</p>
+                <p className="text-body text-text max-w-measure min-w-0">
+                  {unitNode(figure.companion)}
+                </p>
               )}
             </div>
           </div>

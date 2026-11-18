@@ -478,7 +478,7 @@ export function NetworkTrends() {
             </p>
           )}
           {/* DY-04: the series by their form, which both themes share, not by a night colour. */}
-          <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+          <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
             The line is every verified node the crawler retained that day; the area under it is the
             part of them that was reachable.
           </p>

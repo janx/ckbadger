@@ -220,7 +220,7 @@ function SupplyNote({ view }: { view: AllocationView }) {
       data-testid="ckbytes-note"
       className="lg:col-start-2 lg:row-start-1 lg:self-start lg:pt-1"
     >
-      <Comment lines={supplyComment(view)} className="max-w-[60ch]" />
+      <Comment lines={supplyComment(view)} />
       <p
         data-testid="ckbytes-formula"
         className="text-text-dim text-meta m-0 mt-3 pl-[18px] font-mono"

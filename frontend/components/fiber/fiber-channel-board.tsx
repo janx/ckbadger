@@ -166,9 +166,8 @@ function Summary({
 }
 
 /**
- * The hero's lede (hierarchy v3, R13): the channel's story in one line (≤ 67 characters fill the
- * 560 px lede at 13 px); the
- * full story, with what each side put in, is the tier-2 `Summary`.
+ * The hero's lede (hierarchy v3, R13): the channel's story in one line (≤ 76 characters fill the
+ * measure, readability R4); the full story, with what each side put in, is the tier-2 `Summary`.
  */
 function ledeSentence(channel: FiberChannelDetail): string {
   const id = channel.channelId;
@@ -468,7 +467,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           <p className="text-text-dim text-small mt-1.5 w-fit max-w-full break-all">
             {channel.channelId}
           </p>
-          <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{ledeSentence(channel)}</p>
+          <p className="text-text-dim text-body max-w-measure mt-1.5">{ledeSentence(channel)}</p>
           <div data-role="figure" className="mt-9 min-w-0">
             <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">capacity</div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
@@ -528,7 +527,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                   />
                 )}
               </div>
-              <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+              <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
                 The chain sees no Fiber payment, only the split at the open and at the close.
               </p>
             </DetailSection>

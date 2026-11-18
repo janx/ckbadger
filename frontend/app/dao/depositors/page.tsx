@@ -213,7 +213,7 @@ export default function DaoDepositorsPage() {
               {moved && (
                 <p
                   data-testid="ranking-moved"
-                  className="text-text-dim text-small mb-3 max-w-[80ch]"
+                  className="text-text-dim text-small max-w-measure mb-3"
                 >
                   The chain tip moved since the first page (ranked at block{' '}
                   <BlockLink number={moved.from} />

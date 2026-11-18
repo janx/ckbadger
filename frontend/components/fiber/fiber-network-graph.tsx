@@ -545,7 +545,7 @@ export function FiberNetworkReading({ network, pin }: Props) {
       <ReadoutRow label="Party or pair readout" pinned={pin.showingPin} idle={IDLE}>
         {pin.active ? readoutLine(data, pin.active) : null}
       </ReadoutRow>
-      <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+      <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
         Each circle is a party, each line a pair; green is CKB locked between them now.
       </p>
     </>

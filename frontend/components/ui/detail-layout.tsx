@@ -49,7 +49,8 @@ interface DetailLayoutBaseProps {
   /**
    * The page's opening sentence, read with its name (rubbing × Song print, phase 5): the last line
    * of the head, after the identity. In a sealed head it is what is below the stone and the name
-   * plate, from the page's left edge (the seals by kind, C10).
+   * plate, from the page's left edge (the seals by kind, C10). Set on the measure
+   * (`max-w-measure`, readability R4): what the page gives carries no width of its own.
    */
   lede?: ReactNode;
   status?: ReactNode;
@@ -115,8 +116,20 @@ export function DetailLayout({
   );
   const head = seal ? (
     // The name plate: the kind word and the status on the kind line, the h1 and the identity (the
-    // id line, in the plate's own voice) beside the stone, the lede under both from the left edge.
-    <SealedHead {...seal} status={status} identity={identity} below={lede}>
+    // id line, in the plate's own voice) beside the stone, the lede under both from the left edge,
+    // on the measure (readability R4, lane B7: 76 characters at the body step, 638.4 px).
+    <SealedHead
+      {...seal}
+      status={status}
+      identity={identity}
+      below={
+        lede === undefined ? undefined : (
+          <div data-detail-lede="" className="max-w-measure min-w-0">
+            {lede}
+          </div>
+        )
+      }
+    >
       {h1}
     </SealedHead>
   ) : (
@@ -133,8 +146,9 @@ export function DetailLayout({
       {identity && (
         <div className="text-text text-small mt-2 min-w-0 [overflow-wrap:anywhere]">{identity}</div>
       )}
+      {/* the page's opening sentences, on the measure (readability R4, lane B7) */}
       {lede && (
-        <div data-detail-lede="" className="mt-4 min-w-0">
+        <div data-detail-lede="" className="max-w-measure mt-4 min-w-0">
           {lede}
         </div>
       )}

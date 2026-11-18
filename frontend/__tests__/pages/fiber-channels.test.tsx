@@ -71,7 +71,8 @@ describe('FiberChannelsPage', () => {
     // R13: one short lede (≤ 90 characters) and the way down to the explanation in tier 2; in the
     // reading ink, a sentence that explains (re-pinned with readability ruling R3; it was dim)
     const lede = within(hero).getByText(/^Channels touch the chain only to open and to close\./);
-    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(

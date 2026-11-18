@@ -177,7 +177,7 @@ export function DaoHeading() {
 /** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
 export function DaoLede() {
   return (
-    <p className="text-text-dim text-body mt-1.5 max-w-[560px]">
+    <p className="text-text-dim text-body max-w-measure mt-1.5">
       CKB locked in the DAO keeps its share of the supply.{' '}
       <a href="#evidence" className="hover:text-text-bright hover:underline">
         How it works<span className="whitespace-nowrap"> ↓</span>
@@ -555,7 +555,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           </span>
         </p>
       )}
-      <p className="text-text text-body mt-3.5 max-w-[640px]">
+      <p className="text-text text-body max-w-measure mt-3.5">
         1.344 billion CKB a year, split in every block by how CKB is used: a deposit keeps its
         share, free CKB outside the DAO has its share burnt.
       </p>
@@ -924,7 +924,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           </div>
         )}
       </div>
-      <p className="text-text text-body mt-3.5 max-w-[640px]">
+      <p className="text-text text-body max-w-measure mt-3.5">
         A withdrawal completes only at the end of a 180-epoch cycle, about 30 days.
       </p>
     </Section>

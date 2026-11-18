@@ -590,7 +590,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
         </div>
       )}
       {/* One caption (R3); the coverage, displacement and no-centre notes are tier 2's. */}
-      <p data-role="caption" className="text-text text-body max-w-[640px]">
+      <p data-role="caption" className="text-text text-body max-w-measure">
         Every node this crawler verified, at its approximate GeoIP place; no links are drawn,
         because no one can see them from outside.
       </p>

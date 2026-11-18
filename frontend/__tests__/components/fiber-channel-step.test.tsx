@@ -91,7 +91,8 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
     // the step's one caption, at caption width (R14)
     expect(screen.getByText('One side posted the commitment.')).toHaveClass(
       'text-body',
-      'max-w-[640px]'
+      // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+      'max-w-measure'
     );
     // script groups stay out of tier 1 (FF-C5)
     expect(screen.queryByText('Script groups')).toBeNull();

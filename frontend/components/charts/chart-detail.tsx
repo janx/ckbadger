@@ -172,7 +172,7 @@ function SubChartHead({ sub }: { sub: SubChart }) {
   const key = sub.series[0].key;
   return (
     <div className="mb-3 flex min-w-0 flex-wrap items-end justify-between gap-x-6 gap-y-2">
-      <p className="text-text-dim text-small min-w-0 max-w-[62ch]">{sub.note}</p>
+      <p className="text-text-dim text-small max-w-measure min-w-0">{sub.note}</p>
       {sub.reading && (
         // keeps the right edge when a narrow width puts it under the note
         <div role="group" aria-label={`${sub.title} reading`} className="ml-auto">
@@ -432,7 +432,7 @@ function DetailBody({
             </div>
           </div>
           {helpOpen && (
-            <p className="text-text-dim text-small mb-4 max-w-[62ch] leading-5">
+            <p className="text-text-dim text-small max-w-measure mb-4 leading-5">
               {/* C10: the readout row under the chart already says "tap or hover". */}
               The line under the chart reads one {style === 'date' ? 'day' : 'point'}: select it to
               keep it there, select it again to let it go. Or focus the chart and use ← and → to

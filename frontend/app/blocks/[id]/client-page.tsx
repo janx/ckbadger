@@ -275,7 +275,7 @@ export default function BlockDetailPage() {
           // The summary is the head's last line (phase 5, Gate 3 note), under the stone and the
           // plate from the page's left edge, where the tab row and the sections start (C10).
           lede={
-            <p data-testid="block-summary" className="text-body max-w-[80ch] leading-relaxed">
+            <p data-testid="block-summary" className="text-body leading-relaxed">
               {unitNode(formatCount(block.transactionsCount, 'transaction'))}
               {block.minerAddress && (
                 <>

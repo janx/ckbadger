@@ -89,7 +89,7 @@ function CollectionLede({
     : undefined;
   const onchain = counts ? counts.btc_ckb + counts.pure_ckb : 0;
   return (
-    <p className="text-text-dim text-body max-w-[640px]">
+    <p className="text-text-dim text-body max-w-measure">
       {/* PB-23: the kind and the sentence are one separated list, so the dot goes with the
           sentence to a new line; the kind is one unit (responsive B#21). */}
       <Dotted
@@ -494,7 +494,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             />
             {description ? (
               <blockquote
-                className="border-base-border text-text text-body max-w-[640px] border-l pl-3"
+                className="border-base-border text-text text-body max-w-measure border-l pl-3"
                 title={
                   kind === 'spore'
                     ? 'the cluster’s description, on chain'

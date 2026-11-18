@@ -519,7 +519,11 @@ describe('Transaction board, tier 1', () => {
       '0.00064119 ckb to the miner.',
       'common knowledge grew by 26\u00a0bytes.',
     ]);
-    expect(comment).toHaveClass('mt-4', 'max-w-[60ch]');
+    // re-pinned with readability R4 (lane B7): the comment's paragraph stands on the measure, which
+    // the Comment sets itself (the page gave the comment max-w-[60ch])
+    expect(comment).toHaveClass('mt-4');
+    expect(comment.className).not.toMatch(/max-w-/);
+    expect(comment.querySelector('p')).toHaveClass('max-w-measure');
     expect(container.querySelectorAll('.comment')).toHaveLength(1);
     // under the seal and the plate, across both columns, after the summary, inside the header
     const { head, below } = expectNamePlate(

@@ -135,8 +135,13 @@ describe('Cell page against the Cell board', () => {
       `/mainnet/objects/${cell.type!.args}`
     );
     const { plate, below } = expectNamePlate(container, 'Cell');
+    // re-pinned with readability R4 (lane B7): the lede stands in one holder that sets it on the
+    // measure (it was below's own child)
     expect(below!.children).toHaveLength(1);
-    expect(below!.firstElementChild!.firstElementChild).toBe(line);
+    const holder = below!.firstElementChild!;
+    expect(holder).toHaveAttribute('data-detail-lede');
+    expect(holder).toHaveClass('max-w-measure');
+    expect(holder.firstElementChild!.firstElementChild).toBe(line);
     expect(plate).not.toContainElement(line);
     // after the full out point and its copy, in the plate
     const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
@@ -178,14 +183,16 @@ describe('Cell page against the Cell board', () => {
       'text-meta',
       'h-[26px]'
     );
-    const parts = Array.from(below!.firstElementChild!.children);
+    // re-pinned with readability R4 (lane B7): the lede in its measured holder under the plate
+    const lede = below!.querySelector('[data-detail-lede] > div')!;
+    const parts = Array.from(lede.children);
     expect(parts).toEqual([
       screen.getByTestId('cell-inventory'),
       screen.getByTestId('cell-origin'),
       screen.getByText(/The out point is the cell's only name/),
     ]);
     // the origin and the sentence keep the identity lines' dim small voice
-    expect(below!.firstElementChild).toHaveClass('text-text-dim', 'text-small', 'space-y-1.5');
+    expect(lede).toHaveClass('text-text-dim', 'text-small', 'space-y-1.5');
   });
 
   it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {

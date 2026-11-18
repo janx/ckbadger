@@ -236,7 +236,7 @@ function HostingSection({
         ))}
       </p>
       {caption && (
-        <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+        <p data-role="caption" className="text-text text-body max-w-measure mt-3.5">
           {caption}
         </p>
       )}

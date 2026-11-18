@@ -1031,7 +1031,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
           </div>
         );
       })}
-      <p className="text-text-dim text-small mt-3.5 max-w-[640px]">
+      <p className="text-text-dim text-small max-w-measure mt-3.5">
         Open a collection to list its objects here; every object is one live cell of this address.
       </p>
     </div>

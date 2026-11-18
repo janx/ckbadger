@@ -292,7 +292,7 @@ export function ScriptCodeClassSummary({
         ))}
       </ul>
       {classes.some((row) => row.class === 'unspendable') && (
-        <p data-testid="unspendable-note" className="text-text-dim text-body mt-3 max-w-[640px]">
+        <p data-testid="unspendable-note" className="text-text-dim text-body max-w-measure mt-3">
           Unspendable: the code cell sits under a lock no one can unlock — the all-zero lock, or a
           secp256k1 lock over 20 zero bytes, which no known key matches — so its code is effectively
           immutable.

@@ -21,7 +21,8 @@ export function DroppedGenesCaption({
   return (
     <p
       data-role="caption"
-      className={cn('text-text-dim text-small [overflow-wrap:anywhere]', className)}
+      // on the measure (readability R4, lane B7); a narrower column's caller may set it narrower
+      className={cn('text-text-dim text-small max-w-measure [overflow-wrap:anywhere]', className)}
     >
       <TraitText text={droppedGenesCaption(dropped, objects)} />
     </p>

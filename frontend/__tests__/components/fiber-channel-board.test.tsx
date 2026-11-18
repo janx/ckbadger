@@ -119,7 +119,8 @@ describe('FiberChannelBoard', () => {
     const lede = within(hero).getByText(
       'Force-closed 8d 3h after it opened; settled after 6 epochs.'
     );
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     // the display figure: the channel's capacity, bright (R4, R11), in the summary form, one run
@@ -212,7 +213,8 @@ describe('FiberChannelBoard', () => {
     expect(caption).toHaveTextContent(
       'The chain sees no Fiber payment, only the split at the open and at the close.'
     );
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     expect(close.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

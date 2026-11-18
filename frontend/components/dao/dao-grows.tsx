@@ -210,7 +210,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
           </div>
         </div>
       )}
-      <p className="text-text text-body mt-3.5 max-w-[640px]">
+      <p className="text-text text-body max-w-measure mt-3.5">
         A deposit grows by AR at its withdrawal request ÷ AR at its deposit.
       </p>
     </section>

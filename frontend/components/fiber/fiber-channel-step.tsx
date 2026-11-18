@@ -183,7 +183,7 @@ export function FiberChannelStep({
     <div className="flex min-w-0 flex-col gap-2.5">
       {header}
       {/* The step's one caption, at caption width (R14). */}
-      {description && <p className="text-text text-body max-w-[640px]">{description}</p>}
+      {description && <p className="text-text text-body max-w-measure">{description}</p>}
       {body}
     </div>
   );

@@ -182,7 +182,10 @@ describe('CkbytesSection', () => {
     const formula = screen.getByTestId('ckbytes-formula');
     expect(note.firstElementChild).toBe(comment);
     expect(comment.nextElementSibling).toBe(formula);
-    expect(comment).toHaveClass('max-w-[60ch]');
+    // re-pinned with readability R4 (lane B7): the comment's paragraph stands on the measure, which
+    // the Comment sets itself (the note gave it max-w-[60ch])
+    expect(comment.className).not.toMatch(/max-w-/);
+    expect(comment.querySelector('p')).toHaveClass('max-w-measure');
     // the real minus sign, as the board writes it; the block as text, its link is the note's
     expect(formula.textContent).toBe(
       `C ${MINUS} burnt ${MINUS} S · from the DAO header of #20,820,045`

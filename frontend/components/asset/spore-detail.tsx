@@ -432,7 +432,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
         />
         {/* Hierarchy v3 (F4): the cell's story is the caption under its evidence. */}
         {versions.data && versions.data.data.length > 0 && (
-          <p data-role="caption" className="text-text text-body max-w-[640px]">
+          <p data-role="caption" className="text-text text-body max-w-measure">
             {cellLifeSentence(versions.data.data, 'object')}
           </p>
         )}

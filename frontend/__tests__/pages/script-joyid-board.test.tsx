@@ -490,7 +490,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(lede).toHaveTextContent(
       /^An universal Account Protocol for Web3 Mass-adoption · joy\.id ↗$/
     );
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'joy.id ↗' })).toHaveAttribute(
       'href',
       'https://joy.id'
@@ -639,7 +640,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
       /^Whoever can spend the code cell can put new code in it; every JoyID cell runs the new code from the next block\.$/
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(timeline.lastElementChild).toBe(caption);
     expect(tier1()).not.toHaveTextContent('point at their code through one code cell');
     expect(tier2()).toHaveTextContent(

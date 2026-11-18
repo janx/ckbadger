@@ -288,7 +288,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
         </span>
         <TapOrHoverHint className="ml-auto" />
       </div>
-      <p data-role="caption" className="text-text text-body mt-3 max-w-[640px]">
+      <p data-role="caption" className="text-text text-body max-w-measure mt-3">
         Whoever can spend the code cell can put new code in it; every {family.name} cell runs the
         new code from the next block.
       </p>

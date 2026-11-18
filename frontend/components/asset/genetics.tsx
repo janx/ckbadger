@@ -255,7 +255,7 @@ export function ObjectGeneticsView({
           ))}
         </GelPlate>
         {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
-        <p data-role="caption" className="text-text text-body max-w-[640px]">
+        <p data-role="caption" className="text-text text-body max-w-measure">
           Its traits are read from {unitText(formatCount(words.bytes, 'byte'))} of DNA
           {words.pointer
             ? `; its ${words.pointer} gene points to a Bitcoin inscription, which makes it BTC+CKB`
@@ -317,7 +317,6 @@ export function ObjectGeneticsView({
               <DroppedGenesCaption
                 dropped={ruled.dropped}
                 objects={collection.genetics.eligibleItems}
-                className="max-w-[640px]"
               />
             )}
           </GelPlate>

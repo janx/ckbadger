@@ -138,7 +138,7 @@ function EditionCard({
         )}
         {unitNode(event.activationDate)}
       </p>
-      <p className="text-text text-body max-w-[640px] leading-relaxed">
+      <p className="text-text text-body max-w-measure leading-relaxed">
         {editionStory(event, timeline, tipMs)}
       </p>
       {rfcs.length > 0 && (
@@ -221,7 +221,7 @@ function TitleRow({ status }: { status?: ReactNode }) {
  */
 function Lede() {
   return (
-    <p className="text-text-dim text-body mt-1.5 max-w-[560px]">
+    <p className="text-text-dim text-body max-w-measure mt-1.5">
       Editions change CKB&apos;s rules; a script&apos;s hash type picks its VM.
     </p>
   );
@@ -233,7 +233,8 @@ const HOW_ID = 'how-hash-type-picks-a-vm';
 /**
  * Tier 2 (hierarchy v3): the explanation tier 1 states as a timeline and one caption — the opening
  * paragraph the page used to lead with (CH-43) and the paragraph that stood under the timeline,
- * with every lane's live references (CH-41). Two columns from lg, prose at most 640 px wide.
+ * with every lane's live references (CH-41). Two columns from lg, prose on the measure (76
+ * characters, readability R4).
  */
 function HowHashTypePicksAVm({
   lanes,
@@ -246,7 +247,7 @@ function HowHashTypePicksAVm({
   return (
     <DetailSection title="How hash_type picks a VM">
       <div className="grid items-start gap-x-14 gap-y-3.5 lg:grid-cols-2">
-        <div className="flex min-w-0 max-w-[640px] flex-col gap-3.5">
+        <div className="max-w-measure flex min-w-0 flex-col gap-3.5">
           <p className="text-text-dim text-body">
             CKB changes its rules in editions. Each one switches on at an agreed epoch, and every
             node must run it from there on. Both so far brought a new version of CKB-VM, the machine
@@ -261,7 +262,7 @@ function HowHashTypePicksAVm({
             scripts start and talk to other scripts.
           </p>
         </div>
-        <p className="text-text-dim text-body max-w-[640px]">
+        <p className="text-text-dim text-body max-w-measure">
           A script named by its type hash follows every upgrade: the same code runs on VM0, then
           VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a
           hardfork never changes how an existing data-pinned script runs. Live cells reference
@@ -381,7 +382,7 @@ export default function HardforksPage() {
             </section>
             {ready && (
               // Footnote budget under the timeline: its readout row and this one caption (R4, R14).
-              <p className="text-text text-body mt-3.5 max-w-[640px]">
+              <p className="text-text text-body max-w-measure mt-3.5">
                 A script named by its type hash follows every upgrade; one named by its data hash
                 stays on the VM its hash type pins.{' '}
                 <a
@@ -429,7 +430,7 @@ export default function HardforksPage() {
                   ))}
                 </dl>
                 {genesisFeatures.length > 0 && (
-                  <p className="text-text-dim text-meta mt-3 max-w-[640px]">
+                  <p className="text-text-dim text-meta max-w-measure mt-3">
                     Today&apos;s node applies RFC{' '}
                     {joinWords(genesisFeatures.map((feature) => feature.rfc))} from epoch 0, so they
                     do not show as switching on with an edition.

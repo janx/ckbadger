@@ -180,7 +180,8 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     const lede = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'lede');
     expect(lede.textContent).toMatch(/^Nodes find each other by word of mouth/);
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'
@@ -397,7 +398,8 @@ describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', 
       'Every node this crawler verified, at its approximate GeoIP place; no links are drawn, because no one can see them from outside.'
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(follows(readout, strip)).toBe(true);
     expect(follows(strip, caption)).toBe(true);
     // Nothing else under the map: no line above it, no coverage or displacement notes.
@@ -485,7 +487,8 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     expect(caption).toHaveTextContent(
       /^36 of the 66 verified nodes run on Amazon\.com, across 2 countries\.$/
     );
-    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');
     // heading, bar, exact line, caption: no legend row of its own.
     expect(section.children).toHaveLength(4);
   });
@@ -563,7 +566,8 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     );
     const caption = section.lastElementChild as HTMLElement;
     expect(caption).toHaveAttribute('data-role', 'caption');
-    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
     // The paragraph and the panel heading leave tier 1.
     expect(section).not.toHaveTextContent(/Daily history of retained verified peers/);
@@ -605,7 +609,8 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     const prose = Array.from(tier1.querySelectorAll('[data-role="caption"], [data-role="lede"]'));
     expect(prose).toHaveLength(4);
     for (const p of prose) {
-      expect(p.className).toMatch(/(^|\s)max-w-\[(640|560)px\](\s|$)/);
+      // re-pinned with readability R4 (lane B7): the one measure, 76 characters (was 640 or 560 px)
+      expect(p.className).toMatch(/(^|\s)max-w-measure(\s|$)/);
       expect(p.textContent!.length).toBeLessThanOrEqual(160);
     }
     expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });

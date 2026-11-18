@@ -641,7 +641,8 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
     expect(screen.queryByRole('region', { name: 'History' })).toBeNull();
     const lede = within(hero()).getByText(/^CKB locked in the DAO keeps its share of the supply\./);
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[560px])
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-measure');
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'
@@ -745,7 +746,8 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     const caption = within(issuance()).getByText(
       '1.344 billion CKB a year, split in every block by how CKB is used: a deposit keeps its share, free CKB outside the DAO has its share burnt.'
     );
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(line.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(issuance().lastElementChild).toBe(caption);
   });
@@ -994,7 +996,8 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     );
     expect(chart.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(years.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     expect(grows().lastElementChild).toBe(caption);
   });
@@ -1191,7 +1194,8 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
     );
     const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
     expect(bar.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
+    expect(caption).toHaveClass('text-body', 'max-w-measure');
     expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     expect(windows().lastElementChild).toBe(caption);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
@@ -1684,7 +1688,9 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
       tier1.querySelectorAll('section > p:not([data-role="exact-amounts"])')
     );
     expect(prose.length).toBeGreaterThanOrEqual(4);
-    for (const p of prose) expect(p.className).toMatch(/(^|\s)max-w-\[(640|560)px\](\s|$)/);
+    // re-pinned with readability R4 (lane B7): the one measure, 76 characters, 638.4 px at the body
+    // step (was max-w-[640px] or max-w-[560px])
+    for (const p of prose) expect(p.className).toMatch(/(^|\s)max-w-measure(\s|$)/);
     // "tap or hover" at most once per section (R14).
     for (const section of Array.from(tier1.querySelectorAll('section')))
       expect(section.querySelectorAll('[data-hint="tap-or-hover"]').length).toBeLessThanOrEqual(1);
