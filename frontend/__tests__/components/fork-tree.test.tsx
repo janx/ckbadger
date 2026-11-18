@@ -325,12 +325,38 @@ describe('ForkTree: every word inside its tile (readability F3)', () => {
     // never cut again: the row form, 13 characters (93.6 px at 12 px), where it stands whole — in
     // a wide tile, its width less 8 px each side (110 − 16 = 94), or under a compact tile, its
     // column (the tile and 16 px) — else the tight form, 11 characters (79.2 px): under a 72 px
-    // tile the column is 88 px. Each has the one ellipsis.
+    // tile the column is 88 px. Each has the one ellipsis. Review fb-logic 1: the gap before the
+    // last column is run into from both sides where the tiles on both sides of it in one row draw
+    // labels; there each has half of it less the 4 px kept clear, (20 − 4) / 2 = 8 px.
     const miners = all.filter((l) => l.text.startsWith('ckb1'));
     expect(miners.length).toBeGreaterThan(0);
-    const room = layout.form === 'wide' ? layout.tileW - 16 : layout.tileW + RUN;
-    for (const miner of miners)
-      expect(miner.text).toBe(13 * 7.2 <= room ? 'ckb1…qs93hhsj' : 'ckb1…93hhsj');
+    const drawsLabels = (n: number, y: string) =>
+      tiles.some(
+        (g) =>
+          g.getAttribute('data-tile') === String(n) &&
+          g.querySelector('rect')!.getAttribute('y') === y &&
+          g.querySelector('[data-time]') !== null
+      );
+    let checked = 0;
+    for (const g of tiles) {
+      const n = Number(g.getAttribute('data-tile'));
+      const y = g.querySelector('rect')!.getAttribute('y')!;
+      const shared =
+        (n === model.last || n === model.last - 1) &&
+        drawsLabels(model.last, y) &&
+        drawsLabels(model.last - 1, y);
+      const room =
+        layout.form === 'wide' ? layout.tileW - 16 : layout.tileW + (shared ? (GAP - 4) / 2 : RUN);
+      for (const text of [...g.querySelectorAll('text')].filter((t) =>
+        t.textContent!.startsWith('ckb1')
+      )) {
+        expect(text.textContent, `${n} in ${room} px`).toBe(
+          13 * 7.2 <= room ? 'ckb1…qs93hhsj' : 'ckb1…93hhsj'
+        );
+        checked++;
+      }
+    }
+    expect(checked).toBe(miners.length);
   });
 });
 

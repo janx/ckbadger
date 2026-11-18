@@ -199,10 +199,50 @@ describe('forkTreeLayout (responsive V4: the two branches drawn to the measured 
   // after the last tile. The narrowest column, 72 + 16 = 88 px, holds a tight address (11
   // characters at 12 px, 79.2 px) and not the row form (13, 93.6); a wide tile's 110 − 2 × 8 = 94
   // px between its insets holds the row form.
+  // Review fb-logic 1: where the last column's labels run back into the gap before it and the
+  // column before it runs its own into the same gap, each has half of it less the 4 px kept clear,
+  // (20 − 4) / 2 = 8 px; the narrowest room is a 72 px tile and that share, 80 px, which still
+  // holds a tight address (79.2).
   it('keeps the room an unnamed miner is written in', () => {
     const c = FORK_TREE.compact;
-    expect([c.minTile, c.gap, c.labelRun, c.under, c.right]).toEqual([72, 20, 16, 38, 4]);
+    expect([c.minTile, c.gap, c.labelRun, c.sharedRun, c.under, c.right]).toEqual([
+      72, 20, 16, 8, 38, 4,
+    ]);
     expect(c.minTile + c.labelRun).toBe(88);
+    expect(c.minTile + c.sharedRun).toBe(80);
     expect(FORK_TREE.wide.tile - 2 * FORK_TREE.wide.inset).toBe(94);
+  });
+
+  // Review fb-logic 1: each tile's labels have the room they really have. At 382 px (a 414 px
+  // window) #21,022,666's four heights stand on 78 px tiles: today's +1 runs its labels 16 px into
+  // the gap after it; +2 and +3 share the gap between them, 8 px each (86 px: the tight form); a
+  // tile whose neighbour across that gap draws nothing (the dropped +1's row) keeps 16. The wide
+  // form's room is the tile less its insets.
+  it('gives each tile the room its labels have, the gap before the last column shared', () => {
+    const tile = (number: number, tag: string, stub = false) => ({
+      number,
+      hash: `0x${tag.padEnd(64, '0')}`,
+      timestamp: stub ? null : '2026-11-01T07:47:24.564Z',
+      minerLockHash: stub ? null : `0x${'11'.padEnd(64, '0')}`,
+      minerAddress: stub ? null : 'ckb1qyqexample93hhsj',
+      minerPool: null,
+      transactionsCount: stub ? null : 1,
+    });
+    const main = [tile(10, 'f0', true), tile(11, 'a1'), tile(12, 'a2'), tile(13, 'a3')];
+    const dropped = tile(12, 'b2');
+    const model: ForkTreeModel = {
+      main,
+      rows: [{ label: 'dropped at this switch', tiles: [dropped] }],
+      uncleLinks: [],
+      marks: [],
+      first: 10,
+      last: 13,
+    };
+    const layout = forkTreeLayout(model, 382);
+    expect([layout.form, layout.tileW]).toEqual(['compact', 78]);
+    expect(main.map(layout.labelRoom)).toEqual([94, 94, 86, 86]);
+    expect(layout.labelRoom(dropped)).toBe(94);
+    expect(() => layout.labelRoom(tile(14, 'zz'))).toThrow('is not a tile of the tree');
+    expect(forkTreeLayout(model, 1248).labelRoom(main[3])).toBe(94);
   });
 });
