@@ -9,7 +9,10 @@ import { fontPx, textPx } from '@/lib/type-metrics';
  * header measures its row (its width less the page's gutter) and budgets its parts here, each
  * from what it writes (lib/type-metrics.ts, a glyph 0.6 em) and the classes that draw it
  * (components/layout/header.tsx, network-switcher.tsx, search-bar.tsx, wordmark.tsx), so a nav
- * entry, a longer label or a second network is weighed by the same rule. At the type scale of
+ * entry, a longer label or a second network is weighed by the same rule. Those classes live in six
+ * components, so the numbers here are a second copy of them: shell-budget.test.tsx reads the
+ * rendered header off its classes (Tailwind's theme and app/globals.css, never this module) at
+ * each reference width and fails where a part drawn differs from its budget. At the type scale of
  * 2026-11-18: one network keeps the nav from 768 px (the field 144 px, its floor 116.4); with two
  * the switcher (117.48 px with its margin) would leave the field 10.52 px across 768–1023, so there
  * the nav is in the menu; from 1024 it stands (210.52).

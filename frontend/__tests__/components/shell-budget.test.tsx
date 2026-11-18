@@ -22,8 +22,23 @@ import {
   switcherPx,
   type NavEntry,
 } from '../utils/shell-budget';
+import {
+  boxPx,
+  containerContentPx,
+  gapPx,
+  inFlowAt,
+  insetsPx,
+  outerPx,
+} from '../utils/tailwind-box';
 import { Header, navItems } from '@/components/layout/header';
-import { headerFieldRoomPx } from '@/lib/header-fit';
+import {
+  FIELD_INSETS_PX,
+  headerFieldRoomPx,
+  headerNavEntryPx,
+  headerNavPx,
+  headerRowForm,
+  headerSwitcherPx,
+} from '@/lib/header-fit';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { VitalsStrip } from '@/components/stats-bar';
 import {
@@ -394,6 +409,105 @@ describe('the header row takes its form from its measured width (ruling on F3-f,
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
     }
+  });
+});
+
+/**
+ * The header as drawn against its budget (review-fb-tests finding 2, for lib/header-fit.ts as for
+ * the status line): the budget's frame constants are numbers written beside the classes of six
+ * components (header, wordmark, network switcher, nav menu, theme switcher, search bar), and the
+ * class test below pins most of those classes by name only — a chevron's size, the gap before it, a
+ * link's padding, the field's border and any class added beside them were pinned by nothing. Here
+ * each part of the rendered header is read off its classes (__tests__/utils/tailwind-box.ts:
+ * Tailwind's theme, app/globals.css, never lib/header-fit.ts) at each width and network count, and
+ * compared with the budget: the wordmark, each nav entry, the switcher with its margin, the nav,
+ * the field's insets, and what the row leaves the field in the form the header drew.
+ */
+describe('the header as drawn is the header its budget counts', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    delete window.__CKBADGER_RUNTIME_CONFIG__;
+  });
+
+  const sum = (xs: readonly number[]) => xs.reduce((a, b) => a + b, 0);
+  const width = (el: Element, viewport: number) => {
+    const w = outerPx(el, viewport);
+    if (w === null) throw new Error(`<${el.tagName}> is not drawn at ${viewport}`);
+    return w;
+  };
+
+  /** What the drawn row leaves the field: the row less its other parts, their gaps and the theme. */
+  function drawnFieldRoom(row: HTMLElement, field: HTMLElement, rowPx: number, viewport: number) {
+    const drawnIn = (el: Element) => Array.from(el.children).filter((c) => inFlowAt(c, viewport));
+    const group = Array.from(row.children).find((c) => c.contains(field))!;
+    const fieldBox = Array.from(group.children).find((c) => c.contains(field))!;
+    const parts = drawnIn(row);
+    const beside = drawnIn(group).filter((c) => c !== fieldBox);
+    return (
+      rowPx -
+      sum(parts.filter((c) => c !== group).map((c) => width(c, viewport))) -
+      (parts.length - 1) * gapPx(row, viewport) -
+      sum(beside.map((c) => width(c, viewport))) -
+      beside.length * gapPx(group, viewport)
+    );
+  }
+
+  const CASES = [
+    [1280, 1],
+    [1024, 1],
+    [768, 1],
+    [640, 1],
+    [390, 1],
+    [360, 1],
+    [1280, 2],
+    [1024, 2],
+    [900, 2],
+    [768, 2],
+    [390, 2],
+  ] as const;
+
+  it.each(CASES)('at %i px with %i network(s)', (viewport, networks) => {
+    if (networks === 2) window.__CKBADGER_RUNTIME_CONFIG__ = TWO;
+    const rowPx = containerContentPx(viewport);
+    atRow(viewport, rowPx);
+    render(<Header />);
+    const h = header();
+    const at = { fromSm: viewport >= 640, fromMd: viewport >= 768, fromLg: viewport >= 1024 };
+    const parts = {
+      nav: NAV,
+      switcher: networks === 2 ? 'mainnet' : null,
+      // the route is `/`: the section word is "Home"
+      word: 'Home',
+    };
+    const form = headerRowForm(rowPx, parts, at);
+    expect(h.row).toHaveAttribute('data-header-form', form);
+    // the wordmark: the 8 px square, its gap, `ckbadger` at 15 px
+    const wordmark = within(h.banner).getByRole('link', { name: 'CKBadger home' });
+    expect(boxPx(wordmark, viewport)).toBeCloseTo(WORDMARK_PX, 9);
+    // the nav, entry by entry, then whole, where it stands in the row
+    if (form === 'nav') {
+      const drawnEntries = Array.from(h.nav.children).filter((c) => inFlowAt(c, viewport));
+      const budget = [
+        ...(parts.switcher === null ? [] : [headerSwitcherPx(parts.switcher)]),
+        ...NAV.map(headerNavEntryPx),
+      ];
+      drawnEntries.forEach((entry, i) =>
+        expect(width(entry, viewport), `${entry.textContent}`).toBeCloseTo(budget[i], 9)
+      );
+      expect(drawnEntries).toHaveLength(budget.length);
+      expect(boxPx(h.nav, viewport)).toBeCloseTo(headerNavPx(parts, at.fromLg), 9);
+    } else expect(inFlowAt(h.nav, viewport)).toBe(false);
+    // the field's text box insets: the border, the prompt's room, the `/` key's from md
+    const field = within(h.banner).getByRole('textbox');
+    expect(insetsPx(field, viewport).box).toBe(
+      at.fromMd ? FIELD_INSETS_PX.fromMd : FIELD_INSETS_PX.belowMd
+    );
+    // what the row leaves the field in the form it drew
+    expect(drawnFieldRoom(h.row, field, rowPx, viewport)).toBeCloseTo(
+      headerFieldRoomPx(form, rowPx, parts, at),
+      9
+    );
   });
 });
 

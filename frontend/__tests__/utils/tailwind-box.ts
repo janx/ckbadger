@@ -455,6 +455,8 @@ function ownDecls(el: Element, viewport: number): Map<Prop, string> {
     }
     for (const d of decls) {
       const before = won.get(d.prop);
+      // a part that takes its room is so whatever else says it (`w-full max-w-…`)
+      if (d.prop === 'flexible' && before) continue;
       if (before && before.level === level && before.rank === d.rank && before.value !== d.value)
         throw new Error(
           `tailwind-box: ${before.cls} and ${cls} both set ${d.prop} at one breakpoint on <${el.tagName.toLowerCase()} class="${el.className}">`
