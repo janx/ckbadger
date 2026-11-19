@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { LockKind, LockWordsView, lockWordsText, rowLock } from '@/components/ui/lock-kind';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
@@ -14,7 +14,7 @@ import { DotCellParty } from '@/components/identity/dotcell-party';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Pager } from '@/components/ui/pager';
-import { FoldBack } from '@/components/transaction/tx-structure';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { listTotal } from '@/components/asset/token-holders';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
@@ -147,10 +147,21 @@ function ScopedCollectionHolders({
     setAll(open);
     pagination.reset();
   };
-  const holders = useQuery({
-    queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
-    queryFn: pagination.ask((cursor) => load({ limit, cursor })),
+  // The top ten, read whether the list is folded or open: the fold's count is theirs, and folding
+  // back finds them read, so the fold's one button never waits on a read (lane P2's follow-up,
+  // item 10: the loading list unmounted it and the focus fell to the page)
+  const top = useQuery({
+    queryKey: ['collection-holders', queryKey, 'top'],
+    queryFn: () => load({ limit: 10, cursor: undefined }),
   });
+  // all holders, in pages of the walk
+  const allHolders = useQuery({
+    queryKey: ['collection-holders', queryKey, 'all', pagination.cursor, limit],
+    queryFn: pagination.ask((cursor) => load({ limit, cursor })),
+    enabled: all,
+  });
+  const holders = all ? allHolders : top;
+  const listId = useId();
   // The distribution's totals, read while its column is drawn: a distribution that breaks its
   // invariants fails its own column in place (D7), the holders' table and the heading standing.
   const totalsOf = () => {
@@ -201,7 +212,8 @@ function ScopedCollectionHolders({
     ].join(' · ');
   const listed = holders.data?.data ?? [];
   // "All holders" pages through the list; the top ten are one page
-  const holdersAt = all && holders.data ? rankedPageAt('holders', holders.data, pagination) : null;
+  const holdersAt =
+    all && allHolders.data ? rankedPageAt('holders', allHolders.data, pagination) : null;
   // the holders' columns, built while their table is drawn (inside its part)
   const columnsOf = (): ListColumn<CollectionHolder>[] => [
     {
@@ -295,90 +307,83 @@ function ScopedCollectionHolders({
         }
       >
         <div className="min-w-0">
-          {holders.data ? (
-            <>
-              <AssetReadState error={holders.error} label="collection holders" retained />
-              {/* a refusal while the holders are drawn fails their table in its place (D7) */}
-              <PartReadBoundary
-                what="the collection holders"
-                where={holdersWhere}
-                render={() => {
-                  for (const holder of holders.data!.data) {
-                    holderKey(holder);
-                    count(holder.itemCount, 'holder item count');
-                  }
-                  return (
-                    <ListTable
-                      label={all ? 'All collection holders' : 'Top 10 collection holders'}
-                      columns={wordHeads(columnsOf())}
-                      rows={holders.data.data}
-                      rowKey={holderKey}
-                      empty="No current holders."
-                      density="row"
-                      rowTitle={holderTitle}
-                      mobileRow={(holder, wide) => {
-                        // R7: the table's scale for its Items bars — the page's rounded maximum.
-                        const scale = resourceScale(listed.map((h) => h.itemCount));
-                        return (
-                          <HolderPhoneRow
-                            rank={rank(holder)}
-                            party={party(holder, phoneSize)}
-                            lock={(() => {
-                              // no part where the row names no lock (B4)
-                              const words = rowLock(holder, 'inline');
-                              return words && <LockWordsView words={words} size={phoneSize} />;
-                            })()}
-                            amount={
-                              <span className="whitespace-nowrap">
-                                <AssetCount value={holder.itemCount} />{' '}
-                                <span className="text-text-dim text-small">
-                                  {countNoun(holder.itemCount, 'item', 'items')}
+          <div id={listId} className="min-w-0">
+            {holders.data ? (
+              <>
+                <AssetReadState error={holders.error} label="collection holders" retained />
+                {/* a refusal while the holders are drawn fails their table in its place (D7) */}
+                <PartReadBoundary
+                  what="the collection holders"
+                  where={holdersWhere}
+                  render={() => {
+                    for (const holder of holders.data!.data) {
+                      holderKey(holder);
+                      count(holder.itemCount, 'holder item count');
+                    }
+                    return (
+                      <ListTable
+                        label={all ? 'All collection holders' : 'Top 10 collection holders'}
+                        columns={wordHeads(columnsOf())}
+                        rows={holders.data.data}
+                        rowKey={holderKey}
+                        empty="No current holders."
+                        density="row"
+                        rowTitle={holderTitle}
+                        mobileRow={(holder, wide) => {
+                          // R7: the table's scale for its Items bars — the page's rounded maximum.
+                          const scale = resourceScale(listed.map((h) => h.itemCount));
+                          return (
+                            <HolderPhoneRow
+                              rank={rank(holder)}
+                              party={party(holder, phoneSize)}
+                              lock={(() => {
+                                // no part where the row names no lock (B4)
+                                const words = rowLock(holder, 'inline');
+                                return words && <LockWordsView words={words} size={phoneSize} />;
+                              })()}
+                              amount={
+                                <span className="whitespace-nowrap">
+                                  <AssetCount value={holder.itemCount} />{' '}
+                                  <span className="text-text-dim text-small">
+                                    {countNoun(holder.itemCount, 'item', 'items')}
+                                  </span>
                                 </span>
-                              </span>
-                            }
-                            bar={{
-                              value: holder.itemCount,
-                              scale,
-                              color: CLASS_COLORS[assetClass],
-                            }}
-                            axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
-                            head={COLLECTION_HOLDER_PHONE_HEAD_PX}
-                            wide={wide}
-                          />
-                        );
-                      }}
-                    />
-                  );
-                }}
+                              }
+                              bar={{
+                                value: holder.itemCount,
+                                scale,
+                                color: CLASS_COLORS[assetClass],
+                              }}
+                              axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
+                              head={COLLECTION_HOLDER_PHONE_HEAD_PX}
+                              wide={wide}
+                            />
+                          );
+                        }}
+                      />
+                    );
+                  }}
+                />
+              </>
+            ) : (
+              <AssetReadState error={holders.error} read={holders} label="collection holders" />
+            )}
+          </div>
+          {top.data && (all || top.data.hasMore) && (
+            // the list's one disclosure control (FoldToggle, lane P1): "all 522 holders ↓", the
+            // count the top ten's own response states, opens the list in place; "fewer ↑" folds
+            // it back. It stays mounted while the list loads and keeps the focus; the pager stands
+            // over it, a ranked list in pages, every figure the response's
+            <div className="mt-3 space-y-1">
+              {holdersAt && <Pager mode="pages" label="holders" {...holdersAt} />}
+              <FoldToggle
+                open={all}
+                count={listTotal(top.data, `the holders of collection ${queryKey}`)}
+                singular="holder"
+                controls={listId}
+                onToggle={showAll}
               />
-              {all ? (
-                <div className="mt-3 space-y-1">
-                  {holdersAt && (
-                    // the controls board's pager: a ranked list in pages, every figure the
-                    // response's
-                    <Pager mode="pages" label="holders" {...holdersAt} />
-                  )}
-                  <FoldBack onFold={() => showAll(false)} />
-                </div>
-              ) : (
-                holders.data.hasMore && (
-                  // the short list's form, opened in place (the placement lane's toggles, the
-                  // lead's ruling): "all 522 holders ↓", the count its response's own
-                  <div className="mt-3">
-                    <Pager
-                      mode="more"
-                      all={{
-                        count: listTotal(holders.data, `the holders of collection ${queryKey}`),
-                        singular: 'holder',
-                        onShow: () => showAll(true),
-                      }}
-                    />
-                  </div>
-                )
-              )}
-            </>
-          ) : (
-            <AssetReadState error={holders.error} read={holders} label="collection holders" />
+            </div>
           )}
         </div>
         {distribution && (

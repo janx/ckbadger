@@ -196,6 +196,34 @@ describe('Collection holders', () => {
     expect(screen.queryByRole('navigation', { name: 'holders' })).not.toBeInTheDocument();
   });
 
+  // Lane P2's follow-up (item 10): the list opens and folds by the one disclosure control
+  // (FoldToggle): one button that stays mounted while the list loads, says its state, names the
+  // list it opens, and keeps the keyboard's focus both ways (the Pager's "all N ↓" and a second
+  // "fewer ↑" button swapped places, and the loading list took both away)
+  it('opens and folds its list with one button that keeps the focus', async () => {
+    const load = vi
+      .fn()
+      .mockImplementation(({ limit }) =>
+        Promise.resolve(page([named], { limit, total: 21, hasMore: true, nextCursor: 'next-50' }))
+      );
+    render(<CollectionHolders assetClass="objects" load={load} queryKey="fold" />);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    const toggle = screen.getByRole('button', { name: /^all 21\sholders ↓$/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    toggle.focus();
+    fireEvent.click(toggle);
+    const all = await screen.findByRole('table', { name: 'All collection holders' });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAccessibleName('fewer ↑');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(all);
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(toggle).toHaveAccessibleName(/^all 21\sholders ↓$/);
+    expect(document.activeElement).toBe(toggle);
+  });
+
   it('shows refresh failures while retaining the previously read holder rows', async () => {
     const client = createTestQueryClient();
     const load = vi.fn().mockResolvedValue(page([resolved]));

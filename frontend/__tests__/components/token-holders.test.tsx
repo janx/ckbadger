@@ -1,5 +1,5 @@
 import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { TokenDistributionView, TokenHolders } from '@/components/asset/token-holders';
 import { api } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -278,6 +278,34 @@ describe('Token holders (board L5)', () => {
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
   };
+
+  // Lane P2's follow-up (item 10): the list opens and folds by the one disclosure control
+  // (FoldToggle): one button that stays mounted while the list loads and keeps the focus both ways
+  it('opens and folds its list with one button that keeps the focus', async () => {
+    vi.spyOn(api, 'getTokenHolders').mockImplementation(async (_, p) => ({
+      ...holders,
+      limit: p?.limit ?? 10,
+      total: 21,
+      hasMore: true,
+      nextCursor: 'page2',
+    }));
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
+    await screen.findByRole('table', { name: 'Top 10 holders' });
+    const toggle = screen.getByRole('button', { name: /^all 21\sholders ↓$/ });
+    toggle.focus();
+    fireEvent.click(toggle);
+    const all = await screen.findByRole('table', { name: 'All holders' });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle).toHaveAccessibleName('fewer ↑');
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls')!)).toContainElement(all);
+    expect(document.activeElement).toBe(toggle);
+    fireEvent.click(toggle);
+    await screen.findByRole('table', { name: 'Top 10 holders' });
+    expect(toggle).toHaveAccessibleName(/^all 21\sholders ↓$/);
+    expect(document.activeElement).toBe(toggle);
+  });
 
   // Review fb-logic 7 (the lead's ruling): the share head writes "0" and its scale in hundredths
   // of a percent; the widest tick it writes for any page is five glyphs ("0.75%" where the top
