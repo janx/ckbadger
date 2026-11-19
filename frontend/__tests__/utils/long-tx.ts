@@ -135,8 +135,10 @@ export function longDeposit(): TransactionDetail {
             size: 85,
             kind: 'witness_args' as const,
             fields: [
-              { name: 'header', start: 0, end: 16, hex: '0x' },
-              { name: 'lock length', start: 16, end: 20, hex: '0x' },
+              // the WitnessArgs bytes over each span: its total size and three offsets, the
+              // lock's length (65), then the lock
+              { name: 'header', start: 0, end: 16, hex: '0x55000000100000005500000055000000' },
+              { name: 'lock length', start: 16, end: 20, hex: '0x41000000' },
               { name: 'lock', start: 20, end: 85, hex: `0x${'ab'.repeat(65)}` },
             ],
           }
@@ -146,6 +148,7 @@ export function longDeposit(): TransactionDetail {
     witnessesAvailable: true,
     headerDeps: [],
     cellbaseWitness: null,
-    feePaidBy: [{ lockHash: sender, address: LONG_TX_SENDER, outflow: '0' }],
+    // what the sender's lock lost: the deposit and the fee (its change came back to it)
+    feePaidBy: [{ lockHash: sender, address: LONG_TX_SENDER, outflow: (DEPOSIT + FEE).toString() }],
   } as unknown as TransactionDetail;
 }

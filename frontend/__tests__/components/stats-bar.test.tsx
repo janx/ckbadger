@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { act, createTestQueryClient, render, screen, waitFor } from '../utils/test-utils';
+import { act, createTestQueryClient, render, screen, waitFor, within } from '../utils/test-utils';
 import { api, type NetworkStats } from '@/lib/api';
 import { VitalsStrip } from '@/components/stats-bar';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
@@ -132,7 +132,7 @@ describe('VitalsStrip', () => {
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });
     await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
 
-    expect(screen.getByRole('link', { name: /Block #20,819,143/ })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /Tip #20,819,143/ })).toHaveAttribute(
       'href',
       '/mainnet/blocks/20819143'
     );
@@ -234,7 +234,7 @@ describe('VitalsStrip', () => {
     expect(live).toHaveAttribute('data-live', 'true');
     expect(live).toHaveAttribute('title', 'Live: realtime updates connected');
     // Nothing leads the Block item any more.
-    expect(strip.firstElementChild).toBe(screen.getByRole('link', { name: /Block #20,819,143/ }));
+    expect(strip.firstElementChild).toBe(screen.getByRole('link', { name: /Tip #20,819,143/ }));
   });
 
   it('writes the block time with a space before its unit and never scrolls sideways (TX-05)', async () => {
@@ -265,7 +265,7 @@ describe('VitalsStrip', () => {
     expect(strip).toHaveClass('grid', 'grid-cols-3', 'gap-x-4', 'gap-y-2');
     expect(strip).toHaveClass('sm:grid-cols-[max-content_max-content_max-content_1fr]');
     // Line 1: the block on the left, Live at the right end of the same line.
-    const block = screen.getByRole('link', { name: /Block #20,819,143/ });
+    const block = screen.getByRole('link', { name: /Tip #20,819,143/ });
     expect(block).toHaveClass('col-span-2', 'sm:col-span-3');
     const live = screen.getByTestId('vitals-live');
     expect(live).toHaveClass('row-start-1', 'col-start-3', 'sm:col-start-4', 'ml-auto');
@@ -313,12 +313,25 @@ describe('VitalsStrip', () => {
     expect(await screen.findByTestId('vitals-error')).toHaveClass('col-span-3', 'sm:col-span-4');
   });
 
+  // Lane P1 (the plan's P1 paragraph; review chain-a block-busy: the strip's "Epoch 15,315 …
+  // Difficulty 635.21 P" stood over a block page's own "Epoch 15,292", "Difficulty 647.18 P"): the
+  // strip's first label says its figures are the tip's, so a page's own block is not read against
+  // them.
+  it('names its block the tip, so a block page’s own epoch and difficulty are not read against it (P1)', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    const tip = await within(strip).findByRole('link', { name: /^Tip #20,819,143/ });
+    expect(strip.firstElementChild).toBe(tip);
+    expect(within(strip).queryByText(/^Block$/)).toBeNull();
+  });
+
   it('places the loading labels where the figures will be', () => {
     vi.mocked(api.getNetworkStats).mockImplementation(() => new Promise(() => {}));
     render(<VitalsStrip />);
     const strip = screen.getByRole('region', { name: 'Chain vitals' });
     const [block, epoch, ...mining] = Array.from(strip.children) as HTMLElement[];
-    expect(block).toHaveTextContent('Block');
+    expect(block).toHaveTextContent('Tip');
     expect(block).toHaveClass('col-span-2', 'sm:col-span-3');
     expect(epoch).toHaveTextContent('Epoch');
     expect(epoch).toHaveClass('col-span-3', 'sm:col-span-4');
@@ -378,7 +391,7 @@ describe('VitalsStrip', () => {
     vi.mocked(api.getNetworkStats).mockImplementation(() => new Promise(() => {}));
     render(<VitalsStrip />);
     const strip = screen.getByRole('region', { name: 'Chain vitals' });
-    for (const label of ['Block', 'Epoch', 'Block time', 'Hash rate', 'Difficulty']) {
+    for (const label of ['Tip', 'Epoch', 'Block time', 'Hash rate', 'Difficulty']) {
       expect(strip).toHaveTextContent(label);
     }
   });
@@ -438,7 +451,7 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     expect(strip).toHaveClass('flex', 'flex-wrap', 'items-baseline', 'gap-x-3', 'py-2.5');
     expect(strip).toHaveClass('md:gap-x-6', 'md:gap-y-2.5', 'md:py-3');
     // what the line holds, drawn at every width, placed by no grid track
-    const block = screen.getByRole('link', { name: /Block #20,819,143/ });
+    const block = screen.getByRole('link', { name: /Tip #20,819,143/ });
     const epoch = screen.getByTestId('vitals-epoch');
     const live = screen.getByTestId('vitals-live');
     for (const el of [block, epoch, screen.getByTestId('vitals-epoch-bar'), live]) {
@@ -489,7 +502,7 @@ describe('VitalsStrip below md: three lines on the home page, one line elsewhere
     render(<VitalsStrip />);
     const strip = screen.getByRole('region', { name: 'Chain vitals' });
     const [block, epoch, ...mining] = Array.from(strip.children) as HTMLElement[];
-    expect(block).toHaveTextContent('Block');
+    expect(block).toHaveTextContent('Tip');
     expect(epoch).toHaveTextContent('Epoch');
     for (const el of [block, epoch]) expect(el.className).not.toMatch(/max-md:hidden|col-span/);
     expect(mining.map((m) => m.textContent)).toEqual(['Block time', 'Hash rate', 'Difficulty']);

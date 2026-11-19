@@ -259,7 +259,7 @@ function Plate({
       <span className="text-text-bright flex items-center gap-1.5 font-medium">
         <ClassMark kind={markOf(asset)} size={12} />
         {href ? (
-          <Link href={href} className="hover:text-jade">
+          <Link look="inline" href={href}>
             {name}
           </Link>
         ) : (
@@ -270,10 +270,7 @@ function Plate({
         )}
       </span>
       {asset.kind === 'object' && (
-        <Link
-          href={getObjectDetailHref(asset.item.objectId)}
-          className="text-text-dim text-meta hover:text-jade"
-        >
+        <Link look="inline" href={getObjectDetailHref(asset.item.objectId)} className="text-meta">
           <ShortId value={asset.item.objectId} kind="hash" size={size} />
         </Link>
       )}

@@ -209,7 +209,7 @@ export function stripFromMd(viewport: number, block: string = WIDEST.block): Lin
   const epoch = epochGroupsPx(true, 10);
   return wrapLines(
     [
-      { name: 'block', px: pairPx('Block', block, 'small', 8) },
+      { name: 'block', px: pairPx('Tip', block, 'small', 8) },
       { name: 'epoch', px: epoch.bar + 8 + epoch.position },
       { name: 'block time', px: pairPx('Block time', WIDEST.blockTime, 'small', 8) },
       { name: 'hash rate', px: pairPx('Hash rate', WIDEST.hashRate, 'small', 8) },
@@ -232,7 +232,7 @@ export function stripLine(
 ): Line[] {
   const sm = viewport >= 640;
   const items = [
-    { name: 'block', px: pairPx('Block', block, 'meta', 6) },
+    { name: 'block', px: pairPx('Tip', block, 'meta', 6) },
     { name: 'epoch', px: epochGroupsPx(false, sm ? 10 : 5).bar },
   ];
   if (live) items.push({ name: 'live', px: livePx(sm) });
@@ -296,7 +296,7 @@ export function stripLines(viewport: number, block: string = WIDEST.block): Stri
   const groups = epochGroupsPx(false, sm ? 10 : 5);
   return {
     first: {
-      block: px(pairPx('Block', block, 'meta', 6)),
+      block: px(pairPx('Tip', block, 'meta', 6)),
       live: px(live),
       blockRoom: px(blockRoom),
       liveRoom: px(tracks[tracks.length - 1]),

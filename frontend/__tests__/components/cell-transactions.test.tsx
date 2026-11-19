@@ -20,7 +20,7 @@ it('prints the committing block time as the site UTC+8 clock, not raw ISO (#16, 
       hash={LONG_TX_HASH}
       label="Created"
       focus="out:0"
-      anchor={`${LONG_TX_HASH}-0`}
+      cell={{ txHash: LONG_TX_HASH, index: 0 }}
     />
   );
   expect(await screen.findByText('2026-10-29 18:12:50 UTC+8')).toBeInTheDocument();

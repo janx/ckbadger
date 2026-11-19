@@ -44,8 +44,11 @@ describe('Address v3 components', () => {
     expect(figure).toHaveTextContent(/^100$/);
     expect(figure).toHaveAttribute('title', '100.00000001 CKB');
     expect(screen.queryByText('CKB held')).not.toBeInTheDocument();
-    // Lane P (Address.dc.html): the exact parts are the quiet line under the bar.
-    expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent('39.00000001');
+    // Lane P (Address.dc.html): the exact parts are the quiet line under the bar. Re-pinned on
+    // purpose (lane P1): what it can spend stands beside the balance, its single shannon there
+    expect(
+      screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
+    ).toHaveTextContent('39.00000001');
   });
 
   // Lane P, the Address board's balance hero: the 40 px figure (its fraction 22 px, dim), the
@@ -67,7 +70,10 @@ describe('Address v3 components', () => {
       vi.restoreAllMocks();
     });
 
-    it('sets the balance as the display figure with its live cells beside it', () => {
+    // Renamed and re-pinned on purpose (lane P1, the plan's P1 paragraph: spendable CKB and
+    // unclaimed compensation stand beside the balance; said once: "in 828 live cells" repeated
+    // the status strip's live cells). It was "… with its live cells beside it".
+    it('sets the balance as the display figure with what it can spend beside it', () => {
       stubChartWidth(1248);
       render(<AddressBalance holdings={board} />);
       const hero = screen.getByRole('region', { name: 'Balance' });
@@ -84,27 +90,38 @@ describe('Address v3 components', () => {
       expect(amount.closest('.text-entity')).toHaveClass('sm:text-display', 'text-text-bright');
       expect(within(figure as HTMLElement).queryByText(/^\.66879443$/)).toBeNull();
       expect(figure.querySelector('wbr')).toBeNull();
-      expect(hero).toHaveTextContent('in 828 live cells');
+      expect(hero).not.toHaveTextContent(/live cells?/);
+      // beside the balance, exact: what it can spend; no compensation where it holds no DAO cell
+      expect(factsOf(hero.querySelector('[data-role="balance-beside"]')!)).toEqual([
+        ['spendable', '28,256.66879443 CKB'],
+      ]);
     });
 
     it('draws the 18 px partition with each share inside and the exact parts in one line', () => {
       stubChartWidth(1248);
       render(<AddressBalance holdings={board} />);
       const bar = screen.getByRole('img', { name: /^Balance partition:/ });
+      // re-pinned on purpose (lane P1; review chain-b address-dao-depositor: three "free"s for
+      // three things): the parts are "occupied", "spendable" and "in the DAO"
       expect(bar).toHaveAccessibleName(
-        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.84%), nothing in the Nervos DAO'
+        'Balance partition: occupied 291,486.00000000 CKB (91.16%), spendable 28,256.66879443 CKB (8.84%), nothing in the Nervos DAO'
       );
       expect(bar).toHaveClass('h-[18px]');
       const parts = [...bar.querySelectorAll('[data-part]')];
-      expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
-      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
+      expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'spendable']);
+      // "spendable 8.84%" (15 glyphs, 108 px and 16 of padding) is wider than its 8.84 % of the
+      // 1,246 px bar (110 px): its share stands in the part's title, never cut (the next test)
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', '']);
+      expect(parts[1]).toHaveAttribute('title', 'spendable 8.84% · 28,256.66879443 CKB');
       // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals);
       // re-pinned with readability R4 (lane B7): labelled facts, each named as its part of the bar
       // (was one line joined by "·")
+      // re-pinned on purpose (lane P1): the parts under the bar are the two the reader cannot
+      // spend, each with its unit (the bar is by CKB); what it can spend stands beside the
+      // balance, said once
       expect(factsOf(screen.getByTestId('balance-parts'))).toEqual([
-        ['occupied', '291,486 pays for the bytes its cells keep'],
-        ['free', '28,256.66879443'],
-        ['DAO free', 'no CKB in the Nervos DAO'],
+        ['occupied', '291,486 CKB pays for the bytes its cells keep'],
+        ['in the DAO', 'no CKB in the Nervos DAO'],
       ]);
     });
 
@@ -113,9 +130,10 @@ describe('Address v3 components', () => {
       render(<AddressBalance holdings={board} />);
       const free = screen
         .getByRole('img', { name: /^Balance partition:/ })
-        .querySelector('[data-part="free"]')!;
+        .querySelector('[data-part="spendable"]')!;
       expect(free).toHaveTextContent(/^$/);
-      expect(free).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
+      // re-pinned on purpose (lane P1): the part is "spendable"
+      expect(free).toHaveAttribute('title', 'spendable 8.84% · 28,256.66879443 CKB');
     });
 
     it('adds the DAO part only when the address has CKB in the Nervos DAO', () => {
@@ -124,12 +142,25 @@ describe('Address v3 components', () => {
       const bar = screen.getByRole('img', { name: /^Balance partition:/ });
       expect(
         [...bar.querySelectorAll('[data-part]')].map((p) => p.getAttribute('data-part'))
-      ).toEqual(['occupied', 'free', 'DAO free']);
+      ).toEqual(['occupied', 'spendable', 'in the DAO']);
       // the exact form (R5, re-pinned on purpose: was "9,589,480.00000000"); re-pinned with
-      // readability R4 (lane B7): a labelled fact (was the line's last item after "·")
+      // readability R4 (lane B7): a labelled fact (was the line's last item after "·"); re-pinned
+      // on purpose (lane P1): "in the DAO", with its unit (it was "DAO free")
       expect(factsOf(screen.getByTestId('balance-parts')).at(-1)).toEqual([
-        'DAO free',
-        '9,589,480, free part of 5 deposits',
+        'in the DAO',
+        '9,589,480 CKB, free part of 5 deposits',
+      ]);
+      // lane P1: its unclaimed compensation stands beside the balance, exact, with what it can
+      // spend
+      expect(
+        factsOf(
+          screen
+            .getByRole('region', { name: 'Balance' })
+            .querySelector('[data-role="balance-beside"]')!
+        )
+      ).toEqual([
+        ['spendable', '54,571.35338057 CKB'],
+        ['unclaimed compensation', '259,870.84255174 CKB'],
       ]);
     });
 
@@ -172,8 +203,11 @@ describe('Address v3 components', () => {
         ['lock', 'JoyID · type · 22-byte args'],
         ['live cells', '40'],
         ['transactions', '1,021'],
-        // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space
-        ['holdings', '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity'],
+        // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space.
+        // Re-pinned on purpose (lane P1; review of phases C and D, NOTE 12): no "29 holdings", a
+        // sum of unlike counts (DAO cells, token kinds, objects, identities) made in the page; the
+        // strip states each class's count, the API's, the first its value and the rest its notes
+        ['holdings', '5 DAO cells · 9 tokens · 14 objects · 1 identity'],
       ]);
       expect(within(strip).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
         'href',

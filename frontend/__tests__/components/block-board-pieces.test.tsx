@@ -181,6 +181,19 @@ describe('BlockTransactionsTable', () => {
       isCellbase: index === 0,
       ...over,
     }) as unknown as Transaction;
+  // Lane P1 (the F3-e note: counts written ungrouped): a transaction's inputs are a count, grouped
+  // as every count is ("13,568", the most a block holds, MAX_TX_INPUTS).
+  it('groups a transaction’s inputs as every count (P1)', () => {
+    const { container } = wrap(
+      <BlockTransactionsTable
+        transactions={[tx(1, { inputsCount: 13568, outputsCount: 2 })]}
+        blockNumber={7}
+      />
+    );
+    expect(container).toHaveTextContent('13,568');
+    expect(container).not.toHaveTextContent('13568');
+  });
+
   it('fails on a transaction from another block', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>

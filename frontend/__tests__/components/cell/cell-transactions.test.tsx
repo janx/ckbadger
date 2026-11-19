@@ -258,8 +258,10 @@ describe('CellTransactions', () => {
         (t) => t.textContent
       );
     // the creating cellbase, then the spending transaction
-    expect(totals('consumed')).toEqual(['0 CKB', '100.00000000 CKB']);
-    expect(totals('created')).toEqual(['200.00000000 CKB', '200.00000000 CKB']);
+    // re-pinned on purpose (lane P1, lane D3's note): a sheet's total is exact, its trailing zeros
+    // dropped (it was the column form, "100.00000000 CKB")
+    expect(totals('consumed')).toEqual(['0 CKB', '100 CKB']);
+    expect(totals('created')).toEqual(['200 CKB', '200 CKB']);
     expect(screen.queryByText(/entering the pool/i)).toBeNull();
     // C11 round 3: a line across a seam only where a cell continues: none in the cellbase (it
     // consumes nothing), the Type ID's one in the spending transaction

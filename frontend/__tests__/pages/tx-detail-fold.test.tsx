@@ -4,7 +4,7 @@
 // state is one URL parameter (`cells`), pushed so that back walks it; a cell the URL points at by
 // its out point (`#<tx hash>-<index>`, the anchor the cell page links with) is never folded.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -139,6 +139,27 @@ describe('the transaction page folds a long sheet (lane D3)', () => {
     );
   });
 
+  // Lane P1 (lane D3's note): the cell page's link opens the transaction at its cell; the page drew
+  // that tile under the fold but left the reader at the top, the tile out of sight below.
+  it('brings the cell the URL points at into view, once it is drawn (P1)', async () => {
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      mockHash = `#${LONG_TX_PREV}-57`;
+      render(<TransactionDetailPage />);
+      await sheets();
+      await waitFor(() => expect(scroll).toHaveBeenCalled());
+      const target = scroll.mock.contexts[0] as HTMLElement;
+      expect(target.dataset.cellId).toBe('in:57');
+      expect(scroll).toHaveBeenCalledWith({ block: 'center' });
+      // once, not on every render
+      expect(scroll).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
   it('never folds the cell the URL points at by its out point', async () => {
     mockHash = `#${LONG_TX_PREV}-57`;
     render(<TransactionDetailPage />);
@@ -151,6 +172,24 @@ describe('the transaction page folds a long sheet (lane D3)', () => {
       new RegExp(`^151 more cells from ${SHORT_SENDER}$`)
     );
   });
+
+  // Review of phases C and D, SHOULD 3 (lane P1): an anchor that is no out point keeps nothing, as
+  // a browser goes nowhere for an unknown anchor; a stray "%" (a pasted link) is no out point. The
+  // page read it through decodeURIComponent, which threw "URI malformed" and crashed the page.
+  it.each(['#100%', '#%E0%A4%A', `#${LONG_TX_PREV}-57%`, '#tx-dep-0'])(
+    'keeps no cell for an anchor that is no out point, %s, and stands',
+    async (hash) => {
+      mockHash = hash;
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      const { consumed } = await sheets();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(consumed.tiles).toEqual(Array.from({ length: 6 }, (_, i) => `tx-io-input-${i}`));
+    }
+  );
 
   it('refuses a cells parameter it does not know, naming the transaction', async () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -190,7 +229,14 @@ describe('the witnesses fold their runs of empty ones (lane D3)', () => {
     expect(run.querySelector('[data-run-words]')).toHaveTextContent(
       /^#1 to #157 are empty: 157\switnesses of 0\sB$/
     );
-    fireEvent.click(within(run).getByRole('button', { name: /^all 158\switnesses ↓$/ }));
+    // re-pinned on purpose (lane P1, review of phases C and D, SHOULD 5): the way to every row is
+    // the fold's one control after the list, no longer a part of the run's line
+    expect(within(run).queryByRole('button')).toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId('tx-witness-tab')).getByRole('button', {
+        name: /^all 158\switnesses ↓$/,
+      })
+    );
     expect(rows()).toEqual(
       Array.from({ length: LONG_TX_INPUTS }, (_, i) => `tx-witness-item-${i}`)
     );
@@ -198,6 +244,30 @@ describe('the witnesses fold their runs of empty ones (lane D3)', () => {
       within(screen.getByTestId('tx-witness-tab')).getByRole('button', { name: 'fewer ↑' })
     );
     expect(rows()).toEqual(['tx-witness-item-0', 'tx-witness-run-1']);
+  });
+
+  // Review of phases C and D, SHOULD 5 (lane P1): the runs open and fold by one control after the
+  // list, mounted in both states, so the keyboard's focus stays on it; it was the run line's Pager
+  // part, gone once the runs opened, and a second "fewer ↑" button after the last witness.
+  it('opens and folds the runs by one control after the list, which keeps the focus (P1)', async () => {
+    render(<TransactionDetailPage />);
+    await screen.findByTestId('tx-witness-item-0');
+    const tab = screen.getByTestId('tx-witness-tab');
+    const control = within(tab).getByRole('button', { name: /^all 158\switnesses ↓$/ });
+    const list = document.getElementById(control.getAttribute('aria-controls') ?? '')!;
+    expect(list).not.toBeNull();
+    expect(list).toContainElement(screen.getByTestId('tx-witness-run-1'));
+    expect(within(screen.getByTestId('tx-witness-run-1')).queryByRole('button')).toBeNull();
+    expect(control).toHaveAttribute('aria-expanded', 'false');
+    control.focus();
+    fireEvent.click(control);
+    expect(rows()).toHaveLength(LONG_TX_INPUTS);
+    expect(document.activeElement).toBe(control);
+    expect(control).toHaveTextContent(/^fewer ↑$/);
+    expect(control).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(control);
+    expect(rows()).toEqual(['tx-witness-item-0', 'tx-witness-run-1']);
+    expect(document.activeElement).toBe(control);
   });
 
   it('never folds the witness the URL selects; a lone empty witness keeps its row', async () => {
