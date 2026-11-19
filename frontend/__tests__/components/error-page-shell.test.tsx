@@ -266,8 +266,10 @@ describe('ErrorPageShell', () => {
     // re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
     // icon at the end of the facts it copies, named for a screen reader (it was a word in the
     // actions' line, "→ copy details for a bug report")
+    // Re-pinned again (lane c2-finish, item 4): the one copy that is an action with a purpose, not
+    // an id's, so its words stand on screen beside the icon (they were only its accessible name)
     const copy = screen.getByRole('button', { name: 'copy details for a bug report' });
-    expect(copy).toHaveTextContent(/^$/);
+    expect(copy).toHaveTextContent(/^copy details for a bug report$/);
     expect(
       screen.getByText(
         'the chain was not checked in this view — this says nothing about what it holds'

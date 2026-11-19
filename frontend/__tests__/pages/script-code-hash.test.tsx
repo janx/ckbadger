@@ -444,16 +444,18 @@ describe('ScriptByCodeHashPage', () => {
     stubLayoutWidths({ chart: 900, list: 1232 });
     try {
       render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
-      expect(await screen.findByText(/^page 1 of 3$/i)).toBeInTheDocument();
+      // re-pinned (lane c2-finish, 1c): "page 1 of 3" was counted of the usage's live cells,
+      // another read; the merged page counts no rows, so the pager says the page alone
+      expect(await screen.findByText(/^page 1$/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /^next( →)?$/i }));
       await waitFor(() =>
         expect(api.getCellsByScriptRef).toHaveBeenLastCalledWith(
           expect.objectContaining({ limit: 20, cursor: expect.any(String) })
         )
       );
-      expect(await screen.findByText(/^page 2 of 3$/i)).toBeInTheDocument();
+      expect(await screen.findByText(/^page 2$/i)).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /^(previous|← prev)$/i }));
-      expect(await screen.findByText(/^page 1 of 3$/i)).toBeInTheDocument();
+      expect(await screen.findByText(/^page 1$/i)).toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }

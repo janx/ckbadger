@@ -92,4 +92,23 @@ describe('CopyButton', () => {
     expect([1280, 640, 390, 360].map((w) => targetHeightPx(button, w))).toEqual([24, 24, 32, 32]);
     expect([1280, 640, 390, 360].map((w) => boxPx(button, w))).toEqual([24, 24, 32, 32]);
   });
+
+  // Lane c2-finish, item 4: the crash page's copy is an action with a purpose, not an id's, so its
+  // words stay on screen beside the icon (they were only its accessible name). The smallest form:
+  // the label written after the icon inside the button, one target of the same height, quiet.
+  it('writes its words after the icon where the copy is an action with a purpose', async () => {
+    setClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
+    render(<CopyButton value={HASH} label="copy details for a bug report" words />);
+    const button = screen.getByRole('button', { name: 'copy details for a bug report' });
+    expect(button).toHaveTextContent(/^copy details for a bug report$/);
+    expect(button.querySelectorAll('svg')).toHaveLength(1);
+    expect(inkOf(screen.getByText('copy details for a bug report'))).toBe(QUIET);
+    expect([1280, 640, 390, 360].map((w) => targetHeightPx(button, w))).toEqual([24, 24, 32, 32]);
+    // as wide as the icon and its words, not the icon's square box
+    expect(button.className).not.toMatch(/(^|\s)(sm:)?w-[68](\s|$)/);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(screen.getByRole('status').textContent).toBe('copied');
+  });
 });

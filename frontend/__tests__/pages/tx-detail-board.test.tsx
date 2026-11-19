@@ -472,9 +472,12 @@ describe('Transaction board, tier 1', () => {
     // re-pinned (A4 Chrome F3): the piece is every head's HeadId, still no size or ink of its own
     const hash = idLine.querySelector('[data-head-id]') as HTMLElement;
     expect(hash).toHaveAttribute('title', TX_HASH);
-    expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono');
+    // re-pinned (lane c2-finish, item 4: copy has one form): HeadId draws the copy after the id,
+    // the one form of every head (8 px after it, at its first line: was items-center gap-0.5 by
+    // the page's hand); the id no longer positions a tick over itself (was 'relative')
+    expect(hash.className).toBe('block min-w-0 flex-1 font-mono');
     expect(hash.querySelector('.overflow-x-auto')).toBeNull();
-    expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
+    expect(hash.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
     // re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
     // icon in the quiet ink in a 32 px box below 640 and 24 px from it, kept whole beside the
     // hash (was a 44 px box pulled 12 px into the line, -my-3 h-11 w-11)

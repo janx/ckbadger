@@ -14,14 +14,15 @@ import {
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { FilterChips } from '@/components/ui/filter-chips';
+import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
-import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -296,8 +297,9 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
 
 export default function FiberChannelsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('open');
-  const pagination = useCursorPagination();
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const pagination = useCursorPagination(pageSize);
   const network = useQuery({ queryKey: ['fiber-network'], queryFn: api.getFiberNetwork });
   const pin = useFiberGraphPin();
   const channels = useQuery({
@@ -311,6 +313,12 @@ export default function FiberChannelsPage() {
       }),
   });
   const summary = network.data?.summary;
+  // where the ranked list stands (lib/pagination.ts): the rows shown of the response's total at
+  // its page size, the page the response was asked as (the list keeps no previous page while the
+  // next loads, so the two never part); nothing for a list on one page, an empty one too
+  const channelsAt = channels.data
+    ? rankedPageAt('Fiber channels', pagination.page, channels.data)
+    : null;
   const chosen = filters.find((filter) => filter.value === stateFilter)!;
   const lastColumn = stateFilter === 'open' ? 'Open for' : 'Lifetime';
   return (
@@ -361,37 +369,22 @@ export default function FiberChannelsPage() {
               }
               note="sorted by capacity"
             />
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="State">
-              {filters.map((filter) => {
-                const on = stateFilter === filter.value;
-                return (
-                  <button
-                    key={filter.value}
-                    type="button"
-                    aria-pressed={on}
-                    onClick={() => {
-                      setStateFilter(filter.value);
-                      pagination.reset();
-                    }}
-                    className={cn(
-                      'text-small h-[30px] border px-[11px]',
-                      on
-                        ? 'bg-base-elevated text-text-bright'
-                        : 'border-base-border-subtle text-text hover:text-text-bright'
-                    )}
-                    style={on ? { borderColor: FIBER_COLORS.filterOn } : undefined}
-                  >
-                    {filter.label}
-                    {summary && (
-                      <span className="text-text-dim">
-                        {' '}
-                        {filter.count(summary).toLocaleString('en-US')}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
+            {/* The state is the controls board's filter (one of five, its words lowercase, each
+                with the summary's count once it is in; on a phone a select after "state" where
+                the chips do not fit its line): a state starts the list again from its first page. */}
+            <FilterChips
+              label="state"
+              values={filters.map((filter) => ({
+                key: filter.value,
+                label: filter.label.toLowerCase(),
+                count: summary ? filter.count(summary) : undefined,
+              }))}
+              value={stateFilter}
+              onChange={(next) => {
+                setStateFilter(next);
+                pagination.reset();
+              }}
+            />
             {channels.isError && (
               <p role="alert" className="text-rouge text-body max-w-measure py-7">
                 Channel list could not be loaded: {String(channels.error)}
@@ -511,18 +504,14 @@ export default function FiberChannelsPage() {
                   ])}
                   mobileRow={(channel, wide) => <ChannelPhoneRow channel={channel} wide={wide} />}
                 />
-                {(channels.data.hasMore || pagination.hasPrevious) && (
-                  <CursorPagination
-                    className="pt-1"
-                    total={channels.data.total}
-                    totalLabel="channels"
-                    pageSize={pageSize}
-                    page={pagination.page}
-                    currentCount={channels.data.data.length}
-                    hasMore={channels.data.hasMore}
-                    hasPrevious={pagination.hasPrevious}
-                    onNext={() => pagination.goToNext(channels.data?.nextCursor)}
+                {/* The controls board's pager for a ranked list (the channels by capacity). */}
+                {channelsAt && (
+                  <Pager
+                    mode="pages"
+                    label="channels"
+                    {...channelsAt}
                     onPrevious={pagination.goToPrevious}
+                    onNext={() => pagination.goToNext(channels.data?.nextCursor)}
                   />
                 )}
               </>

@@ -542,17 +542,15 @@ export function ScriptFamilyPage({
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
   const history = family.history;
-  // The family's cells, oldest first, counted of its live cells: the pager's pages mode, null for
-  // one page (an empty page draws none either).
-  const cellsAt =
-    cells.rows.length > 0
-      ? rankedPageAt('cells', cells.page, {
-          data: cells.rows,
-          limit: cells.pageSize,
-          hasMore: cells.hasMore,
-          total: family.liveCellsCount,
-        })
-      : null;
+  // The family's cells, oldest first: the pager's pages mode, null for one page, an empty page
+  // past the end its place and a way back. Its pages merge its references' reads, which count no
+  // rows of their own: no count (the family's live cells is another read, at another tip, and its
+  // head states it: lane c2-finish, 1c).
+  const cellsAt = rankedPageAt('cells', cells.page, {
+    data: cells.rows,
+    limit: cells.pageSize,
+    hasMore: cells.hasMore,
+  });
   const numbers = versionNumbers(family);
   const lineage = typeLineage(history);
   const holders = lineage ? codeHolders(lineage, history, numbers) : [];

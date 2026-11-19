@@ -8,7 +8,6 @@ import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
-import { CopyButton } from '@/components/ui/copy-button';
 import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
@@ -29,7 +28,7 @@ import {
 import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, isNotFoundApiError, type AddressCellClass, type AddressHoldings } from '@/lib/api';
+import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
@@ -85,26 +84,6 @@ const ACTIVITY_MARKS: Partial<Record<ActivityFilter, PaletteKey>> = {
   identity: CLASS_KEYS.identities,
   dao: CLASS_KEYS.dao,
 };
-/**
- * The live cells a page of the list is counted of: the API's total of the unfiltered list, or
- * the holdings read's count of the class chosen (a class's page carries no total of its own; the
- * class filter is offered once the holdings have answered).
- */
-function liveCellsTotal(
-  total: number | undefined,
-  cellClass: AddressCellClass | undefined,
-  holdings: AddressHoldings | undefined,
-  addr: string
-): number {
-  const count = cellClass ? holdings?.classes[cellClass].cellCount : total;
-  if (count === undefined)
-    throw new Error(
-      cellClass
-        ? `address ${addr}: the ${cellClass} cells are listed before the holdings that count them`
-        : `address ${addr}: an unfiltered live cells page carries no total`
-    );
-  return count;
-}
 /** One address activity page; the list and the tab count share it, so they share its cache entry. */
 const activityPageQuery = (
   lockHash: string | undefined,
@@ -134,14 +113,11 @@ export default function AddressDetailPage() {
  */
 function AddressIdentity({ value, kind }: { value: string; kind: 'address' | 'hash' }) {
   return (
-    <span className="flex min-w-0 items-start gap-2">
-      <HeadId value={value} kind={kind} />
-      <CopyButton
-        value={value}
-        label={kind === 'address' ? 'copy address' : 'copy lock script hash'}
-        className="shrink-0"
-      />
-    </span>
+    <HeadId
+      value={value}
+      kind={kind}
+      copy={kind === 'address' ? 'copy address' : 'copy lock script hash'}
+    />
   );
 }
 function AddressDetailPageContent({ addr }: { addr: string }) {
@@ -150,9 +126,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const activityPage = useCursorPagination(),
-    txPage = useCursorPagination(),
-    cellPage = useCursorPagination();
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const activityPage = useCursorPagination(pageSize),
+    txPage = useCursorPagination(pageSize),
+    cellPage = useCursorPagination(pageSize);
   const historyId = useId();
   const address = useQuery({
     queryKey: ['address', addr],
@@ -577,12 +554,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   (cells.data ? (
                     <>
                       <AddressLiveCells rows={cells.data.data} />
+                      {/* counted where the page's own response counts its cells; a class
+                          filter's count is the holdings' read, stated by the class's chip
+                          (lane c2-finish, 1c) */}
                       <AddressPagination
                         pagination={cellPage}
-                        read={{
-                          ...cells.data,
-                          total: liveCellsTotal(cells.data.total, cellClass, holdings.data, addr),
-                        }}
+                        read={cells.data}
                         label="live cells"
                       />
                     </>

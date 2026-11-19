@@ -11,7 +11,7 @@ import { AssetFeed } from '@/components/asset/asset-feed';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
 import { CellVersions } from '@/components/asset/cell-versions';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
-import { Hash } from '@/components/ui/hash';
+import { HeadId } from '@/components/ui/head-id';
 import { TenureBar } from '@/components/ui/tenure-bar';
 import { useClockTime } from '@/components/ui/utc8-date';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -246,7 +246,12 @@ export function CanonicalIdentityDetail({
       }
       identity={
         kind === 'did' && didDecoded ? (
-          <Hash hash={didDecoded.did} truncate={false} className="text-text text-body" />
+          // the head's id (a did:ckb), its copy button after it (lane c2-finish, item 4), at the
+          // asset heads' id step (the identity line's 12 px; it was 14): 40 × 7.2 = 288 px and the
+          // button's 46 hold a 390 phone's 358 on one line, where 336 + 46 did not
+          <span className="text-text block">
+            <HeadId value={didDecoded.did} kind="did" copy="copy DID" />
+          </span>
         ) : undefined
       }
       // Consistency round C7: the standard's sentence is the lede; the facts are the metrics row,

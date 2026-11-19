@@ -485,7 +485,15 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       // F2 identities (round 2, ID-COL-5): an identity collection's id is a route alias, and it
       // has no description to record; it opens with what the standard is instead. A cluster or
       // class is named by its id under the title; its kind leads the lede.
-      identity={kind === 'identity' ? undefined : <HeadId value={id} kind="hash" copyable />}
+      identity={
+        kind === 'identity' ? undefined : (
+          <HeadId
+            value={id}
+            kind="hash"
+            copy={kind === 'spore' ? 'copy cluster id' : 'copy class id'}
+          />
+        )
+      }
       // Lane D2 (PB-13): an identity collection's opening, what the standard is, is the lede its
       // hero follows, as a cluster's or a class's lede is (it was the shell's intro, after a head
       // with no figure)

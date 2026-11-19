@@ -11,7 +11,6 @@ import { sentenceText } from '@/components/ui/block-link';
 import { BlocksLimitsNote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
 import { ActivityRow } from '@/components/activity/activity-row';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ListTable } from '@/components/ui/list-table';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
@@ -473,21 +472,6 @@ describe('additive shared props (F2 blocks)', () => {
       />
     );
     expect(document.querySelector('[data-role="evidence"]')).toHaveTextContent(/^#0 · tx$/);
-  });
-  it('CursorPagination takes a range sentence and button words', () => {
-    render(
-      <CursorPagination
-        summary="50 newest of 9"
-        hasMore
-        hasPrevious={false}
-        onNext={() => {}}
-        onPrevious={() => {}}
-        previousLabel="Newer"
-        nextLabel="Older →"
-      />
-    );
-    expect(screen.getByText('50 newest of 9')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
   });
   it('CkbAmount drops the unit when the header names it', () => {
     const { container } = render(

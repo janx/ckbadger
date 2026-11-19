@@ -21,7 +21,7 @@ import Link from '@/components/ui/link';
 import { Pager } from '@/components/ui/pager';
 import { RangeSelect } from '@/components/ui/range-select';
 import { Select } from '@/components/ui/select';
-import { Tabs, type Tab } from '@/components/ui/tabs';
+import { TabLinks, Tabs, type Tab } from '@/components/ui/tabs';
 import { TextField } from '@/components/ui/text-field';
 import { color, themeDeclarations } from '@/lib/palette';
 import '@/app/globals.css';
@@ -72,6 +72,16 @@ function TabRows() {
       >
         <Note>the {inventory} panel · 324 px with its counts: they stay at 360</Note>
       </Tabs>
+      <TabLinks
+        label="inventory classes"
+        command
+        tabs={INVENTORY_TABS.map((tab) => ({ ...tab, href: `/inventory/${tab.label}` }))}
+        current="tokens"
+      />
+      <Note>
+        the same row when each class is its own address: a nav of links, the current one the page
+        (it opens the inventory: open one in a new tab)
+      </Note>
       <Tabs
         label="a tab row that is not a command line, with a zero"
         tabs={[ADDRESS_TABS[0], { ...ADDRESS_TABS[1], count: 0 }, ADDRESS_TABS[2]]}
@@ -161,16 +171,43 @@ function Pagers() {
       <Pager
         mode="pages"
         label="tokens"
-        from={(page - 1) * 20 + 1}
-        to={Math.min(page * 20, 727)}
-        total={727}
-        pageSize={20}
         page={page}
-        pages={37}
+        pageSize={20}
+        hasMore={page < 37}
+        rows={{ from: (page - 1) * 20 + 1, to: Math.min(page * 20, 727) }}
+        count={{ total: 727, pages: 37 }}
         onPrevious={go(page - 1)}
         onNext={go(page + 1)}
       />
       <Note>pages: a ranked list (live: prev and next walk its 37 pages)</Note>
+      <Pager
+        mode="pages"
+        label="objects"
+        page={2}
+        pageSize={24}
+        hasMore
+        rows={{ from: 25, to: 48 }}
+        count={null}
+        onPrevious={() => {}}
+        onNext={() => {}}
+      />
+      <Note>
+        pages of an ordered list whose response counts no rows: the next by its own “more”
+      </Note>
+      <Pager
+        mode="pages"
+        label="holders"
+        page={2}
+        pageSize={20}
+        hasMore={false}
+        rows={null}
+        count={null}
+        onPrevious={() => {}}
+        onNext={() => {}}
+      />
+      <Note>
+        an empty page past the end, the list shrank under the reader: where it is, a way back
+      </Note>
       <Pager
         mode="time"
         label="blocks"
@@ -189,12 +226,11 @@ function Pagers() {
       <Pager
         mode="pages"
         label="one page"
-        from={1}
-        to={8}
-        total={8}
-        pageSize={20}
         page={1}
-        pages={1}
+        pageSize={20}
+        hasMore={false}
+        rows={{ from: 1, to: 8 }}
+        count={{ total: 8, pages: 1 }}
         onPrevious={() => {}}
         onNext={() => {}}
       />
@@ -214,6 +250,7 @@ function Fields() {
   const [name, setName] = useState('');
   const [country, setCountry] = useState('');
   const [sort, setSort] = useState<Sort>('capacity');
+  const [version, setVersion] = useState<(typeof VERSIONS)[number]['value']>('12');
   return (
     <Item name="field, select">
       <TextField
@@ -232,9 +269,25 @@ function Fields() {
         className="w-[200px]"
       />
       <Select label="sorted by" value={sort} options={SORTS} onChange={setSort} />
+      {/* a 328 px line (a 360 px phone's): the pair 304.4 px stands on it; 'cell version' makes
+          it 343.4 px, and the well goes under its label (never a cut value) */}
+      <div className="w-[328px] max-w-full">
+        <Select label="version" value={version} options={VERSIONS} onChange={setVersion} />
+      </div>
+      <div className="w-[328px] max-w-full">
+        <Select label="cell version" value={version} options={VERSIONS} onChange={setVersion} />
+      </div>
+      <Note>
+        in a 328 px line: the pair on one line where it fits, else the well under its label
+      </Note>
     </Item>
   );
 }
+
+const VERSIONS = [
+  { value: '1', label: '1 · #15,064,087' },
+  { value: '12', label: '12 · #21,016,901 · current' },
+] as const;
 
 function CopyAndHelp() {
   return (

@@ -75,11 +75,17 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
       </span>
       {/* words wrap between words; only the route, one long token, may break anywhere. The
           facts end with the one copy of the controls board, which copies them for a bug report
-          and answers in words beside it. */}
+          and answers in words beside it; an action with a purpose, not an id's copy, so its words
+          stand after its icon (lane c2-finish, item 4). */}
       <span className="min-w-0 [overflow-wrap:anywhere]">
         page <span className="break-all">{fullRoute}</span> · network {network} · CKBadger {build} ·{' '}
         <span>the chain was not checked in this view — this says nothing about what it holds</span>{' '}
-        <CopyButton value={report} label="copy details for a bug report" className="align-middle" />
+        <CopyButton
+          value={report}
+          label="copy details for a bug report"
+          words
+          className="align-middle"
+        />
       </span>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         <button

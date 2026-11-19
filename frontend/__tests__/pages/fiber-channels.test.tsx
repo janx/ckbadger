@@ -39,7 +39,9 @@ describe('FiberChannelsPage', () => {
     );
     render(<FiberChannelsPage />);
     expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^All/ }));
+    // re-pinned (lane C2 topics): the state is a radio of the controls board's filter chips, in
+    // its lowercase words (it was the pressed button "All")
+    fireEvent.click(screen.getByRole('radio', { name: /^all/ }));
     await waitFor(() => expect(releaseAll).toBeTypeOf('function'));
     expect(screen.queryByTitle(channel.channelId)).not.toBeInTheDocument();
     // Nor a stale count: while the chosen list loads the heading runs on nothing (phase 5, B7).
@@ -167,9 +169,13 @@ describe('FiberChannelsPage', () => {
         const params = new URL(request.url).searchParams;
         requested.push(params.get('state') ?? 'all');
         sorts.push(params.get('sort'));
+        // re-pinned (lane C2 topics): the API answers one a page, so its 38 channels take 38
+        // pages (it answered 50 a page with a next page, which the old pager drew and the board's
+        // refuses: 38 rows at 50 a page are one page)
         return HttpResponse.json({
           ...page([channel]),
           total: 38,
+          limit: 1,
           hasMore: true,
           nextCursor: '1:0x01',
         });
@@ -184,15 +190,19 @@ describe('FiberChannelsPage', () => {
     expect(heading.lastElementChild).toHaveClass('text-text-dim');
     expect(screen.getByRole('region', { name: 'Channels 38 open' })).toContainElement(heading);
     await waitFor(() => expect(requested[0]).toBe('open'));
-    const open = await screen.findByRole('button', { name: 'Open 1' });
-    expect(open).toHaveAttribute('aria-pressed', 'true');
+    // re-pinned (lane C2 topics): the states are the controls board's filter chips, a radio group
+    // named "state" in the chips' lowercase words, the summary's count after each (they were
+    // pressed buttons, "Open 1" …, in a group named "State")
+    const states = screen.getByRole('radiogroup', { name: 'state' });
+    const open = await within(states).findByRole('radio', { name: 'open 1' });
+    expect(open).toHaveAttribute('aria-checked', 'true');
     for (const name of [
-      'Closed together 1',
-      'Force-closed, settled 0',
-      'Force-closed, not settled 1',
-      'All 3',
+      'closed together 1',
+      'force-closed, settled 0',
+      'force-closed, not settled 1',
+      'all 3',
     ])
-      expect(screen.getByRole('button', { name })).toHaveAttribute('aria-pressed', 'false');
+      expect(within(states).getByRole('radio', { name })).toHaveAttribute('aria-checked', 'false');
     const table = await screen.findByRole('table', { name: 'Open channels' });
     expect(
       within(table)
@@ -232,8 +242,14 @@ describe('FiberChannelsPage', () => {
     expect(sorted).toHaveClass('text-meta');
     expect(sorted).toHaveAttribute('data-prompt-note');
     expect(sorted.previousElementSibling).toBe(heading);
-    expect(screen.getByText('Showing 1–1 of 38 channels · 50 per page')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Closed together 1' }));
+    // re-pinned (lane C2 topics): the controls board's pager for a ranked list, its figures the
+    // response's (it was "Showing 1–1 of 38 channels · 50 per page" beside boxed buttons)
+    const pager = screen.getByRole('navigation', { name: 'channels' });
+    expect(pager).toHaveTextContent('1–1 of 38 · 1 a page');
+    expect(pager).toHaveTextContent('← prevpage 1 of 38next →');
+    expect(within(pager).queryByRole('button', { name: '← prev' })).toBeNull();
+    expect(within(pager).getByRole('button', { name: 'next →' })).toBeInTheDocument();
+    fireEvent.click(within(states).getByRole('radio', { name: 'closed together 1' }));
     await waitFor(() => expect(requested).toContain('cooperativelyClosed'));
     expect(
       await screen.findByRole('table', { name: 'Closed together channels' })
@@ -243,6 +259,52 @@ describe('FiberChannelsPage', () => {
     expect(
       screen.getByRole('heading', { level: 2, name: 'Channels 38 closed together' })
     ).toBeInTheDocument();
+  });
+
+  // Lane C2 (topics), written before the pager and the state chips are replaced: the list pages
+  // forward by the cursor the API served and back to the page before it, and a state starts the
+  // list again from its first page, so the replacements are proven against what the page did.
+  it('pages by the served cursor and back, and a state starts the list again from its first page', async () => {
+    const asked: { state: string | null; cursor: string | null }[] = [];
+    server.use(
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        const cursor = params.get('cursor');
+        asked.push({ state: params.get('state'), cursor });
+        const second = cursor === 'after-first';
+        // two channels, one a page: the second page is the last
+        return HttpResponse.json({
+          data: [second ? closedChannel : channel],
+          total: 2,
+          limit: 1,
+          hasMore: !second,
+          nextCursor: second ? null : 'after-first',
+        });
+      })
+    );
+    // re-pinned (lane C2 topics): the board's pager's words and the state's radios (they were the
+    // buttons Next and Previous, and the pressed button "Closed together 1")
+    const next = () => screen.getByRole('button', { name: 'next →' });
+    const previous = () => screen.getByRole('button', { name: '← prev' });
+    const state = (name: string) => screen.getByRole('radio', { name });
+    render(<FiberChannelsPage />);
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+    expect(asked).toEqual([{ state: 'open', cursor: null }]);
+    fireEvent.click(next());
+    expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
+    expect(screen.queryByTitle(channel.channelId)).toBeNull();
+    expect(asked.at(-1)).toEqual({ state: 'open', cursor: 'after-first' });
+    fireEvent.click(previous());
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+    expect(screen.queryByTitle(closedChannel.channelId)).toBeNull();
+    fireEvent.click(next());
+    expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
+    fireEvent.click(await waitFor(() => state('closed together 1')));
+    await waitFor(() =>
+      expect(asked.at(-1)).toEqual({ state: 'cooperativelyClosed', cursor: null })
+    );
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
   });
 });
 

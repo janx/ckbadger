@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, within } from '@testing-library/react';
-import { Tabs, type Tab } from '@/components/ui/tabs';
+import { TabLinks, Tabs, type Tab, type TabLink } from '@/components/ui/tabs';
 import { tabRowPx } from '@/lib/control-row-fit';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
@@ -236,5 +236,109 @@ describe('Tabs: the phone rule, by the one function (lib/control-row-fit)', () =
     expect(() =>
       render(<Row tabs={[...ADDRESS, { key: 'names' as Key, label: 'names', count: 1 }]} />)
     ).toThrow('wider than the 328 px line of a 360 px window');
+  });
+});
+
+/**
+ * Lane c2-finish, item 3: a tab that is its own address is a link. The inventory's classes are three
+ * routes, so as tabs a class could not open in a new tab and an arrow key changed the route,
+ * remounting the page and losing the focus. `TabLinks` is the tab row's form for that case: the
+ * same look, a `nav` of links (WAI-ARIA navigation, not a tablist), the current one
+ * `aria-current="page"`, each link a stop of the tab order and no arrow keys of its own.
+ */
+describe('TabLinks: a tab that is its own address', () => {
+  type Class = 'tokens' | 'objects' | 'identities';
+  const CLASSES: TabLink<Class>[] = [
+    { key: 'tokens', label: 'tokens', count: 727, href: '/inventory/tokens' },
+    { key: 'objects', label: 'objects', count: 5653, href: '/inventory/objects' },
+    { key: 'identities', label: 'identities', count: 0, href: '/inventory/identities' },
+  ];
+  const Classes = ({ command = true }: { command?: boolean }) => (
+    <TabLinks label="Inventory classes" tabs={CLASSES} current="tokens" command={command} />
+  );
+
+  it('is a navigation of links named by their words, the current one the page', () => {
+    render(<Classes />);
+    const nav = screen.getByRole('navigation', { name: 'Inventory classes' });
+    expect(screen.queryByRole('tablist')).toBeNull();
+    expect(screen.queryByRole('tab')).toBeNull();
+    const links = within(nav).getAllByRole('link');
+    expect(links.map((l) => l.textContent)).toEqual([
+      'tokens 727',
+      'objects 5,653',
+      'identities 0',
+    ]);
+    expect(links.map((l) => l.getAttribute('href'))).toEqual([
+      expect.stringMatching(/\/inventory\/tokens$/),
+      expect.stringMatching(/\/inventory\/objects$/),
+      expect.stringMatching(/\/inventory\/identities$/),
+    ]);
+    expect(links.map((l) => l.getAttribute('aria-current'))).toEqual(['page', null, null]);
+  });
+
+  it('is a stop of the tab order per link, and leaves the arrows to the page', async () => {
+    const user = userEvent.setup();
+    render(<Classes />);
+    const links = screen.getAllByRole('link');
+    await user.tab();
+    expect(links[0]).toHaveFocus();
+    await user.keyboard('{ArrowRight}');
+    expect(links[0]).toHaveFocus();
+    await user.tab();
+    expect(links[1]).toHaveFocus();
+  });
+
+  it('draws the tab row’s look: the current bright and 600 on the celadon line, a zero quiet', () => {
+    render(<Classes />);
+    const [current, other, zero] = screen.getAllByRole('link');
+    const name = (link: HTMLElement) => link.firstElementChild!;
+    expect(current).toHaveClass('border-b-2', 'border-jade', 'font-semibold');
+    expect(inkOf(name(current))).toBe(BRIGHT);
+    expect(other).toHaveClass('border-b-2', 'border-transparent', 'font-normal');
+    expect(inkOf(name(other))).toBe(READING);
+    expect(inkOf(name(zero))).toBe(QUIET);
+    const count = within(current).getByText('727');
+    expect(count).toHaveClass('text-meta', 'font-normal');
+    expect(inkOf(count)).toBe(QUIET);
+    // the tab's box: the same classes as a tab's
+    render(
+      <Tabs label="x" tabs={CLASSES} value="tokens" onChange={() => {}}>
+        <p />
+      </Tabs>
+    );
+    const tab = screen.getAllByRole('tab')[0];
+    for (const cls of ['text-body', 'sm:text-section', 'h-8', 'border-b-2', 'pb-1.5', '-mb-px'])
+      expect(current.classList.contains(cls), cls).toBe(tab.classList.contains(cls));
+  });
+
+  it('gives a link a 32 px target, on one line with the prompt square and lowercase names', () => {
+    const { container } = render(<Classes />);
+    for (const w of [1280, 640, 390, 360])
+      for (const link of screen.getAllByRole('link')) expect(targetHeightPx(link, w)).toBe(32);
+    const nav = screen.getByRole('navigation');
+    expect(nav.querySelector(':scope > .section-mark')).toHaveAttribute('aria-hidden', 'true');
+    expect(screen.getAllByRole('link').every((l) => l.classList.contains('lowercase'))).toBe(true);
+    expect(flexWrapsAt(nav, 360)).toBe(false);
+    expect(container.querySelector('[role="tabpanel"]')).toBeNull();
+  });
+
+  it('keeps the phone rule of the one function: 324 px at 360 with the counts, which stay', () => {
+    at(360);
+    render(<Classes />);
+    expect(drawnPx(screen.getByRole('navigation'), 360)).toBe(
+      tabRowPx(CLASSES, 'body', true).withCounts
+    );
+    expect(screen.getAllByRole('link').map((l) => l.textContent)).toEqual([
+      'tokens 727',
+      'objects 5,653',
+      'identities 0',
+    ]);
+  });
+
+  it('refuses a current that is none of its links', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(<TabLinks label="Inventory classes" tabs={CLASSES} current={'names' as Class} />)
+    ).toThrow('TabLinks "Inventory classes": no link names');
   });
 });

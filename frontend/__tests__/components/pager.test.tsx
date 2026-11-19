@@ -16,8 +16,20 @@ const text = (el: Element | null) => el?.textContent?.replace(/ /g, ' ') ?? nul
 
 afterEach(() => vi.restoreAllMocks());
 
+// Re-pinned on purpose (lane c2-finish, item 1): the pages mode takes a ranked page as
+// lib/pagination.ts's rankedPageAt gives it — the page, its size, its rows (none past the end),
+// the response's "more" and, where the response counts the rows, the count and the pages — where
+// it took a flat from / to / total / pages that a list with no count or a shrunk list could not
+// give. Every case below is the case it was, in that shape, and three are new.
 describe('Pager: pages', () => {
-  const page3 = { from: 41, to: 60, total: 727, pageSize: 20, page: 3, pages: 37 };
+  const page3 = {
+    page: 3,
+    pageSize: 20,
+    hasMore: true,
+    rows: { from: 41, to: 60 },
+    count: { total: 727, pages: 37 },
+  };
+  const go = { onPrevious: () => {}, onNext: () => {} };
 
   it('says where the list is and goes either way: the board’s line', async () => {
     const user = userEvent.setup();
@@ -35,29 +47,18 @@ describe('Pager: pages', () => {
   });
 
   it('writes the count quiet, where it is in the reading ink and a way to go celadon, no box', () => {
-    render(
-      <Pager mode="pages" label="tokens" {...page3} onPrevious={() => {}} onNext={() => {}} />
-    );
+    render(<Pager mode="pages" label="tokens" {...page3} {...go} />);
     expect(inkOf(screen.getByText(/^41–60 of 727/))).toBe(QUIET);
     expect(inkOf(screen.getByText('page 3 of 37'))).toBe(READING);
-    for (const go of screen.getAllByRole('button')) {
-      expect(go).toHaveClass('text-jade', 'text-small');
-      expect(go.className).not.toMatch(/\bborder\b|\bbg-/);
+    for (const b of screen.getAllByRole('button')) {
+      expect(b).toHaveClass('text-jade', 'text-small');
+      expect(b.className).not.toMatch(/\bborder\b|\bbg-/);
     }
   });
 
   it('draws an end that cannot be taken in the quiet ink, and not as a control', () => {
     const { unmount } = render(
-      <Pager
-        mode="pages"
-        label="tokens"
-        {...page3}
-        page={1}
-        from={1}
-        to={20}
-        onPrevious={() => {}}
-        onNext={() => {}}
-      />
+      <Pager mode="pages" label="tokens" {...page3} page={1} rows={{ from: 1, to: 20 }} {...go} />
     );
     expect(screen.queryByRole('button', { name: '← prev' })).toBeNull();
     expect(inkOf(screen.getByText('← prev'))).toBe(QUIET);
@@ -69,10 +70,9 @@ describe('Pager: pages', () => {
         label="tokens"
         {...page3}
         page={37}
-        from={721}
-        to={727}
-        onPrevious={() => {}}
-        onNext={() => {}}
+        rows={{ from: 721, to: 727 }}
+        hasMore={false}
+        {...go}
       />
     );
     expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
@@ -84,14 +84,12 @@ describe('Pager: pages', () => {
       <Pager
         mode="pages"
         label="tokens"
-        from={1}
-        to={8}
-        total={8}
-        pageSize={20}
         page={1}
-        pages={1}
-        onPrevious={() => {}}
-        onNext={() => {}}
+        pageSize={20}
+        hasMore={false}
+        rows={{ from: 1, to: 8 }}
+        count={{ total: 8, pages: 1 }}
+        {...go}
       />
     );
     expect(container).toBeEmptyDOMElement();
@@ -102,15 +100,13 @@ describe('Pager: pages', () => {
       <Pager
         mode="pages"
         label="blocks"
-        from={2000001}
-        to={2000020}
-        total={53025887}
-        pageSize={20}
         page={100001}
+        pageSize={20}
+        hasMore
+        rows={{ from: 2000001, to: 2000020 }}
         // the caller's figure, not ⌈53,025,887 / 20⌉ = 2,651,295: the pager divides nothing
-        pages={2651300}
-        onPrevious={() => {}}
-        onNext={() => {}}
+        count={{ total: 53025887, pages: 2651300 }}
+        {...go}
       />
     );
     expect(screen.getByText('page 100,001 of 2,651,300')).toBeInTheDocument();
@@ -120,33 +116,96 @@ describe('Pager: pages', () => {
   });
 
   it('keeps “· 20 a page” from 640 and leaves it below, the phone’s line', () => {
-    render(
-      <Pager mode="pages" label="tokens" {...page3} onPrevious={() => {}} onNext={() => {}} />
-    );
+    render(<Pager mode="pages" label="tokens" {...page3} {...go} />);
     const perPage = screen.getByText(/· 20 a page/);
     expect(inFlowAt(perPage, 640)).toBe(true);
     expect(inFlowAt(perPage, 390)).toBe(false);
   });
 
   it('gives a way to go a 28 px target from 640 and 32 below', () => {
-    render(
-      <Pager mode="pages" label="tokens" {...page3} onPrevious={() => {}} onNext={() => {}} />
+    render(<Pager mode="pages" label="tokens" {...page3} {...go} />);
+    for (const b of screen.getAllByRole('button'))
+      expect([1280, 640, 390, 360].map((w) => targetHeightPx(b, w))).toEqual([28, 28, 32, 32]);
+  });
+
+  // Item 1a: an ordered list whose response counts no rows (the gallery's search): its rows and
+  // its size, the page alone, the next by the response's own "more".
+  it('pages an ordered list with no count: its rows, the page alone, the next by “more”', async () => {
+    const user = userEvent.setup();
+    const onNext = vi.fn();
+    const { unmount } = render(
+      <Pager
+        mode="pages"
+        label="objects"
+        page={2}
+        pageSize={24}
+        hasMore
+        rows={{ from: 25, to: 48 }}
+        count={null}
+        onPrevious={() => {}}
+        onNext={onNext}
+      />
     );
-    for (const go of screen.getAllByRole('button'))
-      expect([1280, 640, 390, 360].map((w) => targetHeightPx(go, w))).toEqual([28, 28, 32, 32]);
+    expect(text(screen.getByRole('navigation', { name: 'objects' }))).toBe(
+      '25–48 · 24 a page← prevpage 2next →'
+    );
+    await user.click(screen.getByRole('button', { name: 'next →' }));
+    expect(onNext).toHaveBeenCalledTimes(1);
+    unmount();
+    render(
+      <Pager
+        mode="pages"
+        label="objects"
+        page={3}
+        pageSize={24}
+        hasMore={false}
+        rows={{ from: 49, to: 52 }}
+        count={null}
+        {...go}
+      />
+    );
+    expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
+    expect(screen.getByText('page 3')).toBeInTheDocument();
+  });
+
+  // Item 1b: the list shrank under the reader: an empty page past the first is where it stands
+  // and a way back, no rows and no count.
+  it('draws an empty page past the end as where it stands and a way back', async () => {
+    const user = userEvent.setup();
+    const onPrevious = vi.fn();
+    render(
+      <Pager
+        mode="pages"
+        label="holders"
+        page={2}
+        pageSize={20}
+        hasMore={false}
+        rows={null}
+        count={null}
+        onPrevious={onPrevious}
+        onNext={() => {}}
+      />
+    );
+    expect(text(screen.getByRole('navigation', { name: 'holders' }))).toBe('← prevpage 2next →');
+    expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
+    await user.click(screen.getByRole('button', { name: '← prev' }));
+    expect(onPrevious).toHaveBeenCalledTimes(1);
   });
 
   it('refuses figures that do not hold together', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    const go = { onPrevious: () => {}, onNext: () => {} };
-    const at = (over: Partial<typeof page3>) => () =>
+    const at = (over: Record<string, unknown>) => () =>
       render(<Pager mode="pages" label="tokens" {...page3} {...over} {...go} />);
     expect(at({ page: 38 })).toThrow('Pager "tokens": page 38 of 37');
-    expect(at({ from: 61 })).toThrow('Pager "tokens": rows 61–60 of 727');
-    expect(at({ to: 728 })).toThrow('Pager "tokens": rows 41–728 of 727');
-    expect(at({ to: 61 })).toThrow('Pager "tokens": 21 rows on a page of 20');
+    expect(at({ rows: { from: 61, to: 60 } })).toThrow('Pager "tokens": rows 61–60');
+    expect(at({ rows: { from: 41, to: 728 } })).toThrow('Pager "tokens": rows 41–728 of 727');
+    expect(at({ rows: { from: 41, to: 61 } })).toThrow('Pager "tokens": 21 rows on a page of 20');
     expect(at({ page: 2.5 })).toThrow('Pager "tokens": page 2.5 is not a whole number');
-    expect(at({ pages: 0 })).toThrow('Pager "tokens": 0 pages');
+    expect(at({ count: { total: 0, pages: 0 } })).toThrow('Pager "tokens": 0 pages');
+    // an empty first page is no page to draw: a list with no rows draws no pager
+    expect(at({ page: 1, rows: null, hasMore: false })).toThrow(
+      'Pager "tokens": an empty first page'
+    );
   });
 });
 

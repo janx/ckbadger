@@ -82,10 +82,11 @@ export function AddressStaleNotice({ error, label }: { error: Error | null; labe
  * computing no figure. A list in time, newest first (the activities, the transactions), takes its
  * time mode: its order in words, `← newer` and `older →`, the page the walk is on and the pages
  * where the API counts the list. A list read from its first by key or by rank (the live cells, the
- * DAO cells largest first, the token kinds, the identities) takes its pages mode, counted of the
- * total its read states (the response's own, or the count the caller sets on it from the read that
- * counts the list). Where the page stands is lib/pagination.ts's (timePageAt, rankedPageAt), from
- * the response; nothing is drawn for a list on one page.
+ * DAO cells largest first, the token kinds, the identities) takes its pages mode, counted only of
+ * the total its own response states: a count another read supplies is at another tip (lane
+ * c2-finish, 1c), so a list whose page carries none is paged by its rows and its "more", its
+ * count standing where the page states it. Where the page stands is lib/pagination.ts's
+ * (timePageAt, rankedPageAt), from the response; nothing is drawn for a list on one page.
  */
 export function AddressPagination({
   pagination,
@@ -449,9 +450,10 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const addr = holdings.lockScriptHash;
   const [active, setActive] = useState<AddressCellClass | null>(null);
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const tokensPage = useCursorPagination(),
-    daoPage = useCursorPagination(),
-    identitiesPage = useCursorPagination();
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const tokensPage = useCursorPagination(pageSize),
+    daoPage = useCursorPagination(pageSize),
+    identitiesPage = useCursorPagination(pageSize);
   const tokens = useQuery({
     queryKey: ['address-tokens', addr, tokensPage.cursor, pageSize],
     queryFn: () => api.getAddressTokens(addr, { limit: pageSize, cursor: tokensPage.cursor }),
@@ -780,7 +782,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     })}
                     <AddressPagination
                       pagination={daoPage}
-                      read={{ ...deposits.data, total: holdings.holdings.dao }}
+                      read={deposits.data}
                       label="DAO cells"
                     />
                   </>
@@ -846,11 +848,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     </span>
                   </div>
                 ))}
-                <AddressPagination
-                  pagination={tokensPage}
-                  read={{ ...tokens.data, total: holdings.holdings.token }}
-                  label="token kinds"
-                />
+                <AddressPagination pagination={tokensPage} read={tokens.data} label="token kinds" />
               </>
             ) : (
               <AddressLoadState label="tokens" error={tokens.error} read={tokens} />
@@ -910,7 +908,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 })}
                 <AddressPagination
                   pagination={identitiesPage}
-                  read={{ ...identities.data, total: holdings.holdings.identity }}
+                  read={identities.data}
                   label="identities"
                 />
               </>
@@ -1088,10 +1086,9 @@ function AddressCollectionObjects({
       throw new Error(
         `Object cell ${c.txHash}:${c.outputIndex} is not in collection ${group.id ?? 'none'}`
       );
-  // ten a page, counted of the collection's objects this address holds: the pager's pages mode
-  const objectsAt =
-    objects.data &&
-    rankedPageAt(`${label} objects`, pages.page, { ...objects.data, total: group.itemCount });
+  // ten a page: the pager's pages mode, counted only where the page's own response counts its
+  // rows (the collection's count is the holdings' read, stated in the group's row: c2-finish 1c)
+  const objectsAt = objects.data && rankedPageAt(`${label} objects`, pages.page, objects.data);
   return (
     <div className="bg-base-surface pl-7">
       {objects.data ? (

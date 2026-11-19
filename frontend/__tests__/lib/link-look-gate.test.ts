@@ -1,7 +1,8 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan';
 import { LINK_LOOKS } from '@/components/ui/link';
 
 /**
@@ -545,8 +546,6 @@ const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
   },
 };
 
-const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
-
 /** The files that draw the one `<a>` of a link (they own it). */
 const LINK_FILES = ['components/ui/link.tsx', 'components/ui/external-link.tsx'];
 
@@ -587,25 +586,6 @@ function isLinkInk(cls: string): boolean {
   if (arbitrary) return !/^(\d|length:)/.test(arbitrary[1]);
   return true;
 }
-
-/** A name of the file: a value it may hold, a component, or a prop (with its default, if any). */
-type Binding =
-  | { kind: 'value'; values: ts.Expression[] }
-  | { kind: 'component' }
-  | { kind: 'prop'; defaults: ts.Expression[] };
-
-const unwrap = (e: ts.Expression): ts.Expression => {
-  let x = e;
-  while (
-    ts.isParenthesizedExpression(x) ||
-    ts.isAsExpression(x) ||
-    ts.isSatisfiesExpression(x) ||
-    ts.isTypeAssertionExpression(x) ||
-    ts.isNonNullExpression(x)
-  )
-    x = x.expression;
-  return x;
-};
 
 /** The link elements a source writes, and what it could not read; `path` places the shell. */
 function scanLinks(
@@ -835,19 +815,6 @@ function scanLinks(
   };
   visit(source);
   return { sites, refused };
-}
-
-function sourceFiles(root: string): string[] {
-  const files: string[] = [];
-  const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (statSync(path).isDirectory()) walk(path);
-      else if (/\.tsx?$/.test(name) && !name.endsWith('.d.ts')) files.push(path);
-    }
-  };
-  for (const dir of SCAN_DIRS) walk(join(root, dir));
-  return files;
 }
 
 /** The scan's count against the list: every file's count per kind must equal its tolerated one. */

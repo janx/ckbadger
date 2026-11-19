@@ -10,10 +10,11 @@ import { DaoSources } from '@/components/dao/dao-sources';
 import {
   DaoHistoryFigure,
   DaoHistoryReading,
-  HistoryRangeToggle,
+  HISTORY_RANGES,
   historySeries,
   type HistoryRange,
 } from '@/components/dao/dao-history';
+import { RangeSelect } from '@/components/ui/range-select';
 import { DaoGrows } from '@/components/dao/dao-grows';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatAccumulatedRate } from '@/lib/dao-header';
@@ -189,7 +190,7 @@ export function DaoLede() {
 }
 
 /**
- * The hero (hierarchy board v3, R13): the title row (h1, the DAO charts link, the range buttons),
+ * The hero (hierarchy board v3, R13): the title row (h1, the DAO charts link, the range),
  * one sentence, then deposited as the page's one gold figure with its 24 h change on its baseline
  * row, and the picture right under it. The picture's reading row and the four metrics in one row
  * follow the hero section. Deposited, deposits and depositors are the evidence anchor's phase-0
@@ -234,9 +235,12 @@ function Hero({
             >
               Explore DAO charts →
             </Link>
+            {/* The controls board's range, `1 m · 1 y · all`: a new range lets a pinned day go. */}
             {series && (
-              <HistoryRangeToggle
-                range={range}
+              <RangeSelect
+                label="History range"
+                options={HISTORY_RANGES}
+                value={range}
                 onChange={(next) => {
                   setRange(next);
                   pin.clear();

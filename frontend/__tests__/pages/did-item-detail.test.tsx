@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { expectHeadId } from '@/__tests__/utils/head-id';
 import Page from '@/app/identities/did/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
@@ -200,6 +201,13 @@ it('titles a did:ckb by its handle, reads its document and places it among did:c
   // The DID string is the identity line under the title (with copy), not the title.
   expect(screen.getByRole('heading', { level: 1 }).closest('header')).toHaveTextContent(
     'did:ckb:ceirceirceirceirceirceirceirceir'
+  );
+  // Lane c2-finish, item 4: the DID is the head's id as every head's is (HeadId: one line or
+  // equal lines, never a scroller; it was HexCode's own-box scroller, copied by a click on it),
+  // the copy button after it
+  expectHeadId('did:ckb:ceirceirceirceirceirceirceirceir');
+  expect(screen.getByRole('heading', { level: 1 }).closest('header')).toContainElement(
+    screen.getByRole('button', { name: 'copy DID' })
   );
   const doc = screen.getByRole('region', { name: 'DID document' });
   expect(doc).toHaveTextContent('at://alice.test');

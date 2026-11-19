@@ -410,8 +410,9 @@ describe('Tokens Inventory Page', () => {
 
     await waitFor(() => {
       // Re-pinned on purpose (controls lane C2): the class is the current tab of the command
-      // line, its name lowercase (it was the nav link "Tokens").
-      expect(screen.getByRole('tab', { name: /^tokens/ })).toHaveAttribute('aria-selected', 'true');
+      // line, its name lowercase (it was the nav link "Tokens"). Re-pinned again (lane c2-finish,
+      // item 3): each class is its own address, so it is the tab row's link, the current page.
+      expect(screen.getByRole('link', { name: /^tokens/ })).toHaveAttribute('aria-current', 'page');
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'token' }));
       // F2 objects (IV-04): the full name leads. Table-rows L2-1: the symbol is a tag beside it
       // and the standard is in the row's title.
@@ -686,10 +687,11 @@ describe('Objects Inventory Page', () => {
 
     await waitFor(() => {
       // Re-pinned on purpose (controls lane C2): the current tab of the command line (it was the
-      // nav link "Objects").
-      expect(screen.getByRole('tab', { name: /^objects/ })).toHaveAttribute(
-        'aria-selected',
-        'true'
+      // nav link "Objects"). Re-pinned again (lane c2-finish, item 3): the tab row's link, the
+      // current page (a class is its own address).
+      expect(screen.getByRole('link', { name: /^objects/ })).toHaveAttribute(
+        'aria-current',
+        'page'
       );
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
       // Table-rows L2-2: the composition is the row's second tag, not a column of its own.
@@ -916,8 +918,11 @@ describe('Inventory approved board regressions', () => {
     expect(within(table).getByText('123')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Inventory', level: 1 })).toBeInTheDocument();
     // Re-pinned on purpose (controls lane C2): the classes are the command line's tablist, their
-    // names lowercase (it was the nav "Inventory classes" with "Tokens").
-    expect(screen.getByRole('tablist', { name: 'Inventory classes' })).toHaveTextContent('tokens');
+    // names lowercase (it was the nav "Inventory classes" with "Tokens"). Re-pinned again (lane
+    // c2-finish, item 3): the tab row's links, a navigation again, its names lowercase still.
+    expect(screen.getByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent(
+      'tokens'
+    );
   });
   it('shows transport errors as errors, not an empty inventory', async () => {
     vi.mocked(api.getAssets).mockRejectedValue(new Error('pinned read failed'));
@@ -949,12 +954,13 @@ describe('Inventory snapshot and pagination lifecycle', () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
     render(<TokensPage />);
     // Re-pinned on purpose (controls lane C2): the command line's tablist, lowercase names (it was
-    // the nav "Inventory classes" with "Tokens").
-    expect(await screen.findByRole('tablist', { name: 'Inventory classes' })).toHaveTextContent(
+    // the nav "Inventory classes" with "Tokens"). Re-pinned again (lane c2-finish, item 3): the tab
+    // row's links, a navigation again (each class is its own address).
+    expect(await screen.findByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent(
       'tokens'
     );
     await waitFor(() =>
-      expect(screen.getByRole('tablist', { name: 'Inventory classes' })).toHaveTextContent('500')
+      expect(screen.getByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent('500')
     );
     expect(screen.getByLabelText('Inventory totals')).toHaveTextContent(
       'cached snapshot and can lag'

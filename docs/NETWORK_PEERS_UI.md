@@ -150,9 +150,11 @@ Expanding a row fetches `/network/peers/{peerId}` and shows:
 - exact retained advertiser peer ids, aliases, first/latest observation times and rounds, and
   observation counts.
 
-Typed observation labels are: Dial request failed; No authenticated session before deadline;
-Authenticated session without Identify before deadline; Malformed Identify; Foreign network; and
-Same-network Identify completed. None is expanded into an unobserved root cause.
+Typed observation labels are: Dial request failed; No authenticated session in time;
+Authenticated, no Identify in time; Malformed Identify; Foreign network; and Same-network Identify
+completed ("in time" is before the probe's deadline). None is expanded into an unobserved root
+cause. A label is at most 37 glyphs, so the peer filter's select holds each whole on a 360 px
+phone, and the filter, the row's badge and the evidence name a state in the same words.
 
 ## Discovery and Accessibility
 

@@ -117,7 +117,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
     <DetailLayout
       title={`Uncle ${formatBlockNumber(uncle.number)}`}
       documentTitle={[formatBlockNumber(uncle.number), 'uncle']}
-      identity={<HeadId value={uncle.hash} kind="hash" copyable />}
+      identity={<HeadId value={uncle.hash} kind="hash" copy="copy uncle hash" />}
       // The status strip under the id line (lane D2; PA-13, PA-06): the block that included it
       // (the dot in the dead ink: an uncle is no longer in force), its time with its age and the
       // delay to its sibling, the canonical block at its height and its epoch; its sentence
