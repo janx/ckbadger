@@ -17,7 +17,7 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
               hash={party.address ?? party.lockHash}
               kind={party.address ? 'address' : 'hash'}
               size="row"
-              className="text-meta"
+              className="text-small"
             />
           </AppLink>
         ) : (

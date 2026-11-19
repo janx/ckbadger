@@ -182,7 +182,7 @@ export function CellVersions({
                 txHash: v.txHash,
                 index: v.outputIndex,
               })}
-              className="text-meta mt-1 block"
+              className="text-small mt-1 block"
             >
               Consumed in transaction
             </AppLink>

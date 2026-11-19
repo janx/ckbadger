@@ -487,17 +487,18 @@ describe('Asset history', () => {
         ceil(at('2024-01-02', 13) + 16),
         // the head "Change", wider than "Mint" or "Burn"
         ceil(Math.max(at('Change', 12), at('Burn', 13)) + 16),
-        // "#99,999,999" over "tx 9999 · sequence 9999" at 12 px, the wider
-        ceil(Math.max(at('#99,999,999', 13), at('tx 9999 · sequence 9999', 12)) + 16),
+        // "#99,999,999" over "tx 9999 · sequence 9999", a link, at 13 px, the wider (re-pinned
+        // on purpose, the ink and size roles round: the link stood at 12 px, 182)
+        ceil(Math.max(at('#99,999,999', 13), at('tx 9999 · sequence 9999', 13)) + 16),
         // its sign and a billion whole units less one, at the token's 0 decimals
         ceil(at('+999,999,999', 13) + 16),
         ceil(at('999,999,999', 13) + 16),
         // the party's lock hash at the row size over "lock 0x43434343…434343" at 12 px; the last
         ceil(Math.max(at('0x11111111…111111', 13), at('lock 0x43434343…434343', 12))),
       ];
-      expect(budgets).toEqual([94, 60, 182, 110, 102, 159]);
+      expect(budgets).toEqual([94, 60, 196, 110, 102, 159]);
       const sum = budgets.reduce((s, w) => s + w, 0);
-      expect(sum).toBe(707);
+      expect(sum).toBe(721);
       mount();
       const table = screen.getByRole('table', { name: 'Mints and burns' });
       const cols = [...table.querySelectorAll('col')].map((c) =>
@@ -509,8 +510,8 @@ describe('Asset history', () => {
       try {
         for (const [width, form] of [
           [1232, 'table'],
-          [707, 'table'],
-          [706, 'rows'],
+          [721, 'table'],
+          [720, 'rows'],
           [608, 'rows'],
           [358, 'rows'],
         ] as const) {

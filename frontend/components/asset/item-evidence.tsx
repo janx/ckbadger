@@ -57,8 +57,10 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
           11 px it is 66 × 6.6 = 435.6 px: one line in the tier's column at 1280 (588 px) and 1024
           (460), and at 640 (608); two halves of 34 characters (224.4 px) at 390 (358) and 360
           (328). Its index is said in words before it, the link opening the cell. */}
-      <div className="text-meta min-w-0">
-        <span className="text-text-dim">Outpoint · output {cell.outputIndex} of</span>
+      {/* The ink and size roles: the label quiet at 12 px, the out point a link at 13 px, 66 × 7.8 =
+          514.8 px: one line at 1280 (588), two halves of 257.4 at 1024 (460), 640, 390 and 360. */}
+      <div className="text-small min-w-0">
+        <span className="text-text-dim text-meta">Outpoint · output {cell.outputIndex} of</span>
         <AppLink look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
           <HeadId value={cell.txHash} kind="hash" />
         </AppLink>
@@ -149,7 +151,8 @@ export function ItemTransactionContext({
     <div
       data-acted-on={context.actedOn}
       className={cn(
-        'text-meta space-y-1 whitespace-normal',
+        // a row's values and links at 13 px (ink and size roles: it was 12)
+        'text-small space-y-1 whitespace-normal',
         // a neighbour's row is set back (R4): every word dim, nothing faded
         headline.neighbour && 'quiet'
       )}

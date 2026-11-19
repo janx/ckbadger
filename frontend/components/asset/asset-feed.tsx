@@ -305,11 +305,13 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       // ID-C8: the identity boards date the block (UTC+8); the other asset boards age it.
       label: identity ? 'Block · date' : 'Block · age',
       // "#99,999,999 · 10y 364d ago" on its line (a date, "2026-10-22", on the identity boards),
-      // "tx 9999 in block" at 12 px under it; it was 160
+      // "tx 9999 in block" under it, both values at the cell's 13 px (ink and size roles: the age
+      // stood quiet and the place at 12 px; 16 glyphs × 7.8 = 124.8 under the first line's 26 ×
+      // 7.8 = 202.8, so the column's width does not move); it was 160
       minWidth: columnPx(
         Math.max(
           cell(`${WIDEST_BLOCK_NUMBER} · ${identity ? '2026-10-22' : WIDEST_AGE}`.length),
-          textPx(`tx ${WIDEST_COUNT_DIGITS} in block`.length, fontPx('meta'))
+          cell(`tx ${WIDEST_COUNT_DIGITS} in block`.length)
         ) + CELL_GAP_PX
       ),
       render: (r) => (
@@ -317,12 +319,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
           <AppLink look="inline" href={`/blocks/${r.blockNumber}`}>
             {formatBlockNumber(r.blockNumber)}
           </AppLink>
-          <span className="text-text-dim">
-            {' '}
-            ·{' '}
-            {unitNode(identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />)}
-          </span>
-          <span className="text-text-dim text-meta block">tx {r.index} in block</span>
+          <span className="text-text-dim"> · </span>
+          {unitNode(identity ? formatUtc8Date(r.timestamp) : <Utc8Age timestamp={r.timestamp} />)}
+          <span className="block">tx {r.index} in block</span>
         </>
       ),
     },

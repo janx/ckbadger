@@ -412,15 +412,16 @@ export function ObjectGeneticsEvidence({
         </SectionDisclosure>
       )}
       {decoded && (decoded.media.length > 0 || decoded.render !== null) && (
-        <ul aria-label="Decoder output" className="text-meta space-y-1">
+        <ul aria-label="Decoder output" className="text-small space-y-1">
           {decoded.media.map((m) => (
             // words break between them; a media type anyone can mint breaks anywhere if it must
             <li key={m.step} className="[overflow-wrap:anywhere]">
               <span className="text-text">
                 {m.mediaType} · {unitText(formatCount(m.size, 'byte'))} · step {m.step + 1}
               </span>{' '}
-              <span className="text-text-dim">
-                sha256 <ShortId value={m.hash} kind="hash" size="row" />
+              <span>
+                <span className="text-text-dim text-meta">sha256</span>{' '}
+                <ShortId value={m.hash} kind="hash" size="row" />
               </span>{' '}
               <a
                 href={`${apiBaseFor(resolveActiveNetwork())}${m.url}`}

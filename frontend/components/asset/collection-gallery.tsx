@@ -61,11 +61,12 @@ function ItemOwner({ item }: { item: CollectionItem }) {
     );
   if (item.isLive)
     return (
-      <span role="alert" className="text-text-dim text-meta">
+      <span role="alert" className="text-text text-small">
         {item.nftId}: a live item with no owner in the API response
       </span>
     );
-  return <span className="text-text-dim text-meta">No live owner</span>;
+  // the cell's content, its words at the cells' 13 px (ink and size roles: quiet at 12 px)
+  return <span className="text-text text-small">No live owner</span>;
 }
 
 /**
