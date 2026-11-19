@@ -1035,12 +1035,16 @@ async fn test_scripts_list_supports_cursor_pagination() {
 async fn test_scripts_role_counts_state_the_overlap_and_the_rest() {
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
-    // (family, lock cells, type cells): a lock, a type, one used as both, one with no role
+    // (family, lock cells, type cells): two locks, a type, one used as both, two with no role, so
+    // no two of the four counts are equal (the third read's T NOTE-2: with one of each, swapping
+    // `both` and `neither`, or `locks` and `types`, passed)
     for (i, (family_id, lock_cells, type_cells)) in [
         ("only-lock", 2, 0),
+        ("only-lock-too", 5, 0),
         ("only-type", 0, 3),
         ("lock-and-type", 1, 1),
         ("no-role", 0, 0),
+        ("no-role-too", 0, 0),
     ]
     .into_iter()
     .enumerate()
@@ -1090,7 +1094,7 @@ async fn test_scripts_role_counts_state_the_overlap_and_the_rest() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
         json["roleCounts"],
-        serde_json::json!({"all":4,"locks":2,"types":2,"both":1,"neither":1}),
+        serde_json::json!({"all":6,"locks":3,"types":2,"both":1,"neither":2}),
         "{json}"
     );
 }
