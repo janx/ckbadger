@@ -347,11 +347,13 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   charts: 1,
   // shared 3 → 2 (lane cd-fixes-controls): the chart's markers' legend at 13 px; 2 → 1: the lock
   // words' code-hash link at 13 px
-  shared: 1,
+  // 1 → 0: the vitals strip
+  shared: 0,
 };
 // 18 → 17 (lane cd-fixes-controls): components/ui/chart.tsx left the list; 17 → 15: the DAO board
 // and the lock words
-const TOLERATED_FILES = 15;
+// 15 → 14: the vitals strip
+const TOLERATED_FILES = 14;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -434,11 +436,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: `a small multiple's chart link at 12 px; ${WORK}`,
   },
   // ---- shared ----
-  'components/stats-bar.tsx': {
-    family: 'shared',
-    sites: { link: 1 },
-    reason: `the epoch vital's words at 12 px below md, inside its link; ${WORK}`,
-  },
+  // 'components/stats-bar.tsx' left the list (lane cd-fixes-controls): a vital's value alone is its
+  // link, the label a label beside it; the epoch's position and time left are values at 13 px
   // 'components/ui/chart.tsx' left the list (lane cd-fixes-controls): the markers' legend, links,
   // reads at 13 px
   // 'components/ui/lock-kind.tsx' left the list (lane cd-fixes-controls): an unregistered lock's

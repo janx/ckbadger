@@ -576,16 +576,21 @@ describe('the vitals strip per width, at its widest real content', () => {
       s.mining.px.forEach((m, i) => expect(m, `${w}`).toBeLessThanOrEqual(s.mining.tracks[i]));
       for (const line of s.epoch) expect(line.px, `${w}`).toBeLessThanOrEqual(contentPx(Number(w)));
     }
+    // re-pinned on purpose (the shared lane's ruling, the ink and size round): the position and the
+    // time left are values at 13 px (they were 12): "1,799 / 1,800" 101.4 (93.6), "≈ 23h 59m left"
+    // 109.2 (100.8), with their 6 px gap 216.6 (200.4); the epoch's line at 640 is 393 of 608
+    // (376.8), at 390 357 of 358 (340.8), still one line; at 360 and 320 the position's line is
+    // 216.6 of 328 and of 288
     expect(at[640].epoch).toEqual([
-      { items: ['epoch and bar', 'position and time left'], px: 376.8 },
+      { items: ['epoch and bar', 'position and time left'], px: 393 },
     ]);
     expect(at[390].epoch).toEqual([
-      { items: ['epoch and bar', 'position and time left'], px: 340.8 },
+      { items: ['epoch and bar', 'position and time left'], px: 357 },
     ]);
     for (const w of [360, 320])
       expect(at[w].epoch).toEqual([
         { items: ['epoch and bar'], px: 134.4 },
-        { items: ['position and time left'], px: 200.4 },
+        { items: ['position and time left'], px: 216.6 },
       ]);
     // at 320 the hash rate's value (92.4) is wider than a third of the line (85.33): its track
     // keeps it and the other two share the rest, 81.8 each
@@ -699,7 +704,10 @@ describe('the classes and sources the budget reads', () => {
 
   it('reads the strip’s labels at meta (small from md), values at body, their gaps', async () => {
     render(<VitalsStrip />);
-    const block = await screen.findByRole('link', { name: /^Tip #/ });
+    // re-pinned on purpose (the shared lane's ruling, the ink and size round): the vital is a box
+    // of its label and its value, the value its link; the epoch's position and time left are
+    // values at the small step at every width (they were meta below md)
+    const block = (await screen.findByRole('link', { name: /^Tip #/ })).closest('[data-vital]')!;
     const [label, value] = Array.from(block.children);
     expect(label).toHaveClass('text-meta', 'md:text-small');
     expect(value).toHaveClass('text-body');
@@ -707,6 +715,8 @@ describe('the classes and sources the budget reads', () => {
     const epoch = screen.getByTestId('vitals-epoch');
     expect(epoch).toHaveClass('gap-x-1.5', 'md:gap-x-2');
     expect(screen.getByTestId('vitals-epoch-bar')).toHaveClass('text-meta', 'md:text-small');
+    expect(within(epoch).getByText(/ \/ /)).toHaveClass('text-small');
+    expect(within(epoch).getByText(/left$|^—$/)).toHaveClass('text-small');
   });
 
   it('reads the footer’s links at the small step, 20 px apart', () => {

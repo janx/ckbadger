@@ -84,11 +84,25 @@ const PLACE: Record<PhoneForm, { block: string; line: string; live: string; home
 const STACKED = 'flex flex-col gap-px sm:flex-row sm:items-baseline sm:gap-1.5 md:gap-2';
 const INLINE = 'flex items-baseline gap-1.5 md:gap-2';
 
+/**
+ * A vital's name: a label (the shared lane's ruling, the ink and size round: decided, the label of a
+ * value), quiet at 12 px below md and 13 from it, beside its value and never inside its link.
+ */
 const LABEL = 'text-text-dim text-meta md:text-small';
-const VALUE =
-  'text-text-bright group-hover:text-jade text-body font-medium tabular-nums transition-colors';
+/** A vital's value, in the strip's bright voice; its link (the inline look) takes the ink. */
+const VALUE = 'text-text-bright text-body font-medium tabular-nums transition-colors';
+/**
+ * The epoch's position and time left: values, the reading ink at 13 px, on the 18 px line they had
+ * at 12 px, so the home page's second epoch row below md does not grow.
+ */
+const POSITION = 'text-text text-small leading-[18px] tabular-nums';
 
-/** A vital: its label and its value, which flares when it changes (material pass v2, move 4). */
+/**
+ * A vital: its label and its value, which flares when it changes (material pass v2, move 4). The
+ * value is the link where the vital has a page (the shared lane's ruling: the label and the value
+ * were one link, so the label was link text in the quiet ink, on every page): in the inline look,
+ * underlined at rest so a reader sees it is a link, named by the label and the value.
+ */
 function Vital({
   label,
   href,
@@ -104,22 +118,20 @@ function Vital({
   form: PhoneForm;
 }) {
   const flare = usePhosphor(value);
-  const body = (
-    <>
+  const cls = layout === 'block' ? [INLINE, PLACE[form].block] : [STACKED, PLACE[form].homeOnly];
+  return (
+    <div data-vital={label} className={cn(cls)}>
       <span className={LABEL}>{label}</span>
-      <span className={cn(VALUE, flare)}>{value}</span>
-    </>
-  );
-  const cls = cn(
-    'group',
-    layout === 'block' ? [INLINE, PLACE[form].block] : [STACKED, PLACE[form].homeOnly]
-  );
-  return href ? (
-    <Link href={href} className={cls}>
-      {body}
-    </Link>
-  ) : (
-    <div className={cls}>{body}</div>
+      <span className={cn(VALUE, flare)}>
+        {href ? (
+          <Link href={href} look="inline" aria-label={`${label} ${value}`}>
+            {value}
+          </Link>
+        ) : (
+          value
+        )}
+      </span>
+    </div>
   );
 }
 
@@ -234,18 +246,24 @@ function EpochVital({
     ? 'the genesis block: its header states no epoch length'
     : `block ${index} of ${length}`;
   return (
-    <Link
-      href="/charts/epoch-time-length"
+    <div
       data-testid="vitals-epoch"
-      aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, ${position}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
-      className={cn(
-        'group flex flex-wrap items-center gap-x-1.5 gap-y-1 md:gap-x-2',
-        PLACE[form].line
-      )}
+      data-vital="Epoch"
+      className={cn('flex flex-wrap items-center gap-x-1.5 gap-y-1 md:gap-x-2', PLACE[form].line)}
     >
       <span className={EPOCH_GROUP}>
         <span className={LABEL}>Epoch</span>
-        <span className={cn(VALUE, flare)}>{epoch.number.toLocaleString('en-US')}</span>
+        {/* the epoch's number is its link (the shared lane's ruling), named with its position and
+            the time left, which the link's page charts */}
+        <span className={cn(VALUE, flare)}>
+          <Link
+            href="/charts/epoch-time-length"
+            look="inline"
+            aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, ${position}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
+          >
+            {epoch.number.toLocaleString('en-US')}
+          </Link>
+        </span>
         {genesis ? (
           <span data-testid="vitals-epoch-genesis" className={LABEL}>
             genesis: no length
@@ -257,12 +275,12 @@ function EpochVital({
       {/* the epoch's position and time left: the home page's below md (the link's label says
           them on every page) */}
       <span className={cn(EPOCH_GROUP, PLACE[form].homeOnly)}>
-        <span className="text-text text-meta md:text-small tabular-nums">
+        <span className={POSITION}>
           {index} / {length}
         </span>
-        <span className={LABEL}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
+        <span className={POSITION}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
       </span>
-    </Link>
+    </div>
   );
 }
 
