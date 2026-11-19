@@ -697,6 +697,27 @@ describe('Address v3', () => {
     await loaded();
     expect(screen.queryByTestId('address-dotcell-names')).not.toBeInTheDocument();
   });
+  // Lane P1 (the placement lane's note: the class filter appeared only once the holdings had
+  // loaded, its counts coming from them, and pushed the list down when it did): the filter stands
+  // from the first draw, its classes without counts until the holdings answer, so nothing jumps.
+  it('draws the class filter before the holdings answer, its counts added in place (P1)', async () => {
+    let answer: (h: typeof holdingsFixture) => void = () => {};
+    vi.mocked(api.getAddressHoldings).mockReturnValue(
+      new Promise<typeof holdingsFixture>((resolve) => {
+        answer = resolve;
+      })
+    );
+    vi.mocked(api.getAddressCells).mockResolvedValue(pageFixture(addressObjectsFixture));
+    render(<AddressDetailPage />);
+    await tab('Live cells');
+    const filter = await screen.findByRole('radiogroup', { name: 'class' });
+    expect(within(filter).getByRole('radio', { name: /^objects$/ })).toBeInTheDocument();
+    answer(holdingsFixture);
+    await loaded();
+    expect(screen.getByRole('radiogroup', { name: 'class' })).toBe(filter);
+    expect(within(filter).getByRole('radio', { name: /^objects\s*14$/ })).toBeInTheDocument();
+  });
+
   it('requests live-cell class filtering before pagination and resets its cursor', async () => {
     // Re-pinned on purpose (lane c2-chain): the unfiltered page carries its total, as the API
     // sends it (/addresses/{addr}/cells: "an exact total of all matching current cells"), since
@@ -1793,13 +1814,19 @@ describe('Address · space legend (lane A follow-up)', () => {
       within(legend)
         .getAllByRole('button')
         .map((b) => b.textContent)
-    ).toEqual(['Objects3,76196.76%', 'Plain CKB1263.24%']);
+      // re-pinned on purpose (lane P1, the plan: the bar says its unit; review chain-b
+      // address-miner: "102 / 122" with no unit read as CKB): bytes, "3,761 B"
+    ).toEqual(['Objects3,761\u00a0B96.76%', 'Plain CKB126\u00a0B3.24%']);
     const rest = within(legend).getByText('nothing in DAO, tokens, identities or other scripts');
     expect(rest).toHaveClass('text-text-dim');
     expect(rest).toHaveAttribute(
       'title',
-      'Nervos DAO 0 CKB · Tokens 0 CKB · Identities 0 CKB · Other scripts 0 CKB'
+      'Nervos DAO 0 B · Tokens 0 B · Identities 0 B · Other scripts 0 B'
     );
+    // the bar's own line says it measures bytes, and its total is bytes
+    const space = legend.closest('div')!.parentElement!;
+    expect(within(space).getByText('On-chain space they take, in bytes')).toBeInTheDocument();
+    expect(space).toHaveTextContent('3,887\u00a0B occupied in 16\u00a0cells');
     expect(
       [...document.querySelectorAll<HTMLElement>('[data-space-class]')].map(
         (b) => b.dataset.spaceClass
