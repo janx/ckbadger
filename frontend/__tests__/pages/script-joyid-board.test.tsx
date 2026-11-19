@@ -13,6 +13,7 @@ import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
+import { getCapacityRangeParams } from '@/lib/capacity-range';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -625,6 +626,24 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
         '2026-10-29 · last full day',
       ])
     );
+  });
+
+  // Lane c2-chain, written before the range became the library's RangeSelect: what the range does,
+  // whatever draws it — the page opens on every day, and a span asks the API for its days.
+  it('opens on every day and asks the API for the chosen span’s days', async () => {
+    await renderJoyid();
+    expect(api.getScriptCapacityChart).toHaveBeenLastCalledWith('JoyID', undefined);
+    for (const [span, key] of [
+      [/^90 ?d$/i, '90d'],
+      [/^30 ?d$/i, '30d'],
+    ] as const) {
+      const days = getCapacityRangeParams(key);
+      expect(days).toBeDefined();
+      fireEvent.click(within(hero()).getByText(span));
+      await waitFor(() =>
+        expect(api.getScriptCapacityChart).toHaveBeenLastCalledWith('JoyID', days)
+      );
+    }
   });
 
   it('moves the summary sentence, the chart notes and the peak to tier 2 (C2)', async () => {
