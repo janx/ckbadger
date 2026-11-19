@@ -344,6 +344,48 @@ describe('ForksPage', () => {
     expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
   });
 
+  // The coordinator's Chrome check (lane C2 topics): the short-list forms are exact, "all N … ↓"
+  // only where the click shows all N, "next K ↓" where it brings K more rows. Every switch on the
+  // first page: all 18; a list longer than a page: the first page's rows less the five that stand.
+  it('says what the click brings: all N when the first page holds them, next K when it does not', async () => {
+    const event = list().data[0];
+    const rows = (n: number, from = 1) =>
+      Array.from({ length: n }, (_, i) => ({ ...event, id: from + i }));
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    vi.mocked(api.getForks).mockResolvedValue({
+      ...list(),
+      data: rows(18),
+      total: 18,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const { unmount } = render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'all 18 branch switches ↓' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^next \d/ })).toBeNull();
+    unmount();
+    // ten a page of 27: the click adds the five rows the first page holds past the five shown
+    vi.mocked(api.getForks).mockResolvedValue({
+      ...list(),
+      data: rows(10),
+      total: 27,
+      limit: 10,
+      hasMore: true,
+      nextCursor: 'after-ten',
+    });
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const bodyRows = () => table().querySelectorAll('tbody tr');
+    expect(bodyRows()).toHaveLength(5);
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'next 5 ↓' }));
+    expect(bodyRows()).toHaveLength(10);
+    expect(screen.getByRole('navigation', { name: 'branch switches' })).toHaveTextContent(
+      'newest first← newerpage 1 of 3older →'
+    );
+  });
+
   it('needs no expander for five switches or fewer', async () => {
     const event = list().data[0];
     const rows = Array.from({ length: 5 }, (_, i) => ({ ...event, id: i + 1 }));
