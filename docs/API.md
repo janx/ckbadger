@@ -107,7 +107,8 @@ and these codes, never their args)
 - `itemTypesUnread: string | null` — see `itemTypes`.
 - `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
   with their args.
-- `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
+- `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args;
+  each lock's registry name is `lockScriptName` (as on a party; it was `scriptName`).
   An output's lock does not run: these are not the locks the transaction called. The locks that
   ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
   input flag (a re-sync).

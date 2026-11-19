@@ -7,7 +7,8 @@
  * renderer's import graph free of React.
  */
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
-import type { ScriptRefHashType } from '@/lib/script-ref';
+import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
+import { sentField } from '@/lib/older-api';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /**
@@ -96,6 +97,24 @@ export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): 
   return notTheDefault
     ? { form: 'lock', name: null, codeHash, hashType, byHashType: hashType }
     : { form: 'lock', name, codeHash, hashType, byHashType: null };
+}
+
+/**
+ * A called lock (an activity's lock call) as the decision reads it (the third read's T SHOULD-5):
+ * its code hash, its hash type and its registry name, `lockScriptName` on the wire as on a party,
+ * read here alone, so the row's head, its link and the AI view decide one lock alike. A call of
+ * an API one version older carries `scriptName` instead: refused by the field's name.
+ */
+export function lockCallFacts(call: {
+  lockCodeHash: string;
+  lockHashType: string;
+  lockScriptName: string | null;
+}): LockFacts {
+  return {
+    name: sentField(call, 'lockScriptName', "an activity's lock call"),
+    codeHash: call.lockCodeHash,
+    hashType: normalizeScriptRefHashType(call.lockHashType),
+  };
 }
 
 /**

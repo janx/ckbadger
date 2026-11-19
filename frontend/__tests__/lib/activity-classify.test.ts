@@ -287,6 +287,7 @@ describe('classifyActivity', () => {
         ],
         lockCalls: [
           {
+            lockScriptName: null,
             lockCodeHash: '0xintent',
             lockHashType: 'type',
             lockArgs: '0xargs',
@@ -307,7 +308,7 @@ describe('classifyActivity', () => {
             lockHashType: 'type',
             lockArgs: '0xargs',
             scriptHash: '0xhash',
-            scriptName: 'RGB++',
+            lockScriptName: 'RGB++',
           },
         ],
       })

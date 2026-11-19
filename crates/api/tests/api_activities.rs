@@ -377,6 +377,15 @@ async fn test_activity_lock_call_states_why_its_args_do_not_decode() {
         Some(&serde_json::Value::Null),
         "{json}"
     );
+    // the third read's T SHOULD-5: a called lock's registry name is `lockScriptName` on the wire,
+    // as on a party (null here: the test store imports no script names); the bare `scriptName` it
+    // was is gone
+    assert_eq!(
+        calls[1].get("lockScriptName"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(calls[1].get("scriptName"), None, "{json}");
 }
 
 #[tokio::test]

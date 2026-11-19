@@ -203,7 +203,7 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       lockHashType: 'type',
       lockArgs: '0x' + String(i).padStart(4, '0') + 'ab'.repeat(20),
       scriptHash: '0x' + String(i).padStart(64, '0'),
-      scriptName: '.bit Lock',
+      lockScriptName: '.bit Lock',
       decoded: null,
       decodeError: null,
     });
@@ -251,7 +251,7 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       lockCalls: named.lockCalls.map((l, i) => ({
         ...l,
         lockCodeHash: '0x' + String(i).padStart(64, '0'),
-        scriptName: `Lock ${i}`,
+        lockScriptName: `Lock ${i}`,
       })),
     } as ActivityRowData;
     const { container } = render(<ActivityRow activity={distinct} />);
@@ -300,7 +300,7 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       lockCalls: named.lockCalls.slice(0, 4).map((l, i) => ({
         ...l,
         lockCodeHash: '0x' + String(i).padStart(64, '0'),
-        scriptName: `Lock ${i}`,
+        lockScriptName: `Lock ${i}`,
       })),
     } as ActivityRowData;
     const { container } = render(<ActivityRow activity={row} />);
@@ -333,7 +333,7 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       ...named,
       protocolActions: [],
       typeCalls: Array.from({ length: 6 }, (_, i) => typeCall(i)),
-      lockCalls: named.lockCalls.slice(0, 1).map((l) => ({ ...l, scriptName: 'Lock 0' })),
+      lockCalls: named.lockCalls.slice(0, 1).map((l) => ({ ...l, lockScriptName: 'Lock 0' })),
     } as ActivityRowData;
     const { container } = render(<ActivityRow activity={row} />);
     const head = container.querySelector('[data-role="head-main"]') as HTMLElement;

@@ -469,7 +469,7 @@ export const feedSamples = {
         // Revised R-8: 33 bytes — a raw prefix byte and a raw 32-byte hash.
         lockArgs: `0x0131da${'00'.repeat(28)}5d74`,
         scriptHash: '0xl1',
-        scriptName: 'Nervape Shadow Lock',
+        lockScriptName: 'Nervape Shadow Lock',
         decoded: { lock: 'shadow-lock', prefix: '0x01', hash: `0x31da${'00'.repeat(28)}5d74` },
         decodeError: null,
       },
@@ -487,6 +487,7 @@ export const feedSamples = {
   tokenTransfer: sample(4, {
     lockCalls: [
       {
+        lockScriptName: null,
         lockCodeHash: `0xab0ede${'00'.repeat(25)}e09f`,
         lockHashType: 'type',
         lockArgs: `0x4b0000${'00'.repeat(14)}838e`,

@@ -323,7 +323,7 @@ describe('renderMarkdownPage', () => {
       lockHashType: 'data',
       lockArgs: '0x' + 'ab'.repeat(20),
       scriptHash: '0x' + 'cd'.repeat(32),
-      scriptName: 'Default Lock',
+      lockScriptName: 'Default Lock',
       decoded: null,
       decodeError: null,
     };

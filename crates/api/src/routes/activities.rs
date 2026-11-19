@@ -272,7 +272,11 @@ pub struct LockCallResponse {
     pub lock_hash_type: String,
     pub lock_args: String,
     pub script_hash: String,
-    pub script_name: Option<String>,
+    /// The registry's name for the lock's code hash, `lockScriptName` on the wire as on a party
+    /// (the third read's T SHOULD-5: the bare `scriptName` it was is a name the lock-words gate
+    /// could only find by its variable's name). The page decides the lock's words from it with
+    /// the code hash and the hash type: a name by another hash type is not that lock's.
+    pub lock_script_name: Option<String>,
     /// Decoded lock args; every integer in it is an exact decimal string
     /// (`utils::exact_json`). `null` when the lock's registry entry declares
     /// no args layout, or the args do not fit it (then `decodeError` says why).
@@ -1153,7 +1157,7 @@ fn convert_lock_call(
         lock_hash_type: hash_type.to_string(),
         lock_args: format!("0x{}", hex::encode(&call.lock_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
-        script_name,
+        lock_script_name: script_name,
         decoded,
         decode_error,
     })

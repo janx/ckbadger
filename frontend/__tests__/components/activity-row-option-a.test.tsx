@@ -215,7 +215,7 @@ describe('option A: the headline line', () => {
       lockHashType: 'type',
       lockArgs: args,
       scriptHash: '0x' + args.slice(2).padStart(64, '0'),
-      scriptName: '.bit Lock',
+      lockScriptName: '.bit Lock',
       decoded: null,
       decodeError: null,
     });

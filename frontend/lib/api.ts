@@ -1347,7 +1347,12 @@ interface ActivityLockCall {
   lockHashType: string;
   lockArgs: string;
   scriptHash: string;
-  scriptName?: string;
+  /**
+   * The registry's name for the lock's code hash, `lockScriptName` as on a party (the third read's
+   * T SHOULD-5; it was `scriptName`): read through the lock decision's `lockCallFacts`, which
+   * refuses a call of an older API by this field's name.
+   */
+  lockScriptName: string | null;
   /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
   decoded?: LockArgsDecoded | null;
   /** Revised R-8: why `decoded` is null although the registry declares a layout; else null. */

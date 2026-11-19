@@ -60,7 +60,7 @@ const batch: GlobalActivity = {
       lockHashType: 'type',
       lockArgs: '0x5678',
       scriptHash: '0x' + '0d'.repeat(32),
-      scriptName: 'PW Lock',
+      lockScriptName: 'PW Lock',
     },
   ],
   protocolActions: [],

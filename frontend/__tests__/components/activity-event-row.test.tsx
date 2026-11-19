@@ -59,7 +59,7 @@ describe('global tx events — one classification for the full rows and the feed
           lockHashType: 'type',
           lockArgs: '0x01',
           scriptHash: '0xi',
-          scriptName: 'UTXOSwap Intent',
+          lockScriptName: 'UTXOSwap Intent',
           decoded: { protocol: 'utxoswap' },
         },
         {
@@ -67,7 +67,7 @@ describe('global tx events — one classification for the full rows and the feed
           lockHashType: 'type',
           lockArgs: '0x02',
           scriptHash: '0xo',
-          scriptName: 'Omnilock',
+          lockScriptName: 'Omnilock',
         },
       ],
     });
