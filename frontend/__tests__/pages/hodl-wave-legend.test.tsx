@@ -40,6 +40,9 @@ const day = (date: string, gt3y: string, y1y3: string) => ({
     '6m1y': '15.00',
     '1y3y': y1y3,
     gt3y,
+    // lane D1: the API's merged bands (10 + 10; 15 + 10 + 5)
+    '1m6m': '20.00',
+    lt1m: '30.00',
     holderCount: '1000',
   },
 });
@@ -48,36 +51,45 @@ describe('chart detail key (C#4)', () => {
   beforeEach(() => stubChartWidth(358));
   afterEach(() => vi.restoreAllMocks());
 
-  it('keys the HODL wave under the chart: every band, in band order, a swatch and its latest share', async () => {
+  // Re-pinned for lane D1 (the chart-hero board, rule 5): a phone keys the stack under the plot
+  // in the stack's order, top band first, each band the API draws with its latest share (was the
+  // eight bands, youngest first, as the legend under every width; the eight now stand in the table
+  // under the chart, hodl-wave.test.tsx).
+  it('keys the HODL wave under the chart on a phone: its five bands, top first, a swatch and its share', async () => {
     vi.mocked(api.getHodlWaveChart).mockResolvedValue({
       title: 'CKB HODL Wave',
       data: [day('2024-01-01', '10.00', '25.00'), day('2024-01-02', '15.00', '20.00')],
       series: bands,
+      bands: [
+        { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+        { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+        { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+        { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+        { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
+      ],
     });
     render(<ChartDetail slug="hodl-wave" />);
-    const legend = await screen.findByRole('list', { name: 'HODL wave legend' });
+    const legend = await screen.findByRole('list', { name: 'HODL wave key' });
     const items = within(legend).getAllByRole('listitem');
-    expect(items.map((item) => item.querySelector('[data-swatch]') !== null)).toEqual(
-      bands.map(() => true)
-    );
-    // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
-    // The bands as ranges, the youngest "< 1 d" (re-pinned for CH-14 / CH-21: the API's "24h",
-    // "1d-1w" … "> 3y").
+    expect(items.map((item) => item.querySelector('[data-swatch]') !== null)).toEqual([
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
     expect(items.map((item) => item.textContent)).toEqual([
-      '< 1 d5.00%',
-      '1 d – 1 w10.00%',
-      '1 w – 1 m15.00%',
-      '1 m – 3 m10.00%',
-      '3 m – 6 m10.00%',
-      '6 m – 1 y15.00%',
-      '1 y – 3 y20.00%',
-      '> 3 y15.00%',
+      'under 1 month30.00%',
+      '1 to 6 months20.00%',
+      '6 to 12 months15.00%',
+      '1 to 3 years20.00%',
+      '3 years or more15.00%',
     ]);
     // each swatch is its band's colour on the plot
     const swatches = items.map(
       (item) => (item.querySelector('[data-swatch]') as HTMLElement).style.backgroundColor
     );
-    expect(new Set(swatches).size).toBe(bands.length);
+    expect(new Set(swatches).size).toBe(5);
   });
 
   it('draws no key under a single-series chart', async () => {

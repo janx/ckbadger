@@ -272,8 +272,8 @@ describe('axis ticks (CH-12)', () => {
       '100k – 1M',
       '≥ 1M CKB',
     ]);
-    expect(screen.getByRole('group', { name: 'Cell size readings' })).toHaveTextContent(
-      'most common, < 100 CKB'
-    );
+    // Re-pinned for lane D1 (rule 3): the bucket named in words in the figure's eyebrow (was the
+    // readings group's "most common, < 100 CKB")
+    expect(screen.getByTestId('figure-eyebrow')).toHaveTextContent('live cells of < 100 CKB');
   });
 });

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { ChartDetail } from '@/components/charts/chart-detail';
 import { api } from '@/lib/api';
 
@@ -58,10 +58,12 @@ describe('a secondary chart is named once (CH-06)', () => {
     expect(document.body).not.toHaveTextContent(/Separate scale|never combined with/);
     // The chart's own title and caption stay for assistive technology only.
     expect(lastChart('Consumed cells, cumulative').hideCaption).toBe(true);
+    // Re-pinned for lane D1 (R3, the ink-role gate): the line that says what a chart counts is a
+    // sentence that explains, in the reading ink (was a quiet paragraph).
     const section = heading.closest('section')!;
-    expect(section.querySelector('p.text-text-dim')).toHaveTextContent(
-      'Cells consumed since genesis, counted at the end of each day.'
-    );
+    expect(
+      within(section).getByText('Cells consumed since genesis, counted at the end of each day.')
+    ).toHaveClass('text-text');
   });
 
   it('says what a DAO depositor count counts', async () => {
@@ -75,8 +77,9 @@ describe('a secondary chart is named once (CH-06)', () => {
     await screen.findByRole('heading', { name: /^Current depositors/ });
     expect(document.body).not.toHaveTextContent(/Separate scale/);
     expect(lastChart('Current depositors').hideCaption).toBe(true);
+    // re-pinned for lane D1 (R3): the reading ink (was the quiet ink)
     expect(
       screen.getByText('Addresses holding a live Nervos DAO deposit at the end of each day.')
-    ).toHaveClass('text-text-dim');
+    ).toHaveClass('text-text');
   });
 });

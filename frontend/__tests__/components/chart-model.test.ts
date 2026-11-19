@@ -14,6 +14,7 @@ import {
   formatChartReadout,
 } from '@/components/charts/chart-model';
 import { chartHardforkMarkers, rangePoints } from '@/components/charts/chart-detail';
+import { chartHead } from '@/components/charts/chart-head';
 import supplyProducer from '@/__tests__/fixtures/chart-api-producer/total-supply.json';
 import secondaryProducer from '@/__tests__/fixtures/chart-api-producer/secondary-issuance.json';
 
@@ -47,11 +48,17 @@ const utilized = {
     data: [
       { date: '2024-01-03', values: { top0: '900719925474099300', others: '900719925474099300' } },
     ],
+    // lane D1: the API names the bands a history is drawn in (re-pinned: it sends them always)
+    bands: [
+      { key: 'top0', label: 'Alpha', members: ['top0'] },
+      { key: 'others', label: 'Others', members: ['others'] },
+    ],
   },
   capacityShare: {
     title: 'Capacity',
     series: [{ key: 'top0', label: 'Alpha', color: '#a' }],
     data: [{ date: '2024-01-03', values: { top0: '1' } }],
+    bands: [{ key: 'top0', label: 'Alpha', members: ['top0'] }],
   },
 };
 const miners = {
@@ -81,10 +88,30 @@ const keyed = (keys: string[], extra: Record<string, string> = {}) => ({
   })),
 });
 const HODL_KEYS = ['gt3y', '1y3y', '6m1y', '3m6m', '1m3m', '1w1m', '1d1w', '24h'];
+/**
+ * Lane D1: the HODL wave as the API sends it now — its five drawn bands named, the two it merges
+ * (1 to 6 months, under 1 month) in every point beside the eight.
+ */
+const HODL_BANDS = [
+  { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+  { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+  { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+  { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+  { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
+];
+const banded = <T extends { data: { values: Record<string, string> }[] }>(
+  payload: T,
+  merged: { '1m6m': string; lt1m: string }
+) => ({
+  ...payload,
+  bands: HODL_BANDS,
+  data: payload.data.map((point) => ({ ...point, values: { ...point.values, ...merged } })),
+});
 
 function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'secondary-issuance') return secondaryProducer;
-  if (definition.slug === 'hodl-wave') return keyed(HODL_KEYS, { holderCount: '123' });
+  if (definition.slug === 'hodl-wave')
+    return banded(keyed(HODL_KEYS, { holderCount: '123' }), { '1m6m': '9', lt1m: '21' });
   if (definition.slug === 'total-supply') return keyed(['circulating', 'nervosdao', 'burnt']);
   if (definition.slug === 'common-knowledge-composition')
     return keyed(['transfer', 'dao', 'udt', 'nftSpore', 'otherContracts']);
@@ -194,8 +221,16 @@ describe('29 chart variants', () => {
       data: [
         {
           date: '2024-01-03',
-          values: Object.fromEntries(keys.map((key, i) => [key, `${amounts[i]}000`])),
+          values: {
+            ...Object.fromEntries(keys.map((key, i) => [key, `${amounts[i]}000`])),
+            // lane D1: the API's rest band, ranks six to eight (9,994 + 9,993 + 9,993)
+            rest: '29980000',
+          },
         },
+      ],
+      bands: [
+        ...keys.slice(0, 5).map((key) => ({ key, label: key, members: [key] })),
+        { key: 'rest', label: 'Others', members: keys.slice(5) },
       ],
     };
     const model = chartModel(CHART_BY_SLUG.get('most-utilized-scripts')!, {
@@ -228,6 +263,7 @@ describe('29 chart variants', () => {
       title: 'Used',
       series: [{ key: 'a', label: 'A', color: '#a' }],
       data: [{ date: '2024-01-03', values: { a: '0' } }],
+      bands: [{ key: 'a', label: 'A', members: ['a'] }],
     };
     const model = chartModel(CHART_BY_SLUG.get('most-utilized-scripts')!, {
       title: 'Used',
@@ -424,26 +460,37 @@ describe('29 chart variants', () => {
     expect(cells.latest?.raw).toBe('3');
     // Re-pinned for CH-18: no "Live cells" fact repeats the head figure.
     expect(cells.facts).toBeUndefined();
-    const hodl = chartModel(CHART_BY_SLUG.get('hodl-wave')!, {
-      title: 'HODL',
-      series: HODL_KEYS.map((key) => ({ key, label: key, color: '#a' })),
-      data: [
+    const hodl = chartModel(
+      CHART_BY_SLUG.get('hodl-wave')!,
+      banded(
         {
-          date: '2024-01-01',
-          values: {
-            ...Object.fromEntries(HODL_KEYS.map((key) => [key, '0'])),
-            gt3y: '35',
-            '24h': '65',
-            holderCount: '9007199254740993',
-          },
+          title: 'HODL',
+          series: HODL_KEYS.map((key) => ({ key, label: key, color: '#a' })),
+          data: [
+            {
+              date: '2024-01-01',
+              values: {
+                ...Object.fromEntries(HODL_KEYS.map((key) => [key, '0'])),
+                gt3y: '35',
+                '24h': '65',
+                holderCount: '9007199254740993',
+              },
+            },
+          ],
         },
-      ],
-    });
-    expect(hodl.latest?.raw).toBe('65');
+        { '1m6m': '0', lt1m: '65' }
+      )
+    );
+    // Re-pinned for lane D1 (the chart-hero board, rule 3): the figure is the answer the chart is
+    // asked, the CKB unmoved for 3 years or more (was the largest band, 65 under 1 day).
+    expect(hodl.latest?.raw).toBe('35');
     expect(hodl.delta).toBeNull();
     expect(hodl.secondary?.points[0].values.holders).toBe('9007199254740993');
     expect(() =>
-      chartModel(CHART_BY_SLUG.get('hodl-wave')!, keyed(HODL_KEYS) as typeof stacked)
+      chartModel(
+        CHART_BY_SLUG.get('hodl-wave')!,
+        banded(keyed(HODL_KEYS), { '1m6m': '9', lt1m: '21' }) as ChartPayload
+      )
     ).toThrow(/missing holderCount/);
     const buckets = chartModel(CHART_BY_SLUG.get('cell-size-distribution')!, {
       title: 'Buckets',
@@ -560,7 +607,11 @@ describe('29 chart variants', () => {
       });
     const model = at([999_999, 1]);
     expect(model.rankedRows?.map((row) => row.share)).toEqual(['>99.99%', '<0.01%']);
-    expect(model.headline).toMatchObject({ display: '>99.99', unit: '%' });
+    // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's own figure, the
+    // leading miner's blocks (was its share in a card headline of its own); the share stays here.
+    expect(chartHead(CHART_BY_SLUG.get('miner-address-distribution')!, model).figure).toMatchObject(
+      { display: '999,999', unit: 'blocks' }
+    );
     // the leading miner's fact ends on the same share (its count's form is the review's item C)
     expect(model.facts?.[0].value).toMatch(/ · >99\.99%$/);
     expect(at([600_000, 400_000]).rankedRows?.map((row) => row.share)).toEqual([

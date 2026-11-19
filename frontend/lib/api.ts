@@ -2871,6 +2871,19 @@ interface StackedAreaChartResponse {
   // group scripts (F2-4), R2b-b: script capacity histories only — the first day with the
   // greatest used + unused (shannons); null for an empty series.
   totalPeak?: { date: string; value: string } | null;
+  /**
+   * Lane D1 (the chart-hero board): the bands a chart page draws where it draws fewer than the
+   * series (`/charts/hodl-wave`: five ages, young neighbours merged; `/charts/most-utilized-*`:
+   * the five largest and `rest`). Each names the series it merges in stack order, and every point
+   * carries the band's own value under its key, computed by the API from the exact integers.
+   */
+  bands?: StackedAreaBand[];
+}
+
+interface StackedAreaBand {
+  key: string;
+  label: string;
+  members: string[];
 }
 
 export interface AssetCapacityHistory extends StackedAreaChartResponse {

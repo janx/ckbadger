@@ -3,8 +3,16 @@ export interface LegendDescriptionItem {
   description: string;
 }
 
+/**
+ * A chart page's evidence tier (lane D1, the chart-hero board, rule 10; CH-15): one sentence of
+ * what is computed, one formula line in the fields the API sends the page (and the store fields
+ * they come from where the route reads them by name), and the legend items only where a page's
+ * were written by hand and are good (hash rate, difficulty, uncle rate, inflation, CKB moved); a
+ * line that explained a series by its own name, a word swapped per series, is gone.
+ */
 export interface ChartDescription {
   overview: string;
+  formula: string;
   legendItems: LegendDescriptionItem[];
 }
 
@@ -16,210 +24,115 @@ interface ChartDescriptionContext {
 
 type ChartDescriptionBuilder = (ctx: ChartDescriptionContext) => ChartDescription;
 
-function bySeriesLabels(
-  seriesLabels: string[] | undefined,
-  builder: (label: string) => string
-): LegendDescriptionItem[] {
-  if (!seriesLabels || seriesLabels.length === 0) return [];
-  return seriesLabels.map((label) => ({
-    label,
-    description: builder(label),
-  }));
-}
-
 const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
-  'dao-chart-total-deposit': ({ yAxisLabel }) => ({
+  'dao-chart-total-deposit': () => ({
     overview:
-      'Shows the capacity of live phase-0 Nervos DAO deposit cells at each complete daily snapshot, alongside the current depositor count.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Total Deposit',
-        description:
-          'For each day: sum full capacity of live phase-0 DAO deposit cells as of end-of-day state.',
-      },
-      {
-        label: 'Current depositors',
-        description:
-          'Number of addresses with a live phase-0 DAO deposit at that daily snapshot; not cumulative-ever depositors.',
-      },
-    ],
+      'Shows the CKB locked in live phase-0 Nervos DAO deposit cells at each complete UTC+8 day, and the addresses that hold them.',
+    formula:
+      'value = total_deposited, the capacity of the live phase-0 deposit cells at the day’s end; value2 = the addresses holding at least one of them.',
+    legendItems: [],
   }),
-  'dao-chart-daily-deposit': ({ yAxisLabel }) => ({
-    overview: 'Shows how much new CKB was deposited into DAO each day.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Daily Deposit',
-        description:
-          'For each day: sum capacities of outputs that create new DAO deposits in confirmed transactions.',
-      },
-    ],
+  'dao-chart-daily-deposit': () => ({
+    overview: 'Shows the CKB newly deposited into the Nervos DAO on each complete UTC+8 day.',
+    formula:
+      'value = Σ capacity of the outputs that open a deposit in the day’s confirmed transactions; value2 = how many such outputs.',
+    legendItems: [],
   }),
-  'dao-chart-circulation-ratio': ({ yAxisLabel }) => ({
-    overview: 'Shows the share of circulating supply currently locked in DAO deposits.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Deposit to Circulation Ratio',
-        description: 'For each day: (total DAO deposit / circulating supply) × 100%.',
-      },
-    ],
-  }),
-  'chart-transaction-count': ({ yAxisLabel }) => ({
-    overview: 'Shows transaction throughput trend by day.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Transaction Count',
-        description: 'For each day: count all confirmed transactions in canonical blocks.',
-      },
-    ],
-  }),
-  'chart-cell-count': ({ seriesLabels }) => ({
-    overview: 'Shows daily cell counts by lifecycle state.',
-    legendItems: bySeriesLabels(seriesLabels, (label) => {
-      const normalized = label.toLowerCase();
-      if (normalized.includes('all')) {
-        return 'For each day: cumulative count of all created cells (live + consumed).';
-      }
-      if (normalized.includes('live')) {
-        return 'For each day: count of currently unspent cells at end-of-day snapshot.';
-      }
-      if (normalized.includes('dead') || normalized.includes('consumed')) {
-        return 'For each day: cumulative count of consumed cells.';
-      }
-      return `For each day: value of the "${label}" cell-count series from indexed canonical data.`;
-    }),
-  }),
-  'chart-knowledge-size': ({ yAxisLabel, y2AxisLabel }) => ({
+  'dao-chart-circulation-ratio': () => ({
     overview:
-      'Shows protocol common knowledge size and its share of total capacity, plus day-over-day net common knowledge flow.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Common Knowledge Size',
-        description: 'For each day: total common knowledge size from indexed chain snapshots.',
-      },
-      {
-        label: y2AxisLabel ?? 'Common Knowledge Share (%)',
-        description: 'For each day: (common knowledge size / total capacity base) × 100%.',
-      },
-      {
-        label: 'Net Flow (CKB/day)',
-        description:
-          'For each day: common knowledge size(today) - common knowledge size(yesterday).',
-      },
-    ],
+      'Shows the share of circulating CKB locked in Nervos DAO deposits at the end of each complete UTC+8 day.',
+    formula:
+      'value = total_deposited ÷ circulating × 100, where circulating = C − genesis burnt − S from the DAO field of the day’s last block.',
+    legendItems: [],
   }),
-  'chart-common-knowledge-composition': ({ seriesLabels }) => ({
+  'chart-transaction-count': () => ({
+    overview: 'Counts the transactions confirmed on each complete UTC+8 day.',
+    formula: 'value = Σ, over the canonical blocks of the day, of each block’s transactions.',
+    legendItems: [],
+  }),
+  'chart-cell-count': () => ({
     overview:
-      'Shows how total common knowledge size is split across composition categories over time.',
-    legendItems: bySeriesLabels(
-      seriesLabels,
-      (label) =>
-        `For each day: sum common knowledge size of live cells classified into "${label}" category.`
-    ),
+      'Counts the cells that are live at the end of each complete UTC+8 day, and the cells consumed since genesis.',
+    formula:
+      'liveCells = live cells at the day’s end; deadCells = cells consumed since genesis; allCells = liveCells + deadCells.',
+    legendItems: [],
   }),
-  'chart-capacity-turnover-ratio': ({ yAxisLabel }) => ({
-    overview: 'Shows how actively live capacity is being consumed and replaced.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Capacity Turnover Ratio',
-        description:
-          'For each day: daily consumed capacity / daily average live common knowledge size.',
-      },
-    ],
-  }),
-  'chart-cell-size-distribution': ({ yAxisLabel }) => ({
-    overview: 'Shows how live cells are distributed across size buckets.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Cell Count',
-        description:
-          'For each bucket: count live cells whose serialized size falls within that size range.',
-      },
-    ],
-  }),
-  'chart-address-cohort-retention': ({ yAxisLabel }) => ({
+  'chart-knowledge-size': () => ({
     overview:
-      'Groups addresses by first-seen month, then shows how much of each cohort’s balance is currently recorded as common knowledge versus total balance.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Retention Rate',
-        description:
-          'For each cohort month: (sum of common_knowledge_size for addresses first seen in that month / sum of balance for the same addresses) × 100%.',
-      },
-    ],
+      'Shows the CKB occupied by live cells, the common knowledge, at the end of each complete UTC+8 day, its share of the capacity base and its change from day to day.',
+    formula:
+      'value = U (dao[24..32]) of the day’s last block − the genesis virtual occupied capacity; value2 = value ÷ the capacity base × 100; net flow = value − value of the day before.',
+    legendItems: [],
+  }),
+  'chart-common-knowledge-composition': () => ({
+    overview:
+      'Splits the CKB occupied by live cells by what each cell holds, at the end of each complete UTC+8 day.',
+    formula:
+      'values.transfer, dao, udt, nftSpore, otherContracts = Σ occupied capacity of the live cells of each kind at the day’s end.',
+    legendItems: [],
+  }),
+  'chart-capacity-turnover-ratio': () => ({
+    overview:
+      'Shows how much of the live occupied capacity was consumed and replaced, each day and over each week.',
+    formula:
+      'value = used_capacity_consumed ÷ knowledge_size × 100 for the day; value2 = Σ used_capacity_consumed ÷ Σ knowledge_size × 100 over the seven days ending it.',
+    legendItems: [],
+  }),
+  'chart-cell-size-distribution': () => ({
+    overview: 'Groups the live cells by the CKB they occupy.',
+    formula:
+      'value = the live cells whose occupied capacity falls in the bucket; value2 = Σ occupied capacity of those cells.',
+    legendItems: [],
+  }),
+  'chart-address-cohort-retention': () => ({
+    overview:
+      'Groups addresses by the month they were first seen, then shows how much of each cohort’s balance is occupied today.',
+    formula:
+      'value = Σ common_knowledge_size ÷ Σ balance × 100 over the addresses first seen in the month; value2 = Σ common_knowledge_size.',
+    legendItems: [],
   }),
   'chart-most-utilized-scripts': () => ({
-    overview: 'Ranks scripts by live common knowledge size against total cells capacity.',
-    legendItems: [
-      {
-        label: 'Common Knowledge CKB',
-        description:
-          'For each script: sum live common knowledge size across deployments; ranked descending (top 20).',
-      },
-      {
-        label: 'Total Cells Capacity',
-        description:
-          'For each script: sum live total cell capacity across deployments; ranked descending (top 20).',
-      },
-    ],
+    overview:
+      'Ranks scripts by the CKB their live cells occupy, across every deployment of a script.',
+    formula:
+      'usedShare.topN = Σ occupied capacity of the live cells a script locks or types, the 20 largest named; capacityShare.topN = Σ their full capacity; rest = the day’s whole − the five largest, which the page draws.',
+    legendItems: [],
   }),
   'chart-most-utilized-assets': () => ({
-    overview: 'Ranks token and Object collection assets by live common knowledge size.',
-    legendItems: [
-      {
-        label: 'Common Knowledge CKB',
-        description:
-          'For each asset: cumulative live common knowledge size derived from exact daily deltas; ranked descending (top 20).',
-      },
-      {
-        label: 'Total Cells Capacity',
-        description:
-          'For each asset: cumulative live total cell capacity derived from exact daily deltas; ranked descending (top 20).',
-      },
-    ],
+    overview: 'Ranks tokens and object collections by the CKB their live cells occupy.',
+    formula:
+      'usedShare.topN = Σ occupied capacity of an asset’s live cells, from exact daily deltas, the 20 largest named; capacityShare.topN = Σ their full capacity; rest = the day’s whole − the five largest.',
+    legendItems: [],
   }),
-  'chart-block-time-distribution': ({ yAxisLabel }) => ({
-    overview: 'Shows frequency distribution of observed block intervals.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Frequency',
-        description:
-          'For each interval bucket: count canonical blocks whose parent-to-child timestamp gap falls in that bucket.',
-      },
-    ],
+  'chart-block-time-distribution': () => ({
+    overview: 'Groups the blocks of the last 42 complete epochs by the time since their parent.',
+    formula:
+      'value = the blocks whose timestamp − parent timestamp falls in the 0.1 s bucket × 100 ÷ the blocks of the 42 epochs.',
+    legendItems: [],
   }),
-  'chart-epoch-time-distribution': ({ yAxisLabel }) => ({
-    overview: 'Shows frequency distribution of observed epoch durations.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Frequency',
-        description:
-          'For each duration bucket: count epochs whose elapsed duration falls in that bucket.',
-      },
-    ],
+  'chart-epoch-time-distribution': () => ({
+    overview: 'Groups the completed epochs by how long each took.',
+    formula: 'value = the completed epochs whose duration, rounded to the minute, is the bucket’s.',
+    legendItems: [],
   }),
-  'chart-epoch-time-length': ({ yAxisLabel }) => ({
-    overview: 'Shows elapsed wall-clock duration for each epoch.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Epoch Time Length',
-        description:
-          'For each epoch: timestamp(last block in epoch) - timestamp(first block in epoch).',
-      },
-    ],
+  'chart-epoch-time-length': () => ({
+    overview:
+      'Shows how long each completed epoch took, its blocks, and the consensus target duration.',
+    formula:
+      'value = timestamp(last block) − timestamp(first block) of the epoch, in hours; value2 = its blocks; target = the consensus epoch duration.',
+    legendItems: [],
   }),
-  'chart-average-block-time': ({ yAxisLabel }) => ({
-    overview: 'Shows average block interval trend over reporting periods.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Average Block Time',
-        description:
-          'For each period: average of canonical parent-to-child block timestamp intervals.',
-      },
-    ],
+  'chart-average-block-time': () => ({
+    overview: 'Shows the average time between blocks on each complete UTC+8 day.',
+    formula:
+      'value = mean of (timestamp − parent timestamp) over the day’s canonical blocks, in seconds.',
+    legendItems: [],
   }),
   'chart-hash-rate': ({ yAxisLabel }) => ({
     overview:
       "For each complete UTC+8 day: the sum of the difficulty of that day's blocks, divided by the sum of their intervals in seconds. The day in progress is left out until it is complete.",
+    formula:
+      'value = Σ difficulty of the day’s blocks ÷ Σ their intervals in seconds, in PH/s (10^15).',
     legendItems: [
       {
         label: yAxisLabel ?? 'Hash Rate',
@@ -231,6 +144,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   'chart-difficulty': ({ yAxisLabel }) => ({
     overview:
       "For each complete UTC+8 day: the mean difficulty of that day's blocks, the sum of their header difficulties divided by the number of blocks.",
+    formula: 'value = Σ header difficulty of the day’s blocks ÷ their number, in P (10^15).',
     legendItems: [
       {
         label: yAxisLabel ?? 'Difficulty',
@@ -241,6 +155,8 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   'chart-uncle-rate': ({ yAxisLabel }) => ({
     overview:
       "For each complete UTC+8 day: the uncles included by that day's blocks divided by the number of blocks, as a percentage. The dashed line is the consensus orphan-rate target the difficulty adjustment aims for.",
+    formula:
+      'value = uncles included by the day’s blocks ÷ the day’s blocks × 100; target = orphanRateTarget.numerator ÷ denominator × 100.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Uncle Rate',
@@ -248,45 +164,38 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
       },
     ],
   }),
-  'chart-miner-address-distribution': ({ seriesLabels }) => ({
-    overview: 'Shows block production share by miner payout address.',
-    legendItems: bySeriesLabels(
-      seriesLabels,
-      (label) =>
-        `For "${label}": (blocks mined by this address group / total blocks in scope) × 100%.`
-    ),
+  'chart-miner-address-distribution': () => ({
+    overview: 'Ranks the miners of the last 7 complete UTC+8 days by the blocks they found.',
+    formula:
+      'blocksMined = the canonical blocks whose cellbase pays the miner’s lock; share = blocksMined ÷ totalBlocks of the window.',
+    legendItems: [],
   }),
-  'chart-total-supply': ({ seriesLabels }) => ({
-    overview: 'Shows total supply composition over time.',
-    legendItems: bySeriesLabels(
-      seriesLabels,
-      (label) =>
-        `For each day: CKB amount attributed to "${label}" component from indexed supply accounting.`
-    ),
-  }),
-  'chart-nominal-apc': ({ yAxisLabel }) => ({
+  'chart-total-supply': () => ({
     overview:
-      'Shows a protocol-rate model by years since genesis, rather than a sequence of observed daily chain snapshots.',
-    legendItems: [
-      {
-        label: yAxisLabel ?? 'Nominal APC',
-        description:
-          'For each modeled quarter-year: fixed annual secondary issuance divided by modeled total issued supply after the primary issuance halvings, multiplied by 100%. The genesis issuance base comes from this network.',
-      },
-    ],
+      'Shows where the issued CKB is at the end of each complete UTC+8 day: circulating, locked in the Nervos DAO, or burnt.',
+    formula:
+      'circulating = C − genesis burnt − S − total_deposited; nervosdao = total_deposited; burnt = genesis burnt + the treasury part of S.',
+    legendItems: [],
   }),
-  'chart-secondary-issuance': ({ seriesLabels }) => ({
+  'chart-nominal-apc': () => ({
     overview:
-      'Shows cumulative secondary issuance components in CKB at complete daily snapshots. The headline protocol total comes independently from the canonical DAO fields; frozen phase-1 compensation can overlap the legacy component partition.',
-    legendItems: bySeriesLabels(
-      seriesLabels,
-      (label) =>
-        `For each complete day: exact cumulative CKB in the "${label}" secondary issuance component.`
-    ),
+      'Shows a protocol-rate model by years since genesis, not a sequence of observed days.',
+    formula:
+      'value(year) = the year’s secondary issuance ÷ the issued supply that year, primary-issuance halvings modeled, × 100; the genesis issuance is this network’s.',
+    legendItems: [],
+  }),
+  'chart-secondary-issuance': () => ({
+    overview:
+      'Shows the secondary issuance since genesis by where it went, at each complete UTC+8 day.',
+    formula:
+      'values.burnt, compensation, mining = cumulative secondary issuance to the treasury, to DAO depositors and to miners; protocolTotalShannons = from the canonical DAO fields (frozen phase-1 compensation can overlap the legacy split).',
+    legendItems: [],
   }),
   'chart-inflation-rate': ({ yAxisLabel }) => ({
     overview:
       'Shows realized issuance growth over each trailing 365 complete UTC+8 days from on-chain DAO headers.',
+    formula:
+      'value = (C(day) − C(day − 365)) ÷ C(day − 365) × 100; value2 = the same less the secondary issuance of those 365 days.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Inflation Rate',
@@ -295,50 +204,38 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
       },
     ],
   }),
-  'chart-hodl-wave': ({ seriesLabels }) => ({
-    overview: 'Shows supply age structure and holder-count trend.',
-    legendItems: [
-      ...bySeriesLabels(
-        seriesLabels,
-        (label) => `For each day: ("${label}" age-band supply / total tracked supply) × 100%.`
-      ),
-      {
-        label: 'Holder Count',
-        description:
-          'For each day: count of unique addresses holding positive balance in indexed data.',
-      },
-    ],
+  'chart-hodl-wave': () => ({
+    overview:
+      'Splits all CKB by the time since it last moved, at the end of each complete UTC+8 day.',
+    formula:
+      'share = band capacity × 100 ÷ Σ band capacities (DailyHodlWave.band_24h … band_gt_3y), half up at two decimals; 1 to 6 months = band_3m_6m + band_1m_3m; under 1 month = band_1w_1m + band_1d_1w + band_24h; holderCount = addresses with a positive balance.',
+    legendItems: [],
   }),
   'chart-activity-volume': () => ({
     overview:
-      'Counts indexed activity events in each canonical chain day, across transfers, DAO changes, tokens, objects, identities and script calls.',
-    legendItems: [
-      {
-        label: 'Activities',
-        description:
-          'Sum the daily counts of each indexed activity category; one transaction can yield more than one activity.',
-      },
-    ],
+      'Counts the indexed activity events of each complete UTC+8 day, across transfers, DAO changes, tokens, objects, identities and script calls.',
+    formula:
+      'value = transferCount + daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount + tokenCount + objectCount + identityCount + scriptCallCount; one transaction can yield more than one.',
+    legendItems: [],
   }),
-  'chart-activity-type-breakdown': ({ seriesLabels }) => ({
-    overview:
-      'Splits each indexed chain day’s activity count by the event category recorded by the activity index.',
-    legendItems: bySeriesLabels(seriesLabels, () => 'Indexed activities of this kind, per day.'),
+  'chart-activity-type-breakdown': () => ({
+    overview: 'Splits each day’s activity count by the kind the activity index records.',
+    formula:
+      'transfer = transferCount; dao = daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount; token = tokenCount; object = objectCount; identity = identityCount; scriptCall = scriptCallCount.',
+    legendItems: [],
   }),
   'chart-active-addresses': () => ({
     overview:
-      'Counts distinct addresses participating in indexed activities for each canonical chain day.',
-    legendItems: [
-      {
-        label: 'Addresses',
-        description:
-          'Each address contributes once to a day, regardless of its number of activities.',
-      },
-    ],
+      'Counts the distinct addresses that took part in the indexed activities of each complete UTC+8 day.',
+    formula:
+      'value = uniqueAddressCount: each address once a day, whatever its number of activities.',
+    legendItems: [],
   }),
   'chart-ckb-volume': () => ({
     overview:
       'Sums the exact CKB capacity moved by indexed transfer activities for each canonical chain day.',
+    formula:
+      'value = totalCkbMoved ÷ 10^8: the shannons moved by the day’s indexed transfer activities, in CKB.',
     legendItems: [
       {
         label: 'CKB moved',
