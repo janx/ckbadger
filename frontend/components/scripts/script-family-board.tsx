@@ -35,7 +35,11 @@ import {
 import type { ShortSize } from '@/lib/shorten';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 import { percentOf } from '@/lib/format-unit';
-import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
+import {
+  HELD_PLOT_NAME,
+  HISTORY_PLOT_HEIGHT,
+  HeldSentence,
+} from '@/components/asset/asset-history';
 import { unitNode, unitText } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { charPx } from '@/lib/type-metrics';
@@ -212,9 +216,9 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
       companion={[
         <>
           in{' '}
-          <a href="#its-cells" className="hover:text-text-bright hover:underline">
+          <Link href="#its-cells" look="inline">
             {unitNode(formatCount(family.liveCellsCount, 'live cell'))}
-          </a>
+          </Link>
         </>,
         share && `${share} occupied`,
       ]}
@@ -286,10 +290,7 @@ export function ScriptHeroMetrics({
           label="Code cell held by"
           note={last.custody.witnessState === 'never_signed' ? 'has never signed' : undefined}
         >
-          <Link
-            href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
-            className="hover:text-jade"
-          >
+          <Link look="key" href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}>
             {/* a hero tile: tight below sm, the row size from it (R9) */}
             <HolderName custody={last.custody} size={size} />
           </Link>
@@ -302,9 +303,9 @@ export function ScriptHeroMetrics({
             <>
               deployed in{' '}
               <Link
+                look="inline"
                 href={`/tx/${deployment.codeCellTxHash}`}
                 title={deployment.codeCellTxHash}
-                className="hover:text-jade"
               >
                 <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
               </Link>
@@ -443,9 +444,11 @@ function UpgradeLabels({
 }
 
 /**
- * The hero's picture (Script board History, hierarchy v3 R13): CKB in its cells with the occupied
- * part in jade (300 px, its name and values inside the plot), then occupied on its own scale; the
- * days its code was replaced dashed through both. One hover state for the whole history (`active`).
+ * The script's history (Script board History; readability R7: after the hero's metrics, 160 px
+ * under one sentence its points give, where it was the hero's 300 px picture): CKB in its cells
+ * with the occupied part in jade (its name and values inside the plot), then occupied on its own
+ * scale; the days its code was replaced dashed through both. One hover state for the whole history
+ * (`active`).
  */
 export function ScriptHistoryFigure({
   family,
@@ -504,36 +507,49 @@ export function ScriptHistoryFigure({
     onActiveIndexChange: onActive,
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
+  // R7: the sentence over the plots, from the series' own points: CKB held is the stack's top,
+  // occupied and free of one day (the series sends no other total)
+  const days = chart.data.map((point) => ({
+    date: point.date,
+    held: BigInt(point.values.used) + BigInt(point.values.unused),
+  }));
   return (
-    <div ref={ref} data-testid="script-history" className="relative mt-[18px] min-w-0">
-      <UpgradeLines
-        upgradeList={upgradeList}
-        position={position}
-        attribute="data-upgrade-line"
-        left={plotLeft}
-      />
-      <UpgradeLabels
-        upgradeList={upgradeList}
-        position={position}
-        width={width}
-        plotName={plotName}
-        left={plotLeft}
-      />
-      <Chart
-        {...shared}
-        {...held}
-        subtitle="Occupied and free capacity, indexed chain day"
-        plotName={plotName}
-        height={300}
-      />
-      <div className="mt-2">
+    <div className="min-w-0">
+      {days.length > 0 && (
+        <div className="mb-3">
+          <HeldSentence days={days} />
+        </div>
+      )}
+      <div ref={ref} data-testid="script-history" className="relative min-w-0">
+        <UpgradeLines
+          upgradeList={upgradeList}
+          position={position}
+          attribute="data-upgrade-line"
+          left={plotLeft}
+        />
+        <UpgradeLabels
+          upgradeList={upgradeList}
+          position={position}
+          width={width}
+          plotName={plotName}
+          left={plotLeft}
+        />
         <Chart
           {...shared}
-          {...occupied}
-          subtitle="Occupied capacity on its own scale"
-          plotName="CKB occupied by those cells' own bytes"
-          height={96}
+          {...held}
+          subtitle="Occupied and free capacity, indexed chain day"
+          plotName={plotName}
+          height={HISTORY_PLOT_HEIGHT}
         />
+        <div className="mt-2">
+          <Chart
+            {...shared}
+            {...occupied}
+            subtitle="Occupied capacity on its own scale"
+            plotName="CKB occupied by those cells' own bytes"
+            height={96}
+          />
+        </div>
       </div>
     </div>
   );
@@ -926,7 +942,7 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
 
 export function blockLink(block: number): ReactNode {
   return (
-    <Link href={`/blocks/${block}`} className="text-text hover:text-jade">
+    <Link look="inline" href={`/blocks/${block}`}>
       {formatBlockNumber(block)}
     </Link>
   );

@@ -31,12 +31,15 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
       'aria-label',
       'Opened, force-closed 8d 3h later, settled after a wait of 6 epochs'
     );
-    for (const label of ['opened', 'force-closed', 'settled'])
+    // Re-pinned on purpose (lane P4, the wait's rule): the wait is said in the settlement's label
+    // at the line's right end, as a waiting channel says it ("not settled · wait 1 epoch"); it was
+    // "settled" there and "6 epochs" under the dashed segment, a word with no room of its own
+    for (const label of ['opened', 'force-closed', 'settled · wait 6 epochs'])
       expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.getByText('#15,564,812 · 2025-03-06')).toBeInTheDocument();
     expect(screen.getByText('#15,643,185 · 2025-03-15')).toBeInTheDocument();
     expect(screen.getByText('open 8d 3h · payments off chain')).toBeInTheDocument();
-    expect(screen.getByText('6 epochs')).toBeInTheDocument();
+    expect(screen.queryByText('6 epochs')).toBeNull();
     const xs = Array.from(svg.querySelectorAll('[data-point]')).map((p) =>
       Number(p.getAttribute('cx'))
     );
@@ -109,6 +112,28 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
     });
   });
 
+  // Lane P4 (PAGE-LANE-NOTES, P4: the wait label ran past the svg on a phone for long-open
+  // channels and met "force-closed" on the desktop): the wait has one place, the settlement's label
+  // at the line's right end, above the line, as a waiting channel says its wait.
+  describe('says the wait in the settlement’s label, at every width', () => {
+    afterEach(() => vi.unstubAllGlobals());
+    it.each([1232, 608, 358, 326])('at %i px', (width) => {
+      stubChartWidth(width);
+      const { container } = render(
+        <FiberChannelTimeline channel={fixture.channel as FiberChannelDetail} />
+      );
+      const svg = container.querySelector('svg')!;
+      const label = screen.getByText('settled · wait 6 epochs');
+      const settle = svg.querySelector('[data-point="settle"]')!;
+      // anchored at its end, 6 px right of the settlement, above the line
+      expect(label).toHaveAttribute('text-anchor', 'end');
+      expect(Number(label.getAttribute('x'))).toBe(Number(settle.getAttribute('cx')) + 6);
+      expect(Number(label.getAttribute('y'))).toBeLessThan(Number(settle.getAttribute('cy')));
+      // no word of the svg is the wait alone, under the dashed segment
+      expect([...svg.querySelectorAll('text')].map((t) => t.textContent)).not.toContain('6 epochs');
+    });
+  });
+
   describe('at phone width (visual pass, 390)', () => {
     afterEach(() => vi.unstubAllGlobals());
     it('draws 1:1 in its box and splits each point’s block and date onto two lines', () => {
@@ -120,9 +145,13 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
       expect(screen.getByText('#15,564,812')).toBeInTheDocument();
       expect(screen.getByText('2025-03-06')).toBeInTheDocument();
       expect(screen.queryByText('#15,564,812 · 2025-03-06')).toBeNull();
-      // the label above the line sits clear of the segment label; the wait reads beside it
-      expect(Number(screen.getByText('settled').getAttribute('y'))).toBeLessThanOrEqual(-30);
-      expect(screen.getByText('6 epochs')).toHaveAttribute('text-anchor', 'start');
+      // the label above the line sits clear of the segment label. Re-pinned on purpose (lane P4,
+      // the wait's rule): the wait reads in it, ending at the settlement (it was "6 epochs" written
+      // from 10 px right of the close, which ran past a 326 px svg)
+      const settled = screen.getByText('settled · wait 6 epochs');
+      expect(Number(settled.getAttribute('y'))).toBeLessThanOrEqual(-30);
+      expect(settled).toHaveAttribute('text-anchor', 'end');
+      expect(screen.queryByText('6 epochs')).toBeNull();
     });
   });
 
@@ -176,17 +205,20 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
     const cases = [1232, 608, 358, 326].flatMap((w) =>
       channels.map(([n, c]) => [w, n, c] as const)
     );
-    const P4 = 'P4 rd/p-topics (Fiber)';
-    const NO_RULE =
-      'the figure has no rule for a wait that does not fit beside its close (PAGE-LANE-NOTES, P4: the wait label runs past the svg on a phone for long-open channels, and meets "force-closed" on the desktop); this lane does not design one';
     /**
      * The timeline's known faults, each pinned by what it measures (the ruling on review F-B's
-     * test finding 1: no case is filtered out of the table; a case whose fault a later lane owns
-     * runs, and its fault is held at its measured size). Every other case holds the property
-     * whole. The list can only shrink: a fix fails its entry's pin, and the entry goes with it.
-     * Below 700 px a settled channel's wait ("6 epochs", 57.6 px at 12 px) is written from 10 px
-     * right of its close, where the close's time puts it; on the board it is centred between
-     * the close and the settlement.
+     * test finding 1: no case is filtered out of the table). The list only shrinks, and it is
+     * empty: lane P4 gave the wait its rule. A settled channel's wait ("6 epochs", 57.6 px at
+     * 12 px) was written under the dashed segment, centred between the close and the settlement on
+     * the board and from 10 px right of the close below 700 px; where the two points stand a few
+     * pixels apart (settled within days of a long life) or the close stands near the right end on
+     * a phone, it ran past the svg (by 1.08 px at 326 for the settled channel, by 24.97 / 26.22 /
+     * 26.38 px at 608 / 358 / 326 for the one settled within days) or met "force-closed" (by
+     * 15.93 px at 1232). The rule: the wait is said in the settlement's own label at the line's
+     * right end, "settled · wait 6 epochs", as a waiting channel says it in its label there ("not
+     * settled · wait 1 epoch"): 23 glyphs at 12.5 px, 172.5 px, ending 6 px right of the
+     * settlement, which stands 40 px in from the svg's right side, so it starts at W − 206.5
+     * (119.5 at 326) and stands above the line, where no other word does.
      */
     const KNOWN_FAULTS: readonly {
       width: number;
@@ -194,53 +226,10 @@ describe('FiberChannelTimeline ("On chain, in three steps", FF-C4)', () => {
       fault: Fault;
       owner: string;
       why: string;
-    }[] = [
-      {
-        width: 326,
-        channel: 'settled',
-        // the close 89.22 % of the way along 246 px from x 40: 259.48 + 10 + 57.6 = 327.08
-        fault: { kind: 'past the svg', text: '6 epochs', by: 1.08 },
-        owner: P4,
-        why: NO_RULE,
-      },
-      // The close 300 / 301.5 of the way along the line (99.50 %):
-      {
-        width: 1232,
-        channel: 'settled within days of its close',
-        // centred between the close (x 1186.27) and the settlement (1192), the wait runs from
-        // 1160.33; "force-closed" (12 glyphs at 12.5 px, 90 px) ends 10 px left of the close,
-        // at 1176.27: they share 15.93 px
-        fault: { kind: 'meets', a: '6 epochs', b: 'force-closed', by: 15.93 },
-        owner: P4,
-        why: NO_RULE,
-      },
-      {
-        width: 608,
-        channel: 'settled within days of its close',
-        // 40 + 99.50 % of 528 = 565.37, then 10 + 57.6: 632.97
-        fault: { kind: 'past the svg', text: '6 epochs', by: 24.97 },
-        owner: P4,
-        why: NO_RULE,
-      },
-      {
-        width: 358,
-        channel: 'settled within days of its close',
-        // 40 + 99.50 % of 278 = 316.62, then 67.6: 384.22
-        fault: { kind: 'past the svg', text: '6 epochs', by: 26.22 },
-        owner: P4,
-        why: NO_RULE,
-      },
-      {
-        width: 326,
-        channel: 'settled within days of its close',
-        // 40 + 99.50 % of 246 = 284.78, then 67.6: 352.38
-        fault: { kind: 'past the svg', text: '6 epochs', by: 26.38 },
-        owner: P4,
-        why: NO_RULE,
-      },
-    ];
-    it('pins the known faults it holds, which only shrink', () => {
-      expect(KNOWN_FAULTS).toHaveLength(5);
+    }[] = [];
+    // Re-pinned on purpose (lane P4): 5 → 0, the wait has its rule
+    it('pins the known faults it holds, which only shrink: none', () => {
+      expect(KNOWN_FAULTS).toHaveLength(0);
       for (const known of KNOWN_FAULTS)
         expect(cases.some(([w, n]) => w === known.width && n === known.channel)).toBe(true);
     });

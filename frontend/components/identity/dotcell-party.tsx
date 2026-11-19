@@ -50,9 +50,9 @@ function PartyIdentity({ party, size }: { party: PartyDisplay; size: ShortSize |
   // An address is the most specific thing the lock resolves to.
   if (party.address) {
     return size ? (
-      <Address address={party.address} size={size} />
+      <Address look="inline" address={party.address} size={size} />
     ) : (
-      <Address address={party.address} truncate={false} />
+      <Address look="inline" address={party.address} truncate={false} />
     );
   }
 

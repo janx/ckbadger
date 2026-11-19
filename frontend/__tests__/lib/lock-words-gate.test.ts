@@ -263,11 +263,16 @@ const DECIDED: Reads = {
  * link) and the cellbase witness's lock.
  */
 const KNOWN: Reads = {
-  'components/asset/cell-versions.tsx': { 'api name': 1 },
+  // components/asset/cell-versions.tsx left (lane p-assets): a version's lock is cellOwnerLockPart
+  // (writer 1)
   'components/asset/item-evidence.tsx': { 'api name': 1 },
   'components/asset/mnft-detail.tsx': { 'api name': 1 },
-  'components/asset/object-hero.tsx': { 'api name': 6 },
-  'components/identity/identity-overview.tsx': { 'api name': 4 },
+  // 6 → 5 (lane p-assets, R8): the life sentence names the lock it sits under once, its story
+  // and its lede alike
+  'components/asset/object-hero.tsx': { 'api name': 5 },
+  // 4 → 3 (lane p-assets): the Owner fact's note is cellOwnerLockPart (writer 5's first read);
+  // the .bit Cell summary's wallet and holder words stay, prose that names a default lock too
+  'components/identity/identity-overview.tsx': { 'api name': 3 },
   'components/identity/identity-evidence.tsx': { 'api name': 1 },
   'components/address/address-holdings.tsx': { 'script info name': 1 },
   'app/cell/[outpoint]/client-page.tsx': { 'api name': 1, 'registry name': 1 },
@@ -382,14 +387,20 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // its link where they read it twice: the known reads fall 26 → 25 and all 39 → 38, in one more
   // file. Then (lane D3, renamed again, it was "… 38 reads in 21 files, … 13 files and 25 reads")
   // the cell page's own copy of the groups' names went: 25 → 24 known reads, 38 → 37 in all
-  // Re-pinned on purpose (lane cd-fixes-controls, renamed, it was "… 37 reads in 21 files, … 13
-  // files and 24 reads"): the gate learned `lockScriptName`, and the Fiber graph's two reads of it
-  // (known writer 13, p-topics) came to light: 24 → 26 known reads in 14 files, 37 → 39 in 22
-  it('pins the totals: 39 reads in 22 files, the known writers 14 files and 26 reads', () => {
+  // Re-pinned on purpose (lane p-assets; renamed, it was "… 37 reads in 21 files, … 13 files and
+  // 24 reads"): the object life sentence reads the lock it sits under once (known writer 4), 24 → 23
+  // known reads and 37 → 36 in all
+  // Re-pinned on purpose (lane p-assets; renamed, it was "… 36 reads in 21 files, … 13 files and
+  // 23 reads"): a version's lock (cell-versions) and an identity's Owner note read the decision,
+  // 23 → 21 known reads in 12 files, 36 → 34 in all in 20
+  // Re-pinned on purpose (lane cd-fixes-controls, renamed, it was "… 34 reads in 20 files, … 12
+  // files and 21 reads"): the gate learned `lockScriptName`, and the Fiber graph's two reads of it
+  // (known writer 13, p-topics) came to light: 21 → 23 known reads in 13 files, 34 → 36 in 21
+  it('pins the totals: 36 reads in 21 files, the known writers 13 files and 23 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(22);
-    expect(total(all)).toBe(39);
-    expect(Object.keys(KNOWN)).toHaveLength(14);
-    expect(total(KNOWN)).toBe(26);
+    expect(Object.keys(all)).toHaveLength(21);
+    expect(total(all)).toBe(36);
+    expect(Object.keys(KNOWN)).toHaveLength(13);
+    expect(total(KNOWN)).toBe(23);
   });
 });

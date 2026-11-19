@@ -4,7 +4,7 @@ import { partitionSpans } from '@/lib/partition-geometry';
 import { color, inkOnFill, type FillInk, type PaletteKey } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { textPx, tightLinePx } from '@/lib/type-metrics';
-import { SVG_TEXT, lineAscentPx } from '@/lib/chart-type';
+import { SVG_TEXT, lineAscentPx, wrapWords } from '@/lib/chart-type';
 
 export interface IcicleNode {
   key: string;
@@ -94,6 +94,19 @@ const LABELS = Math.ceil(
     LABEL_GAP
 );
 const ROW = BOX + LABELS + 4;
+/**
+ * The lines under the icicle that name a part too narrow for its words (lane P4): 8 px under the
+ * last row, each a tight line of the label size (15 px) and 4 px apart, its 9 px swatch centred
+ * on the line and its words 6 px after the swatch.
+ */
+const UNDER_GAP = 8;
+const UNDER_LINE = tightLinePx(SVG_TEXT.label);
+const UNDER_PITCH = UNDER_LINE + 4;
+const UNDER_SWATCH = 9;
+const UNDER_WORDS_X = UNDER_SWATCH + 6;
+/** A named part's words under the icicle: its name, its share and its unit, and its note. */
+const underWords = (label: NonNullable<IcicleNode['boxLabel']>) =>
+  `${label.name} ${label.share}${label.unit ? ` ${label.unit}` : ''}${label.note ? ` · ${label.note}` : ''}`;
 /** The baseline of a line set at `px` centred in a box `h` tall. */
 const centredY = (h: number, px: number) => (h - tightLinePx(px)) / 2 + lineAscentPx(px);
 
@@ -174,7 +187,56 @@ export function IciclePartition({
     );
   }
   const lastBelow = placed.some((p) => p.depth === depth && p.node.align !== 'inside');
-  const height = rowY[depth] + boxH(depth) + (rows || hideLabels || !lastBelow ? 0 : LABELS);
+  // In rows (the DAO page, lane P4: a split bar names every segment in place): a part whose name
+  // and share do not fit inside its box writes nothing inside it, and is named on a line of its own
+  // under the icicle, at its box: its paint's swatch at the box's left edge and its words after it,
+  // or, where they would run past the drawing, ending at the box's right edge (or, narrower still,
+  // from the drawing's left edge). One line a part, in the order the parts are placed, so no two
+  // meet.
+  const fittedOf = (p: Placed) =>
+    !hideLabels && p.node.boxLabel
+      ? fittedLabel(
+          p.node.boxLabel,
+          p.width,
+          boxH(p.depth),
+          boxH(p.depth) >= 40 ? SVG_TEXT.reading : SVG_TEXT.label,
+          boxH(p.depth) >= 40 ? 12 : 6
+        )
+      : null;
+  const under = rows
+    ? placed.filter((p) => {
+        if (hideLabels || !p.node.boxLabel) return false;
+        const fitted = fittedOf(p);
+        return fitted === null || fitted === 'share';
+      })
+    : [];
+  // Each named part's place and lines: at its box's left edge where its words run on to the
+  // drawing's end, else ending at its box's right edge, else from the drawing's left edge,
+  // wrapped between words to the drawing's width (a whole wider than a 358 px phone: "secondary
+  // issuance since genesis 9,314,713,506 CKB", 50 glyphs, 360 px and the swatch).
+  const underTop = rowY[depth] + boxH(depth) + UNDER_GAP;
+  let next = underTop;
+  const underPlaced = under.map((p) => {
+    const words = underWords(p.node.boxLabel!);
+    const run = UNDER_WORDS_X + textPx(words.length, SVG_TEXT.label);
+    const lines = run <= total ? [words] : wrapWords(words, SVG_TEXT.label, total - UNDER_WORDS_X);
+    const x =
+      run > total
+        ? 0
+        : p.x + run <= total
+          ? p.x
+          : p.x + p.width - run >= 0
+            ? p.x + p.width - run
+            : 0;
+    const top = next;
+    next = top + lines.length * UNDER_LINE + (UNDER_PITCH - UNDER_LINE);
+    return { p, lines, x, top };
+  });
+  const height =
+    rowY[depth] +
+    boxH(depth) +
+    (rows || hideLabels || !lastBelow ? 0 : LABELS) +
+    (under.length ? next - (UNDER_PITCH - UNDER_LINE) - (rowY[depth] + boxH(depth)) : 0);
   const { resolved: theme } = useTheme();
   return (
     <svg
@@ -190,11 +252,12 @@ export function IciclePartition({
         // (a box is a fill, so no word on it is dim or thinned; A5's fill-ink rule, DY-03).
         const boxInk = FILL_INK_CLASS[inkOnFill(theme, paint.key, paint.opacity).ink];
         const h = boxH(d);
-        // hierarchy v3: words inside the box at body (a ≥ 40 px row) or meta, where they fit.
+        // hierarchy v3: words inside the box at body (a ≥ 40 px row) or meta, where they fit; in
+        // rows, a part named under the icicle writes none inside its box (lane P4)
         const px = h >= 40 ? SVG_TEXT.reading : SVG_TEXT.label;
         const pad = h >= 40 ? 12 : 6;
-        const fitted =
-          !hideLabels && node.boxLabel ? fittedLabel(node.boxLabel, width, h, px, pad) : null;
+        const named = under.some((p) => p.node === node);
+        const fitted = named ? null : fittedOf({ node, depth: d, x, width });
         const end = node.align === 'end';
         const tx = end ? x + width - 10 : x + 2;
         const anchor = end ? 'end' : 'start';
@@ -311,6 +374,34 @@ export function IciclePartition({
                 )}
               </g>
             )}
+          </g>
+        );
+      })}
+      {underPlaced.map(({ p, lines, x, top }) => {
+        const paint = icicleNodePaint(p.node);
+        return (
+          <g key={`under-${p.node.key}`} data-under-label={p.node.key}>
+            <rect
+              x={x}
+              y={top + (UNDER_LINE - UNDER_SWATCH) / 2}
+              width={UNDER_SWATCH}
+              height={UNDER_SWATCH}
+              fill={paint.color}
+              fillOpacity={paint.opacity}
+            />
+            <text
+              x={x + UNDER_WORDS_X}
+              y={top + lineAscentPx(SVG_TEXT.label)}
+              fontSize={SVG_TEXT.label}
+              className="fill-text"
+            >
+              {lines[0]}
+              {lines.slice(1).map((line, i) => (
+                <tspan key={`${i}:${line}`} x={x + UNDER_WORDS_X} dy={UNDER_LINE}>
+                  {line}
+                </tspan>
+              ))}
+            </text>
           </g>
         );
       })}

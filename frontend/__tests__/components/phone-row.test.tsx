@@ -139,7 +139,9 @@ describe('PhoneRow (boards L1–L8)', () => {
   // Lane D4 (PB-09): a line that holds its right part keeps it at the line's right edge, so where a
   // chip lands does not depend on how long the left part is; the left wraps beside it, between the
   // items of its separated list.
-  it('holds a right part at its line’s edge where the line says so, and wraps the rest otherwise', () => {
+  // renamed (lane p-assets): it was "holds a right part at its line’s edge where the line says so,
+  // and wraps the rest otherwise"
+  it('holds a right part at its line’s edge where it fits beside the left’s widest item, else puts it under', () => {
     render(
       <PhoneRow
         testId="row"
@@ -159,12 +161,28 @@ describe('PhoneRow (boards L1–L8)', () => {
     const [head, what] = Array.from(row.querySelectorAll(':scope > [data-line]'));
     expect(head).toHaveClass('flex-wrap');
     expect(head).not.toHaveClass('flex-nowrap');
-    expect(what).toHaveClass('flex-nowrap');
-    expect(what).not.toHaveClass('flex-wrap');
-    // its left part shrinks and its list wraps between items; its right part does not shrink
-    expect(what.querySelector(':scope > [data-part="left"]')).toHaveClass('min-w-0');
+    // Re-pinned on purpose (lane p-assets; review of phases C and D, logic SHOULD 4: a hold line's
+    // "must fit together" was checked nowhere, and at 360 a token holder's share, 202.4 px that
+    // cannot wrap, beside "UTXOSwap Proxy Lock", 148.2 px, made 362.6 px on a 328 px line: the share
+    // was drawn over the lock): a hold line wraps too, by its own rule. Its left part's flex basis
+    // is nothing and its least width its widest unbreakable item (min-content), so the right part
+    // stays on the line wherever that item and the right part fit together, the left growing beside
+    // it and wrapping there whatever its length; where they do not, the right part goes under,
+    // at the right edge (it was flex-nowrap, the left part shrinking under its own content).
+    expect(what).toHaveClass('flex-wrap');
+    expect(what).not.toHaveClass('flex-nowrap');
+    const left = what.querySelector(':scope > [data-part="left"]');
+    expect(left).toHaveClass('basis-0', 'grow', 'min-w-min');
+    expect(left).not.toHaveClass('min-w-0');
     expect(what.querySelector('[data-dotted]')).toHaveClass('flex-wrap');
-    expect(what.querySelector(':scope > [data-part="right"]')).toHaveClass('shrink-0');
+    expect(what.querySelector(':scope > [data-part="right"]')).toHaveClass(
+      'shrink-0',
+      'ml-auto',
+      'max-w-full'
+    );
+    // a line without hold keeps its left part's own width, shrinking under it
+    expect(head.querySelector(':scope > [data-part="left"]')).toHaveClass('min-w-0');
+    expect(head.querySelector(':scope > [data-part="left"]')).not.toHaveClass('basis-0');
   });
 
   it('refuses a row without a line', () => {

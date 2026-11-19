@@ -215,6 +215,15 @@ describe('shared chart detail', () => {
           blocksMined: 41743,
           percentage: '62.7931',
         },
+        // the window's other miner (lane D1's third round, S7: the route lists every miner of the window, so one
+        // row is one miner who found every block; 41,743 of 66,477 has a second, 24,734)
+        {
+          minerLockHash: `0x${'b'.repeat(64)}`,
+          address: null,
+          minerName: 'Pool B',
+          blocksMined: 24734,
+          percentage: '37.2068',
+        },
       ],
       totalBlocks: 66477,
       windowDays: 7,
@@ -412,11 +421,12 @@ describe('shared chart detail', () => {
   it('prints epoch numbers with thousands groups (CH-35)', async () => {
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
       title: 'Epoch length',
-      yAxisLabel: 'Hours',
+      // each epoch's duration in the whole ms the route sends (lane D1's third round, M1): 4.1 h and 4.29 h
+      yAxisLabel: 'Milliseconds',
       y2AxisLabel: 'Blocks',
       data: [
-        { date: '15201', value: '4.1', value2: '1800' },
-        { date: '15202', value: '4.29', value2: '1800' },
+        { date: '15201', value: '14760000', value2: '1800' },
+        { date: '15202', value: '15444000', value2: '1800' },
       ],
       // the API's consensus target, which the page's sentence reads (lane D1)
       target: { seconds: 14400, hours: '4.00' },
@@ -433,14 +443,15 @@ describe('shared chart detail', () => {
   it('draws the main chart without repeating the title, counts its points grouped, formats epoch peaks (visual pass)', async () => {
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
       title: 'Epoch length',
-      yAxisLabel: 'Hours',
+      // each epoch's duration in the whole ms the route sends (lane D1's third round, M1): 50.48 h, then 4.15 h
+      yAxisLabel: 'Milliseconds',
       y2AxisLabel: 'Blocks',
       data: Array.from({ length: 1201 }, (_, i) => ({
         date: String(14004 + i),
-        value: i === 0 ? '50.48' : '4.15',
+        value: i === 0 ? '181728000' : '14940000',
         value2: '1800',
       })),
-      peak: { date: '14004', value: '50.48' },
+      peak: { date: '14004', value: '181728000' },
       peak2: { date: '14004', value: '1800' },
       target: { seconds: 14400, hours: '4.00' },
     });
@@ -470,13 +481,14 @@ describe('shared chart detail', () => {
   it('gives every chart a readout line a tap pins (R6), and says so in its help', async () => {
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
       title: 'Epoch length',
-      yAxisLabel: 'Hours',
+      // each epoch's duration in the whole ms the route sends (lane D1's third round, M1): 4.1 h and 4.2 h
+      yAxisLabel: 'Milliseconds',
       y2AxisLabel: 'Blocks',
       data: [
-        { date: '14004', value: '4.1', value2: '1800' },
-        { date: '14005', value: '4.2', value2: '1801' },
+        { date: '14004', value: '14760000', value2: '1800' },
+        { date: '14005', value: '15120000', value2: '1801' },
       ],
-      peak: { date: '14005', value: '4.2' },
+      peak: { date: '14005', value: '15120000' },
       peak2: { date: '14005', value: '1801' },
       target: { seconds: 14400, hours: '4.00' },
     });

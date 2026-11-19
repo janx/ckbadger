@@ -171,7 +171,8 @@ async fn test_average_block_time_chart_recomputes_after_initial_empty_response()
     assert_eq!(second_data.len(), 1);
     // Canonical chart date format, converted from the RocksDB day key.
     assert_eq!(second_data[0]["date"], "2024-01-15");
-    assert_eq!(second_data[0]["value"], "12.00");
+    // re-pinned for lane D1's third round (M1): the day's average in whole ms (was "12.00" s)
+    assert_eq!(second_data[0]["value"], "12000");
 }
 
 /// Regression (STATS-013): the indexed tip block's day is still in progress, so
@@ -204,7 +205,8 @@ async fn test_average_block_time_chart_excludes_the_in_progress_tip_day() {
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(
         json["data"],
-        serde_json::json!([{ "date": "2024-01-15", "value": "9.60", "value2": null }]),
+        // re-pinned for lane D1's third round (M1): whole ms (was "9.60" s)
+        serde_json::json!([{ "date": "2024-01-15", "value": "9600", "value2": null }]),
         "the tip block's day is in progress and must not be charted: {json}"
     );
 }
@@ -449,11 +451,10 @@ async fn supply_and_secondary_issuance_state_their_wholes() {
             .iter()
             .map(|key| ckb_shannons(values[*key].as_str().unwrap()))
             .sum::<i128>();
-        assert_eq!(
-            point["componentsTotalShannons"],
-            parts.to_string(),
-            "{point}"
-        );
+        // re-pinned for lane D1's third round (S1): one whole, the protocol total, which the
+        // three destinations make (it read componentsTotalShannons, a second total)
+        assert_eq!(point["protocolTotalShannons"], parts.to_string(), "{point}");
+        assert!(point.get("componentsTotalShannons").is_none(), "{point}");
     }
 }
 
@@ -768,6 +769,10 @@ async fn test_most_utilized_scripts_chart_draws_five_largest_and_the_rest() {
         );
         // the rest band is named like the API's own remainder
         assert_eq!(chart["bands"][5]["label"], "Others", "{scope}");
+        // the five drawn ranks' total, which the page's "the five largest hold" states (lane D1's
+        // third round, M2): the day's total less the rest
+        let drawn = if scope == "usedShare" { "2500" } else { "7500" };
+        assert_eq!(chart["data"][0]["values"]["drawnTotal"], drawn, "{scope}");
         assert_eq!(chart["bands"][0]["label"], "Script 1 (type)", "{scope}");
         // ranks six and seven (200 + 100, or 1,200 + 1,100) and the API's remainder (0)
         assert_eq!(chart["data"][0]["values"]["rest"], rest, "{scope}");
@@ -1446,6 +1451,182 @@ async fn test_charts_block_time_distribution_cuts_its_shares() {
     };
     assert_eq!(value("1.0"), "66.666");
     assert_eq!(value("2.0"), "33.333");
+}
+
+/// The day's average block interval is sent as the whole ms the store derives
+/// (`DailyStats::avg_block_time_ms`), never rounded to seconds (lane D1's third round, M1): 19,910
+/// ms over two intervals is 9,955 ms, which half up at two decimals of a second read "9.96".
+#[tokio::test]
+async fn average_block_time_sends_the_days_average_in_whole_ms() {
+    let store = test_store();
+    store
+        .put_daily_stats(
+            "20240115",
+            &DailyStats {
+                blocks_count: 3,
+                block_time_sum_ms: 19_910,
+                block_time_count: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/average-block-time").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "9955", "{json}");
+}
+
+/// Block intervals: a share is of every interval of the window, the ones beyond the drawn 50 s
+/// too, which the route counts and states (lane D1's third round, S4: said, not drawn); and the
+/// route states the window's complete epochs. Intervals 1 s, 1 s and 63 s: 1.0 s holds 66.666 %,
+/// 63 s is beyond the range.
+#[tokio::test]
+async fn block_time_distribution_shares_are_of_every_interval_of_the_window() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (number, ts_ms, epoch) in [
+        (0i64, 0i64, 0i64),
+        (1, 1_000, 0),
+        (2, 2_000, 0),
+        (3, 65_000, 0),
+        (4, 66_000, 1),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                timestamp: ts_ms,
+                epoch_number: epoch,
+                epoch_index: 0,
+                epoch_length: 4,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: ts_ms,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/block-time-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let value = |date: &str| {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|point| point["date"] == date)
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(value("1.0"), "66.666", "{json}");
+    assert_eq!(json["intervals"], 3, "{json}");
+    assert_eq!(json["beyondRange"], 1, "{json}");
+    assert_eq!(json["epochs"], 1, "{json}");
+}
+
+/// Secondary issuance sends one whole (lane D1's third round, S1): the protocol total, `miner + S +
+/// claimed`, which the three destinations partition (`cum_dao_compensation = claimed +
+/// unclaimed`), checked per day. A seed whose secondary fields are none of them zero: miner
+/// 150.00000001, S 300.00000003 of which 100.00000001 unclaimed, 50 claimed.
+#[tokio::test]
+async fn secondary_issuance_states_one_whole_its_destinations_make() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let genesis_burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, 1_589_276_230_000),
+            (1, 1_590_137_711_584),
+            (2, utc_ms("2020-05-25T04:00:00Z")),
+        ],
+    );
+    let snapshot = DaoDailySnapshot {
+        date: String::new(),
+        total_deposited: 0,
+        depositors_count: 0,
+        new_deposits: 0,
+        withdrawals: 0,
+        compensation: 50_00000000,
+        cumulative_deposit_amount: 0,
+        total_issuance: genesis_burnt + 1300_00000003,
+        secondary_pool: 300_00000003,
+        occupied_capacity: 0,
+        cum_miner_secondary: 150_00000001,
+        cum_dao_compensation: 150_00000001,
+        cum_treasury: 0,
+        unclaimed_compensation: 100_00000001,
+        frozen_phase1_compensation: 0,
+        cumulative_depositors: 0,
+        daily_depositor_addresses: 0,
+        protocol_deposited: None,
+    };
+    for (date, date_key) in [("2020-05-12", "20200512"), ("2020-05-22", "20200522")] {
+        store
+            .put_daily_stats(
+                date_key,
+                &DailyStats {
+                    blocks_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        let row = DaoDailySnapshot {
+            date: date.to_string(),
+            ..snapshot.clone()
+        };
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&row).unwrap(),
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/secondary-issuance").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    for point in json["data"].as_array().unwrap() {
+        let values = &point["values"];
+        assert_eq!(values["compensation"], "150.00000001", "{point}");
+        assert_eq!(values["mining"], "150.00000001", "{point}");
+        assert_eq!(values["burnt"], "200.00000002", "{point}");
+        // one whole, which the three destinations make
+        assert_eq!(point["protocolTotalShannons"], "50000000004", "{point}");
+        assert!(point.get("componentsTotalShannons").is_none(), "{point}");
+    }
+}
+
+/// The share series' routes cut at their precision, never round (lane D1's third round, S9):
+/// two uncles in three blocks is 0.666666… of a block, cut 0.666666 (half up 0.666667).
+#[tokio::test]
+async fn uncle_rate_cuts_its_fraction() {
+    let store = test_store();
+    store
+        .put_daily_block_stats(
+            "20240115",
+            &DailyBlockStats {
+                difficulty_sum: 300,
+                block_count: 3,
+                total_uncles: 2,
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/uncle-rate").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "0.666666", "{json}");
 }
 
 /// Regression: every date-keyed chart emits ONE canonical date format

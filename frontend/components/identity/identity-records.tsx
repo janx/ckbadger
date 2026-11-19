@@ -109,6 +109,7 @@ export function IdentityRecords({
                   <dd className="min-w-0">
                     {a.ckbAddress ? (
                       <AppLink
+                        look="inline"
                         href={`/address/${a.ckbAddress}`}
                         className="[overflow-wrap:anywhere]"
                       >

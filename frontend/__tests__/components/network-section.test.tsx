@@ -110,8 +110,9 @@ describe('NetworkSection', () => {
       http.get(`${API}/charts/average-block-time`, () =>
         HttpResponse.json({
           ...averageBlockTimeChart,
+          // 1,005 ms, the whole ms the route sends (lane D1's third round, M1; was '1.005' s)
           data: averageBlockTimeChart.data.map((point, index, all) =>
-            index === all.length - 1 ? { ...point, value: '1.005' } : point
+            index === all.length - 1 ? { ...point, value: '1005' } : point
           ),
         })
       ),

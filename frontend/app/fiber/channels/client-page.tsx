@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import {
-  FiberGraphNotes,
   FiberPartiesNote,
   FiberNetworkPicture,
   FiberNetworkReading,
@@ -27,7 +26,7 @@ import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
-import { WIDEST_TX_VALUE, WIDEST_TX_VALUE_SUMMARY, shortChars } from '@/lib/list-bounds';
+import { WIDEST_FIBER_LIFETIME, WIDEST_TX_VALUE_SUMMARY, shortChars } from '@/lib/list-bounds';
 import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ShortId } from '@/components/ui/short-id';
@@ -76,9 +75,10 @@ const ROW = 'text-body py-1.5';
 const body = (chars: number) => textPx(chars, fontPx('body'));
 const meta = (chars: number) => textPx(chars, fontPx('meta'));
 /**
- * The longest a channel lives on its duration form: under 10,000 days (some 27 years), "9999d 23h".
+ * The 6 px between the two parties of a pair on its line (the flex gap, set from this constant),
+ * so the Parties column budgets the pair whole.
  */
-const WIDEST_LIFETIME = fiberDuration(String((9999 * 86_400 + 23 * 3600) * 1000), 'bound');
+const PARTY_GAP_PX = 6;
 
 /**
  * A party in the table, by its address or lock hash at the row size (U-09; it was the last six
@@ -90,12 +90,9 @@ function Party({ party }: { party: FiberChannel['observedParties'][number] }) {
   ) : (
     <ShortId value={party.lockScriptHash} kind="hash" size="row" />
   );
+  // a link inside the row's line: the channel id is the row's key (T5)
   return party.address ? (
-    <Link
-      href={`/address/${party.address}`}
-      className="text-text hover:text-jade"
-      title={party.address}
-    >
+    <Link href={`/address/${party.address}`} look="inline" title={party.address}>
       {text}
     </Link>
   ) : (
@@ -175,18 +172,13 @@ function PartySuffix({ party }: { party: FiberChannel['observedParties'][number]
   ) : (
     <ShortId value={party.lockScriptHash} kind="hash" size={size} />
   );
+  // a link inside the row's line, as the table writes it: the channel id is the row's key
   return party.address ? (
-    <Link
-      href={`/address/${party.address}`}
-      className="text-text-bright hover:text-jade"
-      title={party.address}
-    >
+    <Link href={`/address/${party.address}`} look="inline" title={party.address}>
       {text}
     </Link>
   ) : (
-    <span className="text-text-bright" title={party.lockScriptHash}>
-      {text}
-    </span>
+    <span title={party.lockScriptHash}>{text}</span>
   );
 }
 
@@ -355,9 +347,10 @@ export default function FiberChannelsPage() {
             lede={
               <>
                 Channels touch the chain only to open and to close.{' '}
-                <a href="#evidence" className="hover:text-text-bright hover:underline">
-                  How it works<span className="whitespace-nowrap"> ↓</span>
-                </a>
+                {/* a way onward to a place on this page: the link writes its "↓" */}
+                <Link href="#evidence" look="onward">
+                  How it works
+                </Link>
               </>
             }
             figure={summary ? openNowFigure(summary) : undefined}
@@ -437,12 +430,12 @@ export default function FiberChannelsPage() {
                           meta(Math.max(...Object.values(FIBER_STATE_WORDS).map((w) => w.length)))
                         ) + CELL_GAP_PX
                       ),
-                      // Table-rows T5: the channel id is the row's one bright thing.
+                      // Table-rows T5: the channel id is the row's one bright thing, its key.
                       render: (channel) => (
                         <>
                           <Link
                             href={`/fiber/channels/${channel.channelId}`}
-                            className="text-text-bright hover:underline"
+                            look="key"
                             title={channel.channelId}
                           >
                             <ShortId value={channel.channelId} kind="hash" size="row" />
@@ -459,14 +452,22 @@ export default function FiberChannelsPage() {
                       key: 'parties',
                       className: ROW,
                       label: 'Parties',
-                      // The flexible column (readability F3-e), as the grid's 1fr was: one party
-                      // whole at its minimum, its lock hash at the row size (17 characters, 142.8;
-                      // an address is 13), and the gap; the pair joins on one line where the
-                      // container gives more. It was 180.
-                      minWidth: columnPx(body(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
-                      width: 'auto',
+                      // The pair on one line (lane P4; review fiber-channels: some 380 px stood
+                      // empty between the parties and their capacity, the flexible column's): two
+                      // lock hashes at the row size, the wider form (17 characters each; an
+                      // address is 13), "↔ " before the second, 36 characters at 14 px (302.4),
+                      // the 6 px between them and the gap: 324.4. It was one party (158.8) and
+                      // the rest of the container.
+                      minWidth: columnPx(
+                        body(2 * shortChars(SHORT_FORMS.row.hash) + '↔ '.length) +
+                          PARTY_GAP_PX +
+                          CELL_GAP_PX
+                      ),
                       render: (channel) => (
-                        <span className="flex min-w-0 flex-wrap gap-x-1.5">
+                        <span
+                          className="flex min-w-0 flex-wrap"
+                          style={{ columnGap: PARTY_GAP_PX }}
+                        >
                           {channel.observedParties.map((party, index) => (
                             <span key={party.lockScriptHash}>
                               {index > 0 && (
@@ -487,15 +488,18 @@ export default function FiberChannelsPage() {
                       key: 'capacity',
                       className: ROW,
                       label: 'Capacity',
-                      // A capacity under a billion CKB, every decimal (20 characters, 168), its
-                      // unit " CKB" at 12 px (28.8) and the gap. It was 210.
+                      // A list column's figure (readability R5; lane P4, review fiber-channels:
+                      // every amount wrote ".00000000 CKB"): the summary form, as the phone row's
+                      // line 1 writes it, its exact value in its title. A capacity under a billion
+                      // CKB cut to whole CKB, "999,999,999" (11 characters, 92.4), its unit " CKB"
+                      // at 12 px (28.8) and the gap: 137.2. It was every decimal, 212.8.
                       minWidth: columnPx(
-                        body(WIDEST_TX_VALUE.length) + meta(' CKB'.length) + CELL_GAP_PX
+                        body(WIDEST_TX_VALUE_SUMMARY.length) + meta(' CKB'.length) + CELL_GAP_PX
                       ),
                       numeric: true,
                       render: (channel) => (
                         <CkbAmount
-                          form="column"
+                          form="summary"
                           shannons={BigInt(channel.capacity)}
                           signed={false}
                           tone="plain"
@@ -505,9 +509,10 @@ export default function FiberChannelsPage() {
                     {
                       key: 'opened',
                       label: 'Opened',
-                      // the date (10 characters, 84) and the gap; it was 120
+                      // the date (10 characters, 84) and the gap; it was 120. A date is a value,
+                      // in the reading ink (R3; it was the quiet ink).
                       minWidth: columnPx(body(formatUtc8Date(0).length) + CELL_GAP_PX),
-                      className: cn(ROW, 'text-text-dim'),
+                      className: ROW,
                       render: (channel) => (
                         <span>
                           <Utc8Date timestamp={channel.openTimestamp} />
@@ -519,9 +524,11 @@ export default function FiberChannelsPage() {
                       className: ROW,
                       label: lastColumn,
                       // "9999d 23h" (9 characters, 75.6), wider than the head ("Lifetime" at 12
-                      // px); the last column, no gap. It was 110.
-                      minWidth: columnPx(body(WIDEST_LIFETIME.length)),
-                      numeric: true,
+                      // px); the last column, no gap. It was 110. The flexible column (lane P4):
+                      // read from its left, so the room the container gives beyond the columns'
+                      // sum (843 px) stands at the row's end, after the last figure.
+                      minWidth: columnPx(body(WIDEST_FIBER_LIFETIME.length)),
+                      width: 'auto',
                       render: (channel) => <span>{lifetime(channel)}</span>,
                     },
                   ])}
@@ -540,7 +547,8 @@ export default function FiberChannelsPage() {
           </section>
         </div>
         <div id="evidence" className="scroll-mt-4">
-          <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+          {/* One column: how to read the graph is its key in tier 1 now (the plan's P4). */}
+          <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0">
             <DetailSection title="What the chain sees of Fiber">
               <Prose>
                 <p>
@@ -550,9 +558,6 @@ export default function FiberChannelsPage() {
                 </p>
                 {network.data && <FiberPartiesNote network={network.data} />}
               </Prose>
-            </DetailSection>
-            <DetailSection title="How to read the graph">
-              <FiberGraphNotes />
             </DetailSection>
           </DetailTier2>
         </div>

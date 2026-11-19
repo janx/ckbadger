@@ -88,8 +88,10 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     expect(note).toHaveAttribute('data-prompt-note');
     expect(heading).not.toContainElement(note);
     expect(Array.from(note.firstElementChild!.children).map((c) => c.textContent)).toEqual([
-      'All DAO activity →',
-      'DAO transactions →',
+      // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+      // its last word by a no-break space (it was typed into the words)
+      'All DAO activity\u00a0→',
+      'DAO transactions\u00a0→',
     ]);
     await waitFor(() => expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(3));
     // Tight rows: 10 px above and below each (the shared row keeps its 2 px between party lines).
@@ -106,11 +108,13 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
   it('links all DAO activity and DAO transactions on their list pages', () => {
     render(<DaoSources />);
     const section = screen.getByRole('region', { name: 'Recent DAO activity' });
-    expect(within(section).getByRole('link', { name: 'All DAO activity →' })).toHaveAttribute(
+    // re-pinned (lane P4): a way onward's arrow is the onward look's, aria-hidden and held to
+    // its last word by a no-break space (it was typed into the words)
+    expect(within(section).getByRole('link', { name: 'All DAO activity' })).toHaveAttribute(
       'href',
       '/mainnet/activities?filter=dao'
     );
-    expect(within(section).getByRole('link', { name: 'DAO transactions →' })).toHaveAttribute(
+    expect(within(section).getByRole('link', { name: 'DAO transactions' })).toHaveAttribute(
       'href',
       '/mainnet/transactions?kind=dao'
     );

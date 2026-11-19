@@ -99,7 +99,8 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
       )}
       <div className="mt-2.5">
         <ReadoutRow label="Deposit reading" pinned={pin.showingPin}>
-          <span className="text-text-dim">
+          {/* a reading's values in the reading ink (R3; lane P4: the line was quiet) */}
+          <span className="text-text">
             {EXAMPLE_DEPOSIT_CKB} deposited {unitNode(day.date)} →{' '}
             {current?.isError ? (
               <span role="alert" className="text-negative">
@@ -118,7 +119,7 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
             ) : (
               <span>…</span>
             )}{' '}
-            compensation by <BlockLink number={tip} />
+            compensation by <BlockLink number={tip} look="inline" />
           </span>
         </ReadoutRow>
       </div>
@@ -156,12 +157,10 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
   // axis line — then one caption on one line; what AR is, and why the curve flattens, read in tier 2.
   return (
     <section aria-label="How a deposit grows" className="flex min-w-0 flex-col">
-      {/* Phase 5 (B2): the question the section answers, run on the board's example deposit. */}
-      <PromptHeading
-        command="How a deposit grows"
-        args={EXAMPLE_DEPOSIT_CKB}
-        className="mb-[18px]"
-      />
+      {/* Phase 5 (B2): the question the section answers. Lane P4: run "by AR", what its chart draws
+          (it was run on the example deposit, "10,000 CKB", over a chart of AR, not of CKB; the
+          example deposit is its reading's) */}
+      <PromptHeading command="How a deposit grows" args="by AR" className="mb-[18px]" />
       {history.isError ? (
         <div role="alert" className="text-rouge text-small">
           AR history could not be read: {String(history.error)}
@@ -178,7 +177,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
           <div
             role="img"
             aria-label="Compensation on free capacity in each year since launch"
-            className="flex h-[72px] items-end gap-2"
+            className="flex h-[96px] items-end gap-2"
           >
             {years.map((y) => {
               const share = yearMax === 0 ? 0 : Number(y.percent) / yearMax;
@@ -195,18 +194,21 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
                     className="bg-gold w-full"
                     style={{ height: `${Math.round(48 * share)}px`, opacity: 0.35 + 0.45 * share }}
                   />
+                  {/* each bar its year (lane P4: a chart that shows amounts carries values; the
+                      years were only the first and last month under the row): the year its
+                      anniversary block starts, 4 characters at 12 px, 28.8 px */}
+                  <span data-role="year" className="text-text-dim text-meta tabular-nums">
+                    {unitNode(formatUtc8Date(y.from.chainTimeMs).slice(0, 4))}
+                  </span>
                 </div>
               );
             })}
           </div>
-          <div className="text-text-dim text-meta mt-1 flex justify-between gap-4">
-            <span>
-              compensation in each year since launch ·{' '}
-              {unitNode(formatUtc8Date(years[0].from.chainTimeMs).slice(0, 7))} →
-            </span>
-            <span className="whitespace-nowrap">
-              → {formatUtc8Date(years[years.length - 1].from.chainTimeMs).slice(0, 7)}
-            </span>
+          {/* the third rate's key, one line (lane P4: the DAO page keys its three rates in one line
+              each) */}
+          <div className="text-meta mt-1">
+            <span className="text-text-dim">each bar:</span>{' '}
+            <span className="text-text">a year’s compensation on free capacity, from AR</span>
           </div>
         </div>
       )}
@@ -224,7 +226,10 @@ function arAtFourPlaces(exact: string): string {
   return m[1];
 }
 
-/** The calculator's answer, a readout: the summary form (R5), its exact value in the title. */
+/**
+ * The calculator's answer, a chart's readout: exact (the ruling of 2026-11-19: a chart's readout is
+ * exact on every page; it was the summary form).
+ */
 function OwedAmount({ shannons }: { shannons: bigint }) {
-  return <CkbAmount form="summary" shannons={shannons} tone="inherit" unit={false} />;
+  return <CkbAmount form="exact" shannons={shannons} tone="inherit" unit={false} />;
 }

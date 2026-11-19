@@ -1202,6 +1202,23 @@ async fn test_dao_daily_charts_exclude_in_progress_days() {
     }
 }
 
+/// The circulation ratio is cut at its four decimals, never rounded (lane D1's third round, S9):
+/// 2 CKB deposited of 3 CKB circulating is 66.666666…%, cut "66.6666" (half up "66.6667").
+#[tokio::test]
+async fn circulation_ratio_cuts_its_share() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
+    let mut snapshot = total_deposit_snapshot("2024-01-15", 2_00000000, 1);
+    snapshot.total_issuance = burnt + 3_00000000;
+    put_total_deposit_snapshot(&store, &snapshot);
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/charts/circulation-ratio").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "66.6666", "{json}");
+}
+
 #[tokio::test]
 async fn test_dao_deposits_cursor_pagination_descending() {
     let store = test_store();

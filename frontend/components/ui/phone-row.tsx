@@ -26,9 +26,13 @@ export interface PhoneLine {
   grow?: boolean;
   /**
    * The right part holds the line's right edge: the left part wraps beside it (a separated list
-   * between its items, words between words) and the right part never drops under it, so where it
-   * lands does not depend on how long the left part is (PB-09: a holder's chip, a collection's
-   * composition). The right part and the widest item of the left must fit the line together.
+   * between its items, words between words), so where the right part lands does not depend on how
+   * long the left part is (PB-09: a holder's chip, a collection's composition). Where the right
+   * part and the left's widest unbreakable item cannot share the line, the right part goes under
+   * the left, at the right edge (review of phases C and D, logic SHOULD 4: it stayed, and the left
+   * was drawn over it). The left part's flex basis is nothing and its least width its min-content,
+   * so whether the two share the line is that item's width and the right part's, never the left's
+   * whole length. A list that holds a line states its budget beside its head's.
    */
   hold?: boolean;
 }
@@ -100,8 +104,7 @@ export function PhoneRow({
           // gap-x-3: PHONE_PART_GAP_PX, the 12 px a list's stated first line counts between its
           // parts (lib/type-metrics.ts; phone-row.test reads the class against it)
           className={cn(
-            'flex items-baseline justify-between gap-x-3 gap-y-0.5',
-            line.hold ? 'flex-nowrap' : 'flex-wrap',
+            'flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5',
             mark && 'col-start-2',
             TONE[line.tone]
           )}
@@ -109,7 +112,9 @@ export function PhoneRow({
           <span
             data-part="left"
             className={cn(
-              'min-w-0 [overflow-wrap:anywhere]',
+              '[overflow-wrap:anywhere]',
+              // hold: the basis nothing, the least width the widest unbreakable item (see `hold`)
+              line.hold ? 'min-w-min grow basis-0' : 'min-w-0',
               line.grow && 'flex flex-1 items-center'
             )}
           >

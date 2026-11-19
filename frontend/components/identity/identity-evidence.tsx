@@ -214,7 +214,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
             {d.nextAccountId === null ? (
               <Dim>none</Dim>
             ) : (
-              <AppLink href={`/identities/dotbit/${d.nextAccountId}`}>
+              <AppLink look="inline" href={`/identities/dotbit/${d.nextAccountId}`}>
                 {d.nextAccountName ?? d.nextAccountId}
               </AppLink>
             )}
@@ -243,7 +243,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       </div>
       <p className="text-text-dim text-meta max-w-measure">
         Decoded from the account data in the witness of tx{' '}
-        <AppLink href={`/tx/${v.cell.txHash}`}>
+        <AppLink look="inline" href={`/tx/${v.cell.txHash}`}>
           <Hash hash={v.cell.txHash} size="row" className="text-meta" />
         </AppLink>
       </p>
@@ -323,7 +323,9 @@ export function BitCellAccountNow({ protocol }: { protocol: Of<'bit_cell'> }) {
                 [
                   'account now',
                   <>
-                    <AppLink href={`/identities/dotbit/${a.id}`}>{a.name ?? a.id}</AppLink>
+                    <AppLink look="inline" href={`/identities/dotbit/${a.id}`}>
+                      {a.name ?? a.id}
+                    </AppLink>
                     <Dim> · {a.isLive ? 'live' : 'not live'}</Dim>
                   </>,
                 ],
@@ -423,7 +425,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
             [
               `Lock · ${v.cell.lockName ?? 'not named'}`,
               <>
-                <AppLink href={`/address/${v.cell.ownerAddress}`}>
+                <AppLink look="inline" href={`/address/${v.cell.ownerAddress}`}>
                   <Hash
                     hash={v.cell.ownerAddress}
                     kind="address"
@@ -443,12 +445,12 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               ZERO_ID.test(d.nextId) ? (
                 <Dim>the ring&apos;s end</Dim>
               ) : next.data ? (
-                <AppLink href={`/identities/dotcell/${next.data.identityId}`}>
+                <AppLink look="inline" href={`/identities/dotcell/${next.data.identityId}`}>
                   {next.data.name}
                 </AppLink>
               ) : (
                 <>
-                  <AppLink href={`/identities/dotcell/${d.nextId}`}>
+                  <AppLink look="inline" href={`/identities/dotcell/${d.nextId}`}>
                     <Hash hash={d.nextId} size="row" className="text-small" />
                   </AppLink>
                   <AssetReadState label="its name" error={next.error} read={next} />

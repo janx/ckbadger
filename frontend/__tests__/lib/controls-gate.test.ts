@@ -127,11 +127,8 @@ const LIBRARY_FILES = [...CONTROL_FILES, 'hooks/useCopy.ts'] as const;
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
   // ---- c2-chain: block, transaction, cell, address, script pages ----
-  'components/scripts/script-newest-cells.tsx': {
-    lane: 'c2-chain',
-    sites: { pager: 1 },
-    reason: 'the newest cells’ “All N cells ↓”: the short list’s form, or a way onward',
-  },
+  // components/scripts/script-newest-cells.tsx left the list (lane p-assets): its "All N cells ↓"
+  // is a way onward to a place on its page, the onward look's link
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home: replaced at its merge ----
   // ---- d1-charts: the chart pages' range and scale are the library's RangeSelect and FilterChips (lane D1) ----
@@ -140,8 +137,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // rulings round 1: an id inside a link is the link, not a copy target) ----
 };
 
-/** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 1;
+/** The pinned total of TOLERATED's sites: the list may only shrink (1 → 0, lane p-assets). */
+const TOLERATED_TOTAL = 0;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

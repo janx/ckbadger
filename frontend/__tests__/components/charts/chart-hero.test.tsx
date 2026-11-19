@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '../../utils/test-utils';
 import { ChartDetail } from '@/components/charts/chart-detail';
-import { CHARTS } from '@/components/charts/chart-catalogue';
+import { CHARTS, SIX_KINDS_SLUG } from '@/components/charts/chart-catalogue';
 import { api } from '@/lib/api';
 import { CHART_FIXTURES, days } from './chart-hero-fixtures';
 
@@ -59,7 +59,8 @@ vi.mock('@/components/ui/chart', () => ({
 interface Expect {
   eyebrow: string;
   figure: string;
-  sentence?: string;
+  /** Every slug's sentence, word for word (T's NOTE 7). */
+  sentence: string;
 }
 
 const d400 = days(400);
@@ -69,11 +70,23 @@ const EXPECT: Record<string, Expect> = {
     figure: '12,000 transactions',
     sentence: `The most in a day since 2026-11-16; the peak was 1,111,902 on ${d400[100]}.`,
   },
-  'active-addresses': { eyebrow: 'active in a day · 2026-11-18', figure: '2,575 addresses' },
-  'ckb-volume': { eyebrow: 'moved in a day · 2026-11-18', figure: '302,594,731 CKB' },
+  'active-addresses': {
+    eyebrow: 'active in a day · 2026-11-18',
+    figure: '2,575 addresses',
+    sentence: `The fewest in a day since 2026-11-16; the peak was 1,111,902 on ${d400[100]}.`,
+  },
+  'ckb-volume': {
+    eyebrow: 'moved in a day · 2026-11-18',
+    figure: '302,594,731 CKB',
+    sentence: 'The most in a day on record.',
+  },
   // lane D1, second follow-up, item 2: the series is the day's kind counts, and the page says so
   // (was "recorded in a day", "6,177 activities")
-  'activity-volume': { eyebrow: 'counted in a day · 2026-11-18', figure: '6,177 kind counts' },
+  'activity-volume': {
+    eyebrow: 'counted in a day · 2026-11-18',
+    figure: '6,177 kind counts',
+    sentence: `The fewest in a day on record; the peak was 1,111,902 on ${d400[100]}. An activity of two kinds counts under both.`,
+  },
   'activity-type-breakdown': {
     eyebrow: 'script calls, the largest kind in a day · 2026-11-18',
     figure: '5,425 activities',
@@ -83,7 +96,11 @@ const EXPECT: Record<string, Expect> = {
     sentence:
       "Script calls were 88.47% of the day's kind counts, CKB transfers 10.25%. An activity of two kinds counts under both.",
   },
-  'cell-count': { eyebrow: 'live · 2026-11-18', figure: '1,000,020 cells' },
+  'cell-count': {
+    eyebrow: 'live · 2026-11-18',
+    figure: '1,000,020 cells',
+    sentence: 'At its peak, 10 cells up on the day before.',
+  },
   'hodl-wave': {
     eyebrow: 'unmoved for 3 years or more · 2026-11-18',
     figure: '27.37% of all CKB',
@@ -102,8 +119,14 @@ const EXPECT: Record<string, Expect> = {
   'total-deposit': {
     eyebrow: 'deposited in the Nervos DAO · 2026-11-18',
     figure: '8,191,619,544 CKB',
+    sentence:
+      '26.80% under its peak of 11,190,757,666 CKB on 2026-11-16, and 1,619,544 CKB up on the day before.',
   },
-  'daily-deposit': { eyebrow: 'deposited in a day · 2026-11-18', figure: '12,232,783 CKB' },
+  'daily-deposit': {
+    eyebrow: 'deposited in a day · 2026-11-18',
+    figure: '12,232,783 CKB',
+    sentence: 'The most in a day on record.',
+  },
   'nominal-apc': {
     eyebrow: 'the model today · year 7.01',
     figure: '2.36% a year',
@@ -115,15 +138,19 @@ const EXPECT: Record<string, Expect> = {
     sentence:
       'Down from 5.97% a year before; real inflation, without the secondary issuance, is 3.34%.',
   },
+  // lane D1's third round: one whole, the protocol total its destinations make (S1: the fixture's 9,397,611,890
+  // disagreed with them), and compensation accrued, claimed or not (S2: it said "paid")
   'secondary-issuance': {
     eyebrow: 'issued since genesis · 2026-11-18',
-    figure: '9,397,611,890 CKB',
+    figure: '9,417,500,000 CKB',
     sentence:
-      'By destination, 72.39% is burnt, 18.05% paid to DAO depositors as compensation and 9.55% to miners.',
+      'By destination, 72.39% is burnt, 18.05% accrued to DAO depositors as compensation, claimed or unclaimed, and 9.55% went to miners.',
   },
+  // lane D1's third round (S9): the figures as shown, no difference of two cut values (it said "0.01 points down")
   'circulation-ratio': {
     eyebrow: 'deposited in the Nervos DAO · 2026-11-18',
     figure: '16.37% of circulating CKB',
+    sentence: 'Its peak was 35.89% on 2026-11-16; 16.37%, down from 16.38% the day before.',
   },
   'knowledge-size': {
     eyebrow: 'occupied by live cells · 2026-11-18',
@@ -146,10 +173,15 @@ const EXPECT: Record<string, Expect> = {
     figure: '600 CKB',
     sentence: 'The five largest assets hold 90.90% of occupied CKB.',
   },
-  'cell-size-distribution': { eyebrow: 'live cells of < 100 CKB', figure: '90.11% of live cells' },
+  'cell-size-distribution': {
+    eyebrow: 'live cells of < 100 CKB',
+    figure: '90.11% of live cells',
+    sentence: 'The most occupied CKB is in cells of 100k – 1M CKB, 33.90% of it.',
+  },
   'capacity-turnover-ratio': {
     eyebrow: 'live capacity moved in the week · 2026-11-18',
     figure: '2.17%',
+    sentence: 'The lowest on record; the peak was 29.51% on 2026-11-15.',
   },
   'address-cohort-retention': {
     eyebrow: 'occupied share of its balance, the 2026-10 cohort',
@@ -162,7 +194,11 @@ const EXPECT: Record<string, Expect> = {
     sentence:
       '82.58% under its peak of 465.31 PH/s on 2024-12-27, and 1.16 PH/s up on the day before.',
   },
-  difficulty: { eyebrow: "difficulty, the day's average · 2026-11-18", figure: '788.78 P' },
+  difficulty: {
+    eyebrow: "difficulty, the day's average · 2026-11-18",
+    figure: '788.78 P',
+    sentence: '84.91% under its peak of 5,229.34 P on 2026-11-16, and 0.78 P up on the day before.',
+  },
   'uncle-rate': {
     eyebrow: 'uncle rate · 2026-11-18',
     figure: '2.00%',
@@ -171,6 +207,7 @@ const EXPECT: Record<string, Expect> = {
   'miner-address-distribution': {
     eyebrow: 'F2Pool, the largest miner · 2026-11-12 → 2026-11-18',
     figure: '41,816 blocks',
+    sentence: "Of the window's 60,583 blocks, the next largest miner, ckb1…cdefghij, found 9,000.",
   },
   'average-block-time': {
     eyebrow: "block time, the day's average · 2026-11-18",
@@ -180,13 +217,15 @@ const EXPECT: Record<string, Expect> = {
   'epoch-time-length': {
     eyebrow: 'epoch #299 took',
     figure: '4.05 h',
-    sentence: 'Over the 4.00 h target in 21 of the last 42 epochs.',
+    // lane D1's third round (M1): counted from the exact ms, epoch 298's 17 s over the target too (it was 21)
+    sentence: 'Over the 4.00 h target in 22 of the last 42 epochs.',
   },
   'block-time-distribution': {
     eyebrow: 'the most common interval · last 42 epochs',
     figure: '1.3 s',
+    // lane D1's third round (S4): what lies past the drawn 50 s is said
     sentence:
-      '1.03% of blocks came 1.3 s after their parent, more than at any other tenth of a second.',
+      '1.03% of blocks came 1.3 s after their parent, more than at any other tenth of a second; 12 blocks came more than 50 s after it.',
   },
   'epoch-time-distribution': {
     eyebrow: 'the most common duration',
@@ -269,9 +308,13 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
       // 5. a stack: at most five bands, each named at its right end, solid
       if (chart.kind === 'stacked') {
         const series = chart.series as { key: string }[];
-        expect(series.length).toBeLessThanOrEqual(
-          definition.slug === 'activity-type-breakdown' ? 6 : 5
-        );
+        // Rule 5: at most five bands. The lead's ruling (lane D1's third round, T's MUST-1): Activity
+        // by type keeps its six kinds, the site's closed set, each with its class colour and its
+        // filter chip, none of them "others"; five and "others" would hide a named kind behind a
+        // word. It is the owner's to confirm at the gate; the allowance is that one slug's, by
+        // name (SIX_KINDS_SLUG), and every other stack, classed or not, is held at five.
+        expect(series.length).toBeLessThanOrEqual(definition.slug === SIX_KINDS_SLUG ? 6 : 5);
+        if (definition.slug === SIX_KINDS_SLUG) expect(series).toHaveLength(6);
         expect(Object.keys(chart.bandEnds as Record<string, string>).sort()).toEqual(
           series.map((entry) => entry.key).sort()
         );
@@ -315,6 +358,23 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
     // the eight ages stay in the table under the chart
     const table = screen.getByRole('table', { name: 'HODL wave, every band' });
     expect(within(table).getAllByRole('row')).toHaveLength(9);
+    // one band, one spelling: the table names the ages as the band ends do, the route's words
+    // (lane D1's third round, N5: it wrote "6 m – 1 y" beside "6 to 12 months")
+    expect(
+      within(table)
+        .getAllByRole('row')
+        .slice(1)
+        .map((row) => row.querySelector('td')?.textContent)
+    ).toEqual([
+      '3 years or more',
+      '1 to 3 years',
+      '6 to 12 months',
+      '3 to 6 months',
+      '1 to 3 months',
+      '1 week to 1 month',
+      '1 day to 1 week',
+      'under 1 day',
+    ]);
   });
 
   // The figure fits a 360 px phone (328 px of line): at 26 px a digit is 15.6 px and the unit, at
@@ -324,7 +384,15 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
   it('lets a long unit wrap under its figure on a phone, never the figure from its unit', async () => {
     const view = render(<ChartDetail slug="circulation-ratio" />);
     const value = await screen.findByTestId('figure-value');
-    expect(value).not.toHaveClass('whitespace-nowrap');
+    // it wraps: no nowrap on the figure or inside it by any form the nowrap gate knows (a class,
+    // Tailwind's text-nowrap, an inline white-space or text-wrap, a NoBreak's span), and its
+    // unit's words are joined by plain spaces (T's NOTE 6: one class name's absence was pinned)
+    for (const el of [value, ...value.querySelectorAll<HTMLElement>('*')]) {
+      expect(el).not.toHaveClass('whitespace-nowrap');
+      expect(el).not.toHaveClass('text-nowrap');
+      expect(el.style.whiteSpace).not.toBe('nowrap');
+      expect(el.style.getPropertyValue('text-wrap')).not.toBe('nowrap');
+    }
     expect(value.textContent).toBe('16.37% of circulating CKB');
     view.unmount();
     render(<ChartDetail slug="hash-rate" />);

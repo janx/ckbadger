@@ -130,11 +130,7 @@ export function DotcellRoles({
                 )}
               >
                 {party.address ? (
-                  <Link
-                    href={`/address/${party.address}`}
-                    title={party.address}
-                    className="hover:text-jade"
-                  >
+                  <Link look="inline" href={`/address/${party.address}`} title={party.address}>
                     {partyShort(party)}
                   </Link>
                 ) : (

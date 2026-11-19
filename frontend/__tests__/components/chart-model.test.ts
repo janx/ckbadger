@@ -53,6 +53,8 @@ const utilized = {
           others: '900719925474099300',
           // the day's whole, the route's (the D1 hand-back, item 2)
           total: '1801439850948198600',
+          // the ranks drawn as their own bands, their total, the route's (lane D1's third round, M2)
+          drawnTotal: '900719925474099300',
         },
       },
     ],
@@ -65,7 +67,7 @@ const utilized = {
   capacityShare: {
     title: 'Capacity',
     series: [{ key: 'top0', label: 'Alpha', color: '#a' }],
-    data: [{ date: '2024-01-03', values: { top0: '1', total: '1' } }],
+    data: [{ date: '2024-01-03', values: { top0: '1', others: '0', total: '1', drawnTotal: '1' } }],
     bands: [{ key: 'top0', label: 'Alpha', members: ['top0'] }],
   },
 };
@@ -197,8 +199,15 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   // A numeric histogram's labels are buckets of its grid (0.1 s; a minute in hours); a date is
   // none of them and fails (re-pinned for the readability review 2026-11-18: the model fills a
   // histogram's regular run on its grid, so it reads each label, where only the axis did).
+  // the window the route counts, its epochs and intervals (lane D1's third round, S4)
   if (definition.slug === 'block-time-distribution')
-    return { ...single, data: single.data.map((p, i) => ({ ...p, date: ['7.8', '7.9'][i] })) };
+    return {
+      ...single,
+      data: single.data.map((p, i) => ({ ...p, date: ['7.8', '7.9'][i] })),
+      epochs: 42,
+      intervals: 100,
+      beyondRange: 0,
+    };
   if (definition.slug === 'epoch-time-distribution')
     return { ...single, data: single.data.map((p, i) => ({ ...p, date: ['4.00', '4.02'][i] })) };
   if (definition.slug === 'uncle-rate')
@@ -275,6 +284,8 @@ describe('29 chart variants', () => {
             ...Object.fromEntries(keys.map((key, i) => [key, `${amounts[i]}000`])),
             // lane D1: the API's rest band, ranks six to eight (9,994 + 9,993 + 9,993)
             rest: '29980000',
+            // the five drawn, the route's (lane D1's third round, M2): 30,000 + 4 × 10,005
+            drawnTotal: '70020000',
             // the day's whole, the route's (the D1 hand-back, item 2)
             total: '100000000',
           },
@@ -315,7 +326,7 @@ describe('29 chart variants', () => {
     const zero = {
       title: 'Used',
       series: [{ key: 'a', label: 'A', color: '#a' }],
-      data: [{ date: '2024-01-03', values: { a: '0', total: '0' } }],
+      data: [{ date: '2024-01-03', values: { a: '0', others: '0', total: '0', drawnTotal: '0' } }],
       bands: [{ key: 'a', label: 'A', members: ['a'] }],
     };
     const model = chartModel(CHART_BY_SLUG.get('most-utilized-scripts')!, {
@@ -394,7 +405,6 @@ describe('29 chart variants', () => {
     // Re-pinned for CH-18: the head reads today; no "Today" fact repeats it.
     expect(model.facts).toBeUndefined();
     expect(model.projectedAfter).toBe(2);
-    expect(model.delta).toBeNull();
     expect(model.series).toHaveLength(1);
     expect(() =>
       chartModel(definition, timeline(['past', 'past', 'past', 'past', 'past']))
@@ -449,7 +459,6 @@ describe('29 chart variants', () => {
     expect(model.secondary?.unit).toBe('depositors');
     expect(model.secondary?.points[1].values.secondary).toBe('4');
     expect(model.points.map((point) => point.label)).toEqual(['2024-01-01', '2024-01-03']);
-    expect(model.delta).toBe('+2');
   });
 
   it('reports incomplete dual-unit points instead of silently using zero', () => {
@@ -552,7 +561,6 @@ describe('29 chart variants', () => {
     // Re-pinned for lane D1 (the chart-hero board, rule 3): the figure is the answer the chart is
     // asked, the CKB unmoved for 3 years or more (was the largest band, 65 under 1 day).
     expect(hodl.latest?.raw).toBe('35');
-    expect(hodl.delta).toBeNull();
     expect(hodl.secondary?.points[0].values.holders).toBe('9007199254740993');
     expect(() =>
       chartModel(
@@ -572,7 +580,6 @@ describe('29 chart variants', () => {
     });
     // In the axis' words (re-pinned for CH-12: was the API's '<100 CKB').
     expect(buckets.latest?.label).toBe('< 100 CKB');
-    expect(buckets.delta).toBeNull();
   });
 
   it('retains both exact script histories and the separate consensus target', () => {
@@ -622,7 +629,12 @@ describe('29 chart variants', () => {
     expect(secondary.points[0].values.mining).toBe('1.50000001');
   });
 
-  it('uses independent protocol issuance total when stacked legacy components overlap', () => {
+  // Re-pinned for lane D1's third round (S1): the protocol total is the one whole, and its destinations make it
+  // (this test sent a protocol total of 4.00000001 CKB beside destinations of 5, the "overlap" the
+  // route's partition now refuses); the frozen phase-1 compensation is a part of the unclaimed
+  // compensation, a developer fact, never a difference between two wholes (was "Frozen phase-1
+  // overlap").
+  it('heads secondary issuance with the protocol total its destinations make', () => {
     const model = chartModel(CHART_BY_SLUG.get('secondary-issuance')!, {
       title: 'Secondary issuance',
       series: [
@@ -632,17 +644,19 @@ describe('29 chart variants', () => {
       data: [
         {
           date: '2024-01-01',
-          values: { compensation: '2', burnt: '3' },
-          protocolTotalShannons: '400000001',
+          values: { compensation: '2', burnt: '3.00000001' },
+          protocolTotalShannons: '500000001',
           phase1CompensationShannons: '100000000',
-          componentsTotalShannons: '500000000',
         },
       ],
     });
-    expect(model.latest?.raw).toBe('4.00000001');
+    expect(model.latest?.raw).toBe('5.00000001');
     // Re-pinned for CH-18: a developer fact, in the evidence tier.
-    expect(model.evidence).toContainEqual({ label: 'Frozen phase-1 overlap', value: '1 CKB' });
-    expect(model.points[0].values).toEqual({ compensation: '2', burnt: '3' });
+    expect(model.evidence).toContainEqual({
+      label: 'Frozen phase-1 compensation',
+      value: '1 CKB',
+    });
+    expect(model.points[0].values).toEqual({ compensation: '2', burnt: '3.00000001' });
   });
 
   it('preserves signed exact knowledge flow above the safe integer range', () => {

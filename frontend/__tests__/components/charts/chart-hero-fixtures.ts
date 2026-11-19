@@ -80,6 +80,8 @@ function shareHistory(names: readonly string[], ids: readonly string[]) {
     values.rest = ckb(100 - k + 50 - k + 50);
     // the day's whole, the API's (the ranks and its remainder)
     values.total = ckb(last.reduce((sum, v) => sum + v - k, 0) + 50);
+    // the five drawn ranks' total, the API's (lane D1's third round, M2)
+    values.drawnTotal = ckb(last.slice(0, 5).reduce((sum, v) => sum + v - k, 0));
     return { date, values };
   };
   return {
@@ -172,14 +174,15 @@ export const CHART_FIXTURES: Record<string, unknown> = {
       { date: hodlDates[1], values: hodlPoint('27.37', '12.87') },
     ],
     series: [
-      ['gt3y', '> 3y'],
-      ['1y3y', '1y-3y'],
-      ['6m1y', '6m-1y'],
-      ['3m6m', '3m-6m'],
-      ['1m3m', '1m-3m'],
-      ['1w1m', '1w-1m'],
-      ['1d1w', '1d-1w'],
-      ['24h', '24h'],
+      // the route's names, in the drawn bands' words (lane D1's third round, N5)
+      ['gt3y', '3 years or more'],
+      ['1y3y', '1 to 3 years'],
+      ['6m1y', '6 to 12 months'],
+      ['3m6m', '3 to 6 months'],
+      ['1m3m', '1 to 3 months'],
+      ['1w1m', '1 week to 1 month'],
+      ['1d1w', '1 day to 1 week'],
+      ['24h', 'under 1 day'],
     ].map(([key, label]) => ({ key, label, color: '#000000' })),
     bands: [
       { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
@@ -260,11 +263,11 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     title: 'Secondary Issuance',
     data: days(2).map((date) => ({
       date,
-      values: { burnt: '6817.5', compensation: '1700', mining: '900' },
-      protocolTotalShannons: '939761189025563741',
+      // one whole, the protocol total, which the three destinations make (lane D1's third round, S1):
+      // 6,817,500,000 + 1,700,000,000.5 + 900,000,000 CKB
+      values: { burnt: '6817500000', compensation: '1700000000.5', mining: '900000000' },
+      protocolTotalShannons: '941750000050000000',
       phase1CompensationShannons: '0',
-      // the three destinations' total, the API's: 6,817.5 + 1,700 + 900 CKB
-      componentsTotalShannons: '941750000000',
     })),
     series: [
       { key: 'compensation', label: 'Deposit Compensation', color: '#000000' },
@@ -394,22 +397,37 @@ export const CHART_FIXTURES: Record<string, unknown> = {
       percentage: '0',
     })),
   },
+  // each day's average in whole ms, as the route sends it (lane D1's third round, M1)
   getAverageBlockTimeChart: line(
     'Average Block Time',
     Array.from({ length: 200 }, (_, i) =>
-      i === 0 ? '113.42' : i === 1 ? '116.32' : i === 199 ? '9.95' : i === 150 ? '10.5' : '9.5'
+      i === 0 ? '113420' : i === 1 ? '116320' : i === 199 ? '9950' : i === 150 ? '10500' : '9500'
     )
   ),
   getEpochTimeLengthChart: {
     title: 'Epoch Time Length',
     yAxisLabel: 'Hours',
     y2AxisLabel: 'Blocks',
+    // each epoch's duration in whole ms, as the route sends it (lane D1's third round, M1): 50.48 h, 17.21 h,
+    // then 4.05 h and 3.95 h by turns; epoch 296 is exactly the 4 h target and epoch 298 is 17 s
+    // over it (14,417,000 ms, which the route's rounded hours read 4.00)
     data: Array.from({ length: 300 }, (_, i) => ({
       date: String(i),
-      value: i === 0 ? '50.48' : i === 1 ? '17.21' : i % 2 ? '4.05' : '3.95',
+      value:
+        i === 0
+          ? '181728000'
+          : i === 1
+            ? '61956000'
+            : i === 296
+              ? '14400000'
+              : i === 298
+                ? '14417000'
+                : i % 2
+                  ? '14580000'
+                  : '14220000',
       value2: '1700',
     })),
-    peak: { date: '0', value: '50.48' },
+    peak: { date: '0', value: '181728000' },
     peak2: { date: '1', value: '1800' },
     target: { seconds: 14_400, hours: '4.00' },
   },
@@ -424,6 +442,10 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     })),
     peak: { date: '1.3', value: '1.03' },
     peak2: null,
+    // the window the route counts (lane D1's third round, S4): its epochs, every interval, those past 50 s
+    epochs: 42,
+    intervals: 75_000,
+    beyondRange: 12,
   },
   getEpochTimeDistributionChart: {
     title: 'Epoch Time Distribution',

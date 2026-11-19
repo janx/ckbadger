@@ -101,8 +101,9 @@ describe('AssetTransactions board columns', () => {
       tx: ceil(at('0x01010101…010101', 13) + 16),
       // "#99,999,999 · 10y 364d ago" on its line, "tx 9999 in block" under it
       block: ceil(Math.max(at('#99,999,999 · 10y 364d ago', 13), at('tx 9999 in block', 12)) + 16),
-      // four digits a side, as written
-      cells: ceil(at('9999 → 9999', 13) + 16),
+      // re-pinned on purpose (lane p-assets, the page lane notes): a transaction's inputs to
+      // MAX_TX_INPUTS, five digits (13,568), its outputs four, as written (it was four a side, 102)
+      cells: ceil(at('13568 → 9999', 13) + 16),
       // under a million CKB on one line with its unit; more breaks before the decimals
       output: ceil(at('999,999.99999999', 13) + at(' CKB', 12) + 16),
       // a fee under 100 CKB with its unit
@@ -113,12 +114,13 @@ describe('AssetTransactions board columns', () => {
       cycles: ceil(Math.max(at('Cycles', 12), at('750,000,000', 13), 48)),
     };
 
-    // re-pinned on purpose (the coordinator's ruling): Size 136 → 96, Cycles 120 → 86, 1,027 → 953
-    it('in the plain feed: 953 px, a table from it', () => {
-      expect(Object.values(base)).toEqual([149, 219, 102, 170, 131, 96, 86]);
+    // re-pinned on purpose (the coordinator's ruling): Size 136 → 96, Cycles 120 → 86, 1,027 → 953;
+    // then (lane p-assets) Cells 102 → 110, five digits of inputs, 953 → 961 (renamed, it was "953")
+    it('in the plain feed: 961 px, a table from it', () => {
+      expect(Object.values(base)).toEqual([149, 219, 110, 170, 131, 96, 86]);
       render(<AssetTransactions rows={[tx(1, 1930, 1_923_713), tx(2, 640, 0)]} />);
       expect(minWidths()).toEqual(Object.values(base));
-      expect(minWidths().reduce((s, w) => s + w, 0)).toBe(953);
+      expect(minWidths().reduce((s, w) => s + w, 0)).toBe(961);
     });
 
     it('with a token and a collection column: the token’s decimals, a stated context', () => {
@@ -157,8 +159,9 @@ describe('AssetTransactions board columns', () => {
     it('changes form where the plain feed’s sum stops fitting', () => {
       for (const [width, form] of [
         [1232, 'table'],
-        [953, 'table'],
-        [952, 'rows'],
+        // re-pinned on purpose (lane p-assets): the sum is 961 px (was 953)
+        [961, 'table'],
+        [960, 'rows'],
         [608, 'rows'],
         [358, 'rows'],
       ] as const) {

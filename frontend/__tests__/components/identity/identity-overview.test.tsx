@@ -1,3 +1,5 @@
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { AssetMetrics } from '@/components/asset/detail-shell';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import {
@@ -52,6 +54,30 @@ const facts = () => Array.from(document.querySelectorAll('[data-role="metrics"] 
 const fact = (label: string) =>
   facts().find((f) => f.querySelector('dt')?.textContent === label) ?? null;
 const factLabels = () => facts().map((f) => f.querySelector('dt')!.textContent);
+
+// Lane p-assets (the lock-words gate's known writer 5): the Owner fact's lock is the one
+// decision's (components/ui/lock-kind.tsx): nothing beside the address for the default lock, where
+// the note wrote the API's name, or "lock not named".
+it('names an owner’s lock by the one decision: nothing for the default lock', () => {
+  const protocol = valar();
+  const last = protocol.versions.at(-1)!.cell;
+  const args = `0x${'ab'.repeat(20)}`;
+  last.lock = { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args };
+  last.lockName = 'SECP256K1/blake160';
+  last.ownerAddress = ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args });
+  render(
+    <Facts
+      protocol={protocol}
+      term={identityTerm(protocol)}
+      now={NOW}
+      isLive
+      createdAtBlock={12260151}
+    />
+  );
+  expect(fact('Owner')).toHaveTextContent(/owner and manager are the same key$/);
+  expect(fact('Owner')).not.toHaveTextContent('SECP256K1');
+  expect(fact('Owner')).not.toHaveTextContent('lock not named');
+});
 
 describe('identity facts rail (ID-C6)', () => {
   it('gives .bit its domain facts: owner, expiry with the last renewal, registration, records', () => {
@@ -195,7 +221,8 @@ describe('identity summary (ID-C5)', () => {
     ).toHaveAttribute('title', '116\u00a0days from now');
   });
 
-  it('tells a did:ckb it has no expiry and names its server', () => {
+  // renamed (R8): it was "tells a did:ckb it has no expiry and names its server"
+  it('names a did:ckb’s server; that it has no expiry is the lede’s', () => {
     const protocol = structuredClone(didProtocolProducer) as IdentityProtocol;
     render(
       <IdentitySummary
@@ -206,8 +233,11 @@ describe('identity summary (ID-C5)', () => {
         subject="alice.test"
       />
     );
+    // Re-pinned on purpose (readability R8, lane p-assets): that it is live with no expiry is the
+    // page's lede now (IdentityPositioning), said once; "in words" keeps the rest (it ended "… It
+    // has no expiry date.")
     expect(screen.getByTestId('identity-summary')).toHaveTextContent(
-      'A Web5 identity, created on 2023-11-15. It names a personal data server at pds.example. It has no expiry date.'
+      /^A Web5 identity, created on 2023-11-15\. It names a personal data server at pds\.example\.$/
     );
   });
 });

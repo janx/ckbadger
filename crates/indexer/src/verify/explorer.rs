@@ -2104,10 +2104,11 @@ impl Check for BlockTimeDistributionConsistency {
 
         let mut sum_ms = 0.0f64;
         let mut count = 0usize;
+        // the route sends each day's average in whole ms (lane D1's third round)
         for point in &recent_days {
-            if let Ok(seconds) = point.value.parse::<f64>() {
-                if seconds > 0.0 {
-                    sum_ms += seconds * 1000.0;
+            if let Ok(ms) = point.value.parse::<f64>() {
+                if ms > 0.0 {
+                    sum_ms += ms;
                     count += 1;
                 }
             }

@@ -28,23 +28,27 @@ function chart(title: string, values: string[], yAxisLabel: string): ChartRespon
   return { title, yAxisLabel, data: values.map((value, i) => ({ date: days[i], value })) };
 }
 
+/**
+ * Each day's average block time in whole ms, as the route sends it (lane D1's third round, M1:
+ * it sent seconds at two decimals, rounded). The last day is 9.57 s.
+ */
 export const BLOCK_TIMES = [
-  '10.02',
-  '9.49',
-  '9.64',
-  '10.02',
-  '10.10',
-  '11.10',
-  '10.37',
-  '11.04',
-  '10.07',
-  '9.60',
-  '8.66',
-  '10.22',
-  '8.93',
-  '9.57',
+  '10020',
+  '9490',
+  '9640',
+  '10020',
+  '10100',
+  '11100',
+  '10370',
+  '11040',
+  '10070',
+  '9600',
+  '8660',
+  '10220',
+  '8930',
+  '9570',
 ];
-export const averageBlockTimeChart = chart('Average Block Time', BLOCK_TIMES, 'Seconds');
+export const averageBlockTimeChart = chart('Average Block Time', BLOCK_TIMES, 'Milliseconds');
 
 /** H/s (the unit BE-1 pins). The last day is 91.75 PH/s. */
 export const HASH_RATES = [
@@ -274,6 +278,7 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
     totalCkbMoved: '0',
     scriptCounts: [],
     kindOccurrences: total,
+    daoCount: 0,
   };
 });
 

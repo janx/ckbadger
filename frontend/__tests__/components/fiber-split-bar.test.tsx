@@ -23,6 +23,26 @@ describe('FiberSplitBar (What moved inside the channel, FF-C3)', () => {
     expect(screen.getByText('at open')).toBeInTheDocument();
   });
 
+  // Lane P4 (readability R3, R5): a figure's labels are its values, read out exact (no padding to
+  // eight decimals, "699.00000000" was a column's form in a figure), and a party's id is a value,
+  // in the reading ink (it was the quiet ink)
+  it('writes its two amounts exact, with no padding, and its names in the reading ink', () => {
+    const { container } = render(
+      <FiberSplitBar
+        left={{ name: 'ppedrr', shannons: BigInt('69900000000') }}
+        right={{ name: '5eyy6y', shannons: BigInt('30100000000') }}
+        note="at open"
+      />
+    );
+    expect(
+      Array.from(container.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
+    ).toEqual(['699 CKB', '301 CKB']);
+    for (const name of ['ppedrr', '5eyy6y']) {
+      expect(screen.getByText(name)).toHaveClass('text-text');
+      expect(screen.getByText(name)).not.toHaveClass('text-text-dim');
+    }
+  });
+
   it('refuses a split it cannot draw: a side that put nothing in', () => {
     expect(() =>
       render(

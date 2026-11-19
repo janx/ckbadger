@@ -48,7 +48,7 @@ describe('ForksPage', () => {
     // where the measure holds MEASURE_CHARS, 76, at the body step (it said 560 px, 8.3 px a
     // character at 13 px)
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
-    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+    expect(within(lede).getByRole('link', { name: 'How it works' })).toHaveAttribute(
       'href',
       '#evidence'
     );
@@ -63,7 +63,11 @@ describe('ForksPage', () => {
       'text-body'
     );
     // the days are the picture, inside the hero section
-    expect(hero.querySelectorAll('[data-uncles]')).toHaveLength(3);
+    // the days are the picture, inside the hero section; re-pinned (lane P4): each day's bar is its
+    // uncle rate (it was its uncles, three bars), and the fixture's third day made no block, so it
+    // has no rate and no bar
+    expect(hero.querySelectorAll('[data-day]')).toHaveLength(3);
+    expect(hero.querySelectorAll('[data-rate]')).toHaveLength(2);
     // the node's own record (R2b-b): one quiet row under the reading, outside the hero
     await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(3));
     expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
@@ -83,7 +87,9 @@ describe('ForksPage', () => {
       '1 uncle · 1 one block later',
       '1 of 1 · committed in a later block',
     ]);
-    // R11: no coloured text in tier 1 (the glyphs and bars keep their colours)
+    // R11: no coloured text in tier 1 (the glyphs and bars keep their colours). Re-pinned (lane
+    // P4; it was none at all): the one celadon is the lede's way down, the onward look the owner
+    // of the looks draws (components/ui/link.tsx), as on the other topic pages
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     await waitFor(() => expect(table()).toBeInTheDocument());
     const coloured = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
@@ -92,7 +98,7 @@ describe('ForksPage', () => {
         .split(/\s+/)
         .some((c) => /^text-(jade|gold|rouge)(\/\d+)?$/.test(c))
     );
-    expect(coloured).toEqual([]);
+    expect(coloured).toEqual([within(lede).getByRole('link', { name: 'How it works' })]);
     expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
     // the full concept sentence lives in tier 2
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
@@ -161,7 +167,8 @@ describe('ForksPage', () => {
     vi.mocked(api.getForks).mockResolvedValue(list());
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     const { container } = render(<ForksPage />);
-    await waitFor(() => expect(container.querySelectorAll('[data-uncles]')).toHaveLength(3));
+    // re-pinned (lane P4): the rate bars of the two days with blocks (it was three uncle bars)
+    await waitFor(() => expect(container.querySelectorAll('[data-rate]')).toHaveLength(2));
     expect(container.querySelectorAll('[data-switches]')).toHaveLength(1);
     // hierarchy v3: the picture has no separate heading
     expect(
@@ -230,7 +237,9 @@ describe('ForksPage', () => {
       'dashed: the block it dropped→ the block that took it as an uncle'
     );
     expect(key.querySelector('.text-jade')).toBeNull();
-    expect(within(table()).getByText('depth 1')).toBeInTheDocument();
+    // re-pinned (lane P4) here and below: a switch's depth in words, "1 block deep" (it was
+    // "depth 1", a term the review found unexplained)
+    expect(within(table()).getByText(fullText('1 block deep'))).toBeInTheDocument();
     // R15 (toward 32–34 px rows): 6 px above and below the 44 px glyph
     for (const cell of within(table()).getAllByRole('cell'))
       expect(cell).toHaveClass('text-body', 'py-1.5');
@@ -238,16 +247,23 @@ describe('ForksPage', () => {
     // its words (R16: a text box is its words)
     for (const head of within(table()).getAllByRole('columnheader'))
       expect(head.firstElementChild?.tagName).toBe('SPAN');
-    expect(within(table()).getByText('depth 1')).toHaveClass('block', 'w-fit');
+    expect(within(table()).getByText(fullText('1 block deep'))).toHaveClass('block', 'w-fit');
     expect(within(table()).getByText('1 of 1 tx committed later')).toHaveClass('block', 'w-fit');
     expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
     expect(within(table()).getByText('50 ms')).toBeInTheDocument();
     // Table-rows T5 (was R11's bright ink): the fork point is the row's one bright thing, so the
-    // fate reads in body ink; the glyph's arrow keeps the jade
-    const fate = within(table()).getByText('uncle in #12 (+1)');
+    // fate reads in body ink; the glyph's arrow keeps the jade. Re-pinned (lane P4; it was one link
+    // "uncle in #12 (+1)"): the words in body ink, the block a link inside the line, and "(+1)"
+    // said in words under it (the review: the term was not explained)
+    const fate = within(table()).getByText('uncle in');
     expect(fate).toHaveClass('text-text');
-    expect(fate).not.toHaveClass('text-text-bright');
-    expect(fate).not.toHaveClass('text-jade');
+    const block = within(fate.parentElement!).getByRole('link', { name: '#12' });
+    expect(block).not.toHaveClass('text-text-bright');
+    expect(block).not.toHaveClass('text-jade');
+    expect(within(table()).getByText(fullText('1 block after it'))).toHaveClass(
+      'text-meta',
+      'text-text-dim'
+    );
     expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
     expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
@@ -541,11 +557,16 @@ describe('ForksPage', () => {
     const point = within(row).getByRole('link', { name: '#10' });
     expect(point).toHaveClass('text-text-bright');
     expect(point.closest('td')).toHaveClass('text-body');
-    expect(within(row).getByText('depth 1')).toHaveClass('text-meta', 'text-text-dim');
+    expect(within(row).getByText(fullText('1 block deep'))).toHaveClass(
+      'text-meta',
+      'text-text-dim'
+    );
     const brights = Array.from(row.querySelectorAll('.text-text-bright'));
     expect(brights).toEqual([point]);
     const seen = within(row).getByRole('link', { name: '2025-08-01 06:13:20' });
-    expect(seen).toHaveClass('text-text');
+    // re-pinned (lane P4): a link inside the row takes the inline look, the line's ink underlined
+    // (it was `text-text` by hand)
+    expect(seen).toHaveClass('underline');
     const seenCell = seen.closest('td')!;
     expect(seenCell).toHaveTextContent(/^2025-08-01 06:13:20$/);
     expect(row.getAttribute('title')).toMatch(

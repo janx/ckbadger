@@ -30,7 +30,7 @@ function fixture<T = Record<string, unknown>>(method: string): T {
 }
 
 type StackedFixture = {
-  data: { date: string; values: Record<string, string>; componentsTotalShannons?: string }[];
+  data: { date: string; values: Record<string, string>; protocolTotalShannons?: string }[];
 };
 
 describe('one form of a percentage on a chart page: cut (item 1)', () => {
@@ -106,14 +106,18 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
     expect(model.bandEnds!.otherContracts).toBe('22.00%');
   });
 
-  it('divides secondary issuance by the total of its destinations the route sends', () => {
+  // Re-pinned for lane D1's third round (S1): one whole, the protocol total, which the destinations make; the
+  // test that divided by a second whole (componentsTotalShannons, twice the destinations) now
+  // divides by a protocol total that differs from the destinations' sum, so the figure shows which
+  // one the sentence reads (and S2: compensation accrued, claimed or not, was "paid").
+  it('divides secondary issuance by the one whole the route sends, its protocol total', () => {
     const payload = fixture<StackedFixture>('getSecondaryIssuanceChart');
-    // 18,835 CKB, twice the three destinations
-    for (const point of payload.data) point.componentsTotalShannons = '1883500000000';
+    // 18,835,000,001 CKB, about twice the three destinations
+    for (const point of payload.data) point.protocolTotalShannons = '1883500000100000000';
     const slug = definition('secondary-issuance');
     const model = chartModel(slug, payload as never);
     expect(chartHead(slug, model).sentence).toBe(
-      'By destination, 36.19% is burnt, 9.02% paid to DAO depositors as compensation and 4.77% to miners.'
+      'By destination, 36.19% is burnt, 9.02% accrued to DAO depositors as compensation, claimed or unclaimed, and 4.77% went to miners.'
     );
   });
 
@@ -130,6 +134,48 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
       'The five largest scripts hold 45.45% of occupied CKB.'
     );
     expect(model.rankedRows![0].share).toBe('13.63%');
+  });
+
+  // lane D1's third round, M2: the five drawn ranks' total and the card's "Others" are the route's
+  // figures (drawnTotal, rest), never a sum in the page; a figure that differs from the sum shows
+  // which one the page states
+  it('states the five largest by the route’s drawn total', () => {
+    const payload = fixture<{ usedShare: StackedFixture; capacityShare: StackedFixture }>(
+      'getMostUtilizedScriptsChart'
+    );
+    payload.usedShare.data.at(-1)!.values.drawnTotal = '100000000000';
+    const slug = definition('most-utilized-scripts');
+    // 1,000 of the day's 2,200 CKB
+    expect(chartHead(slug, chartModel(slug, payload as never)).sentence).toBe(
+      'The five largest scripts hold 45.45% of occupied CKB.'
+    );
+  });
+
+  it('writes the card’s "Others" as the route’s rest', () => {
+    const payload = fixture<{ usedShare: StackedFixture; capacityShare: StackedFixture }>(
+      'getMostUtilizedScriptsChart'
+    );
+    payload.usedShare.data.at(-1)!.values.rest = '77700000000';
+    const model = chartModel(definition('most-utilized-scripts'), payload as never);
+    // 777 of 2,200 CKB
+    expect(model.rankedPreview!.rows.at(-1)).toMatchObject({ title: 'Others', share: '35.31%' });
+  });
+
+  // lane D1's third round, N12: a tie at ranks 5 and 6 is the route's to break; the page keeps
+  // its order (it sorted ties by label)
+  it('keeps the route’s order of a ranking, ties too', () => {
+    const payload = fixture<{
+      usedShare: StackedFixture & { series: { key: string; label: string }[] };
+      capacityShare: StackedFixture;
+    }>('getMostUtilizedScriptsChart');
+    const last = payload.usedShare.data.at(-1)!.values;
+    // ranks 5 and 6 tie at 200 CKB; the route put "Type ID" (top4) before "Always success" (top5)
+    last.top5 = last.top4;
+    payload.usedShare.series[4].label = 'Zeta';
+    payload.usedShare.series[5].label = 'Alpha';
+    const model = chartModel(definition('most-utilized-scripts'), payload as never);
+    const labels = model.rankedRows!.map((row) => row.label);
+    expect(labels.indexOf('Zeta')).toBeLessThan(labels.indexOf('Alpha'));
   });
 
   it('divides cell size by the live cells and the occupied CKB the route counts', () => {
@@ -156,9 +202,9 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
       expect(() => chartModel(definition(slug), payload as never), slug).toThrow(field);
     }
     const issuance = fixture<StackedFixture>('getSecondaryIssuanceChart');
-    delete issuance.data.at(-1)!.componentsTotalShannons;
+    delete issuance.data.at(-1)!.protocolTotalShannons;
     expect(() => chartModel(definition('secondary-issuance'), issuance as never)).toThrow(
-      'componentsTotalShannons'
+      'protocolTotalShannons'
     );
   });
 

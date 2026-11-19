@@ -167,7 +167,12 @@ describe('Collection holders', () => {
       <CollectionHolders assetClass="objects" load={load} queryKey="first" />
     );
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
-    fireEvent.click(screen.getByRole('button', { name: 'All holders →' }));
+    // Re-pinned on purpose (lane p-assets, the placement lane's toggles with the lead's ruling): a
+    // control that opens more of a list in place is the short list's form, the Pager's "all N
+    // holders ↓", under the list; its way back is "fewer ↑" (it was "All holders →" in the heading
+    // row, an arrow that said another page)
+    expect(screen.queryByRole('button', { name: /→$/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^all 21\sholders ↓$/ }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: undefined }));
     const pager = await screen.findByRole('navigation', { name: 'holders' });
     expect(pager).toHaveTextContent('1–1 of 21');
@@ -181,6 +186,10 @@ describe('Collection holders', () => {
     fireEvent.click(screen.getByRole('button', { name: '← prev' }));
     await waitFor(() => expect(screen.queryByRole('button', { name: '← prev' })).toBeNull());
     expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('page 1 of 2');
+    // the way back folds the list to its ten
+    fireEvent.click(screen.getByRole('button', { name: 'fewer ↑' }));
+    await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(screen.getByRole('button', { name: /^all 21\sholders ↓$/ })).toBeInTheDocument();
     rerender(<CollectionHolders assetClass="objects" load={load} queryKey="second" />);
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     expect(load).toHaveBeenLastCalledWith({ limit: 10, cursor: undefined });
@@ -303,7 +312,8 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     lockKind: 'JoyID',
     lockCodeHash: JOYID_CODE_HASH,
   };
-  it('draws one-line rows with the holder bright, the lock a chip and the count as a bar', async () => {
+  // renamed (lane p-assets): it was "… the lock a chip …"; a lock is plain words now
+  it('draws one-line rows with the holder bright, the lock in words and the count as a bar', async () => {
     const load = vi.fn().mockResolvedValue(page([joyid, named]));
     render(
       <CollectionHolders
@@ -328,7 +338,10 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       '[&_a]:leading-row',
       'flex-nowrap'
     );
-    expect(within(first).getByText('JoyID')).toHaveClass('border', 'text-meta');
+    // re-pinned on purpose (lane p-assets): a lock is plain words, no chip, the column's value in
+    // the reading ink at the cells' step (it was the row tag's border and 12 px)
+    expect(within(first).getByText('JoyID')).toHaveClass('text-text', 'text-small');
+    expect(within(first).getByText('JoyID')).not.toHaveClass('border');
     const scale = resourceScale([6, 6]);
     expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
     expect(first.querySelector('[data-segment]')).toHaveStyle({
@@ -368,8 +381,9 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       // the widest holder: a prefix-only owner at the row size, its 8 px gap and the
       // "unresolved" badge (13 px words, 8 px sides, a 1 px border)
       ceil(at('0x34343434…343434', 13) + 8 + at('unresolved', 13) + 16 + 2 + 16),
-      // the lock's tag: 12 characters at 12 px, 5 px sides and a 1 px border
-      ceil(at('x'.repeat(12), 12) + 12 + 16),
+      // the lock's name: 12 characters at 13 px, no box (re-pinned on purpose, lane p-assets: it
+      // was a tag of 12 characters at 12 px with 5 px sides and a 1 px border, 115)
+      ceil(at('x'.repeat(12), 13) + 16),
       // the 48 px track (ticks "0 750M" are 43.2), the 10 px gap, "99,999" items; the last column
       48 + 10 + ceil(at('99,999', 13)),
     ];
@@ -381,9 +395,9 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       // a range's items under a million, "999,999"; the last column
       ceil(at('999,999', 13)),
     ];
-    expect(holders).toEqual([55, 253, 115, 105]);
+    expect(holders).toEqual([55, 253, 110, 105]);
     expect(bands).toEqual([52, 121, 55]);
-    expect(holders.reduce((s, w) => s + w, 0)).toBe(528);
+    expect(holders.reduce((s, w) => s + w, 0)).toBe(523);
     expect(bands.reduce((s, w) => s + w, 0)).toBe(228);
     const load = vi.fn().mockResolvedValue(page([joyid, named]));
     render(
@@ -398,7 +412,7 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(holders);
     expect(cols[2].width).toBe('auto');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(528);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(523);
     const bandTable = screen.getByRole('table', { name: 'Holders by how many items they hold' });
     expect(
       [...bandTable.querySelectorAll('col')].map((c) =>
@@ -412,8 +426,10 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     try {
       for (const [width, holders, bands] of [
         [1232, 'table', 'table'],
-        [528, 'table', 'table'],
-        [527, 'rows', 'table'],
+        // re-pinned on purpose (lane p-assets): the holders' table is 523 px with the lock as
+        // words (it was 528 with the lock's tag)
+        [523, 'table', 'table'],
+        [522, 'rows', 'table'],
         [358, 'rows', 'table'],
         [228, 'rows', 'table'],
         [227, 'rows', 'rows'],

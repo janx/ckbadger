@@ -7,9 +7,16 @@ interface Walk {
   history: string[];
   /** The page size the walk was taken at. */
   size: number | undefined;
+  /** The cursor its first page is asked at: none for the list's newest end. */
+  from: string | undefined;
 }
 
-const start = (size: number | undefined): Walk => ({ cursor: undefined, history: [], size });
+const start = (size: number | undefined, from: string | undefined): Walk => ({
+  cursor: from,
+  history: [],
+  size,
+  from,
+});
 
 /**
  * A walk through a cursor-paged list, one page at a time. It asks for its pages itself: `ask`
@@ -22,12 +29,15 @@ const start = (size: number | undefined): Walk => ({ cursor: undefined, history:
  * response again and moves nothing: lane c2-finish, item 1e). `pageSize` is the page size the list
  * asks the API for: a change of it (a list that reads 24 or 50 a page from md and 20 below) starts
  * the walk again from the first page, as the cursors taken at the other size name
- * other rows (item 1d); so does `reset`.
+ * other rows (item 1d); so does `reset`. `from` is the cursor the walk starts from (an asset feed
+ * opened at its URL's cursor), none for the list's newest end: its first page is asked and stamped
+ * there, and a change of it starts the walk again, as a change of page size does.
  */
-export function useCursorPagination(pageSize?: number): CursorWalk {
-  const [walk, setWalk] = useState<Walk>(() => start(pageSize));
-  // a change of page size starts the walk again, in the render that sees it (before any read)
-  const current = walk.size === pageSize ? walk : start(pageSize);
+export function useCursorPagination(pageSize?: number, from?: string): CursorWalk {
+  const [walk, setWalk] = useState<Walk>(() => start(pageSize, from));
+  // a change of page size or of the starting cursor starts the walk again, in the render that sees
+  // it (before any read)
+  const current = walk.size === pageSize && walk.from === from ? walk : start(pageSize, from);
   if (current !== walk) setWalk(current);
   const page = current.history.length + 1;
 
@@ -52,7 +62,7 @@ export function useCursorPagination(pageSize?: number): CursorWalk {
     });
   }, []);
 
-  const reset = useCallback(() => setWalk((w) => start(w.size)), []);
+  const reset = useCallback(() => setWalk((w) => start(w.size, w.from)), []);
 
   const at = { page, cursor: current.cursor, size: current.size };
   const ask =

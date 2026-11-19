@@ -26,9 +26,12 @@ function everyScale(max: number): number[] {
 }
 
 // Review fb-logic 7 (the lead's ruling): an axis maximum states the scale its bars are drawn on, so
-// a head whose tick text is not exactly its value is a wrong figure. The tick form rounds through
-// toFixed(3); it now refuses a value it cannot write exactly, and every scale the heads are given
-// (resourceScale's: 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5 × 10^k) is written exactly, its half too.
+// a head whose tick text is not exactly its value is a wrong figure. The tick form is formatTick,
+// which writes every digit a tick has (the lead's ruling of 2026-11-19), and every scale the heads
+// are given (resourceScale's: 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5 × 10^k) reads back as itself, its
+// half too. Lane D1's third round: the tick form's refusal of a value it would round went with the
+// rounding (it could no longer trip: formatTick has no value it rounds), and this test, which held
+// that refusal, now holds the exact text it writes instead.
 describe('the tick form writes an axis maximum exactly (review fb-logic 7)', () => {
   // Re-pinned for the lead's ruling of 2026-11-19 (lane D1, second follow-up): formatTick writes
   // every tick exactly, so the tick form has no value it would round any more; 1,234,567 read

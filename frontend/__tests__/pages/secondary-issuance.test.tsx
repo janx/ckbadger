@@ -25,10 +25,9 @@ describe('SecondaryIssuancePage', () => {
         {
           date: '2026-02-23',
           values: { mining: '60.00000001', compensation: '29', burnt: '10' },
+          // the one whole, which the three destinations make (lane D1's third round, S1)
           protocolTotalShannons: '9900000001',
           phase1CompensationShannons: '100000000',
-          // the three destinations' total, the route's (the D1 hand-back, item 2)
-          componentsTotalShannons: '9900000001',
         },
       ],
       series: [
@@ -75,6 +74,8 @@ describe('SecondaryIssuancePage', () => {
     expect(figure).toHaveTextContent('99 CKB');
     expect(figure).toHaveAttribute('title', '99.00000001 CKB');
     const evidence = document.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(evidence).toHaveTextContent('Frozen phase-1 overlap: 1 CKB');
+    // re-pinned for lane D1's third round (S1): a part of the unclaimed compensation, never a
+    // difference between two wholes (was "Frozen phase-1 overlap")
+    expect(evidence).toHaveTextContent('Frozen phase-1 compensation: 1 CKB');
   });
 });

@@ -90,7 +90,18 @@ describe('NetworkDistributions', () => {
       expect(found).not.toBeNull();
       return found!;
     });
-    expect(segment.textContent).toBe('50.00%');
+    // Re-pinned on purpose (readability P4, "a split bar names every segment in place"): a part
+    // whose segment cannot hold its words (its name, share and count) writes none there and is
+    // named on its own line under the bar; it was '50.00%', the share alone, its name nowhere near
+    // it. Each segment is (240 − 2) / 2 = 119 px; "中国电信 50.00% · 5 nodes" counts 4 × 16.25 +
+    // 17 × 7.8 = 197.6 px and 20 of padding.
+    expect(segment.textContent).toBe('');
+    const line = container.querySelector('[data-provider-line="中国电信"]') as HTMLElement;
+    expect(line.textContent).toBe('中国电信 50.00% · 5 nodes');
+    // two parts of 5 rank by their names, Hetzner first: from its part's left edge, 121 px (119
+    // and the 2 px gap), its line, 9 + 6 + 197.6 = 212.6 px, would run past the bar's end, so it
+    // ends at its part's right edge, the bar's end: 240 − 212.6
+    expect(parseFloat(line.style.marginLeft)).toBeCloseTo(240 - 212.6, 6);
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -701,6 +712,14 @@ describe('NetworkTrends', () => {
       ['leader', 'body', 'US 12', '2 labels'],
       ['labels', 'quiet', 'US 12 · DE 10', null],
     ]);
+    // PAGE-LANE-NOTES (B1, network/trends:288): the quiet line draws in the reading ink, so its
+    // label words are set quiet by the page — each label in the quiet ink, each count a value in
+    // the line's reading ink
+    const labelsLine = rows[0].querySelector('[data-line="labels"]') as HTMLElement;
+    const named = [...labelsLine.querySelectorAll('[data-role="figure-label"]')];
+    expect(named.map((n) => n.textContent)).toEqual(['US', 'DE']);
+    for (const n of named) expect(n).toHaveClass('text-text-dim');
+    expect(labelsLine.querySelectorAll('[data-dotted-item]')).toHaveLength(2);
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['day', '2025-07-02', null],
       ['leader', 'No retained round observation', null],

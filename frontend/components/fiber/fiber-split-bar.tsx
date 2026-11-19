@@ -24,14 +24,17 @@ export function FiberSplitBar({ left, right, note }: { left: Side; right: Side; 
   const leftPercent = Number((left.shannons * BigInt(1_000_000)) / total) / 10_000;
   return (
     <div data-split-bar className="min-w-0">
+      {/* A figure's labels are its values (lane P4): each party's id in the reading ink and its
+          amount exact, read out as the figure draws it (no padding to eight decimals: the
+          column form is a table column's); the note under the bar is the figure's note. */}
       <div className="text-body mb-1.5 flex flex-wrap justify-between gap-4">
         <span>
-          <span className="text-text-dim">{left.name}</span>{' '}
-          <CkbAmount form="column" shannons={left.shannons} signed={false} tone="plain" />
+          <span className="text-text">{left.name}</span>{' '}
+          <CkbAmount form="exact" shannons={left.shannons} signed={false} tone="plain" />
         </span>
         <span>
-          <CkbAmount form="column" shannons={right.shannons} signed={false} tone="plain" />{' '}
-          <span className="text-text-dim">{right.name}</span>
+          <CkbAmount form="exact" shannons={right.shannons} signed={false} tone="plain" />{' '}
+          <span className="text-text">{right.name}</span>
         </span>
       </div>
       <div className="flex h-[22px] gap-0.5" aria-hidden="true">

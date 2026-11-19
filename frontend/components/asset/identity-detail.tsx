@@ -255,9 +255,22 @@ export function CanonicalIdentityDetail({
           </span>
         ) : undefined
       }
-      // Consistency round C7: the standard's sentence is the lede; the facts are the metrics row,
-      // and the summary paragraph that restated them is tier 2's "in words" (as the Spore page's).
-      intro={<IdentityPositioning standard={standard} />}
+      // Readability R8: the lede is the identity's state, what it is and whether it is live, the
+      // sentence of "in words" that says so (it was the standard's sentence, which a recycled name
+      // contradicted); the facts are the metrics row (C7), the rest of "in words" tier 2's
+      lede={
+        state && (
+          <IdentityPositioning
+            standard={standard}
+            state={state}
+            accountGone={
+              state === 'expired' &&
+              p?.kind === 'bit_cell' &&
+              p.versions.at(-1)!.decoded.linkedAccount?.isLive === false
+            }
+          />
+        )
+      }
       metrics={
         p && term ? (
           <AssetMetrics

@@ -2,7 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '../utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
-  FiberGraphNotes,
   FiberPartiesNote,
   FiberNetworkPicture,
   FiberNetworkReading,
@@ -63,11 +62,28 @@ describe('FiberNetworkGraph', () => {
     expect(Number(name.getAttribute('x'))).toBeLessThanOrEqual(8);
     // the legend heads the column at the plot's right, before any party or pair is chosen
     const key = within(panel()).getByRole('list', { name: 'Graph key' });
+    // each item's words, its drawn glyph (a circle's number) apart
     expect(
       within(key)
         .getAllByRole('listitem')
-        .map((item) => item.textContent)
-    ).toEqual(['CKB locked now', 'channels over time', 'force-closed', 'has an open channel']);
+        .map((item) =>
+          Array.from(item.childNodes)
+            .filter((n) => n.nodeName.toLowerCase() !== 'svg')
+            .map((n) => n.textContent)
+            .join('')
+            .trim()
+        )
+      // Re-pinned on purpose (lane P4, the plan's P4 sentence: the Fiber graph's numbers and sizes
+      // come up from tier 2 as a legend): the key names what a circle's size and number are and
+      // what each line's width is; it named the lines' colours and the ring only, the rest was
+      // tier 2's prose ("How to read the graph")
+    ).toEqual([
+      'party · size and number: its channels',
+      'has an open channel',
+      'pair · grey width: channels over time',
+      'green width: CKB locked now',
+      'force-closed',
+    ]);
     expect(key).toHaveClass('text-meta', 'text-text-dim');
     expect(svg.querySelectorAll('[data-node]')).toHaveLength(25);
     expect(svg.querySelectorAll('[data-edge]')).toHaveLength(35);
@@ -84,6 +100,49 @@ describe('FiberNetworkGraph', () => {
     expect(Number(note.getAttribute('x'))).toBeLessThanOrEqual(880);
     // tier 1 carries no developer sentence about represented histories (FF-F6)
     expect(screen.queryByText(/channel histories represented/)).toBeNull();
+  });
+
+  // The plan's P4 sentence ("keys that a tier-1 figure needs come up from tier 2 as a legend, not
+  // as prose": the Fiber graph's numbers and sizes). The key draws each mark as the figure draws
+  // it: a party's circle with its count inside, its ring, and a pair's grey, green and dashed
+  // lines, the grey at the strength the edges are drawn at (review fiber-channels: the grey
+  // "channels over time" edges all but vanished by night; at 0.28 the night reading ink makes
+  // 2.0 : 1 on the page ground, at 0.4 2.86 : 1, and the key drew 0.4 while the figure drew 0.28).
+  it('keys a party’s size and number and each line’s width in tier 1, drawn as the figure draws them (P4)', () => {
+    const { container } = render(<Graph network={mainnet as FiberNetwork} />);
+    const key = within(panel()).getByRole('list', { name: 'Graph key' });
+    const party = within(key).getAllByRole('listitem')[0];
+    // a circle with a number inside, as a hub carries its count
+    expect(party.querySelector('circle')).not.toBeNull();
+    expect(party.querySelector('svg text')).toHaveTextContent(/^\d+$/);
+    // the key's grey line and every grey edge of the figure: one strength
+    const keyGrey = within(key).getAllByRole('listitem')[2].querySelector('line')!;
+    const edges = Array.from(
+      container.querySelectorAll('svg[data-fiber-graph] [data-edge] line[data-history]')
+    );
+    expect(edges.length).toBe(35);
+    for (const edge of edges)
+      expect(edge.getAttribute('stroke-opacity')).toBe(keyGrey.getAttribute('stroke-opacity'));
+    expect(keyGrey.getAttribute('stroke-opacity')).toBe('0.4');
+    // the key's words are labels: the meta step, the quiet ink (R3)
+    expect(key).toHaveClass('text-meta', 'text-text-dim');
+  });
+
+  it('says an empty network in the reading ink (R3: an empty state reads)', () => {
+    const net = network as FiberNetwork;
+    render(
+      <Graph
+        network={{
+          ...net,
+          summary: { ...net.summary, observedParties: 0, observedPairs: 0 },
+          parties: [],
+          pairs: [],
+        }}
+      />
+    );
+    const empty = screen.getByText('No on-chain parties observed yet.');
+    expect(empty).toHaveClass('text-text');
+    expect(empty).not.toHaveClass('text-text-dim');
   });
 
   it('keeps the explainer out of the picture: the column holds the legend until a party is chosen (R13, R14)', () => {
@@ -135,17 +194,13 @@ describe('FiberNetworkGraph', () => {
     expect(edge).not.toHaveClass('outline-none');
   });
 
-  it('says in tier 2 how to read the graph, what a party is, and which channels it cannot draw', () => {
-    render(
-      <>
-        <FiberGraphNotes />
-        <FiberPartiesNote network={network as FiberNetwork} />
-      </>
-    );
-    expect(
-      screen.getByText(/^Each circle is a party: the address that funded/)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/^Each line is a pair that opened channels\./)).toBeInTheDocument();
+  // Re-pinned on purpose (lane P4; renamed, it said "says in tier 2 how to read the graph, what a
+  // party is, and which channels it cannot draw"): how to read the graph is its key in tier 1, so
+  // the tier-2 explainer (FiberGraphNotes, "Each circle is a party …") is gone; what a party is
+  // stays in tier 2
+  it('says in tier 2 what a party is and which channels it cannot draw', () => {
+    render(<FiberPartiesNote network={network as FiberNetwork} />);
+    expect(screen.queryByText(/^Each circle is a party/)).toBeNull();
     expect(
       screen.getByText(
         fullText(
@@ -153,11 +208,8 @@ describe('FiberNetworkGraph', () => {
         )
       )
     ).toBeInTheDocument();
-    // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece (.prose-tier2:
-    // 13 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph. The
-    // explainer carries its own Prose; the parties note is one paragraph set in the page's.
-    const notes = screen.getByText(/^Each circle is a party: the address that funded/);
-    expect(notes.closest('[data-prose]')).toHaveClass('prose-tier2');
+    // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece, not by a body
+    // class on each paragraph; the parties note is one paragraph set in the page's.
     for (const p of Array.from(document.querySelectorAll('p'))) {
       expect(p).not.toHaveClass('text-body', 'text-text-dim');
     }

@@ -47,19 +47,23 @@ export function ClusterCellEvidence({
       >
         <dt className="text-text-dim">{cell.isLive ? 'live cell' : 'cell'}</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
-          <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`} title={cell.txHash}>
+          <AppLink
+            look="inline"
+            href={`/cell/${cell.txHash}-${cell.outputIndex}`}
+            title={cell.txHash}
+          >
             <ShortId value={cell.txHash} kind="hash" size="row" />
             <OutpointIndex index={cell.outputIndex} />
           </AppLink>{' '}
           · created in{' '}
-          <AppLink href={`/blocks/${cell.blockNumber}`}>
+          <AppLink look="inline" href={`/blocks/${cell.blockNumber}`}>
             {formatBlockNumber(cell.blockNumber)}
           </AppLink>{' '}
           · <Utc8Date timestamp={cell.timestamp} />
         </dd>
         <dt className="text-text-dim">held by</dt>
         <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
-          <AppLink href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
+          <AppLink look="inline" href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
             <ShortId value={cell.ownerAddress} kind="address" size="row" />
           </AppLink>
           {/* the holder's lock by the one decision (B4): nothing for the default lock */}
@@ -75,6 +79,7 @@ export function ClusterCellEvidence({
             <dt className="text-text-dim">type</dt>
             <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
               <AppLink
+                look="inline"
                 href={getScriptDetailHref({
                   name: cell.typeName,
                   codeHash: type.codeHash,

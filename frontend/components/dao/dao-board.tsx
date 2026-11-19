@@ -24,11 +24,7 @@ import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { CkbAmount } from '@/components/ui/ckb-amount';
-import {
-  IciclePartition,
-  icicleNodePaint,
-  type IcicleNode,
-} from '@/components/ui/icicle-partition';
+import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
   CLASS_COLORS,
@@ -40,13 +36,14 @@ import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
-import { WIDEST_COUNT, WIDEST_DAO_DEPOSIT, shortChars } from '@/lib/list-bounds';
+import { WIDEST_DAO_DEPOSIT_SUMMARY, shortChars } from '@/lib/list-bounds';
 import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
+import { HeadId } from '@/components/ui/head-id';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
@@ -182,10 +179,32 @@ export function DaoLede() {
   return (
     <p className="text-text text-body max-w-measure mt-1.5">
       CKB locked in the DAO keeps its share of the supply.{' '}
-      <a href="#evidence" className="hover:text-text-bright hover:underline">
-        How it works<span className="whitespace-nowrap"> ↓</span>
-      </a>
+      {/* a way onward, to a place further down: the link writes its ↓ (lane P4) */}
+      <Link href="#evidence" look="onward">
+        How it works
+      </Link>
     </p>
+  );
+}
+
+/**
+ * The two headline rates' keys, one line each in tier 1 (readability P4: "the DAO page keys its
+ * three rates in one line each"; the third, each year's compensation, is keyed under its bars):
+ * what each rate is, said where the reader meets it, and once (tier 2 no longer repeats it).
+ */
+function RateKeys() {
+  return (
+    // each key one line of the measure, 76 characters at most (R4): 70 and 72 here
+    <ul aria-label="What the rates are" className="text-small max-w-measure mt-3 space-y-1">
+      <li>
+        <span className="text-text-dim">Estimated APC:</span>{' '}
+        <span className="text-text">a year’s compensation, at today’s issuance and deposits</span>
+      </li>
+      <li>
+        <span className="text-text-dim">Compensation, last 365 days:</span>{' '}
+        <span className="text-text">what free capacity in the DAO grew, from AR</span>
+      </li>
+    </ul>
   );
 }
 
@@ -229,11 +248,8 @@ function Hero({
           <DaoHeading />
           <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
             {/* The hero's former "Explore DAO charts →", beside the range of the charts it continues. */}
-            <Link
-              href="/charts/total-deposit"
-              className="text-text hover:text-text-bright text-small font-mono hover:underline"
-            >
-              Explore DAO charts →
+            <Link href="/charts/total-deposit" look="onward" className="text-small font-mono">
+              Explore DAO charts
             </Link>
             {/* The controls board's range, `1 m · 1 y · all`: a new range lets a pinned day go. */}
             {series && (
@@ -320,6 +336,7 @@ function Hero({
           {evidence.phase0.count.toLocaleString('en-US')}
         </Metric>
       </dl>
+      <RateKeys />
     </div>
   );
 }
@@ -332,7 +349,6 @@ function exactSafeMs(value: string, context: string): number {
   return Number(ms);
 }
 
-const ICICLE_LABEL_MIN_PX = 1000;
 /** Hierarchy v3 (board): the icicle's rows — the whole, its three parts, compensation's two. */
 const ICICLE_ROWS = { heights: [48, 48, 32], gap: 3 } as const;
 /** The claimable part of the requested withdrawals: the DAO gold at this alpha (R12). */
@@ -439,33 +455,25 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           },
         ],
       };
-  const narrow = width !== null && width < ICICLE_LABEL_MIN_PX;
-  /** PB-25: a legend row's swatch is its block's paint, so every row names one block. */
-  const swatchOf = (key: string) => {
-    const find = (node: IcicleNode): IcicleNode | undefined =>
-      node.key === key ? node : node.children?.map(find).find(Boolean);
-    const node = root && find(root);
-    if (!node) throw new Error(`DAO issuance: no icicle block ${key} for its legend row`);
-    const { color: paint, opacity } = icicleNodePaint(node);
-    return <Swatch color={fade(paint, opacity)} />;
-  };
   return (
     <Section
       title="Where secondary issuance goes"
       args={
         <>
-          at <BlockLink number={statistics.tipBlockNumber} />
+          at <BlockLink number={statistics.tipBlockNumber} look="inline" />
         </>
       }
     >
       <div ref={ref} className="min-w-0">
         {root === null ? (
-          <div className="text-text-dim text-small max-w-measure">
+          <div className="text-text text-small max-w-measure">
             No secondary issuance has accrued at this indexed block; allocation shares are
             undefined.
           </div>
         ) : (
           width !== null && (
+            // every part named in place at every width (lane P4): inside its box where its name
+            // and share fit, else on a line of its own under the icicle, at its box
             <IciclePartition
               root={root}
               label="Secondary issuance since genesis, split three ways: to miners, compensation for depositors, burnt; the compensation is paid out or still owed to live deposits"
@@ -476,88 +484,30 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           )
         )}
       </div>
-      {root !== null && width !== null && narrow && (
-        <ul
-          aria-label="Secondary issuance parts"
-          className="text-small text-text-dim mt-3 space-y-1.5"
-        >
-          <li>
-            {swatchOf('total')}
-            secondary issuance since genesis{' '}
-            <span className="text-text">
-              <Amount form="column" value={total.toString()} />
-            </span>{' '}
-            CKB
-          </li>
-          <li>
-            {swatchOf('miners')}
-            miners {share(mining)} ·{' '}
-            <span className="text-text">
-              <Amount form="column" value={mining.toString()} />
-            </span>
-          </li>
-          <li>
-            {swatchOf('compensation')}
-            depositors {share(compensation)} ·{' '}
-            <span className="text-text">
-              <Amount form="column" value={compensation.toString()} />
-            </span>
-            <ul className="mt-1 space-y-1 pl-5">
-              <li>
-                {swatchOf('paid')}
-                paid out {ofCompensation(claimed)} ·{' '}
-                <span className="text-text">
-                  <Amount form="column" value={claimed.toString()} />
-                </span>
-              </li>
-              <li>
-                {swatchOf('owed')}
-                still owed {ofCompensation(unclaimed)} ·{' '}
-                <span className="text-text">
-                  <Amount form="column" value={unclaimed.toString()} />
-                </span>{' '}
-                to {liveCells} live cells
-              </li>
-            </ul>
-          </li>
-          <li>
-            {swatchOf('burnt')}
-            burnt {share(burnt)} ·{' '}
-            <span className="text-text">
-              <Amount form="column" value={burnt.toString()} />
-            </span>{' '}
-            · no cell can ever claim it
-          </li>
-        </ul>
-      )}
-      {root !== null && width !== null && !narrow && (
-        // One line of three facts (each its own item, so a narrower column wraps between them).
-        <p
-          data-role="exact-amounts"
-          className="text-small text-text-dim mt-3 flex flex-wrap gap-x-[0.6em]"
-        >
+      {root !== null && width !== null && (
+        // The amounts under the icicle, one line of facts (each its own item, so a narrower column
+        // wraps between them), in the summary form, whole CKB, each titled with its exact value
+        // (R5, lane P4: they were every decimal, padded): the labels quiet, the amounts read.
+        <p data-role="amounts" className="text-small text-text mt-3 flex flex-wrap gap-x-[0.6em]">
           <span>
-            to miners{' '}
-            <span className="text-text">
-              <Amount form="column" value={mining.toString()} />
-            </span>
+            <span className="text-text-dim">to miners</span>{' '}
+            <Amount form="summary" value={mining.toString()} />
           </span>
           <span>
             {' '}
-            · for depositors{' '}
-            <span className="text-text">
-              <Amount form="column" value={compensation.toString()} />
-            </span>{' '}
-            (paid out <Amount form="column" value={claimed.toString()} /> · still owed{' '}
-            <Amount form="column" value={unclaimed.toString()} /> to {liveCells} live cells)
+            <span className="text-text-dim">· for depositors</span>{' '}
+            <Amount form="summary" value={compensation.toString()} />{' '}
+            <span className="text-text-dim">(paid out</span>{' '}
+            <Amount form="summary" value={claimed.toString()} />{' '}
+            <span className="text-text-dim">· still owed</span>{' '}
+            <Amount form="summary" value={unclaimed.toString()} />{' '}
+            <span className="text-text-dim">to {liveCells} live cells)</span>
           </span>
           <span>
             {' '}
-            · burnt{' '}
-            <span className="text-text">
-              <Amount form="column" value={burnt.toString()} />
-            </span>{' '}
-            CKB
+            <span className="text-text-dim">· burnt</span>{' '}
+            <Amount form="summary" value={burnt.toString()} />{' '}
+            <span className="text-text-dim">CKB</span>
           </span>
         </p>
       )}
@@ -697,10 +647,11 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
       <div className="text-text-dim text-meta max-w-measure">
         How all{' '}
         <span className="text-text">
-          <Amount form="column" value={issued.toString()} />
+          <Amount form="summary" value={issued.toString()} />
         </span>{' '}
-        CKB issued so far is used at block <BlockLink number={statistics.tipBlockNumber} /> · every
-        block splits its issuance in these proportions
+        CKB issued so far is used at block{' '}
+        <BlockLink number={statistics.tipBlockNumber} look="inline" /> · every block splits its
+        issuance in these proportions
       </div>
       <div
         className="text-meta mt-1.5 flex h-[18px] w-full gap-[3px] overflow-hidden"
@@ -822,10 +773,20 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
       title="When deposits can leave"
       args={`${ready.count.toLocaleString('en-US')} ready · ${waiting.count.toLocaleString('en-US')} waiting`}
     >
-      <div className="relative">
-        <span className="text-text-dim text-meta pointer-events-none absolute left-2 top-1">
-          CKB whose 180-epoch cycle ends in the next 30 days
+      {/* The plot's name and its scale (lane P4: a chart that shows amounts carries values): the
+          tallest bar reaches the rule over the bars, and its amount is written at the rule's
+          right end, in the summary form, titled exactly; on a narrow column the scale takes a
+          line of its own under the name. */}
+      <div className="text-meta mb-1 flex flex-wrap items-baseline justify-between gap-x-4">
+        <span className="text-text-dim">CKB whose 180-epoch cycle ends in the next 30 days</span>
+        <span className="whitespace-nowrap">
+          <span className="text-text-dim">top line </span>
+          <span data-role="window-scale" className="text-text">
+            <Amount form="summary" value={max.toString()} /> CKB
+          </span>
         </span>
+      </div>
+      <div className="border-row-rule relative border-t">
         <div
           className="grid grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]"
           role="list"
@@ -842,7 +803,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
                 onFocus={() => setSelectedDay(row.nominalDay)}
                 onMouseEnter={() => setSelectedDay(row.nominalDay)}
-                className="focus:outline-interactive group flex h-[200px] flex-col justify-end pt-6 focus:outline"
+                className="focus:outline-interactive group flex h-[200px] flex-col justify-end focus:outline"
                 title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${formatCount(row.count, 'deposit')}, ${row.capacity} shannons`}
               >
                 <div
@@ -869,7 +830,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           idle={
             <>
               <span className="text-text-bright">
-                <Amount form="column" value={first.capacity} /> CKB
+                <Amount form="exact" value={first.capacity} /> CKB
               </span>{' '}
               in {plural(first.count, 'deposit')} ends its cycle within a day
             </>
@@ -882,7 +843,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 return (
                   <span className="text-text-bright">
                     Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
-                    {row.throughEpochOffset} · <Amount form="column" value={row.capacity} /> CKB in{' '}
+                    {row.throughEpochOffset} · <Amount form="exact" value={row.capacity} /> CKB in{' '}
                     {unitNode(formatCount(row.count, 'deposit'))}
                   </span>
                 );
@@ -986,7 +947,7 @@ function concentrationGroups(evidence: DaoEvidence) {
 /** A depositor's address at the form's size (U-09): row in the table, tight in the phone row. */
 function ownerLink(owner: Owner, size: ShortSize) {
   return (
-    <Link href={`/address/${owner.address}`} className="text-text-bright hover:underline">
+    <Link href={`/address/${owner.address}`} look="key">
       <ShortId value={owner.address} kind="address" size={size} />
     </Link>
   );
@@ -1039,7 +1000,13 @@ const ownerHead = (label: string) => <span className="text-meta">{label}</span>;
  */
 const ownerCell = (chars: number) => textPx(chars, fontPx('body'));
 
-const OWNER_COLUMNS: ListColumn<Owner>[] = [
+/**
+ * The columns for the rows the topic page shows. A depositor's deposits are no consensus count (a
+ * lock may hold any number of DAO cells across blocks; PAGE-LANE-NOTES: WIDEST_COUNT, a block's or
+ * a transaction's count, was reused for them), and the topic page shows five known rows: the
+ * Deposits column is budgeted from the widest count those rows hold (lane P4).
+ */
+const ownerColumns = (rows: readonly Owner[]): ListColumn<Owner>[] => [
   {
     key: 'rank',
     className: OWNER_CELL,
@@ -1047,7 +1014,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     header: ownerHead('#'),
     // a rank of the topic page's five (one digit, 8.4) and the gap; it was 40
     minWidth: columnPx(ownerCell(String(TOPIC_ROWS).length) + CELL_GAP_PX),
-    render: (o) => <span className="text-text-dim">{o.rank}</span>,
+    render: (o) => o.rank,
   },
   {
     key: 'depositor',
@@ -1078,11 +1045,13 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     className: OWNER_CELL,
     label: 'Deposits',
     header: ownerHead('Deposits'),
-    // the head's "Deposits" (57.6 at 12 px), wider than four digits ("9,999", 42), and the gap;
-    // it was 80
+    // the head's "Deposits" (57.6 at 12 px) or the widest count the rows hold, and the gap; it was
+    // the head against four digits, "9,999" (42), and 80 before that
     minWidth: columnPx(
-      Math.max(textPx('Deposits'.length, fontPx('meta')), ownerCell(WIDEST_COUNT.length)) +
-        CELL_GAP_PX
+      Math.max(
+        textPx('Deposits'.length, fontPx('meta')),
+        ...rows.map((o) => ownerCell(o.depositCount.toLocaleString('en-US').length))
+      ) + CELL_GAP_PX
     ),
     numeric: true,
     render: (o) => o.depositCount.toLocaleString('en-US'),
@@ -1092,11 +1061,12 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     className: OWNER_CELL,
     label: 'CKB deposited',
     header: ownerHead('CKB deposited'),
-    // one depositor's CKB under ten billion, every decimal (22 characters, 184.8), and the gap;
-    // it was 210
-    minWidth: columnPx(ownerCell(WIDEST_DAO_DEPOSIT.length) + CELL_GAP_PX),
+    // A list column, so the summary form (R5, lane P4: it was every decimal, padded): one
+    // depositor's CKB under ten billion, whole, "9,999,999,999" (13 characters, 109.2), and the
+    // gap; it was 22 characters (184.8), and 210 before that
+    minWidth: columnPx(ownerCell(WIDEST_DAO_DEPOSIT_SUMMARY.length) + CELL_GAP_PX),
     numeric: true,
-    render: (o) => <Amount form="column" value={o.capacity} />,
+    render: (o) => <Amount form="summary" value={o.capacity} />,
   },
   {
     key: 'share',
@@ -1106,7 +1076,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     // "100.00%" (58.8); the last column, no gap. It was 70.
     minWidth: columnPx(ownerCell('100.00%'.length)),
     numeric: true,
-    render: (o) => <span className="text-text-dim">{o.sharePercent}%</span>,
+    render: (o) => `${o.sharePercent}%`,
   },
 ];
 
@@ -1116,11 +1086,8 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
     <Section
       title="Who deposits"
       note={
-        <Link
-          href="/dao/depositors"
-          className="text-text hover:text-text-bright text-small hover:underline"
-        >
-          All {evidence.concentration.currentDepositors.toLocaleString('en-US')} depositors →
+        <Link href="/dao/depositors" look="onward" className="text-small">
+          All {evidence.concentration.currentDepositors.toLocaleString('en-US')} depositors
         </Link>
       }
     >
@@ -1140,22 +1107,22 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
       <ListTable
         label="Largest depositors"
         rows={evidence.concentration.owners.slice(0, TOPIC_ROWS)}
-        columns={OWNER_COLUMNS}
+        columns={ownerColumns(evidence.concentration.owners.slice(0, TOPIC_ROWS))}
         rowKey={(o) => o.lockScriptHash}
         empty="No live deposits at this indexed tip."
         mobileRow={(o) => (
           <div className="text-small space-y-1">
             <div className="flex items-baseline justify-between gap-3">
               <span className="min-w-0">
-                <span className="text-text-dim mr-2">{o.rank}</span>
+                <span className="mr-2">{o.rank}</span>
                 {ownerLink(o, 'tight')}
               </span>
-              <span className="text-text-dim shrink-0">{o.sharePercent}%</span>
+              <span className="shrink-0">{o.sharePercent}%</span>
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
               {ownerLock(o, 'inline', 'tight')}
               <span className="text-text-bright">
-                <Amount form="column" value={o.capacity} /> CKB
+                <Amount form="summary" value={o.capacity} /> CKB
                 <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>
               </span>
             </div>
@@ -1210,7 +1177,7 @@ function RawEvidence({
       bytes: '0..8',
       value: (
         <>
-          <Amount form="column" value={header.c} /> CKB issued in total
+          <Amount form="exact" value={header.c} /> CKB issued in total
         </>
       ),
     },
@@ -1224,7 +1191,7 @@ function RawEvidence({
       bytes: '16..24',
       value: (
         <>
-          <Amount form="column" value={header.s} /> CKB: compensation still owed to live deposits +
+          <Amount form="exact" value={header.s} /> CKB: compensation still owed to live deposits +
           the burnt share, which no cell can ever claim
         </>
       ),
@@ -1234,7 +1201,7 @@ function RawEvidence({
       bytes: '24..32',
       value: (
         <>
-          <Amount form="column" value={header.u} /> CKB occupied (incl. genesis virtual occupied)
+          <Amount form="exact" value={header.u} /> CKB occupied (incl. genesis virtual occupied)
         </>
       ),
     },
@@ -1243,7 +1210,8 @@ function RawEvidence({
     <DetailSection
       title={
         <>
-          The DAO field in every block header · <BlockLink number={header.blockNumber} />
+          The DAO field in every block header ·{' '}
+          <BlockLink number={header.blockNumber} look="inline" />
         </>
       }
     >
@@ -1265,14 +1233,14 @@ function RawEvidence({
       <p className="text-text text-body max-w-measure mt-3">
         AR, in every block header, is the DAO&apos;s growth index. Since genesis, AR grew from{' '}
         {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)} at block{' '}
-        <BlockLink number={evidence.tipBlockNumber} />: free capacity deposited in block 0 would
-        have grown by +{evidence.ar.sinceGenesisGrowthPercent}
+        <BlockLink number={evidence.tipBlockNumber} look="inline" />: free capacity deposited in
+        block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
         %. A deposit grows on the capacity it does not occupy; the curve flattens as more CKB
         exists. The deposit reading under &ldquo;How a deposit grows&rdquo; is the API
         calculator&apos;s for 10,000 CKB in a standard deposit cell: compensation accrues on its
         free capacity, the CKB the cell does not occupy. Compensation freezes at the withdrawal
         request AR. At block{' '}
-        <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
+        <Link href={`/blocks/${anchor.blockNumber}`} look="inline">
           {formatBlockNumber(anchor.blockNumber)}
         </Link>{' '}
         (
@@ -1280,16 +1248,17 @@ function RawEvidence({
           <ShortId value={anchor.blockHash} kind="hash" size="row" />
         </span>
         ), S (
-        <Amount form="column" value={statsS.toString()} /> CKB) equals the compensation still owed (
-        <Amount form="column" value={owed.toString()} />) plus the burnt share (
-        <Amount form="column" value={burnt.toString()} />) to the shannon: S only counts the burnt
+        <Amount form="exact" value={statsS.toString()} /> CKB) equals the compensation still owed (
+        <Amount form="exact" value={owed.toString()} />) plus the burnt share (
+        <Amount form="exact" value={burnt.toString()} />) to the shannon: S only counts the burnt
         share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’
         share.
       </p>
       {evidence.ar.year365 && (
         <div className="text-text-dim text-meta max-w-measure mt-2 font-mono">
-          365-day anchor: block <BlockLink number={evidence.ar.year365.anchorBlockNumber} /> · chain
-          time <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}
+          365-day anchor: block{' '}
+          <BlockLink number={evidence.ar.year365.anchorBlockNumber} look="inline" /> · chain time{' '}
+          <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}
           {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
           {formatDurationMs(
             exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
@@ -1300,9 +1269,10 @@ function RawEvidence({
       )}
       <Link
         href={`/blocks/${header.blockNumber}`}
-        className="text-text hover:text-text-bright text-small mt-2 inline-block hover:underline"
+        look="onward"
+        className="text-small mt-2 inline-block"
       >
-        Open source block →
+        Open source block
       </Link>
     </DetailSection>
   );
@@ -1318,11 +1288,16 @@ function RawEvidence({
               <div>
                 <dt className="text-text-dim">Type script · type</dt>
                 <dd className="mt-0.5">
+                  {/* the whole code hash in designed lines, never broken where the browser
+                      pleases (lane P4) */}
                   <Link
                     href="/script/0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e?hashType=type&kind=type"
-                    className="text-text-bright break-all font-mono hover:underline"
+                    look="key"
                   >
-                    0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e
+                    <HeadId
+                      value="0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e"
+                      kind="hash"
+                    />
                   </Link>
                 </dd>
                 <dd className="text-text-dim mt-0.5">
@@ -1408,18 +1383,19 @@ function HowItWorks({
           future secondary issuance to use; what is burnt stays burnt.
         </p>
         <p>
-          Estimated APC is at today&apos;s issuance and deposits; &ldquo;Compensation, last 365
-          days&rdquo; is on free capacity, from the header&apos;s AR. Statistics are exact to the
-          shannon at block <BlockLink number={statistics.tipBlockNumber} />; the indexed epoch is{' '}
+          {/* what the two headline rates are is said once, in their keys in tier 1 (lane P4) */}
+          Statistics are exact to the shannon at block{' '}
+          <BlockLink number={statistics.tipBlockNumber} look="inline" />; the indexed epoch is{' '}
           {evidence.tipEpoch.display}. &ldquo;Recent DAO activity&rdquo; lists deposits, withdrawal
           requests and withdrawals, newest first.
         </p>
       </Prose>
       <Link
         href={`/blocks/${statistics.tipBlockNumber}`}
-        className="text-text hover:text-text-bright text-small mt-2.5 inline-block hover:underline"
+        look="onward"
+        className="text-small mt-2.5 inline-block"
       >
-        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
+        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)}
       </Link>
     </DetailSection>
   );

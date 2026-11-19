@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import Link from '@/components/ui/link';
+import Link, { type LinkLook } from '@/components/ui/link';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenAddress, type ShortSize } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
@@ -18,8 +18,11 @@ export function minerName(address: string, pool: string | null, size: ShortSize)
 
 /**
  * A miner linked to its address. `unnamed` replaces the tail form where a page shows the address
- * itself for an unnamed miner (blocks list, block page). `className` lets a list row set it in
- * body ink, where its key cell is the one bright thing (table-rows T5); bright by default.
+ * itself for an unnamed miner (blocks list, block page). `look` is the link's job where the caller
+ * states it (lane P4: the fork pages write a miner inside a line or a cell, `inline`), drawn by the
+ * owner of the looks with no ink of its own; a caller that states none keeps the former ink:
+ * `className` lets a list row set it in body ink, where its key cell is the one bright thing
+ * (table-rows T5); bright by default.
  */
 export function MinerLink({
   address,
@@ -27,6 +30,7 @@ export function MinerLink({
   size,
   unnamed,
   className,
+  look,
 }: {
   address: string;
   pool: string | null;
@@ -34,12 +38,14 @@ export function MinerLink({
   size: ShortSize;
   unnamed?: ReactNode;
   className?: string;
+  look?: Extract<LinkLook, 'key' | 'inline'>;
 }) {
   if (pool === null && unnamed !== undefined) return <>{unnamed}</>;
   return (
     <Link
       href={`/address/${address}`}
-      className={cn('text-text-bright hover:text-jade', className)}
+      look={look}
+      className={look === undefined ? cn('text-text-bright hover:text-jade', className) : className}
       title={address}
       data-miner-pool={pool ?? undefined}
     >

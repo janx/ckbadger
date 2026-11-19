@@ -24,14 +24,31 @@ describe('MostUtilizedAssetsPage', () => {
       usedShare: {
         title: 'Top Assets Common Knowledge Share',
         data: [
-          { date: '2024-01-01', values: { top0: '100000001', others: '20', total: '100000021' } },
-          { date: '2024-01-02', values: { top0: '200000002', others: '30', total: '200000032' } },
+          {
+            date: '2024-01-01',
+            values: {
+              top0: '100000001',
+              others: '20',
+              total: '100000021',
+              drawnTotal: '100000001',
+            },
+          },
+          {
+            date: '2024-01-02',
+            values: {
+              top0: '200000002',
+              others: '30',
+              total: '200000032',
+              drawnTotal: '200000002',
+            },
+          },
         ],
         series: [
           { key: 'top0', label: 'Token A (token)', color: '#00c389' },
           { key: 'others', label: 'Others', color: '#64748b' },
         ],
-        // lane D1: the API names the bands a history is drawn in (re-pinned: it always does)
+        // lane D1: the API names the bands a history is drawn in (re-pinned: it always does);
+        // each day states the drawn ranks' total, drawnTotal (lane D1's third round, M2)
         bands: [
           { key: 'top0', label: 'Token A (token)', members: ['top0'] },
           { key: 'others', label: 'Others', members: ['others'] },
@@ -40,8 +57,24 @@ describe('MostUtilizedAssetsPage', () => {
       capacityShare: {
         title: 'Top Assets Capacity Share',
         data: [
-          { date: '2024-01-01', values: { top0: '300000003', others: '40', total: '300000043' } },
-          { date: '2024-01-02', values: { top0: '400000004', others: '50', total: '400000054' } },
+          {
+            date: '2024-01-01',
+            values: {
+              top0: '300000003',
+              others: '40',
+              total: '300000043',
+              drawnTotal: '300000003',
+            },
+          },
+          {
+            date: '2024-01-02',
+            values: {
+              top0: '400000004',
+              others: '50',
+              total: '400000054',
+              drawnTotal: '400000004',
+            },
+          },
         ],
         series: [
           { key: 'top0', label: 'Cluster A (object)', color: '#00c389' },

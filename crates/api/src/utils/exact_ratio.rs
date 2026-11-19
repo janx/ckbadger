@@ -95,6 +95,29 @@ pub fn format_percent(numerator: i128, denominator: i128, decimals: u32) -> Resu
             .checked_add(2)
             .ok_or("percentage precision overflow")?,
     )?;
+    percent_from_ratio(&ratio, decimals)
+}
+
+/// The same percentage cut at `decimals`, never rounded (lane D1's third round): a share a chart
+/// page states shows no digit that is not the exact value's.
+pub fn format_percent_cut(
+    numerator: i128,
+    denominator: i128,
+    decimals: u32,
+) -> Result<String, String> {
+    let ratio = format_ratio_cut(
+        numerator,
+        denominator,
+        decimals
+            .checked_add(2)
+            .ok_or("percentage precision overflow")?,
+    )?;
+    percent_from_ratio(&ratio, decimals)
+}
+
+/// A ratio written at `decimals + 2` places, as a percentage at `decimals`: the point moved two
+/// places right.
+fn percent_from_ratio(ratio: &str, decimals: u32) -> Result<String, String> {
     let (whole, fraction) = ratio
         .split_once('.')
         .ok_or("percentage requires fractional digits")?;
@@ -123,6 +146,13 @@ pub fn format_share_4(numerator: i64, denominator: i64) -> Result<Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_cut_percentage_never_carries() {
+        assert_eq!(format_percent_cut(2, 3, 6).unwrap(), "66.666666");
+        assert_eq!(format_percent(2, 3, 6).unwrap(), "66.666667");
+        assert_eq!(format_percent_cut(1, 1, 0).unwrap(), "100");
+    }
 
     #[test]
     fn a_cut_ratio_drops_the_digits_past_its_places_and_never_carries() {

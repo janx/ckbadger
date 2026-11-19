@@ -1578,7 +1578,7 @@ async fn get_circulation_ratio_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:dao-circulation-ratio", chain)?;
+    let cache_key = complete_days_cache_key("chart:dao-circulation-ratio:v2", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.mem_cache.get::<ChartResponse>(cache_key) {
         return ok(cached);
@@ -1616,7 +1616,8 @@ async fn get_circulation_ratio_chart(
                 s.date, s.total_deposited
             )));
         }
-        let ratio = crate::utils::exact_ratio::format_ratio(
+        // cut at its four decimals, never rounded (lane D1's third round, S9)
+        let ratio = crate::utils::exact_ratio::format_ratio_cut(
             s.total_deposited.checked_mul(100).ok_or_else(|| {
                 ApiError::internal(format!("DAO deposited percentage overflows for {}", s.date))
             })?,

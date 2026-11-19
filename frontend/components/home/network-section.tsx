@@ -21,6 +21,7 @@ import {
 import { RangeSelect } from '@/components/ui/range-select';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { api, type ChartResponse, type TxStatsDataPoint } from '@/lib/api';
+import { chartUnitValue } from '@/components/charts/chart-model';
 import { chartNumber, dayLabel, splitByCompleteness } from '@/lib/daily-series';
 import {
   exactDecimalRatio,
@@ -130,7 +131,24 @@ function BlockTimeFigure() {
     refetchInterval: 300_000,
   });
   const d = useMemo(
-    () => derive({ data, error }, (chart) => exactLineView(chart, 1), 'No block-time history.'),
+    () =>
+      derive(
+        { data, error },
+        // the route sends each day's average in whole ms (lane D1's third round, M1); read in
+        // seconds through the chart pages' one conversion, exactly
+        (chart) =>
+          exactLineView(
+            {
+              ...chart,
+              data: chart.data.map((point) => ({
+                ...point,
+                value: chartUnitValue(point.value, 'ms-seconds', `block time ${point.date}`),
+              })),
+            },
+            1
+          ),
+        'No block-time history.'
+      ),
     [data, error]
   );
   const v = viewOf(d);

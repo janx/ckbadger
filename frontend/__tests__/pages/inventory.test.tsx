@@ -736,7 +736,12 @@ describe('Objects Inventory Page', () => {
       const labels = screen.getAllByText('Decode pending').filter((el) => el.tagName === 'SPAN');
       expect(labels).toHaveLength(1);
       for (const label of labels) {
-        expect(label).toHaveClass('text-text-dim');
+        // re-pinned on purpose (readability P2, lane p-assets): the composition chip's words read
+        // in the reading ink, as the composition legend writes them (they were the quiet ink); a
+        // row tag keeps the quiet ink of a label; neither warns
+        expect(label).toHaveClass(
+          label.hasAttribute('data-composition') ? 'text-text' : 'text-text-dim'
+        );
         expect(label).not.toHaveClass('text-warning', 'storage-text-gem');
       }
     };

@@ -14,12 +14,15 @@ import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
-import { formatStandard } from '@/components/activity-event-row';
 import { formatBlockNumber } from '@/lib/format-block';
 import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { CompositionBadge } from '@/components/ui/composition-mark';
-import { useFromSm } from '@/hooks/useFromMd';
-import { PHONE_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { NoBreak } from '@/components/ui/no-break';
+import { PHONE_LINE_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
+import { wordHeads } from '@/components/asset/inventory-table';
+import { SHORT_FORMS } from '@/lib/shorten';
+import { WIDEST_BLOCK_NUMBER, shortChars } from '@/lib/list-bounds';
 import type { CompositionTier } from '@/lib/asset-utils';
 // F2 objects (round 2, OB-C3): the 24-card gallery was replaced by the Collection board's
 // Newest list (`collection-objects.tsx`).
@@ -39,20 +42,21 @@ export interface CollectionItemsProps {
  * never passed off as an address, and a named owner is never reported as "No live owner".
  */
 function ItemOwner({ item }: { item: CollectionItem }) {
+  // a value in a list's cell, at the cells' 13 px; its note under it at 12 (readability B)
   if (item.ownerAddress)
-    return <Address address={item.ownerAddress} size="row" className="text-meta" />;
+    return <Address address={item.ownerAddress} size="row" look="inline" className="text-small" />;
   if (item.ownerLockHash)
     return (
-      <span className="text-meta">
-        <Hash hash={item.ownerLockHash} size="row" className="text-meta" />
-        <span className="text-text-dim block">address not indexed</span>
+      <span className="text-small">
+        <Hash hash={item.ownerLockHash} size="row" className="text-small" />
+        <span className="text-text-dim text-meta block">address not indexed</span>
       </span>
     );
   if (item.ownerHashPrefix)
     return (
-      <span className="text-meta [overflow-wrap:anywhere]">
-        <Hash hash={item.ownerHashPrefix} truncate={false} className="text-meta" />
-        <span className="text-text-dim block">named owner prefix · no indexed lock</span>
+      <span className="text-small [overflow-wrap:anywhere]">
+        <Hash hash={item.ownerHashPrefix} truncate={false} className="text-small" />
+        <span className="text-text-dim text-meta block">named owner prefix · no indexed lock</span>
       </span>
     );
   if (item.isLive)
@@ -71,11 +75,19 @@ function ItemOwner({ item }: { item: CollectionItem }) {
 function mnftRowTitle(item: CollectionItem): ReactNode {
   if (item.tokenIndex === undefined)
     return (
-      <span role="alert" className="text-rouge text-small font-mono">
+      <span role="alert" className="text-rouge text-small font-mono [overflow-wrap:anywhere]">
         m-NFT item {item.nftId} has no tokenIndex
       </span>
     );
-  return item.name === null ? `#${item.tokenIndex}` : `${item.name} #${item.tokenIndex}`;
+  // the index is one figure: a line breaks before it, never inside it
+  const index = <NoBreak>#{item.tokenIndex}</NoBreak>;
+  return item.name === null ? (
+    index
+  ) : (
+    <>
+      {item.name} {index}
+    </>
+  );
 }
 
 /**
@@ -205,9 +217,17 @@ const ITEM_NAME_LINE_PX = phoneHead(
 
 /** An item's name as its row says it: an m-NFT's class name and index, else its name or DID. */
 function itemName(item: CollectionItem): ReactNode {
-  return item.standard === 'm-nft'
-    ? mnftRowTitle(item)
-    : (item.name ?? item.did ?? <Hash hash={item.nftId} size="row" className="text-meta" />);
+  if (item.standard === 'm-nft') return mnftRowTitle(item);
+  // a name is words, broken between them; a name or a DID with a run as long as an id (40
+  // characters and more, a did:ckb) breaks anywhere, never past its line
+  const words = item.name ?? item.did;
+  if (words !== null && words !== undefined)
+    return /\S{40,}/.test(words) ? (
+      <span className="[overflow-wrap:anywhere]">{words}</span>
+    ) : (
+      words
+    );
+  return <Hash hash={item.nftId} size="row" className="text-small" />;
 }
 
 /** The status filter's values, as the heading's args say them (the chips' own words). */
@@ -222,7 +242,6 @@ const STATUS_VALUES: readonly FilterValue<ItemStatusFilter>[] = (
 ).map((key) => ({ key, label: STATUS_WORDS[key] }));
 
 export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps) {
-  const fromSm = useFromSm();
   const [search, setSearch] = useState(''),
     // Live first: live cells are the state (DATA_DESIGN); a .bit collection is 97 % recycled names,
     // so 'all' opened on a screen of names with no live owner (review 2026-11-03, item 3).
@@ -257,6 +276,73 @@ export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps)
       : item.standard === 'm-nft'
         ? `/objects/mnft/${item.nftId}`
         : `/objects/${item.nftId}`;
+  // Each column budgeted from what it holds at its step (readability F3-e), the 16 px gap after
+  // every column but the last.
+  const columns: ListColumn<CollectionItem>[] = wordHeads([
+    {
+      key: 'name',
+      label: 'Name',
+      // the flexible column: 24 characters of a name at the key's 14 px (201.6) and the gap at its
+      // minimum; a longer name wraps between its words, a DID or an id anywhere, never cut
+      minWidth: columnPx(textPx(24, fontPx('body')) + CELL_GAP_PX),
+      width: 'auto',
+      render: (item) => (
+        <span className="block min-w-0">
+          <AppLink href={href(item)} look="key" className="text-body">
+            {itemName(item)}
+          </AppLink>
+          {status !== 'recycled' && !item.isLive && (
+            <span className="text-text-dim text-meta block">inactive</span>
+          )}
+        </span>
+      ),
+    },
+    {
+      key: 'holder',
+      label: 'Held by',
+      // a lock hash at the row size (17 characters at 13 px, 132.6) or its note, "address not
+      // indexed" at 12 (136.8, the wider), and the gap; an owner prefix breaks anywhere
+      minWidth: columnPx(
+        Math.max(
+          textPx(shortChars(SHORT_FORMS.row.hash), fontPx('small')),
+          textPx('address not indexed'.length, fontPx('meta'))
+        ) + CELL_GAP_PX
+      ),
+      render: (item) => <ItemOwner item={item} />,
+    },
+    ...(kind === 'object'
+      ? [
+          {
+            key: 'composition',
+            label: 'Composition',
+            // the owner's rule: an object's composition on every row. The widest chip, an
+            // off-chain tier at the small size ("Decentralized mix": its 12 px mark, 6 px and 17
+            // characters at 12, 140.4), and the gap
+            minWidth: columnPx(
+              12 + 6 + textPx('Decentralized mix'.length, fontPx('meta')) + CELL_GAP_PX
+            ),
+            render: () =>
+              tier ? (
+                <CompositionBadge tier={tier} size="sm" />
+              ) : (
+                <span className="text-text">not recorded</span>
+              ),
+          } satisfies ListColumn<CollectionItem>,
+        ]
+      : []),
+    {
+      key: 'created',
+      label: 'Created',
+      // a block of eight digits, "#99,999,999" (85.8 at 13 px); the last column
+      minWidth: columnPx(textPx(WIDEST_BLOCK_NUMBER.length, fontPx('small'))),
+      numeric: true,
+      render: (item) => (
+        <AppLink href={`/blocks/${item.createdAtBlock}`} look="inline">
+          {formatBlockNumber(item.createdAtBlock)}
+        </AppLink>
+      ),
+    },
+  ]);
   return (
     <section aria-label="Collection items" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -299,45 +385,22 @@ export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps)
       {query.data ? (
         <>
           <AssetReadState label="collection items" error={query.error} retained />
-          {/* Below sm, the phone-rows board's row (PB-03); from sm the three-column grid. */}
-          {fromSm ? (
-            <div className="divide-base-border divide-y">
-              {query.data.data.map((item) => (
-                <article
-                  key={item.nftId}
-                  className="grid min-w-0 gap-3 py-4 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]"
-                >
-                  <div className="min-w-0">
-                    <AppLink href={href(item)} className="text-text-bright break-words">
-                      {/* F2 identities (round 2): a did:ckb row has no name but its DID (R2b-b-22). */}
-                      {item.standard === 'm-nft'
-                        ? mnftRowTitle(item)
-                        : (item.name ??
-                          item.did ?? <Hash hash={item.nftId} size="row" className="text-meta" />)}
-                    </AppLink>
-                    <span className="text-text-dim text-meta mt-1 block">
-                      {formatStandard(item.standard)} · {item.isLive ? 'Live' : 'Inactive'}
-                    </span>
-                  </div>
-                  <div className="min-w-0">
-                    <ItemOwner item={item} />
-                  </div>
-                  <AppLink href={`/blocks/${item.createdAtBlock}`} className="text-meta">
-                    {formatBlockNumber(item.createdAtBlock)}
-                  </AppLink>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="divide-base-border divide-y">
-              {query.data.data.map((item) => (
-                <div key={item.nftId} className="py-2.5">
-                  <CollectionItemPhoneRow item={item} href={href(item)} kind={kind} tier={tier} />
-                </div>
-              ))}
-            </div>
-          )}
-          {query.data.data.length === 0 && <p className="text-text-dim">No items.</p>}
+          {/* Readability P2: a list with its column heads (its rows were three bare values, the
+              block a lone number at the far right), each row once what differs: the standard is
+              the page's and its status the filter's, said once (each row said ".bit · Live"); a
+              name no longer live says so where the filter is not "inactive". Below the table's
+              width, the phone-rows board's row (PB-03). */}
+          <ListTable
+            label={kind === 'identity' ? 'Identities' : 'Objects'}
+            columns={columns}
+            rows={query.data.data}
+            rowKey={(item) => item.nftId}
+            empty="No items."
+            density="row"
+            mobileRow={(item) => (
+              <CollectionItemPhoneRow item={item} href={href(item)} kind={kind} tier={tier} />
+            )}
+          />
           {/* The library's pager (lane c2-finish, 1a): counted of the chosen status's total
               where this page's response states it, an ordered list with no count on a search
               page (the API gives a search no total), nothing for one page. */}

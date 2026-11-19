@@ -124,7 +124,7 @@ function WhatItIs({ what }: { what: What }) {
     case 'item':
     case 'typed':
       return (
-        <Link href={what.href} title={what.title} className="text-text hover:text-jade">
+        <Link look="inline" href={what.href} title={what.title}>
           {what.text}
         </Link>
       );
@@ -145,11 +145,7 @@ function whatText(what: What): string {
 
 function Owner({ cell, size }: { cell: Cell; size: ShortSize }) {
   return cell.address ? (
-    <Link
-      href={`/address/${cell.address}`}
-      title={cell.address}
-      className="text-text hover:text-jade"
-    >
+    <Link look="inline" href={`/address/${cell.address}`} title={cell.address}>
       <ShortId value={cell.address} kind="address" size={size} />
     </Link>
   ) : (
@@ -196,15 +192,11 @@ function Created({
         parts={[
           <>
             tx{' '}
-            <Link
-              href={`/tx/${cell.txHash}`}
-              title={cell.txHash}
-              className="text-text-dim hover:text-jade"
-            >
+            <Link look="inline" href={`/tx/${cell.txHash}`} title={cell.txHash}>
               <ShortId value={cell.txHash} kind="hash" size={size} />
             </Link>
           </>,
-          <BlockLink key="block" number={cell.createdAtBlock} />,
+          <BlockLink look="inline" key="block" number={cell.createdAtBlock} />,
           createdDate(detail),
         ]}
       />
@@ -268,9 +260,10 @@ export function ScriptNewestCells({
   // The out point at the form's size (U-09): `row` in the table, `tight` in the phone row.
   const key = ({ cell }: Row, size: ShortSize) => (
     <Link
+      look="key"
       href={`/cell/${cell.txHash}-${cell.outputIndex}`}
       title={outpoint(cell)}
-      className="text-body text-text-bright hover:text-jade leading-row hover:underline"
+      className="text-body leading-row"
     >
       <ShortId value={cell.txHash} kind="hash" size={size} />
       <OutpointIndex index={cell.outputIndex} />
@@ -393,12 +386,15 @@ export function ScriptNewestCells({
           </span>
         </p>
       )}
+      {/* Ways onward (the controls gate's one work-list entry, "All N cells ↓"): a place further
+          down this page and another page, each the onward look, its arrow the link's own ("↓" to
+          a place on this page, "→" to another) */}
       <p data-role="newest-footer" className="text-small mt-1 flex flex-wrap gap-x-4 gap-y-1">
-        <a href="#its-cells" className="text-text hover:text-jade">
-          All {unitNode(formatCount(family.liveCellsCount, 'cell'))} ↓
-        </a>
+        <Link href="#its-cells" look="onward">
+          all {unitNode(formatCount(family.liveCellsCount, 'cell'))}
+        </Link>
         {activity && (
-          <Link href={activity.href} className="text-text hover:text-jade">
+          <Link href={activity.href} look="onward">
             {activity.label}
           </Link>
         )}

@@ -390,4 +390,45 @@ describe('Shared asset feeds', () => {
       expect(loadTransactions).toHaveBeenCalledWith({ limit: 20, cursor: undefined })
     );
   });
+
+  // The page lane notes (the placement lanes, 2026-11-19): the feed's onNewer was not available on
+  // an activity page opened from a URL cursor, so a reader who landed on page 3 could not go
+  // newer. The API pages one way (older); the way newer from a cursor it has no history of is the
+  // newest end, after which the walk counts its pages again.
+  it('goes newer from an activity page opened at a URL cursor: to the newest end', async () => {
+    const loadActivities = vi.fn().mockResolvedValue({
+      data: [activity],
+      total: 100,
+      limit: 20,
+      hasMore: true,
+      nextCursor: 'older',
+    });
+    const changed = vi.fn();
+    render(
+      <AssetFeed
+        queryKey="cursor-newer"
+        scope="This identity"
+        initialActivityCursor="100:2"
+        onActivityCursorChange={changed}
+        loadActivities={loadActivities}
+        loadTransactions={vi.fn()}
+      />
+    );
+    await waitFor(() =>
+      expect(loadActivities).toHaveBeenLastCalledWith({ limit: 20, cursor: '100:2' })
+    );
+    const pager = await screen.findByRole('navigation', { name: 'activities' });
+    fireEvent.click(within(pager).getByRole('button', { name: '← newer' }));
+    await waitFor(() =>
+      expect(loadActivities).toHaveBeenLastCalledWith({ limit: 20, cursor: undefined })
+    );
+    await waitFor(() => expect(changed).toHaveBeenLastCalledWith(undefined));
+    // at the newest end the pages are counted again, and there is nothing newer
+    await waitFor(() =>
+      expect(screen.getByRole('navigation', { name: 'activities' })).toHaveTextContent(
+        'page 1 of 5'
+      )
+    );
+    expect(screen.queryByRole('button', { name: '← newer' })).toBeNull();
+  });
 });

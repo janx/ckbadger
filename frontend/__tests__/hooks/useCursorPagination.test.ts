@@ -117,6 +117,31 @@ describe('useCursorPagination', () => {
 
   // Item 1d, kept: a list that asks for another page size below md (24 / 20, 50 / 20) starts again
   // from its first page when the size changes: the cursors of the other size name other rows.
+  // Lane cd-fixes-controls, at the merge with the asset lane's URL cursor: a walk can start from a
+  // cursor (an asset feed opened at the URL's), its first page asked and stamped there, so a
+  // response read there is not the newest end's
+  describe('a walk that starts from a cursor', () => {
+    it('asks its first page there, comes back to it, and starts again when the cursor changes', async () => {
+      const { result, rerender } = renderHook(({ from }) => useCursorPagination(20, from), {
+        initialProps: { from: 'url-7' as string | undefined },
+      });
+      expect(result.current.cursor).toBe('url-7');
+      expect(result.current.hasPrevious).toBe(false);
+      const fromUrl = await askPage(result.current, 'url-8');
+      expect(fromUrl.asked).toEqual({ page: 1, cursor: 'url-7', size: 20 });
+      act(() => result.current.goToNext(fromUrl));
+      expect(result.current.cursor).toBe('url-8');
+      act(() => result.current.goToPrevious());
+      expect(result.current.cursor).toBe('url-7');
+      // to the newest end: a new start, and the response read at the URL's cursor moves nothing
+      rerender({ from: undefined });
+      expect(result.current.cursor).toBeUndefined();
+      expect(result.current.page).toBe(1);
+      act(() => result.current.goToNext(fromUrl));
+      expect(result.current.page).toBe(1);
+    });
+  });
+
   describe('a change of page size', () => {
     it('starts the list again from its first page', async () => {
       const { result, rerender } = renderHook(({ size }) => useCursorPagination(size), {
