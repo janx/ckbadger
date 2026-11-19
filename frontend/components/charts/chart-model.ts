@@ -1,13 +1,15 @@
 import type { ChartPoint, ChartSeries } from '@/components/ui/chart';
-import type {
-  ChartDefinition,
-  ChartPayload,
-  ChartScale,
+import {
+  SIX_KINDS_SLUG,
+  type ChartDefinition,
+  type ChartPayload,
+  type ChartScale,
 } from '@/components/charts/chart-catalogue';
 import {
   exactDecimalRatio,
   exactSignedDecimalRatio,
   exactUnsignedInteger,
+  cutScaledInteger,
   formatCompactRatio,
   formatExactDecimal,
   formatScaledInteger,
@@ -78,38 +80,14 @@ export interface SubChart {
   bandEnds?: Record<string, string>;
   /** A histogram's whole, the route's: what its page's shares of a bucket divide by (cell size). */
   whole?: string;
+  /** A ranked history's last day: the ranks drawn as their own bands, their total, the route's. */
+  drawnTotal?: string;
 }
 
 /** A dated sub-chart read at its last day, the head's date (CH-05). */
 function withLastReading(sub: SubChart): SubChart {
   const last = sub.points.at(-1);
   return last ? { ...sub, reading: { label: last.label, point: last } } : sub;
-}
-
-/**
- * The HODL wave's age bands as ranges (CH-14, CH-21): an en dash with spaces, the youngest band
- * `< 1 d` (the API's "24h" read as a duration among ranges).
- */
-const SERIES_NAMES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
-  'hodl-wave': {
-    gt3y: '> 3 y',
-    '1y3y': '1 y – 3 y',
-    '6m1y': '6 m – 1 y',
-    '3m6m': '3 m – 6 m',
-    '1m3m': '1 m – 3 m',
-    '1w1m': '1 w – 1 m',
-    '1d1w': '1 d – 1 w',
-    '24h': '< 1 d',
-  },
-};
-
-/** A stacked series' name: the page's own where it has one (an unknown band fails), else the API's. */
-function seriesName(slug: string, entry: { key: string; label: string }): string {
-  const names = SERIES_NAMES[slug];
-  if (!names) return entry.label;
-  const name = names[entry.key];
-  if (name === undefined) throw new Error(`${slug}: unknown band ${entry.key}`);
-  return name;
 }
 
 /** The point whose `key` value is largest; the first of equals. */
@@ -150,8 +128,6 @@ export interface ChartModel {
   /** Present only when the API actually provides a second physical unit. */
   secondary?: SubChart;
   latest: { label: string; raw: string; display: string } | null;
-  /** Exact, signed change between the final two returned points. */
-  delta: string | null;
   rankedRows?: {
     label: string;
     value: string;
@@ -202,7 +178,11 @@ export interface ChartModel {
   /** Lane D1: every series of a stack whose bands were merged, at the last point, for its table. */
   table?: { name: string; value: string }[];
   /** Lane D1: the consensus target, exactly, in the chart's unit (uncle rate, epoch length). */
-  target?: { ratio: readonly [bigint, bigint]; text: string };
+  target?: { ratio: readonly [bigint, bigint]; text: string; ms?: bigint };
+  /** Lane D1, third round (S5): the buckets tied with the reading, by label. */
+  readingTies?: string[];
+  /** Block intervals' window, the route's (S4). */
+  intervalWindow?: { epochs: number; intervals: number; beyondRange: number };
   /** Lane D1: the window a ranking of blocks counts (miners). */
   window?: { from: string; to: string; totalBlocks: number };
   /** A fixed value domain: a share chart runs 0–100 (CH-15). */
@@ -262,6 +242,17 @@ export function chartUnitValue(value: string, scale: ChartScale, context: string
       return decimalByPower(value, 15, context);
     case 'fraction-percent':
       return multiplyDecimal(value, BigInt(100), context);
+    // a duration the route sends in whole ms (lane D1's third round, M1)
+    case 'ms-seconds':
+      return decimalByPower(value, 3, context);
+    // hours need not end in a decimal (ms ÷ 3,600,000; 14,417,000 ms is 4.0047222… h): the value
+    // is cut at nine places, its trailing zeros dropped (4 h reads "4", exactly), a carrier for the
+    // plot and every two-place figure (a cut of a finer cut is the cut), while the exact ms stays
+    // on the point (`values.ms`) for what compares and for the figure's title
+    case 'ms-hours':
+      return cutScaledInteger(exactUnsignedInteger(value, context), BigInt(3_600_000), 9)
+        .replace(/(\.\d*?)0+$/, '$1')
+        .replace(/\.$/, '');
   }
 }
 
@@ -371,6 +362,10 @@ function singleChart(
     peak?: { date: string; value: string } | null;
     peak2?: { date: string; value: string } | null;
     target?: { seconds: number; hours: string };
+    /** Block intervals' window, the route's (S4). */
+    epochs?: number;
+    intervals?: number;
+    beyondRange?: number;
     /** Cell size's wholes, counted by the route from its snapshot (the D1 hand-back, item 2). */
     liveCells?: string;
     occupiedCapacity?: string;
@@ -398,6 +393,8 @@ function singleChart(
     const values: Record<string, string> = {
       primary: chartUnitValue(primary, definition.scale, `${definition.slug} at ${point.date}`),
     };
+    // the duration's exact ms, for the target count and the figure's title (M1); not drawn
+    if (definition.scale === 'ms-hours') values.ms = primary;
     if (hasSecond && !definition.secondary) {
       const companion = point[companionField];
       if (companion === undefined || companion === null)
@@ -455,7 +452,6 @@ function singleChart(
         }
       : undefined;
   const last = points.at(-1);
-  const previous = points.at(-2);
   const bucketDistribution = BUCKET_DISTRIBUTIONS.includes(definition.slug);
   // Cohorts are ordered by first-seen month: the card reads the newest one, not the largest (CH-09).
   const cohorts = definition.slug === 'address-cohort-retention';
@@ -463,6 +459,14 @@ function singleChart(
     bucketDistribution && points.length
       ? largestPoint(points, 'primary', `${definition.slug} bucket`)
       : null;
+  // the buckets tied with the most common one, every one of them (S5)
+  const ties = leadingBucket
+    ? points.filter(
+        (point) =>
+          point !== leadingBucket &&
+          compareExact(point.values.primary, leadingBucket.values.primary) === 0
+      )
+    : [];
   // A model timeline is summarised at its "today" sample; any other series at its last point.
   const todayPoint = currentIndex === null ? null : points[currentIndex];
   // The newest cohort is the month the snapshot falls in, still filling; any older cohort is
@@ -522,13 +526,8 @@ function singleChart(
         }
       : null,
     // Neighbouring samples of a model curve or of a bucket histogram are not a change over time.
-    delta:
-      bucketDistribution || cohorts || todayPoint
-        ? null
-        : last && previous
-          ? exactDelta(previous.values.primary, last.values.primary, definition.slug)
-          : null,
     reading: leadingBucket ?? completeCohort ?? undefined,
+    ...(ties.length ? { readingTies: ties.map((point) => point.label) } : {}),
     projectedAfter: currentIndex ?? undefined,
     today: timelineMarkers ? today : undefined,
     // A bucket histogram's peak is its most common bucket, already the headline; a model has none.
@@ -553,6 +552,16 @@ function singleChart(
           return { label: `largest, ${point.label}`, point };
         })()
       : readingAt(secondary, summaryPoint.label, style, definition.slug);
+  // Block intervals' window, the route's: its epochs, every interval, those past the drawn 50 s
+  // (S4); an older API sends none and the page refuses it.
+  if (definition.slug === 'block-time-distribution') {
+    const { epochs, intervals, beyondRange } = payload;
+    if (epochs === undefined || intervals === undefined || beyondRange === undefined)
+      throw new Error(
+        `${definition.slug}: the API sends no epochs, intervals or beyondRange: it is older than this page`
+      );
+    model.intervalWindow = { epochs, intervals, beyondRange };
+  }
   // Cell size's shares divide by the route's wholes: its live cells and the CKB they occupy.
   if (definition.slug === 'cell-size-distribution') {
     if (payload.liveCells === undefined || payload.occupiedCapacity === undefined)
@@ -589,6 +598,8 @@ function singleChart(
     model.target = {
       ratio: exactDecimalRatio(payload.target.hours, `${definition.slug} target`),
       text: `${payload.target.hours} h`,
+      // the target in the ms each epoch is compared in, exactly (M1)
+      ms: BigInt(payload.target.seconds) * BigInt(1000),
     };
   }
   // The weekly share alone on the card; the daily share stays on the detail (CH-12).
@@ -631,7 +642,6 @@ type StackedPayload = {
     values: Record<string, string>;
     protocolTotalShannons?: string;
     phase1CompensationShannons?: string;
-    componentsTotalShannons?: string;
   }[];
   series: { key: string; label: string; color: string }[];
   peaks?: Record<string, { date: string; value: string }>;
@@ -671,7 +681,8 @@ const STATED_WHOLES: Readonly<
   'activity-type-breakdown': { field: 'kindOccurrences', on: 'values' },
   'total-supply': { field: 'totalIssuance', on: 'values' },
   'common-knowledge-composition': { field: 'knowledgeSize', on: 'values' },
-  'secondary-issuance': { field: 'componentsTotalShannons', on: 'point', scale: 'shannons' },
+  // the protocol total, the one whole the route sends, which the destinations make (S1)
+  'secondary-issuance': { field: 'protocolTotalShannons', on: 'point', scale: 'shannons' },
 };
 
 function stackedChart(definition: ChartDefinition, payload: StackedPayload): ChartModel {
@@ -686,8 +697,9 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
       ? payload.bands!
       : payload.series;
   if (!drawn.length) throw new Error(`${definition.slug}: no chart series`);
-  // A ranking draws its five and "others"; any other stack at most five (the board, rule 5).
-  const most = classes ? MAX_BANDS + 1 : MAX_BANDS;
+  // Rule 5: a stack draws at most five bands. The one allowance is the lead's ruling, by name
+  // (SIX_KINDS_SLUG): Activity by type keeps its six kinds, none of them "others".
+  const most = definition.slug === SIX_KINDS_SLUG ? MAX_BANDS + 1 : MAX_BANDS;
   if (drawn.length > most)
     throw new Error(
       `${definition.slug}: ${drawn.length} bands, more than the ${most} a page draws`
@@ -702,7 +714,7 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   const wholeOf = (point: StackedPayload['data'][number]): string | undefined => {
     if (!stated) return undefined;
     if (stated.on === 'values') return read(point, stated.field);
-    const raw = point[stated.field as 'componentsTotalShannons'];
+    const raw = point[stated.field as 'protocolTotalShannons'];
     if (raw === undefined)
       throw new Error(`${definition.slug}: missing ${stated.field} at ${point.date}`);
     return chartUnitValue(raw, stated.scale, `${definition.slug} ${stated.field} at ${point.date}`);
@@ -725,7 +737,6 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
       : { key: entry.key, label: entry.label, color: ramp[index] }
   );
   const last = points.at(-1);
-  const previous = points.at(-2);
   /** The point's whole, the route's (STATED_WHOLES). */
   const whole = (point: ChartPoint): string => {
     if (point.whole === undefined)
@@ -792,16 +803,14 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
           display: summary(headOf(points.length - 1), definition.unit),
         }
       : null,
-    delta:
-      banded || !last || !previous
-        ? null
-        : exactDelta(headOf(points.length - 2), headOf(points.length - 1), definition.slug),
-    // The frozen phase-1 overlap explains the protocol total for developers (CH-18).
+    // The frozen phase-1 compensation, a developer fact (CH-18): the compensation frozen at a
+    // withdraw request and not yet claimed, a part of the compensation band (lane D1's third
+    // round, S1: it was called an overlap of two wholes; the destinations make the one whole).
     evidence:
       isSecondaryIssuance && payload.data.length
         ? [
             {
-              label: 'Frozen phase-1 overlap',
+              label: 'Frozen phase-1 compensation',
               // Grouped like the head figure (CH-34).
               value: `${formatChartExact(chartUnitValue(payload.data.at(-1)!.phase1CompensationShannons!, 'shannons', `${definition.slug} latest phase-1`), 'CKB')} CKB`,
             },
@@ -825,7 +834,8 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   if (banded) {
     const lastPoint = payload.data.at(-1)!;
     model.table = payload.series.map((entry) => ({
-      name: seriesName(definition.slug, entry),
+      // the route's name, in the drawn bands' words (N5: one band, one spelling)
+      name: entry.label,
       value: withUnit(cutDecimal(read(lastPoint, entry.key), 2), '%'),
     }));
   }
@@ -860,7 +870,6 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
     values: { liveCells: read(point, 'liveCells') },
   }));
   const last = points.at(-1);
-  const previous = points.at(-2);
   const peak = payload.peaks?.liveCells;
   return {
     title: payload.title,
@@ -886,10 +895,6 @@ function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): C
           display: summary(last.values.liveCells, definition.unit),
         }
       : null,
-    delta:
-      last && previous
-        ? exactDelta(previous.values.liveCells, last.values.liveCells, definition.slug)
-        : null,
     peak:
       peak === undefined
         ? undefined
@@ -908,9 +913,9 @@ function barWidth(part: bigint, total: bigint): number {
 }
 
 /**
- * Top five ranked entries plus one "Others" row for the exact remainder of the total, so the card
- * never drops ranks six and beyond (CH-01). The remainder is computed from exact amounts, never
- * from rounded shares; a zero remainder (or zero total) has no "Others" row.
+ * Top five ranked entries plus one "Others" row for the remainder of the total, so the card never
+ * drops ranks six and beyond (CH-01): the route's figure where it states one (a share history's
+ * rest), never rounded shares; a zero remainder (or zero total) has no "Others" row.
  */
 function rankedPreviewRows(
   ranked: readonly {
@@ -923,14 +928,13 @@ function rankedPreviewRows(
     fullId?: string;
   }[],
   total: bigint,
+  remainder: bigint,
   remainderShare: (remainder: bigint) => string,
   context: string
 ): RankedPreviewRow[] {
   const top = ranked.slice(0, PREVIEW_RANKS);
-  const shown = top.reduce((sum, entry) => sum + entry.amount, BigInt(0));
-  const remainder = total - shown;
-  if (remainder < BigInt(0))
-    throw new Error(`${context}: top ${top.length} ranks exceed the returned total`);
+  if (remainder < BigInt(0) || remainder > total)
+    throw new Error(`${context}: a remainder of ${remainder} outside the total ${total}`);
   return [
     ...top.map((entry) => ({
       label: entry.shortLabel,
@@ -1025,6 +1029,10 @@ function shareRows(
       };
     });
     const end = points.at(-1);
+    const endRaw = history.data.at(-1);
+    const drawnRaw = endRaw?.values.drawnTotal;
+    if (endRaw && drawnRaw === undefined)
+      throw new Error(`${definition.slug} ${key}: missing drawnTotal at ${endRaw.date}`);
     return {
       title,
       caption,
@@ -1032,6 +1040,15 @@ function shareRows(
       unit: 'CKB',
       series,
       points,
+      ...(drawnRaw === undefined
+        ? {}
+        : {
+            drawnTotal: chartUnitValue(
+              drawnRaw,
+              'shannons',
+              `${definition.slug} ${key} drawnTotal`
+            ),
+          }),
       // each band's share of the day's whole, the route's, at its right end, cut
       bandEnds: end
         ? Object.fromEntries(
@@ -1055,7 +1072,6 @@ function shareRows(
       unit: 'CKB',
       kind: 'ranked',
       latest: null,
-      delta: null,
       rankedRows: [],
       historicalShares: histories,
     };
@@ -1079,12 +1095,15 @@ function shareRows(
     total === BigInt(0)
       ? '—'
       : cutShare(shannons.toString(), total.toString(), `${definition.slug} share`);
-  const sorted = [...entries].sort((a, b) =>
-    a.shannons === b.shannons ? a.label.localeCompare(b.label) : a.shannons > b.shannons ? -1 : 1
-  );
+  // the route's order, ties broken as the route breaks them (N12: the page sorted ties by label)
   const othersKey = used.series.find((series) => series.key === 'others')?.label;
-  const named = sorted.filter((entry) => entry.label !== othersKey);
-  const others = sorted.filter((entry) => entry.label === othersKey);
+  const named = entries.filter((entry) => entry.label !== othersKey);
+  const others = entries.filter((entry) => entry.label === othersKey);
+  // the card's "Others": the route's rest past the five drawn, else its own remainder (M2)
+  const restRaw = last.values.rest ?? last.values.others;
+  if (restRaw === undefined)
+    throw new Error(`${definition.slug}: missing rest or others at ${last.date}`);
+  const rest = exactUnsignedInteger(restRaw, `${definition.slug} rest`);
   // The API's own bucket holds the ranks beyond its named list; say so, the card's "Others" differs.
   // It is a remainder, not a rank: it closes the list instead of leading it (CH-29).
   // Two entities can share a name (two "MEMES" tokens): the id tells them apart (CH-29).
@@ -1118,7 +1137,7 @@ function shareRows(
             : {}),
         }
   );
-  const leader = named[0] ?? sorted[0];
+  const leader = named[0] ?? entries[0];
   return {
     title: definition.title,
     points: [],
@@ -1126,7 +1145,6 @@ function shareRows(
     unit: 'CKB',
     kind: 'ranked',
     latest: { label: last.date, raw: leader.value, display: summary(leader.value, 'CKB') },
-    delta: null,
     rankedRows,
     rankedPreview: {
       rows: rankedPreviewRows(
@@ -1144,6 +1162,7 @@ function shareRows(
             : {}),
         })),
         total,
+        rest,
         share,
         definition.slug
       ).map((row) =>
@@ -1280,7 +1299,6 @@ function minerRows(
         }
       : null,
     window: { from: payload.fromDate, to: payload.toDate, totalBlocks: payload.totalBlocks },
-    delta: null,
     rankedRows,
     rankedPreview: {
       rows: rankedPreviewRows(
@@ -1292,6 +1310,10 @@ function minerRows(
           href: miner.row.href,
         })),
         BigInt(payload.totalBlocks),
+        // no route figure states the window's other miners: their blocks are the window's less
+        // the five (the third round's hand-back names it)
+        BigInt(payload.totalBlocks) -
+          miners.slice(0, PREVIEW_RANKS).reduce((sum, miner) => sum + miner.blocks, BigInt(0)),
         percent2,
         definition.slug
       ),
@@ -1433,26 +1455,6 @@ function classedSeries(
   });
 }
 
-/** The exact sum of non-negative decimals, trailing zeros trimmed. */
-export function exactSum(values: readonly string[], context: string): string {
-  const ratios = values.map((value) => exactDecimalRatio(value, context));
-  const denominator = ratios.reduce(
-    (largest, [, divisor]) => (divisor > largest ? divisor : largest),
-    BigInt(1)
-  );
-  const sum = ratios.reduce((acc, [numerator, divisor]) => {
-    if (denominator % divisor !== BigInt(0))
-      throw new Error(`${context}: incompatible decimal divisors`);
-    return acc + numerator * (denominator / divisor);
-  }, BigInt(0));
-  const whole = sum / denominator;
-  const fraction = (sum % denominator)
-    .toString()
-    .padStart(denominator.toString().length - 1, '0')
-    .replace(/0+$/, '');
-  return fraction ? `${whole}.${fraction}` : whole.toString();
-}
-
 /**
  * An exact decimal cut to `places` decimals, never rounded, its whole part grouped (lane D1: a figure
  * on a chart page's head, in its sentence and at a band's end is the API's value cut for display).
@@ -1472,10 +1474,19 @@ export function cutDecimal(value: string, places: number): string {
 /** The exact ratio `n / d` (both non-negative, `d` positive) as a decimal cut to `places`. */
 export function cutRatio(n: bigint, d: bigint, places: number): string {
   if (n < BigInt(0) || d <= BigInt(0)) throw new Error(`cut ratio: ${n} / ${d}`);
-  const scale = BigInt(10) ** BigInt(places);
-  const scaled = (n * scale) / d;
-  const whole = (scaled / scale).toLocaleString('en-US');
-  return places ? `${whole}.${(scaled % scale).toString().padStart(places, '0')}` : whole;
+  // the one cut, the lib's (S11); grouped here
+  const [whole, fraction] = cutScaledInteger(n, d, places).split('.');
+  const grouped = BigInt(whole).toLocaleString('en-US');
+  return fraction === undefined ? grouped : `${grouped}.${fraction}`;
+}
+
+/** -1, 0 or 1 as decimal `a` is under, at or over `b`, exactly. */
+function compareExact(a: string, b: string): number {
+  const [an, ad] = exactSignedDecimalRatio(a, 'compare');
+  const [bn, bd] = exactSignedDecimalRatio(b, 'compare');
+  const left = an * bd;
+  const right = bn * ad;
+  return left === right ? 0 : left > right ? 1 : -1;
 }
 
 /**

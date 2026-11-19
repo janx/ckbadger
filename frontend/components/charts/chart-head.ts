@@ -7,13 +7,12 @@ import {
   cutRatio,
   cutShare,
   exactDelta,
-  exactSum,
   formatChartExact,
   formatChartHead,
   formatEpochLabel,
   type ChartModel,
 } from '@/components/charts/chart-model';
-import { exactSignedDecimalRatio } from '@/lib/exact-integer';
+import { exactSignedDecimalRatio, formatExactDecimal } from '@/lib/exact-integer';
 import { formatDateWindow, withUnit } from '@/lib/format-unit';
 import { formatCount } from '@/lib/format-count';
 
@@ -27,6 +26,11 @@ import { formatCount } from '@/lib/format-count';
  * computes — a fall from a peak, a change on the day before, a share of a whole — is computed from
  * the exact values and cut, never rounded and never computed from a cut figure. Nothing is smoothed:
  * a sentence reads the series' own points.
+ *
+ * A percentage series (unit `%`) is a share its route cuts at its precision: the route sends the
+ * share, not its operands. Its sentence does no arithmetic between two of its values; it states the
+ * figures as shown and says up, down or the same by comparing those figures (`shown`), claiming
+ * nothing of a digit it does not show (lane D1's third round, S9).
  */
 export interface ChartHead {
   /** What the figure is, in words (lowercase, the eyebrow). */
@@ -89,16 +93,41 @@ function yearBefore(points: readonly ChartPoint[], date: string): ChartPoint | u
   return points.find((point) => point.label === target);
 }
 
-/** "Up from 21.74% a year before", "Down from …", "Unchanged from …" — exact comparison. */
-function fromYearBefore(now: Ratio, before: Ratio, beforeText: string): string {
-  const c = compare(now, before);
-  return `${c > 0 ? 'Up' : c < 0 ? 'Down' : 'Unchanged'} from ${beforeText} a year before`;
+/**
+ * A percentage as the page shows it, cut at two decimals, as a ratio to compare (S9): what a
+ * sentence compares of a share series is the figures it states.
+ */
+function shown(value: string): Ratio {
+  const [n, d] = ratio(value, 'shown percentage');
+  // BigInt division cuts toward zero, as cutDecimal cuts the digits it writes
+  return [(n * BigInt(100)) / d, BigInt(100)];
 }
 
+/** A percentage as a sentence writes it: cut at two decimals, with its sign. */
+const percentText = (value: string) => withUnit(cutDecimal(value, 2), '%');
+
 /**
- * The newest point and how it stands against the past (a daily flow, a noisy rate): the most (or
- * the least) since the last day that reached it, else on record; and the series' peak, from the
- * API, unless the newest point is that peak.
+ * "Up from 21.74% a year before", "Down from …", "The same 22.22% as a year before": a share series
+ * compared by the figures shown (N3: it said "Unchanged" of two different shares).
+ */
+function fromYearBefore(now: string, before: string): string {
+  const c = compare(shown(now), shown(before));
+  const beforeText = percentText(before);
+  return c === 0
+    ? `The same ${beforeText} as a year before`
+    : `${c > 0 ? 'Up' : 'Down'} from ${beforeText} a year before`;
+}
+
+/** The point before as a sentence names it: the day before, or its date where days are missing. */
+const beforeWords = (previous: ChartPoint, last: ChartPoint) =>
+  dayBefore(previous.label, last.label) ? 'the day before' : `on ${previous.label}`;
+
+/**
+ * The newest point and how it stands against the past (a daily flow, a noisy rate). Against the
+ * point before: the same (S6: an equal day is its own case, never "the most since" it); else the
+ * most (or the least) since the last day that reached it, else on record. Then the series' peak,
+ * from the API, unless the newest point stands at it. One point is the first on record. A
+ * percentage series compares the figures it shows (S9).
  */
 function sinceSentence(
   model: ChartModel,
@@ -106,28 +135,41 @@ function sinceSentence(
 ): string {
   const { points, unit } = model;
   const key = model.series[0].key;
+  const percent = unit === '%';
+  const value = (point: ChartPoint): Ratio => (percent ? shown(point.values[key]) : at(point, key));
   const last = points.at(-1)!;
-  const now = at(last, key);
+  const now = value(last);
   const previous = points.at(-2);
-  const up = !previous || compare(now, at(previous, key)) >= 0;
+  if (!previous) return 'The first day on record.';
+  // the newest point stands at the record where no point of the series is above it; the peak, the
+  // route's, is named only where it does not
+  const atRecord = points.every((point) => compare(value(point), now) <= 0);
+  const peak = model.peak;
+  const peakText =
+    atRecord || !peak ? '' : `; the peak was ${stated(peak.raw, unit)} on ${peak.label}`;
+  const step = compare(now, value(previous));
+  if (step === 0) {
+    const same = `The same${percent ? ` ${stated(last.values[key], unit)}` : ''} as ${beforeWords(previous, last)}`;
+    return atRecord ? `${same}, the ${words.more}${words.span} on record.` : `${same}${peakText}.`;
+  }
+  const up = step > 0;
   let since: string | null = null;
   for (let i = points.length - 2; i >= 0; i--) {
-    const c = compare(at(points[i], key), now);
+    const c = compare(value(points[i]), now);
     if (up ? c >= 0 : c <= 0) {
       since = points[i].label;
       break;
     }
   }
-  const head = `The ${up ? words.more : words.less}${words.span} ${since ? `since ${since}` : 'on record'}`;
-  const peak = model.peak;
-  const atPeak = up && since === null;
-  return `${head}${peak && !atPeak ? `; the peak was ${stated(peak.raw, unit)} on ${peak.label}` : ''}.`;
+  return `The ${up ? words.more : words.less}${words.span} ${since ? `since ${since}` : 'on record'}${peakText}.`;
 }
 
 /**
  * A level that moves slowly against its peak (the board's hash rate): how far under the peak it is,
- * as a share of the peak, and its change on the day before; a percentage says its peak and its
- * change in points instead of a share of a share.
+ * as a share of the peak, and its change on the day before. A percentage states its peak, its
+ * figure and the day before's, and says up, down or the same by the figures it shows (S9: never a
+ * difference of two cut shares, "0.00 points up"). A peak under the newest point is the route's
+ * fault, and fails (N1).
  */
 function peakSentence(model: ChartModel): string {
   const { points, unit } = model;
@@ -135,10 +177,26 @@ function peakSentence(model: ChartModel): string {
   const last = points.at(-1)!;
   const previous = points.at(-2);
   const peak = model.peak;
+  if (peak && compare(ratio(peak.raw, 'head peak'), at(last, key)) < 0)
+    throw new Error(
+      `${model.title}: peak ${peak.raw} on ${peak.label} is under the newest point, ${last.values[key]} on ${last.label}`
+    );
+  const percent = unit === '%';
+  if (percent) {
+    const peakText = peak ? `Its peak was ${stated(peak.raw, unit)} on ${peak.label}` : '';
+    if (!previous) return peak ? `${peakText}.` : 'The first day on record.';
+    const c = compare(shown(last.values[key]), shown(previous.values[key]));
+    const now = stated(last.values[key], unit);
+    const before = beforeWords(previous, last);
+    const change =
+      c === 0
+        ? `the same ${now} as ${before}`
+        : `${now}, ${c > 0 ? 'up' : 'down'} from ${stated(previous.values[key], unit)} ${before}`;
+    return peak ? `${peakText}; ${change}.` : `${capitalise(change)}.`;
+  }
   const change = previous
     ? exactDelta(previous.values[key], last.values[key], `${model.title} change`)
     : null;
-  const percent = unit === '%';
   // "on the day before" where the point before is the calendar day before; else since its date
   const since =
     previous && dayBefore(previous.label, last.label)
@@ -149,29 +207,41 @@ function peakSentence(model: ChartModel): string {
       ? ''
       : change === '0'
         ? `unchanged ${since === 'on the day before' ? 'from the day before' : since}`
-        : `${percent ? `${cutDecimal(change.slice(1), 2)} points` : stated(change.slice(1), unit, true)} ${change.startsWith('-') ? 'down' : 'up'} ${since}`;
-  if (!peak) return `${changeText.charAt(0).toUpperCase()}${changeText.slice(1)}.`;
-  if (percent)
-    return `Its peak was ${stated(peak.raw, unit)} on ${peak.label}${changeText ? `; ${changeText}` : ''}.`;
+        : `${stated(change.slice(1), unit, true)} ${change.startsWith('-') ? 'down' : 'up'} ${since}`;
+  if (!peak) return changeText ? `${capitalise(changeText)}.` : 'The first day on record.';
   const [pn, pd] = ratio(peak.raw, 'head peak');
   const [ln, ld] = at(last, key);
   const gap = pn * ld - ln * pd;
-  if (gap <= BigInt(0)) return `At its peak${changeText ? `, ${changeText}` : ''}.`;
+  if (gap === BigInt(0)) return `At its peak${changeText ? `, ${changeText}` : ''}.`;
   const fall = withUnit(cutRatio(gap * BigInt(100), pn * ld, 2), '%');
   return `${fall} under its peak of ${stated(peak.raw, unit, true)} on ${peak.label}${changeText ? `, and ${changeText}` : ''}.`;
 }
 
-/** Over a target on how many of the newest points (a consensus target, CH-12). */
+/**
+ * Over a target on how many of the newest points (a consensus target, CH-12), counted exactly (M1):
+ * a duration by its whole ms against the target's (an epoch 17 s over 4 h is over it); a share by
+ * the figure it shows (S9: the route cuts the share; what a reader sees at 2.50% is not over a
+ * 2.50% target).
+ */
 function targetSentence(model: ChartModel, window: number, noun: string, peakToo: boolean): string {
-  if (!model.target) throw new Error(`${model.title}: a target sentence with no target`);
+  const target = model.target;
+  if (!target) throw new Error(`${model.title}: a target sentence with no target`);
   const key = model.series[0].key;
   const recent = model.points.slice(-window);
-  const over = recent.filter((point) => compare(at(point, key), model.target!.ratio) > 0).length;
+  const isOver = (point: ChartPoint): boolean => {
+    if (target.ms !== undefined) {
+      return BigInt(msAt(point, model.title)) > target.ms;
+    }
+    if (model.unit !== '%')
+      throw new Error(`${model.title}: a target compared neither in ms nor as a share`);
+    return compare(shown(point.values[key]), target.ratio) > 0;
+  };
+  const over = recent.filter(isOver).length;
   const peak =
     peakToo && model.peak
       ? `; the peak was ${stated(model.peak.raw, model.unit)} on ${model.peak.label}`
       : '';
-  return `Over the ${model.target.text} target ${noun === 'day' ? 'on' : 'in'} ${over} of the last ${formatCount(recent.length, noun)}${peak}.`;
+  return `Over the ${target.text} target ${noun === 'day' ? 'on' : 'in'} ${over} of the last ${formatCount(recent.length, noun)}${peak}.`;
 }
 
 /** Whether `earlier` is the calendar day before `later` (two dated labels). */
@@ -251,7 +321,10 @@ function wholeAt(point: ChartPoint, context: string): string {
   return point.whole;
 }
 
-/** The share a ranking's five largest hold of the newest day's whole, from the API's bands. */
+/**
+ * The share a ranking's five largest hold of the newest day's whole: the ranks drawn as their own
+ * bands, their total the route's (`drawnTotal`, M2: the page summed them).
+ */
 function fiveLargest(model: ChartModel, entity: string): string {
   const history = model.historicalShares?.[0];
   const last = history?.points.at(-1);
@@ -260,10 +333,11 @@ function fiveLargest(model: ChartModel, entity: string): string {
   const whole = wholeAt(last, `${model.title} whole`);
   const rest = keys.find((key) => key === 'rest' || key === 'others');
   const named = keys.filter((key) => key !== rest);
-  const held = exactSum(
-    named.map((key) => last.values[key]),
-    `${model.title} named`
-  );
+  if (history.drawnTotal === undefined)
+    throw new Error(`${model.title}: no drawn total at ${last.label}`);
+  const held = history.drawnTotal;
+  if (exactSignedDecimalRatio(whole, `${model.title} whole`)[0] === BigInt(0))
+    return `No occupied CKB on ${last.label}.`;
   return `The ${named.length === 5 ? 'five' : String(named.length)} largest ${entity}s hold ${cutShare(held, whole, `${model.title} named`)} of occupied CKB.`;
 }
 
@@ -279,6 +353,27 @@ function rankedHead(entity: string): HeadOf {
   };
 }
 
+/** The one miner of a window, who found every block of it, or the route is broken (S7). */
+function oneMiner(blocks: string, totalBlocks: number): string {
+  if (blocks !== String(totalBlocks))
+    throw new Error(`miners: one miner of ${blocks} blocks in a window of ${totalBlocks}`);
+  return 'One miner found every block in the window.';
+}
+
+/** A duration's whole ms at a point, as the route sends it (M1). */
+function msAt(point: ChartPoint, context: string): string {
+  const ms = point.values.ms;
+  if (ms === undefined) throw new Error(`${context}: no ms at ${point.label}`);
+  return ms;
+}
+
+/** Labels in a list: "1.3 s", "1.3 s and 1.4 s", "1.3 s, 1.4 s and 1.5 s". */
+function listed(items: readonly string[]): string {
+  return items.length < 2
+    ? (items[0] ?? '')
+    : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+}
+
 const HEADS: Record<string, HeadOf> = {
   'transaction-count': (_, m) =>
     dated(m, 'confirmed in a day', (x) => sinceSentence(x, FLOW_COUNT)),
@@ -290,9 +385,18 @@ const HEADS: Record<string, HeadOf> = {
     const last = m.points.at(-1);
     if (!last) return dated(m, 'the largest kind in a day', () => '');
     const keys = m.series.map((entry) => entry.key);
-    const [first, second] = largestTwo(last, keys);
     // the day's kind occurrences, the route's: kinds overlap, so they are no count of activities
     const whole = wholeAt(last, 'activities whole');
+    // a whole of zero (a day of cellbases only): no largest kind and no share, words for the
+    // empty day, as the band ends write a dash (S8: one rule)
+    if (ratio(whole, 'activities whole')[0] === BigInt(0))
+      return {
+        eyebrow: 'the largest kind in a day',
+        at: last.label,
+        figure: null,
+        sentence: 'No activity of any kind on the day.',
+      };
+    const [first, second] = largestTwo(last, keys);
     return {
       eyebrow: `${word(KIND_WORDS, first)}, the largest kind in a day`,
       at: last.label,
@@ -312,11 +416,11 @@ const HEADS: Record<string, HeadOf> = {
     const head = dated(m, 'unmoved for 3 years or more', () => '', '% of all CKB');
     if (!last) return head;
     const before = yearBefore(m.points, last.label);
-    const moved = `${withUnit(cutDecimal(last.values[young], 2), '%')} of all CKB moved within the last month`;
+    const moved = `${percentText(last.values[young])} of all CKB moved within the last month`;
     return {
       ...head,
       sentence: before
-        ? `${fromYearBefore(at(last, oldest), at(before, oldest), withUnit(cutDecimal(before.values[oldest], 2), '%'))}; ${moved}.`
+        ? `${fromYearBefore(last.values[oldest], before.values[oldest])}; ${moved}.`
         : `${capitalise(moved)}.`,
     };
   },
@@ -363,7 +467,7 @@ const HEADS: Record<string, HeadOf> = {
       const before = yearBefore(x.points, last.label);
       const real = `real inflation, without the secondary issuance, is ${withUnit(cutDecimal(last.values.companion, 2), '%')}`;
       return before
-        ? `${fromYearBefore(at(last, 'primary'), at(before, 'primary'), withUnit(cutDecimal(before.values.primary, 2), '%'))}; ${real}.`
+        ? `${fromYearBefore(last.values.primary, before.values.primary)}; ${real}.`
         : `${capitalise(real)}.`;
     }),
   'secondary-issuance': (_, m) =>
@@ -371,7 +475,9 @@ const HEADS: Record<string, HeadOf> = {
       const last = x.points.at(-1)!;
       const whole = wholeAt(last, 'issuance whole');
       const share = (key: string) => cutShare(last.values[key], whole, 'issuance');
-      return `By destination, ${share('burnt')} is burnt, ${share('compensation')} paid to DAO depositors as compensation and ${share('mining')} to miners.`;
+      // compensation accrues to depositors whether or not they have claimed it (S2: "paid" said
+      // the unclaimed part was paid; the Supply chart names that part "not yet claimed")
+      return `By destination, ${share('burnt')} is burnt, ${share('compensation')} accrued to DAO depositors as compensation, claimed or unclaimed, and ${share('mining')} went to miners.`;
     }),
   'circulation-ratio': (_, m) =>
     dated(m, 'deposited in the Nervos DAO', peakSentence, '% of circulating CKB'),
@@ -438,8 +544,10 @@ const HEADS: Record<string, HeadOf> = {
   'capacity-turnover-ratio': (_, m) =>
     dated(m, 'live capacity moved in the week', (x) => sinceSentence(x, RATE)),
   'address-cohort-retention': (_, m) => {
-    const largest = m.points.length
-      ? m.points.reduce((best, point) =>
+    // the complete cohorts: the newest one, the snapshot's month, is still filling (N6)
+    const complete = m.points.slice(0, -1);
+    const largest = complete.length
+      ? complete.reduce((best, point) =>
           compare(at(point, 'primary'), at(best, 'primary')) > 0 ? point : best
         )
       : null;
@@ -456,8 +564,10 @@ const HEADS: Record<string, HeadOf> = {
           }
         : null,
       sentence: largest
-        ? `The ${largest.label} cohort keeps the largest share, ${withUnit(cutDecimal(largest.values.primary, 2), '%')}.`
-        : 'No cohorts yet.',
+        ? `The ${largest.label} cohort keeps the largest share, ${percentText(largest.values.primary)}.`
+        : m.points.length
+          ? 'No complete cohort yet.'
+          : 'No cohorts yet.',
     };
   },
   'hash-rate': (_, m) => dated(m, 'hash rate', peakSentence),
@@ -473,10 +583,11 @@ const HEADS: Record<string, HeadOf> = {
       figure: rows[0]
         ? { raw: rows[0].value, display: formatChartHead(rows[0].value, 'blocks'), unit: 'blocks' }
         : null,
-      sentence:
-        window && second
-          ? `Of the window's ${formatCount(window.totalBlocks, 'block')}, the next largest miner, ${second.label}, found ${formatChartHead(second.value, 'blocks')}.`
-          : 'One miner found every block in the window.',
+      sentence: !rows.length
+        ? 'No blocks in the window.'
+        : second
+          ? `Of the window's ${formatCount(window!.totalBlocks, 'block')}, the next largest miner, ${second.label}, found ${formatChartHead(second.value, 'blocks')}.`
+          : oneMiner(rows[0].value, window!.totalBlocks),
     };
   },
   'average-block-time': (_, m) =>
@@ -488,18 +599,32 @@ const HEADS: Record<string, HeadOf> = {
         ? `epoch #${formatEpochLabel(last.label, 'epoch-time-length')} took`
         : 'an epoch took',
       at: null,
-      figure: latestFigure(m),
+      // the figure cut from the epoch's whole ms; its title the ms, every digit (M1)
+      figure: last
+        ? {
+            ...latestFigure(m)!,
+            title: `${formatExactDecimal(msAt(last, m.title), `${m.title} ms`)} ms`,
+          }
+        : null,
       sentence: last ? targetSentence(m, 42, 'epoch', false) : 'No completed epochs yet.',
     };
   },
   'block-time-distribution': (_, m) => {
     const mode = m.reading;
+    // the window the route counted: its epochs, every interval, those past the drawn 50 s (S4)
+    const window = m.intervalWindow;
+    if (!window) throw new Error('block intervals: no window from the route');
+    // every bucket tied with the most common one is named (S5)
+    const ties = m.readingTies ?? [];
+    const beyond = window.beyondRange
+      ? `; ${formatCount(window.beyondRange, 'block')} came more than 50 s after it`
+      : '';
     return {
       eyebrow: 'the most common interval',
-      at: 'last 42 epochs',
+      at: `last ${formatCount(window.epochs, 'epoch')}`,
       figure: mode ? { raw: mode.label, display: mode.label, unit: 's' } : null,
       sentence: mode
-        ? `${withUnit(cutDecimal(mode.values.primary, 2), '%')} of blocks came ${mode.label} s after their parent, more than at any other tenth of a second.`
+        ? `${percentText(mode.values.primary)} of blocks came ${mode.label} s after their parent${ties.length ? `, as many as ${listed(ties.map((tie) => `${tie} s`))} after it` : ''}, more than at any other tenth of a second${beyond}.`
         : 'No blocks in the window yet.',
     };
   },
@@ -513,7 +638,12 @@ const HEADS: Record<string, HeadOf> = {
       at: null,
       figure: mode ? { raw: mode.label, display: mode.label, unit: 'h' } : null,
       sentence: taken.length
-        ? `The shortest epoch took ${taken[0].label} h and the longest ${taken.at(-1)!.label} h.`
+        ? `The shortest epoch took ${taken[0].label} h and the longest ${taken.at(-1)!.label} h${
+            // every duration tied with the most common one is named (S5)
+            mode && m.readingTies?.length
+              ? `; as many took ${listed(m.readingTies.map((tie) => `${tie} h`))} as ${mode.label} h`
+              : ''
+          }.`
         : 'No completed epochs yet.',
     };
   },
@@ -532,8 +662,9 @@ export function chartHead(definition: ChartDefinition, model: ChartModel): Chart
   return {
     ...head,
     // what the series counts, said once where it needs saying (ACTIVITY_COUNT_WORDS.note)
+    // said where a figure counts (an empty day has none: S8)
     sentence:
-      definition.countNote && model.points.length
+      definition.countNote && model.points.length && figure
         ? `${head.sentence} ${definition.countNote}`
         : head.sentence,
     figure: figure && {

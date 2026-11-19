@@ -30,7 +30,7 @@ function fixture<T = Record<string, unknown>>(method: string): T {
 }
 
 type StackedFixture = {
-  data: { date: string; values: Record<string, string>; componentsTotalShannons?: string }[];
+  data: { date: string; values: Record<string, string>; protocolTotalShannons?: string }[];
 };
 
 describe('one form of a percentage on a chart page: cut (item 1)', () => {
@@ -106,14 +106,18 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
     expect(model.bandEnds!.otherContracts).toBe('22.00%');
   });
 
-  it('divides secondary issuance by the total of its destinations the route sends', () => {
+  // Re-pinned for lane D1's third round (S1): one whole, the protocol total, which the destinations make; the
+  // test that divided by a second whole (componentsTotalShannons, twice the destinations) now
+  // divides by a protocol total that differs from the destinations' sum, so the figure shows which
+  // one the sentence reads (and S2: compensation accrued, claimed or not, was "paid").
+  it('divides secondary issuance by the one whole the route sends, its protocol total', () => {
     const payload = fixture<StackedFixture>('getSecondaryIssuanceChart');
-    // 18,835 CKB, twice the three destinations
-    for (const point of payload.data) point.componentsTotalShannons = '1883500000000';
+    // 18,835,000,001 CKB, about twice the three destinations
+    for (const point of payload.data) point.protocolTotalShannons = '1883500000100000000';
     const slug = definition('secondary-issuance');
     const model = chartModel(slug, payload as never);
     expect(chartHead(slug, model).sentence).toBe(
-      'By destination, 36.19% is burnt, 9.02% paid to DAO depositors as compensation and 4.77% to miners.'
+      'By destination, 36.19% is burnt, 9.02% accrued to DAO depositors as compensation, claimed or unclaimed, and 4.77% went to miners.'
     );
   });
 
@@ -198,9 +202,9 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
       expect(() => chartModel(definition(slug), payload as never), slug).toThrow(field);
     }
     const issuance = fixture<StackedFixture>('getSecondaryIssuanceChart');
-    delete issuance.data.at(-1)!.componentsTotalShannons;
+    delete issuance.data.at(-1)!.protocolTotalShannons;
     expect(() => chartModel(definition('secondary-issuance'), issuance as never)).toThrow(
-      'componentsTotalShannons'
+      'protocolTotalShannons'
     );
   });
 

@@ -26,18 +26,29 @@ describe('MostUtilizedScriptsPage', () => {
         data: [
           {
             date: '2024-01-01',
-            values: { top0: '9007199254740993', others: '20', total: '9007199254741013' },
+            values: {
+              top0: '9007199254740993',
+              others: '20',
+              total: '9007199254741013',
+              drawnTotal: '9007199254740993',
+            },
           },
           {
             date: '2024-01-02',
-            values: { top0: '9007199254740995', others: '30', total: '9007199254741025' },
+            values: {
+              top0: '9007199254740995',
+              others: '30',
+              total: '9007199254741025',
+              drawnTotal: '9007199254740995',
+            },
           },
         ],
         series: [
           { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
           { key: 'others', label: 'Others', color: '#64748b' },
         ],
-        // lane D1: the API names the bands a history is drawn in (re-pinned: it always does)
+        // lane D1: the API names the bands a history is drawn in (re-pinned: it always does);
+        // each day states the drawn ranks' total, drawnTotal (lane D1's third round, M2)
         bands: [
           { key: 'top0', label: 'SECP256K1_BLAKE160', members: ['top0'] },
           { key: 'others', label: 'Others', members: ['others'] },
@@ -46,8 +57,24 @@ describe('MostUtilizedScriptsPage', () => {
       capacityShare: {
         title: 'Top Scripts Capacity Share',
         data: [
-          { date: '2024-01-01', values: { top0: '100000001', others: '40', total: '100000041' } },
-          { date: '2024-01-02', values: { top0: '200000002', others: '50', total: '200000052' } },
+          {
+            date: '2024-01-01',
+            values: {
+              top0: '100000001',
+              others: '40',
+              total: '100000041',
+              drawnTotal: '100000001',
+            },
+          },
+          {
+            date: '2024-01-02',
+            values: {
+              top0: '200000002',
+              others: '50',
+              total: '200000052',
+              drawnTotal: '200000002',
+            },
+          },
         ],
         series: [
           { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },

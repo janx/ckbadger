@@ -130,7 +130,6 @@ describe('Charts index encodings (F2 charts)', () => {
           values: { compensation: '2', mining: '3', burnt: '1' },
           protocolTotalShannons: '600000000',
           phase1CompensationShannons: '0',
-          componentsTotalShannons: '600000000',
         },
       ],
     });
@@ -328,6 +327,15 @@ describe('Charts index encodings (F2 charts)', () => {
           blocksMined: 42705,
           percentage: '62.9950',
         },
+        // the window's other miner (lane D1's third round, S7: one row is one miner who found every block, so this
+        // window of 67,791 blocks has a second row, 25,086)
+        {
+          minerLockHash: `0x${'b'.repeat(64)}`,
+          address: null,
+          minerName: 'Pool B',
+          blocksMined: 25086,
+          percentage: '37.0049',
+        },
       ],
     });
     // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's figure, the leading
@@ -486,9 +494,10 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
   it('draws the consensus epoch-duration target from the API (CH-12, R2b-b)', () => {
     const model = chartModel(def('epoch-time-length'), {
       title: 'Epoch length',
-      yAxisLabel: 'Hours',
+      yAxisLabel: 'Milliseconds',
       y2AxisLabel: 'Blocks',
-      data: [{ date: '15204', value: '4.15', value2: '1800' }],
+      // 4.15 h in the whole ms the route sends (lane D1's third round, M1)
+      data: [{ date: '15204', value: '14940000', value2: '1800' }],
       target: { seconds: 14400, hours: '4.00' },
     });
     expect(model.referenceLines).toEqual([{ value: 4, label: 'target 4.00 h' }]);
@@ -510,6 +519,14 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
             ...Object.fromEntries(entries.map(([key], i) => [key, String((9 - i) * 100)])),
             // the day's whole, the route's (the D1 hand-back, item 2)
             total: String(entries.reduce((sum, _, i) => sum + (9 - i) * 100, 0)),
+            // the route's remainder past its named ranks, and the five drawn ranks' total (lane D1's third round, M2)
+            ...(entries.some(([key]) => key === 'others') ? {} : { others: '0' }),
+            drawnTotal: String(
+              entries
+                .filter(([key]) => key !== 'others')
+                .slice(0, 5)
+                .reduce((sum, _, i) => sum + (9 - i) * 100, 0)
+            ),
           },
         },
       ],

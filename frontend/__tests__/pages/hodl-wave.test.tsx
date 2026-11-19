@@ -44,14 +44,15 @@ const response = {
     { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
   ],
   series: [
-    { key: '24h', label: '24h', color: '#6366f1' },
-    { key: '1d1w', label: '1d-1w', color: '#4ade80' },
-    { key: '1w1m', label: '1w-1m', color: '#f87171' },
-    { key: '1m3m', label: '1m-3m', color: '#f59e0b' },
-    { key: '3m6m', label: '3m-6m', color: '#d4e157' },
-    { key: '6m1y', label: '6m-1y', color: '#22c55e' },
-    { key: '1y3y', label: '1y-3y', color: '#67e8f9' },
-    { key: 'gt3y', label: '> 3y', color: '#a78bfa' },
+    // the route's names, in the drawn bands' words (lane D1's third round, N5)
+    { key: '24h', label: 'under 1 day', color: '#6366f1' },
+    { key: '1d1w', label: '1 day to 1 week', color: '#4ade80' },
+    { key: '1w1m', label: '1 week to 1 month', color: '#f87171' },
+    { key: '1m3m', label: '1 to 3 months', color: '#f59e0b' },
+    { key: '3m6m', label: '3 to 6 months', color: '#d4e157' },
+    { key: '6m1y', label: '6 to 12 months', color: '#22c55e' },
+    { key: '1y3y', label: '1 to 3 years', color: '#67e8f9' },
+    { key: 'gt3y', label: '3 years or more', color: '#a78bfa' },
   ],
 };
 
@@ -97,17 +98,18 @@ describe('HodlWavePage', () => {
       ],
     });
     // The eight ages stay, exact, named as ranges (CH-21), in the table under the chart (the
-    // summary row of facts is gone: re-pinned for lane D1, rule 2).
+    // summary row of facts is gone: re-pinned for lane D1, rule 2). Re-pinned for lane D1's third
+    // round (N5): in the route's words, the band ends' own (were the page's "6 m – 1 y" …).
     const table = screen.getByRole('table', { name: 'HODL wave, every band' });
     expect([...table.querySelectorAll('tbody tr')].map((row) => row.textContent)).toEqual([
-      '< 1 d5.00%',
-      '1 d – 1 w10.00%',
-      '1 w – 1 m15.00%',
-      '1 m – 3 m10.00%',
-      '3 m – 6 m10.00%',
-      '6 m – 1 y15.00%',
-      '1 y – 3 y20.00%',
-      '> 3 y15.00%',
+      'under 1 day5.00%',
+      '1 day to 1 week10.00%',
+      '1 week to 1 month15.00%',
+      '1 to 3 months10.00%',
+      '3 to 6 months10.00%',
+      '6 to 12 months15.00%',
+      '1 to 3 years20.00%',
+      '3 years or more15.00%',
     ]);
     expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
     expect(holders).toMatchObject({

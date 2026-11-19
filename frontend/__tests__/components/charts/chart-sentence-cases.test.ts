@@ -6,7 +6,8 @@ import { chartHead } from '@/components/charts/chart-head';
 /**
  * Lane D1, third round (the reviewers' S5–S9, N1, N3, N6 and T's NOTE 7): every sentence form of
  * the chart heads, on the edge series the reviewers raised — one point, an empty range, a tie, a
- * fall to zero, an equal day — pinned word for word on points this file states.
+ * fall to zero, an equal day — pinned word for word on points this file states. A count is glued
+ * to its noun by a no-break space (formatCount), written here as \u00a0.
  */
 
 const def = (slug: string) => {
@@ -50,12 +51,12 @@ describe('a flow’s day against the past (sinceSentence)', () => {
   });
   it('reads a percentage series by the figures it shows (S9: turnover)', () => {
     // 2.171181 and 2.17 shown alike; the day before 2.179 is 2.17 too: the same shown figure
+    // the weekly turnover is the page's series (value2), its peak the route's peak2
+    const payload = daily(['2.5', '2.179', '2.171181']);
     const turnover = head('capacity-turnover-ratio', {
-      ...daily(['2.5', '2.179', '2.171181']),
-      data: daily(['2.5', '2.179', '2.171181']).data.map((point) => ({
-        ...point,
-        value2: point.value,
-      })),
+      ...payload,
+      data: payload.data.map((point) => ({ ...point, value2: point.value })),
+      peak2: payload.peak,
     });
     expect(turnover.sentence).toBe(
       'The same 2.17% as the day before; the peak was 2.50% on 2026-11-16.'
@@ -143,7 +144,7 @@ describe('over a target, counted exactly (M1)', () => {
     // 14,418,000 ms is 4.005 h: cut, 4.00 h (half up it read 4.01)
     expect(epochs.figure?.display).toBe('4.00');
     expect(epochs.figure?.title).toBe('14,418,000 ms');
-    expect(epochs.sentence).toBe('Over the 4.00 h target in 2 of the last 3 epochs.');
+    expect(epochs.sentence).toBe('Over the 4.00 h target in 2 of the last 3\u00a0epochs.');
   });
   it('counts the uncle rate over its target by the figure it shows', () => {
     const uncles = head('uncle-rate', {
@@ -151,7 +152,7 @@ describe('over a target, counted exactly (M1)', () => {
       orphanRateTarget: { numerator: 1, denominator: 40 },
     });
     expect(uncles.sentence).toBe(
-      'Over the 2.50% target on 0 of the last 1 day; the peak was 2.50% on 2026-11-18.'
+      'Over the 2.50% target on 0 of the last 1\u00a0day; the peak was 2.50% on 2026-11-18.'
     );
   });
 });
@@ -216,7 +217,7 @@ describe('a tie at the top (S5)', () => {
       intervals: 75_000,
       beyondRange: 0,
     });
-    expect(intervals.at).toBe('last 42 epochs');
+    expect(intervals.at).toBe('last 42\u00a0epochs');
     expect(intervals.sentence).toBe(
       '1.03% of blocks came 1.2 s after their parent, as many as 1.3 s after it, more than at any other tenth of a second.'
     );
@@ -233,9 +234,9 @@ describe('a tie at the top (S5)', () => {
       intervals: 12_000,
       beyondRange: 12,
     });
-    expect(intervals.at).toBe('last 7 epochs');
+    expect(intervals.at).toBe('last 7\u00a0epochs');
     expect(intervals.sentence).toBe(
-      '1.03% of blocks came 1.3 s after their parent, more than at any other tenth of a second; 12 blocks came more than 50 s after it.'
+      '1.03% of blocks came 1.3 s after their parent, more than at any other tenth of a second; 12\u00a0blocks came more than 50 s after it.'
     );
   });
   it('says the epoch durations tied at the top', () => {

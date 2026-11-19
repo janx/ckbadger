@@ -92,9 +92,21 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
     );
   });
 
-  it('names the HODL bands as ranges, the youngest "< 1 d"', () => {
+  // Re-pinned for lane D1's third round (N5): the route names its eight ages in the drawn bands' words, and the
+  // table reads the route's names (it named them its own way, "6 m – 1 y" beside the band end's
+  // "6 to 12 months": one band, two spellings on one page).
+  it('names the HODL ages in the route’s words, the bands’ own', () => {
     const keys = ['gt3y', '1y3y', '6m1y', '3m6m', '1m3m', '1w1m', '1d1w', '24h'];
-    const labels = ['> 3y', '1y-3y', '6m-1y', '3m-6m', '1m-3m', '1w-1m', '1d-1w', '24h'];
+    const labels = [
+      '3 years or more',
+      '1 to 3 years',
+      '6 to 12 months',
+      '3 to 6 months',
+      '1 to 3 months',
+      '1 week to 1 month',
+      '1 day to 1 week',
+      'under 1 day',
+    ];
     const model = chartModel(def('hodl-wave'), {
       title: 'CKB HODL Wave',
       series: keys.map((key, i) => ({ key, label: labels[i], color: '#000' })),
@@ -126,16 +138,7 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
       '1 to 6 months',
       'under 1 month',
     ]);
-    expect(model.table?.map((row) => row.name)).toEqual([
-      '> 3 y',
-      '1 y – 3 y',
-      '6 m – 1 y',
-      '3 m – 6 m',
-      '1 m – 3 m',
-      '1 w – 1 m',
-      '1 d – 1 w',
-      '< 1 d',
-    ]);
+    expect(model.table?.map((row) => row.name)).toEqual(labels);
   });
 
   it("names a companion series by the page's own words, no '(%)'", () => {
@@ -172,7 +175,13 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
       data: [
         {
           date: '2026-11-13',
-          values: { top0: '300000000', others: '100000000', total: '400000000' },
+          // the route's whole and its one drawn rank's total (lane D1's third round, M2)
+          values: {
+            top0: '300000000',
+            others: '100000000',
+            total: '400000000',
+            drawnTotal: '300000000',
+          },
         },
       ],
       bands: [

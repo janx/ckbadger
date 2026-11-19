@@ -101,6 +101,8 @@ describe('ChartSmallMultiple', () => {
             ...Object.fromEntries(keys.map((key, i) => [key, String((7 - i) * 100_000_000)])),
             // lane D1: the API's rest band, rank six and its remainder (2 + 1 CKB)
             rest: '300000000',
+            // the five drawn, the route's (lane D1's third round, M2): 7 + 6 + 5 + 4 + 3 CKB
+            drawnTotal: '2500000000',
             // the day's whole, the route's (the D1 hand-back, item 2): 7 + 6 + … + 1 CKB
             total: '2800000000',
           },
@@ -142,7 +144,10 @@ describe('ChartSmallMultiple', () => {
           fetch: async () => ({
             title: 'Miners',
             windowDays: 7,
-            totalBlocks: 10,
+            // Re-pinned for lane D1's third round (S7): the route lists every miner of the window
+            // (to 100), so one row was one miner who found every block, not 6 of 10; the window's
+            // 100 blocks are found by six miners here, the sixth the card's "Others" (8 blocks)
+            totalBlocks: 100,
             fromDate: '2026-10-21',
             toDate: '2026-10-27',
             data: [
@@ -150,9 +155,16 @@ describe('ChartSmallMultiple', () => {
                 minerLockHash: `0x${'a'.repeat(64)}`,
                 address,
                 minerName: null,
-                blocksMined: 6,
+                blocksMined: 60,
                 percentage: '60.0000',
               },
+              ...['b', 'c', 'd', 'e', 'f'].map((id) => ({
+                minerLockHash: `0x${id.repeat(64)}`,
+                address: null,
+                minerName: `Pool ${id.toUpperCase()}`,
+                blocksMined: 8,
+                percentage: '8.0000',
+              })),
             ],
           }),
         }}
@@ -163,7 +175,7 @@ describe('ChartSmallMultiple', () => {
     // R9 (re-pinned): the short address is `ckb1…` and its last 8 characters.
     expect(list).toHaveTextContent('ckb1…xx93hhsj60.00%');
     expect(screen.queryByText(new RegExp(address))).not.toBeInTheDocument();
-    expect(list).toHaveTextContent('Others40.00%');
+    expect(list).toHaveTextContent('Others8.00%');
     // Lane L: the miner's short address links to its address page; "Others" is no entity.
     const miner = within(list).getByRole('link', { name: 'ckb1…xx93hhsj' });
     expect(miner).toHaveAttribute('href', `/mainnet/address/${address}`);
@@ -172,7 +184,7 @@ describe('ChartSmallMultiple', () => {
     // Re-pinned for lane D1 (rule 9, CH-07): the page's own figure, the largest miner's blocks
     // under its title (was its share under "top"); the window is the head's date.
     const readout = screen.getByRole('group', { name: 'Miners current readout' });
-    expect(readout.textContent).toBe('6');
+    expect(readout.textContent).toBe('60');
     expect(screen.getByText('largest miner')).toBeInTheDocument();
     expect(screen.getByText('2026-10-21 → 2026-10-27')).toBeInTheDocument();
   });
@@ -244,7 +256,11 @@ describe('ChartSmallMultiple', () => {
       ],
       // the day's whole, the route's (the D1 hand-back, item 2)
       data: [
-        { date: '2026-10-29', values: { top0: '300', top1: '200', others: '500', total: '1000' } },
+        // the route's whole and its two drawn ranks' total (lane D1's third round, M2)
+        {
+          date: '2026-10-29',
+          values: { top0: '300', top1: '200', others: '500', total: '1000', drawnTotal: '500' },
+        },
       ],
       // lane D1: two named ranks, each its own band
       bands: ['top0', 'top1', 'others'].map((key) => ({ key, label: key, members: [key] })),
@@ -274,7 +290,11 @@ describe('ChartSmallMultiple', () => {
       ],
       // the day's whole, the route's (the D1 hand-back, item 2)
       data: [
-        { date: '2026-10-29', values: { top0: '300', top1: '200', others: '500', total: '1000' } },
+        // the route's whole and its two drawn ranks' total (lane D1's third round, M2)
+        {
+          date: '2026-10-29',
+          values: { top0: '300', top1: '200', others: '500', total: '1000', drawnTotal: '500' },
+        },
       ],
       // lane D1: two named ranks, each its own band
       bands: ['top0', 'top1', 'others'].map((key) => ({ key, label: key, members: [key] })),

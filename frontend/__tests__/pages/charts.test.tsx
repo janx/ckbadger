@@ -245,7 +245,13 @@ describe('ChartsPage', () => {
     vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue(mockMostUtilizedScriptsResponse);
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue(mockMostUtilizedAssetsResponse);
-    vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue(mockChartResponse);
+    // the window the route counts (lane D1's third round, S4)
+    vi.mocked(api.getBlockTimeDistributionChart).mockResolvedValue({
+      ...mockChartResponse,
+      epochs: 42,
+      intervals: 100,
+      beyondRange: 0,
+    });
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue(mockChartResponse);

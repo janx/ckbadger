@@ -232,6 +232,10 @@ describe('axis ticks (CH-12)', () => {
         date: `${Math.floor(i / 10)}.${i % 10}`,
         value: '0.199',
       })),
+      // the window the route counts (lane D1's third round, S4)
+      epochs: 42,
+      intervals: 75_000,
+      beyondRange: 0,
     });
     render(<ChartDetail slug="block-time-distribution" />);
     await screen.findByRole('img', { name: 'Block intervals' });

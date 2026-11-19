@@ -73,6 +73,10 @@ describe('the fact row under the lede (CH-18)', () => {
         { date: '0.7', value: '0.9' },
         { date: '0.8', value: '1.04' },
       ],
+      // the window the route counts (lane D1's third round, S4)
+      epochs: 42,
+      intervals: 75_000,
+      beyondRange: 0,
     });
     const view = render(<ChartDetail slug="block-time-distribution" />);
     await screen.findByTestId('figure-value');
@@ -109,6 +113,8 @@ describe('the fact row under the lede (CH-18)', () => {
             others: '17958953600000000',
             // the day's whole, the route's (the D1 hand-back, item 2)
             total: '23878000000000000',
+            // the one rank drawn as its own band, the route's (lane D1's third round, M2)
+            drawnTotal: '5919046400000000',
           },
         },
       ],
@@ -137,7 +143,9 @@ describe('the fact row under the lede (CH-18)', () => {
     );
   });
 
-  it('moves the frozen phase-1 overlap to the evidence tier', async () => {
+  // Re-pinned for lane D1's third round (S1): the frozen phase-1 compensation is a part of the unclaimed
+  // compensation, no difference between two wholes (was "Frozen phase-1 overlap").
+  it('moves the frozen phase-1 compensation to the evidence tier', async () => {
     vi.mocked(api.getSecondaryIssuanceChart).mockResolvedValue({
       title: 'Secondary Issuance',
       series: [
@@ -150,16 +158,14 @@ describe('the fact row under the lede (CH-18)', () => {
         values: { compensation: '2', mining: '3', burnt: String(1 + i) },
         protocolTotalShannons: String(600000000 + i * 100000000),
         phase1CompensationShannons: '9265519217277960',
-        // the three destinations' total, the route's (the D1 hand-back, item 2)
-        componentsTotalShannons: String(600000000 + i * 100000000),
       })),
     });
     render(<ChartDetail slug="secondary-issuance" />);
     await screen.findByTestId('figure-value');
     expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(within(tier2).getByText(/Frozen phase-1 overlap/)).toHaveTextContent(
-      'Frozen phase-1 overlap: 92,655,192.1727796 CKB'
+    expect(within(tier2).getByText(/Frozen phase-1 compensation/)).toHaveTextContent(
+      'Frozen phase-1 compensation: 92,655,192.1727796 CKB'
     );
   });
 
@@ -169,7 +175,11 @@ describe('the fact row under the lede (CH-18)', () => {
     const keys = ['gt3y', '1y3y', '6m1y', '3m6m', '1m3m', '1w1m', '1d1w', '24h'];
     vi.mocked(api.getHodlWaveChart).mockResolvedValue({
       title: 'CKB HODL Wave',
-      series: keys.map((key) => ({ key, label: key === 'gt3y' ? '> 3y' : key, color: '#000' })),
+      series: keys.map((key) => ({
+        key,
+        label: key === 'gt3y' ? '3 years or more' : key,
+        color: '#000',
+      })),
       data: [
         {
           date: '2026-11-13',

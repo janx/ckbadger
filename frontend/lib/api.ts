@@ -2850,6 +2850,19 @@ interface MinerDistributionResponse {
   toDate: string;
 }
 
+/**
+ * Block intervals: the histogram and the window it counts (lane D1's third round, S4): a share is of every interval
+ * of the window, the ones past the drawn 50 s counted and stated, not drawn.
+ */
+export interface BlockTimeDistributionChartResponse extends ChartResponse {
+  /** The complete epochs the window holds (42, or fewer on a younger chain). */
+  epochs: number;
+  /** Every interval of the window: what each share divides by. */
+  intervals: number;
+  /** The intervals past the drawn range, more than 50 s after their parent. */
+  beyondRange: number;
+}
+
 /** Cell size: the histogram and the two wholes its page divides by (lane D1). */
 export interface CellSizeDistributionChartResponse extends ChartResponse {
   /** The live cells of every bucket. */
@@ -2861,10 +2874,9 @@ export interface CellSizeDistributionChartResponse extends ChartResponse {
 interface StackedAreaDataPoint {
   date: string;
   values: Record<string, string>;
+  /** Secondary issuance: the one whole, which its three destinations make (lane D1). */
   protocolTotalShannons?: string;
   phase1CompensationShannons?: string;
-  /** Secondary issuance: the total of its three destinations, in shannons (lane D1). */
-  componentsTotalShannons?: string;
 }
 
 interface StackedAreaSeries {
@@ -4284,6 +4296,20 @@ function cursorReadQuery(params: CursorQueryParams): URLSearchParams {
   return query;
 }
 
+/**
+ * A count the daily-activities route states for the chart pages, as the chart reads it. An API
+ * older than the page sends none, and the page refuses it by the field's name (lane D1's third
+ * round, N7: it read `invalid decimal "undefined"`).
+ */
+function routeCount(day: DailyActivityStats, field: 'kindOccurrences' | 'daoCount'): string {
+  const value = (day as Partial<DailyActivityStats>)[field];
+  if (value === undefined)
+    throw new Error(
+      `daily activities on ${day.date} send no ${field}: the API is older than this page`
+    );
+  return String(value);
+}
+
 export const api = {
   getForks: (params: CursorQueryParams = {}): Promise<CursorPaginatedResponse<ReorgEvent>> => {
     const query = new URLSearchParams();
@@ -5187,7 +5213,7 @@ export const api = {
     return fetchApi('/charts/most-utilized-assets');
   },
 
-  getBlockTimeDistributionChart: (): Promise<ChartResponse> => {
+  getBlockTimeDistributionChart: (): Promise<BlockTimeDistributionChartResponse> => {
     return fetchApi('/charts/block-time-distribution');
   },
 
@@ -5371,7 +5397,7 @@ export const api = {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
         // the day's kind occurrences, the route's sum of the eight kinds (lane D1)
-        value: String(s.kindOccurrences),
+        value: routeCount(s, 'kindOccurrences'),
       })),
       title: 'Daily Activity Volume',
       yAxisLabel: 'Activities',
@@ -5381,23 +5407,24 @@ export const api = {
   getActivityTypeBreakdownChart: async (): Promise<StackedAreaChartResponse> => {
     const stats = await api.getDailyActivityStats(0);
     return {
-      data: stats.map((s) => ({
-        date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        values: {
-          transfer: String(s.transferCount),
-          dao: (
-            BigInt(s.daoDepositCount) +
-            BigInt(s.daoWithdrawRequestCount) +
-            BigInt(s.daoWithdrawCompleteCount)
-          ).toString(),
-          token: String(s.tokenCount),
-          object: String(s.objectCount),
-          identity: String(s.identityCount),
-          scriptCall: String(s.scriptCallCount),
-          // the whole the page's shares divide by, the route's (lane D1)
-          kindOccurrences: String(s.kindOccurrences),
-        },
-      })),
+      data: stats.map((s) => {
+        // the whole the page's shares divide by, the route's (lane D1)
+        const kindOccurrences = routeCount(s, 'kindOccurrences');
+        // the day's DAO actions, the route's sum of its three counts (lane D1's third round, M2)
+        const dao = routeCount(s, 'daoCount');
+        return {
+          date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+          values: {
+            transfer: String(s.transferCount),
+            dao,
+            token: String(s.tokenCount),
+            object: String(s.objectCount),
+            identity: String(s.identityCount),
+            scriptCall: String(s.scriptCallCount),
+            kindOccurrences,
+          },
+        };
+      }),
       series: [
         { key: 'transfer', label: 'Transfer', color: color('jade') },
         { key: 'dao', label: 'DAO', color: color('gold') },

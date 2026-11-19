@@ -42,7 +42,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       'Shows the share of circulating CKB locked in Nervos DAO deposits at the end of each complete UTC+8 day.',
     formula:
-      'value = total_deposited ÷ circulating × 100, where circulating = C − genesis burnt − S from the DAO field of the day’s last block.',
+      'value = total_deposited ÷ circulating × 100, cut at four decimals, where circulating = C − genesis burnt − S from the DAO field of the day’s last block.',
     legendItems: [],
   }),
   'chart-transaction-count': () => ({
@@ -75,7 +75,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       'Shows how much of the live occupied capacity was consumed and replaced, each day and over each week.',
     formula:
-      'value = used_capacity_consumed ÷ knowledge_size × 100 for the day; value2 = Σ used_capacity_consumed ÷ Σ knowledge_size × 100 over the seven days ending it.',
+      'value = used_capacity_consumed ÷ knowledge_size × 100 for the day; value2 = Σ used_capacity_consumed ÷ Σ knowledge_size × 100 over the seven days ending it; both cut at six decimals.',
     legendItems: [],
   }),
   'chart-cell-size-distribution': () => ({
@@ -88,26 +88,27 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       'Groups addresses by the month they were first seen, then shows how much of each cohort’s balance is occupied today.',
     formula:
-      'value = Σ common_knowledge_size ÷ Σ balance × 100 over the addresses first seen in the month; value2 = Σ common_knowledge_size.',
+      'value = Σ common_knowledge_size ÷ Σ balance × 100 over the addresses first seen in the month, cut at six decimals; value2 = Σ common_knowledge_size.',
     legendItems: [],
   }),
   'chart-most-utilized-scripts': () => ({
     overview:
       'Ranks scripts by the CKB their live cells occupy, across every deployment of a script.',
     formula:
-      'usedShare.topN = Σ occupied capacity of the live cells a script locks or types, the 20 largest named; capacityShare.topN = Σ their full capacity; rest = the day’s whole − the five largest, which the page draws.',
+      'usedShare.topN = Σ occupied capacity of the live cells a script locks or types, the 20 largest named; capacityShare.topN = Σ their full capacity; drawnTotal = Σ the five largest, which the page draws; rest = the day’s whole − drawnTotal.',
     legendItems: [],
   }),
   'chart-most-utilized-assets': () => ({
     overview: 'Ranks tokens and object collections by the CKB their live cells occupy.',
     formula:
-      'usedShare.topN = Σ occupied capacity of an asset’s live cells, from exact daily deltas, the 20 largest named; capacityShare.topN = Σ their full capacity; rest = the day’s whole − the five largest.',
+      'usedShare.topN = Σ occupied capacity of an asset’s live cells, from exact daily deltas, the 20 largest named; capacityShare.topN = Σ their full capacity; drawnTotal = Σ the five largest; rest = the day’s whole − drawnTotal.',
     legendItems: [],
   }),
   'chart-block-time-distribution': () => ({
-    overview: 'Groups the blocks of the last 42 complete epochs by the time since their parent.',
+    overview:
+      'Groups the blocks of the last 42 complete epochs, or of every complete epoch on a younger chain, by the time since their parent.',
     formula:
-      'value = the blocks whose timestamp − parent timestamp falls in the 0.1 s bucket × 100 ÷ the blocks of the 42 epochs.',
+      'value = the blocks whose timestamp − parent timestamp falls in the 0.1 s bucket × 100 ÷ intervals, every block of the window, cut at three decimals; beyondRange = the blocks over 50 s, in intervals and in no bucket.',
     legendItems: [],
   }),
   'chart-epoch-time-distribution': () => ({
@@ -119,13 +120,13 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       'Shows how long each completed epoch took, its blocks, and the consensus target duration.',
     formula:
-      'value = timestamp(last block) − timestamp(first block) of the epoch, in hours; value2 = its blocks; target = the consensus epoch duration.',
+      'value = timestamp(last block) − timestamp(first block) of the epoch, in whole ms; value2 = its blocks; target = the consensus epoch duration.',
     legendItems: [],
   }),
   'chart-average-block-time': () => ({
     overview: 'Shows the average time between blocks on each complete UTC+8 day.',
     formula:
-      'value = mean of (timestamp − parent timestamp) over the day’s canonical blocks, in seconds.',
+      'value = DailyStats::avg_block_time_ms: Σ (timestamp − parent timestamp) ÷ the number of the day’s canonical blocks, in whole ms, cut.',
     legendItems: [],
   }),
   'chart-hash-rate': ({ yAxisLabel }) => ({
@@ -156,11 +157,12 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       "For each complete UTC+8 day: the uncles included by that day's blocks divided by the number of blocks, as a percentage. The dashed line is the consensus orphan-rate target the difficulty adjustment aims for.",
     formula:
-      'value = uncles included by the day’s blocks ÷ the day’s blocks × 100; target = orphanRateTarget.numerator ÷ denominator × 100.',
+      'value = uncles included by the day’s blocks ÷ the day’s blocks, cut at six decimals, drawn × 100; target = orphanRateTarget.numerator ÷ denominator × 100.',
     legendItems: [
       {
         label: yAxisLabel ?? 'Uncle Rate',
-        description: 'Exact ratio of two daily counts; the day in progress is left out.',
+        description:
+          'The ratio of two daily counts, cut at six decimals; the day in progress is left out.',
       },
     ],
   }),
@@ -188,7 +190,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       'Shows the secondary issuance since genesis by where it went, at each complete UTC+8 day.',
     formula:
-      'values.burnt, compensation, mining = cumulative secondary issuance to the treasury, to DAO depositors and to miners; protocolTotalShannons = from the canonical DAO fields (frozen phase-1 compensation can overlap the legacy split).',
+      'values.burnt, compensation, mining = cumulative secondary issuance to the treasury, to DAO depositors (claimed or not) and to miners; protocolTotalShannons = miner + S + claimed, the one whole the three make, checked per day.',
     legendItems: [],
   }),
   'chart-inflation-rate': ({ yAxisLabel }) => ({
@@ -222,7 +224,7 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     overview:
       'Splits each day’s kind counts by kind: a band is the day’s activities of its kind, and the stack, the kinds summed, counts an activity of two kinds under both.',
     formula:
-      'transfer = transferCount; dao = daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount; token = tokenCount; object = objectCount; identity = identityCount; scriptCall = scriptCallCount.',
+      'transfer = transferCount; dao = daoCount = daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount, as the route sums them; token = tokenCount; object = objectCount; identity = identityCount; scriptCall = scriptCallCount.',
     legendItems: [],
   }),
   'chart-active-addresses': () => ({

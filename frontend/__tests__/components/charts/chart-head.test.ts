@@ -14,7 +14,6 @@ const model = (kind: ChartModel['kind'], keys: string[]): ChartModel => ({
   unit: kind === 'stacked' ? 'activities' : '%',
   kind,
   latest: null,
-  delta: null,
 });
 
 describe('capNote (rule 6)', () => {
