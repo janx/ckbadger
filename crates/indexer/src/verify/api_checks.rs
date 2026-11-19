@@ -99,7 +99,7 @@ struct BlockResponse {
 struct DaoStatisticsResponse {
     total_deposited: String,
     estimated_apc: String,
-    active_deposits: i64,
+    live_cells_count: i64,
 }
 
 #[derive(serde::Deserialize)]
@@ -1309,7 +1309,7 @@ impl Check for DeepForkClear {
     }
 }
 
-/// F6: GET /dao/statistics → totalDeposited > 0, estimatedApc > 0, activeDeposits > 0.
+/// F6: GET /dao/statistics → totalDeposited > 0, estimatedApc > 0, liveCellsCount > 0.
 pub struct DaoStatisticsSane;
 
 impl Check for DaoStatisticsSane {
@@ -1317,7 +1317,7 @@ impl Check for DaoStatisticsSane {
         "dao_statistics_sane"
     }
     fn description(&self) -> &'static str {
-        "DAO statistics: deposits > 0, APC > 0, active deposits > 0"
+        "DAO statistics: deposits > 0, APC > 0, live DAO cells > 0"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Fast
@@ -1366,10 +1366,10 @@ impl Check for DaoStatisticsSane {
             });
         }
 
-        if dao.active_deposits <= 0 {
+        if dao.live_cells_count <= 0 {
             findings.push(Finding {
                 entity: "dao_statistics".to_string(),
-                details: vec![format!("activeDeposits = {}", dao.active_deposits)],
+                details: vec![format!("liveCellsCount = {}", dao.live_cells_count)],
             });
         }
 
@@ -1378,7 +1378,7 @@ impl Check for DaoStatisticsSane {
                 1,
                 format!(
                     "deposited={}, apc={}%, deposits={}",
-                    dao.total_deposited, dao.estimated_apc, dao.active_deposits
+                    dao.total_deposited, dao.estimated_apc, dao.live_cells_count
                 ),
             ))
         } else {
@@ -8676,7 +8676,7 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/v1/dao/statistics"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "totalDeposited": "1000000000", "estimatedApc": "2.0", "activeDeposits": 1,
+                    "totalDeposited": "1000000000", "estimatedApc": "2.0", "liveCellsCount": 1,
                     "miningReward": "900000000000", "depositCompensation": "900000000000", "burnt": "900000000000"
                 })))
                 .mount(&server)

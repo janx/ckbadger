@@ -1,5 +1,6 @@
 //! Exact Shannon fee rates. The rational value is retained for comparison and
-//! aggregation; only serialized readouts are rounded half-up to two decimals.
+//! aggregation; only serialized readouts are cut to two decimals, never rounded
+//! (lane exactness, part B4: they were half up).
 
 use num_bigint::BigUint;
 use num_integer::Integer;
@@ -103,12 +104,10 @@ fn sum_rates(rates: &[FeeRate]) -> (BigUint, BigUint) {
     (numerator, denominator)
 }
 
+/// The rate at two places, cut: the hundredths below it are dropped, never carried.
 fn format_rational(numerator: BigUint, denominator: BigUint) -> String {
     let scaled = numerator * BigUint::from(100u16);
-    let (mut quotient, remainder) = scaled.div_rem(&denominator);
-    if remainder * BigUint::from(2u8) >= denominator {
-        quotient += BigUint::from(1u8);
-    }
+    let quotient = scaled / denominator;
     let (whole, cents) = quotient.div_rem(&BigUint::from(100u16));
     format!("{whole}.{cents:0>2}")
 }

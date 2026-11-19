@@ -12,6 +12,7 @@
       "consumedAtBlock": 3,
       "consumedByTx": "0x66ceaf4f13457d4af6978c2e76f1b2d1d6284f122d56a443bb895098575f1d89",
       "dataHash": "0xc132a4226b96902551d544a7e1bacc1e8fbf14c4c6f66f81bc8953ce6de36260",
+      "freeCapacity": "37100000000",
       "isLive": false,
       "lock": {
         "args": "0x0606060606060606060606060606060606060606",
@@ -45,6 +46,7 @@
       "consumedAtBlock": null,
       "consumedByTx": null,
       "dataHash": "0xc132a4226b96902551d544a7e1bacc1e8fbf14c4c6f66f81bc8953ce6de36260",
+      "freeCapacity": "37000000000",
       "isLive": true,
       "lock": {
         "args": "0x0707070707070707070707070707070707070707",

@@ -3369,7 +3369,7 @@ interface MempoolTransaction {
   fee: string;
   size: number;
   cycles: number;
-  /** Shannon per byte, rounded half-up to two decimals. */
+  /** Shannon per byte, cut at two decimals (lane exactness, part B4: it was half up). */
   feeRate: string;
   ancestorsCount: number;
   timestamp: number;
@@ -3407,7 +3407,7 @@ interface PendingProposal {
   fee: string | null;
   size: number | null;
   cycles: number | null;
-  /** Shannon per byte, rounded half-up to two decimal places. */
+  /** Shannon per byte, cut at two decimal places (lane exactness, part B4). */
   feeRate: string | null;
 }
 
@@ -3422,7 +3422,7 @@ interface BlockFeeStats {
   totalSize: number;
   totalCycles: number | null;
   cyclesStatus: 'pending' | 'complete' | 'failed';
-  /** Shannon per 1000 bytes, rounded half-up to two decimals; null without fee samples. */
+  /** Shannon per 1000 bytes, cut at two decimals (lane exactness, part B4); null without fee samples. */
   avgFeeRate: string | null;
   minFeeRate: string | null;
   maxFeeRate: string | null;

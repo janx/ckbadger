@@ -709,7 +709,10 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /charts/uncle-rate` (a fraction, six decimals), `/charts/capacity-turnover-ratio`
   (a percentage, six decimals), `/charts/address-cohort-retention` (a
   percentage, six decimals) and `/dao/charts/circulation-ratio` (a percentage,
-  four decimals) cut their shares at their precision, never round.
+  four decimals) cut their shares at their precision, never round. An API older
+  than this cut sent the same shapes rounded half up, so a page cannot tell one
+  from the other and draws it (part B8: accepted, the frontend and the API ship
+  together).
 - `GET /stats/daily-activities` — each day's `kindOccurrences`: the eight kinds
   the charts read (transfers, the three DAO actions, tokens, objects,
   identities, script calls) summed. Kinds overlap, an action counting in each
@@ -766,10 +769,10 @@ network store too), no re-sync:
   `withdrawalRequestCellsCount` (withdrawal requests) and `liveCellsCount`
   (their total, the live DAO cells); `secondaryIssuance` (shannons): the
   miners' share, the depositors' compensation and the burnt share, which make
-  it. `activeDeposits` is the same live-cell total under its legacy name (a
-  withdrawal request is no active deposit); the route refuses a row where it is
-  not the deposits and the requests, and it goes when its last reader, the home
-  page, reads `liveCellsCount`.
+  it. The legacy `activeDeposits`, the same live-cell total under an untrue
+  name (a withdrawal request is no active deposit), is no longer sent (part B5);
+  the route still refuses a stored row whose legacy count is not the deposits and
+  the requests.
 - `GET /charts/block-time-distribution` — `bucketCounts`: each bucket's
   intervals, one per point of `data`, so a tie or the most common interval is
   read from counts, not from the cut shares.
@@ -783,6 +786,24 @@ network store too), no re-sync:
   `transactionsPerMinute`, `transactionsPerDay` (two, one, none),
   `/statistics/asset-ecosystem`'s category `percentage` (two), `/dao/calculator`'s
   realized APC (two) and `/dao/evidence`'s percentages (two and four).
+- Fee rates (part B4): every rate the routes serve at two places is cut there,
+  never rounded half up — `/mempool/transactions`' `feeRate`,
+  `/mempool/blocks`' `feeRateRange` and `medianFeeRate`, the pending
+  proposals' `feeRate`, `/blocks/{id}/fee-stats`' `avgFeeRate`, `minFeeRate`
+  and `maxFeeRate` (one function, `utils::exact_fee`); the whole-number rates
+  (`tx_fee_rate`, shannons per KB) were already floored.
+- `GET …/cell-versions` (spore objects, object items, identity items) — each
+  version's `freeCapacity`, `capacity − occupiedCapacity`, stated so a page
+  subtracts nothing (part B5). The token history's days, the "CKB held"
+  histories and the cell versions take their free part from one helper
+  (`utils::assets::free_part`), which refuses an occupied part under zero or
+  above the whole.
+- Activities' Nervos DAO actions (part B6) — each `protocolActions[]` entry of
+  protocol `dao` carries `metadata.lockHash`: the lock hash (hex, no `0x`) of
+  the cell that took the step (a deposit's output deposit cell, a withdrawal
+  request's output request cell, a completed withdrawal's input request cell),
+  written by the indexer with the action. A page says whose step each is from
+  it, matching a participant's `lockHash`.
 - `GET /network/distributions` — `hosting` (`organisations`, `rest`,
   `restOrganisations`): the verified nodes by hosting organisation (an
   organisation's several ASNs as one, `Unknown` without an ASN), the five

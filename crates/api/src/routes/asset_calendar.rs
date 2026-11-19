@@ -96,12 +96,9 @@ pub(crate) fn held_point(
     used: i128,
     what: &str,
 ) -> Result<StackedAreaDataPoint, String> {
-    if used < 0 || used > capacity {
-        return Err(format!(
-            "{what} at {date}: occupied {used} is not within the capacity {capacity}"
-        ));
-    }
-    let unused = capacity - used;
+    // the one free part (`free_part`), with the history and the day it was read for
+    let unused = crate::utils::assets::free_part(capacity, used)
+        .map_err(|error| format!("{what} at {date}: {error}"))?;
     Ok(StackedAreaDataPoint {
         date,
         values: std::collections::HashMap::from([
