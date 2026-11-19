@@ -142,7 +142,7 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   // and the protocol circulation beside them; re-keyed for lane exactness, part A2 (M1)
   if (definition.slug === 'total-supply') {
     const bands = withWhole(
-      keyed(['circulatingNotDeposited', 'daoDeposited', 'unclaimedCompensation', 'burnt']),
+      keyed(['outsideDao', 'daoDeposited', 'daoWithdrawing', 'unclaimedCompensation', 'burnt']),
       'totalIssuance'
     );
     return {
@@ -151,8 +151,11 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
         ...point,
         values: {
           ...point.values,
+          // what circulates is outside the DAO, deposited or withdrawing (lane exactness, part B1)
           circulating: String(
-            Number(point.values.circulatingNotDeposited) + Number(point.values.daoDeposited)
+            Number(point.values.outsideDao) +
+              Number(point.values.daoDeposited) +
+              Number(point.values.daoWithdrawing)
           ),
         },
       })),
@@ -527,15 +530,22 @@ describe('29 chart variants', () => {
     const model = chartModel(CHART_BY_SLUG.get('total-supply')!, {
       title: 'Supply',
       series: [
-        { key: 'circulatingNotDeposited', label: 'Circulating, not deposited', color: '#a' },
+        // re-pinned for lane exactness, part B1: the five bands, every one sent
+        { key: 'outsideDao', label: 'Outside the Nervos DAO', color: '#a' },
         { key: 'daoDeposited', label: 'Deposited in the Nervos DAO', color: '#b' },
+        { key: 'daoWithdrawing', label: 'Withdrawing from the Nervos DAO', color: '#c' },
+        { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#d' },
+        { key: 'burnt', label: 'Burnt', color: '#e' },
       ],
       data: [
         {
           date: '2024-01-01',
           values: {
-            circulatingNotDeposited: '1.123456789',
+            outsideDao: '1.123456789',
             daoDeposited: '2.000000001',
+            daoWithdrawing: '0',
+            unclaimedCompensation: '0',
+            burnt: '7',
             totalIssuance: '10.123456790000000001',
             circulating: '3.12345679',
           },

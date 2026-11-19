@@ -1,13 +1,14 @@
 'use client';
 
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { useQuery } from '@tanstack/react-query';
-import { api, isNotFoundApiError, type ItemCellVersion } from '@/lib/api';
+import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { NotFoundPage } from '@/components/not-found-page';
-import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
+import { ReadFailure } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetCount } from '@/components/asset/inventory-table';
@@ -34,7 +35,7 @@ import {
 } from '@/components/asset/object-hero';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
-import { cellLockSentence, cellOwnerLockPart } from '@/components/ui/lock-kind';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -242,9 +243,12 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           {/* F2 objects (OB-M6): the board's four properties; configure decoding is tier 2. */}
           {/* One column until md: at 640 the 2×2 grid broke "8 bytes" (responsive B#15). */}
           <dl aria-label="Properties" className="grid gap-x-7 md:grid-cols-2">
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
-              <dt className="text-text-dim">Token</dt>
-              <dd className="text-text-bright text-right">
+            {/* Lane P2's third round (item 8): plain words a reader who does not know the m-NFT
+                script can read; the script's own terms (its state byte, claimed, locked) stand
+                once, in the evidence tier's permissions */}
+            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
+              <dt className="text-text-dim">Number</dt>
+              <dd className="text-text-bright">
                 #<AssetCount value={item.tokenIndex} />{' '}
                 <span className="text-text-dim">
                   of <AssetCount value={item.class.issued} /> issued ·{' '}
@@ -252,25 +256,13 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               </dd>
             </div>
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
-              <dt className="text-text-dim">State</dt>
-              <dd className="text-text-bright text-right">
-                0x{item.state.toString(16).padStart(2, '0')} ·{' '}
-                {item.claimed ? 'claimed' : 'unclaimed'} · {item.locked ? 'locked' : 'unlocked'}
-              </dd>
+            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
+              <dt className="text-text-dim">Transfer</dt>
+              <dd className="text-text-bright">{transferWords(item)}</dd>
             </div>
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
-              <dt className="text-text-dim">Issuer</dt>
-              <dd className="text-text-bright text-right">
-                {item.issuer.name ?? 'Unnamed issuer'}{' '}
-                <span className="text-text-dim">
-                  · <AssetCount value={item.issuer.classCount} /> classes
-                </span>
-              </dd>
-            </div>
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
+            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
               <dt className="text-text-dim">Characteristic</dt>
-              <dd className="text-text-bright min-w-0 text-right [overflow-wrap:anywhere]">
+              <dd className="text-text-bright min-w-0 [overflow-wrap:anywhere]">
                 {characteristic.every((b) => b === '00') ? (
                   <>
                     none, all zero ·{' '}
@@ -330,7 +322,6 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                   {className}
                 </AppLink>
               ),
-              note: `by ${item.issuer.name ?? 'an unnamed issuer'}`,
             },
             {
               label: 'Issued',
@@ -340,8 +331,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 <>
                   <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
-                  </AppLink>{' '}
-                  · to <IssuedTo cell={first} />
+                  </AppLink>
                 </>
               ) : undefined,
             },
@@ -467,27 +457,23 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         read={protocol}
       />
       {history && (
-        <div role="region" aria-label="CKB held in its cell" className="space-y-3">
+        // Lane P2's third round (item 1): the asset pages' one pattern, CKB held and its split the
+        // metric, this section headed "History" with the sentence its versions give and the
+        // versions, no figure of its own
+        <div role="region" aria-label="History" className="space-y-3">
           <CellVersions
             history={history}
             subject="m-NFT"
             life
             firstLabel="Issued"
-            title="CKB held"
-            actions={
-              current && (
-                <span className="text-text-dim text-small">
-                  1 CKB per byte ·{' '}
-                  <span className="text-jade">
-                    {ckbText(BigInt(current.occupiedCapacity))} occupied
-                  </span>{' '}
-                  · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))} free
-                </span>
-              )
-            }
+            title="History"
+            actions={<span className="text-text-dim text-small">1 CKB per byte</span>}
             intro={
               history.data.length > 0 && (
-                <p className="text-body max-w-measure mb-4 leading-relaxed">
+                <p
+                  data-role="history-sentence"
+                  className="text-text text-body max-w-measure mb-4 leading-relaxed"
+                >
                   {cellLifeSentence(history.data, 'token')}
                 </p>
               )
@@ -567,14 +553,32 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
 }
 
 /**
- * The lock the token was issued to, in the Issued fact's note: the one decision's sentence form
- * (lane P2's follow-up, item 6), a refusal failing the note's part in place (ruling D7).
+ * Whether the token can be transferred, in plain words (lane P2's third round, item 8): not while
+ * it is locked; otherwise as its class's configuration permits, before or after its holder claims
+ * it (the permissions the evidence tier lists, the script's own terms said there once).
  */
-function IssuedTo({ cell }: { cell: ItemCellVersion }) {
-  const read = readPart(() => cellLockSentence(cell, 'row'));
-  if (read.error !== undefined)
-    return (
-      <PartReadError what="the lock it was issued to" where="the Issued fact" error={read.error} />
-    );
-  return <>{read.value}</>;
+function transferWords(item: {
+  locked: boolean;
+  claimed: boolean;
+  permissions: { allowTransferBeforeClaim: boolean; allowTransferAfterClaim: boolean };
+}): string {
+  const allowed = item.claimed
+    ? item.permissions.allowTransferAfterClaim
+    : item.permissions.allowTransferBeforeClaim;
+  const transfer = item.locked
+    ? 'not allowed, the token is locked'
+    : allowed
+      ? 'allowed'
+      : 'not allowed by its class';
+  return `${transfer} · ${item.claimed ? 'claimed by its holder' : 'not claimed yet'}`;
 }
+
+/**
+ * A property row (lane P2's third round, item 4): its value at one gap (12 px) after its label,
+ * left-aligned, the label column as wide as the longest label, "Characteristic", 14 characters at
+ * the line's 14 px, 117.6 px, 118 (the value stood at the row's right edge).
+ */
+const PROPERTY_ROW = 'border-row-rule grid min-w-0 items-baseline gap-x-3 border-b py-2';
+const PROPERTY_COLUMNS = {
+  gridTemplateColumns: `${columnPx(textPx('Characteristic'.length, fontPx('body')))}px minmax(0, 1fr)`,
+};

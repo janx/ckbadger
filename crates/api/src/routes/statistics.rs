@@ -3854,39 +3854,77 @@ fn snapshot_secondary_cumulative(
     ))
 }
 
-/// The keys of `/charts/total-supply`'s four bands, in the order they stack (lane exactness, part A2, M1: each
-/// named for what it holds). `circulatingNotDeposited` is the protocol circulation less the DAO's
-/// deposits, `supply.liquid`: a withdrawal request's principal left `total_deposited` at its
-/// request, so it is in this band, and its frozen compensation in `unclaimedCompensation`.
-const TOTAL_SUPPLY_BAND_KEYS: [&str; 4] = [
-    "circulatingNotDeposited",
+/// The keys of `/charts/total-supply`'s five bands, in the order they stack, each named for what it
+/// holds (lane exactness, part B1): `outsideDao`, the protocol circulation outside every DAO cell; `daoDeposited`, the
+/// deposits (status 0); `daoWithdrawing`, the principal of the withdrawal requests (phase 1), still
+/// in a DAO cell; `unclaimedCompensation`, the DAO compensation accrued and not yet claimed, still
+/// in S (the requests' frozen compensation among it); `burnt`.
+const TOTAL_SUPPLY_BAND_KEYS: [&str; 5] = [
+    "outsideDao",
     "daoDeposited",
+    "daoWithdrawing",
     "unclaimedCompensation",
     "burnt",
 ];
 
-/// The four bands of `/charts/total-supply`, in shannons, in the order they stack: the CKB
-/// circulating outside the DAO (`liquid`), the DAO's deposits, the DAO compensation not yet claimed
-/// and the burnt (lane D1, second follow-up). They partition C, the day's total issuance:
-/// `liquid + dao_locked + unclaimed + burnt == C` holds by construction (`treasury + unclaimed ==
-/// S`), and a row where it does not is an error naming the date and the four operands, never a
-/// repaired stack.
-pub(crate) fn total_supply_bands(
-    date: &str,
-    total_issuance: i128,
-    bands: [i128; 4],
-) -> Result<[i128; 4], String> {
-    let [outside_dao, dao_deposited, unclaimed_compensation, burnt] = bands;
+/// One day's operands of `/charts/total-supply`, in shannons: the day's DAO field and the DAO cells
+/// the indexer counted (lane exactness, part B1).
+pub(crate) struct SupplyOperands {
+    /// C, the day's total issuance.
+    pub total_issuance: i128,
+    /// The protocol circulation, C − genesis burnt − S.
+    pub circulating: i128,
+    /// The capacity of every live DAO cell, deposits and withdrawal requests
+    /// (`DaoDailySnapshot.protocol_deposited`).
+    pub protocol_deposited: i128,
+    /// The capacity of the deposits (status 0) alone (`total_deposited`).
+    pub total_deposited: i128,
+    /// The DAO compensation not yet claimed, in S.
+    pub unclaimed_compensation: i128,
+    /// Genesis burnt and the treasury part of S.
+    pub burnt: i128,
+}
+
+/// The five bands of `/charts/total-supply`, in shannons, in the order they stack (lane exactness, part B1): outside
+/// the Nervos DAO (`circulating − protocol_deposited`), deposited (`total_deposited`), withdrawing
+/// (`protocol_deposited − total_deposited`), the unclaimed compensation and the burnt. They make C:
+/// `circulating + unclaimed + burnt == C` holds by construction (`treasury + unclaimed == S`). A
+/// band under zero, or bands that do not make C, are an error naming the date and every operand,
+/// never a repaired stack.
+pub(crate) fn total_supply_bands(date: &str, day: &SupplyOperands) -> Result<[i128; 5], String> {
     let operands = format!(
-        "outside_dao={outside_dao}, dao_deposited={dao_deposited}, \
-         unclaimed_compensation={unclaimed_compensation}, burnt={burnt}, \
-         total_issuance={total_issuance}"
+        "total_issuance={}, circulating={}, protocol_deposited={}, total_deposited={}, \
+         unclaimed_compensation={}, burnt={}",
+        day.total_issuance,
+        day.circulating,
+        day.protocol_deposited,
+        day.total_deposited,
+        day.unclaimed_compensation,
+        day.burnt
     );
+    let less = |a: i128, b: i128, what: &str| {
+        a.checked_sub(b)
+            .ok_or_else(|| format!("total supply {what} overflows for {date}: {operands}"))
+    };
+    let bands = [
+        less(day.circulating, day.protocol_deposited, "outside the DAO")?,
+        day.total_deposited,
+        less(day.protocol_deposited, day.total_deposited, "withdrawing")?,
+        day.unclaimed_compensation,
+        day.burnt,
+    ];
+    for (key, band) in TOTAL_SUPPLY_BAND_KEYS.iter().zip(bands) {
+        if band < 0 {
+            return Err(format!(
+                "total supply band {key} is negative for {date}: {band}; {operands}"
+            ));
+        }
+    }
     let sum = bands
         .iter()
         .try_fold(0i128, |sum, band| sum.checked_add(*band))
         .ok_or_else(|| format!("total supply bands overflow for {date}: {operands}"))?;
-    if sum != total_issuance {
+    if sum != day.total_issuance {
         return Err(format!(
             "total supply bands do not make C for {date}: they sum to {sum}; {operands}"
         ));
@@ -3898,8 +3936,8 @@ async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    // v4: four bands that partition C, and the protocol circulation (lane D1, second follow-up)
-    let cache_key = complete_days_cache_key("chart:total-supply:v5", chain)?;
+    // v6: five bands that make C, the withdrawal requests' principal its own (lane exactness, part B1)
+    let cache_key = complete_days_cache_key("chart:total-supply:v6", chain)?;
     if let Some(cached) = state
         .cache
         .get::<StackedAreaChartResponse>(&cache_key)
@@ -3929,28 +3967,37 @@ async fn get_total_supply_chart(
             )));
         };
 
+        // the DAO cells' capacity, written by the indexer every day; a store older than its writer
+        // has days without it, and the five bands cannot be drawn from them (lane exactness, part B1)
+        let Some(protocol_deposited) = snapshot.protocol_deposited else {
+            return Err(ApiError::internal(format!(
+                "missing protocol_deposited in dao_daily_snapshots for {}. delete RocksDB and re-sync from genesis",
+                snapshot.date
+            )));
+        };
         let bands = total_supply_bands(
             &snapshot.date,
-            snapshot.total_issuance,
-            [
-                supply.liquid,
-                supply.dao_locked,
-                snapshot.unclaimed_compensation,
-                supply.burnt,
-            ],
+            &SupplyOperands {
+                total_issuance: snapshot.total_issuance,
+                circulating: supply.circulating,
+                protocol_deposited,
+                total_deposited: supply.dao_locked,
+                unclaimed_compensation: snapshot.unclaimed_compensation,
+                burnt: supply.burnt,
+            },
         )
         .map_err(ApiError::internal)?;
         let mut values = std::collections::HashMap::new();
         for (key, band) in TOTAL_SUPPLY_BAND_KEYS.iter().zip(bands) {
             values.insert(key.to_string(), shannon_to_ckb_string(band));
         }
-        // C, the day's total issuance, which the four bands partition
+        // C, the day's total issuance, which the five bands make
         values.insert(
             "totalIssuance".to_string(),
             shannon_to_ckb_string(snapshot.total_issuance),
         );
         // the protocol circulation, C − genesis burnt − S: what the site calls circulating (the
-        // band outside the DAO and the DAO's deposits), the page's head figure
+        // bands outside the DAO, deposited and withdrawing), the page's head figure
         values.insert(
             "circulating".to_string(),
             shannon_to_ckb_string(supply.circulating),
@@ -3976,8 +4023,9 @@ async fn get_total_supply_chart(
     let series = TOTAL_SUPPLY_BAND_KEYS
         .iter()
         .zip([
-            ("Circulating, not deposited", "#00c389"),
+            ("Outside the Nervos DAO", "#00c389"),
             ("Deposited in the Nervos DAO", "#3b82f6"),
+            ("Withdrawing from the Nervos DAO", "#786540"),
             ("Unclaimed DAO compensation", "#a68b57"),
             ("Burnt", "#6b7280"),
         ])
@@ -6846,24 +6894,46 @@ mod tests {
         );
     }
 
+    /// lane exactness, part B1: five bands from one day's operands; re-pinned from four (it took the bands made).
     #[test]
     fn total_supply_bands_must_make_c() {
+        let day = |circulating, protocol_deposited, total_deposited, burnt| SupplyOperands {
+            total_issuance: 1_000,
+            circulating,
+            protocol_deposited,
+            total_deposited,
+            unclaimed_compensation: 50,
+            burnt,
+        };
+        // 850 circulates: 300 in DAO cells, 250 of them deposits; 50 unclaimed; 100 burnt
         assert_eq!(
-            total_supply_bands("2026-11-18", 1_000, [600, 250, 50, 100]),
-            Ok([600, 250, 50, 100])
+            total_supply_bands("2026-11-18", &day(850, 300, 250, 100)),
+            Ok([550, 250, 50, 50, 100])
         );
         // a row whose bands miss C by one shannon is an error naming the date and the operands
-        let error = total_supply_bands("2026-11-18", 1_000, [600, 250, 50, 99]).unwrap_err();
+        let error = total_supply_bands("2026-11-18", &day(850, 300, 250, 99)).unwrap_err();
         assert!(error.contains("2026-11-18"), "{error}");
         assert!(error.contains("they sum to 999"), "{error}");
         assert!(
             error.contains(
-                "outside_dao=600, dao_deposited=250, unclaimed_compensation=50, burnt=99, \
-                 total_issuance=1000"
+                "total_issuance=1000, circulating=850, protocol_deposited=300, \
+                 total_deposited=250, unclaimed_compensation=50, burnt=99"
             ),
             "{error}"
         );
-        assert!(total_supply_bands("2026-11-18", 0, [i128::MAX, 1, 0, 0])
+        // DAO cells under the deposits they hold: withdrawing would be negative
+        let error = total_supply_bands("2026-11-18", &day(850, 249, 250, 100)).unwrap_err();
+        assert!(
+            error.contains("band daoWithdrawing is negative for 2026-11-18: -1"),
+            "{error}"
+        );
+        // DAO cells over what circulates: outside the DAO would be negative
+        let error = total_supply_bands("2026-11-18", &day(850, 851, 250, 100)).unwrap_err();
+        assert!(
+            error.contains("band outsideDao is negative for 2026-11-18: -1"),
+            "{error}"
+        );
+        assert!(total_supply_bands("2026-11-18", &day(i128::MIN, 1, 0, 0))
             .unwrap_err()
             .contains("overflow"));
     }

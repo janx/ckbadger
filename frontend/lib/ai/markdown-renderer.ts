@@ -1,4 +1,5 @@
 import { CHART_ROUTES } from '@/lib/ai/page-registry';
+import { partyLockWordsText } from '@/lib/lock-words';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import {
   api,
@@ -1558,11 +1559,11 @@ export async function renderMarkdownPage(
             ['ownerHashPrefix', item.owner.hashPrefix],
             ['ownerLockHash', item.owner.lockHash ?? '-'],
             ['ownerAddress', item.owner.address ?? '-'],
-            ['ownerScriptName', item.owner.scriptName ?? '-'],
+            ['ownerLock', item.owner.lockHash ? partyLockWordsText(item.owner, 'row') : '-'],
             ['managerHashPrefix', item.manager.hashPrefix],
             ['managerLockHash', item.manager.lockHash ?? '-'],
             ['managerAddress', item.manager.address ?? '-'],
-            ['managerScriptName', item.manager.scriptName ?? '-'],
+            ['managerLock', item.manager.lockHash ? partyLockWordsText(item.manager, 'row') : '-'],
           ]
         ),
         '',

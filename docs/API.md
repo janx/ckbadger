@@ -245,6 +245,10 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
   network with no `.cell` ring root indexed
 - `DotCellItemResponse` — the name, its owner/manager/sale/records, `parent`, and the **first
   page** of its live sub-names: `children` (at most 50), `childrenHasMore`, `childrenNextCursor`
+- `PartyRef` (a `.cell` name's owner, manager and sale seller) — `hashPrefix`, `lockHash`,
+  `address`, and `lockScriptName`, the registry's name for the party's lock code hash, the one
+  name every route gives a lock's registry name (it was `scriptName`, the word a type call and a
+  code cell keep)
 - `CursorPaginatedResponse<DotCellNameRef>` — `…/children`: `identityId`, `label`, `name`
 
 **`.cell` sub-names**
@@ -673,19 +677,23 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /charts/common-knowledge-composition` — each point's
   `values.knowledgeSize` (CKB): the day's knowledge size, which the five kinds
   partition.
-- `GET /charts/total-supply` — four bands that partition C, each point's
+- `GET /charts/total-supply` — five bands that make C, each point's
   `values.totalIssuance` (CKB), the total issuance in the day's DAO field:
-  `circulatingNotDeposited` ("Circulating, not deposited": the protocol
-  circulation less the deposits, the CKB in withdrawal requests included),
-  `daoDeposited` ("Deposited in the Nervos DAO": the status-0 deposits, the
-  amount the DAO page calls deposited), `unclaimedCompensation` (DAO
-  compensation accrued and not yet
-  claimed, inside S) and `burnt` (genesis burnt and the treasury part of S).
-  They sum to C to the shannon; the route checks it per row and fails with the
-  date and the four operands where it does not. `values.circulating` is the
-  protocol circulation, `C − genesis burnt − S`
-  (`circulatingNotDeposited + daoDeposited`),
-  the amount the site calls circulating everywhere; it is not a band.
+  `outsideDao` ("Outside the Nervos DAO": the protocol circulation less every
+  live DAO cell, `circulating − protocol_deposited`), `daoDeposited`
+  ("Deposited in the Nervos DAO": the status-0 deposits, the amount the DAO page
+  calls deposited), `daoWithdrawing` ("Withdrawing from the Nervos DAO": the
+  principal of the withdrawal requests, `protocol_deposited − total_deposited`),
+  `unclaimedCompensation` (DAO compensation accrued and not yet claimed, inside
+  S) and `burnt` (genesis burnt and the treasury part of S). They sum to C to
+  the shannon and none is negative; the route checks both per row and fails
+  with the date and every operand where either does not hold, and refuses a day
+  whose snapshot has no `protocol_deposited` ("delete RocksDB and re-sync from
+  genesis"). `values.circulating` is the protocol circulation,
+  `C − genesis burnt − S` (`outsideDao + daoDeposited + daoWithdrawing`), the
+  amount the site calls circulating everywhere; it is not a band. (Part A2's
+  four bands keyed the first `circulatingNotDeposited`, the withdrawal requests
+  in it; lane D1's keyed it `outsideDao` with the same meaning.)
 - `GET /charts/secondary-issuance` — one whole, each point's
   `protocolTotalShannons`: the secondary issuance since genesis,
   `miner + S + claimed`, in shannons. Its three destinations make it: `compensation` (DAO
@@ -882,7 +890,7 @@ network store too), no re-sync:
 
 - Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockKind} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
 - Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`; percentages use this page's denominator, never another request's cached total.
-- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity}]`, `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
+- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity,freeCapacity}]` (`freeCapacity` is `capacity - occupiedCapacity`, stated so a page subtracts nothing; a day whose occupied part exceeds its capacity is refused), `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
 - Distribution returns `holdersCount,totalSupply,largestHolderBalance,nextNineBalance,remainingBalance,decimals,unit,buckets`. Bucket boundaries are raw integer strings, lower inclusive/upper exclusive; the last upper bound is null. Known decimals produce token-unit ranges below 1, 1–10, 10–100, 100–1,000, 1,000–10,000, 10,000–100,000, and at least 100,000. Unknown decimals explicitly use raw units. Counts and balances cover every positive holder, including values above u128.
 - New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every participant remains present. Token amount moved can be read as the sum of positive deltas for that token in the complete activity; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
 - Read complexity: history and feeds scan that token's transfer prefix, distribution scans its holder prefix, live count scans its physical type-cell prefix. History joins relevant headers only and trusts their indexed chain time; it never scans the full chain's headers or substitutes RPC. No new persistent writes.

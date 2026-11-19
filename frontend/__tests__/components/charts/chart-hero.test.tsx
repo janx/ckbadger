@@ -115,7 +115,9 @@ const EXPECT: Record<string, Expect> = {
     eyebrow: 'circulating · 2026-11-18',
     figure: '8,000 CKB',
     sentence:
-      'Of the 12,000 CKB issued, 66.66% circulates, 37.50% of it deposited in the Nervos DAO; 29.16% is burnt.',
+      // re-pinned for lane exactness, part B1: of what circulates, the deposits and the withdrawing apart (100 of
+      // 8,000 is 1.25 %)
+      'Of the 12,000 CKB issued, 66.66% circulates, 37.50% of it deposited in the Nervos DAO and 1.25% withdrawing from it; 29.16% is burnt.',
   },
   'total-deposit': {
     eyebrow: 'deposited in the Nervos DAO · 2026-11-18',

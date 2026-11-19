@@ -206,8 +206,10 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     2,
     (i) => ({
       // four bands that partition C, the day's total issuance (the route checks it per row)
-      circulatingNotDeposited: i ? '5000' : '4999',
+      // five bands (lane exactness, part B1): outside the Nervos DAO, deposited, withdrawing, unclaimed, burnt
+      outsideDao: i ? '4900' : '4899',
       daoDeposited: '3000',
+      daoWithdrawing: '100',
       unclaimedCompensation: '500',
       burnt: '3500',
       totalIssuance: i ? '12000' : '11999',
@@ -215,8 +217,9 @@ export const CHART_FIXTURES: Record<string, unknown> = {
       circulating: i ? '8000' : '7999',
     }),
     [
-      ['circulatingNotDeposited', 'CKB circulating, not deposited'],
+      ['outsideDao', 'CKB outside the Nervos DAO'],
       ['daoDeposited', 'Nervos DAO deposits'],
+      ['daoWithdrawing', 'Nervos DAO withdrawal requests'],
       ['unclaimedCompensation', 'DAO compensation not yet claimed'],
       ['burnt', 'Burnt'],
     ]

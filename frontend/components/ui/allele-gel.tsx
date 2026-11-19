@@ -38,7 +38,7 @@ import { cn } from '@/lib/utils';
 import { clipForeignLabel } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
 import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
-import { descentPx, foreignTextPx, tightLinePx } from '@/lib/type-metrics';
+import { descentPx, foreignTextPx, textPx, tightLinePx } from '@/lib/type-metrics';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
@@ -342,28 +342,41 @@ function Gel({
                           !b.isColour &&
                           (() => {
                             const label = clipForeignLabel(b.label, SVG_TEXT.tick, labelRoom);
-                            // words on a fill: the ink the band calls for under the label's run
-                            const half = foreignTextPx(label, SVG_TEXT.tick) / 2;
-                            const fill = bandLabelInk(
-                              theme,
-                              GEL_INK_KEYS[ink],
-                              r(opacity),
-                              ground,
-                              [r(cx) - half, r(cx) + half],
-                              width
-                            );
-                            return (
-                              <text
-                                x={r(cx)}
-                                y={r(p.y + (p.h - TICK_LINE) / 2 + lineAscentPx(SVG_TEXT.tick))}
-                                textAnchor="middle"
-                                fontSize={SVG_TEXT.tick}
-                                pointerEvents="none"
-                                fill={fill}
-                              >
-                                {label}
-                              </text>
-                            );
+                            // the band's share of the objects under its value (lane P2's third
+                            // round, item 5: it was in the band's hover title only), where the band
+                            // holds two lines and the lane the figure
+                            const share = percentOf(BigInt(b.count), BigInt(total));
+                            const lines =
+                              p.h > 2 * TICK_LINE &&
+                              foreignTextPx(share, SVG_TEXT.tick) <= labelRoom
+                                ? [label, share]
+                                : [label];
+                            const firstTop = p.y + (p.h - lines.length * TICK_LINE) / 2;
+                            return lines.map((line, k) => {
+                              // words on a fill: the ink the band calls for under the line's run
+                              const half = foreignTextPx(line, SVG_TEXT.tick) / 2;
+                              const fill = bandLabelInk(
+                                theme,
+                                GEL_INK_KEYS[ink],
+                                r(opacity),
+                                ground,
+                                [r(cx) - half, r(cx) + half],
+                                width
+                              );
+                              return (
+                                <text
+                                  key={k}
+                                  x={r(cx)}
+                                  y={r(firstTop + k * TICK_LINE + lineAscentPx(SVG_TEXT.tick))}
+                                  textAnchor="middle"
+                                  fontSize={SVG_TEXT.tick}
+                                  pointerEvents="none"
+                                  fill={fill}
+                                >
+                                  {line}
+                                </text>
+                              );
+                            });
                           })()}
                       </g>
                     );
@@ -376,7 +389,12 @@ function Gel({
                     fontSize={SVG_TEXT.tick}
                     fill={GEL_COLORS.label}
                   >
-                    {lane.variants.toLocaleString('en-US')}
+                    {/* the count with its noun where the lane holds it (lane P2's third round,
+                        item 5: a bare "3", which only the legend explained) */}
+                    {textPx(formatCount(lane.variants, 'variant').length, SVG_TEXT.tick) <=
+                    lw - 2 * inset
+                      ? formatCount(lane.variants, 'variant')
+                      : lane.variants.toLocaleString('en-US')}
                   </text>
                 </g>
               );
