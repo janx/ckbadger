@@ -5,11 +5,13 @@ import {
   displayAt,
   flexColumnAt,
   flexWrapsAt,
+  minWidthAt,
   gapPx,
   inFlowAt,
   insetsPx,
   shrinksAt,
   textRunPx,
+  widthClassesAt,
   widthRuleAt,
   wrapsAt,
 } from '@/__tests__/utils/tailwind-box';
@@ -35,7 +37,10 @@ import {
  * wrapping rows hold (lane B4 fix round: the activity row's right part, a `shrink-0` item, read as
  * its words while it stood as one line). One capped at its container (`max-w-full`) is never wider
  * than its line, so its text breaks as any item's; one that sets its own width otherwise is
- * refused (its box, not its text, stands in the line). A replaced element (an `svg`) or an empty sized box (a status dot) is a piece of its
+ * refused (its box, not its text, stands in the line). So is an item behind `display: contents`
+ * (its row is its grandparent's), an item that cannot shrink below its max-content width by its
+ * minimum (`min-w-max`, `min-w-fit`) and an item with two width classes (lane B4 second fix
+ * round). A replaced element (an `svg`) or an empty sized box (a status dot) is a piece of its
  * run as wide as `tailwind-box` reads it. Spaces collapse to one and a run's end spaces hang.
  *
  * What it cannot read it refuses: a word that may break inside itself where it overflows
@@ -70,8 +75,22 @@ export function lineRuns(root: Element, viewport: number): LineRun[] {
     const parent = el.parentElement;
     if (!parent) return false;
     const display = displayAt(parent, viewport);
+    if (display === 'contents')
+      throw new Error(
+        `line-runs: <${el.tagName.toLowerCase()} class="${el.className}"> stands behind display: contents; the flex row it is an item of is not read`
+      );
     if (display !== 'flex' && display !== 'inline-flex') return false;
+    const min = minWidthAt(el, viewport);
+    if (min === 'max-content' || min === 'fit-content')
+      throw new Error(
+        `line-runs: <${el.tagName.toLowerCase()} class="${el.className}"> cannot shrink below its max-content width (min-width ${min}); not read`
+      );
     if (flexColumnAt(parent, viewport) || shrinksAt(el, viewport)) return false;
+    const widths = widthClassesAt(el, viewport);
+    if (widths.length > 1)
+      throw new Error(
+        `line-runs: <${el.tagName.toLowerCase()} class="${el.className}"> has two width classes (${widths.join(', ')}); which holds is not read`
+      );
     const width = widthRuleAt(el, viewport);
     // capped at its container (`max-w-full`), it is never wider than its line: its text breaks
     if (width === 'capped') return false;
@@ -157,6 +176,10 @@ export function lineRuns(root: Element, viewport: number): LineRun[] {
       for (const child of Array.from(node.childNodes)) {
         if (child.nodeType === Node.TEXT_NODE && !(child.textContent ?? '').trim()) continue;
         if (child instanceof Element && !inFlowAt(child, viewport)) continue;
+        if (child instanceof Element && displayAt(child, viewport) === 'contents')
+          throw new Error(
+            `line-runs: <${child.tagName.toLowerCase()} class="${child.className}"> is display: contents in a flex row; its children are the row's items, not read`
+          );
         if (!first) {
           if (wraps) flush();
           else if (gap) pieces.push({ ch: '', px: gap, wraps: false });
