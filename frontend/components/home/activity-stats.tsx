@@ -95,7 +95,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
     label: r.label,
     count: r.count,
     total: scripts.total,
-    href: getScriptDetailHref({ name: r.name, codeHash: r.codeHash }),
+    href: getScriptDetailHref({ name: r.name, codeHash: r.codeHash, hashType: r.hashType }),
   }));
   if (scripts.others) {
     rows.push({

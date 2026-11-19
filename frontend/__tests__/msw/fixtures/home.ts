@@ -201,41 +201,49 @@ export const daoStatistics: DaoStatistics = {
 const SCRIPT_COUNTS = [
   {
     codeHash: '0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43',
+    hashType: 'type',
     name: '.bit Time Index State',
     count: 5480,
   },
   {
     codeHash: '0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79',
+    hashType: 'type',
     name: '.bit Time Info',
     count: 5480,
   },
   {
     codeHash: '0xd483925160e4232b2cb29f012e8380b7b612d71cf4e79991476b6bcf610735f6',
+    hashType: 'type',
     name: 'Bitcoin SPV Type Lock',
     count: 294,
   },
   {
     codeHash: '0x1106d9eaccde0995a7e07e80dd0ce7509f21752538dfdd1ee2526d24574846b1',
+    hashType: 'type',
     name: '.bit Lock',
     count: 23,
   },
   {
     codeHash: '0x7a2a3e8d6e5c4a2b4f2d5c0b3b8a1e2f1c9d4e7f6a5b4c3d2e1f0a9b8c7d6e5f',
+    hashType: 'type',
     name: '.bit Income Cell',
     count: 12,
   },
   {
     codeHash: '0x0b36e9860000000000000000000000000000000000000000000000000000beef',
+    hashType: 'type',
     name: null,
     count: 6,
   },
   {
     codeHash: '0xe2b842a50000000000000000000000000000000000000000000000000000cafe',
+    hashType: 'type',
     name: null,
     count: 3,
   },
   {
     codeHash: '0x5dd229e20000000000000000000000000000000000000000000000000000f00d',
+    hashType: 'type',
     name: null,
     count: 2,
   },

@@ -1443,6 +1443,8 @@ type GlobalActivityFilter =
 
 interface ScriptCountEntry {
   codeHash: string;
+  /** The script's hash type: a count is one script's, by its pair (code hash, hash type). */
+  hashType: string;
   name: string | null;
   count: number;
 }

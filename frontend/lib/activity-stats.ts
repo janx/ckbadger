@@ -70,6 +70,8 @@ export function activityTypeShares(c: ActivityCounts): ShareRow[] {
 
 export interface ScriptShareRow extends ShareRow {
   codeHash: string;
+  /** The script's hash type: a row is one script, by its pair. */
+  hashType: string;
   name: string | null;
 }
 
@@ -82,12 +84,15 @@ export interface ScriptShares {
 }
 
 /**
- * A script's name when the API knows one, else its code hash at the tight size: the label of a
- * share bar in the home page's stats card (U-09).
+ * A script's name when the API knows one (the registry's name of its pair), else its code hash at
+ * the tight size and its hash type: the label of a share bar in the home page's stats card (U-09).
+ * A script is its pair (lane rd/api-lock-names), so an unnamed one is never its code hash alone.
  */
-export function scriptLabel(entry: Pick<ScriptCountEntry, 'name' | 'codeHash'>): string {
+export function scriptLabel(
+  entry: Pick<ScriptCountEntry, 'name' | 'codeHash' | 'hashType'>
+): string {
   const name = entry.name?.trim();
-  return name ? name : shortenHash(entry.codeHash, 'tight');
+  return name ? name : `${shortenHash(entry.codeHash, 'tight')} by ${entry.hashType}`;
 }
 
 /** Script calls ranked by count: the `limit` largest, then everything else as one row. */
@@ -95,12 +100,14 @@ export function scriptShares(entries: ScriptCountEntry[], limit = 5): ScriptShar
   const ranked = entries.filter((e) => e.count > 0).sort((a, b) => b.count - a.count);
   const total = ranked.reduce((sum, e) => sum + e.count, 0);
   if (total === 0) return { total: 0, top: [], others: null };
+  // each script by its pair: one code hash by type and by data is two rows
   const top = ranked.slice(0, limit).map((e) => ({
-    key: e.codeHash,
+    key: `${e.codeHash}:${e.hashType}`,
     label: scriptLabel(e),
     count: e.count,
     share: e.count / total,
     codeHash: e.codeHash,
+    hashType: e.hashType,
     name: e.name,
   }));
   const rest = ranked.slice(limit);
