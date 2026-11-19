@@ -5,7 +5,8 @@ export type ChartPayload =
   | Awaited<ReturnType<typeof api.getCellCountChart>>
   | Awaited<ReturnType<typeof api.getMostUtilizedScriptsChart>>
   | Awaited<ReturnType<typeof api.getMinerAddressDistributionChart>>
-  | Awaited<ReturnType<typeof api.getUncleRateChart>>;
+  | Awaited<ReturnType<typeof api.getUncleRateChart>>
+  | Awaited<ReturnType<typeof api.getCellSizeDistributionChart>>;
 
 export type ChartVisual = 'line' | 'bars' | 'stacked' | 'ranked';
 export type ChartScale = 'raw' | 'shannons' | 'hash-rate' | 'difficulty' | 'fraction-percent';

@@ -23,7 +23,13 @@ describe('TotalSupplyPage', () => {
       data: [
         {
           date: '2026-02-23',
-          values: { circulating: '70.00000001', nervosdao: '30.00000002', burnt: '0.00000001' },
+          values: {
+            circulating: '70.00000001',
+            nervosdao: '30.00000002',
+            burnt: '0.00000001',
+            // C, the day's total issuance, the route's (the D1 hand-back, item 2)
+            totalIssuance: '100.00000004',
+          },
         },
       ],
       series: [

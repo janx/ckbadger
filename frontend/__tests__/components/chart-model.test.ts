@@ -46,7 +46,15 @@ const utilized = {
       { key: 'others', label: 'Others', color: '#b' },
     ],
     data: [
-      { date: '2024-01-03', values: { top0: '900719925474099300', others: '900719925474099300' } },
+      {
+        date: '2024-01-03',
+        values: {
+          top0: '900719925474099300',
+          others: '900719925474099300',
+          // the day's whole, the route's (the D1 hand-back, item 2)
+          total: '1801439850948198600',
+        },
+      },
     ],
     // lane D1: the API names the bands a history is drawn in (re-pinned: it sends them always)
     bands: [
@@ -57,7 +65,7 @@ const utilized = {
   capacityShare: {
     title: 'Capacity',
     series: [{ key: 'top0', label: 'Alpha', color: '#a' }],
-    data: [{ date: '2024-01-03', values: { top0: '1' } }],
+    data: [{ date: '2024-01-03', values: { top0: '1', total: '1' } }],
     bands: [{ key: 'top0', label: 'Alpha', members: ['top0'] }],
   },
 };
@@ -87,6 +95,20 @@ const keyed = (keys: string[], extra: Record<string, string> = {}) => ({
     values: { ...Object.fromEntries(keys.map((key, i) => [key, String(i + d + 1)])), ...extra },
   })),
 });
+/**
+ * The route's whole at each point, as a split stack's route sends it (the D1 hand-back, item 2):
+ * its parts' total and `more` (total supply's C is more than its bands).
+ */
+const withWhole = (payload: ReturnType<typeof keyed>, field: string, more = 0) => ({
+  ...payload,
+  data: payload.data.map((point) => ({
+    ...point,
+    values: {
+      ...point.values,
+      [field]: String(Object.values(point.values).reduce((sum, v) => sum + Number(v), more)),
+    },
+  })),
+});
 const HODL_KEYS = ['gt3y', '1y3y', '6m1y', '3m6m', '1m3m', '1w1m', '1d1w', '24h'];
 /**
  * Lane D1: the HODL wave as the API sends it now — its five drawn bands named, the two it merges
@@ -112,11 +134,18 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'secondary-issuance') return secondaryProducer;
   if (definition.slug === 'hodl-wave')
     return banded(keyed(HODL_KEYS, { holderCount: '123' }), { '1m6m': '9', lt1m: '21' });
-  if (definition.slug === 'total-supply') return keyed(['circulating', 'nervosdao', 'burnt']);
+  if (definition.slug === 'total-supply')
+    return withWhole(keyed(['circulating', 'nervosdao', 'burnt']), 'totalIssuance', 1);
   if (definition.slug === 'common-knowledge-composition')
-    return keyed(['transfer', 'dao', 'udt', 'nftSpore', 'otherContracts']);
+    return withWhole(
+      keyed(['transfer', 'dao', 'udt', 'nftSpore', 'otherContracts']),
+      'knowledgeSize'
+    );
   if (definition.slug === 'activity-type-breakdown')
-    return keyed(['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall']);
+    return withWhole(
+      keyed(['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall']),
+      'kindOccurrences'
+    );
   if (definition.slug === 'epoch-time-length')
     return {
       ...simple,
@@ -130,6 +159,9 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
     return {
       ...simple,
       data: simple.data.map((point, i) => ({ ...point, date: ['<100 CKB', '>=1m CKB'][i] })),
+      // the route's wholes (the D1 hand-back, item 2)
+      liveCells: '4',
+      occupiedCapacity: '6',
     };
   if (
     [
@@ -226,6 +258,8 @@ describe('29 chart variants', () => {
             ...Object.fromEntries(keys.map((key, i) => [key, `${amounts[i]}000`])),
             // lane D1: the API's rest band, ranks six to eight (9,994 + 9,993 + 9,993)
             rest: '29980000',
+            // the day's whole, the route's (the D1 hand-back, item 2)
+            total: '100000000',
           },
         },
       ],
@@ -239,12 +273,13 @@ describe('29 chart variants', () => {
       usedShare: share,
       capacityShare: share,
     });
+    // re-pinned for the D1 hand-back, item 1: 10.005% is cut, 10.00% (was half up, 10.01%)
     expect(model.rankedPreview?.rows.map((row) => `${row.label} ${row.share}`)).toEqual([
       's0 30.00%',
-      's1 10.01%',
-      's2 10.01%',
-      's3 10.01%',
-      's4 10.01%',
+      's1 10.00%',
+      's2 10.00%',
+      's3 10.00%',
+      's4 10.00%',
       'Others 29.98%',
     ]);
     // The API's own remainder bucket is ranks beyond its named list, not the card's Others.
@@ -263,7 +298,7 @@ describe('29 chart variants', () => {
     const zero = {
       title: 'Used',
       series: [{ key: 'a', label: 'A', color: '#a' }],
-      data: [{ date: '2024-01-03', values: { a: '0' } }],
+      data: [{ date: '2024-01-03', values: { a: '0', total: '0' } }],
       bands: [{ key: 'a', label: 'A', members: ['a'] }],
     };
     const model = chartModel(CHART_BY_SLUG.get('most-utilized-scripts')!, {
@@ -304,8 +339,9 @@ describe('29 chart variants', () => {
       'Others',
     ]);
     // 1,123 of 66,477 blocks at two decimals, the one share form (re-pinned for CH-03 / CH-14:
-    // was floored at the API's four decimals, 1.6893%).
-    expect(preview.rows.at(-1)?.share).toBe('1.69%');
+    // was floored at the API's four decimals, 1.6893%), cut (re-pinned for the D1 hand-back,
+    // item 1: was half up, 1.69%).
+    expect(preview.rows.at(-1)?.share).toBe('1.68%');
     expect(preview.rows[0].title).toBe(rows[0].address);
     // The detail names the miner in the same short form as a fact and as its ranked row; the full
     // address is the row's link title (re-pinned for CH-03: the row printed all 97 characters).
@@ -336,7 +372,8 @@ describe('29 chart variants', () => {
       })),
     });
     const model = chartModel(definition, timeline(['past', 'past', 'current', 'future', 'future']));
-    expect(model.latest).toEqual({ label: 'year 6.5', raw: '2.3297', display: '2.33' });
+    // re-pinned for the D1 hand-back, item 1: a rate is cut (was half up, 2.33)
+    expect(model.latest).toEqual({ label: 'year 6.5', raw: '2.3297', display: '2.32' });
     // Re-pinned for CH-18: the head reads today; no "Today" fact repeats it.
     expect(model.facts).toBeUndefined();
     expect(model.projectedAfter).toBe(2);
@@ -442,7 +479,9 @@ describe('29 chart variants', () => {
     ]);
   });
 
-  it('adds arbitrary decimal precision in stacked totals without truncating', () => {
+  // Re-pinned for the D1 hand-back, item 2: a stack's whole is the route's, exactly, never the
+  // page's sum of its bands (this test summed 1.123456789 and 2.000000001 to 3.12345679).
+  it('takes a stack’s whole from its route at every digit, never the sum of its bands', () => {
     const model = chartModel(CHART_BY_SLUG.get('total-supply')!, {
       title: 'Supply',
       series: [
@@ -450,10 +489,18 @@ describe('29 chart variants', () => {
         { key: 'nervosdao', label: 'Nervos DAO', color: '#b' },
       ],
       data: [
-        { date: '2024-01-01', values: { circulating: '1.123456789', nervosdao: '2.000000001' } },
+        {
+          date: '2024-01-01',
+          values: {
+            circulating: '1.123456789',
+            nervosdao: '2.000000001',
+            totalIssuance: '10.123456790000000001',
+          },
+        },
       ],
     });
-    expect(model.latest?.raw).toBe('3.12345679');
+    expect(model.latest?.raw).toBe('10.123456790000000001');
+    expect(model.points[0].whole).toBe('10.123456790000000001');
   });
 
   it('summarizes live cells, the largest HODL band, and bucket distributions semantically', () => {
@@ -500,6 +547,8 @@ describe('29 chart variants', () => {
         { date: '<100 CKB', value: '90', value2: '1' },
         { date: '>=1m CKB', value: '1', value2: '10' },
       ],
+      liveCells: '91',
+      occupiedCapacity: '11',
     });
     // In the axis' words (re-pinned for CH-12: was the API's '<100 CKB').
     expect(buckets.latest?.label).toBe('< 100 CKB');
@@ -562,6 +611,7 @@ describe('29 chart variants', () => {
           values: { compensation: '2', burnt: '3' },
           protocolTotalShannons: '400000001',
           phase1CompensationShannons: '100000000',
+          componentsTotalShannons: '500000000',
         },
       ],
     });
@@ -607,14 +657,16 @@ describe('29 chart variants', () => {
         })),
       });
     const model = at([999_999, 1]);
-    expect(model.rankedRows?.map((row) => row.share)).toEqual(['>99.99%', '<0.01%']);
+    // re-pinned for the D1 hand-back, item 1: cut, 99.9999% reads 99.99% and is true (half up it
+    // read 100.00%, bounded as '>99.99%'); a share that cuts to nothing stays under a hundredth
+    expect(model.rankedRows?.map((row) => row.share)).toEqual(['99.99%', '<0.01%']);
     // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's own figure, the
     // leading miner's blocks (was its share in a card headline of its own); the share stays here.
     expect(chartHead(CHART_BY_SLUG.get('miner-address-distribution')!, model).figure).toMatchObject(
       { display: '999,999', unit: 'blocks' }
     );
     // the leading miner's fact ends on the same share (its count's form is the review's item C)
-    expect(model.facts?.[0].value).toMatch(/ · >99\.99%$/);
+    expect(model.facts?.[0].value).toMatch(/ · 99\.99%$/);
     expect(at([600_000, 400_000]).rankedRows?.map((row) => row.share)).toEqual([
       '60.00%',
       '40.00%',

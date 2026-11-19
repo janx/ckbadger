@@ -120,7 +120,7 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
     const head = chartHead(slug, chartModel(slug, payload as never));
     expect(head.figure!.display).toBe('45.05');
     expect(head.figure!.title).toBe('911,281 of 2,022,560 live cells');
-    expect(head.sentence).toBe('The most occupied CKB is in cells of 100k–1m CKB, 16.95% of it.');
+    expect(head.sentence).toBe('The most occupied CKB is in cells of 100k – 1M CKB, 16.95% of it.');
   });
 
   it('refuses a stack whose route sends no whole', () => {

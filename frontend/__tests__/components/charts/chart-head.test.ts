@@ -18,10 +18,12 @@ const model = (kind: ChartModel['kind'], keys: string[]): ChartModel => ({
 });
 
 describe('capNote (rule 6)', () => {
-  it('names a stack above its scale by its whole', () => {
+  // re-pinned for the D1 hand-back, item 2: the whole is the route's, each point's own (the page
+  // summed its bands before: 6,225 + 1,103,188)
+  it('names a stack above its scale by its whole, the route’s', () => {
     const points = [
-      { label: '2024-01-18', values: { a: '6225', b: '1103188' } },
-      { label: '2024-01-19', values: { a: '5', b: '400000' } },
+      { label: '2024-01-18', values: { a: '6225', b: '1103188' }, whole: '1109413' },
+      { label: '2024-01-19', values: { a: '5', b: '400000' }, whole: '400005' },
     ];
     // a count and its noun are held by a no-break space: compared as a space
     const note = capNote(model('stacked', ['a', 'b']), points, [0, 1], (l) => l, 'day');

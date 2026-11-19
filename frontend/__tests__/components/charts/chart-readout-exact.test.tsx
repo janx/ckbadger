@@ -68,8 +68,14 @@ describe('a CKB chart’s readouts state the exact value', () => {
       data: [
         {
           date: '2026-02-23',
-          // the three places the API always sends (the head's sentence reads all three)
-          values: { circulating: '8131306075.44505907', nervosdao: '1234.50000000', burnt: '0.1' },
+          // the three places the API always sends (the head's sentence reads all three) and C,
+          // the day's total issuance, which the sentence divides by (the D1 hand-back, item 2)
+          values: {
+            circulating: '8131306075.44505907',
+            nervosdao: '1234.50000000',
+            burnt: '0.1',
+            totalIssuance: '8131307310.04505907',
+          },
         },
       ],
       series: [

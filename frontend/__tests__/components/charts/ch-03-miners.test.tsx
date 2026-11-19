@@ -64,7 +64,8 @@ describe('Miners ranking (CH-03)', () => {
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
     expect(link).toHaveAttribute('title', address);
     expect(first).toHaveTextContent(/^1\. ckb1…4s93hhsj41,870 blocks · 67\.83%$/);
-    expect(second).toHaveTextContent(/^2\. 0xbbbbbbbb…bbbbbb8,548 blocks · 13\.85%$/);
+    // re-pinned for the D1 hand-back, item 1: 8,548 of 61,726 blocks cut (was half up, 13.85%)
+    expect(second).toHaveTextContent(/^2\. 0xbbbbbbbb…bbbbbb8,548 blocks · 13\.84%$/);
     expect(document.body).not.toHaveTextContent(/\((Address|Lock hash)\)/);
     // The full address is in the link's title only, never printed.
     expect(screen.queryByText(address)).toBeNull();

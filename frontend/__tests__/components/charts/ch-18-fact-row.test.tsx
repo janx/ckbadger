@@ -104,7 +104,12 @@ describe('the fact row under the lede (CH-18)', () => {
       data: [
         {
           date: '2026-11-13',
-          values: { top0: '5919046400000000', others: '17958953600000000' },
+          values: {
+            top0: '5919046400000000',
+            others: '17958953600000000',
+            // the day's whole, the route's (the D1 hand-back, item 2)
+            total: '23878000000000000',
+          },
         },
       ],
       bands: [
@@ -126,8 +131,9 @@ describe('the fact row under the lede (CH-18)', () => {
     expect(figure).toHaveClass('text-text-bright');
     expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
+    // re-pinned for the D1 hand-back, item 1: 24.7887…% cut (was half up, 24.79%)
     expect(within(tier2).getByText(/^Largest script:/)).toHaveTextContent(
-      'Largest script: Default Lock · 59,190,464 CKB · 24.79%'
+      'Largest script: Default Lock · 59,190,464 CKB · 24.78%'
     );
   });
 
@@ -144,6 +150,8 @@ describe('the fact row under the lede (CH-18)', () => {
         values: { compensation: '2', mining: '3', burnt: String(1 + i) },
         protocolTotalShannons: String(600000000 + i * 100000000),
         phase1CompensationShannons: '9265519217277960',
+        // the three destinations' total, the route's (the D1 hand-back, item 2)
+        componentsTotalShannons: String(600000000 + i * 100000000),
       })),
     });
     render(<ChartDetail slug="secondary-issuance" />);

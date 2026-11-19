@@ -5368,18 +5368,8 @@ export const api = {
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        value: [
-          s.transferCount,
-          s.daoDepositCount,
-          s.daoWithdrawRequestCount,
-          s.daoWithdrawCompleteCount,
-          s.tokenCount,
-          s.objectCount,
-          s.identityCount,
-          s.scriptCallCount,
-        ]
-          .reduce((sum, count) => sum + BigInt(count), BigInt(0))
-          .toString(),
+        // the day's kind occurrences, the route's sum of the eight kinds (lane D1)
+        value: String(s.kindOccurrences),
       })),
       title: 'Daily Activity Volume',
       yAxisLabel: 'Activities',
@@ -5402,6 +5392,8 @@ export const api = {
           object: String(s.objectCount),
           identity: String(s.identityCount),
           scriptCall: String(s.scriptCallCount),
+          // the whole the page's shares divide by, the route's (lane D1)
+          kindOccurrences: String(s.kindOccurrences),
         },
       })),
       series: [

@@ -30,7 +30,15 @@ const composition = {
   data: [
     {
       date: '2026-10-29',
-      values: { transfer: '100', dao: '300', udt: '50', nftSpore: '40', otherContracts: '10' },
+      values: {
+        transfer: '100',
+        dao: '300',
+        udt: '50',
+        nftSpore: '40',
+        otherContracts: '10',
+        // the day's knowledge size, the route's (the D1 hand-back, item 2)
+        knowledgeSize: '500',
+      },
     },
   ],
 };
@@ -87,7 +95,13 @@ describe('Charts index encodings (F2 charts)', () => {
         { key: 'nervosdao', label: 'Nervos DAO', color: '#3b82f6' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
-      data: [{ date: '2026-10-29', values: { circulating: '3', nervosdao: '2', burnt: '1' } }],
+      // C, the route's total issuance, more than the bands (the D1 hand-back, item 2)
+      data: [
+        {
+          date: '2026-10-29',
+          values: { circulating: '3', nervosdao: '2', burnt: '1', totalIssuance: '7' },
+        },
+      ],
     });
     expect(supply.series.map((s) => [s.label, s.color])).toEqual([
       ['Circulating', DATA_COLOR],
@@ -107,6 +121,7 @@ describe('Charts index encodings (F2 charts)', () => {
           values: { compensation: '2', mining: '3', burnt: '1' },
           protocolTotalShannons: '600000000',
           phase1CompensationShannons: '0',
+          componentsTotalShannons: '600000000',
         },
       ],
     });
@@ -193,6 +208,8 @@ describe('Charts index encodings (F2 charts)', () => {
             object: '4',
             identity: '1',
             scriptCall: '20',
+            // the day's kind occurrences, the route's (the D1 hand-back, item 2)
+            kindOccurrences: '100',
           },
         },
       ],
@@ -244,6 +261,9 @@ describe('Charts index encodings (F2 charts)', () => {
         { date: '100-1k CKB', value: '300', value2: '1' },
         { date: '>=1m CKB', value: '100', value2: '1' },
       ],
+      // the route's wholes (the D1 hand-back, item 2)
+      liveCells: '1000',
+      occupiedCapacity: '3',
     });
     // Re-pinned for CH-12: the API's buckets only ('100+ CKB' is none of them), named in the
     // axis' words, and a bucket's unit is its symbol ('h', was 'hours'; CH-14).
@@ -301,13 +321,14 @@ describe('Charts index encodings (F2 charts)', () => {
       ],
     });
     // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's figure, the leading
-    // miner's blocks grouped (was its share in a headline of the card's own); its share, 62.9950
-    // half up to 63.00 as every percentage, stays on its row.
+    // miner's blocks grouped (was its share in a headline of the card's own); its share stays on
+    // its row, 42,705 of 67,791 blocks cut, 62.99% (re-pinned for the D1 hand-back, item 1: it was
+    // half up, 63.00%).
     expect(chartHead(def('miner-address-distribution'), miners)).toMatchObject({
       at: '2026-10-23 → 2026-10-29',
       figure: { display: '42,705', unit: 'blocks' },
     });
-    expect(miners.rankedRows?.[0].share).toBe('63.00%');
+    expect(miners.rankedRows?.[0].share).toBe('62.99%');
   });
 
   it("heads nominal APC with the API's today at its exact year, never the quarter sample (CH-03, CH-33)", () => {
@@ -474,7 +495,11 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
       data: [
         {
           date: '2026-10-29',
-          values: Object.fromEntries(entries.map(([key], i) => [key, String((9 - i) * 100)])),
+          values: {
+            ...Object.fromEntries(entries.map(([key], i) => [key, String((9 - i) * 100)])),
+            // the day's whole, the route's (the D1 hand-back, item 2)
+            total: String(entries.reduce((sum, _, i) => sum + (9 - i) * 100, 0)),
+          },
         },
       ],
       // lane D1: five or fewer ranks, each series is its own band

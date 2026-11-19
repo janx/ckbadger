@@ -25,6 +25,11 @@ export interface ChartPoint {
   values: Readonly<Record<string, string>>;
   /** Optional exact time coordinate for plots sharing one time axis. */
   x?: number;
+  /**
+   * A stack's whole at this point as the API states it, which every share a chart page states of
+   * the point divides by (components/charts/chart-model.ts). Not drawn.
+   */
+  whole?: string;
 }
 export interface ChartSeries {
   key: string;
@@ -654,7 +659,10 @@ export function Chart({
         : PLOT_NAME_BAND + (nameLines.length - 1) * PLOT_NAME_LINE) +
       keyBand +
       // the cap's note takes its own lines under the name (rule 6)
-      capLines.length * PLOT_NAME_LINE,
+      capLines.length * PLOT_NAME_LINE +
+      // the fork markers' labels stand a tight line under the name's last line and the cap's,
+      // as many lines as they are measured to take, at every width (the D1 hand-back, item 4)
+      (plotName !== undefined && markers.length ? MARKER_LABEL_GAP : 0),
     bottom = height - X_AXIS_BAND + keyBand,
     axisY = height + keyBand - X_AXIS_FOOT;
   const lo = ticks?.values[0],

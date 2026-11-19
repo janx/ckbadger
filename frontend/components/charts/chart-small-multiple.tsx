@@ -17,7 +17,7 @@ import {
   formatChartReadout,
   type ChartModel,
 } from '@/components/charts/chart-model';
-import { chartHead, type ChartHead } from '@/components/charts/chart-head';
+import { chartDrawing, chartHead, type ChartHead } from '@/components/charts/chart-head';
 
 /** A preview bar's width: the model's, from the exact parts (never the printed share). */
 function shareWidth(row: { width: number; label: string }, title: string): number {
@@ -94,6 +94,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   let model: ChartModel | null = null;
   let head: ChartHead | null = null;
   let ticks: { index: number; label: string }[] = [];
+  let drawing: ReturnType<typeof chartDrawing> | null = null;
   let modelError: string | null = null;
   if (data) {
     try {
@@ -108,6 +109,14 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         bucketUnit(definition),
         model.bucketRun
       );
+      // the page's default scale and cap, drawn the page's way (the D1 hand-back, item 3)
+      if (model.kind !== 'ranked')
+        drawing = chartDrawing(
+          definition,
+          model,
+          model.card?.points ?? model.points,
+          model.card?.series ?? model.series
+        );
     } catch (cause) {
       model = null;
       modelError = cause instanceof Error ? cause.message : String(cause);
@@ -204,9 +213,13 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
               referenceLines={model.referenceLines}
               formatValue={(value) => formatChartReadout(value, model.unit)}
               formatAxis={chartAxisFormat(model.unit)}
+              // The page's default scale and cap (rule 6), the axis saying which: a log scale is
+              // named with the unit, a cut axis names what is above it.
+              yScale={drawing?.yScale}
+              axisCap={drawing?.axisCap}
               // Rule 4: every plot's left edge on one line; its ticks inside it, bare, its unit
               // named once; rule 5: a stack in the page's solid bands.
-              plotName={model.unit}
+              plotName={drawing?.yScale === 'log' ? `${model.unit} · log scale` : model.unit}
               insideYTicks
               bareTicks
               solidBands={model.kind === 'stacked'}

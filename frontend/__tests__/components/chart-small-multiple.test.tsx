@@ -101,6 +101,8 @@ describe('ChartSmallMultiple', () => {
             ...Object.fromEntries(keys.map((key, i) => [key, String((7 - i) * 100_000_000)])),
             // lane D1: the API's rest band, rank six and its remainder (2 + 1 CKB)
             rest: '300000000',
+            // the day's whole, the route's (the D1 hand-back, item 2): 7 + 6 + … + 1 CKB
+            total: '2800000000',
           },
         },
       ],
@@ -198,6 +200,8 @@ describe('ChartSmallMultiple', () => {
                   udt: '50',
                   nftSpore: '40',
                   otherContracts: '10',
+                  // the day's knowledge size, the route's (the D1 hand-back, item 2)
+                  knowledgeSize: '500',
                 },
               },
             ],
@@ -238,7 +242,10 @@ describe('ChartSmallMultiple', () => {
         { key: 'top1', label: 'MEMES (token)', color: '#000', id: `token:${b}` },
         { key: 'others', label: 'Others', color: '#000' },
       ],
-      data: [{ date: '2026-10-29', values: { top0: '300', top1: '200', others: '500' } }],
+      // the day's whole, the route's (the D1 hand-back, item 2)
+      data: [
+        { date: '2026-10-29', values: { top0: '300', top1: '200', others: '500', total: '1000' } },
+      ],
       // lane D1: two named ranks, each its own band
       bands: ['top0', 'top1', 'others'].map((key) => ({ key, label: key, members: [key] })),
     };
@@ -265,7 +272,10 @@ describe('ChartSmallMultiple', () => {
         { key: 'top1', label: '拯救民主 (object)', color: '#000' },
         { key: 'others', label: 'Others', color: '#000' },
       ],
-      data: [{ date: '2026-10-29', values: { top0: '300', top1: '200', others: '500' } }],
+      // the day's whole, the route's (the D1 hand-back, item 2)
+      data: [
+        { date: '2026-10-29', values: { top0: '300', top1: '200', others: '500', total: '1000' } },
+      ],
       // lane D1: two named ranks, each its own band
       bands: ['top0', 'top1', 'others'].map((key) => ({ key, label: key, members: [key] })),
     };
