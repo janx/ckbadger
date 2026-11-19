@@ -7,6 +7,7 @@ import { api, type Cell } from '@/lib/api';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -309,6 +310,10 @@ describe('CellDetailPage', () => {
     expect(screen.getByRole('region', { name: 'Cell facts' })).toHaveTextContent(
       'Occupied61 B · 39 CKB free'
     );
+    // lane P1, the ink and size roles: its free CKB is a value, the reading ink (it was quiet)
+    expect(
+      inkOf(within(screen.getByRole('region', { name: 'Cell facts' })).getByText(/ free$/))
+    ).toBe(READING);
   });
   it('shows exact spent input, timestamps and chain lifetime', async () => {
     getCell.mockResolvedValue({

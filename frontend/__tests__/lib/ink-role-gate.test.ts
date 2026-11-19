@@ -69,17 +69,13 @@ interface Tolerated {
 // chain 36 → 31, lists 43 → 36, topics 18 → 14, files 59 → 58 (the merge with the P3 follow-up's
 // 2d, each site decided: the blocks list 5, the transactions page 5 (one with 2b), the activities
 // page 1, the stream explorer 1, the DAO depositors 4, which left the list)
-// chain 28 → 23, files 51 → 48 (lane P1, the ink and size roles: the address pages)
-// chain 23 → 22, files 48 → 47 (lane P1, the ink and size roles: the code cell)
-// chain 22 → 14, files 47 → 43, decided 15 → 16 in 6 → 7 files (lane P1, the ink and size roles:
-// the block and uncle pages)
-// chain 14 → 3, files 43 → 39, decided 16 → 18 in 7 → 9 files (lane P1, the ink and size roles: the
-// transaction page and the cell graph)
+// chain 28 → 0, files 51 → 37, decided 15 → 18 in 6 → 9 files (lane P1, the ink and size roles:
+// each chain file left the list in the commit that converted it)
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // chain 31 → 28, lists 35 → 23 (the third read's T NOTE-3): the sites the P3 follow-up's 2d
   // decided to stay quiet left this work list for DECIDED (the blocks list 2, the CKBytes note 1;
   // the activities page 1, the inventory 1, the transactions page 6, the stream explorer 4)
-  chain: 3,
+  chain: 0,
   assets: 33,
   // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
@@ -90,69 +86,30 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
 // 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
-const TOLERATED_FILES = 39;
+const TOLERATED_FILES = 37;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
-  // app/address/[addr]/client-page.tsx left the list (lane P1, the ink and size roles: the address
-  // pages): its empty lines ('Script unavailable', 'No activities.') are sentences, in the reading
-  // ink
-  // app/blocks/[id]/client-page.tsx left the list (lane P1, the ink and size roles: the block and
-  // uncle pages): its empty lines (no uncles, no proposals, no activities) and its loading line are
-  // sentences, in the reading ink
-  // app/blocks/[id]/uncles/[index]/client-page.tsx left the list (lane P1, the ink and size roles:
-  // the block and uncle pages): 'This uncle proposed nothing.' is a sentence, in the reading ink
+  // lane P1, the ink and size roles: the chain family's 28 sites left this list, 25 in the
+  // reading ink (empty, loading and waiting lines, a table cell's content, notes that are
+  // sentences) and 3 to DECIDED (an uncle row's label, the witness list's hint, the structure's
+  // key): the address page 2, address-history 1, address-holdings 2, the block page 4, the uncle
+  // page 1, block-position 2, block-transactions-table 1, the transaction page 8,
+  // cell-graph-renderer 1, cell-graph 1, cell-microscope 1, cell-transactions 2, code-cell-board
+  // 1, tx-structure 1
   // 'app/cell/[outpoint]/client-page.tsx' left the list (lane P1 follow-up): the DAO line, its
   // deposit block and its compensation, is values in the reading ink (link 4 → 1, prose 2 → 1 in
   // B7: the out-point sentence reads)
-  // app/tx/[hash]/client-page.tsx left the list (lane P1, the ink and size roles: the transaction
-  // page and the cell graph): its loading lines, the node's waiting line and message, the
-  // unavailable witness bytes and the cell deps' 'none' are sentences or a value, in the reading
-  // ink; the witness list's hint went to DECIDED
-  // components/address/address-history.tsx left the list (lane P1, the ink and size roles: the
-  // address pages): a cycles cell with no figure ('Not computed', 'Failed') is a table cell's
-  // content, in the reading ink
-  // components/address/address-holdings.tsx left the list (lane P1, the ink and size roles: the
-  // address pages): its loading and unavailable line and the collections' sentence ('Open a
-  // collection to list its objects here; …') read in the reading ink
-  // components/blocks/block-position.tsx left the list (lane P1, the ink and size roles: the block
-  // and uncle pages): the origins being read is a sentence, in the reading ink; an uncle row's
-  // label went to DECIDED
-  // components/blocks/block-transactions-table.tsx left the list (lane P1, the ink and size roles:
-  // the block and uncle pages): a cycles cell with no figure ('Not yet run', 'Replay failed') is a
-  // table cell's content, in the reading ink
   // 'components/blocks/block-visual.tsx' left the list (lane P1 follow-up): the size-and-cycles
   // line under the blocks figure is a reading of it, its figures values, in the reading ink
   // 'components/blocks/reward-breakdown.tsx' left the list (lane P1 follow-up): the reward's
   // sentences (genesis has none; paid by a block's cellbase, not indexed yet) and "paid by the
   // cellbase of #N · 0x…" are statements, in the reading ink, their links with them
-  // components/cell-graph-renderer.tsx left the list (lane P1, the ink and size roles: the
-  // transaction page and the cell graph): 'No graph data.' is a sentence, in the reading ink
-  // components/cell-graph.tsx left the list (lane P1, the ink and size roles: the transaction page
-  // and the cell graph): 'Loading graph…' is a sentence, in the reading ink
-  'components/cell/cell-microscope.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: "empty 1: the data box's 'No data: the cell carries 0 bytes.' (lane P1 follow-up)",
-  },
-  'components/cell/cell-transactions.tsx': {
-    family: 'chain',
-    // link 1 → 0 (lane P1 follow-up): a live cell's age and the block it is as of are values, in
-    // the reading ink
-    sites: { prose: 2 },
-    reason:
-      "loading 1: a transaction being read; note 1: the code cells' 'the spender picks its own cell deps'",
-  },
-  // components/cell/code-cell-board.tsx left the list (lane P1, the ink and size roles: the code
-  // cell): 'No registered Type ID version history for this binary.' is a sentence, in the reading
-  // ink
   // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
   // link is its key, the key look's ink)
   // 'components/transaction/script-group-matrix.tsx' left the list (lane P1 follow-up): a group's
   // runs line ("guards out 1 for the next spend · …") is a statement, in the reading ink, a group
   // only attached as one that ran (link 1 → 0 in lane P1: its script's name reads)
-  // components/transaction/tx-structure.tsx left the list (lane P1, the ink and size roles: the
-  // transaction page and the cell graph): the onward bridge's key went to DECIDED
   // ---- assets ----
   'app/tokens/[typeHash]/client-page.tsx': {
     // prose 4 → 3 (lane p-assets: each link states its look)
@@ -1202,28 +1159,24 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   // in 58 files …" on the base): the script hero's companion line left the list. Re-pinned on
   // purpose (the third read's T NOTE-3; renamed, it was "122 sites in 57 files"): the decided
   // sites left the work list for DECIDED, 15 in 6 files
-  // Re-pinned on purpose (lane P1, the ink and size roles: the address pages; renamed, it was "107
-  // sites in 51 files")
-  // Re-pinned on purpose (lane P1, the ink and size roles: the code cell; renamed, it was "102
-  // sites in 48 files")
-  // Re-pinned on purpose (lane P1, the ink and size roles: the block and uncle pages; renamed, it
-  // was "101 sites in 47 files")
-  // Re-pinned on purpose (lane P1, the ink and size roles: the transaction page and the cell graph;
-  // renamed, it was "93 sites in 43 files")
-  it('tolerates 82 sites in 39 files: the pinned totals by family, which only fall', () => {
+  // Re-pinned on purpose (lane P1, the ink and size roles; renamed, it was "107 sites in 51
+  // files"): the chain family's 28 sites left the list, 25 in the reading ink and 3 decided
+  it('tolerates 79 sites in 37 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
         (byFamily[entry.family] ?? 0) +
         Object.values(entry.sites).reduce((sum, n) => sum + (n ?? 0), 0);
-    expect(byFamily).toEqual(TOLERATED_BY_FAMILY);
+    // a family at 0 has no entry left to count (lane P1, the ink and size roles: chain the first),
+    // as the size-role gate reads its own
+    const pinned = Object.fromEntries(Object.entries(TOLERATED_BY_FAMILY).filter(([, n]) => n > 0));
+    expect(byFamily).toEqual(pinned);
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
-  // Re-pinned on purpose (lane P1, the ink and size roles: the block and uncle pages; renamed, it
-  // was "15 in 6 files")
-  // Re-pinned on purpose (lane P1, the ink and size roles: the transaction page and the cell graph;
-  // renamed, it was "16 in 7 files")
+  // Re-pinned on purpose (lane P1, the ink and size roles; renamed, it was "15 in 6 files"): the
+  // chain family's three decided sites joined, an uncle row's label, the witness list's hint and the
+  // structure's key
   it('holds the decided sites apart, 18 in 9 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
