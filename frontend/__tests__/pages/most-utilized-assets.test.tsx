@@ -30,6 +30,11 @@ describe('MostUtilizedAssetsPage', () => {
           { key: 'top0', label: 'Token A (token)', color: '#00c389' },
           { key: 'others', label: 'Others', color: '#64748b' },
         ],
+        // lane D1: the API names the bands a history is drawn in (re-pinned: it always does)
+        bands: [
+          { key: 'top0', label: 'Token A (token)', members: ['top0'] },
+          { key: 'others', label: 'Others', members: ['others'] },
+        ],
       },
       capacityShare: {
         title: 'Top Assets Capacity Share',
@@ -40,6 +45,11 @@ describe('MostUtilizedAssetsPage', () => {
         series: [
           { key: 'top0', label: 'Cluster A (object)', color: '#00c389' },
           { key: 'others', label: 'Others', color: '#64748b' },
+        ],
+        // lane D1: the API names the bands a history is drawn in (re-pinned: it always does)
+        bands: [
+          { key: 'top0', label: 'Cluster A (object)', members: ['top0'] },
+          { key: 'others', label: 'Others', members: ['others'] },
         ],
       },
     });
@@ -53,7 +63,9 @@ describe('MostUtilizedAssetsPage', () => {
         { label: '2024-01-01', values: { top0: '1.00000001', others: '0.0000002' } },
         { label: '2024-01-02', values: { top0: '2.00000002', others: '0.0000003' } },
       ],
-      series: [{ label: 'Token A (token)' }, { label: 'Others' }],
+      // re-pinned for lane D1: an asset's band is its name; its class is the ranking's mark (CH-06),
+      // the API's "(token)" kept out of tier 1 (CH-04)
+      series: [{ label: 'Token A' }, { label: 'Others' }],
     });
     expect(chartMock.mock.calls[1][0]).toMatchObject({
       title: 'Owned live capacity',
@@ -62,7 +74,7 @@ describe('MostUtilizedAssetsPage', () => {
         { label: '2024-01-01', values: { top0: '3.00000003', others: '0.0000004' } },
         { label: '2024-01-02', values: { top0: '4.00000004', others: '0.0000005' } },
       ],
-      series: [{ label: 'Cluster A (object)' }, { label: 'Others' }],
+      series: [{ label: 'Cluster A' }, { label: 'Others' }],
     });
   });
 });

@@ -8,6 +8,7 @@ import {
   shortBucketLabel,
 } from '@/components/charts/chart-model';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
+import { chartHead } from '@/components/charts/chart-head';
 
 // F2 charts group: the Charts index board's encodings, computed once in the chart model.
 
@@ -52,9 +53,19 @@ const hodl = {
       date: '2026-10-29',
       values: {
         ...Object.fromEntries(hodlSeries.map(([key, , value]) => [key, value])),
+        // lane D1: the API's merged bands, from the capacities (here 10 + 10, 10 + 7 + 5.54)
+        '1m6m': '20',
+        lt1m: '22.54',
         holderCount: '358415',
       },
     },
+  ],
+  bands: [
+    { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+    { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+    { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+    { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+    { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
   ],
 };
 
@@ -115,7 +126,12 @@ describe('Charts index encodings (F2 charts)', () => {
 
   it('heads knowledge by kind with the leading share and lists every kind in a legend (CH-07)', () => {
     const model = chartModel(def('common-knowledge-composition'), composition);
-    expect(model.headline).toEqual({ pre: 'nervos dao', display: '60.00', unit: '%' });
+    // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's own head — the largest
+    // kind named in words, its CKB, and the sentence its share (was a card headline of its own).
+    const head = chartHead(def('common-knowledge-composition'), model);
+    expect(head.eyebrow).toBe('the Nervos DAO, the largest kind');
+    expect(head.figure).toMatchObject({ display: '300', unit: 'CKB' });
+    expect(head.sentence).toBe('The Nervos DAO holds 60.00% of occupied CKB, plain CKB 20.00%.');
     // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
       'Nervos DAO 60.00%',
@@ -126,24 +142,33 @@ describe('Charts index encodings (F2 charts)', () => {
     ]);
   });
 
-  it('summarises the HODL wave in four age groups on a fixed 0–100 axis (CH-07, CH-15)', () => {
+  // Re-pinned for lane D1 (the chart-hero board, rules 5 and 9): the card and the page draw the
+  // same five bands the API names, its merged figures as sent (was four groups the page summed
+  // from rounded percentages, and eight bands on the page: CH-07's two sets of names).
+  it('draws the HODL wave in the API’s five bands on a fixed 0–100 axis, page and card (CH-07, CH-15)', () => {
     const model = chartModel(def('hodl-wave'), hodl);
     expect(model.card?.series.map((s) => s.label)).toEqual([
-      'over 1 y',
-      '3 m – 1 y',
-      '1 w – 3 m',
-      'under 1 w',
+      '3 years or more',
+      '1 to 3 years',
+      '6 to 12 months',
+      '1 to 6 months',
+      'under 1 month',
     ]);
     expect(model.card?.points[0].values).toEqual({
-      over1y: '47.48',
-      m3y1: '20',
-      w1m3: '20',
-      under1w: '12.54',
+      gt3y: '27.47',
+      '1y3y': '20.01',
+      '6m1y': '10',
+      '1m6m': '20',
+      lt1m: '22.54',
     });
-    expect(model.headline).toEqual({ pre: 'over 1 y', display: '47.48', unit: '%' });
+    expect(chartHead(def('hodl-wave'), model).figure).toMatchObject({
+      display: '27.47',
+      unit: '% of all CKB',
+    });
     expect(model.yDomain).toEqual([0, 100]);
-    // The detail keeps every band the API returns.
-    expect(model.series).toHaveLength(8);
+    expect(model.series).toEqual(model.card?.series);
+    // every band the API returns stays, in the table under the chart
+    expect(model.table).toHaveLength(8);
   });
 
   // Re-pinned for CH-02 (UI review 2026-11-14): the card's bands are the six kinds in their class
@@ -172,16 +197,20 @@ describe('Charts index encodings (F2 charts)', () => {
         },
       ],
     });
+    // Re-pinned for lane D1 (rule 9, CH-07): the card's bands are the page's, in the page's class
+    // order (was the card's own order, script calls first); still fixed, not by size.
     expect(model.card?.legend.map((l) => `${l.label} ${l.value}`)).toEqual([
-      'Script calls 20.00%',
       'CKB transfers 50.00%',
+      'Nervos DAO 22.00%',
       'Tokens 3.00%',
       'Objects 4.00%',
       'Identities 1.00%',
-      'Nervos DAO 22.00%',
+      'Script calls 20.00%',
     ]);
-    // the headline reads the first kind of the fixed order (unchanged here; said in the hand-back)
-    expect(model.headline).toEqual({ pre: 'script calls', display: '20.00', unit: '%' });
+    // the head names the largest kind in words (was the first kind of the card's order)
+    const head = chartHead(def('activity-type-breakdown'), model);
+    expect(head.eyebrow).toBe('CKB transfers, the largest kind in a day');
+    expect(head.figure).toMatchObject({ display: '50', unit: 'activities' });
   });
 
   it('draws live cells as one live count, consumed cells kept apart (CH-08)', () => {
@@ -218,7 +247,11 @@ describe('Charts index encodings (F2 charts)', () => {
     });
     // Re-pinned for CH-12: the API's buckets only ('100+ CKB' is none of them), named in the
     // axis' words, and a bucket's unit is its symbol ('h', was 'hours'; CH-14).
-    expect(cellSize.headline).toEqual({ pre: '< 100 CKB', display: '60.00', unit: '%' });
+    // Re-pinned for lane D1 (rules 3 and 9): the page's own head, named in words.
+    expect(chartHead(def('cell-size-distribution'), cellSize)).toMatchObject({
+      eyebrow: 'live cells of < 100 CKB',
+      figure: { display: '60.00', unit: '% of live cells' },
+    });
     // Re-pinned for CH-18: no fact restates the head's bucket (was: not "Largest bucket").
     expect(cellSize.facts).toBeUndefined();
     const epochs = chartModel(def('epoch-time-distribution'), {
@@ -230,7 +263,10 @@ describe('Charts index encodings (F2 charts)', () => {
         { date: '50.50', value: '1' },
       ],
     });
-    expect(epochs.headline).toEqual({ pre: 'most common', display: '4.02', unit: 'h' });
+    expect(chartHead(def('epoch-time-distribution'), epochs)).toMatchObject({
+      eyebrow: 'the most common duration',
+      figure: { display: '4.02', unit: 'h' },
+    });
     const cohort = chartModel(def('address-cohort-retention'), {
       title: 'Cohorts',
       yAxisLabel: '%',
@@ -241,7 +277,10 @@ describe('Charts index encodings (F2 charts)', () => {
     });
     // Re-pinned for CH-19 (UI review 2026-11-14): the newest cohort is the month still filling;
     // the headline is the last complete cohort, the one before it (was 2026-09).
-    expect(cohort.headline).toEqual({ pre: '2024-06', display: '7.90', unit: '%' });
+    expect(chartHead(def('address-cohort-retention'), cohort)).toMatchObject({
+      eyebrow: 'occupied share of its balance, the 2024-06 cohort',
+      figure: { display: '7.90', unit: '%' },
+    });
   });
 
   it('heads ranked cards with the leader share, grouped like every other number (CH-31)', () => {
@@ -261,8 +300,14 @@ describe('Charts index encodings (F2 charts)', () => {
         },
       ],
     });
-    // 62.9950 rounds half up to 63.00, as every rate reading does.
-    expect(miners.headline).toEqual({ pre: 'top', display: '63.00', unit: '%' });
+    // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's figure, the leading
+    // miner's blocks grouped (was its share in a headline of the card's own); its share, 62.9950
+    // half up to 63.00 as every percentage, stays on its row.
+    expect(chartHead(def('miner-address-distribution'), miners)).toMatchObject({
+      at: '2026-10-23 → 2026-10-29',
+      figure: { display: '42,705', unit: 'blocks' },
+    });
+    expect(miners.rankedRows?.[0].share).toBe('63.00%');
   });
 
   it("heads nominal APC with the API's today at its exact year, never the quarter sample (CH-03, CH-33)", () => {
@@ -280,9 +325,16 @@ describe('Charts index encodings (F2 charts)', () => {
       ...payload,
       today: { blockNumber: 20876568, date: '2026-10-30', year: '6.9561234', value: '2.3395' },
     });
-    expect(model.headline).toEqual({ pre: 'year 6.96', display: '2.34', unit: '%' });
+    // Re-pinned for lane D1: the page's head, at the API's today; its figure cut, never rounded
+    // (2.3395 is 2.33, was 2.34); with no today, no figure, never the quarter sample.
+    expect(chartHead(def('nominal-apc'), model)).toMatchObject({
+      at: 'year 6.96',
+      figure: { display: '2.33', unit: '% a year' },
+    });
     expect(model.today).toEqual({ label: 'year 6.96', values: { primary: '2.3395' } });
-    expect(chartModel(def('nominal-apc'), payload).headline).toBeNull();
+    expect(
+      chartHead(def('nominal-apc'), chartModel(def('nominal-apc'), payload)).figure
+    ).toBeNull();
   });
 
   it('marks the consensus uncle-rate target and draws real inflation dashed (CH-12)', () => {
@@ -425,6 +477,8 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
           values: Object.fromEntries(entries.map(([key], i) => [key, String((9 - i) * 100)])),
         },
       ],
+      // lane D1: five or fewer ranks, each series is its own band
+      bands: entries.map(([key, label]) => ({ key, label, members: [key] })),
     });
     const scripts = series([
       ['top0', 'Default Lock', 'family:default-lock'],
@@ -531,7 +585,8 @@ describe('Deposited per day card window (CH-13)', () => {
   };
   it('crops the card to the last 60 days and leaves the detail whole', () => {
     const definition = def('daily-deposit');
-    expect(definition.cardSubtitle).toBe('CKB, last 60 days');
+    // Re-pinned for lane D1 (rule 9): the caption written to stand with its date on one line
+    expect(definition.cardSubtitle).toBe('deposited a day, last 60 d');
     const model = chartModel(definition, payload);
     expect(model.points).toHaveLength(75);
     expect(model.card?.points).toHaveLength(60);

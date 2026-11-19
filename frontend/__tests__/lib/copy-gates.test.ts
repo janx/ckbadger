@@ -262,11 +262,6 @@ describe('copy gates (U-15)', () => {
       why: 'an accessible name, the class by name',
     },
     {
-      file: 'components/charts/chart-model.ts',
-      text: '${definition.slug} holders at ',
-      why: 'a reading context, the chart by its slug',
-    },
-    {
       file: 'components/scripts/script-family-board.tsx',
       text: '${family.name} cells',
       why: 'an axis named by its script: "CKB in JoyID cells"',

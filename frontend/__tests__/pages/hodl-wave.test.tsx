@@ -29,9 +29,19 @@ const response = {
         '6m1y': '15.00',
         '1y3y': '20.00',
         gt3y: '15.00',
+        // lane D1: the API's merged bands (10 + 10; 15 + 10 + 5)
+        '1m6m': '20.00',
+        lt1m: '30.00',
         holderCount: '9007199254740993',
       },
     },
+  ],
+  bands: [
+    { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+    { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+    { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+    { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+    { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
   ],
   series: [
     { key: '24h', label: '24h', color: '#6366f1' },
@@ -54,7 +64,9 @@ describe('HodlWavePage', () => {
     render(<HodlWavePage />);
     expect(await screen.findByText('HODL wave')).toBeInTheDocument();
     // F2 charts (CH-26): a breadcrumb to the chart's own section replaces "← All charts".
-    expect(screen.getByRole('link', { name: 'Charts / Activity' })).toHaveAttribute(
+    // Re-pinned for lane D1: the board's crumb, its section a link of its own (was "Charts /
+    // Activity", one link).
+    expect(screen.getByRole('link', { name: 'activity' })).toHaveAttribute(
       'href',
       '/mainnet/charts#activity'
     );
@@ -62,26 +74,42 @@ describe('HodlWavePage', () => {
     const [ages, holders] = chartMock.mock.calls.map(([props]) => props);
     expect(ages).toMatchObject({
       kind: 'stacked',
-      // Every band the API returns, named as a range (re-pinned for CH-21: the API's labels).
-      series: response.series.map(({ key }) => ({
-        key,
-        label: {
-          '24h': '< 1 d',
-          '1d1w': '1 d – 1 w',
-          '1w1m': '1 w – 1 m',
-          '1m3m': '1 m – 3 m',
-          '3m6m': '3 m – 6 m',
-          '6m1y': '6 m – 1 y',
-          '1y3y': '1 y – 3 y',
-          gt3y: '> 3 y',
-        }[key],
-      })),
-      data: [{ label: '2024-01-01', values: expect.objectContaining({ gt3y: '15.00' }) }],
+      // Re-pinned for lane D1 (the chart-hero board, rule 5): the chart draws the API's five
+      // bands, oldest first, its merged figures as sent (was every band the API returns, eight)
+      series: [
+        { key: 'gt3y', label: '3 years or more' },
+        { key: '1y3y', label: '1 to 3 years' },
+        { key: '6m1y', label: '6 to 12 months' },
+        { key: '1m6m', label: '1 to 6 months' },
+        { key: 'lt1m', label: 'under 1 month' },
+      ],
+      data: [
+        {
+          label: '2024-01-01',
+          values: {
+            gt3y: '15.00',
+            '1y3y': '20.00',
+            '6m1y': '15.00',
+            '1m6m': '20.00',
+            lt1m: '30.00',
+          },
+        },
+      ],
     });
-    // Responsive review C#10: the summary pairs stay one column until md ("Largest age / band").
-    const summary = screen.getByRole('banner').querySelector('dl')!;
-    expect(summary).toHaveClass('md:grid-cols-2');
-    expect(summary).not.toHaveClass('sm:grid-cols-2');
+    // The eight ages stay, exact, named as ranges (CH-21), in the table under the chart (the
+    // summary row of facts is gone: re-pinned for lane D1, rule 2).
+    const table = screen.getByRole('table', { name: 'HODL wave, every band' });
+    expect([...table.querySelectorAll('tbody tr')].map((row) => row.textContent)).toEqual([
+      '< 1 d5.00%',
+      '1 d – 1 w10.00%',
+      '1 w – 1 m15.00%',
+      '1 m – 3 m10.00%',
+      '3 m – 6 m10.00%',
+      '6 m – 1 y15.00%',
+      '1 y – 3 y20.00%',
+      '> 3 y15.00%',
+    ]);
+    expect(screen.getByRole('banner').querySelector('dl')).toBeNull();
     expect(holders).toMatchObject({
       title: 'Holder count',
       unit: 'holders',

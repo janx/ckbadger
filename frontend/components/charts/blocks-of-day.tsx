@@ -35,11 +35,11 @@ export function BlocksOfDay({ date }: { date: string }) {
   return (
     <span data-testid="blocks-of-day">
       {unitText(title)}:{' '}
-      <Link href={`/blocks/${first.hash}`} className="text-jade hover:underline">
+      <Link href={`/blocks/${first.hash}`} look="key">
         {formatBlockNumber(first.number)}
       </Link>{' '}
       –{' '}
-      <Link href={`/blocks/${last.hash}`} className="text-jade hover:underline">
+      <Link href={`/blocks/${last.hash}`} look="key">
         {formatBlockNumber(last.number)}
       </Link>
       <span className="text-text-dim">

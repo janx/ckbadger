@@ -484,32 +484,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 3, ink: 3 },
     reason: '3 without a look; inks by hand (text-text, hover:text-text-bright, hover:underline)',
   },
-  // ---- d1-charts ----
-  'app/charts/page.tsx': {
-    lane: 'd1-charts',
-    sites: { ink: 1, raw: 1 },
-    reason: 'inks by hand (text-text-dim, hover:text-jade); 1 raw <a>',
-  },
-  'components/charts/blocks-of-day.tsx': {
-    lane: 'd1-charts',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (text-jade, hover:underline)',
-  },
-  'components/charts/chart-detail.tsx': {
-    lane: 'd1-charts',
-    sites: { look: 4, ink: 5, raw: 1 },
-    reason: '4 without a look; inks by hand (text-jade, hover:underline, text-text-dim); 1 raw <a>',
-  },
-  'components/charts/chart-small-multiple.tsx': {
-    lane: 'd1-charts',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (hover:text-jade, text-text-bright)',
-  },
-  'components/charts/topic-charts.tsx': {
-    lane: 'd1-charts',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text, hover:text-jade)',
-  },
   // ---- shell ----
   'components/stats-bar.tsx': {
     lane: 'shell',
@@ -519,7 +493,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-const TOLERATED_TOTAL = 610;
+const TOLERATED_TOTAL = 588;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

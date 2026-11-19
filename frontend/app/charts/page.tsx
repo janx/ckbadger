@@ -1,6 +1,7 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
 import { CHART_SECTIONS, INDEX_CHARTS, chartSectionId } from '@/components/charts/chart-catalogue';
@@ -23,13 +24,9 @@ export default function ChartsPage() {
               className="text-small flex flex-wrap gap-x-[18px] gap-y-1"
             >
               {CHART_SECTIONS.map((section) => (
-                <a
-                  key={section}
-                  href={`#${chartSectionId(section)}`}
-                  className="text-text-dim hover:text-jade"
-                >
+                <Link key={section} href={`#${chartSectionId(section)}`} look="inline">
                   {section}
-                </a>
+                </Link>
               ))}
             </nav>
           }
@@ -62,7 +59,7 @@ export default function ChartsPage() {
               </div>
             );
           })}
-          <p className="text-text-dim text-small max-w-measure">
+          <p className="text-text text-small max-w-measure">
             Every chart stops at the last complete day. Open a chart for its full resolution and
             source; there, <TapOrHoverHint what="the chart" /> to read any point.
           </p>

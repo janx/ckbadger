@@ -225,7 +225,8 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
       expect(sentence, 'the sentence').not.toBeNull();
       const words = sentence!.querySelector('[data-role="sentence-words"]')!.textContent!;
       expect(words).toMatch(/\.$/);
-      if (expected.sentence) expect(words).toBe(expected.sentence);
+      // a count and its noun are held by a no-break space (the units gate): compared as a space
+      if (expected.sentence) expect(words.replace(/\u00a0/g, ' ')).toBe(expected.sentence);
       expect(screen.queryByText(/Last change/)).toBeNull();
       expect(document.querySelector('[aria-label$=" readings"]')).toBeNull();
       expect(
@@ -272,12 +273,12 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
     render(<ChartDetail slug="epoch-time-length" />);
     await screen.findByRole('heading', { level: 1, name: 'Epoch length' });
     const chart = mainChart('Epoch length');
-    expect(chart.axisCap).toEqual({
-      value: expect.any(Number),
-      note: '2 epochs above this scale; the largest, #0 · 50.48 h',
-    });
-    expect((chart.axisCap as { value: number }).value).toBeLessThan(17.21);
-    expect((chart.axisCap as { value: number }).value).toBeGreaterThanOrEqual(4.05);
+    const cap = chart.axisCap as { value: number; note: string };
+    expect(cap.note.replace(/\u00a0/g, ' ')).toBe(
+      '2 epochs above this scale; the largest, #0 · 50.48 h'
+    );
+    expect(cap.value).toBeLessThan(17.21);
+    expect(cap.value).toBeGreaterThanOrEqual(4.05);
   });
 
   it('draws the HODL wave in its five bands, oldest on the baseline, each figure the API’s (rule 5)', async () => {

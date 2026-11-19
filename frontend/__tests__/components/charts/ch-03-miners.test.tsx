@@ -72,12 +72,18 @@ describe('Miners ranking (CH-03)', () => {
     expect(screen.getAllByText(/lock hash/i)).toHaveLength(1);
   });
 
+  // Re-pinned for lane D1 (the chart-hero board): the leading miner is named, whole, in the
+  // figure's eyebrow over its window (was a "Leading miner" fact under the lede); the fact with its
+  // share stands in the evidence tier.
   it('keeps the leading miner whole and writes the window with an arrow', async () => {
     render(<ChartDetail slug="miner-address-distribution" />);
     await screen.findByRole('list', { name: 'Miners ranking' });
-    const leader = screen.getByText('Leading miner').nextElementSibling as HTMLElement;
-    const name = within(leader).getByText('ckb1…4s93hhsj');
-    expect(name).toHaveClass('whitespace-nowrap');
+    expect(screen.getByTestId('figure-eyebrow')).toHaveTextContent(
+      'ckb1…4s93hhsj, the largest miner · 2026-11-07 → 2026-11-13'
+    );
+    expect(screen.getByText(/^Leading miner:/)).toHaveTextContent(
+      'Leading miner: ckb1…4s93hhsj · 41,870 blocks · 67.83%'
+    );
     expect(document.body).toHaveTextContent('2026-11-07 → 2026-11-13');
     expect(document.body).not.toHaveTextContent(/2026-11-07[-–]2026-11-13/);
   });
