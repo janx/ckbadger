@@ -722,42 +722,130 @@ export function Chart({
     return [Math.min(...ys), filled ? bottom : Math.max(...ys)];
   };
   /**
-   * An in-plot value (hierarchy v3): a figure, so the dim ink (R4), bare, at its line. Lane D1
-   * (rule 4): its number never lies on a mark of the plot — over its line at the left end, else
-   * under it, else at the right end over and under; where every place is crossed it is not
-   * written (the grid line stays).
+   * Where each in-plot value stands (hierarchy v3; lane D1, rule 4): its number at its own line,
+   * over it at the plot's left end, else under it, else at the right end over and under it: the
+   * first of those places whose box clears the plot's marks AND every number already placed, by
+   * `TICK_CLEAR`. (Each number was placed against the marks alone, from b285bbda, so the number
+   * under one line and the number over the next stood on one spot where two lines are under 30 px
+   * apart: "4" on "2" in the Nominal APC card, "5" on "10" in the Inflation card, at 53d9b56f.)
+   *
+   * The rule when they do not all fit: the axis keeps the least a reader needs to tell its scale,
+   * the highest line that holds a number (from the top down) and the lowest (from the bottom up,
+   * clear of the first): two numbers, or one on a linear axis that stands on 0 (the baseline is
+   * not written, hierarchy v3, but where the labelled lines hold no second number the axis needs,
+   * the baseline's is it; the plot reads from 0 as its x axis stands on it). Where the marks
+   * leave that least no clear place, it stands at its first place clear of the other numbers, on
+   * the marks, on the page's ground (`grounded`). The lines between follow from the top down, and
+   * a line with no clear place keeps no number, its grid line standing. A plot that cannot keep
+   * that least clear of its own numbers is too short for an in-plot scale: it is refused, named,
+   * never drawn with too few numbers to read (the chart tests draw every index card at 278 and
+   * 358 px). A number left off loses no figure: the readout line and the head state every value
+   * exactly.
+   */
+  const insidePlaces = new Map<
+    number,
+    { x: number; y: number; anchor: 'start' | 'end'; grounded: boolean }
+  >();
+  if (insideYTicks && ticks && right !== null) {
+    // the labelled lines, from the top down: every round value above the baseline, out of the band
+    const lines = ticks.values
+      .filter((v, i) => i > 0 && yTick(v) >= top + INSIDE_TICK_ROOM)
+      .sort((a, b) => b - a);
+    const boxes: { x0: number; x1: number; y0: number; y1: number }[] = [];
+    // `onMarks`: the place may cross the plot's marks (the least the axis keeps, drawn on a ground)
+    const stand = (v: number, onMarks = false): boolean => {
+      const label = tickLabel(v, ticks.step);
+      // at the left end it starts where the plot's name does (left + 8); at the right it ends 2 px in
+      const wide = textPx(label.length, SVG_TEXT.label) + 10;
+      const line = yTick(v);
+      const places = [
+        { x: left + 8, anchor: 'start' as const, x0: left, x1: left + wide, dy: TICK_OVER },
+        { x: left + 8, anchor: 'start' as const, x0: left, x1: left + wide, dy: TICK_UNDER },
+        { x: right - 2, anchor: 'end' as const, x0: right - wide, x1: right, dy: TICK_OVER },
+        { x: right - 2, anchor: 'end' as const, x0: right - wide, x1: right, dy: TICK_UNDER },
+      ];
+      for (const spot of places) {
+        const box = {
+          x0: spot.x0,
+          x1: spot.x1,
+          y0: line + spot.dy - TICK_BOX_UP,
+          y1: line + spot.dy + TICK_BOX_DOWN,
+        };
+        if (box.y0 < top - TICK_CLEAR || box.y1 > bottom) continue;
+        const span = markSpan(spot.x0, spot.x1);
+        const onAMark =
+          span !== null && !(box.y1 + TICK_CLEAR < span[0] || box.y0 - TICK_CLEAR > span[1]);
+        if (onAMark && !onMarks) continue;
+        const crosses = boxes.some(
+          (other) =>
+            box.x0 < other.x1 + TICK_CLEAR &&
+            other.x0 < box.x1 + TICK_CLEAR &&
+            box.y0 < other.y1 + TICK_CLEAR &&
+            other.y0 < box.y1 + TICK_CLEAR
+        );
+        if (crosses) continue;
+        insidePlaces.set(v, {
+          x: spot.x,
+          y: line + spot.dy,
+          anchor: spot.anchor,
+          grounded: onAMark,
+        });
+        boxes.push(box);
+        return true;
+      }
+      return false;
+    };
+    // the least that tells the scale: two numbers; one on a linear axis that stands on 0, which
+    // the plot reads from as its x axis stands on it
+    const baseline = ticks.values[0];
+    const needed = yScale !== 'log' && baseline === 0 ? 1 : 2;
+    // the numbers the axis keeps: the highest line that holds one, then the lowest; first clear
+    // of the marks, then, for the least the axis keeps, on them on a ground
+    let highest: number | undefined;
+    let lowest: number | undefined;
+    for (const onMarks of [false, true]) {
+      if (highest === undefined) highest = lines.find((v) => stand(v, onMarks));
+      const kept = (highest === undefined ? 0 : 1) + (lowest === undefined ? 0 : 1);
+      if (highest !== undefined && lowest === undefined && (!onMarks || kept < needed))
+        lowest = [...lines].reverse().find((v) => v !== highest && stand(v, onMarks));
+      // where the labelled lines hold no second number the axis needs, the baseline's is it
+      if (highest !== undefined && lowest === undefined && needed === 2 && stand(baseline, onMarks))
+        lowest = baseline;
+      if ((highest === undefined ? 0 : 1) + (lowest === undefined ? 0 : 1) >= needed) break;
+    }
+    const kept = (highest === undefined ? 0 : 1) + (lowest === undefined ? 0 : 1);
+    if (kept < needed)
+      throw new Error(
+        `${title}: the plot is too short for an in-plot scale: ${needed === 1 ? 'a number' : 'two numbers'} must stand, and of its lines ${lines.map((v) => tickLabel(v, ticks.step)).join(', ') || '(none above its baseline)'} ${kept === 0 ? 'none holds' : 'only one holds'} a number clear of the other numbers`
+      );
+    // the lines between, from the top down, each where a place is free
+    const [high, low] = [highest, lowest];
+    if (high !== undefined && low !== undefined)
+      for (const v of lines) if (v < high && v > low && !insidePlaces.has(v)) stand(v);
+  }
+  /**
+   * An in-plot value (hierarchy v3): a figure, the dim ink (R4), bare, at its place if it has one;
+   * one the axis keeps on the plot's marks stands on the page's ground (a stroke under its glyphs,
+   * as the end label's), so the mark does not cut it.
    */
   const insideTickLabel = (v: number) => {
-    if (!ticks || right === null) return null;
-    const label = tickLabel(v, ticks.step);
-    // at the left end it starts where the plot's name does (left + 8); at the right it ends 2 px in
-    const wide = textPx(label.length, SVG_TEXT.label) + 10;
-    const line = yTick(v);
-    const places = [
-      { x: left + 8, anchor: 'start' as const, x0: left, x1: left + wide, dy: TICK_OVER },
-      { x: left + 8, anchor: 'start' as const, x0: left, x1: left + wide, dy: TICK_UNDER },
-      { x: right - 2, anchor: 'end' as const, x0: right - wide, x1: right, dy: TICK_OVER },
-      { x: right - 2, anchor: 'end' as const, x0: right - wide, x1: right, dy: TICK_UNDER },
-    ];
-    const place = places.find((spot) => {
-      const boxTop = line + spot.dy - TICK_BOX_UP;
-      const boxBottom = line + spot.dy + TICK_BOX_DOWN;
-      if (boxTop < top - TICK_CLEAR || boxBottom > bottom) return false;
-      const span = markSpan(spot.x0, spot.x1);
-      return span === null || boxBottom + TICK_CLEAR < span[0] || boxTop - TICK_CLEAR > span[1];
-    });
-    if (!place) return null;
+    const place = insidePlaces.get(v);
+    if (!place || !ticks) return null;
     return (
       <text
         key={`y-tick:${v}`}
         data-role="y-tick"
+        data-grounded={place.grounded || undefined}
         x={place.x}
-        y={line + place.dy}
+        y={place.y}
         textAnchor={place.anchor}
         fill="var(--c-text-dim)"
         fontSize={SVG_TEXT.label}
+        {...(place.grounded
+          ? { stroke: 'var(--c-base-bg)', strokeWidth: 4, paintOrder: 'stroke' }
+          : {})}
       >
-        {label}
+        {tickLabel(v, ticks.step)}
       </text>
     );
   };
@@ -926,6 +1014,8 @@ export function Chart({
                   </g>
                 )
               )}
+              {/* the baseline's number, where the axis keeps it to tell its scale */}
+              {insideYTicks !== 'over' && insideTickLabel(ticks.values[0])}
               {plotName !== undefined && (
                 <text
                   data-role="chart-name"
@@ -1129,10 +1219,7 @@ export function Chart({
                   );
                 })}
               </g>
-              {insideYTicks === 'over' &&
-                ticks.values.map(
-                  (v, i) => i > 0 && yTick(v) >= top + INSIDE_TICK_ROOM && insideTickLabel(v)
-                )}
+              {insideYTicks === 'over' && ticks.values.map((v) => insideTickLabel(v))}
               {axisCap && (
                 <g data-role="axis-cap">
                   {/* the gold mark and the note under the plot's name (the board's outlier) */}
