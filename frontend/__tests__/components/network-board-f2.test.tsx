@@ -325,6 +325,51 @@ describe('Network board (F2 charts)', () => {
     expect(fills[0]).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
   });
 
+  // P4 topics (the review's network page: in "which software they run" the names stood at x 24–270,
+  // their bars at 608 and their counts at 744, and one release's builds were scattered by count).
+  // The list is one grid: the names' column as wide as the widest name, the bar right after it,
+  // then the count; the top eight by count stand with a release's builds together, the release of
+  // the most nodes first. Nothing is totalled: a release's total is not the API's figure.
+  it('keeps a release’s builds together, each bar beside its name, nothing totalled (P4)', async () => {
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () =>
+        HttpResponse.json({
+          verifiedRetained: 65,
+          sameNetworkReachable: 65,
+          verifiedUnavailable: 0,
+          versions: [
+            { label: '0.210.0 (2592ddf 2026-09-17)', count: 37 },
+            { label: '0.209.0 (d166e28 2026-07-29)', count: 10 },
+            { label: '0.210.0 (a1b2c3d 2026-10-01)', count: 6 },
+            { label: '0.5.3', count: 5 },
+            { label: '0.210.0 (e4f5a6b 2026-10-20)', count: 4 },
+            { label: '0.210.0 (c7d8e9f 2026-11-02)', count: 3 },
+          ],
+          countries: [{ label: 'US', count: 65 }],
+          asns: [{ label: 'AS1 Example', count: 65 }],
+          protocols: [],
+        })
+      )
+    );
+    render(wrap(<NetworkDistributions />));
+    const section = await screen.findByRole('region', { name: 'Which software they run' });
+    const list = within(section).getByRole('list', { name: 'Client versions' });
+    // one grid for every row: the names' column is the widest name, then a 90 px bar, then counts
+    expect(list).toHaveClass('grid', 'w-fit', 'grid-cols-[minmax(0,max-content)_90px_max-content]');
+    const rows = within(list).getAllByRole('listitem');
+    for (const row of rows) expect(row).toHaveClass('contents');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      '0.210.0 (2592ddf 2026-09-17)37',
+      '0.210.0 (a1b2c3d 2026-10-01)6',
+      '0.210.0 (e4f5a6b 2026-10-20)4',
+      '0.210.0 (c7d8e9f 2026-11-02)3',
+      '0.209.0 (d166e28 2026-07-29)10',
+      '0.5.3' + '5',
+    ]);
+    // no release total is made in the page (37 + 6 + 4 + 3)
+    expect(section).not.toHaveTextContent('50');
+  });
+
   it('draws verified as a line over the reachable area, with its first and last day on the axis (CH-58, R14)', async () => {
     render(wrap(<NetworkTrends />));
     const svg = await screen.findByRole('img', { name: 'Verified and reachable peers, peers' });

@@ -42,44 +42,78 @@ function useDistributions() {
   });
 }
 
+/** A client version's release: its label before the build in brackets, `0.210.0 (2592ddf …)`. */
+const releaseOf = (label: string) => label.split(' ')[0];
+
+/**
+ * The shown rows with one group's rows together (P4 topics: one release's builds stood apart, by
+ * count): the groups in the order of their largest row, each group's rows by count. A row's count
+ * is the API's; no group is totalled (a release's total would be a sum made in the page).
+ */
+function grouped(rows: readonly LabelCount[], group: (label: string) => string): LabelCount[] {
+  const groups = new Map<string, LabelCount[]>();
+  for (const row of rows)
+    groups.set(group(row.label), [...(groups.get(group(row.label)) ?? []), row]);
+  return [...groups.values()].flat();
+}
+
 /**
  * A top-N bar list in the data hue, the leader strongest (Network board). Labels stay DOM text;
- * `attr` marks the bars for their own section.
+ * `attr` marks the bars for their own section. One grid for every row (P4 topics: the names stood
+ * at the list's left, their bars 340 px away): the names' column as wide as the widest name (a
+ * client version, "0.210.0 (2592ddf 2026-09-17)", 28 characters at 13 px, 218.4 px), its bar 10 px
+ * after it, its count after that; a name wider than the line is cut, whole in its title.
  */
-function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
+function Bars({
+  items,
+  attr,
+  label,
+  group,
+}: {
+  items: LabelCount[];
+  attr: string;
+  /** The list's name, for a screen reader. */
+  label: string;
+  /** Rows of one group stand together (a release's builds). */
+  group?: (label: string) => string;
+}) {
   const top = [...items].sort((a, b) => b.count - a.count).slice(0, TOP_N);
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
   if (top.length === 0) return <p className="text-text text-small">No data.</p>;
+  const rows = group === undefined ? top : grouped(top, group);
   return (
-    <div className="flex max-w-[720px] flex-col gap-1">
-      {top.map((it, i) => (
-        <div
-          key={it.label}
-          className="text-small grid grid-cols-[minmax(0,1fr)_90px_36px] items-center gap-2.5 py-0.5"
-        >
-          <span
-            className={`truncate ${i === 0 ? 'text-text-bright' : 'text-text'}`}
-            title={it.label}
-          >
-            {it.label}
-          </span>
-          <span aria-hidden="true" className="bg-bar-track flex h-1.5">
+    <ul
+      aria-label={label}
+      className="text-small grid w-fit max-w-full grid-cols-[minmax(0,max-content)_90px_max-content] items-center gap-x-2.5 gap-y-1"
+    >
+      {rows.map((it) => {
+        const leader = it === top[0];
+        return (
+          <li key={it.label} className="contents">
             <span
-              {...{ [attr]: '' }}
-              className="scan-fill"
-              style={{
-                width: `${(100 * it.count) / max}%`,
-                backgroundColor: DATA_COLOR,
-                opacity: i === 0 ? 0.9 : 0.5,
-              }}
-            />
-          </span>
-          <span className="text-text text-right tabular-nums">
-            {it.count.toLocaleString('en-US')}
-          </span>
-        </div>
-      ))}
-    </div>
+              className={`truncate ${leader ? 'text-text-bright' : 'text-text'}`}
+              title={it.label}
+            >
+              {it.label}
+            </span>
+            <span aria-hidden="true" className="bg-bar-track flex h-1.5">
+              <span
+                {...{ [attr]: '' }}
+                className="scan-fill"
+                style={{
+                  width: `${(100 * it.count) / max}%`,
+                  backgroundColor: DATA_COLOR,
+                  opacity: leader ? 0.9 : 0.5,
+                }}
+              />
+            </span>
+            <span className="text-text text-right tabular-nums">
+              {it.count.toLocaleString('en-US')}
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -97,7 +131,12 @@ export function NetworkDistributions() {
   // Its scope ("reachable now or verified before") is said in tier 2 (R14: no note beside the h2).
   return (
     <TopicSection title="Which software they run" args={formatCount(data.verifiedRetained, 'node')}>
-      <Bars items={data.versions} attr="data-version-bar" />
+      <Bars
+        items={data.versions}
+        attr="data-version-bar"
+        label="Client versions"
+        group={releaseOf}
+      />
     </TopicSection>
   );
 }
@@ -113,7 +152,7 @@ export function NetworkProtocols() {
         Failed to load protocol counts.
       </p>
     );
-  return <Bars items={data.protocols} attr="data-protocol-bar" />;
+  return <Bars items={data.protocols} attr="data-protocol-bar" label="Protocols" />;
 }
 
 /** The organisation part of an ASN label "AS16509 Amazon.com" (the API's one label form). */
