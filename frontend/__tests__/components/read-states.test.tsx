@@ -85,8 +85,12 @@ describe('the address read state’s inks', () => {
     expect(screen.getByRole('alert')).not.toHaveClass('text-text-dim');
   });
 
-  it('keeps the unavailable line quiet', async () => {
+  // re-pinned on purpose (lane P1, the ink and size roles: a loading or unavailable line is a
+  // sentence, none of the quiet roles (a label, a unit, a column head, a hint, an eyebrow); it kept
+  // the quiet ink, "keeps the unavailable line quiet")
+  it('writes the unavailable line in the reading ink', async () => {
     renderSection(<Section state="address" kind="nothing" />);
-    expect(await screen.findByRole('status')).toHaveClass('text-text-dim');
+    expect(await screen.findByRole('status')).toHaveClass('text-text');
+    expect(screen.getByRole('status')).not.toHaveClass('text-text-dim');
   });
 });

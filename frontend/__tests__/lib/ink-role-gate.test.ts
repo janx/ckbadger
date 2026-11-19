@@ -69,11 +69,12 @@ interface Tolerated {
 // chain 36 → 31, lists 43 → 36, topics 18 → 14, files 59 → 58 (the merge with the P3 follow-up's
 // 2d, each site decided: the blocks list 5, the transactions page 5 (one with 2b), the activities
 // page 1, the stream explorer 1, the DAO depositors 4, which left the list)
+// chain 28 → 23, files 51 → 48 (lane P1, the ink and size roles: the address pages)
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // chain 31 → 28, lists 35 → 23 (the third read's T NOTE-3): the sites the P3 follow-up's 2d
   // decided to stay quiet left this work list for DECIDED (the blocks list 2, the CKBytes note 1;
   // the activities page 1, the inventory 1, the transactions page 6, the stream explorer 4)
-  chain: 28,
+  chain: 23,
   assets: 33,
   // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
@@ -84,18 +85,13 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
 // 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
-const TOLERATED_FILES = 51;
+const TOLERATED_FILES = 48;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
-  'app/address/[addr]/client-page.tsx': {
-    family: 'chain',
-    // prose 4 → 2 (lane P1 follow-up): the .cell names' and the Fiber channels' section sentences
-    // are statements, in the reading ink
-    sites: { prose: 2 },
-    reason:
-      "empty 2: the evidence tier's 'Script unavailable' and the history's no-activities line",
-  },
+  // app/address/[addr]/client-page.tsx left the list (lane P1, the ink and size roles: the address
+  // pages): its empty lines ('Script unavailable', 'No activities.') are sentences, in the reading
+  // ink
   'app/blocks/[id]/client-page.tsx': {
     family: 'chain',
     // link 13 → 11 (lane D2): the facts aside's "Paid in" and "Paying cellbase" links went with it;
@@ -128,23 +124,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       "loading 5: the graph section, the node's waiting line and its message, the graph, the cell deps; empty 3: no witness bytes, no witness chosen, no cell deps",
   },
-  'components/address/address-history.tsx': {
-    family: 'chain',
-    // link 1 → 0 (lane P1): the script link states its look, the line's reading ink
-    sites: { td: 1 },
-    reason: "empty 1: a transaction's cycles cell with no figure ('Not computed', 'Failed')",
-  },
-  'components/address/address-holdings.tsx': {
-    family: 'chain',
-    // prose 7 → 6 (B7): the balance's parts are labelled facts, no longer a quiet <p>
-    // link 4 → 0, prose 6 → 2 (lane P1 follow-up): the DAO counts, a deposit's state, block and
-    // day, an identity's expiry and holding block and a live cell's block are values in the reading
-    // ink; a read that failed says so in the reading ink; three empty lines went, each in a
-    // section drawn only when its class holds something (they could not be reached)
-    sites: { prose: 2 },
-    reason:
-      "loading 1: the load state's loading and unavailable line; note 1: the collections' hint",
-  },
+  // components/address/address-history.tsx left the list (lane P1, the ink and size roles: the
+  // address pages): a cycles cell with no figure ('Not computed', 'Failed') is a table cell's
+  // content, in the reading ink
+  // components/address/address-holdings.tsx left the list (lane P1, the ink and size roles: the
+  // address pages): its loading and unavailable line and the collections' sentence ('Open a
+  // collection to list its objects here; …') read in the reading ink
   'components/blocks/block-position.tsx': {
     family: 'chain',
     // link 1 → 0, prose 7 → 2 (lane P1 follow-up): the position sentence, the two failures, a
@@ -1230,7 +1215,9 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   // in 58 files …" on the base): the script hero's companion line left the list. Re-pinned on
   // purpose (the third read's T NOTE-3; renamed, it was "122 sites in 57 files"): the decided
   // sites left the work list for DECIDED, 15 in 6 files
-  it('tolerates 107 sites in 51 files: the pinned totals by family, which only fall', () => {
+  // Re-pinned on purpose (lane P1, the ink and size roles: the address pages; renamed, it was "107
+  // sites in 51 files")
+  it('tolerates 102 sites in 48 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
