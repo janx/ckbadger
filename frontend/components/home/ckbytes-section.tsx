@@ -637,7 +637,8 @@ function DaoBlock() {
           {d.message}
         </div>
       )}
-      {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
+      {/* an empty-state line, the reading ink (BRIEF-ink-size-roles item 3) */}
+      {d.state === 'empty' && <div className="text-small">{d.message}</div>}
       {d.state === 'ready' && <DaoFigures view={d.view} />}
       <Link href="/dao" look="onward" className="text-small w-fit">
         DAO details
@@ -682,7 +683,8 @@ function DaoFigures({ view }: { view: DaoView }) {
         <DaoStat term="Active deposits">{view.depositCells.toLocaleString('en-US')}</DaoStat>
         <DaoStat term="Change in 24 h">
           {change === null ? (
-            <span className="text-text-dim">—</span>
+            // no change to state: a value's place, the reading ink (BRIEF-ink-size-roles item 1)
+            <span>—</span>
           ) : (
             <span
               data-testid="home-dao-change-24h"

@@ -129,7 +129,8 @@ function FeedList<T>({
     );
   }
   if (visible.length === 0) {
-    return <div className="text-text-dim text-small py-3">{`No ${what} yet.`}</div>;
+    // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+    return <div className="text-small py-3">{`No ${what} yet.`}</div>;
   }
   return (
     <ul className="m-0 list-none p-0" data-testid="feed-rows">
