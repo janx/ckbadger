@@ -275,7 +275,9 @@ function ActivityStreamToolbar({
       {/* the counts' period, said with them (lists lane P3: they are yesterday's, the list below
           is the latest, which its own line says) */}
       {summary && (
-        <p className="text-text-dim text-meta mt-2">
+        // a note that is a sentence, the reading ink at 13 px and the prose measure
+        // (BRIEF-ink-size-roles item 3: it was quiet at 12)
+        <p className="text-small max-w-measure mt-2">
           Yesterday’s counts (UTC+8): kinds may overlap, DAO counts actions.
         </p>
       )}
@@ -591,7 +593,9 @@ export function ActivitiesStreamExplorer({
             </p>
           </div>
         ) : emptyState ? (
-          <p className="text-text-dim py-4">Nothing of this kind in the latest activities.</p>
+          // an empty-state sentence, the reading ink and the prose measure (BRIEF-ink-size-roles
+          // item 3)
+          <p className="max-w-measure py-4">Nothing of this kind in the latest activities.</p>
         ) : (
           <div>
             {/* the list's period, as the counts' above (lists lane P3): the latest activities, as

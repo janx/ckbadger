@@ -145,14 +145,11 @@ const POOL_PHONE_HEAD_PX = phoneHead(
 function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
   const what = (
     <>
-      {tx.activity ? (
-        activityHeadline(tx.activity)
-      ) : (
-        <span className="text-text-dim">Interpretation unavailable</span>
-      )}
+      {tx.activity ? activityHeadline(tx.activity) : <span>Interpretation unavailable</span>}
       <PoolInterpretationNotice
         interpretation={tx.interpretation}
-        className="text-warning text-meta ml-2"
+        // a note on the line, at the line's size (BRIEF-ink-size-roles item 2: it was 12 px)
+        className="text-warning ml-2"
       />
     </>
   );
@@ -161,9 +158,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
       {poolConsumed(tx)} → {formatCount(tx.outputsCount, 'cell')}
     </span>,
     tx.value === null ? (
-      <span key="value" className="text-text-dim">
-        Interpretation partial
-      </span>
+      <span key="value">Interpretation partial</span>
     ) : (
       <Labelled key="value" label="value">
         <CkbAmount
@@ -218,7 +213,8 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
               <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
                 {poolStatusLabel(tx.status)}
               </span>
-              <span className="text-text-dim">
+              {/* the wait, a time: the reading ink (BRIEF-ink-size-roles item 1) */}
+              <span>
                 · <Utc8Age timestamp={tx.timestamp} />
               </span>
             </span>
@@ -277,11 +273,7 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
         columnPx(textPx('Interpretation'.length, fontPx('small')) + CELL_GAP_PX) + sameWidth,
       width: 'auto',
       render: (tx) =>
-        tx.activity ? (
-          activityHeadline(tx.activity)
-        ) : (
-          <span className="text-text-dim">Interpretation unavailable</span>
-        ),
+        tx.activity ? activityHeadline(tx.activity) : <span>Interpretation unavailable</span>,
     },
     {
       key: 'status',
@@ -308,7 +300,8 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
           <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
             {poolStatusLabel(tx.status)}
           </span>
-          <span className="text-text-dim">
+          {/* the wait, a time: the reading ink (BRIEF-ink-size-roles item 1) */}
+          <span>
             · <Utc8Age timestamp={tx.timestamp} />
           </span>
         </span>
@@ -341,7 +334,8 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
       numeric: true,
       render: (tx) =>
         tx.value === null ? (
-          <span className="text-text-dim whitespace-normal">Interpretation partial</span>
+          // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+          <span className="whitespace-normal">Interpretation partial</span>
         ) : (
           <CkbAmount
             form="column"
@@ -579,7 +573,8 @@ export default function TransactionsPage() {
               </p>
             )}
             {daily && !day && (
-              <p className="text-text-dim text-small max-w-measure">
+              // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+              <p className="text-small max-w-measure">
                 No complete activity statistics for {yesterday} (UTC+8).
               </p>
             )}
@@ -593,7 +588,9 @@ export default function TransactionsPage() {
               counted
             />
             {day && (
-              <p className="text-text-dim text-meta max-w-measure">
+              // a note that is a sentence, the reading ink at 13 px (BRIEF-ink-size-roles item 3: it
+              // was quiet at 12)
+              <p className="text-small max-w-measure">
                 Yesterday’s counts (UTC+8): kinds may overlap, DAO counts actions, “all” counts each
                 user transaction once.
               </p>

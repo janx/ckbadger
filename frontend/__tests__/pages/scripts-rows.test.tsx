@@ -250,6 +250,10 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     // T5 still holds: the name is the row's one bright thing; the tag is an accent, not bright.
     expect(rowOf(t, 'Default Lock').querySelectorAll('.text-text-bright')).toHaveLength(1);
     expect(code('AlwaysSuccess')).toHaveTextContent(/^code evidence unavailable$/);
+    // BRIEF-ink-size-roles item 1: a cell's content, the reading ink (it was quiet)
+    expect(within(code('AlwaysSuccess')).getByText('code evidence unavailable')).not.toHaveClass(
+      'text-text-dim'
+    );
   });
 
   it('shows live cells alone — "of N ever" leaves the row for its title (T1)', async () => {
@@ -288,13 +292,14 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
   });
 
   // Re-pinned on purpose (B5): the share now stands right of its bar, so the dim share is the bar's
-  // figure, not the cell's first element.
-  it('keeps the occupied share in the last column, dim', async () => {
+  // figure, not the cell's first element. Re-pinned on purpose and renamed (BRIEF-ink-size-roles
+  // item 1: a figure in a cell is the reading ink; it was "…, dim")
+  it('keeps the occupied share in the last column, in the reading ink', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const occupied = cells(rowOf(t, 'JoyID'))[4];
     expect(occupied).toHaveTextContent(/^4\.20%$/);
-    expect(within(occupied).getByText('4.20%')).toHaveClass('text-text-dim');
+    expect(within(occupied).getByText('4.20%')).not.toHaveClass('text-text-dim');
   });
 
   it('puts every field that left the row in its title (D3: nothing deleted)', async () => {

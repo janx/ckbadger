@@ -632,10 +632,30 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     expect(row.querySelector('td:nth-child(5)')).toHaveTextContent(/^0\.00030000$/);
   });
 
-  it('draws a zero value quiet, as the board does', () => {
+  // Re-pinned on purpose and renamed (BRIEF-ink-size-roles item 1: a figure in a cell is the
+  // reading ink, a zero as any other; it was "draws a zero value quiet, as the board does"). The
+  // block's age under it is a time, and the names after the headline (the scripts called) names:
+  // the reading ink too (both were quiet).
+  it('draws a zero value, the age and the names after the headline in the reading ink', () => {
     render(<TransactionListTable transactions={[scriptCall]} />);
     const row = within(screen.getByRole('table')).getAllByRole('row')[1];
-    expect(row.querySelector('td:nth-child(4) [data-zero]')).toBeInTheDocument();
+    const value = row.querySelector('td:nth-child(4)') as HTMLElement;
+    expect(value).toHaveTextContent(/^0$|^0\.00000000$/);
+    // no wrapper sets the amount quiet (its own form, the amount rule's, is CkbAmount's)
+    const amount = value.querySelector('[data-ckb-amount]') as HTMLElement;
+    expect(amount.className).not.toMatch(/text-text-dim/);
+    for (
+      let el: Element | null = amount.parentElement;
+      el && el.tagName !== 'TD';
+      el = el.parentElement
+    )
+      expect(el.className).not.toMatch(/text-text-dim/);
+    const age = row.querySelector('td:nth-child(2) time') as HTMLElement;
+    for (let el: Element | null = age; el && el.tagName !== 'TD'; el = el.parentElement)
+      expect(el.className).not.toMatch(/text-text-dim/);
+    const name = within(row).getAllByText(/\.bit Time Index State/)[0];
+    for (let el: Element | null = name; el && el.tagName !== 'TD'; el = el.parentElement)
+      expect(el.className).not.toMatch(/text-text-dim/);
   });
 
   // The Cells column held "3 → 3" but wrapped "10 → 2" onto a second line (a 61 px row): it is

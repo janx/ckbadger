@@ -224,7 +224,9 @@ function SupplyNote({ view }: { view: AllocationView }) {
       <Comment lines={supplyComment(view)} />
       <p
         data-testid="ckbytes-formula"
-        className="text-text-dim text-meta max-w-measure m-0 mt-3 pl-[18px] font-mono"
+        // the figure's caption, where it comes from and the block it is read at: the reading ink at
+        // 13 px (BRIEF-ink-size-roles item 3: it was quiet at 12)
+        className="text-small max-w-measure m-0 mt-3 pl-[18px] font-mono"
       >
         {supplyFormula(view)}
       </p>
@@ -499,7 +501,10 @@ interface ChangeView {
   max: bigint;
 }
 
-/** An exact signed change for the caption: whole CKB bright, the 8 decimals dim. */
+/**
+ * An exact signed change for the caption, one value in one ink and one size: its 8 decimals with
+ * its whole (BRIEF-ink-size-roles items 1 and 2, with R5: they were quiet at 12 px).
+ */
 function exactSignedReadout(delta: bigint): ReadoutValue {
   const text = formatSignedCkbExact(delta);
   const dot = text.indexOf('.');
@@ -507,7 +512,7 @@ function exactSignedReadout(delta: bigint): ReadoutValue {
     value: (
       <>
         {text.slice(0, dot)}
-        <span className="text-text-dim text-meta">{text.slice(dot)}</span>
+        {text.slice(dot)}
       </>
     ),
     text: `${text} CKB`,
@@ -635,7 +640,8 @@ function DaoBlock() {
           {d.message}
         </div>
       )}
-      {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
+      {/* an empty-state line, the reading ink (BRIEF-ink-size-roles item 3) */}
+      {d.state === 'empty' && <div className="text-small">{d.message}</div>}
       {d.state === 'ready' && <DaoFigures view={d.view} />}
       <Link href="/dao" look="onward" className="text-small w-fit">
         DAO details
@@ -680,7 +686,8 @@ function DaoFigures({ view }: { view: DaoView }) {
         <DaoStat term="Active deposits">{view.depositCells.toLocaleString('en-US')}</DaoStat>
         <DaoStat term="Change in 24 h">
           {change === null ? (
-            <span className="text-text-dim">—</span>
+            // no change to state: a value's place, the reading ink (BRIEF-ink-size-roles item 1)
+            <span>—</span>
           ) : (
             <span
               data-testid="home-dao-change-24h"

@@ -143,9 +143,10 @@ describe('DAO depositors page (DAO-12)', () => {
     // re-pinned on purpose (the P3 follow-up's 2d, the ink-role gate): a rank is a value, the
     // reading ink (it was the quiet ink)
     expect(rank.firstElementChild).toHaveClass('text-text');
-    // R7: the share is a bar on the page's scale with its number beside it, the number dim.
+    // R7: the share is a bar on the page's scale with its number beside it. Re-pinned on purpose
+    // (BRIEF-ink-size-roles item 1: a figure in a cell is the reading ink): the number was dim.
     expect(share.querySelector('[data-aligned-bar]')).not.toBeNull();
-    expect(within(share as HTMLElement).getByText('1.00%')).toHaveClass('text-text-dim');
+    expect(within(share as HTMLElement).getByText('1.00%')).not.toHaveClass('text-text-dim');
     for (const cell of [rank, deposits, capacity, share])
       expect(cell.querySelector('.text-body')).toBeNull();
   });

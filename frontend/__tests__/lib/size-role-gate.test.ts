@@ -342,7 +342,10 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   chain: 0,
   // assets 13 → 1 (lane P2, the ink and size roles round, at the gate's merge) → 0
   assets: 0,
-  lists: 6,
+  // lists 6 → 5 (the inventory's totals line at 13 px)
+  // lists 5 → 4 (the pipeline's pinned readout at 13 px)
+  // lists 4 → 0 (the blocks list's links and cells at 13 px)
+  lists: 0,
   // topics 2 → 0 (lane cd-fixes-controls): the DAO board's two notes at 13 px
   topics: 0,
   // charts 1 → 0 (the ink and size round): the index card's ranking writes its rows at 13 px
@@ -351,12 +354,14 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // words' code-hash link at 13 px; 1 → 0: the vitals strip
   shared: 0,
 };
-// 18 → 3: components/ui/chart.tsx, the DAO board, the lock words and the vitals strip (lane
-// cd-fixes-controls), components/charts/chart-small-multiple.tsx (the chart lane),
-// components/cell/code-cell-board.tsx, components/transaction/script-group-matrix.tsx and
-// components/transaction/what-moved.tsx (lane P1, chain 3 → 0), and the assets family's seven
-// files (lane P2, assets 13 → 0)
-const TOLERATED_FILES = 3;
+// 18 → 0 (the ink and size round, at the merge of its five lanes): components/ui/chart.tsx, the
+// DAO board, the lock words and the vitals strip (lane cd-fixes-controls),
+// components/charts/chart-small-multiple.tsx (the chart lane), components/cell/code-cell-board.tsx,
+// components/transaction/script-group-matrix.tsx and components/transaction/what-moved.tsx (lane
+// P1, chain 3 → 0), the assets family's seven files (lane P2, assets 13 → 0), and
+// components/asset/inventory-summary.tsx, components/pipeline/pipeline-panel.tsx and
+// app/blocks/page.tsx (lane P3, lists 6 → 0)
+const TOLERATED_FILES = 0;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -368,21 +373,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // the gate's merge; then script-code-evidence 1, a history marker's chip (its day, event and
   // block, and its code cell's link) 12 → 13 px
   // ---- lists ----
-  'app/blocks/page.tsx': {
-    family: 'lists',
-    sites: { link: 3, td: 1 },
-    reason: `the blocks list's miner and reward links at 12 px and a 12 px cell; ${WORK}`,
-  },
-  'components/asset/inventory-summary.tsx': {
-    family: 'lists',
-    sites: { link: 1 },
-    reason: `the inventory's as-of block link in a 12 px line; ${WORK}`,
-  },
-  'components/pipeline/pipeline-panel.tsx': {
-    family: 'lists',
-    sites: { link: 1 },
-    reason: `the pipeline's pinned readout link in a 12 px line; ${WORK}`,
-  },
+  // 'app/blocks/page.tsx' left the list (BRIEF-ink-size-roles item 2: link 3, td 1 → 0): the\n  // reward's finality line and its block link, and both hardfork links, read at the cell's 13 px; the\n  // hash beside and under the number is an id at 13 px too (the Block column 220 → 226, Age · txs\n  // 122 → 126 with its proposals at 13 px)
+  // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles item 2, 588cd09a:\n  // link 1 → 0): the totals line is a sentence at 13 px, its block link with it
+  // 'components/pipeline/pipeline-panel.tsx' left the list (BRIEF-ink-size-roles item 2: link 1 →\n  // 0): the pinned readout's link and values read at 13 px; its eyebrow and tag stay 12 px, labels
   // ---- topics ----
   // 'components/dao/dao-board.tsx' left the list (lane cd-fixes-controls): the capacity-use caption
   // and the 365-day anchor line read at 13 px, their block links with them
