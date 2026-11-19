@@ -423,3 +423,66 @@ describe('gene cells keep their share whole (lane A follow-up)', () => {
     );
   });
 });
+
+// Readability B7, the third round (review of the second fixes): the dropped-genes caption stands
+// in a 400 px box on the collection page, and the box is drawn exactly when the caption is: an
+// empty box in the gel's `space-y-3` column added a 12 px gap below xl where no gene is dropped.
+describe('the dropped-genes caption’s box', () => {
+  const gelColumn = (container: HTMLElement) =>
+    container.querySelector('[data-role="objects-columns"] > div') as HTMLElement;
+
+  it('draws no box when no gene is dropped, nor any empty element in the gel’s column', async () => {
+    const { container } = render(
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    const column = gelColumn(container);
+    expect(column).toHaveClass('space-y-3');
+    expect(container.querySelector('.max-w-\\[400px\\]')).toBeNull();
+    for (const child of Array.from(column.children))
+      expect(child.childNodes.length).toBeGreaterThan(0);
+  });
+
+  it('draws the caption inside its 400 px box, on the measure, when a gene is dropped', async () => {
+    // a second gene the pattern declares, one value on every object: it gets no lane (C9)
+    const pattern = collectionInsightsProducer.currentPattern;
+    const step = pattern.steps[0];
+    const face = step.description.genes[0];
+    const insights = {
+      ...collectionInsightsProducer,
+      currentPattern: {
+        ...pattern,
+        steps: [
+          {
+            ...step,
+            description: {
+              ...step.description,
+              genes: [
+                face,
+                { ...face, index: 1, name: 'Hat', byteOffset: '1', ruleArguments: ['Cap'] },
+              ],
+            },
+          },
+        ],
+      },
+      genetics: {
+        ...collectionInsightsProducer.genetics,
+        traits: [
+          ...collectionInsightsProducer.genetics.traits,
+          { name: 'Hat', values: [{ value: 'Cap', count: 8 }] },
+        ],
+      },
+    } as CollectionInsights;
+    const { container } = render(
+      <CollectionObjects id="collection" title="Genes" insights={insights} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    const boxes = gelColumn(container).querySelectorAll('.max-w-\\[400px\\]');
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0].children).toHaveLength(1);
+    const caption = boxes[0].firstElementChild!;
+    expect(caption).toHaveAttribute('data-role', 'caption');
+    expect(caption).toHaveClass('max-w-measure');
+    expect(caption).toHaveTextContent(/Hat/);
+  });
+});
