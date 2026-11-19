@@ -270,7 +270,7 @@ function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
     size: 'body',
     value:
       bitCells.length === 0 ? (
-        <span className="text-text-dim">none</span>
+        <span className="text-text">none</span>
       ) : (
         <span className="flex flex-col gap-0.5">
           {bitCells.map((c) => (
@@ -278,9 +278,10 @@ function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
               <AppLink look="key" href={`/identities/bit-cell/${c.id}`}>
                 {c.name ?? <ShortId value={c.id} kind="hash" size="row" />}
               </AppLink>
-              <span className="text-text-dim font-normal">
-                {' '}
-                · expires <NoBreak>{formatUtc8Date(c.expiredAt * 1000)}</NoBreak>
+              {/* the label quiet, the date a value in the reading ink (ink roles) */}
+              <span className="font-normal">
+                <span className="text-text-dim"> · expires</span>{' '}
+                <NoBreak>{formatUtc8Date(c.expiredAt * 1000)}</NoBreak>
               </span>
             </span>
           ))}
@@ -342,7 +343,7 @@ export function identityFacts({
               {d.linkedAccount.name ?? d.linkedAccount.id}
             </AppLink>
           ) : (
-            <span className="text-text-dim">not indexed</span>
+            <span className="text-text">not indexed</span>
           ),
           note: d.linkedAccount ? (d.linkedAccount.isLive ? 'live' : 'not live') : undefined,
         },

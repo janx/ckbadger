@@ -383,14 +383,15 @@ export function AssetHistory({
     {
       key: 'block',
       label: 'Block / transaction',
-      // "#99,999,999" over "tx 9999 · sequence 9999" at 12 px (a block's transactions and a
-      // transaction's transfers under 10,000; 165.6, the wider), and the gap; it was 160
+      // "#99,999,999" over "tx 9999 · sequence 9999", a link, at the cell's 13 px (a block's
+      // transactions and a transaction's transfers under 10,000; 23 glyphs × 7.8 = 179.4, the
+      // wider), and the gap (ink and size roles: the link stood at 12 px, 165.6)
       minWidth: columnPx(
         Math.max(
           cell(WIDEST_BLOCK_NUMBER.length),
           textPx(
             `tx ${WIDEST_COUNT_DIGITS} · sequence ${WIDEST_COUNT_DIGITS}`.length,
-            fontPx('meta')
+            fontPx('small')
           )
         ) + CELL_GAP_PX
       ),
@@ -399,7 +400,7 @@ export function AssetHistory({
           <AppLink look="inline" href={`/blocks/${e.blockNumber}`}>
             {formatBlockNumber(e.blockNumber)}
           </AppLink>
-          <AppLink look="inline" className="text-meta block" href={`/tx/${e.txHash}`}>
+          <AppLink look="inline" className="text-small block" href={`/tx/${e.txHash}`}>
             tx {e.txIndex} · sequence {e.transferSequence}
           </AppLink>
         </>
@@ -670,7 +671,7 @@ export function AssetHistory({
       ) : (
         <>
           <p
-            className="text-text-dim text-small py-6"
+            className="text-text text-small py-6"
             title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
           >
             No complete daily history in this range.
@@ -678,7 +679,8 @@ export function AssetHistory({
           {peakItem && <p className="text-text text-small max-w-measure">{peakItem}</p>}
         </>
       )}
-      {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
+      {/* the footnote's counts are figures: the reading ink (ink roles; it stood quiet) */}
+      {footnote && <div className="text-text text-small mt-3">{footnote}</div>}
       {supplyEvents && token && (
         // the library's section disclosure (lane cd-fixes-controls, the disclosure sweep): its words
         // in tier 1's reading ink at 13 px, under the tier's rule
@@ -688,11 +690,11 @@ export function AssetHistory({
         >
           <div className="space-y-3">
             {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
-              <p className="text-text text-meta max-w-measure">
+              <p className="text-text text-small max-w-measure">
                 The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
               </p>
             )}
-            <p className="text-text text-meta max-w-measure">
+            <p className="text-text text-small max-w-measure">
               Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
               which preserves time through backward block timestamps.
             </p>
@@ -749,7 +751,7 @@ export function AssetHistory({
                             hash={e.address ?? e.lockHash}
                             kind={e.address ? 'address' : 'hash'}
                             size={phoneSize}
-                            className="text-meta"
+                            className="text-small"
                           />
                         </AppLink>
                         {/* no space and no part where the row names no lock (B4) */}

@@ -49,14 +49,19 @@ it('keeps object capacity primary, one versions heading and exact occupied value
 // .toHaveClass("text-meta")"): the out point's hash is a head's id (HeadId) in the 11 px line, its
 // index said in words before it; at 11 px it is 435.6 px, one line in the 460 px column at 1024,
 // two halves below 435.6
-it('sets the raw evidence’s out point at its line’s size, so a whole hash fits a 1024 column', async () => {
+// Re-pinned on purpose (the ink and size roles round): the out point is a link, at 13 px; its label
+// stays at 12 beside it. At 13 px its hash is 66 × 7.8 = 514.8 px: one line in the tier's 588 px
+// column at 1280, two halves of 257.4 px from 1024 (460) down, never a scroll (a head's id).
+it('sets the raw evidence’s out point as a link at 13 px, its label at 12', async () => {
   render(<SporeDetailView object={sporeDetailProducer} error={null} />);
   const evidence = await screen.findByRole('region', { name: 'Raw item evidence' });
-  const line = within(evidence).getByText(/^Outpoint · output \d+ of$/).parentElement!;
-  expect(line).toHaveClass('text-meta');
+  const label = within(evidence).getByText(/^Outpoint · output \d+ of$/);
+  expect(label).toHaveClass('text-meta', 'text-text-dim');
+  const line = label.parentElement!;
+  expect(line).toHaveClass('text-small');
   const hash = line.querySelector('[data-head-id]') as HTMLElement;
   expect(hash).not.toBeNull();
-  expect(hash.className).not.toMatch(/(^|\s)text-(body|small|section)/);
+  expect(hash.className).not.toMatch(/(^|\s)text-(body|meta|section)/);
 });
 
 it('rejects impossible object capacity rather than clamping it', () => {

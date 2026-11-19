@@ -107,7 +107,7 @@ export function ClusterCellEvidence({
  */
 export function StoredDescription({ description }: { description: string | null }) {
   if (description === null)
-    return <p className="text-text-dim text-meta">No description bytes recorded.</p>;
+    return <p className="text-text text-small">No description bytes recorded.</p>;
   let pretty: string | null = null;
   try {
     pretty = JSON.stringify(JSON.parse(description), null, 2);
@@ -123,7 +123,7 @@ export function StoredDescription({ description }: { description: string | null 
       {pretty !== null ? (
         <TintedJson text={pretty} />
       ) : (
-        <pre className="text-meta text-text-dim max-w-full whitespace-pre-wrap break-all">
+        <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
           {description}
         </pre>
       )}
@@ -265,7 +265,7 @@ export function MnftClassEvidence({
           {info.kind === 'pretty JSON' ? (
             <TintedJson text={info.text} />
           ) : (
-            <pre className="text-meta text-text-dim max-w-full whitespace-pre-wrap break-all">
+            <pre className="text-text text-small max-w-full whitespace-pre-wrap break-all">
               {info.text}
             </pre>
           )}

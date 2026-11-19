@@ -76,7 +76,7 @@ function InscriptionReading({
 }
 
 const NO_EXPLORER = (
-  <span className="text-text-dim text-meta max-w-measure block">
+  <span className="text-text text-small max-w-measure block">
     The Bitcoin network of testnet inscriptions is not established, so no explorer link is given.
   </span>
 );
@@ -93,7 +93,7 @@ function BtcfsReading({ uri, network }: { uri: string; network: string }) {
   const single = parseBtcfsUri(uri);
   const inscriptions = single ? [single] : inscriptionList(uri);
   if (inscriptions === null)
-    return <p className="text-text text-meta">Not a recognisable btcfs inscription reference.</p>;
+    return <p className="text-text text-small">Not a recognisable btcfs inscription reference.</p>;
   const readings = inscriptions.map((inscription) => (
     <InscriptionReading
       key={`${inscription.txid}i${inscription.index}`}
@@ -151,9 +151,10 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
         // words); the first reference's inscription after it, its raw URI in the disclosure
         <figure className="m-0 min-w-0 space-y-3 text-center">
           {omigaLink && omiga && <ViewImage href={omiga} />}
-          <figcaption className="text-meta max-w-measure mx-auto min-w-0 space-y-1">
-            {/* a note under the figure, the figure's caption: quiet by rule (R3) */}
-            <span className="text-text-dim text-meta block">
+          <figcaption className="text-small max-w-measure mx-auto min-w-0 space-y-1">
+            {/* the figure's caption, a sentence: the reading ink at 13 px (ink roles: it stood
+                quiet at 12 px, "a note under the figure") */}
+            <span className="text-text block">
               Its image lives on Bitcoin; CKBadger reads CKB only and does not fetch it.
             </span>
             <BtcfsReading uri={firstReference.uri} network={network} />
@@ -177,7 +178,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
           className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 border p-6 text-center"
         >
           <ClassMark kind="objects" size={24} />
-          <p className="text-text-dim text-meta max-w-measure">
+          <p className="text-text text-small max-w-measure">
             {profile?.tier === 'decode_pending'
               ? 'Decode pending · awaiting DOB execution.'
               : 'No renderable media available.'}
@@ -194,11 +195,11 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
             <>Media dependencies · {unitNode(formatCount(profile.sources.length, 'source'))}</>
           }
         >
-          <div className="text-meta">
+          <div className="text-text text-small">
             <ul className="space-y-3">
               {profile.sources.map((s, i) => (
                 <li key={`${s.uri}:${i}`}>
-                  <span className="text-text-dim">
+                  <span className="text-text-dim text-meta">
                     {s.scheme} · {s.sourceLocation} · {s.dependencyTier}
                   </span>
                   {/* only the raw URI breaks anywhere; the words around it break between them */}

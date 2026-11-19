@@ -340,7 +340,8 @@ describe('the size scan finds a link or a cell at 12 px, and only that', () => {
  */
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   chain: 0,
-  assets: 13,
+  // assets 13 → 1 (lane P2, the ink and size roles round, at the gate's merge) → 0
+  assets: 0,
   lists: 6,
   // topics 2 → 0 (lane cd-fixes-controls): the DAO board's two notes at 13 px
   topics: 0,
@@ -350,52 +351,22 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // words' code-hash link at 13 px; 1 → 0: the vitals strip
   shared: 0,
 };
-// 18 → 10: components/ui/chart.tsx, the DAO board, the lock words and the vitals strip (lane
-// cd-fixes-controls), components/charts/chart-small-multiple.tsx (the chart lane), and
+// 18 → 3: components/ui/chart.tsx, the DAO board, the lock words and the vitals strip (lane
+// cd-fixes-controls), components/charts/chart-small-multiple.tsx (the chart lane),
 // components/cell/code-cell-board.tsx, components/transaction/script-group-matrix.tsx and
-// components/transaction/what-moved.tsx (lane P1, chain 3 → 0)
-const TOLERATED_FILES = 10;
+// components/transaction/what-moved.tsx (lane P1, chain 3 → 0), and the assets family's seven
+// files (lane P2, assets 13 → 0)
+const TOLERATED_FILES = 3;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
   // ---- assets ----
-  'components/asset/asset-history.tsx': {
-    family: 'assets',
-    sites: { link: 2 },
-    reason: `a block link in a 12 px note and a party's address at the tight size in the supply's phone rows; ${WORK}`,
-  },
-  'components/asset/cell-versions.tsx': {
-    family: 'assets',
-    sites: { link: 2 },
-    reason: `a version's cell link with its id at the tight size and its transaction link at 12 px; ${WORK}`,
-  },
-  'components/asset/genetics.tsx': {
-    family: 'assets',
-    sites: { link: 3 },
-    reason: `the pattern's two source links and a cluster link in 12 px lines; ${WORK}`,
-  },
-  'components/asset/identity-document.tsx': {
-    family: 'assets',
-    sites: { link: 1 },
-    reason: `the document's cell link, its id at the tight size; ${WORK}`,
-  },
-  'components/asset/item-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 3 },
-    reason: `an item's version, transaction and cell links in 12 px lines; ${WORK}`,
-  },
-  'components/identity/identity-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 1 },
-    reason: `an identity's record link in a 12 px line; ${WORK}`,
-  },
-  'components/scripts/script-code-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 1 },
-    reason: `a code cell's link in a 12 px line; ${WORK}`,
-  },
+  // The assets family left the list (lane P2, the ink and size roles round): asset-history 2,
+  // cell-versions 2, genetics 3, identity-document 1, item-evidence 3 and identity-evidence 1 at
+  // the gate's merge; then script-code-evidence 1, a history marker's chip (its day, event and
+  // block, and its code cell's link) 12 → 13 px
   // ---- lists ----
   'app/blocks/page.tsx': {
     family: 'lists',
