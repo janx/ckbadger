@@ -2488,6 +2488,10 @@ async fn test_daily_activities_state_their_kind_occurrences() {
             },
         )
         .unwrap();
+    // re-pinned on purpose (the P3 follow-up's 2b): the route reads the day's chain row too
+    store
+        .put_daily_stats("20240115", &transactions_day(7, 50))
+        .unwrap();
     seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
@@ -2495,6 +2499,69 @@ async fn test_daily_activities_state_their_kind_occurrences() {
     assert_eq!(json[0]["kindOccurrences"], 52, "{json}");
     // the merged DAO band, the route's (lane D1's third round, M2): 2 + 1 + 1
     assert_eq!(json[0]["daoCount"], 4, "{json}");
+}
+
+/// A day's chain row: its blocks and its committed transactions, cellbases among them.
+fn transactions_day(blocks: i32, transactions: i32) -> DailyStats {
+    DailyStats {
+        blocks_count: blocks,
+        transactions_count: transactions,
+        ..Default::default()
+    }
+}
+
+/// The P3 follow-up's 2b: the Transactions and Activities pages stated the day's user transactions
+/// by subtracting its cellbases from its transactions in the page. The count is the route's: the
+/// day's committed transactions (its chain row) less its cellbases (its activity row), one path.
+#[tokio::test]
+async fn test_daily_activities_state_the_day_s_user_transactions() {
+    let store = test_store();
+    for (date, blocks, transactions) in [("20240114", 8_000, 31_000), ("20240115", 7_990, 30_100)] {
+        store
+            .put_daily_activity_stats(
+                date,
+                &ckbadger_store::types::DailyActivityStats {
+                    coinbase_count: u32::try_from(blocks).unwrap(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_daily_stats(date, &transactions_day(blocks, transactions))
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json[0]["userTransactionCount"], 23_000, "{json}");
+    assert_eq!(json[1]["userTransactionCount"], 22_110, "{json}");
+}
+
+/// A day with more cellbases than transactions, or with no chain row, is an indexer fault the
+/// route names by its date; it never states a count it cannot make.
+#[tokio::test]
+async fn test_daily_activities_refuse_a_day_whose_counts_disagree() {
+    for chain_row in [Some(transactions_day(9, 8)), None] {
+        let store = test_store();
+        store
+            .put_daily_activity_stats(
+                "20240115",
+                &ckbadger_store::types::DailyActivityStats {
+                    coinbase_count: 9,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        if let Some(row) = &chain_row {
+            store.put_daily_stats("20240115", row).unwrap();
+        }
+        seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        assert!(json.to_string().contains("20240115"), "{json}");
+    }
 }
 
 /// Cell size states its wholes (the D1 hand-back, item 2): the page's "of live cells" and "of it"
@@ -3290,6 +3357,10 @@ async fn test_daily_activities_exclude_the_in_progress_tip_day() {
                     ..Default::default()
                 },
             )
+            .unwrap();
+        // re-pinned on purpose (the P3 follow-up's 2b): the route reads the day's chain row too
+        store
+            .put_daily_stats(date, &transactions_day(0, transfers as i32))
             .unwrap();
     }
     seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");

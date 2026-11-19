@@ -7,7 +7,6 @@ import type {
   ScriptCountEntry,
   DailyActivityStats,
   GlobalActivityFilter,
-  TxStatsResponse,
 } from '@/lib/api';
 import { shortenHash } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
@@ -115,29 +114,6 @@ export function completedYesterdayActivities(
 ): DailyActivityStats | undefined {
   const yesterday = previousChainDay(now);
   return days.find((day) => day.date.replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3') === yesterday);
-}
-/** Reads only the matching, explicitly complete canonical transaction-count bucket. */
-export function completedYesterdayTransactions(
-  stats: TxStatsResponse,
-  now = Date.now()
-): number | undefined {
-  const label = previousChainDay(now).slice(5).replace('-', '/');
-  const bucket = stats.dailyData.find((day) => day.complete && day.label === label);
-  if (!bucket) return undefined;
-  if (!Number.isSafeInteger(bucket.value) || bucket.value < 0)
-    throw new Error(`Invalid transaction count for ${label}: ${bucket.value}`);
-  return bucket.value;
-}
-/** The global activity stream is exactly canonical transactions minus cellbase. */
-export function nonCellbaseCount(transactions: number, cellbase: number, date: string): number {
-  if (
-    !Number.isSafeInteger(transactions) ||
-    !Number.isSafeInteger(cellbase) ||
-    cellbase < 0 ||
-    transactions < cellbase
-  )
-    throw new Error(`Invalid transaction/cellbase counts on ${date}: ${transactions}/${cellbase}`);
-  return transactions - cellbase;
 }
 /** Per-kind occurrences, with All supplied independently as an exact unique count. */
 export function activityFilterCounts(

@@ -1466,6 +1466,11 @@ interface DailyActivityStats {
   kindOccurrences: number;
   /** The day's Nervos DAO actions, the route's sum of its three DAO counts (lane D1). */
   daoCount: number;
+  /**
+   * The day's user transactions, the route's count: its committed transactions less its cellbases
+   * (the P3 follow-up's 2b). The activity stream holds exactly these; no page subtracts.
+   */
+  userTransactionCount: number;
 }
 
 interface ActivitySummary24h {

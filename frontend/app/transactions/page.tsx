@@ -36,8 +36,6 @@ import { cn } from '@/lib/utils';
 import {
   activityFilterCounts,
   completedYesterdayActivities,
-  completedYesterdayTransactions,
-  nonCellbaseCount,
   previousChainDay,
 } from '@/lib/activity-stats';
 import { countNoun, formatCount } from '@/lib/format-count';
@@ -500,18 +498,11 @@ export default function TransactionsPage() {
     queryFn: () => api.getDailyActivityStats(2),
     refetchInterval: 60000,
   });
-  const { data: txStats, error: txStatsError } = useQuery({
-    queryKey: ['tx-stats'],
-    queryFn: () => api.getTxStats(),
-    refetchInterval: 60000,
-  });
   const yesterday = previousChainDay();
   const day = daily ? completedYesterdayActivities(daily) : undefined;
-  const total = txStats ? completedYesterdayTransactions(txStats) : undefined;
-  // yesterday's user transactions: its committed transactions but its cellbases (the one path of
-  // that count, the activities page's too)
-  const users =
-    day && total !== undefined ? nonCellbaseCount(total, day.coinbaseCount, yesterday) : undefined;
+  // yesterday's user transactions: the route's count, the day's committed transactions less its
+  // cellbases (the activities page states the same figure; no page subtracts)
+  const users = day?.userTransactionCount;
   const counts: Partial<Record<TransactionKind, number>> = day
     ? activityFilterCounts(day, users)
     : {};
@@ -579,19 +570,14 @@ export default function TransactionsPage() {
                 </>
               )}
             </p>
-            {(dailyError || txStatsError) && (
+            {dailyError && (
               <p role="alert" className="text-text-dim text-small max-w-measure">
-                Could not read yesterday’s statistics: {(dailyError ?? txStatsError)!.message}
+                Could not read yesterday’s statistics: {dailyError.message}
               </p>
             )}
             {daily && !day && (
               <p className="text-text-dim text-small max-w-measure">
                 No complete activity statistics for {yesterday} (UTC+8).
-              </p>
-            )}
-            {txStats && total === undefined && (
-              <p className="text-text-dim text-small max-w-measure">
-                No complete transaction count for {yesterday} (UTC+8).
               </p>
             )}
             {/* The controls board's kind filter, with yesterday's counts (PA-15: the activities

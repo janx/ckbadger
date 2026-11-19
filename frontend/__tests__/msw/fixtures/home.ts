@@ -295,6 +295,9 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
     scriptCounts: [],
     kindOccurrences: total,
     daoCount: 0,
+    // the route's count of the day's user transactions (its transactions less its 9,800
+    // cellbases: the transaction-count chart's 9,800 + total)
+    userTransactionCount: total,
   };
 });
 

@@ -12,15 +12,9 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
-import { activityTypeShares, nonCellbaseCount, scriptShares } from '@/lib/activity-stats';
-import {
-  api,
-  type ActivitySummary24h,
-  type DailyActivityStats,
-  type ChartResponse,
-} from '@/lib/api';
+import { activityTypeShares, scriptShares } from '@/lib/activity-stats';
+import { api, type ActivitySummary24h, type DailyActivityStats } from '@/lib/api';
 import { dayLabel } from '@/lib/daily-series';
-import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { usePhosphor } from '@/hooks/usePhosphor';
 import { cn } from '@/lib/utils';
@@ -171,29 +165,18 @@ interface DailyView {
   max: number;
 }
 
-/** Activities per day, oldest first; the last day is the headline. Days must be in order. */
-export function dailyActivityView(
-  days: DailyActivityStats[],
-  transactions: ChartResponse
-): DailyView | null {
+/**
+ * Activities per day, oldest first; the last day is the headline. A day's bar is the route's count
+ * of its user transactions (`userTransactionCount`). Days must be in order.
+ */
+export function dailyActivityView(days: DailyActivityStats[]): DailyView | null {
   if (days.length === 0) return null;
   for (let i = 1; i < days.length; i++) {
     if (days[i].date <= days[i - 1].date) {
       throw new Error(`daily activity days out of order: ${days[i - 1].date} then ${days[i].date}`);
     }
   }
-  const counts = new Map<string, string>();
-  for (const point of transactions.data) {
-    const date = point.date.replaceAll('-', '');
-    if (counts.has(date)) throw new Error(`Duplicate daily transaction count for ${date}`);
-    counts.set(date, point.value);
-  }
-  const totals = days.map((day) => {
-    const value = counts.get(day.date.replaceAll('-', ''));
-    if (value === undefined) throw new Error(`Missing daily transaction count for ${day.date}`);
-    const count = Number(exactUnsignedInteger(value, `transaction count on ${day.date}`));
-    return nonCellbaseCount(count, day.coinbaseCount, day.date);
-  });
+  const totals = days.map((day) => day.userTransactionCount);
   const bars = days.map((day, i) => ({
     label: dayLabel(day.date),
     value: totals[i],
@@ -212,23 +195,12 @@ export function dailyActivityView(
 function DailyActivityFigure() {
   const { data, error } = useQuery({
     queryKey: ['home-daily-activity', 30],
-    queryFn: async () => {
-      const [days, transactions] = await Promise.all([
-        api.getDailyActivityStats(30),
-        api.getTransactionCountChart(),
-      ]);
-      return { days, transactions };
-    },
+    queryFn: () => api.getDailyActivityStats(30),
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
   const d = useMemo(
-    () =>
-      derive(
-        { data, error },
-        ({ days, transactions }) => dailyActivityView(days, transactions),
-        'No daily activity.'
-      ),
+    () => derive({ data, error }, (days) => dailyActivityView(days), 'No daily activity.'),
     [data, error]
   );
   const v = viewOf(d);

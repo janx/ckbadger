@@ -4779,6 +4779,10 @@ pub struct DailyActivityStatsResponse {
     /// The day's Nervos DAO actions, the chart's one DAO band: deposits, withdraw requests and
     /// completed withdraws summed here, never in the page (lane D1's third round, M2).
     pub dao_count: u64,
+    /// The day's user transactions: its committed transactions (its chain row) less its cellbases,
+    /// counted here, never in a page (the P3 follow-up's 2b). The activity stream holds exactly
+    /// these, so the Transactions page's "all" and the Activities page's lede state this figure.
+    pub user_transaction_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4845,6 +4849,32 @@ fn dao_count(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
     .sum()
 }
 
+/// A day's user transactions: its committed transactions less its cellbases. A day without its
+/// chain row, or with more cellbases than transactions, is an indexer fault named by its date.
+fn user_transaction_count(
+    date: &str,
+    chain: Option<&ckbadger_store::types::DailyStats>,
+    activity: &ckbadger_store::types::DailyActivityStats,
+) -> anyhow::Result<u64> {
+    let chain = chain.ok_or_else(|| {
+        anyhow::anyhow!("day {date} has daily activity stats but no daily chain stats")
+    })?;
+    let transactions = u64::try_from(chain.transactions_count).map_err(|_| {
+        anyhow::anyhow!(
+            "day {date} has a negative transaction count {}",
+            chain.transactions_count
+        )
+    })?;
+    transactions
+        .checked_sub(u64::from(activity.coinbase_count))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "day {date} has {} cellbases but only {transactions} transactions",
+                activity.coinbase_count
+            )
+        })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct DailyActivityStatsParams {
     #[serde(default = "default_activity_days")]
@@ -4863,7 +4893,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:v3:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v4:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -4874,10 +4904,18 @@ async fn get_daily_activity_stats(
     }
 
     let store = state.store.clone();
-    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let (all_stats, chain_days) = tokio::task::spawn_blocking(move || {
+        Ok::<_, anyhow::Error>((
+            store.list_daily_activity_stats()?,
+            store
+                .list_daily_stats_with_dates()?
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+        ))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Complete days only: the tip block's day is still in progress.
     let mut complete_stats = Vec::with_capacity(all_stats.len());
@@ -4932,6 +4970,8 @@ async fn get_daily_activity_stats(
     let result: Vec<DailyActivityStatsResponse> = selected
         .into_iter()
         .map(|(date, s)| {
+            let user_transaction_count = user_transaction_count(&date, chain_days.get(&date), &s)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
             let mut script_counts: Vec<ScriptCountEntry> = s
                 .script_counts
                 .iter()
@@ -4943,7 +4983,7 @@ async fn get_daily_activity_stats(
                 .collect();
             script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
 
-            DailyActivityStatsResponse {
+            Ok(DailyActivityStatsResponse {
                 date,
                 transfer_count: s.transfer_count,
                 dao_deposit_count: s.dao_deposit_count,
@@ -4960,9 +5000,10 @@ async fn get_daily_activity_stats(
                 script_counts,
                 kind_occurrences: kind_occurrences(&s),
                 dao_count: dao_count(&s),
-            }
+                user_transaction_count,
+            })
         })
-        .collect();
+        .collect::<Result<_, ApiRouteError>>()?;
 
     // Don't cache empty results — the indexer may not have written data yet
     // and we don't want to serve stale empty responses for hours.

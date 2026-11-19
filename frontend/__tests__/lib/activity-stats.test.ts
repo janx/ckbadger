@@ -4,8 +4,6 @@ import {
   activityTypeShares,
   activityFilterCounts,
   completedYesterdayActivities,
-  completedYesterdayTransactions,
-  nonCellbaseCount,
   previousChainDay,
   formatShare,
   scriptLabel,
@@ -130,35 +128,12 @@ describe('exact completed day counts', () => {
       completedYesterdayActivities([{ ...dailyActivities[0], date: '20261025' }], now)?.date
     ).toBe('20261025');
   });
-  it('selects only the exact complete transaction bucket and never a latest-bucket substitute', () => {
-    const base = { currentHour: 0, currentDay: 999, hourlyData: [] };
-    expect(
-      completedYesterdayTransactions(
-        {
-          ...base,
-          dailyData: [
-            { label: '10/24', value: 9, complete: true },
-            { label: '10/25', value: 10, complete: false },
-          ],
-        },
-        now
-      )
-    ).toBeUndefined();
-    expect(
-      completedYesterdayTransactions(
-        { ...base, dailyData: [{ label: '10/25', value: 0, complete: true }] },
-        now
-      )
-    ).toBe(0);
-  });
   it('keeps unique totals separate from overlapping occurrences', () => {
     expect(activityFilterCounts(counts, 10).all).toBe(10);
     expect(activityFilterCounts(counts).all).toBeUndefined();
     // the DAO chip states the API's count of the day's DAO actions, summed nowhere in the page
     expect(activityFilterCounts({ ...counts, daoCount: 13 }).dao).toBe(13);
-    expect(nonCellbaseCount(25, 10, '2026-10-25')).toBe(15);
-    expect(() => nonCellbaseCount(9, 10, '2026-10-25')).toThrow(
-      'Invalid transaction/cellbase counts'
-    );
+    // the P3 follow-up's 2b: the day's user transactions are the route's figure
+    // (userTransactionCount), so the page's subtraction and its tests went with it
   });
 });
