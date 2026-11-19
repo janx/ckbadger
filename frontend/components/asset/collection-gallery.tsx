@@ -15,11 +15,17 @@ import { AssetReadState } from '@/components/asset/detail-shell';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatStandard } from '@/components/activity-event-row';
 import { formatBlockNumber } from '@/lib/format-block';
+import type { CompositionTier } from '@/lib/asset-utils';
 // F2 objects (round 2, OB-C3): the 24-card gallery was replaced by the Collection board's
 // Newest list (`collection-objects.tsx`).
 export interface CollectionItemsProps {
   id: string;
   kind: 'object' | 'identity';
+  /**
+   * The composition every live object of the collection shares, its rows' chip (the owner's rule:
+   * on every row of an object list); null where they do not share one, so no row can say its own.
+   */
+  tier?: CompositionTier | null;
 }
 // ── F2 identities (round 2): R3 owners on item rows (ID-COL-2 / ID-COL-3) ──
 /**

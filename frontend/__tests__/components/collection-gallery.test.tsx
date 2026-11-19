@@ -4,6 +4,10 @@ import { api } from '@/lib/api';
 import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
 import { collectionGalleryFilteredProducer } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
+import { phoneLines, statedHeadPx } from '@/__tests__/utils/phone-row';
+import { shortenAddress } from '@/lib/shorten';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 beforeEach(mockItemReads);
 // F2 objects (round 2): the 24-card CollectionGallery was replaced by the Newest list; its two
 // tests moved to __tests__/components/collection-objects.test.tsx.
@@ -169,4 +173,71 @@ it('refuses an m-NFT row without its token index', async () => {
   render(<CollectionItems id="class" kind="object" />);
   expect(await screen.findByText(/m-NFT item 0x8f67.* has no tokenIndex/)).toBeInTheDocument();
   log.mockRestore();
+});
+
+// Lane D4 (the phone-rows board, its collection items pane; PB-03): a class's and an identity
+// collection's items on a phone were four stacked values, 135 px a row, no composition chip and the
+// minting block bare. Each is the board's row: the name has line 1 to itself (it may wrap, it is
+// never cut), who holds it is line 2 with, on a class's row, the composition chip at its right
+// edge (27 characters of a name at 14 px and the chip are 357 px, past a 360 px phone's 328 px
+// line, so the chip moved from the name's line to the holder's); line 3 quiet, where it was minted,
+// named, and its state where it is not live.
+describe('collection items on a phone (lane D4, PB-03)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const owner = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq4s93hhsj';
+  const mnft = (tokenIndex: number, isLive = true) => ({
+    nftId: `0x8f67${'00'.repeat(24)}${String(tokenIndex).padStart(8, '0')}`,
+    name: 'Non-Fungible Santa Claus',
+    standard: 'm-nft',
+    ownerLockHash: isLive ? `0x${'12'.repeat(32)}` : null,
+    ownerAddress: isLive ? owner : null,
+    tokenIndex,
+    isLive,
+    createdAtBlock: 6_140_203,
+  });
+
+  it('writes a class’s item as name · holder and composition · where it was minted', async () => {
+    atViewportWidth(390);
+    vi.mocked(api.getObjectCollectionItems).mockResolvedValue(emptyPage([mnft(0), mnft(2, false)]));
+    render(<CollectionItems id="class" kind="object" tier="centralized_mixture" />);
+    const [live, gone] = await screen.findAllByTestId('collection-item-row-mobile');
+    expect(phoneLines(live).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['name', 'head', 'Non-Fungible Santa Claus #0', null],
+      ['holder', 'body', `held by ${shortenAddress(owner, 'tight')}`, 'Centralized mix'],
+      ['minted', 'quiet', 'minted at #6,140,203', null],
+    ]);
+    // the chip holds the holder's line's right edge, whatever the holder's length
+    expect(live.querySelector('[data-line="holder"]')).toHaveClass('flex-nowrap');
+    expect(phoneLines(gone).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['name', 'Non-Fungible Santa Claus #2', null],
+      ['holder', 'No live owner', 'Centralized mix'],
+      ['minted', 'minted at #6,140,203 · inactive', null],
+    ]);
+    // the name is the row's key: never cut, it wraps between its words
+    const name = live.querySelector('[data-line="name"] [data-part="left"] a')!;
+    expect(name.className).not.toMatch(/truncate/);
+    expect(statedHeadPx(live)).toBeLessThanOrEqual(PHONE_LINE_PX[360]);
+  });
+
+  it('writes an identity collection’s item with its holder and no chip of an object', async () => {
+    atViewportWidth(390);
+    const item = identityItem('dotbit');
+    vi.mocked(api.getIdentityCollectionItems).mockResolvedValue(emptyPage([item]));
+    render(<CollectionItems id="dotbit" kind="identity" />);
+    const [row] = await screen.findAllByTestId('collection-item-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['name', item.name, null],
+      [
+        'holder',
+        item.ownerAddress
+          ? `held by ${shortenAddress(item.ownerAddress, 'tight')}`
+          : 'No live owner',
+        null,
+      ],
+      ['minted', `minted at #${item.createdAtBlock.toLocaleString('en-US')}`, null],
+    ]);
+  });
 });
