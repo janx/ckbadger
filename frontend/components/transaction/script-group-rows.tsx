@@ -40,19 +40,35 @@ export function groupCells(g: TransactionScriptGroup): string[] {
   return [...g.inputIndices.map((i) => `in:${i}`), ...g.outputIndices.map((i) => `out:${i}`)];
 }
 
+/**
+ * A group's name and its script page, from one read of the registry's name for its code hash (the
+ * one rule, `registeredName`): the name, or the hash at the row size; the script's page by that
+ * name, or by the code hash where the registry has none.
+ */
+function groupNaming(
+  g: TransactionScriptGroup,
+  lookup: ScriptLookupResponse | undefined
+): { label: string; href: string } {
+  const name = registeredName(lookup, g.script.codeHash);
+  return {
+    label: name ?? shortenHash(g.script.codeHash, 'row'),
+    href: getScriptDetailHref({
+      name,
+      codeHash: g.script.codeHash,
+      hashType: g.script.hashType,
+      scriptKind: g.kind,
+    }),
+  };
+}
+
 /** The registry's name for a group's code hash, or the hash at the row size. */
 export function groupLabel(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return registeredName(lookup, g.script.codeHash) ?? shortenHash(g.script.codeHash, 'row');
+  return groupNaming(g, lookup).label;
 }
 
 /** The group's script page. */
 export function groupHref(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return getScriptDetailHref({
-    name: lookup?.[g.script.codeHash]?.name,
-    codeHash: g.script.codeHash,
-    hashType: g.script.hashType,
-    scriptKind: g.kind,
-  });
+  return groupNaming(g, lookup).href;
 }
 
 /** A witness's kind in words. */
