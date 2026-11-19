@@ -289,6 +289,39 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     expect(feedRows()).toEqual([fresh.txHash, ...run.map((a) => a.txHash)]);
   });
 
+  // B4 third round (review-rules-fixes2 MUST 1, the coordinator's item 1): block times may step
+  // backwards across midnight UTC+8, so a new row at the top can carry a date that already stands
+  // lower in the stream. Its group is new; the lower group of that date, where the reader opened
+  // a run and focused its toggle, keeps its key and every row in it.
+  it('a new row whose date already stands lower leaves that lower group as it was', async () => {
+    const user = userEvent.setup({ advanceTimers: () => {} });
+    // NOW is 16:00 UTC+8 on Nov 18: a row a minute ago is Nov 18, one 20 hours ago Nov 17
+    const today = { ...transfer, txHash: `0x${'d1'.repeat(32)}`, timestamp: String(NOW - 60_000) };
+    const yesterday = [oracle(1, 'q3q7ue', '0x00', 72_000), oracle(2, 'q3q7ue', '0x00', 72_100)];
+    const head = stream([today, ...yesterday]);
+    render(<ActivitiesStreamExplorer />);
+    const toggle = await screen.findByRole('button', { name: '2 transactions ↓' });
+    await user.click(toggle);
+    toggle.focus();
+    // a newer block whose time is Nov 17, above the Nov 18 row
+    const back = {
+      ...transfer,
+      txHash: `0x${'d2'.repeat(32)}`,
+      blockNumber: 21047799,
+      timestamp: String(NOW - 71_000_000),
+    };
+    head.resolve(page([back, today, ...yesterday]));
+    await waitFor(() => expect(feedRows()[0]).toBe(back.txHash));
+    expect(
+      [...document.querySelectorAll('[data-testid^="activity-day-divider"]')].map(
+        (d) => d.textContent
+      )
+    ).toEqual(['Yesterday', 'Today', 'Yesterday']);
+    expect(toggle.isConnected).toBe(true);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(toggle);
+  });
+
   it('a new row at the top leaves a row’s own state alone: its participants stay opened', async () => {
     const user = userEvent.setup({ advanceTimers: () => {} });
     const head = stream([crowd]);
