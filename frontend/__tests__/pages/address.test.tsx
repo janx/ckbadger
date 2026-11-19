@@ -198,7 +198,8 @@ describe('Address v3', () => {
       'JoyID · type · 22-byte args',
       '40',
       '1,021',
-      '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
+      // re-pinned on purpose (lane P1; review of phases C and D, NOTE 12): no sum of unlike counts
+      '5 DAO cells · 9 tokens · 14 objects · 1 identity',
     ]);
     expect(within(strip).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
       'href',
@@ -399,16 +400,18 @@ describe('Address v3', () => {
     // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
     // purpose: was every decimal)
     expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
-    expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent(
-      '54,571.35338057'
-    );
+    // re-pinned on purpose (lane P1): what it can spend stands beside the balance
+    expect(
+      screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
+    ).toHaveTextContent('54,571.35338057');
     // the exact parts, exact form (readability R5, re-pinned on purpose: was padded); re-pinned with
     // readability R4 (lane B7): a labelled fact (was the parts line's last item after "·")
     expect(
       factsOf(
         within(screen.getByLabelText('Address capacity partition')).getByTestId('balance-parts')
       )
-    ).toContainEqual(['DAO free', '9,589,480, free part of 5 deposits']);
+      // re-pinned on purpose (lane P1): "in the DAO", with its unit (it was "DAO free")
+    ).toContainEqual(['in the DAO', '9,589,480 CKB, free part of 5 deposits']);
     expect(container.querySelector('[data-tier="2"]')).toHaveClass(
       'mt-24',
       'border-t',
@@ -754,6 +757,28 @@ describe('Address v3', () => {
     const last = await within(history).findByText('page 2 of 2');
     expect(last.closest('nav')).toHaveTextContent(/^21–25 of 25/);
   });
+
+  // Lane P1 (the placement lane's note: the class filter appeared only once the holdings had
+  // loaded, its counts coming from them, and pushed the list down when it did): the filter stands
+  // from the first draw, its classes without counts until the holdings answer, so nothing jumps.
+  it('draws the class filter before the holdings answer, its counts added in place (P1)', async () => {
+    let answer: (h: typeof holdingsFixture) => void = () => {};
+    vi.mocked(api.getAddressHoldings).mockReturnValue(
+      new Promise<typeof holdingsFixture>((resolve) => {
+        answer = resolve;
+      })
+    );
+    vi.mocked(api.getAddressCells).mockResolvedValue(pageFixture(addressObjectsFixture));
+    render(<AddressDetailPage />);
+    await tab('Live cells');
+    const filter = await screen.findByRole('radiogroup', { name: 'class' });
+    expect(within(filter).getByRole('radio', { name: /^objects$/ })).toBeInTheDocument();
+    answer(holdingsFixture);
+    await loaded();
+    expect(screen.getByRole('radiogroup', { name: 'class' })).toBe(filter);
+    expect(within(filter).getByRole('radio', { name: /^objects\s*14$/ })).toBeInTheDocument();
+  });
+
   it('requests live-cell class filtering before pagination and resets its cursor', async () => {
     // Re-pinned on purpose (lane c2-chain): the unfiltered page carries its total, as the API
     // sends it (/addresses/{addr}/cells: "an exact total of all matching current cells"), since
@@ -1360,7 +1385,8 @@ describe('Address board · F2 blocks', () => {
     render(<AddressDetailPage />);
     const balance = await screen.findByLabelText('Address capacity partition');
     const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
-    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'free', 'DAO free']);
+    // re-pinned on purpose (lane P1): the parts are named occupied, spendable and in the DAO
+    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'spendable', 'in the DAO']);
     for (const part of parts) expect(part).toHaveClass('min-w-[3px]');
     expect(parts[0].parentElement).toHaveClass('h-[18px]', 'gap-0.5');
     expect(balance).toHaveTextContent('free part of 5 deposits');
@@ -1568,7 +1594,7 @@ describe('Address board · F2 blocks', () => {
   it('writes "1 cell" for a single identity cell (BA-45)', async () => {
     render(<AddressDetailPage />);
     const identities = await section(/Identities$/);
-    expect(identities).toHaveTextContent(/1 cell · 227\.99993047 CKB held/);
+    expect(identities).toHaveTextContent(/1 cell · 227\.99 CKB held/);
   });
 
   // F2 blocks visual pass + R2b-a order=capacity (BA-34).
@@ -1616,10 +1642,8 @@ describe('Address board · F2 blocks', () => {
 
   it('writes the class headers as the board: "9 kinds in 15 cells", "14 in 7 collections"', async () => {
     render(<AddressDetailPage />);
-    expect(await section(/Tokens$/)).toHaveTextContent(
-      /9 kinds in 15 cells · 21,507\.60266154 CKB held/
-    );
-    expect(await section(/Objects$/)).toHaveTextContent(/14 in 7 collections · 4,093\.0+ CKB held/);
+    expect(await section(/Tokens$/)).toHaveTextContent(/9 kinds in 15 cells · 21,507 CKB held/);
+    expect(await section(/Objects$/)).toHaveTextContent(/14 in 7 collections · 4,093 CKB held/);
   });
 });
 
@@ -1861,13 +1885,19 @@ describe('Address · space legend (lane A follow-up)', () => {
       within(legend)
         .getAllByRole('button')
         .map((b) => b.textContent)
-    ).toEqual(['Objects3,76196.76%', 'Plain CKB1263.24%']);
+      // re-pinned on purpose (lane P1, the plan: the bar says its unit; review chain-b
+      // address-miner: "102 / 122" with no unit read as CKB): bytes, "3,761 B"
+    ).toEqual(['Objects3,761\u00a0B96.76%', 'Plain CKB126\u00a0B3.24%']);
     const rest = within(legend).getByText('nothing in DAO, tokens, identities or other scripts');
     expect(rest).toHaveClass('text-text-dim');
     expect(rest).toHaveAttribute(
       'title',
-      'Nervos DAO 0 CKB · Tokens 0 CKB · Identities 0 CKB · Other scripts 0 CKB'
+      'Nervos DAO 0 B · Tokens 0 B · Identities 0 B · Other scripts 0 B'
     );
+    // the bar's own line says it measures bytes, and its total is bytes
+    const space = legend.closest('div')!.parentElement!;
+    expect(within(space).getByText('On-chain space they take, in bytes')).toBeInTheDocument();
+    expect(space).toHaveTextContent('3,887 B occupied in 16 cells');
     expect(
       [...document.querySelectorAll<HTMLElement>('[data-space-class]')].map(
         (b) => b.dataset.spaceClass

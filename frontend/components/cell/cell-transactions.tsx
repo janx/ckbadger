@@ -6,21 +6,23 @@ import Link from '@/components/ui/link';
 import { BlockLink } from '@/components/ui/block-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure } from '@/components/transaction/tx-structure';
-import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
+import {
+  CellTilesError,
+  readCellTiles,
+  sheetTotals,
+} from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
 import { scriptGroupRows } from '@/components/transaction/script-group-rows';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
 import { formatDurationMs } from '@/lib/utils';
-import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
+import { BOARD_INKS, CELL_COLORS } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { formatCount } from '@/lib/format-count';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
-
-/** Links in a board ink; the global `a:hover` jade still wins over them. */
-const LINK = inkStyle(BOARD_INKS.link);
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 
 /** Which of the cell's transactions: the one that created it, or the one that spent it. */
 type Role = 'Created' | 'Spent';
@@ -60,16 +62,20 @@ function useCellTransaction(hash: string) {
 /**
  * The read transaction, or what stands in its place: a line while it is read, its error where it
  * cannot be. A read answered without its evidence, or a transaction without its committed
- * structure, broke an invariant and is refused.
+ * structure, broke an invariant and is refused. `deps` says whether the part needs the cell deps
+ * too (the script groups do; the embed draws none, so it neither waits for that read nor fails
+ * on it: review of phases C and D, SHOULD 7).
  */
 function readTransaction(
   read: ReturnType<typeof useCellTransaction>,
   hash: string,
   label: Role,
-  what: string
+  what: string,
+  deps: boolean
 ): { tx: TransactionDetail } | { node: ReactNode } {
-  const { transaction, dependencies } = read;
-  if (isAwaited(transaction) || isAwaited(dependencies))
+  const { transaction } = read;
+  const dependencies = deps ? read.dependencies : null;
+  if (isAwaited(transaction) || (dependencies !== null && isAwaited(dependencies)))
     return {
       node: (
         <p className="text-text-dim text-small max-w-measure">
@@ -77,16 +83,16 @@ function readTransaction(
         </p>
       ),
     };
-  if (transaction.error || dependencies.error)
+  if (transaction.error || dependencies?.error)
     return {
       node: (
         <p role="alert" className="text-rouge text-small max-w-measure [overflow-wrap:anywhere]">
-          {label} transaction {what} unavailable: {String(transaction.error ?? dependencies.error)}
+          {label} transaction {what} unavailable: {String(transaction.error ?? dependencies?.error)}
         </p>
       ),
     };
   // awaited and failed are answered above: an answered read without its evidence broke an invariant
-  if (!transaction.data || !dependencies.data)
+  if (!transaction.data || (dependencies !== null && !dependencies.data))
     throw new Error(`${label} transaction ${hash}: its read answered without its evidence`);
   const tx: TransactionDetail = transaction.data;
   if (
@@ -111,7 +117,7 @@ export function TransactionEvidence({
   hash,
   label,
   focus,
-  anchor,
+  cell,
   onward,
   afterOnward,
 }: {
@@ -119,21 +125,25 @@ export function TransactionEvidence({
   label: Role;
   /** This cell's tile in the transaction (`out:1`, `in:57`). */
   focus: string;
-  /** This cell's out point, `<tx hash>-<index>`: the transaction page's anchor for it. */
-  anchor: string;
+  /** This cell's out point: the link opens the transaction at it (`transactionAtCellHref`). */
+  cell: { txHash: string; index: number };
   /** Drawn under the onward bridge (the dashed "Not spent yet" box). */
   afterOnward?: ReactNode;
   /** The focused output's txviz bridge label (the cell carries on past this transaction). */
   onward?: string;
 }) {
   const read = useCellTransaction(hash);
-  const got = readTransaction(read, hash, label, 'evidence');
+  const got = readTransaction(read, hash, label, 'evidence', false);
   if ('node' in got) return got.node;
   const { tx } = got;
-  const tiles = cellTiles(tx, read.lookup.data);
-  if (![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
+  // the tiles as the transaction page reads them: a cell the lock decision refuses fails this
+  // part in its place, never the page (review of phases C and D, SHOULD 7)
+  const tilesRead = readCellTiles(tx, read.lookup.data);
+  const tiles = tilesRead.value;
+  if (tiles && ![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
     throw new Error(`${label} transaction ${hash} does not contain focused cell ${focus}`);
-  const side = label === 'Created' ? tiles.outputs : tiles.inputs;
+  // the side's cells, the transaction's list (a tile is drawn for each)
+  const side = label === 'Created' ? tx.outputs! : tx.inputs!;
   const verb = label === 'Created' ? 'created' : 'consumed';
   return (
     <div className="space-y-3">
@@ -158,30 +168,33 @@ export function TransactionEvidence({
           </>
         )}
         {' · '}
-        <Link href={`/tx/${hash}#${anchor}`} look="onward">
+        <Link href={transactionAtCellHref(hash, cell)} look="onward">
           open the transaction
         </Link>
       </p>
-      <TxStructure
-        txHash={hash}
-        inputs={tiles.inputs}
-        outputs={tiles.outputs}
-        fee={tx.fee}
-        // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
-        {...sheetTotals(tx)}
-        continuity={txContinuity(tx, tiles.inputs)}
-        focusedCellIds={[focus]}
-        meOut={onward !== undefined ? focus : undefined}
-        onward={onward}
-        afterOnward={afterOnward}
-        // the board's embed: this cell and its continuity partner; the rest counted, no control
-        fold={{
-          head: 0,
-          keep: [focus],
-          open: { consumed: false, created: false },
-          subject: 'this cell',
-        }}
-      />
+      {tilesRead.error !== undefined ? (
+        <CellTilesError tx={tx} error={tilesRead.error} />
+      ) : (
+        <TxStructure
+          txHash={hash}
+          inputs={tiles!.inputs}
+          outputs={tiles!.outputs}
+          fee={tx.fee}
+          // C11: the sheets' heads end with the API's exact totals (the detail read carries both)
+          {...sheetTotals(tx)}
+          continuity={txContinuity(tx, tiles!.inputs)}
+          focusedCellIds={[focus]}
+          meOut={onward !== undefined ? focus : undefined}
+          onward={onward}
+          afterOnward={afterOnward}
+          // the board's embed: this cell and its continuity partner; the rest counted, no control
+          fold={{
+            head: 0,
+            keep: [focus],
+            open: { consumed: false, created: false },
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -193,7 +206,7 @@ export function TransactionEvidence({
  */
 function TransactionScriptGroups({ hash, label }: { hash: string; label: Role }) {
   const read = useCellTransaction(hash);
-  const got = readTransaction(read, hash, label, 'script groups');
+  const got = readTransaction(read, hash, label, 'script groups', true);
   const title = `Script groups of the transaction that ${label === 'Created' ? 'created' : 'spent'} it`;
   if ('node' in got)
     return (
@@ -260,7 +273,7 @@ function NotSpentYet({
             {cell.liveAgeAtBlock != null && (
               <>
                 {' '}
-                · as of <BlockLink number={cell.liveAgeAtBlock} />
+                · as of <BlockLink look="inline" number={cell.liveAgeAtBlock} />
               </>
             )}
           </span>
@@ -277,8 +290,8 @@ function NotSpentYet({
             <span style={{ color: CELL_COLORS[requirement.kind] }}>{requirement.kind} group</span>
             <span className="min-w-0">
               <Link
+                look="inline"
                 href={`/script/${requirement.referenceHash}?hashType=${requirement.hashType}&kind=${requirement.kind}`}
-                className="text-text hover:text-jade"
                 title={`${requirement.hashType} ${requirement.referenceHash}`}
               >
                 {(requirement.kind === 'lock' ? lockName : typeName) ?? (
@@ -303,8 +316,7 @@ function NotSpentYet({
                   {' '}
                   <Link
                     href={`/cell/${candidate.txHash}-${candidate.outputIndex}`}
-                    className="text-[color:var(--ink)]"
-                    style={LINK}
+                    look="inline"
                     title={`Candidate cell ${candidate.txHash}:${candidate.outputIndex} · version ${candidate.versionHash}`}
                   >
                     <ShortId value={candidate.txHash} kind="hash" size="row" />
@@ -335,8 +347,8 @@ export function CellTransactions({
   if (cell.status === 'dead' && (!cell.consumedByTx || cell.consumingInputIndex == null))
     throw new Error(`Consumed cell ${cell.txHash}:${cell.outputIndex} lacks exact spending input`);
   const spent = cell.status === 'dead';
-  // this cell's out point, the transaction pages' anchor for it on either transaction
-  const anchor = `${cell.txHash}-${cell.outputIndex}`;
+  // this cell's out point: either transaction's page is opened at it
+  const outPoint = { txHash: cell.txHash, index: cell.outputIndex };
   return (
     // Rubbing × Song print, phase 5 (D11): the transactions it shows — the one that created it,
     // and the one that spent it once it is spent (its consumedByTx, required above).
@@ -346,7 +358,7 @@ export function CellTransactions({
           hash={cell.txHash}
           label="Created"
           focus={`out:${cell.outputIndex}`}
-          anchor={anchor}
+          cell={outPoint}
           onward={spent ? 'this cell, onward: spent below' : 'this cell, onward: not spent yet'}
           afterOnward={
             spent ? undefined : <NotSpentYet cell={cell} lockName={lockName} typeName={typeName} />
@@ -357,7 +369,7 @@ export function CellTransactions({
             hash={cell.consumedByTx!}
             label="Spent"
             focus={`in:${cell.consumingInputIndex}`}
-            anchor={anchor}
+            cell={outPoint}
           />
         )}
       </div>

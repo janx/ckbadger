@@ -88,7 +88,25 @@ export function ScriptGroupLegend({ children }: { children?: ReactNode }) {
   );
 }
 
-/** `input 0, 1, 2`, `input 0 → output 0`, `output 1`: a group's cells in words. */
+/** A side's indices, ascending, as their runs: `0 to 3, 7, 9 to 12` (a run of three or more). */
+function indexRuns(at: readonly number[]): string {
+  const parts: string[] = [];
+  for (let i = 0; i < at.length; ) {
+    let j = i;
+    while (j + 1 < at.length && at[j + 1] === at[j] + 1) j++;
+    if (j - i >= 2) parts.push(`${at[i]} to ${at[j]}`);
+    else for (let k = i; k <= j; k++) parts.push(String(at[k]));
+    i = j + 1;
+  }
+  return parts.join(', ');
+}
+
+/**
+ * `input 0, 1, 2`, `input 0 → output 0`, `output 1`: a group's cells in words. A side of more than
+ * three cells is said as its count and its runs (lane P1, lane D3's note: the long transaction's
+ * default lock listed 158 indices, about ten lines): `158 inputs: 0 to 157`,
+ * `9 inputs: 0 to 3, 7, 9 to 12`.
+ */
 export function cellsInWords(
   cellIds: readonly string[],
   inputs: readonly MatrixColumn[],
@@ -97,7 +115,10 @@ export function cellsInWords(
   // The columns are the transaction's cells in order, so a column's position is its index.
   const side = (word: string, cells: readonly MatrixColumn[]) => {
     const at = cells.flatMap((c, i) => (cellIds.includes(c.id) ? [i] : []));
-    return at.length ? `${word} ${at.join(', ')}` : null;
+    if (at.length === 0) return null;
+    return at.length <= 3
+      ? `${word} ${at.join(', ')}`
+      : `${formatCount(at.length, word)}: ${indexRuns(at)}`;
   };
   return [side('input', inputs), side('output', outputs)]
     .filter((part): part is string => part !== null)
@@ -223,7 +244,7 @@ export function ScriptGroupMatrix({
                   key={c.id}
                   data-column={c.id}
                   data-dimmed={dim(lit?.cells.has(c.id) ?? false)}
-                  tabIndex={0}
+                  tabIndex={onHover ? 0 : undefined}
                   onMouseEnter={() => onHover?.({ t: 'cell', id: c.id })}
                   onMouseLeave={() => onHover?.(null)}
                   onFocus={() => onHover?.({ t: 'cell', id: c.id })}
@@ -238,7 +259,7 @@ export function ScriptGroupMatrix({
                     {c.top}
                   </span>
                   {c.href ? (
-                    <Link href={c.href} title={c.title} className="hover:text-jade">
+                    <Link look="inline" href={c.href} title={c.title}>
                       {c.label}
                     </Link>
                   ) : (
@@ -266,7 +287,7 @@ export function ScriptGroupMatrix({
             <div
               key={g.id}
               role="row"
-              tabIndex={0}
+              tabIndex={onHover ? 0 : undefined}
               data-group-row={g.id}
               data-lit={on}
               data-dimmed={dim(on)}
@@ -287,15 +308,13 @@ export function ScriptGroupMatrix({
                   <span className="text-text-dim text-meta">{g.kind}</span>
                   {g.mark && <ClassMark kind={g.mark} size={12} />}
                   {g.href ? (
-                    <Link
-                      href={g.href}
-                      className={cn(
-                        'hover:text-jade truncate',
-                        g.ran ? 'text-text-bright' : 'text-text'
-                      )}
-                    >
-                      {g.name}
-                    </Link>
+                    // a group that ran is the row's key; one only attached, a link inside its
+                    // line, in the reading ink though its row is set back
+                    <span className={cn('min-w-0 truncate', !g.ran && 'text-text')}>
+                      <Link href={g.href} look={g.ran ? 'key' : 'inline'}>
+                        {g.name}
+                      </Link>
+                    </span>
                   ) : (
                     <span className="truncate">{g.name}</span>
                   )}
@@ -406,7 +425,7 @@ function GroupList({
         return (
           <li
             key={g.id}
-            tabIndex={0}
+            tabIndex={onHover ? 0 : undefined}
             data-group-row={g.id}
             data-ran={g.ran}
             data-lit={on}
@@ -429,17 +448,15 @@ function GroupList({
               <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
                 {g.mark && <ClassMark kind={g.mark} size={12} className="self-center" />}
                 {g.href ? (
-                  <Link
-                    href={g.href}
-                    className={cn(
-                      'hover:text-jade break-words',
-                      g.ran ? 'text-text-bright' : 'text-text-dim'
-                    )}
-                  >
-                    {g.name}
-                  </Link>
+                  // a group that ran is the row's key; one only attached, a link inside its line,
+                  // in the reading ink though its row is set back
+                  <span className={cn('break-words', !g.ran && 'text-text')}>
+                    <Link href={g.href} look={g.ran ? 'key' : 'inline'}>
+                      {g.name}
+                    </Link>
+                  </span>
                 ) : (
-                  <span className={cn('break-words', g.ran ? 'text-text-bright' : 'text-text-dim')}>
+                  <span className={cn('break-words', g.ran ? 'text-text-bright' : 'text-text')}>
                     {g.name}
                   </span>
                 )}

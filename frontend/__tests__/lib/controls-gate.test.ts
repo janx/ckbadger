@@ -7,7 +7,8 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
 /**
  * Gate for the controls (UI review 2026-11-14, phase C, lane C1; the controls board the owner
  * passed on 2026-11-19, gate D0′): a tab row, a filter, a range, a pager, a text field, a select, a
- * copy button and a help mark are each one component of `components/ui/` (CONTROL_FILES). Outside
+ * copy button, a help mark and a fold's toggle are each one component of `components/ui/`
+ * (CONTROL_FILES). Outside
  * them no page or component writes the raw form of one. Four kinds can be told from the source:
  *
  * - `select`: a `<select>`;
@@ -133,6 +134,9 @@ const CONTROL_FILES = [
   'components/ui/copy-button.tsx',
   'components/ui/help-mark.tsx',
   'components/ui/retry-action.tsx',
+  // the fold's one control (review of phases C and D, SHOULD 5; lane P1): "all 158 cells ↓" and
+  // "fewer ↑" on one button that keeps its focus, the short list's words the Pager writes too
+  'components/ui/fold-toggle.tsx',
 ] as const;
 
 /** What the scan leaves to the library: its controls, and the one copy path the copy button uses. */

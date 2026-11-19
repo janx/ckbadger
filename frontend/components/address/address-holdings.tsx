@@ -26,7 +26,8 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
+import { occupiedCapacityText } from '@/lib/occupied';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
 import { Pager } from '@/components/ui/pager';
@@ -34,7 +35,6 @@ import type { StripFact } from '@/components/ui/status-strip';
 import { DetailFacts } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { charPx } from '@/lib/type-metrics';
-import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import { percentOf } from '@/lib/format-unit';
@@ -177,18 +177,26 @@ function collectionOrder(groups: AddressHoldings['objectCollections']) {
   );
 }
 
-/** An exact CKB amount in the balance's line of exact parts (Address board), in one ink. */
+/**
+ * An exact CKB amount among the balance's labelled figures (Address board), in one ink, with its
+ * unit: the bar beside them is by CKB, the space bar under the holdings by bytes (lane P1, the
+ * plan: the two bars say their unit).
+ */
 function ExactParts({ shannons }: { shannons: bigint }) {
-  return <CkbAmount form="exact" shannons={shannons} signed={false} tone="plain" unit={false} />;
+  return <CkbAmount form="exact" shannons={shannons} signed={false} tone="plain" />;
 }
 
 /**
  * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, in
- * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — with its live
- * cells at the right; the 18 px partition with each share inside its part (a share its part cannot
- * hold is in the part's title, never cut); and the exact parts as three labelled facts
- * (`DetailFacts`: occupied, free, and DAO free, which says so when there is none). A DAO part of
- * the partition is drawn only when the address has CKB in the Nervos DAO.
+ * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — and beside it,
+ * exact, what the address can spend and, where it holds Nervos DAO cells, the compensation they
+ * have accrued unclaimed (lane P1, the plan's P1 paragraph: they stood under the bar and four
+ * sections down; the live cells it stood "in" are the status strip's, said once); the 18 px
+ * partition with each share inside its part (a share its part cannot hold is in the part's title,
+ * never cut), its parts named "occupied", "spendable" and "in the DAO" (they were occupied, free
+ * and DAO free: three frees for three things); and under it the two parts it cannot spend, as
+ * labelled facts with their unit (`DetailFacts`; "in the DAO" says so when there is none). A DAO
+ * part of the partition is drawn only when the address has CKB in the Nervos DAO.
  */
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
@@ -203,8 +211,8 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const parts = (
     [
       { key: 'occupied', value: occupied, color: DATA_COLOR, ink: 'text-base-bg' },
-      { key: 'free', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
-      { key: 'DAO free', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
+      { key: 'spendable', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
+      { key: 'in the DAO', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
   const share = (v: bigint) => percentOf(v, sum);
@@ -225,13 +233,28 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
             <span className="text-text-dim text-body"> CKB</span>
           </div>
         </div>
-        <span className="text-text-dim text-body tabular-nums">
-          in{' '}
-          <NoBreak>
-            <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
-            {countNoun(holdings.liveCellsCount, 'live cell')}
-          </NoBreak>
-        </span>
+        <div data-role="balance-beside" className="text-small min-w-0 tabular-nums">
+          <DetailFacts
+            facts={[
+              { label: 'spendable', value: <ExactParts shannons={free} /> },
+              ...(holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0
+                ? [
+                    {
+                      label: 'unclaimed compensation',
+                      value: (
+                        <ExactParts
+                          shannons={exactUnsignedInteger(
+                            holdings.daoUnclaimedCompensation,
+                            'Address unclaimed compensation'
+                          )}
+                        />
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
       </div>
       {!zero && (
         <div aria-label="Address capacity partition" className="mt-3.5">
@@ -286,9 +309,8 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                     </>
                   ),
                 },
-                { label: 'free', value: <ExactParts shannons={free} /> },
                 {
-                  label: 'DAO free',
+                  label: 'in the DAO',
                   value:
                     daoFree === BigInt(0) ? (
                       <span className="text-text-dim">no CKB in the Nervos DAO</span>
@@ -379,15 +401,13 @@ export function addressStripFacts(
                     ? unitNode(`in ${formatCount(holdings.classes.token.cellCount, 'cell')}`)
                     : undefined,
             }
-          : {
+          : // each class's count as the API states it, the first the value and the rest its
+            // notes: DAO cells, token kinds, objects and identities are unlike things, never
+            // added into one "holdings" figure in the page (review of phases C and D, NOTE 12)
+            {
               label: 'holdings',
-              value: unitNode(
-                formatCount(
-                  held.reduce((n, c) => n + c.count, 0),
-                  'holding'
-                )
-              ),
-              note: held.map((c) => unitNode(formatCount(c.count, c.one, c.many))),
+              value: unitNode(formatCount(held[0].count, held[0].one, held[0].many)),
+              note: held.slice(1).map((c) => unitNode(formatCount(c.count, c.one, c.many))),
             }
     );
   }
@@ -498,7 +518,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const held_ = (kind: AddressCellClass) => (
     <>
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"
@@ -511,7 +531,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     <>
       {unitNode(formatCount(holdings.classes[kind].cellCount, 'cell'))} ·{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"
@@ -543,17 +563,18 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             />,
             dottedGroup(
               held.map((c) => (
-                <a
+                <Link
                   key={c.key}
+                  look="inline"
                   href={`#holdings-${c.key}`}
-                  className="hover:text-jade tabular-nums"
+                  className="tabular-nums"
                   onMouseEnter={() => setActive(c.key)}
                   onMouseLeave={() => setActive(null)}
                   onFocus={() => setActive(c.key)}
                   onBlur={() => setActive(null)}
                 >
                   {unitNode(formatCount(c.count, c.one, c.many))}
-                </a>
+                </Link>
               )),
               { role: 'holdings-nav', className: 'text-text-dim', nav: { label: 'Holdings' } }
             ),
@@ -576,9 +597,11 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       )}
       <div className="space-y-2">
         <div className="text-small flex flex-wrap justify-between gap-2">
-          <span className="text-text-dim">On-chain space they take</span>
+          {/* the bar's unit, bytes (lane P1, the plan: the two bars say their unit; review
+              chain-b address-miner: its "102 / 122" beside the CKB bar above read as CKB) */}
+          <span className="text-text-dim">On-chain space they take, in bytes</span>
           <span>
-            {formatCkbAmount(occupied).full.replace(/\.0{8}$/, '')} CKB occupied in{' '}
+            {occupiedCapacityText(occupied, `Address ${holdings.lockScriptHash}`)} occupied in{' '}
             {unitNode(formatCount(holdings.liveCellsCount, 'cell'))}
           </span>
         </div>
@@ -623,9 +646,9 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 <ClassMark kind={c.mark} size={12} />
                 {c.label}
                 <span className="text-text-bright">
-                  {formatCkbAmount(holdings.classes[c.key].occupiedCapacity).full.replace(
-                    /\.0{8}$/,
-                    ''
+                  {occupiedCapacityText(
+                    BigInt(holdings.classes[c.key].occupiedCapacity),
+                    `Address ${holdings.lockScriptHash} ${c.label}`
                   )}
                 </span>
                 {occupied > BigInt(0) && (
@@ -644,7 +667,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               className="text-text-dim sm:col-span-2"
               title={spaceOrder(holdings)
                 .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0))
-                .map((c) => `${c.label} 0 CKB`)
+                .map((c) => `${c.label} 0 B`)
                 .join(' · ')}
             >
               nothing in{' '}
@@ -686,7 +709,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')
                   )}
                 </p>
-                <dl className="text-small grid gap-3 py-3 sm:grid-cols-3">
+                {/* its unclaimed compensation stands beside the balance, said once (lane P1) */}
+                <dl className="text-small grid gap-3 py-3 sm:grid-cols-2">
                   <div>
                     <dt className="text-text-dim">
                       {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
@@ -695,18 +719,6 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       <CkbAmount
                         form="summary"
                         shannons={BigInt(holdings.classes.dao.capacity)}
-                        signed={false}
-                        tone="plain"
-                        wrap
-                      />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-text-dim">Unclaimed compensation</dt>
-                    <dd className="mt-1">
-                      <CkbAmount
-                        form="summary"
-                        shannons={BigInt(holdings.daoUnclaimedCompensation)}
                         signed={false}
                         tone="plain"
                         wrap
@@ -752,7 +764,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
                         >
                           <span className="text-text-dim">
-                            <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
+                            <Link look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
                               {d.status === 'deposited'
                                 ? 'deposited'
                                 : d.status === 'withdrawing'
@@ -760,7 +772,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                                   : 'withdrawn'}
                             </Link>{' '}
                             at{' '}
-                            <Link href={`/blocks/${eventBlock}`}>
+                            <Link look="inline" href={`/blocks/${eventBlock}`}>
                               {formatBlockNumber(eventBlock)}
                             </Link>{' '}
                             · <Utc8Date timestamp={eventTimestamp} />
@@ -812,10 +824,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
                   >
                     <span className="min-w-0">
-                      <Link
-                        href={`/tokens/${t.typeScriptHash}`}
-                        className="text-text-bright hover:text-jade"
-                      >
+                      <Link look="key" href={`/tokens/${t.typeScriptHash}`}>
                         {tokenName(t) ?? (
                           <Hash hash={t.typeScriptHash} size="row" className="text-small" />
                         )}
@@ -865,8 +874,9 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     >
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link
+                          look="key"
                           href={getIdentityItemDetailHref(d.standard, d.id)}
-                          className="text-text-bright text-body"
+                          className="text-body"
                         >
                           {d.name ?? <Hash hash={d.id} size="row" />}
                         </Link>
@@ -882,7 +892,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                               : `expires ${formatUtc8Date(c.expiresAt * 1000)}`
                           )}{' '}
                           · held since{' '}
-                          <Link href={`/blocks/${c.heldSinceBlock!}`}>
+                          <Link look="inline" href={`/blocks/${c.heldSinceBlock!}`}>
                             {formatBlockNumber(c.heldSinceBlock!)}
                           </Link>
                         </span>
@@ -985,8 +995,9 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
                 <ClassMark kind="objects" size={16} />
                 {href ? (
                   <Link
+                    look="key"
                     href={href}
-                    className="text-text-bright text-body min-w-0 truncate"
+                    className="text-body min-w-0 truncate"
                     onClick={(e) => e.stopPropagation()}
                   >
                     {label}
@@ -1102,10 +1113,11 @@ function AddressCollectionObjects({
                   <span role="cell" className="flex min-w-0 items-center gap-2">
                     <ClassMark kind="objects" size={12} />
                     <Link
+                      look="key"
                       href={d.standard === 'm-nft' ? `/objects/mnft/${d.id}` : `/objects/${d.id}`}
                       aria-label={d.name ?? `Object ${d.id}`}
                       title={d.id}
-                      className="text-text-bright text-body min-w-0 truncate"
+                      className="text-body min-w-0 truncate"
                     >
                       {d.name ?? <ShortId value={d.id} kind="hash" size="row" />}
                     </Link>
@@ -1118,12 +1130,13 @@ function AddressCollectionObjects({
                     )}
                   </span>
                   <span role="cell" className="text-text-dim hidden tabular-nums sm:block">
-                    <Link href={`/blocks/${c.createdAtBlock}`}>
+                    <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
                       {formatBlockNumber(c.createdAtBlock)}
                     </Link>
                   </span>
                   <span role="cell" className="text-right">
                     <Link
+                      look="inline"
                       href={`/cell/${c.txHash}-${c.outputIndex}`}
                       title={`${c.txHash}:${c.outputIndex}`}
                     >
@@ -1137,7 +1150,7 @@ function AddressCollectionObjects({
           <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
             {objectsAt && <Pager mode="pages" label={`${label} objects`} {...objectsAt} />}
             {href && (
-              <Link href={href} className="text-small">
+              <Link look="inline" href={href} className="text-small">
                 All {group.itemCount.toLocaleString('en-US')} in the collection →
               </Link>
             )}

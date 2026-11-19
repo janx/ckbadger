@@ -20,7 +20,7 @@ import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
 import { formatDurationMs } from '@/lib/utils';
 import { shortenOutpoint } from '@/lib/shorten';
-import { BOARD_INKS, CELL_COLORS, DATA_COLOR, DATA_KEY, inkStyle } from '@/lib/design-tokens';
+import { DATA_KEY } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
@@ -86,7 +86,7 @@ function depGroupItems(cell: Cell): NonNullable<Cell['depGroupItems']> {
  * the state with every DAO cell, so any other value is a broken read.
  */
 function DaoCompensationAt({ cell, dao }: { cell: Cell; dao: NonNullable<Cell['daoInfo']> }) {
-  const block = <BlockLink number={dao.compensationAtBlock} />;
+  const block = <BlockLink look="inline" number={dao.compensationAtBlock} />;
   switch (dao.compensationState) {
     case 'accruing':
       return <>, at block {block}</>;
@@ -139,13 +139,11 @@ function ScriptFact({
   label,
   script,
   name,
-  color,
   owner,
 }: {
   label: string;
   script: Cell['lock'];
   name: string | null;
-  color: string;
   /** Lane L: the lock's address, the cell's owner, linked under the args (the Lock fact only). */
   owner?: string;
 }) {
@@ -174,9 +172,10 @@ function ScriptFact({
             )}
             {owner && (
               <Link
+                look="inline"
                 href={`/address/${owner}`}
                 title={owner}
-                className="hover:text-jade block [overflow-wrap:anywhere]"
+                className="block [overflow-wrap:anywhere]"
               >
                 <ShortId value={owner} kind="address" size="row" />
               </Link>
@@ -186,13 +185,11 @@ function ScriptFact({
       }
     >
       {href ? (
-        <Link href={href} title={`${script.hashType} ${script.codeHash}`} style={{ color }}>
+        <Link look="inline" href={href} title={`${script.hashType} ${script.codeHash}`}>
           {text}
         </Link>
       ) : (
-        <span style={{ color }} title={script.codeHash}>
-          {text}
-        </span>
+        <span title={script.codeHash}>{text}</span>
       )}
     </Fact>
   );
@@ -231,25 +228,19 @@ function CellFacts({
       {/* The capacity, the time and the block it was created in are the status strip's (lane D2):
           these are the cell's other facts, none deleted. */}
       <Fact label="Occupied">
-        <span style={{ color: DATA_COLOR }}>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
+        <span>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
         <span className="text-text-dim text-small">
           ·{' '}
           {capacity === occupied ? (
             '0'
           ) : (
-            <CkbAmount form="column" shannons={capacity - occupied} signed={false} tone="plain" />
+            <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" />
           )}{' '}
           free
         </span>
       </Fact>
-      <ScriptFact
-        label="Lock"
-        script={cell.lock}
-        name={lockName}
-        color={CELL_COLORS.lock}
-        owner={cell.address}
-      />
-      <ScriptFact label="Type" script={cell.type} name={typeName} color={CELL_COLORS.type} />
+      <ScriptFact label="Lock" script={cell.lock} name={lockName} owner={cell.address} />
+      <ScriptFact label="Type" script={cell.type} name={typeName} />
       <Fact
         label="Data"
         sub={
@@ -260,7 +251,7 @@ function CellFacts({
               : undefined
         }
       >
-        <span style={{ color: CELL_COLORS.data }}>{cell.dataSize.toLocaleString('en-US')} B</span>
+        <span>{cell.dataSize.toLocaleString('en-US')} B</span>
       </Fact>
       {/* the epoch it was created in (the strip states its block and time) */}
       <Fact label="Epoch">
@@ -286,7 +277,7 @@ function CellFacts({
           }
         >
           {cell.consumedAtBlock != null ? (
-            <Link href={`/blocks/${cell.consumedAtBlock}`} className="text-text-bright">
+            <Link look="key" href={`/blocks/${cell.consumedAtBlock}`}>
               {formatBlockNumber(cell.consumedAtBlock)}
             </Link>
           ) : (
@@ -300,7 +291,7 @@ function CellFacts({
             sub={
               cell.liveAgeAtBlock != null && (
                 <>
-                  as of <BlockLink number={cell.liveAgeAtBlock} />
+                  as of <BlockLink look="inline" number={cell.liveAgeAtBlock} />
                 </>
               )
             }
@@ -310,74 +301,6 @@ function CellFacts({
         )
       )}
     </section>
-  );
-}
-
-/** "code cell of JoyID, v5": the scripts this cell is code for, and its Type ID version. */
-function CodeCellOf({ cell }: { cell: Cell }) {
-  if (!cell.codeCellOf?.length) return null;
-  const version = cell.codeCell?.typeIdVersions.find(
-    (item) => item.codeCellTxHash === cell.txHash && item.codeCellOutputIndex === cell.outputIndex
-  );
-  return (
-    <span data-testid="code-cell-of" className="text-text-dim text-small">
-      · code cell of{' '}
-      {cell.codeCellOf.map((script, i) => (
-        <span key={`${script.codeHash}:${script.hashType}`}>
-          {i > 0 && ', '}
-          <Link
-            href={`/script/${script.codeHash}?hashType=${script.hashType}`}
-            className="text-text-bright"
-          >
-            {script.name}
-          </Link>
-        </span>
-      ))}
-      {version && `, v${version.ordinal}`}
-    </span>
-  );
-}
-
-/**
- * Lane U (U3): the transaction and the output index as one line under the full out point —
- * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to
- * the transaction page and the block to its page; the line under the plate is the page's lede
- * (prose: the row form, R9).
- */
-function CellOrigin({ cell }: { cell: Cell }) {
-  return (
-    <p className="max-w-measure" data-testid="cell-origin">
-      output {cell.outputIndex} of transaction{' '}
-      <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        <ShortId value={cell.txHash} kind="hash" size="row" />
-      </Link>{' '}
-      ·{' '}
-      {cell.status === 'dead' ? (
-        cell.consumedAtBlock != null ? (
-          <span className="whitespace-nowrap">
-            spent at{' '}
-            <Link
-              href={`/blocks/${cell.consumedAtBlock}`}
-              className="text-text hover:text-text-bright"
-            >
-              {formatBlockNumber(cell.consumedAtBlock)}
-            </Link>
-          </span>
-        ) : (
-          'spent, block unavailable'
-        )
-      ) : (
-        <span className="whitespace-nowrap">
-          live since{' '}
-          <Link
-            href={`/blocks/${cell.createdAtBlock}`}
-            className="text-text hover:text-text-bright"
-          >
-            {formatBlockNumber(cell.createdAtBlock)}
-          </Link>
-        </span>
-      )}
-    </p>
   );
 }
 
@@ -453,9 +376,6 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
         seal={{ ...seal, kind: 'Cell' }}
-        // on the kind line, after "Cell": the scripts it is code for (its state, live or spent,
-        // is the status strip's first fact, said once)
-        status={<CodeCellOf cell={cell} />}
         // The status strip under the id line (lane D2, PA-13): its state, when it was created, the
         // block that created it and its capacity; its other facts stay in "Cell facts" below.
         strip={{ label: 'Cell status', facts: cellStripFacts(cell) }}
@@ -469,14 +389,22 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <span className="min-w-0">{outpoint}</span>
           </IdCopyRow>
         }
-        // Under the stone and the plate, from the page's left edge (C10), in the identity lines'
-        // dim small voice: the inventory item this cell is (lane U, U6) and the transaction it is
-        // an output of (what an out point is, in general, is the developer tier's: lane D3).
+        // Under the stone and the plate, from the page's left edge (C10): one sentence of what the
+        // cell is (lane U, U6: the inventory item it is; lane P1: for every kind, by its scripts —
+        // the code it holds, which the kind line said, among them). Said once (lane P1): its
+        // state, its block and its capacity are the strip's, its transaction the Transactions
+        // section's link, and its out point is written whole on the id line and short in the h1
+        // (the origin line under them wrote the transaction's hash a third time); what an out
+        // point is, in general, is the developer tier's (lane D3).
         lede={
-          <div className="text-text-dim text-small space-y-1.5">
-            <CellInventoryLine cell={cell} />
-            <CellOrigin cell={cell} />
-          </div>
+          <CellInventoryLine
+            cell={cell}
+            typeName={
+              cell.type?.codeHash === TYPE_ID_CODE_HASH || names.lookup.isSuccess
+                ? names.type
+                : undefined
+            }
+          />
         }
         // The developer tier (lane D3, U-17): what an out point is, the cell's bytes, and the
         // script groups of its transactions, in the transaction page's rows.
@@ -488,13 +416,13 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
               other cell has it, and this one{' '}
               {cell.status === 'dead' && cell.consumedAtBlock != null ? (
                 <>
-                  existed from block <BlockLink number={cell.createdAtBlock} /> until block{' '}
-                  <BlockLink number={cell.consumedAtBlock} /> spent it.
+                  existed from block <BlockLink look="inline" number={cell.createdAtBlock} /> until
+                  block <BlockLink look="inline" number={cell.consumedAtBlock} /> spent it.
                 </>
               ) : (
                 <>
-                  exists from block <BlockLink number={cell.createdAtBlock} /> until a transaction
-                  spends it.
+                  exists from block <BlockLink look="inline" number={cell.createdAtBlock} /> until a
+                  transaction spends it.
                 </>
               )}
             </p>
@@ -521,10 +449,10 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             {/* F-9: the API sends every DAO cell's exact compensation (shannons) with its state
                 and block; an answer without them is a broken read and fails here, by name. */}
             <p className="text-text-dim text-small max-w-measure">
-              deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} /> ·{' '}
+              deposit block <BlockLink look="inline" number={cell.daoInfo.depositBlockNumber} /> ·{' '}
               {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
               <CkbAmount
-                form="column"
+                form="exact"
                 shannons={parseShannons(
                   cell.daoInfo.compensation,
                   `DAO cell ${cell.txHash}:${cell.outputIndex} compensation`
@@ -542,11 +470,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <ul className="text-small space-y-2">
               {depGroupItems(cell).map((item) => (
                 <li key={`${item.txHash}:${item.outputIndex}`}>
-                  <Link
-                    href={`/cell/${item.txHash}-${item.outputIndex}`}
-                    className="text-[color:var(--ink)]"
-                    style={inkStyle(BOARD_INKS.cellLink)}
-                  >
+                  <Link href={`/cell/${item.txHash}-${item.outputIndex}`} look="inline">
                     {item.txHash}
                     <OutpointIndex index={item.outputIndex} />
                   </Link>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
@@ -26,7 +26,15 @@ import { Tabs } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { rankedPageAt } from '@/lib/pagination';
-import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction } from '@/lib/api';
+import {
+  api,
+  isNotFoundApiError,
+  type Block,
+  type BlockUncle,
+  type GlobalActivity,
+  type Transaction,
+} from '@/lib/api';
+import { ParticipantRefView } from '@/components/participant-ref';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
@@ -37,7 +45,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 import { ShortId } from '@/components/ui/short-id';
-import { Utc8Age, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import { HeadId } from '@/components/ui/head-id';
 import { RowSeal } from '@/components/ui/row-seal';
 import { percentOf } from '@/lib/format-unit';
@@ -191,7 +199,7 @@ export default function BlockDetailPage() {
   const epochStart = block.number - epoch.index;
   const amount = (value: string, field: string) => (
     <CkbAmount
-      form="column"
+      form="exact"
       shannons={parseShannons(value, `block ${block.number} ${field}`)}
       signed={false}
       tone="plain"
@@ -240,7 +248,6 @@ export default function BlockDetailPage() {
   if (parentElapsedMs !== null && !Number.isSafeInteger(parentElapsedMs))
     throw new Error(`Block ${block.number}: invalid parent timestamp interval`);
   const cycles = block.cycles === null ? null : Number(block.cycles);
-  const paidIn = block.rewardFinalizesAt === null ? null : block.rewardFinalizesAt - block.number;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
@@ -313,7 +320,7 @@ export default function BlockDetailPage() {
                     address={block.minerAddress}
                     pool={block.minerPool}
                     size="row"
-                    unnamed={<Address address={block.minerAddress} size="row" />}
+                    unnamed={<Address look="inline" address={block.minerAddress} size="row" />}
                   />
                 ) : (
                   'Genesis'
@@ -348,39 +355,51 @@ export default function BlockDetailPage() {
           }}
           // The summary is the head's last line (phase 5, Gate 3 note), under the stone and the
           // plate from the page's left edge, where the tab row and the sections start (C10).
+          // Lane P1 (the plan's P1 paragraph; said once): the strip states the time, the miner and
+          // the reward, so the lede says what only it says — what the block holds, the uncles it
+          // includes and which block's reward its cellbase pays (that cellbase's row names its
+          // amount and payee); genesis, what it issued: its header's total issuance, C.
           lede={
             <p data-testid="block-summary" className="text-body leading-relaxed">
               {unitNode(formatCount(block.transactionsCount, 'transaction'))}
-              {block.minerAddress && (
+              {block.number === 0 ? (
                 <>
-                  , mined by{' '}
-                  <MinerLink
-                    address={block.minerAddress}
-                    pool={block.minerPool}
-                    size="row"
-                    unnamed={<Address address={block.minerAddress} size="row" />}
-                  />
-                </>
-              )}{' '}
-              on <Utc8Date timestamp={block.timestamp} /> at{' '}
-              {unitNode(formatUtc8Time(block.timestamp))}.
-              {block.miningReward !== null ? (
-                <>
-                  {' '}
-                  The miner earns {amount(block.miningReward, 'reward')} for this block
-                  {paidIn !== null && <>, paid {unitNode(formatCount(paidIn, 'block'))} later</>}.
+                  , which issued the chain’s first{' '}
+                  <CkbAmount form="summary" shannons={dao.C} signed={false} tone="plain" />
                 </>
               ) : (
-                paidIn !== null && (
-                  <> Its reward is paid {unitNode(formatCount(paidIn, 'block'))} later.</>
-                )
+                <>
+                  {block.uncles.length > 0 && (
+                    <>
+                      {' and '}
+                      {unitNode(formatCount(block.uncles.length, 'uncle'))},{' '}
+                      {block.uncles.map((uncle, index) => (
+                        <Fragment key={uncle.hash}>
+                          {index > 0 && (index === block.uncles.length - 1 ? ' and ' : ', ')}
+                          <Link look="inline" href={getUncleDetailHref(block.number, index)}>
+                            {formatBlockNumber(uncle.number)}
+                          </Link>
+                        </Fragment>
+                      ))}
+                    </>
+                  )}
+                  {block.cellbasePays && (
+                    <>
+                      ; its cellbase pays the reward for{' '}
+                      <Link look="inline" href={`/blocks/${block.cellbasePays.hash}`}>
+                        {formatBlockNumber(block.cellbasePays.number)}
+                      </Link>
+                    </>
+                  )}
+                </>
               )}
+              .
             </p>
           }
           // on the kind line, after "Block"
           status={
             activation && (
-              <Link href="/hardforks" className="text-text-dim text-small">
+              <Link look="inline" href="/hardforks" className="text-small">
                 HARDFORK ACTIVATION · {activation.shortName.toUpperCase()}
               </Link>
             )
@@ -395,7 +414,7 @@ export default function BlockDetailPage() {
                 <div>
                   <dt className="text-text-dim mb-1">Epoch</dt>
                   <dd className="flex items-center gap-2">
-                    <Link href={`/blocks/${epochStart}`} className="text-text-bright">
+                    <Link look="key" href={`/blocks/${epochStart}`}>
                       {epoch.number.toLocaleString('en-US')}
                     </Link>
                     {!genesisEpoch && (
@@ -416,8 +435,11 @@ export default function BlockDetailPage() {
                       className="text-text-dim max-w-measure mt-1"
                     >
                       the genesis header’s epoch field is {block.rawHeader.epoch}, so it states no
-                      epoch length; <Link href="/blocks/1">{formatBlockNumber(1)}</Link> is the
-                      first header to state epoch 0’s
+                      epoch length;{' '}
+                      <Link look="inline" href="/blocks/1">
+                        {formatBlockNumber(1)}
+                      </Link>{' '}
+                      is the first header to state epoch 0’s
                     </dd>
                   )}
                 </div>
@@ -578,11 +600,11 @@ export default function BlockDetailPage() {
                           {proposal.uncle &&
                             (uncleIndex(proposal.uncle.hash) >= 0 ? (
                               <Link
+                                look="inline"
                                 href={getUncleDetailHref(
                                   block.number,
                                   uncleIndex(proposal.uncle.hash)
                                 )}
-                                className="text-text-dim"
                               >
                                 uncle {formatBlockNumber(proposal.uncle.number)}
                               </Link>
@@ -595,7 +617,7 @@ export default function BlockDetailPage() {
                         {proposal.committedTxHash ? (
                           <p className="text-text-dim max-w-measure">
                             →{' '}
-                            <Link href={`/tx/${proposal.committedTxHash}`}>
+                            <Link look="inline" href={`/tx/${proposal.committedTxHash}`}>
                               <Hash
                                 hash={proposal.committedTxHash}
                                 size="row"
@@ -603,7 +625,7 @@ export default function BlockDetailPage() {
                               />
                             </Link>{' '}
                             in{' '}
-                            <Link href={`/blocks/${proposal.committedBlockNumber}`}>
+                            <Link look="inline" href={`/blocks/${proposal.committedBlockNumber}`}>
                               {formatBlockNumber(
                                 committedBlock(
                                   proposal.committedBlockNumber,
@@ -639,11 +661,21 @@ export default function BlockDetailPage() {
               <div className="flex flex-wrap items-baseline justify-between gap-3">
                 <span className="text-text-dim">Header · version {block.version} · 208 bytes</span>
                 <span>
-                  <Link href={`/blocks/${block.number}.raw`} target="_blank" rel="noreferrer">
+                  <Link
+                    look="inline"
+                    href={`/blocks/${block.number}.raw`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     JSON
                   </Link>
                   {' · '}
-                  <Link href={`/blocks/${block.number}.md`} target="_blank" rel="noreferrer">
+                  <Link
+                    look="inline"
+                    href={`/blocks/${block.number}.md`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Markdown
                   </Link>
                 </span>
@@ -654,7 +686,9 @@ export default function BlockDetailPage() {
                   <dd className="min-w-0">
                     <span className="break-all">
                       {key === 'parentHash' ? (
-                        <Link href={`/blocks/${value}`}>{value}</Link>
+                        <Link look="inline" href={`/blocks/${value}`}>
+                          {value}
+                        </Link>
                       ) : (
                         value
                       )}
@@ -742,14 +776,17 @@ export default function BlockDetailPage() {
                             key={activity.txHash}
                             activity={activity}
                             headline={
-                              activity.isCellbase ? <CellbaseHeadline block={block} /> : undefined
+                              activity.isCellbase ? (
+                                <CellbaseHeadline block={block} activity={activity} />
+                              ) : undefined
                             }
                             evidence={
                               <>
                                 #{activity.txIndex} ·{' '}
                                 <Link
+                                  look="key"
                                   href={`/tx/${activity.txHash}`}
-                                  className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
+                                  className="transition-colors"
                                 >
                                   <ShortId value={activity.txHash} kind="hash" size="row" />
                                 </Link>
@@ -800,10 +837,13 @@ export default function BlockDetailPage() {
 
 function ArrowLink({ href, label, d }: { href: string; label: string; d: string }) {
   return (
+    // a block: a box whose mark draws its own ink, quiet, celadon under the pointer (the link's
+    // hover reaches it through the group)
     <Link
+      look="block"
       href={href}
       aria-label={label}
-      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center border"
+      className="border-base-border group flex h-9 w-9 shrink-0 items-center justify-center border"
     >
       <svg
         aria-hidden="true"
@@ -813,6 +853,7 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
+        className="text-text-dim group-hover:text-jade group-focus-visible:text-jade"
       >
         <path d={d} />
       </svg>
@@ -947,11 +988,11 @@ function UncleRow({
       <RowSeal id={{ kind: 'block', hash: uncle.hash, txs: 'not kept' }} state="ink" />
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="flex flex-wrap items-baseline gap-x-2">
-          <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
+          <Link look="key" href={getUncleDetailHref(blockNumber, index)}>
             {formatBlockNumber(uncle.number)}
           </Link>
           <span className="text-text-dim">uncle</span>
-          <Link href={getUncleDetailHref(blockNumber, index)}>
+          <Link look="inline" href={getUncleDetailHref(blockNumber, index)}>
             <Hash hash={uncle.hash} size="row" className="text-small" />
           </Link>
         </span>
@@ -963,7 +1004,7 @@ function UncleRow({
           ) : detail.sameParentAs === null ? (
             <>
               the canonical{' '}
-              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
                 {formatBlockNumber(detail.canonicalAtHeight.number)}
               </Link>{' '}
               has another parent
@@ -971,14 +1012,14 @@ function UncleRow({
           ) : (
             <>
               sibling of{' '}
-              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
                 {formatBlockNumber(detail.sameParentAs)}
               </Link>{' '}
-              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
                 <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
               </Link>
               , same parent{' '}
-              <Link href={`/blocks/${uncle.parentHash}`}>
+              <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
                 {formatBlockNumber(uncle.number - 1)}
               </Link>
             </>
@@ -995,18 +1036,40 @@ function UncleRow({
   );
 }
 
-/** "Cellbase  pays the reward of #N" (R2b-a 1, BA-12): the block whose reward this cellbase pays. */
-function CellbaseHeadline({ block }: { block: Pick<Block, 'cellbasePays'> }) {
+/**
+ * "Cellbase  reward for #N, to ckb1…xxxxxxxx" (R2b-a 1, BA-12; lane P1, the plan's P1 paragraph):
+ * the block whose reward this cellbase pays, and to whom — its parties, the cells it creates, in
+ * the row form — so its amount is not read as this block's own reward, which the status strip
+ * states. The words are the row's statement, the reading ink; its links are inside the line.
+ */
+function CellbaseHeadline({
+  block,
+  activity,
+}: {
+  block: Pick<Block, 'cellbasePays'>;
+  activity: Pick<GlobalActivity, 'participants'>;
+}) {
   return (
     <>
       Cellbase
       {block.cellbasePays && (
-        <span className="text-text-dim font-normal">
+        <span className="text-text font-normal">
           {' '}
-          pays the reward of{' '}
-          <Link href={`/blocks/${block.cellbasePays.hash}`}>
+          reward for{' '}
+          <Link look="inline" href={`/blocks/${block.cellbasePays.hash}`}>
             {formatBlockNumber(block.cellbasePays.number)}
           </Link>
+          {activity.participants.length > 0 && (
+            <>
+              , to{' '}
+              {activity.participants.map((party, i) => (
+                <Fragment key={party.lockHash ?? party.lockHashPrefix ?? i}>
+                  {i > 0 && (i === activity.participants.length - 1 ? ' and ' : ', ')}
+                  <ParticipantRefView participant={party} size="row" compact quiet />
+                </Fragment>
+              ))}
+            </>
+          )}
         </span>
       )}
     </>

@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatOccupiedDelta,
+  occupiedCapacityText,
   occupiedBytesDelta,
   occupiedBytesText,
   occupiedPairText,
@@ -20,6 +21,22 @@ describe('lib/occupied keeps a figure with its unit', () => {
     expect(occupiedPairText(BigInt(563), BigInt(589), 'tx 0xab')).toBe(`563 → 589${NBSP}B`);
     expect(occupiedBytesDelta(BigInt(-61))).toBe(`${MINUS}61${NBSP}B`);
     expect(formatOccupiedDelta('2600000000', 'tx 0xab')).toBe(`+26${NBSP}B`);
+  });
+});
+
+// Lane P1 (the address page's bar of on-chain space says its unit): occupied capacity, in
+// shannons as the API sends it, written as the bytes it is.
+describe('occupiedCapacityText', () => {
+  it('writes occupied capacity as its bytes, with their unit', () => {
+    expect(occupiedCapacityText(BigInt('10200000000'), 'address 0xab')).toBe(`102${NBSP}B`);
+    expect(occupiedCapacityText(BigInt('376100000000'), 'address 0xab')).toBe(`3,761${NBSP}B`);
+    expect(occupiedCapacityText(BigInt(0), 'address 0xab')).toBe(`0${NBSP}B`);
+  });
+
+  it('refuses a figure that is not whole bytes, naming where it stands', () => {
+    expect(() => occupiedCapacityText(BigInt('10200000001'), 'address 0xab')).toThrow(
+      'address 0xab: occupied capacity 10200000001 shannons is not a whole number of bytes'
+    );
   });
 });
 

@@ -19,6 +19,7 @@ import {
   MATERIALS,
   overGround,
   PALETTE,
+  paletteKeyOf,
   PALETTE_KEYS,
   relativeLuminance,
   THEMES,
@@ -135,6 +136,20 @@ function rgbaAlpha(value: string): number {
   if (!m) throw new Error(`${value} is not rgba(r, g, b, a)`);
   return Number(m[1]);
 }
+
+// Lane P1 (the cell microscope's ELF regions read their label's ink off a tone given as a colour):
+// the key a `color(key)` names, and nothing else.
+describe('paletteKeyOf', () => {
+  it('reads back the key of every colour the palette writes', () => {
+    for (const key of PALETTE_KEYS) expect(paletteKeyOf(color(key))).toBe(key);
+  });
+
+  it('refuses a colour that names no key', () => {
+    expect(() => paletteKeyOf('#97b9c4')).toThrow('palette: "#97b9c4" names no palette key');
+    expect(() => paletteKeyOf('var(--c-no-such-ink)')).toThrow('names no palette key');
+    expect(() => paletteKeyOf(alpha('jade', 0.5))).toThrow('names no palette key');
+  });
+});
 
 describe('the palette: one source for both themes', () => {
   it('defines every colour key in both themes as #rrggbb', () => {

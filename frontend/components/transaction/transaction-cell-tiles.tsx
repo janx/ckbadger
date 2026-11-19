@@ -12,6 +12,7 @@ import {
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { cellLockFacts, lockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { ShortId } from '@/components/ui/short-id';
+import { PartReadError, readPart } from '@/components/read-failure';
 function required<T>(value: T | null | undefined, hash: string, field: string): T {
   if (value === null || value === undefined)
     throw new Error(`Transaction ${hash} missing required field "${field}"`);
@@ -64,6 +65,9 @@ export function registeredName(
   return name && name.toLowerCase() !== 'unknown' ? name : null;
 }
 
+/** An output's state once a later transaction spent it (lane P1): the widest state a tile writes. */
+export const OUTPUT_SPENT = 'spent later';
+
 export function cellTiles(
   tx: TransactionDetail,
   lookup: ScriptLookupResponse | undefined
@@ -111,11 +115,7 @@ export function cellTiles(
         // the row size, as the summary, the balances and What moved write the same party (R9): a
         // tile's text column is 215 px at its narrowest (1024; 343 at 1280, 246 at 360), where
         // the address, 13 characters at 12 px (93.6 px), stands whole, its lock wrapping under it
-        <Link
-          href={`/address/${address ?? lockHash}`}
-          className="text-text hover:text-jade"
-          title={lockHash ?? undefined}
-        >
+        <Link look="inline" href={`/address/${address ?? lockHash}`} title={lockHash ?? undefined}>
           {address !== null ? (
             <ShortId value={address} kind="address" size="row" />
           ) : (
@@ -224,10 +224,27 @@ export function cellTiles(
           cell.commonKnowledgeSize,
           `${tx.hash}: output ${i} occupied bytes`
         ).toString(),
-        state: status,
+        // lane P1 (the plan's P1 paragraph): an output spent since was spent by a later
+        // transaction, "spent later"; "consumed" is its input neighbours' word, consumed here
+        state: status === 'consumed' ? OUTPUT_SPENT : status,
       };
     }),
   };
+}
+
+/**
+ * A transaction's tiles as a part of a page (review of phases C and D, SHOULD 7; the rules' third
+ * round): the one read the transaction page and the cell page's embed both make, so a cell the
+ * lock decision refuses (`cellTiles` throws, naming the transaction and the cell) fails the part
+ * that draws the tiles, in its place (`CellTilesError`), never the page.
+ */
+export function readCellTiles(tx: TransactionDetail, lookup: ScriptLookupResponse | undefined) {
+  return readPart(() => cellTiles(tx, lookup));
+}
+
+/** The part's error where the tiles stand: what could not be drawn, of which transaction, why. */
+export function CellTilesError({ tx, error }: { tx: TransactionDetail; error: Error }) {
+  return <PartReadError what="the cells" where={`transaction ${tx.hash}`} error={error} />;
 }
 
 /**

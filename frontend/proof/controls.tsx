@@ -16,6 +16,7 @@ import { BlockLink } from '@/components/ui/block-link';
 import { CopyButton } from '@/components/ui/copy-button';
 import { ExternalLink } from '@/components/ui/external-link';
 import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { HelpPopover } from '@/components/ui/help-popover';
 import Link from '@/components/ui/link';
 import { Pager } from '@/components/ui/pager';
@@ -181,6 +182,21 @@ function Ranges() {
   );
 }
 
+/** The fold's one control over a list it opens and folds (FoldToggle). */
+function FoldDemo() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <ul id="proof-fold" className="text-small">
+        {Array.from({ length: open ? 12 : 3 }, (_, i) => (
+          <li key={i}>cell {i}</li>
+        ))}
+      </ul>
+      <FoldToggle open={open} count={12} singular="cell" controls="proof-fold" onToggle={setOpen} />
+    </div>
+  );
+}
+
 function Pagers() {
   const [page, setPage] = useState(3);
   const go = (to: number) => () => setPage(to);
@@ -249,6 +265,8 @@ function Pagers() {
         next={{ count: 50, onShow: () => {} }}
       />
       <Note>the short list’s own forms</Note>
+      <FoldDemo />
+      <Note>a fold that opens in place: one button, its words toggling, its focus kept</Note>
       <Note>
         one page: lib/pagination.ts draws nothing for it (rankedPageAt and timePageAt give null)
       </Note>

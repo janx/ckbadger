@@ -75,9 +75,11 @@ describe('the cell page: its transactions before its bytes, a developer tier (la
     // in tier 2: the note on the cell's name, its bytes, then its transactions' groups
     expect(follows(note, bytes)).toBe(true);
     expect(follows(bytes, groups)).toBe(true);
-    // the lede keeps what the cell is and where it comes from, not the generic note
+    // the lede keeps what the cell is, not the generic note. Re-pinned on purpose (lane P1, said
+    // once): it is one sentence of what the cell is; the origin line it held went
     const lede = container.querySelector<HTMLElement>('[data-detail-lede]')!;
-    expect(lede).toContainElement(screen.getByTestId('cell-origin'));
+    expect(screen.queryByTestId('cell-origin')).toBeNull();
+    expect(lede.textContent).toMatch(/^This cell /);
     expect(lede).not.toContainElement(note);
   });
 });

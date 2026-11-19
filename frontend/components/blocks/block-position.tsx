@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { BLOCK_GLYPH_HEIGHT, BlockContents } from '@/components/blocks/block-visual';
 import { SentenceNodes, heightListParts, type SentencePart } from '@/components/ui/block-link';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
-import { BLOCK_POSITION_COLORS } from '@/lib/design-tokens';
+import { BLOCK_POSITION_COLORS, CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
@@ -97,6 +97,65 @@ interface BlockPositionProps {
   hasMore: boolean;
   transactionsError?: string;
   proposalsError?: string;
+}
+
+/**
+ * The diagram's key (lane P1, the plan: "Position in the chain" gets the legend it lacks; review
+ * chain-a block-busy): each mark the tiles and the arcs draw, a swatch of the same mark (the
+ * contents glyph's diamond, square and dot, the proposal arc's gold, the uncle box's dashed
+ * rule) beside its words, labels in the quiet ink. It stands over both forms of the position:
+ * the phone's list draws the same glyph and the same gold.
+ */
+function PositionLegend() {
+  const swatch = (mark: ReactNode) => (
+    <svg aria-hidden="true" width="18" height="12" viewBox="0 0 18 12" className="shrink-0">
+      {mark}
+    </svg>
+  );
+  const items: [string, ReactNode][] = [
+    ['the cellbase', <path key="d" d="M9 1.5 13.5 6 9 10.5 4.5 6z" fill={DATA_COLOR} />],
+    [
+      'a transaction, by its size',
+      <rect key="s" x="4" y="1" width="10" height="10" fill={DATA_COLOR} opacity="0.8" />,
+    ],
+    ['a proposal', <circle key="p" cx="9" cy="6" r="2.4" fill={CLASS_COLORS.dao} />],
+    [
+      'proposed, then committed',
+      <path
+        key="a"
+        d="M1 11C1 2 17 2 17 11"
+        fill="none"
+        stroke="var(--c-gold)"
+        strokeWidth="1.5"
+      />,
+    ],
+    [
+      'an included uncle',
+      <rect
+        key="u"
+        x="1.5"
+        y="1.5"
+        width="15"
+        height="9"
+        fill="none"
+        stroke="var(--c-ink-quiet)"
+        strokeDasharray="3 3"
+      />,
+    ],
+  ];
+  return (
+    <ul
+      aria-label="Chain position legend"
+      className="text-text-dim text-meta flex flex-wrap gap-x-5 gap-y-1.5"
+    >
+      {items.map(([words, mark]) => (
+        <li key={words} className="flex items-center gap-1.5">
+          {swatch(mark)}
+          {words}
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 /** Canonical proposal endpoints and uncle references from the existing read responses. */
@@ -215,7 +274,7 @@ export function BlockPosition({
           className="text-small space-y-2 p-3"
           style={{ backgroundColor: BLOCK_POSITION_COLORS.currentTile }}
         >
-          <Link href={`/blocks/${block.hash}`} className="text-text-bright block">
+          <Link look="key" href={`/blocks/${block.hash}`} className="block">
             Current block {formatBlockNumber(block.number)}
           </Link>
           <BlockContents
@@ -226,12 +285,12 @@ export function BlockPosition({
         </div>
         <nav aria-label="Chain neighbors" className="text-small flex flex-wrap gap-x-5 gap-y-2">
           {block.number > 0 && (
-            <Link href={`/blocks/${block.parentHash}`}>
+            <Link look="inline" href={`/blocks/${block.parentHash}`}>
               ← {formatBlockNumber(block.number - 1)}
             </Link>
           )}
           {block.confirmations > 1 && (
-            <Link href={`/blocks/${block.number + 1}`}>
+            <Link look="inline" href={`/blocks/${block.number + 1}`}>
               {formatBlockNumber(block.number + 1)} →
             </Link>
           )}
@@ -246,11 +305,15 @@ export function BlockPosition({
               {unitNode(formatCount(arc.to - arc.from, 'block'))}
             </p>
             <p className="flex flex-wrap items-center gap-2">
-              <Link href={`/blocks/${arc.from}`}>{formatBlockNumber(arc.from)}</Link>
+              <Link look="inline" href={`/blocks/${arc.from}`}>
+                {formatBlockNumber(arc.from)}
+              </Link>
               <span aria-hidden="true" className="text-text-dim">
                 →
               </span>
-              <Link href={`/blocks/${arc.to}`}>{formatBlockNumber(arc.to)}</Link>
+              <Link look="inline" href={`/blocks/${arc.to}`}>
+                {formatBlockNumber(arc.to)}
+              </Link>
             </p>
             {arc.uncles.size > 0 && (
               <p className="text-text-dim max-w-measure">
@@ -266,10 +329,10 @@ export function BlockPosition({
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
             {/* U-16: a full hash is one token, whole on its line or scrolled in its own box */}
-            <Link href={`/blocks/${uncle.parentHash}`} className="block">
+            <Link look="inline" href={`/blocks/${uncle.parentHash}`} className="block">
               Parent <HexCode value={uncle.parentHash} truncate={false} variant="inherit" />
             </Link>
-            <Link href={getUncleDetailHref(block.number, index)} className="block">
+            <Link look="inline" href={getUncleDetailHref(block.number, index)} className="block">
               <Dotted
                 parts={[
                   `Uncle ${formatBlockNumber(uncle.number)}`,
@@ -279,11 +342,14 @@ export function BlockPosition({
             </Link>
             <p className="text-text-dim max-w-measure">
               Included by{' '}
-              <Link href={`/blocks/${block.hash}`}>{formatBlockNumber(block.number)}</Link>
+              <Link look="inline" href={`/blocks/${block.hash}`}>
+                {formatBlockNumber(block.number)}
+              </Link>
             </p>
           </div>
         ))}
       </div>
+      <PositionLegend />
       <div
         ref={viewport}
         className="hidden max-w-full overflow-x-auto md:block"
@@ -365,6 +431,7 @@ export function BlockPosition({
             return (
               <g key={number} transform={`translate(${x(number)}, ${tileTop})`}>
                 <Link
+                  look="block"
                   href={`/blocks/${current ? block.hash : parent ? block.parentHash : number}`}
                   aria-label={`Block ${formatBlockNumber(number)}`}
                 >
@@ -440,6 +507,7 @@ export function BlockPosition({
                     strokeDasharray="3 3"
                   />
                   <Link
+                    look="block"
                     href={getUncleDetailHref(block.number, index)}
                     aria-label={`Included uncle ${formatBlockNumber(uncle.number)}`}
                   >
@@ -497,6 +565,7 @@ export function BlockPosition({
                   strokeDasharray="3 3"
                 />
                 <Link
+                  look="block"
                   href={`/blocks/${uncle.parentHash}`}
                   aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
@@ -526,6 +595,7 @@ export function BlockPosition({
                   </text>
                 </Link>
                 <Link
+                  look="block"
                   href={getUncleDetailHref(block.number, index)}
                   aria-label={`Included uncle ${formatBlockNumber(uncle.number)}`}
                 >

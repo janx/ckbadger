@@ -1,5 +1,5 @@
 'use client';
-import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
 import { CELL_COLORS, CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
-import { Pager } from '@/components/ui/pager';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 
 /** A transaction's stone (the seals by kind): its hash and the cells it consumed and created. */
 export type TxSealId = Extract<SealId, { kind: 'tx' }>;
@@ -42,8 +42,6 @@ export interface TxFold {
    * rest is its one link to the transaction.
    */
   onToggle?: (side: Side, open: boolean) => void;
-  /** What a sheet that draws none of its cells is not ("this cell", on the cell page). */
-  subject?: string;
 }
 
 /**
@@ -181,6 +179,8 @@ export function TxStructure({
 }: TxStructureProps) {
   const [hover, setHover] = useState<{ kind: 'cell'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
+  // each sheet's rows, the element its fold control opens and folds (aria-controls)
+  const rowsIds = { consumed: useId(), created: useId() };
   const [centers, setCenters] = useState<Record<string, number>>({});
   const sheets = foldSheets(txHash, inputs, outputs, continuity, fold);
   // the tiles drawn: a fold that opens or closes moves them, so the links are measured again
@@ -272,7 +272,7 @@ export function TxStructure({
             total={total}
             sealed={seamSeal !== undefined}
           />
-          <div data-sheet-rows="" className="space-y-3">
+          <div id={rowsIds[side]} data-sheet-rows="" className="space-y-3">
             {side === 'consumed' && inflow && <InflowSource txHash={txHash} inflow={inflow} />}
             {shown.map(tile)}
             {fold && (folded.length > 0 || sheets[side].opened) && (
@@ -281,7 +281,8 @@ export function TxStructure({
                 count={cells.length}
                 shown={shown.length}
                 folded={folded}
-                subject={fold.subject}
+                lit={folded.filter((c) => linked.has(c.id)).length}
+                rows={rowsIds[side]}
                 onToggle={fold.onToggle && ((open) => fold.onToggle!(side, open))}
               />
             )}
@@ -493,9 +494,12 @@ function foldSheets(
 }
 
 /**
- * The way back from an opened fold of the transaction's lists (lane D3: a sheet's cells, the
- * developer tier's empty witnesses), in the rows' fold's words, "fewer ↑", set as the Pager's
- * short-list part it answers ("all 158 cells ↓"): the Pager has no way back of its own.
+ * The way back from an opened list that a Pager's "all N ↓" opened, in the rows' fold's words,
+ * "fewer ↑". Lane P1 (merge with lane P2): the transaction's own folds (its sheets, its empty
+ * witnesses) are FoldToggle's (components/ui/fold-toggle.tsx: one button that keeps its focus,
+ * review of phases C and D, SHOULD 5); this stays for its last users, the token's and the
+ * collection's holders (components/asset/token-holders.tsx, collection-holders.tsx, lane P2),
+ * which should take FoldToggle too.
  */
 export function FoldBack({ onFold }: { onFold: () => void }) {
   return (
@@ -513,25 +517,31 @@ export function FoldBack({ onFold }: { onFold: () => void }) {
 /**
  * The fold row (lane D3; the board's dashed row): what the sheet folds, by counting — "152 more
  * cells from ckb1…sqylvfrs" when every folded cell has one lock (the same lock, not the same
- * shortened address), else "152 more cells consumed"; where the sheet draws none of its cells and
- * the page says what they are not, ", none of them this cell". It never sums: the sheet's total
- * is the head's, the API's. The way to the rest is the short list's form, the Pager's
- * "all 158 cells ↓"; opened, the row stands after the last cell and folds the sheet again with the
- * rows' fold's words, "fewer ↑". Without a control (the cell page) the row is the count alone.
+ * shortened address), else "152 more cells consumed"; a sheet that draws none of its cells counts
+ * them all, "2 cells created" (lane P1: on a cell page, ", none of them this cell" said what the
+ * reader knows, and is gone). It never sums: the sheet's total
+ * is the head's, the API's. The way to the rest is the fold's one control (`FoldToggle`, review
+ * of phases C and D, SHOULD 5): "all 158 cells ↓"; opened, the row stands after the last cell and
+ * the same button, still focused, folds the sheet again, "fewer ↑". Without a control (the cell
+ * page) the row is the count alone.
  */
 function FoldRow({
   side,
   count,
   shown,
   folded,
-  subject,
+  lit,
+  rows,
   onToggle,
 }: {
   side: Side;
   count: number;
   shown: number;
   folded: readonly CellTileData[];
-  subject?: string;
+  /** How many of the folded cells the page lights (a script group, a witness): said, not drawn. */
+  lit: number;
+  /** The id of the sheet's rows, which the control opens and folds. */
+  rows: string;
   onToggle?: (open: boolean) => void;
 }) {
   const words = () => {
@@ -539,12 +549,6 @@ function FoldRow({
     // "1 more cell created", as the board writes it)
     const lock = folded[0].seal.id.lock;
     const shared = folded.length > 1 && folded.every((c) => c.seal.id.lock === lock);
-    const not =
-      shown === 0 && subject !== undefined
-        ? folded.length === 1
-          ? `, not ${subject}`
-          : `, none of them ${subject}`
-        : '';
     return (
       <span data-fold-words="" className="min-w-0">
         {unitNode(
@@ -559,7 +563,8 @@ function FoldRow({
         ) : (
           side
         )}
-        {not}
+        {/* a cell the page lights inside the fold is said here (lane P1, lane D3's note) */}
+        {lit > 0 && ` · ${lit.toLocaleString('en-US')} lit`}
       </span>
     );
   };
@@ -571,11 +576,13 @@ function FoldRow({
       {folded.length > 0 && words()}
       {onToggle && (
         <div className="sm:ml-auto">
-          {folded.length > 0 ? (
-            <Pager mode="more" all={{ count, singular: 'cell', onShow: () => onToggle(true) }} />
-          ) : (
-            <FoldBack onFold={() => onToggle(false)} />
-          )}
+          <FoldToggle
+            open={folded.length === 0}
+            count={count}
+            singular="cell"
+            controls={rows}
+            onToggle={onToggle}
+          />
         </div>
       )}
     </div>
@@ -623,7 +630,7 @@ function SheetHead({
       {total !== undefined && (
         <span data-sheet-total="" className="text-small">
           <CkbAmount
-            form="column"
+            form="exact"
             shannons={exactUnsignedInteger(total, `${txHash}: ${side} capacity`)}
             signed={false}
             tone="plain"
@@ -717,7 +724,7 @@ function FeeRow({ txHash, fee }: { txHash: string; fee: string }) {
     >
       <span className="block">fee</span>
       <CkbAmount
-        form="column"
+        form="exact"
         shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
         signed={false}
         tone="plain"
@@ -741,7 +748,7 @@ function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) 
     >
       <span className="block">{inflow.label}</span>
       <CkbAmount
-        form="column"
+        form="exact"
         shannons={exactUnsignedInteger(inflow.amount, `${txHash}: ${inflow.label}`)}
         signed={false}
         tone="plain"

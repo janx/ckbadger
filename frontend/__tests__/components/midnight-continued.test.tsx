@@ -268,7 +268,8 @@ describe('move 3 on the tx page’s cells diagram', () => {
     expect(sheets[1]).toHaveTextContent('1 cell created');
     // the consumed capacity once, on its sheet's head, exact; no second line under the sheets
     const total = sheets[0].querySelector('[data-sheet-total]');
-    expect(total).toHaveTextContent(/^1,062\.00000000 CKB$/);
+    // re-pinned on purpose (lane P1): exact, its trailing zeros dropped (it was the column form)
+    expect(total).toHaveTextContent(/^1,062 CKB$/);
     expect(container.querySelectorAll('[data-sheet-total]')).toHaveLength(2);
     expect(container).not.toHaveTextContent(/entering the pool/i);
   });
