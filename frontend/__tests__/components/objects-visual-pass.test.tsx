@@ -93,7 +93,6 @@ it('says "at issue" for an m-NFT token’s lock footnote', () => {
 it('keeps an occupied change on one line in the lock-column grid', () => {
   const { container } = render(
     <ActivityRow
-      lockColumn
       activity={{
         txHash: '0x' + 'cd'.repeat(32),
         blockNumber: 1,

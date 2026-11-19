@@ -29,7 +29,8 @@ export interface CellTileData {
   seal: CellSeal;
   content: ReactNode;
   capacity: string;
-  occupied: string;
+  /** Exact occupied bytes, as the API gives them (`commonKnowledgeSize`). */
+  occupiedBytes: string;
   state: string;
   anatomy?: CellAnatomy;
   testId?: string;
@@ -49,10 +50,12 @@ export interface CellTileProps {
 }
 export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTileProps) {
   const capacity = exactUnsignedInteger(cell.capacity, `${cell.id}: capacity`);
-  const occupied = exactUnsignedInteger(cell.occupied, `${cell.id}: occupied`);
-  if (capacity === BigInt(0) || occupied > capacity)
+  const occupied = exactUnsignedInteger(cell.occupiedBytes, `${cell.id}: occupied bytes`);
+  // one byte of state occupies exactly one CKB, 10^8 shannons of the capacity (F2-tx, TX-19)
+  const occupiedShannons = occupied * SHANNONS_PER_CKB;
+  if (capacity === BigInt(0) || occupiedShannons > capacity)
     throw new Error(
-      `${cell.id}: occupied ${occupied} exceeds capacity ${capacity} or capacity is zero`
+      `${cell.id}: occupied ${occupied} bytes (${occupiedShannons} shannons) exceed capacity ${capacity} shannons, or capacity is zero`
     );
   assertSealOfTile(cell, capacity);
   return (
@@ -149,9 +152,10 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
         {/* the bar, its bytes and the state at 12 px, budgeted at a cell's widest occupied figure:
             no more than the transaction that made it (LARGEST_TX_BYTES, of record: genesis's
             cellbase), "occupied 1,236,271 B", 144 px: 56 + 6 + 144 + 6 + 57.6 ('consumed') =
-            269.6 px. It holds in the 343 px text column at 1280; in the 215 px column at 1024
-            (from "occupied 9 B" on) the state, the line's end, drops under the bar on its own line
-            at the right */}
+            269.6 px. It holds in the 343 px text column at 1280. In the 215 px column at 1024 it
+            holds up to "occupied 9 B" and not from "occupied 10 B" on, so every real cell (at
+            least 41 bytes) stands its state, the line's end, under the bar on its own line at the
+            right, as it did before the unit was written (measured on the type build) */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)
@@ -163,7 +167,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
             <div aria-hidden="true" className="bg-bar-track h-1 w-14 shrink-0">
               <div
                 className="bg-jade scan-fill h-full"
-                style={{ width: `${(Number(occupied) / Number(capacity)) * 100}%` }}
+                style={{ width: `${(Number(occupiedShannons) / Number(capacity)) * 100}%` }}
               />
             </div>
           )}
@@ -171,8 +175,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
               writer, "occupied 195 B" (B4). R3: "occupied" is the label, quiet; its figure is a
               number, the reading ink. */}
           <span className="text-text-dim text-meta">
-            occupied{' '}
-            <span className="text-text">{occupiedBytesText(occupiedBytes(cell.id, occupied))}</span>
+            occupied <span className="text-text">{occupiedBytesText(occupied, cell.id)}</span>
           </span>
         </TileText>
       </div>
@@ -229,11 +232,4 @@ function assertSealOfTile(cell: CellTileData, capacity: bigint): void {
     throw new Error(
       `${cell.id}: its seal (cell ${id.tx}:${id.index}, ${sealClass}, ${id.capacity} shannons) is not the tile's (${outPoint ? `cell ${outPoint.txHash}:${outPoint.index}, ` : ''}${cell.kind}, ${capacity} shannons)`
     );
-}
-
-// F2-tx (TX-19): one byte of state occupies exactly one CKB.
-function occupiedBytes(id: string, shannons: bigint): bigint {
-  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
-    throw new Error(`${id}: occupied ${shannons} shannons is not whole bytes`);
-  return shannons / SHANNONS_PER_CKB;
 }

@@ -234,16 +234,19 @@ describe('Collection holders', () => {
   ])('rejects invalid full-scope counts or repeated buckets %#', (...buckets) => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      expect(() =>
-        render(
-          <CollectionHolders
-            assetClass="objects"
-            load={vi.fn().mockResolvedValue(page([]))}
-            queryKey="bad-distribution"
-            distribution={buckets}
-          />
-        )
-      ).toThrow(/collection|Collection/);
+      // B4 second fix round (re-pinned on purpose, ruling D7): the refusal fails the section in
+      // its place, saying why, where it took the page
+      render(
+        <CollectionHolders
+          assetClass="objects"
+          load={vi.fn().mockResolvedValue(page([]))}
+          queryKey="bad-distribution"
+          distribution={buckets}
+        />
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(
+        /^Could not read the collection holders: .*(collection|Collection)/
+      );
     } finally {
       error.mockRestore();
     }
@@ -323,10 +326,8 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       within(table).getByRole('columnheader', { name: 'Items' }).querySelector('[data-scale-ticks]')
     ).not.toBeNull();
     expect(first).toHaveAttribute('title', `#1 · ${lock} · JoyID · 6 items`);
-    expect(second).toHaveAttribute(
-      'title',
-      `#2 · ${prefix} (unresolved) · lock not indexed · 6 items`
-    );
+    // B4 second fix round (re-pinned on purpose): the row's title says what its Lock cell says, from the one decision: 'not indexed' (it was 'lock not indexed')
+    expect(second).toHaveAttribute('title', `#2 · ${prefix} (unresolved) · not indexed · 6 items`);
     const buckets = screen.getByRole('table', { name: 'Holders by how many items they hold' });
     expectWordHeads(buckets);
     expect(within(buckets).getByText('3–5')).toHaveClass(

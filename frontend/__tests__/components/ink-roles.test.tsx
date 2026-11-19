@@ -220,7 +220,7 @@ describe('CellTile: its out point is a link, its state and bytes are values', ()
       kind: 'ckb',
       content: 'CKB',
       capacity: '6100000000',
-      occupied: '6100000000',
+      occupiedBytes: '61',
       state: 'live',
       outPoint,
     });
@@ -244,7 +244,7 @@ describe('CellTile: its out point is a link, its state and bytes are values', ()
     expect(inkOf(within(row).getByText('live'))).toBe(READING);
     // B4 fix round (re-pinned on purpose, tests MUST-2): the figure carries its unit, one value
     // in the reading ink ("61 B", the one writer's); it was the bare "61"
-    expect(inkOfText(row, occupiedBytesText(BigInt(61)))).toBe(READING);
+    expect(inkOfText(row, occupiedBytesText(BigInt(61), 'out:0'))).toBe(READING);
     expect(inkOfText(row, 'occupied')).toBe(QUIET);
   });
 

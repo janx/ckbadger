@@ -916,6 +916,26 @@ export function widthRuleAt(el: Element, viewport: number): 'auto' | 'capped' | 
   return flexible === 'unread:max-w-full' ? 'capped' : 'set';
 }
 
+/** An element's own min-width at a viewport, as its class sets it, or null where none does. */
+export function minWidthAt(el: Element, viewport: number): string | null {
+  return ownDecls(el, viewport).get('min-width') ?? null;
+}
+
+/**
+ * The classes in effect at a viewport that set an element's width or take or bound its room
+ * (`w-…`, `basis-…`, `max-w-…`, `flex-1`, …): more than one is a cascade the reader does not
+ * decide (it keeps the first that takes the room).
+ */
+export function widthClassesAt(el: Element, viewport: number): string[] {
+  return Array.from(el.classList).filter((cls) => {
+    const { variants, utility } = splitVariants(cls);
+    const decls = utilityDecls(utility);
+    if (decls === null) return false;
+    const sets = decls.some((d) => d.prop === 'width' || d.prop === 'flexible');
+    return sets && levelAt(cls, variants, viewport, el, () => true) !== null;
+  });
+}
+
 /** Whether a flex container lays its items on more than one line at a viewport. */
 export function flexWrapsAt(el: Element, viewport: number): boolean {
   const v = ownDecls(el, viewport).get('flex-wrap') ?? 'nowrap';

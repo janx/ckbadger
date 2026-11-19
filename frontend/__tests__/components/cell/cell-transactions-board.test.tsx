@@ -1,3 +1,4 @@
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -20,11 +21,12 @@ vi.mock('@/lib/api', () => ({
 const TYPE_ID = '0x00000000000000000000000000000000000000000000000000545950455f4944';
 const SECP = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 const CKBFS = `0x${'31'.repeat(32)}`;
-const OUT0_LOCK = `0x43b292${'00'.repeat(26)}895d`;
+// 32 bytes (B4 second fix round: it was 31, which the address encoder refuses)
+const OUT0_LOCK = `0x43b292${'00'.repeat(27)}895d`;
 const cell = sporeCell as unknown as Cell;
 const SPORE = cell.type!.codeHash;
 const SHADOW = cell.lock!.codeHash;
-const defaultLock = { codeHash: SECP, hashType: 'type', args: `0x${'01'.repeat(20)}` };
+const defaultLock = { codeHash: SECP, hashType: 'type' as const, args: `0x${'01'.repeat(20)}` };
 const fileDisplay = {
   kind: 'file',
   standard: 'ckbfs',
@@ -46,24 +48,34 @@ const sporeDisplay = {
   collectionName: 'Nervape 3x',
   compositionTier: 'btc_ckb',
 };
-const input = (i: number, extra: object) => ({
-  previousOutput: { txHash: `0x${String(i).repeat(64)}`, index: 0 },
-  capacity: '19500000000',
-  commonKnowledgeSize: '195',
-  address: `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqcjk9lz${i}`,
-  lock: defaultLock,
-  display: null,
-  ...extra,
+/**
+ * A cell owned at the real address of its own lock (B4 second fix round: a tile refuses an address
+ * that spells another lock; these were not addresses, and a cell given another lock kept one).
+ */
+const owned = <T extends { lock: { codeHash: string; hashType: string; args: string } }>(
+  cell: T
+) => ({
+  ...cell,
+  address: ckbAddress(cell.lock as { codeHash: string; hashType: 'type'; args: string }),
 });
-const output = (extra: object) => ({
-  capacity: '32000000000',
-  commonKnowledgeSize: '320',
-  address: 'ckb1qp3kr4shp3hr',
-  lock: defaultLock,
-  status: 'live',
-  display: null,
-  ...extra,
-});
+const input = (i: number, extra: object) =>
+  owned({
+    previousOutput: { txHash: `0x${String(i).repeat(64)}`, index: 0 },
+    capacity: '19500000000',
+    commonKnowledgeSize: '195',
+    lock: defaultLock,
+    display: null,
+    ...extra,
+  });
+const output = (extra: object) =>
+  owned({
+    capacity: '32000000000',
+    commonKnowledgeSize: '320',
+    lock: defaultLock,
+    status: 'live',
+    display: null,
+    ...extra,
+  });
 // The Spore transfer that created the board's cell (0xbe1b9761…): 3 cells consumed → 3 created.
 const sporeTx = {
   hash: cell.txHash,

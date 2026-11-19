@@ -46,6 +46,7 @@ import { retryTransientOnly } from '@/lib/query-client';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { cellOwnerLock, LockWordsView } from '@/components/ui/lock-kind';
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -142,8 +143,17 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       ) : (
         'No live owner'
       ),
+      // the owner's lock by the one decision, off its cell's last version (B4): nothing for the
+      // default lock; an owner with no cell version is a contract break, named
       note: object.ownerLockHash
-        ? (last?.lockName ?? (history ? 'Unregistered lock' : 'Loading lock…'))
+        ? history === undefined
+          ? 'Loading lock…'
+          : (() => {
+              if (last === undefined)
+                throw new Error(`${id}: owner ${object.ownerLockHash} but no cell versions`);
+              const words = cellOwnerLock(last);
+              return words ? <LockWordsView words={words} size="row" /> : undefined;
+            })()
         : undefined,
     },
     ...(object.clusterId

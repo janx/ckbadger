@@ -181,41 +181,46 @@ export function ActivityRowHead({
           data-role="evidence"
           // An item of the head's wrapping row that may shrink (lane B4 fix round: it was
           // shrink-0, so it stood at its whole width, one line past a phone's): beside the headline
-          // while both fit, on its own line when not, where it takes the line's room and breaks
-          // between its units. No run around them: each owns its white-space (the block number has
-          // no space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets
-          // "this device's clock is behind" break between its words), so a line breaks only
-          // between them, never inside one.
+          // while both fit, on its own line when not, where it takes the line's room. Its parts are
+          // a separated list (second fix round: the separators have one owner, and a line never
+          // starts or ends with one): it breaks between the parts, each separator hung before the
+          // part after it, and inside a part only where the part lets it (the block number has no
+          // space to break at, the status is one badge, `Utc8Age` keeps an age whole and lets "this
+          // device's clock is behind" break between its words).
           className={cn('text-text-dim text-meta', line && 'leading-row ml-auto')}
         >
-          {blockNumber !== null ? (
-            <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
-              {formatBlockNumber(blockNumber)}
-            </Link>
-          ) : poolStatus ? (
-            <PoolStatusBadge status={poolStatus} />
-          ) : (
-            <span>Unconfirmed</span>
-          )}
-          {' · '}
-          {!linked && (
-            <>
-              <Link
-                href={`/tx/${hash}`}
-                className="hover:text-jade text-text-dim transition-colors"
-              >
-                <ShortId value={hash} kind="hash" size="row" />
-              </Link>
-              {' · '}
-            </>
-          )}
-          {timestamp !== null ? (
-            <RowDate timestamp={timestamp} age={age} />
-          ) : timeAddedToPool ? (
-            <TimeInPool since={timeAddedToPool} />
-          ) : (
-            'Time unavailable'
-          )}
+          <Dotted
+            parts={[
+              blockNumber !== null ? (
+                // its ink said on itself, the evidence's quiet ink (a part handed to the list)
+                <Link
+                  href={`/blocks/${blockNumber}`}
+                  className="text-text-dim hover:text-text transition-colors"
+                >
+                  {formatBlockNumber(blockNumber)}
+                </Link>
+              ) : poolStatus ? (
+                <PoolStatusBadge status={poolStatus} />
+              ) : (
+                <span>Unconfirmed</span>
+              ),
+              !linked && (
+                <Link
+                  href={`/tx/${hash}`}
+                  className="hover:text-jade text-text-dim transition-colors"
+                >
+                  <ShortId value={hash} kind="hash" size="row" />
+                </Link>
+              ),
+              timestamp !== null ? (
+                <RowDate timestamp={timestamp} age={age} />
+              ) : timeAddedToPool ? (
+                <TimeInPool since={timeAddedToPool} />
+              ) : (
+                'Time unavailable'
+              ),
+            ]}
+          />
         </span>
       )}
     </div>
@@ -558,12 +563,6 @@ function ProtocolActionList({
   );
 }
 
-/**
- * The tx-level facts of an activity, from the one event classification (T7): the protocol actions
- * (`actions`, drawn inline or as a list by `ActivityRow`), then the type calls and the lock calls by
- * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
- * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
- */
 /** A protocol action read for its row's note, or the error it cannot be read with. */
 type ProtocolRead =
   | { facts: ProtocolNoteFact[]; error?: undefined }
@@ -588,6 +587,12 @@ export function rowReadFails(activity: ActivityBody): boolean {
   );
 }
 
+/**
+ * The tx-level facts of an activity, from the one event classification (T7): the protocol actions
+ * (`actions`, drawn inline or as a list by `ActivityRow`), then the type calls and the lock calls by
+ * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
+ * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
+ */
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
@@ -814,6 +819,7 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
  */
 function ParticipantLine({
   p,
+  txHash,
   focus,
   fee,
   foldObjects,
@@ -823,6 +829,8 @@ function ParticipantLine({
   notes,
 }: {
   p: ActivityParticipant & { key: string };
+  /** The line's transaction, named where its figures are refused. */
+  txHash: string;
   focus: boolean;
   /** Its only movement is the fee (`feeOnlyParty`): "fee" and the fee, in the reading ink. */
   fee: boolean;
@@ -934,7 +942,7 @@ function ParticipantLine({
           data-role="occupied"
           className="text-meta text-text-dim whitespace-nowrap tabular-nums"
         >
-          occupied {formatOccupiedDelta(p.usedDelta)}
+          occupied {formatOccupiedDelta(p.usedDelta, `transaction ${txHash}, party ${p.key}`)}
         </span>
       )}
       {phoneObjects && objectsOpen && (
@@ -1027,6 +1035,7 @@ function Participants({
         <ParticipantLine
           key={p.key}
           p={p}
+          txHash={txHash}
           focus={p === focus}
           fee={feePayer !== null && p.key === partyKey(participants[feePayer], feePayer)}
           foldObjects={foldObjects}
@@ -1072,12 +1081,6 @@ export type ActivityRowProps = {
   showEvidence?: boolean;
   /** F2 blocks: the row's own evidence line (see `ActivityRowHead.evidence`). */
   evidence?: ReactNode;
-  /**
-   * F2 objects (IV-14, OB-12): was the lock kind's own grid column. Option A (T7) draws the lock
-   * kind as a tag on every participant line, so this no longer changes the row; kept so the
-   * callers that pass it need no change in this lane.
-   */
-  lockColumn?: boolean;
   /** F2 objects: fold a batch of objects behind "+N more objects", leading with `focusItemId` (OB-M3). */
   foldObjects?: boolean;
   focusItemId?: string;
@@ -1362,9 +1365,9 @@ export function FoldedActivityRow({
         data-role="run-toggle"
         aria-expanded={open}
         onClick={onToggle}
-        // a finger's target on a phone: WCAG 2.2's minimum, 24 px tall (2.5.8; the row line is
-        // 20), its words centred in it; from md the row's line (lane B4 fix round)
-        className="text-interactive hover:text-jade text-small leading-row min-h-6 self-start bg-transparent pl-[18px] transition-colors md:min-h-0"
+        // a finger's target at every width: WCAG 2.2's minimum, 24 px tall (2.5.8, no breakpoint;
+        // the row line is 20), its words centred in it (lane B4 fix rounds)
+        className="text-interactive hover:text-jade text-small leading-row min-h-6 self-start bg-transparent pl-[18px] transition-colors"
       >
         {open ? 'fewer ↑' : unitNode(`${formatCount(rows.length, 'transaction')} ↓`)}
       </button>

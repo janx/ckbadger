@@ -1,3 +1,4 @@
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
@@ -1230,6 +1231,55 @@ describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
 describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
   const who = () => screen.getByRole('region', { name: 'Who deposits' });
 
+  // B4 second fix round (review-rules-fixes-logic SHOULD 3, tests SHOULD-3; the coordinator's
+  // item 5): the Lock column and the phone row read the one decision, the lock off the depositor's
+  // address: in the column the default lock is written, a lock on its code hash by data is named
+  // with its hash type; beside the party on a phone row the default lock is silent.
+  it('names a depositor’s lock by the one decision, in the column and on a phone', () => {
+    const DEFAULT = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
+    const [first, second] = evidence.concentration.owners;
+    const owners = [
+      { ...first, lockKind: 'SECP256K1/blake160' },
+      {
+        ...second,
+        address:
+          'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl',
+        lockCodeHash: DEFAULT,
+        lockHashType: 'data',
+        lockKind: 'SECP256K1/blake160',
+      },
+    ];
+    const withOwners = { ...evidence, concentration: { ...evidence.concentration, owners } };
+    stubCalculator();
+    stubChartWidth(1248);
+    const { unmount } = render(<DaoBoard statistics={stats} evidence={withOwners} />);
+    const table = within(who()).getByRole('table', { name: 'Largest depositors' });
+    const at = within(table)
+      .getAllByRole('columnheader')
+      .findIndex((h) => h.textContent === 'Lock');
+    const cells = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => within(r).getAllByRole('cell')[at]);
+    expect(cells[0]).toHaveTextContent(/^SECP256K1\/blake160$/);
+    expect(cells[1]).toHaveTextContent(/^lock 0x9bd7e06f…a3cce8 by data$/);
+    expect(within(cells[1]).getByRole('link')).toHaveAttribute(
+      'href',
+      `/mainnet/script/${DEFAULT}?hashType=data&kind=lock`
+    );
+    unmount();
+    vi.unstubAllGlobals();
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={withOwners} />);
+    const rows = within(
+      within(who()).getByRole('list', { name: 'Largest depositors, compact' })
+    ).getAllByRole('listitem');
+    expect(rows[0]).not.toHaveTextContent('SECP256K1/blake160');
+    expect(rows[0]).toHaveTextContent(`ckb1…${first.address.slice(-6)}`);
+    expect(rows[1]).toHaveTextContent('lock 0x9bd7…cce8 by data');
+    vi.unstubAllGlobals();
+  });
+
   it('draws the concentration bar: largest, next 9, next 90, everyone else', () => {
     stubCalculator();
     const many = {
@@ -1382,8 +1432,10 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
       ceil(at('5', 14) + 16),
       // an address at the row size
       ceil(at('ckb1…4s93hhsj', 14) + 16),
-      // a lock's code hash at the row size
-      ceil(at('0x9bd7e06f…a3cce8', 14) + 16),
+      // a lock the API names none of, as the one decision writes it: "lock " and its code hash
+      // at the row size (B4 second fix round, re-pinned on purpose: it was the code hash alone,
+      // 159, which the words "lock 0x…" passed)
+      ceil(at('lock 0x9bd7e06f…a3cce8', 14) + 16),
       // the head's "Deposits", wider than four digits
       ceil(Math.max(at('Deposits', 12), at('9,999', 14)) + 16),
       // one depositor's CKB under ten billion, every decimal
@@ -1391,9 +1443,9 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
       // "100.00%"; the last column
       ceil(at('100.00%', 14)),
     ];
-    expect(budgets).toEqual([25, 126, 159, 74, 201, 59]);
+    expect(budgets).toEqual([25, 126, 201, 74, 201, 59]);
     const sum = budgets.reduce((s, w) => s + w, 0);
-    expect(sum).toBe(644);
+    expect(sum).toBe(686);
     stubCalculator();
     stubChartWidth(1248);
     const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
@@ -1405,8 +1457,8 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     unmount();
     for (const [width, form] of [
       [1232, 'table'],
-      [644, 'table'],
-      [643, 'rows'],
+      [686, 'table'],
+      [685, 'rows'],
       [608, 'rows'],
       [358, 'rows'],
     ] as const) {
@@ -1434,12 +1486,20 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     // 32–34 px (6 px above and below a 20.8 px line).
     for (const cell of Array.from(table.querySelectorAll('tbody td')))
       expect(cell).toHaveClass('text-body', 'py-1.5');
-    // The Lock column names the lock; its code hash and hash type are the link's title.
+    // The Lock column names the lock by the one decision (B4 second fix round, re-pinned on
+    // purpose): a lock the API names none of is "lock" and its code hash, the hash its script
+    // page's link, by its hash type as a lock, its title the code hash (it was the hash alone, its
+    // title the code hash and "(type)")
     const lock = within(table).getAllByRole('link', { name: /^0x9bd7e06f/ })[0];
     expect(lock.textContent).toBe('0x9bd7e06f…a3cce8');
+    expect(lock.closest('[data-lock-kind]')).toHaveTextContent(/^lock 0x9bd7e06f…a3cce8$/);
     expect(lock).toHaveAttribute(
       'title',
-      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8 (type)'
+      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8'
+    );
+    expect(lock).toHaveAttribute(
+      'href',
+      '/mainnet/script/0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8?hashType=type&kind=lock'
     );
     unmount();
     vi.unstubAllGlobals();
@@ -1463,7 +1523,8 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     const owners = Array.from({ length: 7 }, (_, i) => ({
       ...first,
       rank: i + 1,
-      address: `${first.address.slice(0, -7)}owner0${i + 1}`,
+      // a real address on the depositors' lock (B4 second fix round: it was not an address)
+      address: seededAddress(`owner0${i + 1}`),
       lockScriptHash: '0x' + String(i + 1).repeat(64),
     }));
     const seven = { ...evidence, concentration: { ...evidence.concentration, owners } };
@@ -1479,7 +1540,9 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
               within(who()).getByRole('list', { name: 'Largest depositors, compact' })
             ).getAllByRole('listitem');
       expect(rows).toHaveLength(5);
-      expect(within(who()).queryByText(/owner06$/)).toBeNull();
+      expect(
+        within(who()).queryByText(new RegExp(`${seededAddress('owner06').slice(-6)}$`))
+      ).toBeNull();
       expect(within(who()).getByRole('link', { name: 'All 2 depositors →' })).toBeInTheDocument();
       unmount();
       vi.unstubAllGlobals();

@@ -10,6 +10,8 @@
 //   hash and hash type, "lock 0x9bd7e06f…a3cce8 by data".
 // - In a column headed "Lock" no cell is empty: the default lock by its name, a lock that is not
 //   indexed as "not indexed", both in quiet words without the column's tag.
+import { lineRuns } from '@/__tests__/utils/line-runs';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -69,6 +71,13 @@ describe('an activity row names a lock on the default code hash by data as anoth
     const { container } = render(<ActivityRow activity={row} />);
     const kind = container.querySelector('[data-role="participant"] [data-role="lock-kind"]');
     expect(kind).toHaveTextContent(new RegExp(`^${BY_DATA_WORDS}$`));
+    // B4 second fix round (review-rules-fixes-logic SHOULD 2, the coordinator's item 4): its link
+    // opens that lock, by its hash type, as a lock (the script page reads both); a bare code hash
+    // opened the default lock's family page
+    expect(kind!.querySelector('a')).toHaveAttribute(
+      'href',
+      `/mainnet/script/${DEFAULT_LOCK_CODE_HASH}?hashType=data&kind=lock`
+    );
   });
 });
 
@@ -123,6 +132,16 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     expect(notIndexed).toHaveTextContent(/^not indexed$/);
     expect(notIndexed).toHaveClass('text-text-dim');
     expect(notIndexed).not.toHaveClass('border');
+    // B4 second fix round (review-rules-fixes-logic SHOULD 3, tests SHOULD-3; the coordinator's
+    // item 5): each row's title says what its Lock cell says, from the one decision
+    const titles = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.getAttribute('title')!);
+    expect(titles[0]).toContain(' · Default Lock · ');
+    expect(titles[1]).toContain(` · ${BY_DATA_WORDS} · `);
+    expect(titles[1]).not.toContain('Default Lock');
+    expect(titles[2]).toContain(' · not indexed · ');
     // NOTE-2: the column's budget, read from the table, holds the widest of its plain words whole
     // ("Default Lock", 12 glyphs at 12 px, 86.4; "not indexed", 79.2) and a 12-glyph tag (98.4)
     const tag = textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1;
@@ -149,9 +168,14 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
           lockKind: 'Default Lock',
         }),
         holder('22', {}),
+        holder('33', {
+          address: BY_DATA_ADDRESS,
+          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+          lockKind: 'Default Lock',
+        }),
       ],
       limit: 10,
-      total: 2,
+      total: 3,
       hasMore: false,
       nextCursor: null,
     });
@@ -160,6 +184,15 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
     const { cells, minWidth } = lockColumn(table);
     for (const cell of cells) expect(cell.textContent?.trim()).not.toBe('');
     expect(cells[1].querySelector('[data-lock-kind]')).toHaveTextContent(/^not indexed$/);
+    // B4 second fix round (the coordinator's item 5): the row titles read the one decision
+    const titles = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => r.getAttribute('title')!);
+    expect(titles[0]).toContain(' · Default Lock · ');
+    expect(titles[1]).toContain(' · not indexed · ');
+    expect(titles[2]).toContain(` · ${BY_DATA_WORDS} · `);
+    expect(titles[2]).not.toContain('Default Lock');
     const tag = textPx(12, fontPx('meta')) + 2 * 5 + 2 * 1;
     expect(minWidth).toBe(columnPx(tag + CELL_GAP_PX));
   });
@@ -216,6 +249,12 @@ describe('a place that may name no lock leaves the part out', () => {
       (s) => s.childNodes.length === 0 && s.getAttribute('aria-hidden') !== 'true'
     );
     expect(empty).toEqual([]);
+    // B4 second fix round (tests NOTE-8): and the ends are drawn, the other lock named beside its
+    // party (an absence alone passes on a section that draws nothing)
+    const ends = [...container.querySelectorAll('[data-flow-end="party"]')];
+    expect(ends.length).toBeGreaterThanOrEqual(2);
+    expect(ends.some((e) => /JoyID/.test(e.textContent ?? ''))).toBe(true);
+    expect(ends.some((e) => e.textContent?.includes(DEFAULT_ADDRESS.slice(-8)))).toBe(true);
   });
 
   it('Balance changes: a party a protocol named, with no cell here, is silent on the default lock', () => {
@@ -225,28 +264,63 @@ describe('a place that may name no lock leaves the part out', () => {
     const a: GlobalActivity = { ...base, participants: [...base.participants, named] };
     render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     expect(document.body).not.toHaveTextContent('Default Lock');
+    // B4 second fix round (tests NOTE-8): and the party is drawn, in its row of the table
+    const table = screen.getByRole('table', { name: 'Balance changes by participant' });
+    expect(within(table).getAllByRole('row')).toHaveLength(base.participants.length + 3);
+    expect(table).toHaveTextContent(`ckb1…${DEFAULT_ADDRESS.slice(-8)}`);
+  });
+});
+
+// B4 second fix round (review-rules-fixes-logic NOTE 5, the coordinator's item 11): the words a
+// lock on the default code hash by data is written in are in the budget of the column that can
+// write them. In Balance changes' participant track the party and its lock are two units with a
+// line between them where they do not fit together, and "lock 0x…" and "by data" are two: every
+// run of the cell fits the track the grid gives it.
+describe('the by-data words fit the columns that write them', () => {
+  it('in Balance changes’ participant track', () => {
+    stubChartWidth(912);
+    const base = feedSamples.objectTransfer;
+    const a: GlobalActivity = {
+      ...base,
+      participants: [...base.participants, party(BY_DATA_ADDRESS, 'Default Lock', '0d')],
+    };
+    render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
+    const table = screen.getByRole('table', { name: 'Balance changes by participant' });
+    const rows = within(table).getAllByRole('row');
+    const track = Number.parseFloat(rows[0].style.gridTemplateColumns.split(' ')[0]);
+    const cell = within(rows[rows.length - 2]).getAllByRole('cell')[0];
+    expect(cell).toHaveTextContent(BY_DATA_WORDS);
+    const past = lineRuns(cell, 1280).filter((r) => r.px > track + 1e-9);
+    expect(past.map((r) => `${r.text} ${r.px.toFixed(1)}`)).toEqual([]);
   });
 });
 
 describe('the transaction’s cell tiles read the same decision', () => {
-  const output = (codeHash: string, isChange: boolean, seed: string) => ({
-    capacity: '10000000000',
-    commonKnowledgeSize: '61',
-    status: 'live' as const,
-    display: null,
-    address: seededAddress(seed, codeHash),
-    lock: { codeHash, hashType: 'type', args: `0x${'00'.repeat(14)}${'61'.repeat(6)}` },
-    type: null,
-    isChange,
-  });
-
-  it('writes no lock beside a default-lock owner, "change" alone on its change, another lock’s name', () => {
-    const outputs = [
-      output(DEFAULT_LOCK_CODE_HASH, false, 'aaaaaa'),
-      output(DEFAULT_LOCK_CODE_HASH, true, 'bbbbbb'),
-      output(JOYID_CODE_HASH, false, 'cccccc'),
-    ];
-    const tx = {
+  /** An output of `lock` (by type unless said), owned at that lock's real address. */
+  const output = (
+    codeHash: string,
+    isChange: boolean,
+    seed: string,
+    hashType: 'type' | 'data' | 'data1' | 'data2' = 'type'
+  ) => {
+    // B4 second fix round (tests MUST-1): the address spells the cell's own lock, args and all
+    const args = `0x${[...seed]
+      .map((c) => c.charCodeAt(0).toString(16))
+      .join('')
+      .padStart(40, '0')}`;
+    return {
+      capacity: '10000000000',
+      commonKnowledgeSize: '61',
+      status: 'live' as const,
+      display: null,
+      address: ckbAddress({ codeHash, hashType, args }),
+      lock: { codeHash, hashType, args },
+      type: null,
+      isChange,
+    };
+  };
+  const txOf = (outputs: Record<string, unknown>[]) =>
+    ({
       hash: `0x${'ee'.repeat(32)}`,
       status: 'committed',
       isCellbase: false,
@@ -262,12 +336,84 @@ describe('the transaction’s cell tiles read the same decision', () => {
         script: o.lock,
         cycles: null,
       })),
-    } as unknown as TransactionDetail;
-    const lookup = {
-      [DEFAULT_LOCK_CODE_HASH]: { name: 'Default Lock' },
-      [JOYID_CODE_HASH]: { name: 'JoyID' },
-    } as never;
-    const tiles = cellTiles(tx, lookup).outputs;
+    }) as unknown as TransactionDetail;
+  const LOOKUP = {
+    [DEFAULT_LOCK_CODE_HASH]: { name: 'Default Lock' },
+    [JOYID_CODE_HASH]: { name: 'JoyID' },
+  } as never;
+
+  // B4 second fix round (review-rules-fixes-logic MUST 2, tests MUST-1; the two refusals the
+  // removed lockCodeHashesByAddress tests held): a tile's owner and its lock are one cell's, so a
+  // cell with an address and no lock, or an address that spells another lock, is refused with the
+  // transaction and the cell named; a lock with no address form (args over 599 bytes: the API
+  // sends no address) is owned by its lock hash, as a row writes a party with no address.
+  it('refuses a cell with an address and no lock, naming the transaction and the output', () => {
+    const cell = { ...output(JOYID_CODE_HASH, false, 'nolock'), lock: null };
+    expect(() => cellTiles(txOf([cell]), LOOKUP)).toThrow(
+      `Transaction 0x${'ee'.repeat(32)} missing required field "output 0.lock"`
+    );
+  });
+
+  it('refuses a cell whose address spells another lock than its own, naming both', () => {
+    const joy = output(JOYID_CODE_HASH, false, 'spells');
+    const cell = { ...joy, lock: { ...joy.lock, codeHash: DEFAULT_LOCK_CODE_HASH } };
+    expect(() => cellTiles(txOf([cell]), LOOKUP)).toThrow(
+      new RegExp(
+        `^Transaction 0x(ee){32} output 0: address ${joy.address} spells the lock ${JOYID_CODE_HASH} by type, args ${joy.lock.args}; the cell's lock is ${DEFAULT_LOCK_CODE_HASH} by type`
+      )
+    );
+  });
+
+  // B4 second fix round (review-rules-fixes-tests SHOULD-5, the coordinator's item 7): a tile
+  // names a lock on the default code hash by data as another lock, by its code hash and hash type
+  // (lockWordsText's "by <hash type>"), and refuses a hash type the chain does not have, naming it.
+  it('names a by-data lock on the default code hash with its hash type, as text', () => {
+    const outputs = [
+      output(DEFAULT_LOCK_CODE_HASH, false, 'bydata', 'data'),
+      output(DEFAULT_LOCK_CODE_HASH, true, 'bydat1', 'data1'),
+    ];
+    expect(cellTiles(txOf(outputs), LOOKUP).outputs.map((t) => t.lockKind)).toEqual([
+      'lock 0x9bd7e06f…a3cce8 by data',
+      'lock 0x9bd7e06f…a3cce8 by data1 · change',
+    ]);
+  });
+
+  it('refuses a lock hash type the chain does not have, naming the word and the cell', () => {
+    const cell = output(JOYID_CODE_HASH, false, 'weird');
+    const odd = { ...cell, lock: { ...cell.lock, hashType: 'data3' } };
+    expect(() => cellTiles(txOf([odd]), LOOKUP)).toThrow(
+      `Transaction 0x${'ee'.repeat(32)} output 0: lock hash type "data3" is not a CKB hash type`
+    );
+  });
+
+  it('owns a cell with no address form by its lock hash, its lock in words', () => {
+    const args = `0x${'ab'.repeat(600)}`;
+    const cell = {
+      ...output(JOYID_CODE_HASH, false, 'long'),
+      address: null,
+      lock: { codeHash: JOYID_CODE_HASH, hashType: 'type', args },
+    };
+    const [tile] = cellTiles(txOf([cell]), LOOKUP).outputs;
+    render(
+      <span>
+        <span data-testid="owner">{tile.owner}</span>
+        <span data-testid="lock">{tile.lockKind}</span>
+      </span>
+    );
+    const owner = screen.getByTestId('owner').querySelector('a')!;
+    expect(owner).toHaveAttribute('href', `/mainnet/address/0x${'1'.repeat(64)}`);
+    expect(owner).toHaveTextContent(/^0x11111111…111111$/);
+    expect(screen.getByTestId('lock')).toHaveTextContent(/^JoyID$/);
+  });
+
+  it('writes no lock beside a default-lock owner, "change" alone on its change, another lock’s name', () => {
+    const outputs = [
+      output(DEFAULT_LOCK_CODE_HASH, false, 'aaaaaa'),
+      output(DEFAULT_LOCK_CODE_HASH, true, 'bbbbbb'),
+      output(JOYID_CODE_HASH, false, 'cccccc'),
+    ];
+    const tiles = cellTiles(txOf(outputs), LOOKUP).outputs;
+    // B4 second fix round (review-rules-fixes-tests SHOULD-5, the coordinator's item 7)
     const words = tiles.map((t) => {
       const { container } = render(<span>{t.lockKind}</span>);
       return container.textContent;

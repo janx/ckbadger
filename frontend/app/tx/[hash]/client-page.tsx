@@ -27,7 +27,7 @@ import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
-import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
+import { cellTiles, kindOf, registeredName } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
 import { BalanceChanges } from '@/components/transaction/balance-changes';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
@@ -86,6 +86,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode, unitText } from '@/components/ui/units';
+import { cellLockFacts, lockWords, lockWordsText } from '@/components/ui/lock-kind';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-small">Loading graph section…</p>,
@@ -120,10 +121,6 @@ function PendingValue() {
   return <span className="text-text-dim">pending…</span>;
 }
 /** The registry's name for a code hash, or null when it has none. */
-function registeredName(lookup: ScriptLookupResponse | undefined, codeHash: string) {
-  const name = lookup?.[codeHash]?.name;
-  return name && name.toLowerCase() !== 'unknown' ? name : null;
-}
 function groupLabel(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
   return registeredName(lookup, g.script.codeHash) ?? shortenHash(g.script.codeHash, 'row');
 }
@@ -1785,8 +1782,21 @@ export default function TransactionDetailPage() {
                     : `Lock of output ${i}`}
                 </dt>
                 <dd>
-                  {registeredName(lookup, cell.lock.codeHash) ?? (
-                    <ShortId value={cell.lock.codeHash} kind="hash" size="row" />
+                  {/* the lock as its tile names it, from the one decision (B4), here a fact that
+                      is never empty: the default lock by its name */}
+                  {lockWordsText(
+                    lockWords(
+                      cellLockFacts(
+                        {
+                          lock: cell.lock,
+                          name: registeredName(lookup, cell.lock.codeHash),
+                          address: cell.address ?? null,
+                        },
+                        `Transaction ${tx.hash} output ${i}`
+                      ),
+                      'column'
+                    )!,
+                    'row'
                   )}
                   ,{' '}
                   <span className={cell.lockArgsDecodeError ? 'text-text-dim' : undefined}>
@@ -1802,7 +1812,7 @@ export default function TransactionDetailPage() {
             {knowledgeDelta !== null && (
               <dd>
                 {/* "occupied" always carries its unit, the pair's once after it (B4) */}
-                occupied {occupiedPairText(occupiedIn!, occupiedOut!)}{' '}
+                occupied {occupiedPairText(occupiedIn!, occupiedOut!, `transaction ${hash}`)}{' '}
                 <span className="text-text-dim">
                   · common knowledge {occupiedBytesDelta(knowledgeDelta)}
                 </span>

@@ -4,8 +4,9 @@ import Link from '@/components/ui/link';
 import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import type { ParticipantRef } from '@/lib/api';
+import { getScriptDetailHref } from '@/lib/detail-routes';
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
-import type { ScriptRefHashType } from '@/lib/script-ref';
+import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /** A lock's name in its default form: plain words in the quiet ink, at the size of its line. */
@@ -41,6 +42,9 @@ export type LockWords =
       form: 'lock';
       name: string | null;
       codeHash: string | null;
+      /** its hash type where the place knows it (its link opens that lock) */
+      hashType: ScriptRefHashType | null;
+      /** the hash type written after it, where its name does not cover it */
       byHashType: ScriptRefHashType | null;
     }
   /** a column's lock that is not indexed: "not indexed" in quiet words */
@@ -74,8 +78,8 @@ export function lockWords(facts: LockFacts, place: LockPlace): LockWords | null 
     isDefaultLock(codeHash, 'type') &&
     hashType !== 'type';
   return notTheDefault
-    ? { form: 'lock', name: null, codeHash, byHashType: hashType }
-    : { form: 'lock', name, codeHash, byHashType: null };
+    ? { form: 'lock', name: null, codeHash, hashType, byHashType: hashType }
+    : { form: 'lock', name, codeHash, hashType, byHashType: null };
 }
 
 /**
@@ -103,6 +107,44 @@ export function rowLockFacts({
   return { name: lockKind, codeHash: script.codeHash, hashType: script.hashType };
 }
 
+/** A lock's hash type as the chain writes it; any other word is a contract break, named. */
+function hashTypeOf(value: string, where: string): ScriptRefHashType {
+  const hashType = normalizeScriptRefHashType(value);
+  if (hashType === null)
+    throw new Error(`${where}: lock hash type ${JSON.stringify(value)} is not a CKB hash type`);
+  return hashType;
+}
+
+/**
+ * A cell's lock (a transaction's input or output, a version of an item's cell): its script and the
+ * registry's name for its code hash. Its owner's address, where it has one, is that script spelled
+ * (lane B4 second fix round): an address that spells another lock (code hash, hash type or args)
+ * is refused with `where` named, as is a hash type the chain does not have.
+ */
+export function cellLockFacts(
+  cell: {
+    lock: { codeHash: string; hashType: string; args: string };
+    name: string | null;
+    address: string | null;
+  },
+  where: string
+): LockFacts {
+  const { lock, name, address } = cell;
+  const hashType = hashTypeOf(lock.hashType, where);
+  if (address !== null) {
+    const spelled = addressScript(address);
+    if (
+      spelled.codeHash !== lock.codeHash.toLowerCase() ||
+      spelled.hashType !== hashType ||
+      spelled.args !== lock.args.toLowerCase()
+    )
+      throw new Error(
+        `${where}: address ${address} spells the lock ${spelled.codeHash} by ${spelled.hashType}, args ${spelled.args}; the cell's lock is ${lock.codeHash} by ${hashType}, args ${lock.args}`
+      );
+  }
+  return { name, codeHash: lock.codeHash.toLowerCase(), hashType };
+}
+
 /**
  * A transaction party's lock: the registry's name the API sends and, where the party has an
  * address, the lock read off it (a feed's party carries no code hash). A party with no address (its
@@ -114,6 +156,26 @@ export function partyLockFacts(party: ParticipantRef): LockFacts {
   if (party.address === null) return { name, codeHash: null, hashType: null };
   const { codeHash, hashType } = addressScript(party.address);
   return { name, codeHash, hashType };
+}
+
+/**
+ * The lock of a version of an item's cell beside its owner (`cellLockFacts` off the cell's lock and
+ * its owner's address, `lockWords` inline), or null where none is written: the default lock.
+ */
+export function cellOwnerLock(cell: {
+  lock: { codeHash: string; hashType: string; args: string };
+  lockName: string | null;
+  ownerAddress: string;
+  txHash: string;
+  outputIndex: number;
+}): LockWords | null {
+  return lockWords(
+    cellLockFacts(
+      { lock: cell.lock, name: cell.lockName, address: cell.ownerAddress },
+      `cell ${cell.txHash}:${cell.outputIndex}`
+    ),
+    'inline'
+  );
 }
 
 /** An API row's lock where it stands (`rowLockFacts`, `lockWords`), or null where none is written. */
@@ -145,7 +207,8 @@ export function lockWordsText(words: LockWords, size: ShortSize): string {
 /**
  * A lock's words drawn (Round 3 R-2, U-15; R9): the registry's name, its code hash in the hover; a
  * lock the registry does not name, "lock 0x9b9b…9b9b", its code hash a link to its script page and
- * one unit (`whitespace-nowrap`), a registered name being words (A4 Chrome sweep). The default form
+ * one unit (`whitespace-nowrap`), a registered name being words (A4 Chrome sweep); "by <hash type>"
+ * after either is words a line may break before. The default form
  * is plain words in the quiet ink at the size of its line (a lock's kind is a label: R3);
  * `className` replaces it for a lock (a column's tag); a column's default lock and "not indexed"
  * are its plain words without the tag.
@@ -176,18 +239,31 @@ export function LockWordsView({
       data-lock-kind
     >
       {name !== null ? (
-        `${name}${by}`
+        <>
+          {name}
+          {by && <span className="whitespace-normal">{by}</span>}
+        </>
       ) : (
         <>
           lock{' '}
           <Link
-            href={`/script/${codeHash}`}
+            // the script page of that lock: its hash type where known, as a lock (B4 second fix
+            // round: a bare code hash opened the family of the code hash's `type` script, the
+            // default lock's for a by-data lock on its code hash)
+            href={getScriptDetailHref({
+              codeHash: codeHash!,
+              // the default lock is its code hash by type
+              hashType: words.form === 'lock' ? words.hashType : 'type',
+              scriptKind: 'lock',
+            })}
             title={codeHash ?? undefined}
             className="hover:text-jade transition-colors"
           >
             <ShortId value={codeHash!} kind="hash" size={size} />
           </Link>
-          {by}
+          {/* "by <hash type>" is words after the unit, a line may break before it (B4 second fix
+              round: held with "lock 0x…" it passed the columns' budgets) */}
+          {by && <span className="whitespace-normal">{by}</span>}
         </>
       )}
     </span>

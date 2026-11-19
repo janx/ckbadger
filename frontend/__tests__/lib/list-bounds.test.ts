@@ -217,13 +217,19 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
   // no more than that transaction's bytes and shrinks by no more than its inputs, MAX_TX_INPUTS
   // such cells. Written as the one writer writes them, with the unit (a cell's own figure is
   // written in the cell tile's test, from LARGEST_TX_BYTES).
+  // B4 second fix round (review-rules-fixes-logic SHOULD 1, tests SHOULD-2; the coordinator's
+  // item 3): the exact bound. Only genesis's cells can pass the block limit, and all of them
+  // together are no more than genesis's block (of record); every other consumed cell is no more
+  // than a block (consensus): 1,236,271 + 13,568 × 597,000 = 8,101,332,271. It budgeted every one
+  // of the 13,568 at genesis's size (16,773,724,928).
   it('bounds occupied bytes by the largest transaction, and a change by its inputs too', () => {
     expect(genesisTransactions[0].txSize).toBeGreaterThan(blockBytes);
-    expect(13_568 * 1_236_271).toBe(16_773_724_928);
+    expect(1_236_271 + 13_568 * 597_000).toBe(8_101_332_271);
     expect(WIDEST_OCCUPIED_CHANGE).toBe(
-      `−${(MAX_TX_INPUTS * LARGEST_TX_BYTES).toLocaleString('en-US')} B`
+      `−${(GENESIS_BLOCK_BYTES + MAX_TX_INPUTS * MAX_BLOCK_BYTES).toLocaleString('en-US')}\u00a0B`
     );
-    expect(WIDEST_OCCUPIED_CHANGE).toBe('−16,773,724,928 B');
+    // its unit after a no-break space, as the one writer writes it (B4 second fix round)
+    expect(WIDEST_OCCUPIED_CHANGE).toBe('−8,101,332,271\u00a0B');
     // the shrinking side is the wider: the growing side is at most one transaction's bytes
     expect(`+${LARGEST_TX_BYTES.toLocaleString('en-US')} B`.length).toBeLessThan(
       WIDEST_OCCUPIED_CHANGE.length

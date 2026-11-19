@@ -22,6 +22,7 @@ import { widestTokenAmount } from '@/components/asset/asset-feed';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { WIDEST_BLOCK_NUMBER, WIDEST_COUNT_DIGITS, shortChars } from '@/lib/list-bounds';
+import { PartReadBoundary } from '@/components/read-failure';
 
 /** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
 const cell = (chars: number) => textPx(chars, fontPx('small'));
@@ -543,83 +544,86 @@ export function AssetHistory({
             Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
             which preserves time through backward block timestamps.
           </p>
-          <ListTable
-            label="Mints and burns"
-            columns={eventColumns}
-            rows={supplyEvents.rows}
-            rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
-            empty="No supply changes."
-            mobileRow={(e, wide) => {
-              const change = (
-                <span className="whitespace-nowrap">
-                  {eventColumns[1].render(e)} {e.kind === 'mint' ? '+' : '−'}
-                  <TokenAmount form="summary" amount={e.amount} decimals={token.decimals} />
-                </span>
-              );
-              const after = (
-                <span>
-                  supply after{' '}
-                  <TokenAmount form="summary" amount={e.supplyAfter} decimals={token.decimals} />
-                </span>
-              );
-              const where = [
-                <AppLink key="b" href={`/blocks/${e.blockNumber}`}>
-                  {formatBlockNumber(e.blockNumber)}
-                </AppLink>,
-                <AppLink key="t" href={`/tx/${e.txHash}`} className="whitespace-nowrap">
-                  tx {e.txIndex} · sequence {e.transferSequence}
-                </AppLink>,
-              ];
-              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
-              // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
-              // below sm (R9).
-              const party = (
-                <span>
-                  {e.kind === 'mint' ? 'to ' : 'from '}
-                  <AppLink href={`/address/${e.address ?? e.lockHash}`}>
-                    <Hash
-                      hash={e.address ?? e.lockHash}
-                      kind={e.address ? 'address' : 'hash'}
-                      size={phoneSize}
-                      copyable={false}
-                      className="text-meta"
-                    />
-                  </AppLink>
-                  {/* no space and no part where the row names no lock (B4) */}
-                  {rowLock(e, 'inline') && (
-                    <>
-                      {' '}
-                      <LockWordsView
-                        words={rowLock(e, 'inline')!}
+          {/* a refusal while the events are drawn fails this table in its place (D7) */}
+          <PartReadBoundary what="the changes to the supply">
+            <ListTable
+              label="Mints and burns"
+              columns={eventColumns}
+              rows={supplyEvents.rows}
+              rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
+              empty="No supply changes."
+              mobileRow={(e, wide) => {
+                const change = (
+                  <span className="whitespace-nowrap">
+                    {eventColumns[1].render(e)} {e.kind === 'mint' ? '+' : '−'}
+                    <TokenAmount form="summary" amount={e.amount} decimals={token.decimals} />
+                  </span>
+                );
+                const after = (
+                  <span>
+                    supply after{' '}
+                    <TokenAmount form="summary" amount={e.supplyAfter} decimals={token.decimals} />
+                  </span>
+                );
+                const where = [
+                  <AppLink key="b" href={`/blocks/${e.blockNumber}`}>
+                    {formatBlockNumber(e.blockNumber)}
+                  </AppLink>,
+                  <AppLink key="t" href={`/tx/${e.txHash}`} className="whitespace-nowrap">
+                    tx {e.txIndex} · sequence {e.transferSequence}
+                  </AppLink>,
+                ];
+                // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
+                // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
+                // below sm (R9).
+                const party = (
+                  <span>
+                    {e.kind === 'mint' ? 'to ' : 'from '}
+                    <AppLink href={`/address/${e.address ?? e.lockHash}`}>
+                      <Hash
+                        hash={e.address ?? e.lockHash}
+                        kind={e.address ? 'address' : 'hash'}
                         size={phoneSize}
-                        className="text-text-dim text-meta"
+                        copyable={false}
+                        className="text-meta"
                       />
-                    </>
-                  )}
-                </span>
-              );
-              return (
-                <PhoneRow
-                  testId="supply-event-row-mobile"
-                  lines={[
-                    {
-                      key: 'change',
-                      tone: 'head',
-                      left: change,
-                      right: formatUtc8Date(e.timestamp),
-                    },
-                    !wide && { key: 'after', tone: 'body', left: after },
-                    {
-                      key: 'evidence',
-                      tone: 'quiet',
-                      left: <Dotted parts={wide ? [after, ...where] : where} />,
-                      right: party,
-                    },
-                  ]}
-                />
-              );
-            }}
-          />
+                    </AppLink>
+                    {/* no space and no part where the row names no lock (B4) */}
+                    {rowLock(e, 'inline') && (
+                      <>
+                        {' '}
+                        <LockWordsView
+                          words={rowLock(e, 'inline')!}
+                          size={phoneSize}
+                          className="text-text-dim text-meta"
+                        />
+                      </>
+                    )}
+                  </span>
+                );
+                return (
+                  <PhoneRow
+                    testId="supply-event-row-mobile"
+                    lines={[
+                      {
+                        key: 'change',
+                        tone: 'head',
+                        left: change,
+                        right: formatUtc8Date(e.timestamp),
+                      },
+                      !wide && { key: 'after', tone: 'body', left: after },
+                      {
+                        key: 'evidence',
+                        tone: 'quiet',
+                        left: <Dotted parts={wide ? [after, ...where] : where} />,
+                        right: party,
+                      },
+                    ]}
+                  />
+                );
+              }}
+            />
+          </PartReadBoundary>
           {supplyPager}
         </details>
       )}

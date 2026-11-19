@@ -7,6 +7,7 @@ import {
 } from '@/components/activity/activity-row';
 import { foldRuns, runKey, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
+import { readable } from '@/components/activity-event-row';
 
 /** One row of a feed, with what its run is drawn and compared from. */
 export interface FeedRow {
@@ -118,10 +119,12 @@ export function ActivityRuns({
     <>
       {runs.flatMap(({ run, head, isOpen }) => {
         const [lead] = run;
-        if (head === null) return [<Fragment key={lead.key}>{lead.row}</Fragment>];
+        // each row, and each run's head, fails in its place (ruling D7): what a row cannot read
+        // (a lock the decision refuses) is said where the row stands, the others drawn
+        if (head === null)
+          return [<Fragment key={lead.key}>{readable(lead.key, () => lead.row)}</Fragment>];
         const folded = (
           <FoldedActivityRow
-            key={`run:${head}`}
             rows={run.map((r) => r.activity)}
             title={lead.title}
             showScriptDetails={showScriptDetails}
@@ -133,9 +136,13 @@ export function ActivityRuns({
             onToggle={() => toggle(run, isOpen)}
           />
         );
+        const headed = <Fragment key={`run:${head}`}>{readable(head, () => folded)}</Fragment>;
         return isOpen
-          ? [folded, ...run.map((r) => <Fragment key={r.key}>{r.row}</Fragment>)]
-          : [folded];
+          ? [
+              headed,
+              ...run.map((r) => <Fragment key={r.key}>{readable(r.key, () => r.row)}</Fragment>),
+            ]
+          : [headed];
       })}
     </>
   );

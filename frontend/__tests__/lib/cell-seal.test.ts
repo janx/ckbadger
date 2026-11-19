@@ -1,5 +1,6 @@
 // The seals by kind, C3: a cell's seal id and ink, from the API's own fields only — a transaction
 // detail's cell (its script hashes from the transaction's script groups) and the cell page's Cell.
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { describe, expect, it } from 'vitest';
 import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
 import type {
@@ -385,7 +386,11 @@ describe('cellPageSeal: the cell /cells/{tx}/{index} serves', () => {
     const output = (lock: string, over: Record<string, unknown> = {}) => ({
       capacity: '6100000000',
       commonKnowledgeSize: '61',
-      address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgjk5zhk',
+      // the real address of its own lock (B4 second fix round: a tile refuses one that spells
+      // another lock; this one was not an address)
+      address: ckbAddress(
+        script(`lock ${lock}`) as { codeHash: string; hashType: 'type'; args: string }
+      ),
       lock: script(`lock ${lock}`),
       cellType: 'plain',
       display: null,

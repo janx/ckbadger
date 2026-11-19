@@ -1,3 +1,5 @@
+import { addressScript } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { onlineManager } from '@tanstack/react-query';
 import { act, screen, waitFor, fireEvent, within } from '@testing-library/react';
@@ -88,7 +90,12 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
           hashType: 'type',
           args: '0x',
         },
-        address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({
+          codeHash: LOCK_CODE_HASH,
+          args: '0x1111111111111111111111111111111111111111',
+        }),
       },
     ],
     outputs: [
@@ -108,7 +115,12 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
           hashType: 'type',
           args: '0x',
         },
-        address: 'ckb1qypk9w2g8j6v4e5xj0k9n3l2m1p8q7r6s5t4u3v2w1x0y9z8a7b6c5d4e3',
+        // B4 second fix round: the real address of the cell's own lock (a tile refuses one that spells
+        // another; this one was not an address)
+        address: ckbAddress({
+          codeHash: LOCK_CODE_HASH,
+          args: '0x2222222222222222222222222222222222222222',
+        }),
       },
     ],
     scriptGroups: [
@@ -229,11 +241,21 @@ function createGenesisDepGroupTransactionDetail(): Awaited<
         cellType: undefined,
         type: undefined,
         address: GENESIS_DEP_GROUP_SENDER,
+        // the lock its address spells (B4 second fix round: a tile refuses an address that
+        // spells another lock; it kept the base transaction's), its hash the activity's
+        lock: addressScript(GENESIS_DEP_GROUP_SENDER),
       },
     ],
     outputs: [output, { ...output }],
     scriptGroups: [
-      { ...tx.scriptGroups![0], ran: false, cycles: null, witnessIndex: null },
+      {
+        ...tx.scriptGroups![0],
+        scriptHash: '0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2',
+        script: addressScript(GENESIS_DEP_GROUP_SENDER),
+        ran: false,
+        cycles: null,
+        witnessIndex: null,
+      },
       {
         scriptHash: '0x77c93b0632b5b6c3ef922c5b7cea208fb0a7c427a13d50e13d3fefad17e0c590',
         kind: 'lock',

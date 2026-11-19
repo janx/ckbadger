@@ -477,8 +477,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'components/dao/dao-board.tsx': {
     family: 'topics',
     // link 6 → 3, prose 3 → 1 (B7): the lede and the AR explanation, with their links, read in
-    // the reading ink
-    sites: { link: 3, td: 2, prose: 1 },
+    // the reading ink; link 3 → 2 (B4 second fix round): a depositor's lock is written by the one
+    // decision (LockWordsView, components/ui/lock-kind.tsx), its link no longer this file's
+    sites: { link: 2, td: 2, prose: 1 },
     reason:
       "the exact amounts line, the block links in the readout and anchor lines, a holder's rank and share in table cells",
   },

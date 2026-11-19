@@ -1,3 +1,4 @@
+import { lineRuns } from '@/__tests__/utils/line-runs';
 import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, fireEvent, within, cleanup } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
@@ -328,7 +329,11 @@ describe('Asset history', () => {
   // hash takes the size of the form it is drawn in, row in the table and tight in the phone row.
   describe('names a supply-event party’s unregistered lock by its code hash (U-15)', () => {
     const unregistered = `0x${'43'.repeat(32)}`;
-    const scriptPage = expect.stringMatching(new RegExp(`/script/${unregistered}$`));
+    // B4 second fix round (re-pinned on purpose): the link opens that lock, by the hash type its
+    // address spells, as a lock (the script page reads both)
+    const scriptPage = expect.stringMatching(
+      new RegExp(`/script/${unregistered}\\?hashType=type&kind=lock$`)
+    );
     const event = (
       i: number,
       kind: 'mint' | 'burn',
@@ -373,6 +378,41 @@ describe('Asset history', () => {
     // 13 px, heads and notes 12) and the 16 px gap after every column but the last. The amounts
     // hold one line under a billion whole units at the token's own decimals (none here); a larger
     // one breaks after a thousands separator.
+    // B4 second fix round (review-rules-fixes-logic NOTE 5, the coordinator's item 11): a lock on
+    // the default code hash by data is written "lock 0x9bd7e06f…a3cce8 by data": the column holds
+    // it, "lock 0x…" one unit and "by data" another, every run within the column's budget.
+    it('holds a by-data lock’s words within the To / from column', () => {
+      const byData = {
+        ...event(
+          4,
+          'mint',
+          '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+          'Default Lock'
+        ),
+        address:
+          'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl',
+      };
+      render(
+        <AssetHistory
+          assetClass="tokens"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 0 }}
+          supplyEvents={{ total: 1, rows: [byData] }}
+        />
+      );
+      fireEvent.click(screen.getByText('Every change to the supply (1)'));
+      const table = screen.getByRole('table', { name: 'Mints and burns' });
+      const cols = table.querySelectorAll('col');
+      const column = Number.parseFloat((cols[cols.length - 1] as HTMLElement).style.minWidth);
+      const cell = within(within(table).getAllByRole('row')[1]).getAllByRole('cell').at(-1)!;
+      expect(cell).toHaveTextContent('lock 0x9bd7e06f…a3cce8 by data');
+      const past = lineRuns(cell, 1280).filter((r) => r.px > column + 1e-9);
+      expect(past.map((r) => `${r.text} ${r.px.toFixed(1)}`)).toEqual([]);
+    });
+
     it('budgets every column from what it holds and changes form at their sum (F3-e)', () => {
       const at = (text: string, px: number) => (text.length * px * 3) / 5;
       const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);

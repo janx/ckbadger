@@ -50,6 +50,7 @@ import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { LockWordsView, rowLock } from '@/components/ui/lock-kind';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -986,15 +987,15 @@ function ownerLink(owner: Owner, size: ShortSize) {
   );
 }
 
-function lockLink(owner: Owner, size: ShortSize) {
-  return (
-    <Link
-      href={`/script/${owner.lockCodeHash}?hashType=${owner.lockHashType}&kind=lock`}
-      className="text-text-dim hover:text-text-bright font-mono hover:underline"
-      title={`${owner.lockCodeHash} (${owner.lockHashType})`}
-    >
-      {owner.lockKind ?? <ShortId value={owner.lockCodeHash} kind="hash" size={size} />}
-    </Link>
+/**
+ * A depositor's lock by the one decision (B4 second fix round), read off its address: in the Lock
+ * column every row is named (the default lock by its name, or "lock 0x…" where the API names
+ * none); beside the party on a phone row the default lock is not, and the part is left out.
+ */
+function ownerLock(owner: Owner, place: 'column' | 'inline') {
+  return rowLock(
+    { lockKind: owner.lockKind, lockCodeHash: owner.lockCodeHash, address: owner.address },
+    place
   );
 }
 
@@ -1037,13 +1038,15 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     key: 'lock',
     label: 'Lock',
     header: ownerHead('Lock'),
-    // The flexible column (a lock's name has no bound): at its minimum a lock's code hash at the
-    // row size (17 characters, 142.8) and the gap, the rest of the container beyond the sum. It
-    // was 170.
-    minWidth: columnPx(ownerCell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
+    // The flexible column (a lock's name has no bound): at its minimum the words the decision
+    // writes for a lock the API names none of, "lock " and its code hash at the row size (22
+    // characters, 184.8) and the gap (B4 second fix round: it was the code hash alone), the rest of
+    // the container beyond the sum. A lock on the default code hash by another hash type adds
+    // " by data1" (9 more), held on its line (one unit), past the column's room into its gap.
+    minWidth: columnPx(ownerCell('lock '.length + shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
     width: 'auto',
     className: OWNER_CELL,
-    render: (o) => lockLink(o, 'row'),
+    render: (o) => <LockWordsView words={ownerLock(o, 'column')!} size="row" />,
   },
   {
     key: 'deposits',
@@ -1125,7 +1128,9 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
               <span className="text-text-dim shrink-0">{o.sharePercent}%</span>
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              {lockLink(o, 'tight')}
+              {ownerLock(o, 'inline') && (
+                <LockWordsView words={ownerLock(o, 'inline')!} size="tight" />
+              )}
               <span className="text-text-bright">
                 <Amount form="column" value={o.capacity} /> CKB
                 <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>

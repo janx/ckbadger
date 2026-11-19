@@ -16,16 +16,32 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 
 const MINUS = '−';
 
+// Lane B4 second fix round (review-rules-fixes-logic NOTE 4, the coordinator's item 10): a change
+// that is not whole bytes is refused naming the transaction it stands in, so the upstream fault is
+// found from the message alone.
+describe('an occupied change that is not whole bytes names its transaction', () => {
+  it('in an activity row', () => {
+    const a = feedSamples.objectTransfer;
+    const bad = {
+      ...a,
+      participants: [{ ...a.participants[0], usedDelta: '150000001' }, ...a.participants.slice(1)],
+    };
+    expect(() => render(<ActivityRow activity={bad} />)).toThrow(
+      new RegExp(`${bad.txHash}.*occupied change 150000001 shannons is not a whole number of bytes`)
+    );
+  });
+});
+
 describe('formatOccupiedDelta writes bytes with their unit (B4 item 2)', () => {
   it('writes a signed, grouped whole number of bytes and "B"', () => {
-    expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61 B`);
-    expect(formatOccupiedDelta('32000000000')).toBe('+320 B');
-    expect(formatOccupiedDelta('123456700000000')).toBe('+1,234,567 B');
-    expect(formatOccupiedDelta('0')).toBe('0 B');
+    expect(formatOccupiedDelta('-6100000000', 'tx 0xab')).toBe(`${MINUS}61\u00a0B`);
+    expect(formatOccupiedDelta('32000000000', 'tx 0xab')).toBe('+320\u00a0B');
+    expect(formatOccupiedDelta('123456700000000', 'tx 0xab')).toBe('+1,234,567\u00a0B');
+    expect(formatOccupiedDelta('0', 'tx 0xab')).toBe('0\u00a0B');
   });
 
   it('refuses a change that is not whole bytes, naming it (occupied capacity is bytes)', () => {
-    expect(() => formatOccupiedDelta('150000001')).toThrow(
+    expect(() => formatOccupiedDelta('150000001', 'tx 0xab')).toThrow(
       /150000001.*not a whole number of bytes/
     );
   });
@@ -76,11 +92,12 @@ describe('the balance changes write occupied bytes with their unit, in every for
       .getAllByRole('row')
       .slice(1)
       .map((r) => within(r).getAllByRole('cell')[2]);
+    // B4 second fix round (re-pinned on purpose): figure and unit joined by a no-break space
     expect(occupied.map((c) => c.textContent)).toEqual([
-      `${MINUS}502 B`,
-      '+320 B',
-      '+208 B',
-      '+26 B',
+      `${MINUS}502\u00a0B`,
+      '+320\u00a0B',
+      '+208\u00a0B',
+      '+26\u00a0B',
     ]);
     for (const c of occupied) expect(c).toHaveClass('whitespace-nowrap');
   });

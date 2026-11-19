@@ -57,13 +57,11 @@ describe('activity participant lines (A1 → T7: one wrapping line at every widt
   // A1 kept the 4/5-track grid off the 640 band (it pushed the page 100–150 px sideways, report
   // B#1–5) and the 136 px party track clipped roles to "ow" (B#11). Option A (T7) has no tracks:
   // one wrapping line per participant at every width, so there is no breakpoint to get wrong.
-  it.each([
-    ['a plain row', false],
-    ['a lockColumn row (the prop no longer changes the row)', true],
-  ])('%s draws a flex column of wrapping lines, no grid, no sm:/md: track', (_name, lockColumn) => {
+  // B4 second fix round: the `lockColumn` prop, which changed nothing since Option A, is gone
+  // (the type refuses it); its case, "the prop no longer changes the row", went with it.
+  it('draws a flex column of wrapping lines, no grid, no sm:/md: track', () => {
     const { container } = render(
       <ActivityRow
-        lockColumn={lockColumn}
         activity={activity([
           party({ roles: ['owner_from'], itemDeltas: [objectArrived] }),
           party({ roles: ['owner_to', 'manager_to'], ckbDelta: '13300000000' }),
@@ -143,10 +141,7 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
   // default lock is named on no line (R9).
   it('shows the lock kind in plain words right after the address, at every width', () => {
     const { container } = render(
-      <ActivityRow
-        lockColumn
-        activity={activity([party({ lockKind: 'JoyID', address: JOYID_ADDRESS })])}
-      />
+      <ActivityRow activity={activity([party({ lockKind: 'JoyID', address: JOYID_ADDRESS })])} />
     );
     const kinds = container.querySelectorAll('[data-role="lock-kind"]');
     expect(kinds).toHaveLength(1);
@@ -172,7 +167,6 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     // line whole; the party cell never exceeds the line.
     const { container } = render(
       <ActivityRow
-        lockColumn
         activity={activity([
           party({
             roles: ['owner_to', 'manager_to'],
