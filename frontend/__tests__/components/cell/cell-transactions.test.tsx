@@ -31,12 +31,15 @@ vi.mock('@/components/transaction/tx-structure', async (importOriginal) => {
 });
 
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
-const lock = { codeHash: `0x${'22'.repeat(32)}`, hashType: 'type', args: '0x' };
 // B4 second fix round: a tile's cell carries the lock its captured address spells (a tile refuses
-// an address that spells another lock); `lock` stays the lock groups' script
+// an address that spells another lock). Third round (the coordinator's item 8): the lock groups'
+// script is that lock too (it was the same code hash with no args, so no cell's lock was its
+// group's); the live and the spent cell have one owner.
+const lock = addressScript(liveFixture.address);
 const typeId = { codeHash: TYPE_ID_CODE_HASH, hashType: 'type', args: '0x' };
-/** The real script hash of `lock` (blake2b, CKB personalisation). */
-const LOCK_HASH = '0x0ee949b7b3d3e5e40183668bc71108c144424658397dcc2b20e25e8c261f8865';
+/** The real script hashes of `lock` and of `typeId` (blake2b, CKB personalisation). */
+const LOCK_HASH = '0xaa368106113229017f9e5ef36fdd33cc71e28cad8e738d8fbf9bd79a5cdad8ab';
+const TYPE_ID_HASH = '0x4d9407e453331c7879396c04ef5dcd1597ee896821a0970e6c6fe9223867fcbb';
 /**
  * As the API lists them (transaction_structure::script_groups): every cell's lock is in a group —
  * the inputs' ran, the outputs' did not (a second group of the same hash) — and the Type ID group
@@ -106,7 +109,7 @@ function tx(hash: string, cellbase = false): TransactionDetail {
     scriptGroups: [
       ...lockGroups(cellbase),
       {
-        scriptHash: `0x${'11'.repeat(32)}`,
+        scriptHash: TYPE_ID_HASH,
         kind: 'type',
         ran: !cellbase,
         inputIndices: cellbase ? [] : [0],
@@ -121,7 +124,7 @@ function tx(hash: string, cellbase = false): TransactionDetail {
 }
 /** The executed and the attached lock groups of one script hash, beside the Type ID group. */
 function attachedGroups(detail: TransactionDetail): TransactionDetail {
-  const hash = `0x${'33'.repeat(32)}`;
+  const hash = LOCK_HASH;
   return {
     ...detail,
     scriptGroups: [
@@ -335,9 +338,11 @@ describe('CellTransactions', () => {
     const structure = await screen.findByTestId('structure');
     const groups = structure.querySelectorAll<HTMLElement>('[data-group-id]');
     expect(groups).toHaveLength(3);
-    expect(groups[2]).toHaveAttribute('data-group-id', `type:run:0x${'11'.repeat(32)}`);
-    expect(groups[0]).toHaveAttribute('data-group-id', `lock:run:0x${'33'.repeat(32)}`);
-    expect(groups[1]).toHaveAttribute('data-group-id', `lock:attached:0x${'33'.repeat(32)}`);
+    // the groups' real hashes (B4 third round: they were 0x11… and 0x33…, the hashes of no
+    // script in them)
+    expect(groups[2]).toHaveAttribute('data-group-id', `type:run:${TYPE_ID_HASH}`);
+    expect(groups[0]).toHaveAttribute('data-group-id', `lock:run:${LOCK_HASH}`);
+    expect(groups[1]).toHaveAttribute('data-group-id', `lock:attached:${LOCK_HASH}`);
     fireEvent.mouseEnter(groups[0]);
     expect(structure.querySelector('[data-cell-id="in:0"]')).toHaveAttribute(
       'data-highlighted',
