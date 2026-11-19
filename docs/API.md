@@ -615,6 +615,11 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /charts/cell-size-distribution` — `liveCells` (the cells of every
   bucket) and `occupiedCapacity` (the CKB they occupy), counted from the same
   snapshot as the buckets.
+- `GET /charts/epoch-time-distribution` — a bucket is one minute, its `date`
+  the minute in hours at two decimals, cut (181 minutes is `"3.01"`); no two
+  minutes share a label. `GET /charts/block-time-distribution` — each bucket's
+  `date` is its exact 0.1 s edge and its `value`, the share of blocks, is cut
+  at three decimals.
 - `GET /stats/daily-activities` — each day's `kindOccurrences`: the eight kinds
   the charts read (transfers, the three DAO actions, tokens, objects,
   identities, script calls) summed. Kinds overlap, an action counting in each
