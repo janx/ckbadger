@@ -40,9 +40,11 @@ describe('the rules in globals.css', () => {
   // Re-pinned on purpose (lane c2-links, the ruling on a link inside a line's underline): the rule
   // carries `text-decoration-color: currentColor` between the colour and the glow, so a muted
   // underline follows its words into the celadon; the colour and the glow are as they were.
+  // Re-pinned on purpose (lane cd-fixes-controls): the rule's selector also names the library's
+  // action after a failed read (`.look-action`, components/ui/retry-action.tsx), after `a:hover`
   it('move 1c: a hovered link turns jade and glows; SVG links keep their own hover', () => {
     expect(css).toMatch(
-      /\na:hover\s*\{\s*color: var\(--c-jade\);\s*text-decoration-color: currentColor;\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
+      /\na:hover,\n\.look-action:focus-visible,\n\.look-action:hover\s*\{\s*color: var\(--c-jade\);\s*text-decoration-color: currentColor;\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
     );
     expect(css).toMatch(/svg a:hover\s*\{\s*color: inherit;\s*text-shadow: none;/);
     // re-pinned (lane c2-finish, rulings round 1): `.hover-lit`, a copyable hash's glow, went

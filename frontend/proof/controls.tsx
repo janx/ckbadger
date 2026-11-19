@@ -20,6 +20,7 @@ import { HelpPopover } from '@/components/ui/help-popover';
 import Link from '@/components/ui/link';
 import { Pager } from '@/components/ui/pager';
 import { RangeSelect } from '@/components/ui/range-select';
+import { RetryAction } from '@/components/ui/retry-action';
 import { Select } from '@/components/ui/select';
 import { TabLinks, Tabs, type Tab } from '@/components/ui/tabs';
 import { TextField } from '@/components/ui/text-field';
@@ -323,6 +324,22 @@ function CopyAndHelp() {
   );
 }
 
+function Retry() {
+  const [tries, setTries] = useState(0);
+  return (
+    <Item name="retry">
+      <p role="alert" className="text-negative text-small max-w-measure break-words">
+        Could not refresh Daily transactions: 503 the chart cache is warming.
+        <RetryAction words="Retry" onRetry={() => setTries((n) => n + 1)} className="ml-2" />
+      </p>
+      <Note>
+        the one action after a failed read: a way onward’s ink, no underline, celadon under the
+        pointer and the focus as a link, 28 px from 640 and 32 below; asked again {tries} times
+      </Note>
+    </Item>
+  );
+}
+
 /** The board's three lines of links: a row's key, links inside a line, ways onward. */
 function LinkLines() {
   return (
@@ -400,6 +417,7 @@ function Board({ theme }: { theme: string }) {
       <Pagers />
       <Fields />
       <CopyAndHelp />
+      <Retry />
       <Links />
     </section>
   );
