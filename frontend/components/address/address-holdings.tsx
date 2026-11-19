@@ -350,8 +350,8 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                 maturity allows */}
             {free > BigInt(0) && (
               <div data-testid="free-note" className="text-text-dim max-w-measure mt-1.5">
-                Free is the CKB {cells} hold beyond what their bytes occupy; whether it can be
-                spent, their locks decide.
+                Free is the CKB {cells} hold beyond what their bytes occupy; their locks, any since
+                on them and a cellbase reward’s maturity decide whether it can be spent.
               </div>
             )}
           </div>

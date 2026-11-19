@@ -140,8 +140,10 @@ describe('Address v3 components', () => {
         ['occupied', '291,486 CKB pays for the bytes of its cells'],
         ['free', '28,256.66879443 CKB'],
       ]);
+      // re-pinned on purpose (the third read's Lb NOTE 2): a lock is not all that holds free CKB;
+      // a since and a cellbase reward's maturity hold it too (it read "their locks decide")
       expect(screen.getByTestId('free-note')).toHaveTextContent(
-        'Free is the CKB its cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
+        'Free is the CKB its cells hold beyond what their bytes occupy; their locks, any since on them and a cellbase reward’s maturity decide whether it can be spent.'
       );
       expect(screen.getByTestId('free-note')).toHaveClass('text-text-dim');
     });
@@ -175,8 +177,10 @@ describe('Address v3 components', () => {
         ['occupied', '6,607 CKB pays for the bytes of its other cells'],
         ['free', '54,571.35338057 CKB'],
       ]);
+      // re-pinned on purpose (the third read's Lb NOTE 2): a lock is not all that holds free CKB;
+      // a since and a cellbase reward's maturity hold it too (it read "their locks decide")
       expect(screen.getByTestId('free-note')).toHaveTextContent(
-        'Free is the CKB its other cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
+        'Free is the CKB its other cells hold beyond what their bytes occupy; their locks, any since on them and a cellbase reward’s maturity decide whether it can be spent.'
       );
       // lane P1: its unclaimed compensation stands beside the balance, exact (re-pinned, third
       // round: alone, no "spendable" beside it)
