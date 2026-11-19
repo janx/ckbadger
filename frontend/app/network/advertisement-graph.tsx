@@ -4,9 +4,8 @@ import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { api } from '@/lib/api';
-import { formatCount } from '@/lib/format-count';
 import { ShortId } from '@/components/ui/short-id';
-import { unitNode } from '@/components/ui/units';
+import { Pager } from '@/components/ui/pager';
 
 /** Five rows of two first (hierarchy R5): every observation stays one tap away. */
 const FIRST_OBSERVATIONS = 10;
@@ -45,14 +44,14 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
   return (
     <div className="min-w-0">
       <p className="text-text text-body max-w-measure mb-4">
-        {data.distinctPeerPairs.toLocaleString()} unique advertiser → target peer pairs across{' '}
-        {data.edges.length.toLocaleString()} retained endpoint alias observations in completed round
-        #{roundId}. Each row is one address-book report — who named whom — never a connection, so
-        none of it is drawn as a link. Retention and later updates can remove earlier evidence; this
-        is a subset of what the crawler heard in that round.
+        {data.distinctPeerPairs.toLocaleString('en-US')} unique advertiser → target peer pairs
+        across {data.edges.length.toLocaleString('en-US')} retained endpoint alias observations in
+        completed round #{roundId}. Each row is one address-book report — who named whom — never a
+        connection, so none of it is drawn as a link. Retention and later updates can remove earlier
+        evidence; this is a subset of what the crawler heard in that round.
       </p>
       {visible.length === 0 ? (
-        <p className="text-text-dim text-small">No retained advertisement edges for this round.</p>
+        <p className="text-text text-small">No retained advertisement edges for this round.</p>
       ) : (
         <div role="list" aria-label="Directed advertiser to advertised endpoint graph">
           {visible.map((edge) => (
@@ -78,25 +77,39 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
               >
                 <ShortId value={edge.targetPeerId} kind="hash" size="row" />
               </span>
-              <span className="text-text-dim text-meta min-w-0 [overflow-wrap:anywhere]">
+              <span className="text-text text-small min-w-0 [overflow-wrap:anywhere]">
                 {edge.alias}
               </span>
             </div>
           ))}
         </div>
       )}
+      {/* The fold both ways, in the form gate B passed for the rows' fold: the controls library's
+          short-list form, "all 25 observations ↓", then "fewer ↑" back to the first ten. The
+          Pager has no "fewer" form, so the way back is written here in its part's box: celadon
+          words in a target 32 px high below 640 and 28 from it. */}
       {data.edges.length > FIRST_OBSERVATIONS && (
-        <button
-          type="button"
-          onClick={() => setShowAll((value) => !value)}
-          className="text-jade text-meta mt-3 underline underline-offset-2"
-        >
-          {unitNode(
-            showAll
-              ? `Show first ${formatCount(FIRST_OBSERVATIONS, 'observation')}`
-              : `Show all ${formatCount(data.edges.length, 'observation')}`
+        <div className="mt-3">
+          {showAll ? (
+            <button
+              type="button"
+              aria-expanded
+              onClick={() => setShowAll(false)}
+              className="text-jade text-small inline-flex h-8 items-center whitespace-nowrap underline-offset-4 hover:underline sm:h-7"
+            >
+              fewer ↑
+            </button>
+          ) : (
+            <Pager
+              mode="more"
+              all={{
+                count: data.edges.length,
+                singular: 'observation',
+                onShow: () => setShowAll(true),
+              }}
+            />
           )}
-        </button>
+        </div>
       )}
     </div>
   );

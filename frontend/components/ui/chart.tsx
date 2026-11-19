@@ -420,7 +420,9 @@ export function chartValueAxis({
     throw new Error(`${title}: invalid fixed value domain`);
   if (integerTicks && yScale === 'log')
     throw new Error(`${title}: a count axis is linear, not logarithmic`);
-  const counted = { integer: integerTicks };
+  // a log axis ticks whole decades only: a tick between them (10^0.5) has no exact label, and a
+  // tick's label is its value (the lead's ruling of 2026-11-19)
+  const counted = { integer: integerTicks || yScale === 'log' };
   if (axisCap && (yScale === 'log' || yDomain || !Number.isFinite(axisCap.value)))
     throw new Error(`${title}: an axis cap is a linear axis's own top`);
   // Lane D1 (rule 6): a value over the cap does not set the axis; it is drawn cut at the top.

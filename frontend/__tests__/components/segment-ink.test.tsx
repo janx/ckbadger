@@ -179,7 +179,42 @@ describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)'
     render(<HostingBar />);
     const bar = await screen.findByRole('img', { name: 'Verified nodes by hosting network' });
     const words = Array.from(bar.children).flatMap((s) => inks(s as HTMLElement, theme));
-    expect(words.length).toBeGreaterThanOrEqual(5);
+    // Re-pinned on purpose (readability P4, "a split bar names every segment in place"): a part
+    // whose segment cannot hold its name, share and count writes nothing in it and is named on its
+    // own line under the bar, so on this crawl only the leader's words stand on a fill (it was
+    // `words.length >= 5`: the shares alone, "6.41%", in segments of 78 px). The fills of the other
+    // steps keep their words in the case below, where every segment holds them.
+    expect(words.map((w) => w.text)).toEqual(['Amazon.com, Inc. 61.54% · 48 nodes']);
+    expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);
+  });
+
+  // Every opacity step of the hosting bar (PROVIDER_OPACITY, 0.9 to 0.2) with words on it: five
+  // networks of 12 nodes and "other networks" of 20 in 1,232 px (1,222 less the gaps, 15.275 px
+  // a node): each of the five, 183.3 px, holds "a 15.00% · 12 nodes" (19 characters at 13 px,
+  // 148.2 px, and 20 of padding); the other networks, 305.5 px, hold their 32 (249.6 and 20).
+  it('reads the words on every step of the hosting bar at 4.5:1 or more', async () => {
+    inTheme(theme);
+    stubChartWidth(1232);
+    server.use(
+      http.get('/api/:network/v1/network/distributions', () =>
+        HttpResponse.json({
+          verifiedRetained: 80,
+          sameNetworkReachable: 80,
+          verifiedUnavailable: 0,
+          versions: [],
+          countries: [{ label: 'United States', count: 80 }],
+          asns: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((org, i) => ({
+            label: `AS${i + 1} ${org}`,
+            count: i < 5 ? 12 : 10,
+          })),
+          protocols: [],
+        })
+      )
+    );
+    render(<HostingBar />);
+    const bar = await screen.findByRole('img', { name: 'Verified nodes by hosting network' });
+    const words = Array.from(bar.children).flatMap((s) => inks(s as HTMLElement, theme));
+    expect(words).toHaveLength(6);
     expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);
   });
 

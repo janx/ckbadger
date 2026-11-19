@@ -2,6 +2,7 @@ import { ckbAmountText } from '@/lib/amount-form';
 import { ELLIPSIS, type ShortForm } from '@/lib/shorten';
 import { formatBlockNumber } from '@/lib/format-block';
 import { occupiedBytesDelta } from '@/lib/occupied';
+import { formatDurationMs } from '@/lib/utils';
 
 /**
  * The widest value a list column holds (readability plan 2026-11-18, lane F3-e), as the column's
@@ -233,5 +234,21 @@ export const WIDEST_CKB_HELD = ckbAmountText(ckbNines(11), 'summary');
  */
 export const WIDEST_ROW_COUNT = nines(8).toLocaleString('en-US');
 
+/**
+ * Of record: how far apart in time a fork's two blocks at one height were found, under 1,000 s:
+ * six digits of milliseconds, `999,999 ms` (lane P4: it was kept on the forks page). A sibling is
+ * found while its parent is the tip, and blocks come some ten seconds apart. Source: the forks
+ * page's "Found apart" column, mainnet's branch switches.
+ */
+export const WIDEST_SIBLING_GAP = '999,999 ms';
+
 /** What a count or figure the API has not derived says in its place (a list writes it either case). */
 export const UNAVAILABLE = 'Unavailable';
+
+/**
+ * Of record: how long a Fiber channel has been open or lived, on the site's one duration form (its
+ * two largest units, `formatDurationMs`, as `lib/fiber-format.ts` writes it): under 10,000 days,
+ * some 27 years, `9999d 23h`. Source: the first Fiber channel on mainnet opened on 2025-03-06
+ * (c07e3fa5…, block #15,564,812).
+ */
+export const WIDEST_FIBER_LIFETIME = formatDurationMs((9999 * 86_400 + 23 * 3600) * 1000);

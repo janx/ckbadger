@@ -606,9 +606,15 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /charts/common-knowledge-composition` — each point's
   `values.knowledgeSize` (CKB): the day's knowledge size, which the five kinds
   partition.
-- `GET /charts/total-supply` — each point's `values.totalIssuance` (CKB): C,
-  the total issuance in the day's DAO field. The three bands do not sum to it:
-  what has not left the unissued secondary pool is no band.
+- `GET /charts/total-supply` — four bands that partition C, each point's
+  `values.totalIssuance` (CKB), the total issuance in the day's DAO field:
+  `outsideDao` (the CKB circulating outside the DAO), `daoDeposited` (the DAO's
+  deposits), `unclaimedCompensation` (DAO compensation accrued and not yet
+  claimed, inside S) and `burnt` (genesis burnt and the treasury part of S).
+  They sum to C to the shannon; the route checks it per row and fails with the
+  date and the four operands where it does not. `values.circulating` is the
+  protocol circulation, `C − genesis burnt − S` (`outsideDao + daoDeposited`),
+  the amount the site calls circulating everywhere; it is not a band.
 - `GET /charts/secondary-issuance` — each point's `componentsTotalShannons`:
   compensation, mining and burnt summed, in shannons. It differs from
   `protocolTotalShannons` by the frozen phase-1 overlap.

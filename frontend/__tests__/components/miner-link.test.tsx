@@ -41,6 +41,16 @@ describe('MinerLink', () => {
     expect(link).not.toHaveClass('text-text-bright');
   });
 
+  // Lane P4: a caller that states the link's job gets the owner of the looks' drawing and no ink of
+  // MinerLink's own (the fork pages write a miner inside a line or a cell: `inline`)
+  it('draws the look its caller states, with no ink of its own', () => {
+    render(<MinerLink size="row" address={address} pool="Example Pool" look="inline" />);
+    const link = screen.getByRole('link', { name: 'Example Pool' });
+    expect(link).toHaveClass('underline');
+    expect(link).not.toHaveClass('text-text-bright');
+    expect(link).not.toHaveClass('hover:text-jade');
+  });
+
   it('has one naming rule for text-only places (tree tiles, the narrative)', () => {
     expect(minerName(address, null, 'tight')).toBe('ckb1…93hhsj');
     expect(minerName(address, null, 'head')).toBe('ckb1…qw93hhsj');

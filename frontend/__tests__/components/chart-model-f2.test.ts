@@ -88,24 +88,33 @@ describe('Charts index encodings (F2 charts)', () => {
       ['Objects', CLASS_COLORS.objects],
       ['Other scripts', CLASS_COLORS.other],
     ]);
+    // re-pinned for the four bands (lane D1, second follow-up, item 1): C in four bands, the unclaimed compensation the DAO's gold a step down
     const supply = chartModel(def('total-supply'), {
       title: 'Total Supply',
       series: [
-        { key: 'circulating', label: 'Circulating', color: '#00c389' },
-        { key: 'nervosdao', label: 'Nervos DAO', color: '#3b82f6' },
+        { key: 'outsideDao', label: 'Outside the DAO', color: '#00c389' },
+        { key: 'daoDeposited', label: 'In the Nervos DAO', color: '#3b82f6' },
+        { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#a68b57' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
-      // C, the route's total issuance, more than the bands (the D1 hand-back, item 2)
       data: [
         {
           date: '2026-10-29',
-          values: { circulating: '3', nervosdao: '2', burnt: '1', totalIssuance: '7' },
+          values: {
+            outsideDao: '3',
+            daoDeposited: '2',
+            unclaimedCompensation: '1',
+            burnt: '1',
+            totalIssuance: '7',
+            circulating: '5',
+          },
         },
       ],
     });
     expect(supply.series.map((s) => [s.label, s.color])).toEqual([
-      ['Circulating', DATA_COLOR],
-      ['Nervos DAO', CLASS_COLORS.dao],
+      ['Outside the DAO', DATA_COLOR],
+      ['In the Nervos DAO', CLASS_COLORS.dao],
+      ['Unclaimed DAO compensation', 'var(--c-gold-ramp)'],
       ['Burnt', CLASS_COLORS.ckb],
     ]);
     const secondary = chartModel(def('secondary-issuance'), {

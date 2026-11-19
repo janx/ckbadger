@@ -284,7 +284,10 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     const { container } = render(
       <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
     );
-    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 1200 134');
+    // re-pinned (lane P4: a part too narrow for its name and share is named on a line under the
+    // icicle): 134 px of rows, then 8 px and the two named parts, miners and still owed, a 15 px
+    // line each 4 px apart: 134 + 8 + 15 + 4 + 15 = 176 (it was 134)
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 1200 176');
     const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
     expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('y'))).toEqual(['0', '51', '102']);
     expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('height'))).toEqual([
@@ -302,7 +305,11 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     expect(box('o').getAttribute('x')).toBe('243.3');
   });
 
-  it('writes the name and share inside each box, falling back to the share alone where the words do not fit', () => {
+  // Renamed and re-pinned (lane P4; it was "writes the name and share inside each box, falling
+  // back to the share alone where the words do not fit"): a split bar names every segment in
+  // place, so a box too narrow for its name and share writes nothing, and the part is named on a
+  // line of its own under the icicle, its swatch at its box's left edge
+  it('writes the name and share inside each box, naming under the icicle a part whose words do not fit', () => {
     const { container } = render(
       <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
     );
@@ -311,8 +318,12 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     // re-pinned (readability F3): the 14 px line centred in the 48 px box, (48 − 17) / 2 + 12.8
     // (was 24 + round(14 × 0.35) = 29)
     expect(label('total')!.getAttribute('y')).toBe('28.3');
-    // 119 px holds "10.00%" but not "miners 10.00%" at 14 px (the reading role, the body step)
-    expect(label('m')!.textContent).toBe('10.00%');
+    // 119 px holds "10.00%" but not "miners 10.00%" at 14 px (the reading role, the body step):
+    // the box writes nothing, its part named under the icicle
+    expect(label('m')).toBeNull();
+    const under = (key: string) => container.querySelector(`[data-under-label="${key}"]`);
+    expect(under('m')!.textContent).toBe('miners 10.00%');
+    expect(under('m')!.querySelector('rect')!.getAttribute('x')).toBe('0');
     expect(label('c')!.textContent).toBe('depositors 20.00%');
     expect(label('b')!.textContent).toBe('burnt 70.00% · no cell can ever claim it');
     // the note is in the box's one ink, no dim ink on a fill (re-pinned on purpose)
@@ -321,10 +332,13 @@ describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12
     // (14 × 7.2 + 16 = 116.8) fits 118 px, "still owed 50.0%" (131.2) does not
     expect(label('p')!.textContent).toBe('paid out 50.0%');
     expect(label('p')).toHaveAttribute('font-size', '12');
-    expect(label('o')!.textContent).toBe('50.0%');
+    expect(label('o')).toBeNull();
+    expect(under('o')!.textContent).toBe('still owed 50.0%');
+    expect(under('o')!.querySelector('rect')!.getAttribute('x')).toBe('243.3');
     // ink: the ink each fill calls for (inkOnFill, re-pinned on purpose: the dark ink was the page
-    // ground picked by hand): by night the well on the light text fill, the bright ink on the slate
-    expect(label('m')).toHaveClass('fill-base-void');
+    // ground picked by hand): by night the bright ink on the slate; under the icicle a part's words
+    // stand on the page ground in the reading ink
+    expect(under('m')!.querySelector('text')).toHaveClass('fill-text');
     expect(label('b')).toHaveClass('fill-text-bright');
     // no words under the boxes (R12)
     expect(container.querySelectorAll('[data-note]')).toHaveLength(0);

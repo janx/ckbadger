@@ -30,13 +30,11 @@ function everyScale(max: number): number[] {
 // toFixed(3); it now refuses a value it cannot write exactly, and every scale the heads are given
 // (resourceScale's: 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7.5 × 10^k) is written exactly, its half too.
 describe('the tick form writes an axis maximum exactly (review fb-logic 7)', () => {
-  it('refuses a value its text would round, naming the value and the text', () => {
-    expect(() => tickForm(1_234_567)).toThrow(
-      'tick form: 1,234,567 would read "1.235M", not exactly its value'
-    );
-    expect(() => ScaleHeader({ label: 'Size, bytes', scale: 1_234_567 })).toThrow(
-      'tick form: 1,234,567 would read "1.235M"'
-    );
+  // Re-pinned for the lead's ruling of 2026-11-19 (lane D1, second follow-up): formatTick writes
+  // every tick exactly, so the tick form has no value it would round any more; 1,234,567 read
+  // "1.235M" and was refused, it reads "1.234567M".
+  it('writes a value with every digit it has, never a rounded text', () => {
+    expect(tickForm(1_234_567)).toBe('1.234567M');
     expect(tickForm(1_500_000)).toBe('1.5M');
   });
 

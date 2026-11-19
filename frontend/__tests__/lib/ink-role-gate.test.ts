@@ -406,107 +406,82 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/fiber/channels/[id]/client-page.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 2 },
-    reason: 'the breadcrumb link, the channel id line and the loading line in the quiet ink',
+    // link 1 → 0, prose 2 → 1 (lane P4): the breadcrumb's link and the channel id line read
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note in the quiet ink',
   },
   'app/fiber/channels/client-page.tsx': {
     family: 'topics',
-    sites: { td: 1, prose: 2 },
-    reason: "a channel row's time in a table cell; the loading lines",
+    // td 1 → 0 (lane P4): a channel's opening day reads in the reading ink
+    sites: { prose: 2 },
+    reason: 'the two loading lines, transient notes in the quiet ink',
   },
-  'app/forks/[height]/[orphan]/client-page.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (B7): the node-store sentence explains, in the reading ink
-    sites: { link: 1, td: 1, prose: 1 },
-    reason: "the breadcrumb link, a row's clock in a table cell, the uncle sentence",
-  },
+  // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4): the breadcrumb link
+  // takes its look, a row's clock and the uncle sentence read in the reading ink
   'app/forks/page.tsx': {
     family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the loading and empty fork-history lines',
+    // prose 2 → 1 (lane P4): the empty fork-history line reads in the reading ink
+    sites: { prose: 1 },
+    reason: 'the loading fork-history line, a transient note',
   },
   'app/hardforks/page.tsx': {
     family: 'topics',
     // prose 10 → 5 (B7): the lede, the two editions paragraphs, the hash-type paragraph and the
-    // RFC note explain, in the reading ink
-    sites: { link: 2, prose: 5 },
-    reason:
-      'the epoch and block lines, the loading and not-reached lines, the consensus line and the how link in the quiet ink',
+    // RFC note explain, in the reading ink; link 2 → 0, prose 5 → 1 (page lane P4): an edition's
+    // epoch, block and day line reads in the reading ink, its block a link inside the line; "How
+    // it works" is a way onward; the no-header and not-reached states read; the consensus line
+    // (the RPC's name) went to tier 2
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note while the timeline is read',
   },
   'app/network/advertisement-graph.tsx': {
     family: 'topics',
-    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink
-    sites: { prose: 3 },
-    reason: 'the loading, refresh and empty lines in the quiet ink',
+    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink; 3 → 2 (P4 topics):
+    // the empty line reads
+    sites: { prose: 2 },
+    reason: 'the loading and refreshing lines, transient notes in the quiet ink',
   },
   'app/network/client-page.tsx': {
     family: 'topics',
     // link 1 → 0, prose 8 → 3 (B7): the lede, the crawler explanations and the note explain, in
-    // the reading ink
-    sites: { prose: 3 },
-    reason: 'the round lines and the MaxMind credit in the quiet ink',
-  },
-  'app/network/distributions.tsx': {
-    family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the empty line and the exact counts line under a distribution',
+    // the reading ink; prose 3 → 1 (P4 topics): the two round lines' counts and age are values
+    sites: { prose: 1 },
+    reason: 'the MaxMind credit, a note in the quiet ink',
   },
   'app/network/network-map.tsx': {
     family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the loading line and the one-node countries line under the map',
-  },
-  'app/network/nodes-table.tsx': {
-    family: 'topics',
-    sites: { prose: 9 },
-    reason: "a node's observation sentences and empty states in its detail",
+    // prose 2 → 1 (P4 topics): the one-node countries line under a phone map went; every country
+    // is a row of the ranked list beside the map
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note in the quiet ink',
   },
   'app/network/trends.tsx': {
     family: 'topics',
-    // prose 5 → 4 (B7): the top-label note explains, in the reading ink
-    sites: { td: 1, prose: 4 },
-    reason: 'a bucket count in a table cell; the loading, empty and round lines',
+    // prose 5 → 4 (B7): the top-label note explains, in the reading ink; td 1 → 0, prose 4 → 2
+    // (P4 topics): a day's label count is a value, and the two empty lines read
+    sites: { prose: 2 },
+    reason: 'the two loading lines, transient notes in the quiet ink',
   },
   'components/dao/dao-board.tsx': {
     family: 'topics',
     // link 6 → 3, prose 3 → 1 (B7): the lede and the AR explanation, with their links, read in
     // the reading ink; link 3 → 2 (B4 second fix round): a depositor's lock is written by the one
     // decision (LockWordsView, components/ui/lock-kind.tsx), its link no longer this file's
-    sites: { link: 2, td: 2, prose: 1 },
+    // td 2 → 0, prose 1 → 0 (lane P4): a holder's rank and share read in the reading ink, the
+    // amounts line under the icicle reads, its labels quiet
+    sites: { link: 2 },
     reason:
-      "the exact amounts line, the block links in the readout and anchor lines, a holder's rank and share in table cells",
+      'the block links in the capacity-use caption and the 365-day anchor line, notes under a figure',
   },
-  'components/dao/dao-grows.tsx': {
-    family: 'topics',
-    sites: { link: 1 },
-    reason: "the block link in the cycle readout's idle line",
-  },
-  'components/dao/dao-history.tsx': {
-    family: 'topics',
-    sites: { prose: 1 },
-    reason: 'the not-enough-days sentence',
-  },
-  'components/fiber/fiber-channel-board.tsx': {
-    family: 'topics',
-    // prose 5 → 2 (B7): the lede and the lock and output notes explain, in the reading ink
-    sites: { link: 1, prose: 2 },
-    reason: 'the channel id, the empty commitment sentence, a party link',
-  },
+  // 'components/dao/dao-grows.tsx' left the list (lane P4): the deposit reading reads in the
+  // reading ink, its block link with it
+  // 'components/dao/dao-history.tsx' left the list (lane P4): the not-enough-days sentence, an
+  // empty state, reads in the reading ink
   'components/fiber/fiber-channel-step.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 1 },
-    reason: "a step's block link and its loading line",
-  },
-  'components/fiber/fiber-network-graph.tsx': {
-    family: 'topics',
-    sites: { link: 2, prose: 1 },
-    reason: "a pair's party links in its readout and the empty-graph sentence",
-  },
-  'components/hardforks/script-deployment-timeline.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (B7): the earliest-creation sentence explains, in the reading ink
+    // link 1 → 0 (lane P4): the step's header reads in the reading ink, its block link with it
     sites: { prose: 1 },
-    reason: 'the empty sentence in the quiet ink',
+    reason: "the step's loading line, a transient note in the quiet ink",
   },
   // ---- shared ----
   'components/activity/activity-row.tsx': {

@@ -304,84 +304,24 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: '3 without a look; inks by hand (text-aqua, no-underline, text-interactive)',
   },
   // ---- p-topics ----
-  'app/fiber/channels/[id]/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (hover:text-text)',
-  },
-  'app/fiber/channels/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
-  },
-  'app/forks/[height]/[orphan]/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 10, ink: 7 },
-    reason: '10 without a look; inks by hand (hover:text-jade, hover:underline, text-emphasis)',
-  },
-  'app/forks/page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (text-text, hover:text-jade, hover:underline); 1 raw <a>',
-  },
-  'app/hardforks/page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (hover:text-text-bright, hover:underline, text-text); 1 raw <a>',
-  },
-  'app/network/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { ink: 1, raw: 1 },
-    reason: 'inks by hand (hover:text-text-bright, hover:underline); 1 raw <a>',
-  },
-  'components/dao/dao-board.tsx': {
-    lane: 'p-topics',
-    sites: { look: 13, ink: 8, raw: 1 },
-    reason:
-      '13 without a look; inks by hand (hover:underline, hover:text-text-bright, text-text); 1 raw <a>',
-  },
-  'components/dao/dao-grows.tsx': {
-    lane: 'p-topics',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
-  'components/dao/dao-sources.tsx': {
-    lane: 'p-topics',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (text-text, hover:text-text-bright, hover:underline)',
-  },
-  'components/deep-fork-alert.tsx': {
-    lane: 'p-topics',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (style, color)',
-  },
-  'components/fiber/fiber-channel-board.tsx': {
-    lane: 'p-topics',
-    sites: { look: 5, ink: 5 },
-    reason: '5 without a look; inks by hand (text-[color:var(--ink)], style, color)',
-  },
-  'components/fiber/fiber-channel-step.tsx': {
-    lane: 'p-topics',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (text-[color:var(--ink)], hover:underline, style)',
-  },
-  'components/fiber/fiber-network-graph.tsx': {
-    lane: 'p-topics',
-    sites: { look: 4, ink: 4 },
-    reason: '4 without a look; inks by hand (hover:text-jade, text-text-bright)',
-  },
+  // the Fiber channel and channels pages left the list (lane P4: look 1, ink 1 and look 3, ink
+  // 4, raw 1 → 0)
+  // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4: look 10, ink 7 → 0)
+  // 'app/forks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
+  // 'app/hardforks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
+  // 'app/network/client-page.tsx' left the list (lane P4: ink 1, raw 1 → 0)
+  // the DAO page's board, its growth section and its sources left the list (lane P4: look 13,
+  // ink 8, raw 1; look 1; look 2, ink 2 → 0)
+  // 'components/deep-fork-alert.tsx' left the list (lane P4: look 1, ink 1 → 0, the button the
+  // block look, its words' ink on a span inside it)
+  // the Fiber board, step and graph left the list (lane P4: look 11, ink 11 → 0)
   'components/forks/miner-link.tsx': {
     lane: 'p-topics',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, hover:text-jade)',
-  },
-  'components/hardforks/script-deployment-timeline.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 3 },
-    reason: '3 without a look; inks by hand (text-text, hover:text-text-bright, hover:underline)',
+    // look 1 → 0 (lane P4): the look is its caller's (`look={look}`); the former ink stands for
+    // the callers that state none yet, the blocks list (P3), the block page and its reward (P1)
+    sites: { ink: 1 },
+    reason:
+      'inks by hand (text-text-bright, hover:text-jade) for the callers that state no look yet (blocks list, block page, reward breakdown)',
   },
   // ---- shell ----
   'components/stats-bar.tsx': {
@@ -402,13 +342,28 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // party's lock-hash link states `block` and its hand-written underline went, 2) → 554 (lane D4
 // follow-up: the asset feed's phone row, its key and its block link, 3: two looks, one ink) → 551
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
-// and one ink) → 537 (lane D3, 14 more: the transaction page's script-group code links moved to
-// script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the structure's
-// group link went, 2; the cell page's transaction links, 4: two looks, two inks) → 535 (lane
-// p-assets: the m-NFT issue sentence's two links, inline) → 531 (lane p-assets: a collection's
-// items list, its name a key, its holder and its block inline, 4: three looks, one ink) → 527
-// (lane p-assets: a script's newest cells' footer, two ways onward, 4: a look, two inks, a raw <a>) → 483 (lane p-assets: each link states its look) → 368 (lane p-assets: each link states its look)
-const TOLERATED_TOTAL = 368;
+// and one ink) → 434: page lane P4, 103 (the fork page's 17 and MinerLink's look 1, the forks
+// page's 8, the deep-fork alert's 2; the hardforks page, 14: its edition block link and the
+// overview links inline, "How it works" a way onward and no raw <a>, 8; the deployment
+// evidence's three links inline, 6; the Fiber channel page, 16: the breadcrumb's link inline,
+// 2, the board's party, lock-script, commitment-cell and output links, 10, each `inline` or
+// `key`, the step's transaction `key` and block `inline`, 4; the Fiber channels page, 16: the
+// list's channel `key`, its parties `inline` in the table and the phone row, the lede's way
+// down `onward` (the raw anchor and its typed arrow gone), 8, the graph's party and block
+// links, 8; the network page, 2: its lede's "How it works" a Link of the onward look, one
+// ink and one raw <a>; the DAO page, 27: its blocks inline, a depositor its row's key, the
+// ways onward (the lede's, the charts', every depositor's, the activity lists', the source
+// block's and the anchor's) onward with no typed arrow and no raw <a>, the DAO script's code
+// hash a key), and lane D3, 14 (the transaction page's script-group code links moved to
+// script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the
+// structure's group link went, 2; the cell page's transaction links, 4: two looks, two inks)
+// → 265: page lane P2 (p-assets), 169: the m-NFT issue sentence's two links inline (2); a
+// collection's items list, its name a key, its holder and its block inline (4); a script's
+// newest cells' footer, two ways onward (4); the script pages, 44 (app/scripts/[name] and
+// script-family-page, each link its look); the asset, identity, token and script components,
+// 115 (23 entries left the list; genetics, mnft-detail, object-media and did-readout keep their
+// raw anchors to a file of any scheme and their inks)
+const TOLERATED_TOTAL = 265;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

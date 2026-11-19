@@ -106,7 +106,8 @@ describe('AdvertisementGraph', () => {
     );
     // Hierarchy v3 (R5): five rows of two first, every observation one tap away.
     expect(screen.getAllByRole('listitem')).toHaveLength(10);
-    fireEvent.click(screen.getByRole('button', { name: 'Show all 25 observations' }));
+    // re-pinned (P4 topics): the fold's form, "all N … ↓" (it was "Show all 25 observations")
+    fireEvent.click(screen.getByRole('button', { name: 'all 25\u00a0observations ↓' }));
     expect(screen.getAllByRole('listitem')).toHaveLength(25);
     expect(screen.getByText('alias-24')).toBeInTheDocument();
   });
@@ -139,6 +140,9 @@ describe('AdvertisementGraph', () => {
     const addr = screen.getByText(alias);
     expect(addr).toHaveClass('[overflow-wrap:anywhere]');
     expect(addr).not.toHaveClass('truncate');
+    // P4 topics (readability R3, R4): the address it named is a value, 13 px in the reading ink
+    // (it was 12 px in the quiet ink)
+    expect(addr).toHaveClass('text-small', 'text-text');
   });
 
   // Table-rows T8: one observation per line, in one column — who, "named", whom (the row's one
@@ -187,7 +191,9 @@ describe('AdvertisementGraph', () => {
     expect(named).toHaveClass('text-meta', 'text-text-dim');
     expect(whom).toHaveAttribute('title', edge(1).targetPeerId);
     expect(whom).toHaveClass('text-body', 'text-text-bright', 'leading-row');
-    expect(addr).toHaveClass('text-meta', 'text-text-dim', '[overflow-wrap:anywhere]');
+    // Re-pinned on purpose (P4 topics, readability R3 and R4): the address named is a value, at
+    // 13 px in the reading ink (it was text-meta text-text-dim)
+    expect(addr).toHaveClass('text-small', 'text-text', '[overflow-wrap:anywhere]');
     expect(row.querySelectorAll('.text-text-bright')).toHaveLength(1);
     expect(row.querySelector('.col-span-3')).toBeNull();
   });

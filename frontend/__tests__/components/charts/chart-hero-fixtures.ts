@@ -193,15 +193,19 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     'Total Supply',
     2,
     (i) => ({
-      circulating: i ? '6000' : '5999',
-      nervosdao: '3000',
-      burnt: '1000.5',
-      // C, the day's total issuance: more than the bands, which leave out the unissued pool
-      totalIssuance: '12000',
+      // four bands that partition C, the day's total issuance (the route checks it per row)
+      outsideDao: i ? '5000' : '4999',
+      daoDeposited: '3000',
+      unclaimedCompensation: '500',
+      burnt: '3500',
+      totalIssuance: i ? '12000' : '11999',
+      // the protocol circulation, C − genesis burnt − S: outside the DAO and in it
+      circulating: i ? '8000' : '7999',
     }),
     [
-      ['circulating', 'Circulating'],
-      ['nervosdao', 'Nervos DAO'],
+      ['outsideDao', 'CKB circulating outside the DAO'],
+      ['daoDeposited', 'Nervos DAO deposits'],
+      ['unclaimedCompensation', 'DAO compensation not yet claimed'],
       ['burnt', 'Burnt'],
     ]
   ),
