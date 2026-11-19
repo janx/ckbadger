@@ -786,6 +786,11 @@ network store too), no re-sync:
   `transactionsPerMinute`, `transactionsPerDay` (two, one, none),
   `/statistics/asset-ecosystem`'s category `percentage` (two), `/dao/calculator`'s
   realized APC (two) and `/dao/evidence`'s percentages (two and four).
+- `/statistics/network`'s `hashRate` and `difficulty` (part B, the third read's
+  S3): in the unit the exact value reaches (no lowered threshold), cut at two
+  places; the difficulty chart's day is the day's average cut to the integer.
+  `estimatedEpochTime` stays the nearest second of an estimate (the remaining
+  blocks at the window's average interval), which the page writes after "≈".
 - Fee rates (part B4): every rate the routes serve at two places is cut there,
   never rounded half up — `/mempool/transactions`' `feeRate`,
   `/mempool/blocks`' `feeRateRange` and `medianFeeRate`, the pending

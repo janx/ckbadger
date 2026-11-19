@@ -546,6 +546,8 @@ fn format_transaction_rates(
     ))
 }
 
+/// The status bar's hash rate in the unit its exact value reaches, cut at two places, never
+/// rounded (lane exactness, part B (the third read's S3): it chose the unit at a lowered threshold so a half-up carry landed in it).
 fn format_hash_rate(hash_rate: u128) -> String {
     let (scale, unit) = [
         (1_000_000_000_000_000_000u128, "EH/s"),
@@ -556,14 +558,11 @@ fn format_hash_rate(hash_rate: u128) -> String {
         (1_000, "KH/s"),
     ]
     .into_iter()
-    .find(|(scale, _)| hash_rate >= *scale - *scale / 200_000)
+    .find(|(scale, _)| hash_rate >= *scale)
     .unwrap_or((1, "H/s"));
     let whole = hash_rate / scale;
-    let remainder = hash_rate % scale;
-    let cents = ckbadger_common::work::rounded_ratio(remainder * 100, scale)
-        .expect("scale is nonzero and bounded");
-    let whole = whole + cents / 100;
-    format!("{whole}.{:02} {unit}", cents % 100)
+    let cents = (hash_rate % scale) * 100 / scale;
+    format!("{whole}.{cents:02} {unit}")
 }
 
 fn format_difficulty(difficulty: u64) -> String {
@@ -583,12 +582,12 @@ fn format_difficulty(difficulty: u64) -> String {
         (KILO, "K"),
     ]
     .into_iter()
-    .find(|(scale, _)| difficulty >= *scale - *scale / 200_000);
+    // the unit the exact value reaches, the figure cut in it (lane exactness, part B (the third read's S3))
+    .find(|(scale, _)| difficulty >= *scale);
     let Some((scale, unit)) = scale else {
         return difficulty.to_string();
     };
-    let hundredths = ckbadger_common::work::rounded_ratio(difficulty as u128 * 100, scale as u128)
-        .expect("u64 difficulty times 100 fits u128 and scale is nonzero");
+    let hundredths = difficulty as u128 * 100 / scale as u128;
     format!("{}.{:02} {unit}", hundredths / 100, hundredths % 100)
 }
 
@@ -3747,8 +3746,8 @@ fn average_daily_difficulty(
             stats.block_count, stats.difficulty_sum
         )));
     }
-    ckbadger_common::work::rounded_ratio(stats.difficulty_sum, stats.block_count as u128)
-        .map_err(|e| ApiError::internal(format!("daily difficulty date={date_key}: {e}")))
+    // the day's average, cut to the integer the chart states, never rounded (lane exactness, part B (the third read's S3))
+    Ok(stats.difficulty_sum / stats.block_count as u128)
 }
 
 /// Exact daily network hash rate in hashes per second (H/s, the unit of
