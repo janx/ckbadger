@@ -199,12 +199,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the code cell’s “Type ID lineage of these bytes”, an inner disclosure with no rule (a form the component lacks)',
   },
-  'components/scripts/script-code-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason:
-      'the committed key hashes of a custody, an inner disclosure at the body step (a form the component lacks)',
-  },
   'components/scripts/script-family-page.tsx': {
     lane: 'p-assets',
     sites: { fold: 1 },
@@ -250,7 +244,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 13 (an item's lock and type scripts are SectionDisclosure's inner form)
 // → 12 (an m-NFT issuer's raw metadata is SectionDisclosure's inner form)
 // → 11 (an object's media dependencies are SectionDisclosure's inner form)
-const TOLERATED_TOTAL = 11;
+// → 10 (a custody's committed key hashes are SectionDisclosure's inner form)
+const TOLERATED_TOTAL = 10;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
