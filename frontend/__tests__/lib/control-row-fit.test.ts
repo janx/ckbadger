@@ -3,6 +3,8 @@ import {
   chipRowFits,
   chipRowPx,
   NARROWEST_LINE_PX,
+  selectPairPx,
+  selectWellUnderLabel,
   tabRowPx,
   tabRowShowsCounts,
   type ChipRowItem,
@@ -195,5 +197,65 @@ describe('a row of filter chips fits the narrowest phone, or is a select', () =>
 
   it('refuses a count that is not a count', () => {
     expect(() => chipRowPx([{ label: 'all', count: -1 }])).toThrow('Invalid count -1');
+  });
+});
+
+/**
+ * A select never cuts its value (lane c2-finish, item 2): a native select is as wide as its widest
+ * option and clips its chosen value, with no mark, where its well is narrower (at 390 an object's
+ * 'Version 1 · block #15,064,087' showed as '… #15,064,08', another number). So the well never
+ * shrinks: the pair, label and well, stands on one line where it fits its line, the well goes
+ * under its label where it does not, and an option wider than the narrowest line even alone is a
+ * naming fault the caller sees. The arithmetic: the label at 13 px (7.8 a glyph), the gap 10, the
+ * well its 1 px frame each side, the select's 10 px before the value and 25 after it (the
+ * chevron), the widest option at 13 px.
+ */
+describe('a select’s pair stands on one line, or its well goes under its label', () => {
+  const VERSION = ['1 · #15,064,087', '12 · #21,016,901 · current'];
+
+  it('measures the object page’s version select at 304.4 px: on one line at 360', () => {
+    // version: 7 × 7.8 = 54.6; the widest option, 26 glyphs, 202.8 and 37 of well: 239.8
+    expect(selectPairPx('version', VERSION)).toEqual({ label: 54.6, well: 239.8, pair: 304.4 });
+    expect(selectWellUnderLabel('version', VERSION, containerContentPx(360))).toBe(false);
+  });
+
+  it('puts the well under its label where the pair is wider than its line', () => {
+    // cell version: 12 × 7.8 = 93.6, the pair 343.4: past 328, inside 358
+    expect(selectPairPx('cell version', VERSION).pair).toBe(343.4);
+    expect(selectWellUnderLabel('cell version', VERSION, 328)).toBe(true);
+    expect(selectWellUnderLabel('cell version', VERSION, 358)).toBe(false);
+    // exactly the line: on it
+    expect(selectWellUnderLabel('cell version', VERSION, 343.4)).toBe(false);
+  });
+
+  it('stands on one line before its line is measured', () => {
+    expect(selectWellUnderLabel('cell version', VERSION, null)).toBe(false);
+  });
+
+  it('measures the widest option, and counts a grapheme outside the served Latin at 1.25 em', () => {
+    // 'ckb held in its cells', 21 glyphs: 163.8 + 37 = 200.8; sorted by: 70.2
+    expect(selectPairPx('sorted by', ['name', 'ckb held in its cells', 'holders'])).toEqual({
+      label: 70.2,
+      well: 200.8,
+      pair: 281,
+    });
+    // '拯救民主', four graphemes at 1.25 em of 13 px: 65 + 37 = 102 (a Latin run of four: 68.2)
+    expect(selectPairPx('class', ['拯救民主']).well).toBe(102);
+  });
+
+  it('throws for an option wider than the narrowest line even alone: a naming fault', () => {
+    // 37 glyphs: 288.6 + 37 = 325.6, inside 328; 38: 333.4, past it
+    const fits = 'x'.repeat(37);
+    expect(selectPairPx('state', [fits]).well).toBe(325.6);
+    expect(selectWellUnderLabel('state', [fits], 328)).toBe(true);
+    const over = 'x'.repeat(38);
+    expect(() => selectWellUnderLabel('state', ['all', over], 1232)).toThrow(
+      `select "state": its option "${over}" makes a well 333.4 px wide, wider than the 328 px line of a 360 px window`
+    );
+    expect(() => selectWellUnderLabel('state', [over], null)).toThrow(/333\.4 px/);
+  });
+
+  it('refuses a select with no option', () => {
+    expect(() => selectPairPx('state', [])).toThrow('select "state": no option to measure');
   });
 });

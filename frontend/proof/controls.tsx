@@ -240,6 +240,7 @@ function Fields() {
   const [name, setName] = useState('');
   const [country, setCountry] = useState('');
   const [sort, setSort] = useState<Sort>('capacity');
+  const [version, setVersion] = useState<(typeof VERSIONS)[number]['value']>('12');
   return (
     <Item name="field, select">
       <TextField
@@ -258,9 +259,25 @@ function Fields() {
         className="w-[200px]"
       />
       <Select label="sorted by" value={sort} options={SORTS} onChange={setSort} />
+      {/* a 328 px line (a 360 px phone's): the pair 304.4 px stands on it; 'cell version' makes
+          it 343.4 px, and the well goes under its label (never a cut value) */}
+      <div className="w-[328px] max-w-full">
+        <Select label="version" value={version} options={VERSIONS} onChange={setVersion} />
+      </div>
+      <div className="w-[328px] max-w-full">
+        <Select label="cell version" value={version} options={VERSIONS} onChange={setVersion} />
+      </div>
+      <Note>
+        in a 328 px line: the pair on one line where it fits, else the well under its label
+      </Note>
     </Item>
   );
 }
+
+const VERSIONS = [
+  { value: '1', label: '1 · #15,064,087' },
+  { value: '12', label: '12 · #21,016,901 · current' },
+] as const;
 
 function CopyAndHelp() {
   return (
