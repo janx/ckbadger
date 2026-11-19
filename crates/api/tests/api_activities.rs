@@ -401,6 +401,78 @@ async fn address_rows_state_each_items_movement_in_the_whole_transaction() {
     }
 }
 
+/// The automated security read of the movement (the lead's finding on a3c52252): a token amount
+/// is a u128 on chain, and anyone can mint an xUDT of 2^127 units or more. The movement converted
+/// each delta into an i128 and summed it there, failing the whole page for an amount valid chain
+/// data holds. The amounts received and sent are summed apart, exactly, whatever their size, and
+/// every party's address page answers: a transfer of u128::MAX units, a mint of 2^127 units, two
+/// parties each receiving u128::MAX with no sender (a sum past a u128), and 2^128 received against
+/// 5 sent, which only the sum's carry tells apart from a burn.
+#[tokio::test]
+async fn address_rows_state_the_movement_of_any_amount_a_transaction_holds() {
+    use ckbadger_store::types::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId};
+    let token = |magnitude: u128, negative: bool| ItemDelta {
+        item_id: vec![0xa7; 32],
+        kind: ItemKind::Token,
+        magnitude,
+        negative,
+    };
+    let party = |id: u8, items: Vec<ItemDelta>| ParticipantDelta {
+        id: ParticipantId::Lock([id; 32]),
+        ckb_delta: 0,
+        used_delta: 0,
+        item_deltas: items,
+        tags: 0,
+        roles: 0,
+    };
+    let cases: [(Vec<ParticipantDelta>, &str); 4] = [
+        (
+            vec![
+                party(0x41, vec![token(u128::MAX, true)]),
+                party(0x42, vec![token(u128::MAX, false)]),
+            ],
+            "transfer",
+        ),
+        (vec![party(0x41, vec![token(1u128 << 127, false)])], "mint"),
+        (
+            vec![
+                party(0x41, vec![token(u128::MAX, false)]),
+                party(0x42, vec![token(u128::MAX, false)]),
+            ],
+            "mint",
+        ),
+        // 2^128 received (its low bits 0, carried once) and 5 sent: only the carry says a mint
+        (
+            vec![
+                party(0x41, vec![token(u128::MAX, false)]),
+                party(0x42, vec![token(1, false)]),
+                party(0x43, vec![token(5, true)]),
+            ],
+            "mint",
+        ),
+    ];
+    for (parties, movement) in cases {
+        let locks: Vec<Vec<u8>> = parties
+            .iter()
+            .map(|p| match p.id {
+                ParticipantId::Lock(hash) => hash.to_vec(),
+                _ => unreachable!("the seed's parties are locks"),
+            })
+            .collect();
+        for lock_hash in locks {
+            let mut actions =
+                make_test_tx_actions(&lock_hash, &[0xab; 32], &[0xbc; 32], 88, 1, 100, 0);
+            actions.participants = parties.clone();
+            let (status, json) = address_activities_response(&lock_hash, &actions).await;
+            assert_eq!(status, StatusCode::OK, "{json}");
+            assert_eq!(
+                json["data"][0]["itemDeltas"][0]["movement"], movement,
+                "{json}"
+            );
+        }
+    }
+}
+
 /// R-8 ruling: an activity lock call whose args do not fit the lock's
 /// registry layout is served (200) with `decoded: null` and a `decodeError`
 /// naming the script and the length, the same rule as the transaction detail.

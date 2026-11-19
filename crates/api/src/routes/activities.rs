@@ -278,41 +278,50 @@ pub struct RowItemDelta {
     pub movement: &'static str,
 }
 
-/// An item's movement in a transaction: its net over every party, `mint` where it rose, `burn`
-/// where it fell, `transfer` where it only changed hands (a token by its type script hash, an
-/// object by its id, an identity by its id and standard: the item delta's kind and id).
-fn item_movement(actions: &TxActions, item: &ItemDelta) -> anyhow::Result<&'static str> {
-    let mut net: i128 = 0;
+/// An exact sum of u128 amounts: its low 128 bits and how many times they carried past a u128. A
+/// token amount is a u128 on chain (anyone can mint 2^127 units or more), so a transaction's amounts
+/// of one item can sum past a u128: the carries keep the sum exact for any number of deltas (a
+/// carry count bounded by the number of deltas a transaction holds, never near a usize), with no
+/// allocation, and two sums compare exactly, carries first (the derived order).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ExactSum {
+    carries: usize,
+    low: u128,
+}
+
+impl ExactSum {
+    fn add(&mut self, amount: u128) {
+        let (low, carried) = self.low.overflowing_add(amount);
+        self.low = low;
+        if carried {
+            self.carries += 1;
+        }
+    }
+}
+
+/// An item's movement in a transaction: the amounts every party received and the amounts every
+/// party sent, each summed apart and exactly ([`ExactSum`]), then compared: `mint` where more was
+/// received than sent, `burn` where more was sent, `transfer` where they are equal (a token by its
+/// type script hash, an object by its id, an identity by its id and standard: the item delta's
+/// kind and id). It cannot fail: an amount is never converted to a signed type (the lead's
+/// finding on a3c52252: a u128 past an i128 failed the whole page).
+fn item_movement(actions: &TxActions, item: &ItemDelta) -> &'static str {
+    let (mut received, mut sent) = (ExactSum::default(), ExactSum::default());
     for delta in actions.participants.iter().flat_map(|p| &p.item_deltas) {
         if delta.kind != item.kind || delta.item_id != item.item_id {
             continue;
         }
-        let magnitude = i128::try_from(delta.magnitude).map_err(|_| {
-            anyhow::anyhow!(
-                "tx 0x{}: item 0x{} moves {} units, past an i128",
-                hex::encode(&actions.tx_hash),
-                hex::encode(&delta.item_id),
-                delta.magnitude
-            )
-        })?;
-        net = if delta.negative {
-            net.checked_sub(magnitude)
+        if delta.negative {
+            sent.add(delta.magnitude);
         } else {
-            net.checked_add(magnitude)
+            received.add(delta.magnitude);
         }
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "tx 0x{}: item 0x{}'s net movement overflows an i128",
-                hex::encode(&actions.tx_hash),
-                hex::encode(&delta.item_id)
-            )
-        })?;
     }
-    Ok(match net.cmp(&0) {
+    match received.cmp(&sent) {
         std::cmp::Ordering::Greater => "mint",
         std::cmp::Ordering::Less => "burn",
         std::cmp::Ordering::Equal => "transfer",
-    })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1293,7 +1302,7 @@ pub(crate) fn build_activity_response(
         .map(|item| {
             Ok(RowItemDelta {
                 delta: convert_item_delta(item, item_cache, store, pool.is_none())?,
-                movement: item_movement(actions, item)?,
+                movement: item_movement(actions, item),
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
