@@ -46,6 +46,21 @@ describe('a flow’s day against the past (sinceSentence)', () => {
     expect(s(['9', '4', '4'])).toBe('The same as the day before; the peak was 9 on 2026-11-16.');
     expect(s(['4', '9', '9'])).toBe('The same as the day before, the most in a day on record.');
   });
+  // lane exactness, part A2 (S3): a series whose every day equals the newest has its own words, and a day of nothing
+  // is never "the most … on record" (it read "The same as the day before, the most in a day on
+  // record." of two days of 0)
+  it('says a flat series is the same every day, and never calls a zero the most', () => {
+    expect(s(['4', '4', '4'])).toBe('The same every day on record.');
+    expect(s(['0', '0'])).toBe('The same every day on record.');
+    expect(head('daily-deposit', daily(['0', '0'])).sentence).toBe('The same every day on record.');
+    const payload = daily(['0', '0']);
+    const turnover = head('capacity-turnover-ratio', {
+      ...payload,
+      data: payload.data.map((point) => ({ ...point, value2: point.value })),
+      peak2: payload.peak,
+    });
+    expect(turnover.sentence).toBe('The same 0.00% every day on record.');
+  });
   it('names a tie with an earlier day as the most since it, no peak beside it', () => {
     expect(s(['9', '4', '9'])).toBe('The most in a day since 2026-11-16.');
   });
@@ -76,6 +91,17 @@ describe('a level against its peak (peakSentence)', () => {
 
   it('stands at its peak on one point', () => {
     expect(deposit(['100'])).toBe('At its peak.');
+  });
+  // lane exactness, part A2 (S3): a flat level is the same every day; a peak of zero is never "at its peak" (two days of
+  // 0 read "At its peak, unchanged from the day before.")
+  it('says a flat level is the same every day, and a zero is no peak', () => {
+    expect(deposit(['0', '0'])).toBe('The same every day on record.');
+    expect(deposit(['150', '150'])).toBe('The same every day on record.');
+    expect(deposit(['0'])).toBe('The first day on record.');
+    expect(head('circulation-ratio', daily(['0', '0'])).sentence).toBe(
+      'The same 0.00% every day on record.'
+    );
+    expect(head('circulation-ratio', daily(['0'])).sentence).toBe('The first day on record.');
   });
   it('says an equal day is unchanged', () => {
     expect(deposit(['200', '150', '150'])).toBe(
@@ -160,6 +186,18 @@ describe('over a target, counted exactly (M1)', () => {
       'Over the 2.50% target on 1 of the last 1\u00a0day; the peak was 2.50% on 2026-11-18.'
     );
   });
+  // the test review's NOTE-1 (lane exactness, part A2): 40,000 uncles of 1,600,000 blocks is one in forty exactly, at
+  // the target and not over it (`>=` on the integers or on the cut share would count it)
+  it('does not count a day exactly at the uncle-rate target', () => {
+    const uncles = head('uncle-rate', {
+      ...daily(['0.025000']),
+      orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: [{ date: '2026-11-18', uncles: 40_000, blocks: 1_600_000 }],
+    });
+    expect(uncles.sentence).toBe(
+      'Over the 2.50% target on 0 of the last 1\u00a0day; the peak was 2.50% on 2026-11-18.'
+    );
+  });
   it('refuses an uncle rate whose route sends no operands, an older API', () => {
     expect(() =>
       head('uncle-rate', {
@@ -167,6 +205,59 @@ describe('over a target, counted exactly (M1)', () => {
         orphanRateTarget: { numerator: 1, denominator: 40 },
       })
     ).toThrow('uncle-rate: the API sends no counts: it is older than this page');
+  });
+});
+
+describe('the epoch target, from its seconds (lane exactness, part A2, N3)', () => {
+  const epochs = (seconds: number, hours: string) =>
+    chartModel(def('epoch-time-length'), {
+      title: 'Epoch Time Length',
+      yAxisLabel: 'Milliseconds',
+      y2AxisLabel: 'Blocks',
+      data: [{ date: '0', value: '14400000', value2: '1800' }],
+      peak: { date: '0', value: '14400000' },
+      peak2: { date: '0', value: '1800' },
+      target: { seconds, hours },
+    } as never);
+
+  it('draws the line at the target’s seconds and states a target off the hundredths in seconds', () => {
+    // a devnet target of 100 s is 0.02777… h: the line at it, not at the cut 0.02
+    const devnet = epochs(100, '0.02');
+    expect(devnet.referenceLines).toEqual([{ value: 100 / 3600, label: 'target 100 s' }]);
+    expect(devnet.target?.text).toBe('100 s');
+    expect(devnet.target?.ms).toBe(BigInt(100_000));
+  });
+  it('draws a target under 36 s, which cuts to 0.00 h, and does not refuse the page', () => {
+    const short = epochs(30, '0.00');
+    expect(short.referenceLines).toEqual([{ value: 30 / 3600, label: 'target 30 s' }]);
+  });
+  it('states the consensus 4 h target in hours, exactly', () => {
+    expect(epochs(14_400, '4.00').referenceLines).toEqual([{ value: 4, label: 'target 4.00 h' }]);
+  });
+  it('refuses a target that is not a whole number of seconds', () => {
+    expect(() => epochs(0, '0.00')).toThrow('epoch-time-length: invalid epoch duration target 0 s');
+  });
+});
+
+describe('an older API’s durations (lane exactness, part A2, N2)', () => {
+  it('says an API that sends seconds or hours, not whole ms, is older than this page', () => {
+    expect(() =>
+      chartModel(def('average-block-time'), {
+        title: 'Average Block Time',
+        yAxisLabel: 'Seconds',
+        data: [{ date: '2026-11-18', value: '9.96' }],
+      } as never)
+    ).toThrow(
+      'average-block-time at 2026-11-18: 9.96 is not whole ms: the API is older than this page'
+    );
+    expect(() =>
+      chartModel(def('epoch-time-length'), {
+        title: 'Epoch Time Length',
+        yAxisLabel: 'Hours',
+        y2AxisLabel: 'Blocks',
+        data: [{ date: '0', value: '4.01', value2: '1800' }],
+      } as never)
+    ).toThrow('epoch-time-length at 0: 4.01 is not whole ms: the API is older than this page');
   });
 });
 
@@ -219,6 +310,35 @@ describe('a whole of zero (S8)', () => {
   });
 });
 
+describe('a tie of the largest kinds (lane exactness, part A2, N9)', () => {
+  it('names every kind tied the largest, and each one’s share', () => {
+    const definition = def('activity-type-breakdown');
+    const kinds = ['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall'];
+    const values: Record<string, string> = {
+      transfer: '3',
+      dao: '0',
+      token: '3',
+      object: '0',
+      identity: '0',
+      scriptCall: '2',
+      kindOccurrences: '8',
+    };
+    const tied = chartHead(
+      definition,
+      chartModel(definition, {
+        title: 'Activity by type',
+        series: kinds.map((key) => ({ key, label: key, color: '#000' })),
+        data: [{ date: '2026-11-18', values }],
+      } as never)
+    );
+    // 3 CKB transfers and 3 token actions of 8: neither is "the largest kind" alone
+    expect(tied.eyebrow).toBe('CKB transfers and tokens, the largest kinds in a day');
+    expect(tied.sentence).toMatch(
+      /^CKB transfers and tokens were 37\.50% each of the day's .+, script calls 25\.00%\.$/
+    );
+  });
+});
+
 describe('a tie at the top (S5)', () => {
   it('names every block interval tied at the top', () => {
     const intervals = head('block-time-distribution', {
@@ -231,6 +351,8 @@ describe('a tie at the top (S5)', () => {
       epochs: 42,
       intervals: 75_000,
       beyondRange: 0,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: Array.from({ length: 51 }, (_, i) => (i === 12 || i === 13 ? 773 : 375)),
     });
     expect(intervals.at).toBe('last 42\u00a0epochs');
     expect(intervals.sentence).toBe(
@@ -248,11 +370,82 @@ describe('a tie at the top (S5)', () => {
       epochs: 7,
       intervals: 12_000,
       beyondRange: 12,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: Array.from({ length: 51 }, (_, i) => (i === 13 ? 124 : 60)),
     });
     expect(intervals.at).toBe('last 7\u00a0epochs');
     expect(intervals.sentence).toBe(
       '1.03% of blocks came 1.3 s after their parent, more than at any other tenth of a second; 12\u00a0blocks came more than 50 s after it.'
     );
+  });
+  // lane exactness, part A2 (S4, N4, N5): block intervals read their buckets by the route's counts
+  const intervalsOf = (
+    counts: readonly number[],
+    shares: readonly string[],
+    window: { epochs: number; intervals: number; beyondRange: number }
+  ) =>
+    head('block-time-distribution', {
+      title: 'Block Time Distribution',
+      yAxisLabel: 'Block Ratio (%)',
+      data: counts.map((_, i) => ({ date: `${Math.floor(i / 10)}.${i % 10}`, value: shares[i] })),
+      ...window,
+      bucketCounts: counts,
+    });
+  it('names no interval where none came under 50 s, and no figure (S4)', () => {
+    const none = intervalsOf(
+      Array.from({ length: 501 }, () => 0),
+      Array.from({ length: 501 }, () => '0.000'),
+      { epochs: 42, intervals: 12, beyondRange: 12 }
+    );
+    expect(none.figure).toBeNull();
+    expect(none.sentence).toBe(
+      'No interval under 50 s; 12\u00a0blocks came more than 50 s after their parent.'
+    );
+  });
+  it('counts a long tie at the top instead of listing it (S4)', () => {
+    // 1.2 s to 1.6 s each 3 of 15,000: 0.02 %, five buckets tied
+    const counts = Array.from({ length: 51 }, (_, i) =>
+      i >= 12 && i <= 16 ? 3 : i === 20 ? 1 : 0
+    );
+    const shares = counts.map((n) => (n === 3 ? '0.020' : n === 1 ? '0.006' : '0.000'));
+    expect(
+      intervalsOf(counts, shares, { epochs: 1, intervals: 15_000, beyondRange: 14_984 }).sentence
+    ).toBe(
+      '0.02% of blocks came 1.2 s after their parent, as many as at 4 other tenths of a second, more than at any of the rest; 14,984\u00a0blocks came more than 50 s after it.'
+    );
+  });
+  it('reads the most common interval by its count where two cut shares are equal (N5)', () => {
+    // 3,000 and 3,001 of 150,000 are both 2.000 % cut at three places; the counts tell them apart
+    const counts = Array.from({ length: 51 }, (_, i) =>
+      i === 12 ? 3_000 : i === 13 ? 3_001 : 2_879
+    );
+    const shares = counts.map((n) => (n === 2_879 ? '1.919' : '2.000'));
+    const intervals = intervalsOf(counts, shares, {
+      epochs: 42,
+      intervals: 150_000,
+      beyondRange: 0,
+    });
+    expect(intervals.figure?.display).toBe('1.3');
+    expect(intervals.sentence).toBe(
+      '2.00% of blocks came 1.3 s after their parent, more than at any other tenth of a second.'
+    );
+  });
+  it('names no window of 0 epochs on a chain in its first (N4)', () => {
+    const first = intervalsOf([], [], { epochs: 0, intervals: 0, beyondRange: 0 });
+    expect(first.at).toBeNull();
+    expect(first.sentence).toBe('No blocks in the window yet.');
+  });
+  it('refuses block intervals whose route sends no counts, an older API (N5)', () => {
+    expect(() =>
+      head('block-time-distribution', {
+        title: 'Block Time Distribution',
+        yAxisLabel: 'Block Ratio (%)',
+        data: [{ date: '0.1', value: '100.000' }],
+        epochs: 1,
+        intervals: 1,
+        beyondRange: 0,
+      })
+    ).toThrow('block-time-distribution: the API sends no bucketCounts: it is older than this page');
   });
   it('says the epoch durations tied at the top', () => {
     const durations = head('epoch-time-distribution', {

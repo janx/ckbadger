@@ -460,6 +460,55 @@ describe('FiberChannelBoard', () => {
     expect(moved.textContent!.length).toBeLessThan(140);
   });
 
+  // lane exactness, part A2 (the pages review's NOTE 4): each party's figures as the chain shows them, a zero said in
+  // words, not only where both parties have one (a single-funded channel stated nothing, and a
+  // close that paid one side read as if nothing were known of it)
+  const withFlows = (stage: string, amounts: readonly [string, string]) => ({
+    ...evidence,
+    stages: evidence.stages.map((s) =>
+      s.stage === stage
+        ? {
+            ...s,
+            partyFlows: s.partyFlows.map((flow, i) => ({ ...flow, netReceived: amounts[i] })),
+          }
+        : s
+    ),
+  });
+  it('says what a single-funded channel’s parties put in, a party with nothing in words', () => {
+    render(
+      <FiberChannelBoard
+        channel={{
+          ...channel,
+          state: 'forceClosed',
+          settlementTxHash: null,
+          settlementBlock: null,
+          settlementTimestamp: null,
+        }}
+        evidence={{
+          ...withFlows('opening', ['-100000000569', '0']),
+          stages: withFlows('opening', ['-100000000569', '0']).stages.filter(
+            (s) => s.stage !== 'settlement'
+          ),
+        }}
+      />
+    );
+    expect(screen.getByTestId('what-moved')).toHaveTextContent(
+      'ckb1…7sppedrr put in 1,000 CKB and ckb1…rc5eyy6y nothing; nothing has been paid out yet.'
+    );
+    // a split of one side is no split: no bar is drawn
+    expect(document.querySelector('[data-split-bar]')).toBeNull();
+  });
+  it('says a close that paid everything to one side, the other side’s nothing in words', () => {
+    render(
+      <FiberChannelBoard
+        channel={channel}
+        evidence={withFlows('settlement', ['106199998278', '0'])}
+      />
+    );
+    expect(screen.getByTestId('what-moved')).toHaveTextContent(
+      'ckb1…7sppedrr put in 1,000 CKB and got back 1,061.99 CKB; ckb1…rc5eyy6y put in 62 CKB and got back nothing.'
+    );
+  });
   it('says what a waiting channel’s parties put in, and that nothing is paid out yet (P4)', () => {
     render(
       <FiberChannelBoard

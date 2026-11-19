@@ -2875,6 +2875,11 @@ export interface BlockTimeDistributionChartResponse extends ChartResponse {
   intervals: number;
   /** The intervals past the drawn range, more than 50 s after their parent. */
   beyondRange: number;
+  /**
+   * Each bucket's intervals, one per point of `data` (lane exactness, part A2, N5): the most common
+   * interval and a tie are read from these, not from the cut shares.
+   */
+  bucketCounts: number[];
 }
 
 /** Cell size: the histogram and the two wholes its page divides by (lane D1). */

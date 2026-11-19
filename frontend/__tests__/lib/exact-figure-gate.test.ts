@@ -460,6 +460,50 @@ describe('the exact-figure gate (lane exactness, part A, A8)', () => {
     ]);
   });
 
+  // lane exactness, part A2 (the test review's NOTE-2): the forms that can round a shown figure beside those above
+  it('reads the other forms that round or read a float into a shown figure', () => {
+    const kinds = (code: string) => exactSites(code).map((s) => `${s.line} ${s.kind}`);
+    expect(
+      kinds(
+        [
+          // a quotient written by the locale: three places at most, rounded
+          "const a = (n / d).toLocaleString('en-US');",
+          // a percent or a compact form rounds whatever it is given
+          "const b = v.toLocaleString('en-US', { style: 'percent' });",
+          "const c = new Intl.NumberFormat('en-US', { notation: 'compact' });",
+          // a decimal read into a float, written
+          'const d = `${Number.parseFloat(s)} CKB`;',
+          'const e = `${+s} CKB`;',
+          // a cut to an integer, written
+          'const f = <span>{Math.trunc(x)}</span>;',
+          // a rounded value in an attribute a reader is told: a title, a label
+          'const g = <abbr title={Math.round(x)} />;',
+          'const h = <b aria-label={String(Math.round(x))} />;',
+        ].join('\n')
+      )
+    ).toEqual([
+      '2 locale-rounds',
+      '4 locale-rounds',
+      '5 locale-rounds',
+      '7 number-to-text',
+      '8 number-to-text',
+      '10 round',
+      '12 round',
+      '13 round',
+    ]);
+  });
+
+  // lane exactness, part A2 (NOTE-2): a name's `toLocaleString` with no digit option is not counted, because the reader
+  // cannot tell a float held by a name from an integer (an integer is exact under the locale; a float
+  // is rounded at three places): its limits paragraph says so, and this pins that it does
+  it('states, in its limits, the float a name holds that it cannot tell from an integer', () => {
+    expect(exactSites("const k = v.toLocaleString('en-US');")).toEqual([]);
+    const own = readFileSync(join(__dirname, 'exact-figure-gate.test.ts'), 'utf8');
+    const limits = own.slice(0, own.indexOf('const ROOT'));
+    expect(limits).toMatch(/rounds a float at three places/);
+    expect(limits).toMatch(/a name's `toLocaleString`/);
+  });
+
   it('passes what it does not count: geometry in an attribute, a value never written', () => {
     expect(
       exactSites(
@@ -468,7 +512,6 @@ describe('the exact-figure gate (lane exactness, part A, A8)', () => {
           '<rect width={w} x={Math.floor(x)} />;',
           'const n = Number(s);',
           'if (n > 3) go(n);',
-          "const k = v.toLocaleString('en-US');",
           'const m = rows[Math.ceil(i / 2)];',
           '// Math.round(x) in a comment',
           "const t = 'Math.round(x) in a string';",
