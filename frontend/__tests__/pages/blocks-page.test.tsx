@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { contentPx, gapPx } from '@/__tests__/utils/tailwind-box';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
 import { render } from '../utils/test-utils';
@@ -377,6 +377,40 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(screen.getByRole('button', { name: 'Newer' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
     expect(screen.queryByText(/Page 1 of/)).not.toBeInTheDocument();
+  });
+
+  // The controls lane (C2, c2-lists), written before the pager became the controls board's: older
+  // asks for the page after the cursor the list served, newer goes back to the page before it.
+  it('walks older by the cursor the list served, and newer back to the page before (BA-06)', async () => {
+    const older = {
+      ...page,
+      data: [
+        row(20_828_892, { transactionSizes: [355] }),
+        row(20_828_891, { transactionSizes: [355] }),
+      ],
+      nextCursor: '20828890',
+    };
+    vi.mocked(api.getBlocks).mockImplementation(async ({ cursor } = {}) =>
+      cursor === '20828892' ? older : page
+    );
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    expect(within(table).getByRole('link', { name: '#20,828,894' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    await waitFor(() =>
+      expect(api.getBlocks).toHaveBeenLastCalledWith({ cursor: '20828892', limit: 50 })
+    );
+    expect(
+      await within(screen.getByRole('table', { name: 'Latest blocks' })).findByRole('link', {
+        name: '#20,828,892',
+      })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /newer$/i }));
+    expect(
+      await within(screen.getByRole('table', { name: 'Latest blocks' })).findByRole('link', {
+        name: '#20,828,894',
+      })
+    ).toBeInTheDocument();
   });
 
   // F2 blocks visual pass (2026-10-30, live 1440 / 390): one-line rows and compact cards.

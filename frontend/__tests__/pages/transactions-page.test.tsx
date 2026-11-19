@@ -1266,6 +1266,112 @@ describe('Transactions kind in the URL (D11)', () => {
   });
 });
 
+// The controls lane (C2, c2-lists), written before the page's chips, tabs and pagers became the
+// controls board's: what each of them asks for, so the new controls are proven against it.
+describe('Transactions paging and kind (what the controls ask for)', () => {
+  const tx = (n: number) => ({
+    hash: `0x${n.toString(16).padStart(64, '0')}`,
+    blockNumber: n,
+    blockHash: `0x${'bb'.repeat(32)}`,
+    index: 1,
+    inputsCount: 2,
+    outputsCount: 3,
+    fee: '100000000',
+    value: '123456789012',
+    txSize: 226,
+    cycles: 1000000,
+    cyclesStatus: 'complete' as const,
+    activity: feedSamples.eightParties,
+    isCellbase: false,
+    timestamp: '2026-02-20T00:00:00Z',
+  });
+  const committed = (from: number, nextCursor: string | null) => ({
+    data: [tx(from), tx(from - 1)],
+    total: 120,
+    limit: 50,
+    hasMore: nextCursor !== null,
+    nextCursor,
+  });
+  const block = async (n: number) =>
+    within(await screen.findByRole('table', { name: 'Committed transactions' })).findByRole(
+      'link',
+      { name: `#${n.toLocaleString('en-US')}` }
+    );
+
+  it('walks the committed list older by its served cursor and newer back to the page before', async () => {
+    vi.mocked(api.getTransactions).mockImplementation(async ({ cursor } = {}) =>
+      cursor === 'c2' ? committed(500, null) : committed(900, 'c2')
+    );
+    render(<TransactionsPage />);
+    expect(await block(900)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({ cursor: 'c2', limit: 50 })
+    );
+    expect(await block(500)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /newer$/i }));
+    expect(await block(900)).toBeInTheDocument();
+  });
+
+  it('starts the committed list again from its newest when a kind is chosen', async () => {
+    vi.mocked(api.getTransactions).mockImplementation(async ({ cursor } = {}) =>
+      cursor === 'c2' ? committed(500, null) : committed(900, 'c2')
+    );
+    render(<TransactionsPage />);
+    expect(await block(900)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    expect(await block(500)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'token',
+      })
+    );
+  });
+
+  it('walks the pool older by its served cursor', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue(committed(900, null));
+    const poolRow = (n: number) => ({
+      hash: `0x${n.toString(16).padStart(64, '0')}`,
+      status: 'pending' as const,
+      value: '100000000',
+      fee: '1000',
+      feeRate: '1000',
+      txSize: 226,
+      cycles: '1000',
+      inputsCount: 1,
+      outputsCount: 2,
+      timestamp: '1792886400000',
+      interpretation: { status: 'complete' as const },
+      activity: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockImplementation(async ({ cursor } = {}) => ({
+      ...emptyPool,
+      data: cursor === 'p2' ? [poolRow(2)] : [poolRow(1)],
+      total: 2,
+      nextCursor: cursor === 'p2' ? null : 'p2',
+      totals: { pending: 2, proposed: 0, awaitingIndex: 0 },
+    }));
+    render(<TransactionsPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /^In the pool/ }));
+    const pool = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    expect(within(pool).getAllByTitle(poolRow(1).hash).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    await waitFor(() =>
+      expect(api.getPoolTransactions).toHaveBeenCalledWith({ cursor: 'p2', limit: 50 })
+    );
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('table', { name: 'Transactions in the pool' })).getAllByTitle(
+          poolRow(2).hash
+        ).length
+      ).toBeGreaterThan(0)
+    );
+  });
+});
+
 // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still
 // awaited; the section says it is loading, never "no …" or "failed", and resumes with the data.
 describe('TransactionsPage while its read is paused', () => {

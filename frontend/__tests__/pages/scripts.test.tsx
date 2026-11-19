@@ -351,3 +351,98 @@ describe('ScriptsPage while its read is paused', () => {
     expect(screen.queryByText('Loading scripts…')).toBeNull();
   });
 });
+
+// The controls lane (C2, c2-lists), written before the role tabs, the sort, the search and the
+// pager became the controls board's: what each asks for, and the step to the last page while it
+// loads (the list keeps the page it shows until the next one answers).
+describe('the scripts list’s pages (what the controls ask for)', () => {
+  const script = (n: number): KnownScript => ({
+    ...mockScriptsResponse.data[0],
+    codeHash: `0x${n.toString(16).padStart(64, '0')}`,
+    name: `Script ${n}`,
+  });
+  const firstPage = () => ({
+    data: Array.from({ length: 50 }, (_, i) => script(i + 1)),
+    total: 51,
+    limit: 50,
+    hasMore: true,
+    nextCursor: 'n2',
+  });
+  const lastPage = () => ({
+    data: [script(51)],
+    total: 51,
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  });
+  const lastList = () =>
+    vi
+      .mocked(api.getScripts)
+      .mock.calls.filter(([p]) => p?.limit === 50)
+      .at(-1)?.[0];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getScripts).mockImplementation(async (params = {}) =>
+      params.cursor === 'n2' ? lastPage() : firstPage()
+    );
+  });
+
+  const toPageTwo = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /^next/i }));
+    await waitFor(() => expect(lastList()).toEqual(expect.objectContaining({ cursor: 'n2' })));
+    expect((await screen.findAllByText('Script 51')).length).toBeGreaterThan(0);
+  };
+
+  it('starts again from the first page when the sort, its direction or the search changes', async () => {
+    render(<ScriptsPage />);
+    expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
+    await toPageTwo();
+    fireEvent.change(screen.getByRole('combobox', { name: /sort/i }), {
+      target: { value: 'liveCells' },
+    });
+    await waitFor(() =>
+      expect(lastList()).toEqual(
+        expect.objectContaining({ sortKey: 'liveCells', cursor: undefined })
+      )
+    );
+    expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
+    await toPageTwo();
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse order' }));
+    await waitFor(() =>
+      expect(lastList()).toEqual(
+        expect.objectContaining({ sortDirection: 'asc', cursor: undefined })
+      )
+    );
+    expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
+    await toPageTwo();
+    fireEvent.change(screen.getByPlaceholderText('search by name or code hash'), {
+      target: { value: 'script' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    await waitFor(() =>
+      expect(lastList()).toEqual(expect.objectContaining({ search: 'script', cursor: undefined }))
+    );
+  });
+
+  it('keeps showing its page while the last one loads, then shows the last one', async () => {
+    let answer: (value: ReturnType<typeof lastPage>) => void = () => {};
+    vi.mocked(api.getScripts).mockImplementation((params = {}) =>
+      params.cursor === 'n2'
+        ? new Promise((resolve) => {
+            answer = resolve;
+          })
+        : Promise.resolve(firstPage())
+    );
+    render(<ScriptsPage />);
+    expect((await screen.findAllByText('Script 50')).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /^next/i }));
+    await waitFor(() => expect(lastList()).toEqual(expect.objectContaining({ cursor: 'n2' })));
+    // the page shown until the next answers: its rows, and no error in their place
+    expect(screen.getAllByText('Script 50').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+    answer(lastPage());
+    expect((await screen.findAllByText('Script 51')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('Script 50')).toBeNull();
+  });
+});

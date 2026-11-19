@@ -304,6 +304,39 @@ describe('ActivitiesStreamExplorer', () => {
     expect(await screen.findByText(/TKN/)).toBeInTheDocument();
   });
 
+  // The controls lane (C2, c2-lists), written before the button under the stream became the
+  // controls board's short-list form: it asks for the page after the cursor the stream served, as
+  // the intersection does, and goes when the stream has no more.
+  it('loads the next page from the button under the stream, and draws none at its end', async () => {
+    const page = (txHash: string, ckb: string, blockNumber: number, more: boolean) => ({
+      data: [
+        makeActivity({
+          txHash,
+          participants: [
+            makeParticipant({ address: seededAddress(`${txHash}111111111111111`), ckbDelta: ckb }),
+          ],
+          blockNumber,
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: more,
+      nextCursor: more ? '500:0:0' : null,
+    });
+    vi.mocked(api.getGlobalActivities).mockImplementation(async (params) =>
+      params?.cursor === '500:0:0'
+        ? page('0xolder', '200000000', 499, false)
+        : page('0xhead', '100000000', 500, true)
+    );
+    render(<ActivitiesStreamExplorer />);
+    expect(await screen.findByText(exactAmount('+1 CKB'))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^(older|next \d+ ↓)$/i }));
+    expect(await screen.findByText(exactAmount('+2 CKB'))).toBeInTheDocument();
+    expect(api.getGlobalActivities).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: '500:0:0', filter: 'all' })
+    );
+    expect(screen.queryByRole('button', { name: /^(older|next \d+ ↓)$/i })).toBeNull();
+  });
+
   it('renders an empty state when the selected filter has no activities', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [],

@@ -928,6 +928,50 @@ describe('Inventory snapshot and pagination lifecycle', () => {
       )
     );
   });
+  // The controls lane (C2, c2-lists), written before the sort and the search became the controls
+  // board's select and field: each starts the list again from its first page.
+  it('starts the list again from its first page when the sort changes', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      total: 52,
+      hasMore: true,
+      nextCursor: 'older',
+    });
+    render(<TokensPage />);
+    await screen.findAllByText('Test Token');
+    fireEvent.click(screen.getByRole('button', { name: /^next/i }));
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older' }))
+    );
+    fireEvent.change(screen.getByRole('combobox', { name: /sort/i }), {
+      target: { value: 'name' },
+    });
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortKey: 'name', cursor: undefined })
+      )
+    );
+  });
+  it('starts the list again from its first page when the search changes', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue({
+      ...mockTokenAssets,
+      total: 52,
+      hasMore: true,
+      nextCursor: 'older',
+    });
+    render(<TokensPage />);
+    await screen.findAllByText('Test Token');
+    fireEvent.click(screen.getByRole('button', { name: /^next/i }));
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older' }))
+    );
+    fireEvent.change(screen.getByPlaceholderText('search by name'), { target: { value: 'beta' } });
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: 'beta', cursor: undefined })
+      )
+    );
+  });
   it('retains the loaded rows and makes refetch failures visible', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
     const client = createTestQueryClient();
