@@ -2857,6 +2857,115 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
 // Exact activity summary: chain-time window and cross-hour address dedup
 // ============================================================
 
+/// The tests review's SHOULD 3 (the P3 follow-up): the 24 h summary's kindOccurrences and daoCount
+/// were pinned only on a transfers-only seed, where kindOccurrences equals transferCount and
+/// daoCount is 0, so a route that stated either wrongly passed. Four transactions whose kinds
+/// overlap and one of which takes three DAO actions: every figure differs from the others.
+#[tokio::test]
+async fn test_activity_summary_24h_counts_overlapping_kinds_and_dao_actions() {
+    use ckbadger_store::types::{
+        ParticipantDelta, ParticipantId, ProtocolAction, TxActions, TypeCallEntry, TAG_IDENTITY,
+        TAG_OBJECT, TAG_TOKEN,
+    };
+    use ckbadger_store::StoreBatch;
+
+    let store = test_store();
+    let tip_time = 1_700_000_000_000i64;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(
+        1,
+        &CachedBlockHeader {
+            hash: vec![1; 32],
+            timestamp: tip_time,
+            chain_time_ms: tip_time,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 5,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    let call = || TypeCallEntry {
+        type_code_hash: vec![0x3a; 32],
+        type_hash_type: 1,
+        type_args: vec![],
+    };
+    let dao = |action: &str| ProtocolAction::new("dao", action, serde_json::json!({}));
+    // (tx index, tags, protocol actions, type calls)
+    let rows: Vec<(i32, u16, Vec<ProtocolAction>, Vec<TypeCallEntry>)> = vec![
+        // two deposits and a withdraw request, a token moved, a script called
+        (
+            1,
+            TAG_TOKEN,
+            vec![dao("deposit"), dao("deposit"), dao("withdraw_request")],
+            vec![call()],
+        ),
+        // a token and an object
+        (2, TAG_TOKEN | TAG_OBJECT, vec![], vec![]),
+        // a plain transfer
+        (3, 0, vec![], vec![]),
+        // an identity and a script called
+        (4, TAG_IDENTITY, vec![], vec![call()]),
+    ];
+    for (tx_index, tags, protocol_actions, type_calls) in rows {
+        let actions = TxActions {
+            tx_hash: vec![0x40 + tx_index as u8; 32],
+            block_hash: vec![1; 32],
+            block_number: 1,
+            tx_index,
+            timestamp: tip_time,
+            is_cellbase: false,
+            protocol_actions,
+            type_calls,
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::Lock([0x50 + tx_index as u8; 32]),
+                ckb_delta: 10,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags,
+                roles: 0,
+            }],
+        };
+        batch.put_tx_actions(&actions);
+        index_tx_of_actions(&mut batch, &actions);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/activity-summary-24h").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let figure = |key: &str| {
+        json[key]
+            .as_u64()
+            .unwrap_or_else(|| panic!("{key}: {json}"))
+    };
+    // the kinds as the rows count them
+    assert_eq!(
+        [
+            "activityCount",
+            "transferCount",
+            "daoDepositCount",
+            "daoWithdrawRequestCount",
+            "tokenCount",
+            "objectCount",
+            "identityCount",
+            "scriptCallCount",
+        ]
+        .map(figure),
+        [4, 1, 2, 1, 2, 1, 1, 2],
+        "{json}"
+    );
+    // the DAO's three actions (not the one transaction that took them), and the eight kinds
+    // summed: 1 transfer + 3 DAO actions + 2 tokens + 1 object + 1 identity + 2 script calls
+    assert_eq!(figure("daoCount"), 3, "{json}");
+    assert_eq!(figure("kindOccurrences"), 10, "{json}");
+}
+
 #[tokio::test]
 async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addresses() {
     use ckbadger_store::types::{ParticipantDelta, ParticipantId, TxActions};
