@@ -68,6 +68,8 @@ describe('detail and list foundations', () => {
       'border-base-border'
     );
     expect(container.querySelector('details')).not.toHaveAttribute('open');
+    // the raw data scrolls sideways itself, inside the disclosure (lane cd-fixes-controls)
+    expect(screen.getByText('0x0012').parentElement).toHaveClass('overflow-x-auto');
     expect(container.querySelector('dt')).toHaveTextContent('Block');
     expect(container.querySelector('dd')).toHaveTextContent('12');
     expect(screen.getByRole('heading', { name: 'Activity' })).toHaveClass('text-section');

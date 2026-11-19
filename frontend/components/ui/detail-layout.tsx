@@ -1,6 +1,7 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { useContext, type ReactNode } from 'react';
 import { SealedHead, type SealedHeadOf } from '@/components/ui/page-seal';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { DetailTierContext, useDetailTier } from '@/components/ui/detail-tier';
 import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { StatusStrip, type StatusStripProps } from '@/components/ui/status-strip';
 import { cn } from '@/lib/utils';
@@ -11,13 +12,10 @@ import {
 } from '@/lib/use-document-title';
 import { unitNode } from '@/components/ui/units';
 
-/** Which information tier a section sits in; tier-2 headings are quieter (FINAL_REVIEW, TX-16). */
-const DetailTierContext = createContext<1 | 2>(1);
-
-/** F2 identities (round 2): which tier a section renders in, for headings outside DetailSection. */
-export function useDetailTier(): 1 | 2 {
-  return useContext(DetailTierContext);
-}
+// The tier a section sits in lives in components/ui/detail-tier.ts (lane cd-fixes-controls, the
+// disclosure sweep: SectionDisclosure reads it, and this layout draws one); its hook is read here
+// too by the components that took it from this module.
+export { useDetailTier };
 
 /**
  * The developer-evidence tier (hierarchy plan R6): one visible boundary — 96 px, a hairline and the
@@ -246,7 +244,9 @@ export function DetailLayout({
           {tier2}
           {rawData && (
             <SectionDisclosure summary="Raw data" open={rawOpen}>
-              {rawData}
+              {/* raw data scrolls sideways where it is wider than its line; the disclosure's own
+                  content does not (a table's sticky head in it would stick to it, not the page) */}
+              <div className="overflow-x-auto">{rawData}</div>
             </SectionDisclosure>
           )}
         </DetailTier2>
