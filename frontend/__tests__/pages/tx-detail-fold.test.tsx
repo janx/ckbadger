@@ -171,3 +171,48 @@ describe('the transaction page folds a long sheet (lane D3)', () => {
     }
   });
 });
+
+// The developer tier's witnesses (lane D3; the board: "#1 to #157 are empty"): the long
+// transaction listed 158 witness rows, 157 of them "#n · empty 0 B", about 6,300 px. A run of
+// empty witnesses that no group reads folds to one line that says which they are, by counting; a
+// witness with bytes is written whole, and the witness the URL selects is never in a run.
+describe('the witnesses fold their runs of empty ones (lane D3)', () => {
+  const rows = () =>
+    Array.from(screen.getByTestId('tx-witness-tab').querySelectorAll<HTMLElement>('[data-testid]'))
+      .map((el) => el.dataset.testid!)
+      .filter((id) => /^tx-witness-(item|run)-/.test(id));
+
+  it('writes the witness with bytes whole and the 157 empty ones as one line that opens', async () => {
+    render(<TransactionDetailPage />);
+    await screen.findByTestId('tx-witness-item-0');
+    expect(rows()).toEqual(['tx-witness-item-0', 'tx-witness-run-1']);
+    const run = screen.getByTestId('tx-witness-run-1');
+    expect(run.querySelector('[data-run-words]')).toHaveTextContent(
+      /^#1 to #157 are empty: 157\switnesses of 0\sB$/
+    );
+    fireEvent.click(within(run).getByRole('button', { name: /^all 158\switnesses ↓$/ }));
+    expect(rows()).toEqual(
+      Array.from({ length: LONG_TX_INPUTS }, (_, i) => `tx-witness-item-${i}`)
+    );
+    fireEvent.click(
+      within(screen.getByTestId('tx-witness-tab')).getByRole('button', { name: 'fewer ↑' })
+    );
+    expect(rows()).toEqual(['tx-witness-item-0', 'tx-witness-run-1']);
+  });
+
+  it('never folds the witness the URL selects; a lone empty witness keeps its row', async () => {
+    mockSearchParams = new URLSearchParams('witness=2');
+    render(<TransactionDetailPage />);
+    await screen.findByTestId('tx-witness-item-0');
+    expect(rows()).toEqual([
+      'tx-witness-item-0',
+      'tx-witness-item-1',
+      'tx-witness-item-2',
+      'tx-witness-run-3',
+    ]);
+    expect(
+      screen.getByTestId('tx-witness-run-3').querySelector('[data-run-words]')
+    ).toHaveTextContent(/^#3 to #157 are empty: 155\switnesses of 0\sB$/);
+    expect(screen.getByTestId('tx-witness-item-2')).toHaveAttribute('aria-pressed', 'true');
+  });
+});
