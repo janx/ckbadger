@@ -130,6 +130,27 @@ function split(channel: FiberChannelDetail, amounts: { party: Party; amount: big
   return channel.observedParties.length === 2 && amounts.length === 2 ? amounts : null;
 }
 
+/**
+ * Both observed parties' amounts in one stage, in the channel's party order, a party with none at
+ * zero (lane exactness, part A2, the pages review's NOTE 4: the sentence of what moved was drawn only where both had
+ * one, so a single-funded channel stated nothing, and a close that paid one side read as if nothing
+ * were known of it). Null where the stage is not observed or the channel has not two parties.
+ */
+function partyAmounts(
+  channel: FiberChannelDetail,
+  stage: Stage | undefined,
+  sign: 1 | -1
+): Split | null {
+  if (!stage || channel.observedParties.length !== 2) return null;
+  const paying = stageAmounts(channel, stage, sign);
+  return channel.observedParties.map((party) => ({
+    party,
+    amount:
+      paying.find((entry) => entry.party.lockScriptHash === party.lockScriptHash)?.amount ??
+      BigInt(0),
+  }));
+}
+
 function Summary({
   channel,
   evidence,
@@ -234,44 +255,40 @@ type Split = { party: Party; amount: bigint }[];
 /**
  * What moved inside the channel, in one sentence (the readability plan's P4: "the Fiber channel
  * page states what moved in a sentence"), from the stages' own party flows (the API's figures,
- * the ones the two split bars draw): what each party put in at the open and, once the channel
- * paid out to both, what each got back at the close or the settlement. Nothing is added or
- * subtracted in the page: the chain does not say which side paid the fees inside both figures, so
- * the amount that changed sides is not a figure the page can state; the two figures stand side by
- * side for each party instead. Summary form (R5: a sentence), each cut figure titled exact. Under
- * 140 characters for two parties with seven-digit amounts (not a tier-1 prose block).
+ * the ones the split bars draw): what each party put in at the open and, once the channel paid
+ * out, what each got back at the close or the settlement, each party's figures as the chain shows
+ * them and a party with none "nothing" (lane exactness, part A2, NOTE 4: a single-funded channel, the usual shape,
+ * and a close that paid one side are said too). Nothing is added or subtracted in the page: the
+ * chain does not say which side paid the fees inside both figures, so the amount that changed sides
+ * is not a figure the page can state; the two figures stand side by side for each party instead.
+ * Summary form (R5: a sentence), each cut figure titled exact. Under 140 characters for two
+ * parties with seven-digit amounts (not a tier-1 prose block). Both splits are in the channel's
+ * party order, read by one function (`partyAmounts`).
  */
 function WhatMoved({
   channel,
-  atOpen,
-  atClose,
+  opened,
+  paid,
 }: {
   channel: FiberChannelDetail;
-  atOpen: Split;
-  atClose: Split | null;
+  opened: Split;
+  paid: Split | null;
 }) {
-  if (atClose)
-    atClose.forEach(({ party }, i) => {
-      if (party.lockScriptHash !== atOpen[i].party.lockScriptHash)
-        throw new Error(
-          `Fiber channel ${channel.channelId}: the close's party ${party.lockScriptHash} is not the open's ${atOpen[i].party.lockScriptHash}`
-        );
-    });
   const unpaid = channel.state === 'open' || channel.state === 'forceClosed';
+  const amount = (value: bigint) => (value > BigInt(0) ? summary(value) : 'nothing');
   return (
     <p data-testid="what-moved" className="text-text text-body max-w-measure">
-      {atClose ? (
-        atOpen.map(({ party, amount }, i) => (
+      {paid ? (
+        opened.map(({ party, amount: putIn }, i) => (
           <span key={party.lockScriptHash}>
             {i > 0 && '; '}
-            <PartyLink party={party} /> put in {summary(amount)} and got back{' '}
-            {summary(atClose[i].amount)}
+            <PartyLink party={party} /> put in {amount(putIn)} and got back {amount(paid[i].amount)}
           </span>
         ))
       ) : (
         <>
-          <PartyLink party={atOpen[0].party} /> put in {summary(atOpen[0].amount)} and{' '}
-          <PartyLink party={atOpen[1].party} /> {summary(atOpen[1].amount)}
+          <PartyLink party={opened[0].party} /> put in {amount(opened[0].amount)} and{' '}
+          <PartyLink party={opened[1].party} /> {amount(opened[1].amount)}
           {unpaid && '; nothing has been paid out yet'}
         </>
       )}
@@ -512,6 +529,11 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
   const atOpen = split(channel, stageAmounts(channel, stageOf(evidence, STAGE_KEYS.open), -1));
   const closing = finalStage(channel, evidence);
   const atClose = split(channel, stageAmounts(channel, closing, 1));
+  // each party's figures at the open and the close, a zero among them (NOTE 4); a channel whose
+  // opening paid nothing in is no channel the sentence can state
+  const openedAll = partyAmounts(channel, stageOf(evidence, STAGE_KEYS.open), -1);
+  const opened = openedAll?.some(({ amount }) => amount > BigInt(0)) ? openedAll : null;
+  const paid = opened ? partyAmounts(channel, closing, 1) : null;
   // a force-closed channel that waits: its commitment cell holds the channel now
   const live = channel.state === 'forceClosed' && tracked !== null && tracked.isLive;
   const commitmentStage =
@@ -547,11 +569,11 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             , so the other side can answer with a newer state.
           </p>
         )}
-        {atOpen && (
+        {opened && (
           <p>
             The chain never sees a Fiber payment, only the split when the channel opens and the
             split when it closes.
-            {atClose &&
+            {paid &&
               ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
           </p>
         )}
@@ -631,14 +653,16 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
         </section>
 
         <div className="mt-16 flex flex-col gap-[72px]">
-          {(atOpen || live) && (
+          {(opened || live) && (
             <DetailSection title="What moved inside the channel">
               {live && tracked && <LiveCommitment channel={channel} commitment={tracked} />}
+              {opened && (
+                <div className={live ? 'mt-3.5' : undefined}>
+                  <WhatMoved channel={channel} opened={opened} paid={paid} />
+                </div>
+              )}
               {atOpen && (
                 <>
-                  <div className={live ? 'mt-3.5' : undefined}>
-                    <WhatMoved channel={channel} atOpen={atOpen} atClose={atClose} />
-                  </div>
                   <div className="mt-[18px] flex flex-col gap-4">
                     <FiberSplitBar
                       left={{ name: partyId(atOpen[0].party), shannons: atOpen[0].amount }}

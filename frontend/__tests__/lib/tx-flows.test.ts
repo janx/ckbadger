@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
-  daoStepOf,
+  daoStepsOf,
   flowKey,
   foldEnds,
   onlyFeeMoved,
@@ -389,7 +389,17 @@ describe('ribbonWeight', () => {
 // own kind: its DAO tag and the transaction's DAO actions, each named once.
 // Re-pinned on purpose (lane P1, third round; review p-logic-chain SHOULD 2): the activity's
 // parties ride along, since whose step a step is depends on how many the activity tags DAO.
-describe('daoStepOf', () => {
+// Re-pinned on purpose (lane P1, the lead's look after the third round; renamed, it was daoStepOf,
+// one string): a step is its words and its own amount, the action's capacity, where the activity
+// says it is the party's one step of the kind, so the figure says the step's amount apart from
+// what flowed (a self-deposit's end read "0.00001124 CKB · Nervos DAO deposit", the fee beside it).
+describe('daoStepsOf', () => {
+  const META: Record<string, Record<string, string>> = {
+    deposit: { capacity: '5000000000000' },
+    withdraw_request: { capacity: '2605000000000', depositBlock: '19695550' },
+    withdraw_complete: { capacity: '2605000000000', compensation: '17530634165' },
+    merge: {},
+  };
   const dao = (...actions: string[]) => ({
     txHash: '0xdao',
     participants: [{ tags: 8 }],
@@ -397,34 +407,45 @@ describe('daoStepOf', () => {
       protocol: 'dao',
       protocolName: 'Nervos DAO',
       action,
-      metadata: {},
+      metadata: META[action],
     })),
   });
-  it('names the step of a party the activity tags DAO, and of no other', () => {
-    expect(daoStepOf(dao('deposit', 'deposit'), { tags: 8 })).toBe('Nervos DAO deposit');
-    expect(daoStepOf(dao('deposit'), { tags: 0 })).toBeNull();
-    expect(daoStepOf(dao(), { tags: 8 })).toBeNull();
-    expect(daoStepOf(dao('withdraw_request'), { tags: 8 | 1 })).toBe(
-      'Nervos DAO withdrawal request'
-    );
-    expect(daoStepOf(dao('withdraw_complete', 'deposit'), { tags: 8 })).toBe(
-      'Nervos DAO withdrawal, Nervos DAO deposit'
-    );
+  it('names the steps of a party the activity tags DAO, with each step’s own amount', () => {
+    expect(daoStepsOf(dao('deposit'), { tags: 8 })).toEqual([
+      { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
+    ]);
+    expect(daoStepsOf(dao('deposit'), { tags: 0 })).toBeNull();
+    expect(daoStepsOf(dao(), { tags: 8 })).toBeNull();
+    expect(daoStepsOf(dao('withdraw_request'), { tags: 8 | 1 })).toEqual([
+      { words: 'Nervos DAO withdrawal request', capacity: BigInt('2605000000000') },
+    ]);
+    expect(daoStepsOf(dao('withdraw_complete', 'deposit'), { tags: 8 })).toEqual([
+      { words: 'Nervos DAO withdrawal', capacity: BigInt('2605000000000') },
+      { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
+    ]);
+    // several steps of a kind: their count, and no total (the API states none, the page sums none)
+    expect(daoStepsOf(dao('deposit', 'deposit'), { tags: 8 })).toEqual([
+      { words: '2 Nervos DAO deposits', capacity: null },
+    ]);
   });
   // Lane P1, third round (review p-logic-chain SHOULD 2): a protocol action names no party, and the
   // DAO tag says only that a party's cells took one of the steps. Where several parties are tagged
   // and the steps are of more than one kind (A deposits, B withdraws), whose step is which is not
   // in the activity: each tagged party is said to take "a Nervos DAO step", never both kinds. Where
-  // the steps are all of one kind, every tagged party took that kind of step.
+  // the steps are all of one kind, every tagged party took that kind of step, its amount unsaid.
   it('names no step a party did not take where the activity does not say whose each is', () => {
     const batch = (...actions: string[]) => ({
       ...dao(...actions),
       participants: [{ tags: 8 }, { tags: 8 }],
     });
-    expect(daoStepOf(batch('deposit', 'withdraw_complete'), { tags: 8 })).toBe('a Nervos DAO step');
-    expect(daoStepOf(batch('deposit', 'deposit'), { tags: 8 })).toBe('Nervos DAO deposit');
+    expect(daoStepsOf(batch('deposit', 'withdraw_complete'), { tags: 8 })).toEqual([
+      { words: 'a Nervos DAO step', capacity: null },
+    ]);
+    expect(daoStepsOf(batch('deposit', 'deposit'), { tags: 8 })).toEqual([
+      { words: 'Nervos DAO deposit', capacity: null },
+    ]);
   });
   it('refuses a DAO step it has no words for', () => {
-    expect(() => daoStepOf(dao('merge'), { tags: 8 })).toThrow('0xdao: a Nervos DAO step "merge"');
+    expect(() => daoStepsOf(dao('merge'), { tags: 8 })).toThrow('0xdao: a Nervos DAO step "merge"');
   });
 });

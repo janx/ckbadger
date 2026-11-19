@@ -109,12 +109,13 @@ const EXPECT: Record<string, Expect> = {
   // lane D1, second follow-up, item 1: circulating is the protocol circulation, C − genesis burnt
   // − S, the route's (it was the band outside the DAO, 6,000); the sentence states C once, what
   // circulates, of that what is in the DAO, and what is burnt (it was "Of the 12,000 CKB issued,
-  // 25.00% is deposited in the Nervos DAO and 8.33% is burnt.")
+  // 25.00% is deposited in the Nervos DAO and 8.33% is burnt."); re-pinned for lane exactness, part A2 (M1): the
+  // deposits are named as the DAO band is, "of it deposited in the Nervos DAO" (was "of it in")
   'total-supply': {
     eyebrow: 'circulating · 2026-11-18',
     figure: '8,000 CKB',
     sentence:
-      'Of the 12,000 CKB issued, 66.66% circulates, 37.50% of it in the Nervos DAO; 29.16% is burnt.',
+      'Of the 12,000 CKB issued, 66.66% circulates, 37.50% of it deposited in the Nervos DAO; 29.16% is burnt.',
   },
   'total-deposit': {
     eyebrow: 'deposited in the Nervos DAO · 2026-11-18',

@@ -384,17 +384,34 @@ async fn total_supply_partitions_c_and_states_the_protocol_circulation() {
     assert_eq!(
         keys,
         [
-            "outsideDao",
+            // re-pinned for lane exactness, part A2 (M1): the liquid band is what circulates and is not deposited
+            // (a withdrawal request's principal is in it), keyed for that (was outsideDao)
+            "circulatingNotDeposited",
             "daoDeposited",
             "unclaimedCompensation",
             "burnt"
+        ]
+    );
+    let labels: Vec<&str> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "Circulating, not deposited",
+            "Deposited in the Nervos DAO",
+            "Unclaimed DAO compensation",
+            "Burnt"
         ]
     );
     let points = json["data"].as_array().unwrap();
     assert!(!points.is_empty(), "{json}");
     for point in points {
         let values = &point["values"];
-        assert_eq!(values["outsideDao"], "749.5", "{point}");
+        assert_eq!(values["circulatingNotDeposited"], "749.5", "{point}");
         assert_eq!(values["daoDeposited"], "250.5", "{point}");
         assert_eq!(values["unclaimedCompensation"], "100.00000001", "{point}");
         assert_eq!(values["burnt"], "8400000200.00000002", "{point}");
@@ -445,6 +462,11 @@ async fn supply_and_secondary_issuance_state_their_wholes() {
 
     let (status, issuance) = get_json(&app, "/charts/secondary-issuance").await;
     assert_eq!(status, StatusCode::OK, "{issuance}");
+    // lane exactness, part A2 (the test review's NOTE-3): the loop meets points, or it asserts nothing
+    assert!(
+        !issuance["data"].as_array().unwrap().is_empty(),
+        "{issuance}"
+    );
     for point in issuance["data"].as_array().unwrap() {
         let values = &point["values"];
         let parts = ["burnt", "compensation", "mining"]
@@ -1528,6 +1550,16 @@ async fn block_time_distribution_shares_are_of_every_interval_of_the_window() {
     assert_eq!(json["intervals"], 3, "{json}");
     assert_eq!(json["beyondRange"], 1, "{json}");
     assert_eq!(json["epochs"], 1, "{json}");
+    // lane exactness, part A2 (the routes review's N5): each bucket's count of intervals, so a tie is read from
+    // the counts, not from the cut shares (two of the three intervals in the 1.0 s bucket)
+    let counts = json["bucketCounts"].as_array().expect("bucketCounts");
+    assert_eq!(counts.len(), 501, "{json}");
+    assert_eq!(counts[10], 2, "{json}");
+    assert_eq!(
+        counts.iter().map(|c| c.as_u64().unwrap()).sum::<u64>(),
+        2,
+        "{json}"
+    );
 }
 
 /// Secondary issuance sends one whole (lane D1's third round, S1): the protocol total, `miner + S +
@@ -1596,6 +1628,8 @@ async fn secondary_issuance_states_one_whole_its_destinations_make() {
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/charts/secondary-issuance").await;
     assert_eq!(status, StatusCode::OK, "{json}");
+    // lane exactness, part A2 (NOTE-3): the loop meets points
+    assert!(!json["data"].as_array().unwrap().is_empty(), "{json}");
     for point in json["data"].as_array().unwrap() {
         let values = &point["values"];
         assert_eq!(values["compensation"], "150.00000001", "{point}");

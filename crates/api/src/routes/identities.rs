@@ -230,15 +230,8 @@ async fn list_identity_collection_holders(
     )?;
 
     let total = agg.holders_count;
-    let start_idx = if let Some((cursor_count, cursor_lock_hash)) = cursor {
-        holders
-            .iter()
-            .position(|(lock_hash, count)| *count == cursor_count && *lock_hash == cursor_lock_hash)
-            .map(|idx| idx + 1)
-            .ok_or_else(|| ApiError::bad_request("Invalid identity collection holders cursor"))?
-    } else {
-        0
-    };
+    // the page starts after the cursor's place in this view's ranking (lane exactness, part A2, S1)
+    let start_idx = crate::response::ranked_page_start(&holders, cursor.as_ref());
 
     let page: Vec<_> = holders.iter().skip(start_idx).take(limit + 1).collect();
     let has_more = page.len() > limit;

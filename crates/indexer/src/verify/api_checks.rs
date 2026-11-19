@@ -2280,7 +2280,7 @@ impl Check for ChartTotalSupplyMonotonic {
             let mut total = 0i128;
             let mut valid = true;
             for key in [
-                "outsideDao",
+                "circulatingNotDeposited",
                 "daoDeposited",
                 "unclaimedCompensation",
                 "burnt",
@@ -8668,7 +8668,7 @@ mod tests {
                 .await;
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{"date": "2024-01-01", "values": {"outsideDao": "1", "daoDeposited": "1", "burnt": "8400000000"}}]})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [{"date": "2024-01-01", "values": {"circulatingNotDeposited": "1", "daoDeposited": "1", "burnt": "8400000000"}}]})))
                 .mount(&server)
                 .await;
             Mock::given(method("GET"))
@@ -8709,7 +8709,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"circulatingNotDeposited": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "1.00000001", "mining": "2.00000002", "burnt": "3.00000003"}, "protocolTotalShannons": "600000006", "phase1CompensationShannons": "100000000"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8730,7 +8730,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"circulatingNotDeposited": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "0", "mining": "3", "burnt": "3"}, "protocolTotalShannons": "600000000", "phase1CompensationShannons": "0"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8750,7 +8750,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"circulatingNotDeposited": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "1", "mining": "2", "burnt": "3"}, "protocolTotalShannons": "600000000", "phase1CompensationShannons": "100000001"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8771,7 +8771,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"circulatingNotDeposited": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([{"date": "2024-01-01", "values": {"compensation": "1", "mining": "2", "burnt": "3"}, "phase1CompensationShannons": "0"}]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8793,7 +8793,7 @@ mod tests {
         mount_secondary_partition_data(
             &runtime,
             &server,
-            json!([{"date": "2024-01-01", "values": {"outsideDao": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
+            json!([{"date": "2024-01-01", "values": {"circulatingNotDeposited": "10", "daoDeposited": "2", "burnt": "8400000000"}}]),
             json!([row.clone(), row]),
         );
         let result = SecondaryIssuancePartitionConservation
@@ -8905,8 +8905,8 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-                    {"date": "2024-01-01", "values": {"outsideDao": "9007199254740992.00000001", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}},
-                    {"date": "2024-01-02", "values": {"outsideDao": "9007199254740992", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}}
+                    {"date": "2024-01-01", "values": {"circulatingNotDeposited": "9007199254740992.00000001", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}},
+                    {"date": "2024-01-02", "values": {"circulatingNotDeposited": "9007199254740992", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}}
                 ]})))
                 .mount(&server)
                 .await;
@@ -8928,8 +8928,8 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/total-supply"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": [
-                    {"date": "2024-01-01", "values": {"outsideDao": "1", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}},
-                    {"date": "2024-01-02", "values": {"outsideDao": "broken", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}}
+                    {"date": "2024-01-01", "values": {"circulatingNotDeposited": "1", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}},
+                    {"date": "2024-01-02", "values": {"circulatingNotDeposited": "broken", "daoDeposited": "0", "unclaimedCompensation": "0", "burnt": "0"}}
                 ]})))
                 .mount(&server)
                 .await;
@@ -8942,7 +8942,7 @@ mod tests {
             .findings
             .iter()
             .flat_map(|finding| &finding.details)
-            .any(|detail| detail.contains("invalid total-supply outsideDao")));
+            .any(|detail| detail.contains("invalid total-supply circulatingNotDeposited")));
     }
 
     #[test]

@@ -135,11 +135,13 @@ describe('Address v3 components', () => {
       // part only where it holds DAO cells (it read "in the DAO: no CKB in the Nervos DAO"), and
       // one quiet line saying what "free" is
       expect(factsOf(screen.getByTestId('balance-parts'))).toEqual([
-        ['occupied', '291,486 CKB pays for the bytes of its other cells'],
+        // re-pinned on purpose (lane P1, the lead's look after the third round): "other" stands
+        // only beside a DAO part; an address with no DAO cell says "its cells"
+        ['occupied', '291,486 CKB pays for the bytes of its cells'],
         ['free', '28,256.66879443 CKB'],
       ]);
       expect(screen.getByTestId('free-note')).toHaveTextContent(
-        'Free is the CKB its other cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
+        'Free is the CKB its cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
       );
       expect(screen.getByTestId('free-note')).toHaveClass('text-text-dim');
     });
@@ -168,9 +170,14 @@ describe('Address v3 components', () => {
       // "occupied")
       expect(factsOf(screen.getByTestId('balance-parts'))).toEqual([
         ['in Nervos DAO cells', '9,590,000 CKB in 5 deposits'],
+        // beside a DAO part its other cells (lane P1): the occupied and free of the cells that
+        // are not Nervos DAO cells
         ['occupied', '6,607 CKB pays for the bytes of its other cells'],
         ['free', '54,571.35338057 CKB'],
       ]);
+      expect(screen.getByTestId('free-note')).toHaveTextContent(
+        'Free is the CKB its other cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
+      );
       // lane P1: its unclaimed compensation stands beside the balance, exact (re-pinned, third
       // round: alone, no "spendable" beside it)
       expect(

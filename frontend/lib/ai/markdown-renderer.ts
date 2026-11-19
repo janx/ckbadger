@@ -314,14 +314,20 @@ function renderGlobalActivityRows(activities: GlobalActivity[]): unknown[][] {
   });
 }
 
+/**
+ * A chart's points with its columns named by its axes (lane exactness, part A2, N8: the two duration charts send whole
+ * ms, and a reader got 14418000 under a bare "value").
+ */
 function renderChartData(chart: ChartResponse): string {
   const rows = chart.data
     .slice(0, 120)
     .map((point) => [point.date, point.value, point.value2 ?? '-']);
+  const value = chart.yAxisLabel ? `value (${chart.yAxisLabel})` : 'value';
+  const value2 = chart.y2AxisLabel ? `value2 (${chart.y2AxisLabel})` : 'value2';
   return [
     `## ${chart.title}`,
     '',
-    markdownTable(['date', 'value', 'value2'], rows),
+    markdownTable(['date', value, value2], rows),
     '',
     `Total points: ${chart.data.length}`,
   ].join('\n');
@@ -1862,7 +1868,11 @@ export async function renderMarkdownPage(
             ['totalDeposited', stats.totalDeposited],
             ['totalDepositedCkb', stats.totalDepositedCkb],
             ['totalDepositors', stats.totalDepositors],
-            ['activeDeposits', stats.activeDeposits],
+            // the live DAO cells once, with their two parts, as the DAO page states them (lane exactness, part A2, S2:
+            // the legacy activeDeposits counts the withdrawal requests too)
+            ['depositCellsCount', stats.depositCellsCount],
+            ['withdrawalRequestCellsCount', stats.withdrawalRequestCellsCount],
+            ['liveCellsCount', stats.liveCellsCount],
             ['totalCompensationPaid', stats.totalCompensationPaid],
             ['totalCompensationPaidCkb', stats.totalCompensationPaidCkb],
             ['unclaimedCompensation', stats.unclaimedCompensation],

@@ -1023,6 +1023,11 @@ describe('Transaction variants (D4)', () => {
     );
     const moved = await screen.findByTestId('tx-what-moved');
     expect(moved.querySelector('[data-flow-side="to"]')).toHaveTextContent('Nervos DAO deposit');
+    // the one rule (lane P1, the lead's look): the step's own line and amount, which here is also
+    // what reached the holder
+    expect(moved.querySelector('[data-flow-side="to"] [data-dao-step]')).toHaveTextContent(
+      /^Nervos DAO deposit 122,000 CKB$/
+    );
   });
 
   // Lane P1, third round (review p-logic-chain MUST 2): the common shape of a DAO step, from the
@@ -1058,7 +1063,9 @@ describe('Transaction variants (D4)', () => {
       expect(summary).toHaveTextContent(lede);
       expect(summary).not.toHaveTextContent('Only the fee moved');
       const moved = await screen.findByTestId('tx-what-moved');
-      expect(moved).toHaveTextContent(step);
+      // re-pinned (lane P1, the lead's look after the third round): the step's own line, with its
+      // own amount, the lede's figure, apart from the fee or the compensation that flowed
+      expect(moved.querySelector('[data-dao-step]')).toHaveTextContent(new RegExp(`^${step}$`));
       expect(
         screen.getByRole('heading', { name: 'Balance changes' }).closest('section')
       ).toHaveTextContent(row('r4p74p'));
@@ -1068,7 +1075,7 @@ describe('Transaction variants (D4)', () => {
       self('deposit', { capacity: '12200000000000' }, (fee) => `-${fee}`);
       await expectStep(
         `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`,
-        'Nervos DAO deposit'
+        'Nervos DAO deposit 122,000 CKB'
       );
     });
 
@@ -1080,7 +1087,7 @@ describe('Transaction variants (D4)', () => {
       );
       await expectStep(
         `${row('r4p74p')} asked to withdraw a Nervos DAO deposit of 26,050 CKB, made at #19,695,550.`,
-        'Nervos DAO withdrawal request'
+        'Nervos DAO withdrawal request 26,050 CKB'
       );
     });
 
@@ -1109,7 +1116,7 @@ describe('Transaction variants (D4)', () => {
       });
       await expectStep(
         `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`,
-        'Nervos DAO withdrawal'
+        'Nervos DAO withdrawal 26,050 CKB'
       );
     });
   });

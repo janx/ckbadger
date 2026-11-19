@@ -20,7 +20,8 @@ import {
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
 import { formatCount } from '@/lib/format-count';
 import {
-  daoStepOf,
+  daoStepsOf,
+  type DaoStep,
   foldEnds,
   ribbonWeight,
   txFlows,
@@ -172,8 +173,8 @@ function EndText({
   end: FlowEnd;
   align: 'left' | 'right';
   size: ShortSize;
-  /** A party's Nervos DAO step here, in words (`daoStepOf`), said after its CKB amount. */
-  daoStep: (party: ParticipantInfo) => string | null;
+  /** A party's Nervos DAO steps here (`daoStepsOf`), each on its own line under its CKB amount. */
+  daoStep: (party: ParticipantInfo) => DaoStep[] | null;
   onExpand?: () => void;
 }) {
   const alignClass = align === 'right' ? 'text-right' : 'text-left';
@@ -206,15 +207,23 @@ function EndText({
         </div>
         <div className="text-small">
           <Amount asset={asset} amount={end.amount} size={size} />
-          {/* what its CKB is here: its Nervos DAO step, so a ribbon to it is not read as a
-              payment (lane P1 follow-up), in the DAO's gold, as its compensation is */}
-          {asset.kind === 'ckb' && daoStep(end.party) && (
-            <>
-              {' '}
-              <span className="text-gold">· {daoStep(end.party)}</span>
-            </>
-          )}
         </div>
+        {/* its Nervos DAO steps, so a ribbon to it is not read as a payment (lane P1 follow-up), in
+            the DAO's gold, as its compensation is; each on a line of its own with the step's own
+            amount, apart from what flowed (the lead's look: a self-deposit read "0.00001124 CKB ·
+            Nervos DAO deposit", the fee beside the step) */}
+        {asset.kind === 'ckb' &&
+          daoStep(end.party)?.map((step, i) => (
+            <div key={i} data-dao-step="" className="text-gold text-small">
+              {step.words}
+              {step.capacity !== null && (
+                <>
+                  {' '}
+                  <CkbAmount form="summary" shannons={step.capacity} signed={false} tone="plain" />
+                </>
+              )}
+            </div>
+          ))}
       </div>
     );
   }
@@ -320,7 +329,7 @@ function RibbonStrip({
   onHover,
 }: {
   flow: TxFlow;
-  daoStep: (party: ParticipantInfo) => string | null;
+  daoStep: (party: ParticipantInfo) => DaoStep[] | null;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -458,7 +467,7 @@ function ListStrip({
   onHover,
 }: {
   flow: TxFlow;
-  daoStep: (party: ParticipantInfo) => string | null;
+  daoStep: (party: ParticipantInfo) => DaoStep[] | null;
   onHover?: (hover: WhatMovedHover | null) => void;
 }) {
   const [expanded, setExpanded] = useState<{ from: boolean; to: boolean }>({
@@ -560,7 +569,7 @@ export function WhatMoved({
       <div ref={ref} className="divide-row-rule flex min-w-0 flex-col divide-y px-3">
         {flows.map((flow) => (
           <div key={flow.key} className="py-4">
-            <Strip flow={flow} daoStep={(party) => daoStepOf(activity, party)} onHover={onHover} />
+            <Strip flow={flow} daoStep={(party) => daoStepsOf(activity, party)} onHover={onHover} />
           </div>
         ))}
       </div>
