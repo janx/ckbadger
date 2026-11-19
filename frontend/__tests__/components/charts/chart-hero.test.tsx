@@ -71,13 +71,17 @@ const EXPECT: Record<string, Expect> = {
   },
   'active-addresses': { eyebrow: 'active in a day · 2026-11-18', figure: '2,575 addresses' },
   'ckb-volume': { eyebrow: 'moved in a day · 2026-11-18', figure: '302,594,731 CKB' },
-  'activity-volume': { eyebrow: 'recorded in a day · 2026-11-18', figure: '6,177 activities' },
+  // lane D1, second follow-up, item 2: the series is the day's kind counts, and the page says so
+  // (was "recorded in a day", "6,177 activities")
+  'activity-volume': { eyebrow: 'counted in a day · 2026-11-18', figure: '6,177 kind counts' },
   'activity-type-breakdown': {
     eyebrow: 'script calls, the largest kind in a day · 2026-11-18',
     figure: '5,425 activities',
-    // re-pinned for the D1 hand-back, item 2: the whole is the API's kind occurrences, and kinds
-    // overlap, so the sentence says so (was "… of the day's activities, …")
-    sentence: "Script calls were 88.47% of the day's kind occurrences, CKB transfers 10.25%.",
+    // re-pinned for the D1 hand-back, item 2, and its second follow-up, item 2: the whole is the
+    // day's kind counts, which count an activity of two kinds under both (was "… of the day's kind
+    // occurrences, …", and before that "of the day's activities")
+    sentence:
+      "Script calls were 88.47% of the day's kind counts, CKB transfers 10.25%. An activity of two kinds counts under both.",
   },
   'cell-count': { eyebrow: 'live · 2026-11-18', figure: '1,000,020 cells' },
   'hodl-wave': {
@@ -85,12 +89,15 @@ const EXPECT: Record<string, Expect> = {
     figure: '27.37% of all CKB',
     sentence: 'Up from 21.74% a year before; 12.87% of all CKB moved within the last month.',
   },
+  // lane D1, second follow-up, item 1: circulating is the protocol circulation, C − genesis burnt
+  // − S, the route's (it was the band outside the DAO, 6,000); the sentence states C once, what
+  // circulates, of that what is in the DAO, and what is burnt (it was "Of the 12,000 CKB issued,
+  // 25.00% is deposited in the Nervos DAO and 8.33% is burnt.")
   'total-supply': {
     eyebrow: 'circulating · 2026-11-18',
-    figure: '6,000 CKB',
-    // re-pinned for the D1 hand-back, item 2: of C, the API's total issuance (it was the page's
-    // sum of the three bands: "Of the 10,000 CKB issued, 29.99% … and 10.00% is burnt.")
-    sentence: 'Of the 12,000 CKB issued, 25.00% is deposited in the Nervos DAO and 8.33% is burnt.',
+    figure: '8,000 CKB',
+    sentence:
+      'Of the 12,000 CKB issued, 66.66% circulates, 37.50% of it in the Nervos DAO; 29.16% is burnt.',
   },
   'total-deposit': {
     eyebrow: 'deposited in the Nervos DAO · 2026-11-18',
