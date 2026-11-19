@@ -442,8 +442,10 @@ export default function TransactionsPage() {
   const [kind, setKind] = useState<TransactionKind>(urlKind);
   const activityType = kind === 'all' ? undefined : kind;
   const [tab, setTab] = useState<'committed' | 'pool'>('committed');
-  const committedPage = useCursorPagination();
-  const poolPage = useCursorPagination();
+  const limit = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const committedPage = useCursorPagination(limit);
+  const poolPage = useCursorPagination(limit);
   const { reset: resetCommitted } = committedPage;
   const { reset: resetPool } = poolPage;
   // D11: the page follows its URL, also when a link or history entry changes it under this page.
@@ -452,7 +454,6 @@ export default function TransactionsPage() {
     resetCommitted();
     resetPool();
   }, [urlKind, resetCommitted, resetPool]);
-  const limit = usePageSize(DEFAULT_PAGE_SIZE);
   const committed = useQuery({
     queryKey: ['transactions', committedPage.cursor, limit, activityType],
     queryFn: () =>

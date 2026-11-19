@@ -27,37 +27,46 @@ function pageCount(list: string, total: number, limit: number): number {
   return Math.ceil(total / limit);
 }
 
+/** Where a page of a ranked list stands, as the pager's `pages` mode draws it. */
+export interface RankedPage {
+  page: number;
+  /** The page size the response served. */
+  pageSize: number;
+  /** Whether a page follows: the response's own "more". */
+  hasMore: boolean;
+  /** The rows the page shows, counted from 1; null for an empty page past the list's end. */
+  rows: { from: number; to: number } | null;
+  /** The rows in all and the pages they fill, where the page's own response counts them. */
+  count: { total: number; pages: number } | null;
+}
+
 /**
  * Where a page of a ranked cursor-paged list stands, for the pager's `pages` mode
  * (components/ui/pager.tsx), from its response and the cursor's page (hooks/useCursorPagination):
  * the rows before it are the full pages before it, each the page size the response states, so it
- * shows rows `from`–`to` of the response's `total`, which fills ⌈total ÷ limit⌉ pages. Null where
- * the list is one page (the first, with nothing after it): no pager is drawn. A ranked list's
- * response that counts no rows is refused, as `pages` mode writes "of N".
+ * shows rows `from`–`to`; where the response counts the rows, the count and the ⌈total ÷ limit⌉
+ * pages they fill. Null where the list is one page (the first, with nothing after it): no pager is
+ * drawn. Two states live data reaches are states, not faults (lane c2-finish): a list whose
+ * response counts no rows (an ordered list, a search) is paged by its rows and its own "more",
+ * with no count; and an empty page past the first (the list shrank under the reader, re-read on
+ * focus) has no rows and no count, only its place and a way back. A count is the page's own
+ * response's alone: one read at one tip, never a figure another read supplied.
  */
-export function rankedPageAt(
-  list: string,
-  page: number,
-  read: CursorPageRead
-): {
-  from: number;
-  to: number;
-  total: number;
-  pageSize: number;
-  page: number;
-  pages: number;
-} | null {
+export function rankedPageAt(list: string, page: number, read: CursorPageRead): RankedPage | null {
   if (page === 1 && !read.hasMore) return null;
-  if (read.total === undefined || read.total === null)
-    throw new Error(`${list}: page ${page} of a ranked list states no total`);
+  const total = read.total === undefined ? null : read.total;
+  const pages = total === null ? null : pageCount(list, total, read.limit);
+  if (total === null && (!Number.isSafeInteger(read.limit) || read.limit < 1))
+    throw new Error(`${list}: a page size of ${read.limit} rows`);
+  if (read.data.length === 0)
+    return { page, pageSize: read.limit, hasMore: read.hasMore, rows: null, count: null };
   const from = (page - 1) * read.limit + 1;
   return {
-    from,
-    to: from + read.data.length - 1,
-    total: read.total,
-    pageSize: read.limit,
     page,
-    pages: pageCount(list, read.total, read.limit),
+    pageSize: read.limit,
+    hasMore: read.hasMore,
+    rows: { from, to: from + read.data.length - 1 },
+    count: total === null ? null : { total, pages: pages! },
   };
 }
 

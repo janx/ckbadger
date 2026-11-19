@@ -411,13 +411,14 @@ const SCRIPTS_TITLE = ['Scripts'] as const;
 
 export default function ScriptsPage() {
   useDocumentTitle(SCRIPTS_TITLE);
-  const pagination = useCursorPagination();
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const pagination = useCursorPagination(pageSize);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>();
   const [role, setRole] = useState<'lock' | 'type' | undefined>();
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
-  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   // The table's page (declared first: its request goes first).
   // The page a response was asked as travels with it: the table keeps the page it shows while the
   // next one loads (keepPreviousData), and the pager writes that page's figures, not the next's.
@@ -453,8 +454,9 @@ export default function ScriptsPage() {
   }
 
   const rows = data?.data ?? [];
-  // the shown page's figures (lib/pagination.ts), at the page it was asked as; nothing for one page
-  const scriptsAt = data && data.data.length > 0 ? rankedPageAt('scripts', data.page, data) : null;
+  // the shown page's figures (lib/pagination.ts), at the page it was asked as; nothing for one page,
+  // an empty page past the end its place and a way back (lane c2-finish, 1b)
+  const scriptsAt = data ? rankedPageAt('scripts', data.page, data) : null;
   const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
@@ -691,7 +693,7 @@ export default function ScriptsPage() {
                     mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
                   />
                 )}
-                {data && data.data.length > 0 && (
+                {data && (data.data.length > 0 || scriptsAt) && (
                   <div className="border-base-border mt-4 border-t pt-4">
                     {scriptsAt && (
                       <Pager

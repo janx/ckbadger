@@ -83,8 +83,9 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
     // Live first: live cells are the state (DATA_DESIGN); a .bit collection is 97 % recycled names,
     // so 'all' opened on a screen of names with no live owner (review 2026-11-03, item 3).
     [status, setStatus] = useState<ItemStatusFilter>('live');
-  const pages = useCursorPagination();
   const pageSize = usePageSize(24);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const pages = useCursorPagination(pageSize);
   const query = useQuery({
     queryKey: ['collection-items', kind, id, search, status, pages.cursor, pageSize],
     queryFn: () =>

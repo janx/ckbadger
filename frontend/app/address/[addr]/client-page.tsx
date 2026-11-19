@@ -29,7 +29,7 @@ import {
 import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, isNotFoundApiError, type AddressCellClass, type AddressHoldings } from '@/lib/api';
+import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
@@ -86,26 +86,6 @@ const ACTIVITY_MARKS: Partial<Record<ActivityFilter, PaletteKey>> = {
   identity: CLASS_KEYS.identities,
   dao: CLASS_KEYS.dao,
 };
-/**
- * The live cells a page of the list is counted of: the API's total of the unfiltered list, or
- * the holdings read's count of the class chosen (a class's page carries no total of its own; the
- * class filter is offered once the holdings have answered).
- */
-function liveCellsTotal(
-  total: number | undefined,
-  cellClass: AddressCellClass | undefined,
-  holdings: AddressHoldings | undefined,
-  addr: string
-): number {
-  const count = cellClass ? holdings?.classes[cellClass].cellCount : total;
-  if (count === undefined)
-    throw new Error(
-      cellClass
-        ? `address ${addr}: the ${cellClass} cells are listed before the holdings that count them`
-        : `address ${addr}: an unfiltered live cells page carries no total`
-    );
-  return count;
-}
 /** One address activity page; the list and the tab count share it, so they share its cache entry. */
 const activityPageQuery = (
   lockHash: string | undefined,
@@ -613,12 +593,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   (cells.data ? (
                     <>
                       <AddressLiveCells rows={cells.data.data} />
+                      {/* counted where the page's own response counts its cells; a class
+                          filter's count is the holdings' read, stated by the class's chip
+                          (lane c2-finish, 1c) */}
                       <AddressPagination
                         pagination={cellPage}
-                        read={{
-                          ...cells.data,
-                          total: liveCellsTotal(cells.data.total, cellClass, holdings.data, addr),
-                        }}
+                        read={cells.data}
                         label="live cells"
                       />
                     </>

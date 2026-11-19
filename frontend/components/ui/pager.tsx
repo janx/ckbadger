@@ -1,22 +1,18 @@
 'use client';
 
 import { formatCount, groupCount } from '@/lib/format-count';
+import type { RankedPage } from '@/lib/pagination';
 import { cn } from '@/lib/utils';
 
-/** A ranked list in pages: the rows shown, the rows in all, a page's size, the page and the pages. */
-interface PagesProps {
+/**
+ * A ranked list in pages, as lib/pagination.ts's `rankedPageAt` gives it: the page, the rows a
+ * page holds, whether a page follows, the rows shown (none for an empty page past the end) and,
+ * where the page's own response counts the rows, the count and the pages.
+ */
+interface PagesProps extends RankedPage {
   mode: 'pages';
   /** The list it pages, for a screen reader (`tokens`). */
   label: string;
-  /** The first and the last row shown, counted from 1. */
-  from: number;
-  to: number;
-  /** The rows in all. */
-  total: number;
-  /** The rows a page holds. */
-  pageSize: number;
-  page: number;
-  pages: number;
   onPrevious: () => void;
   onNext: () => void;
 }
@@ -132,27 +128,42 @@ export function Pager(props: PagerProps) {
     );
   }
 
-  const { label, from, to, total, pageSize, page, pages, onPrevious, onNext } = props;
-  for (const [what, n] of Object.entries({ from, to, total, pageSize, page, pages }))
-    whole(label, what, n);
-  if (pages < 1) throw new Error(`Pager "${label}": ${pages} pages`);
-  if (pages === 1) return null;
-  if (page < 1 || page > pages) throw new Error(`Pager "${label}": page ${page} of ${pages}`);
-  if (from < 1 || from > to || to > total)
-    throw new Error(`Pager "${label}": rows ${from}–${to} of ${total}`);
-  if (to - from + 1 > pageSize)
-    throw new Error(`Pager "${label}": ${to - from + 1} rows on a page of ${pageSize}`);
+  const { label, page, pageSize, hasMore, rows, count, onPrevious, onNext } = props;
+  whole(label, 'page', page);
+  whole(label, 'pageSize', pageSize);
+  if (count) {
+    whole(label, 'total', count.total);
+    whole(label, 'pages', count.pages);
+    if (count.pages < 1) throw new Error(`Pager "${label}": ${count.pages} pages`);
+    if (page < 1 || page > count.pages)
+      throw new Error(`Pager "${label}": page ${page} of ${count.pages}`);
+  } else if (page < 1) throw new Error(`Pager "${label}": page ${page}`);
+  if (rows) {
+    whole(label, 'from', rows.from);
+    whole(label, 'to', rows.to);
+    const of = count ? ` of ${count.total}` : '';
+    if (rows.from < 1 || rows.from > rows.to || (count && rows.to > count.total))
+      throw new Error(`Pager "${label}": rows ${rows.from}–${rows.to}${of}`);
+    if (rows.to - rows.from + 1 > pageSize)
+      throw new Error(`Pager "${label}": ${rows.to - rows.from + 1} rows on a page of ${pageSize}`);
+  } else if (page === 1)
+    throw new Error(`Pager "${label}": an empty first page (a list with no rows draws no pager)`);
+  if (page === 1 && !hasMore) return null;
   return (
     <nav aria-label={label} className={LINE}>
-      {/* one unit: the range never breaks at its dash, nor the line before its "·" */}
-      <span className="mr-auto whitespace-nowrap">
-        {groupCount(from)}–{groupCount(to)} of {groupCount(total)}
-        <span className="hidden sm:inline"> · {groupCount(pageSize)} a page</span>
-      </span>
-      <span className="flex flex-wrap items-center gap-x-[18px]">
+      {/* one unit: the range never breaks at its dash, nor the line before its "·"; an empty page
+          past the end (the list shrank under the reader) shows no range, only where it stands */}
+      {rows && (
+        <span className="mr-auto whitespace-nowrap">
+          {groupCount(rows.from)}–{groupCount(rows.to)}
+          {count && ` of ${groupCount(count.total)}`}
+          <span className="hidden sm:inline"> · {groupCount(pageSize)} a page</span>
+        </span>
+      )}
+      <span className={cn('flex flex-wrap items-center gap-x-[18px]', !rows && 'ml-auto')}>
         <Go words="← prev" onGo={page > 1 ? onPrevious : undefined} />
-        <At page={page} pages={pages} />
-        <Go words="next →" onGo={page < pages ? onNext : undefined} />
+        <At page={page} pages={count?.pages} />
+        <Go words="next →" onGo={hasMore ? onNext : undefined} />
       </span>
     </nav>
   );

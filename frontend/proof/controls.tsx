@@ -161,16 +161,43 @@ function Pagers() {
       <Pager
         mode="pages"
         label="tokens"
-        from={(page - 1) * 20 + 1}
-        to={Math.min(page * 20, 727)}
-        total={727}
-        pageSize={20}
         page={page}
-        pages={37}
+        pageSize={20}
+        hasMore={page < 37}
+        rows={{ from: (page - 1) * 20 + 1, to: Math.min(page * 20, 727) }}
+        count={{ total: 727, pages: 37 }}
         onPrevious={go(page - 1)}
         onNext={go(page + 1)}
       />
       <Note>pages: a ranked list (live: prev and next walk its 37 pages)</Note>
+      <Pager
+        mode="pages"
+        label="objects"
+        page={2}
+        pageSize={24}
+        hasMore
+        rows={{ from: 25, to: 48 }}
+        count={null}
+        onPrevious={() => {}}
+        onNext={() => {}}
+      />
+      <Note>
+        pages of an ordered list whose response counts no rows: the next by its own “more”
+      </Note>
+      <Pager
+        mode="pages"
+        label="holders"
+        page={2}
+        pageSize={20}
+        hasMore={false}
+        rows={null}
+        count={null}
+        onPrevious={() => {}}
+        onNext={() => {}}
+      />
+      <Note>
+        an empty page past the end, the list shrank under the reader: where it is, a way back
+      </Note>
       <Pager
         mode="time"
         label="blocks"
@@ -189,12 +216,11 @@ function Pagers() {
       <Pager
         mode="pages"
         label="one page"
-        from={1}
-        to={8}
-        total={8}
-        pageSize={20}
         page={1}
-        pages={1}
+        pageSize={20}
+        hasMore={false}
+        rows={{ from: 1, to: 8 }}
+        count={{ total: 8, pages: 1 }}
         onPrevious={() => {}}
         onNext={() => {}}
       />

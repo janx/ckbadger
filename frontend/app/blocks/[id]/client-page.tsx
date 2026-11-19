@@ -53,9 +53,10 @@ export default function BlockDetailPage() {
   const { id } = useParams();
   const router = useRouter();
   const [view, setView] = useState<'activities' | 'transactions'>('activities');
-  const pagination = useCursorPagination();
-  const activityPagination = useCursorPagination();
   const pageSize = usePageSize(100);
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const pagination = useCursorPagination(pageSize);
+  const activityPagination = useCursorPagination(pageSize);
   const read = useQuery({
     queryKey: ['block', id],
     queryFn: () => api.getBlock(id as string),
@@ -222,20 +223,13 @@ export default function BlockDetailPage() {
   // the proposals read itself.
   const ownProposals = proposals?.filter((p) => p.uncle === null);
   const activityRows = activities.data?.data;
-  // Both lists are read in tx order and counted of the block's transactions (one activity row per
-  // transaction, the block feed's contract): the pager's pages mode, null for one page.
+  // Both lists are read in tx order: the pager's pages mode, null for one page, counted only where
+  // a page's own response counts its rows (lane c2-finish, 1c: the block's transaction count is
+  // another read, at its own tip; the tab heading states it).
   const activitiesAt =
-    activities.data &&
-    rankedPageAt('activities', activityPagination.page, {
-      ...activities.data,
-      total: block.transactionsCount,
-    });
+    activities.data && rankedPageAt('activities', activityPagination.page, activities.data);
   const transactionsAt =
-    transactions.data &&
-    rankedPageAt('transactions', pagination.page, {
-      ...transactions.data,
-      total: block.transactionsCount,
-    });
+    transactions.data && rankedPageAt('transactions', pagination.page, transactions.data);
   const parentElapsedMs =
     block.parentTimestamp === null
       ? null

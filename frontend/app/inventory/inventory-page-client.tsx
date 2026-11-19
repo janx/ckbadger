@@ -101,7 +101,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
   const router = useRouter(),
     pathname = usePathname(),
     params = useSearchParams();
-  const pagination = useCursorPagination();
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const pagination = useCursorPagination(pageSize);
   const resetPage = pagination.reset;
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string>();
@@ -129,7 +131,6 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
-  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   const assets = useQuery({
     queryKey: [
       'assets',

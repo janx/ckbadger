@@ -939,9 +939,6 @@ export default function ScriptDetailPage({
   const usageByCodeHash = new Map(
     versionUsageEntries.map((deployment) => [deployment.codeHash, deployment])
   );
-  const selectedVersionUsage = selectedVersion
-    ? usageByCodeHash.get(selectedVersion.codeHash)
-    : undefined;
   // Usage lists every family version (by_deployment) with its counts; the page waits for it
   // before rendering. A failed request, or a version the response leaves out (a contract
   // violation), is shown as such — never as "0 cells, 0 CKB".
@@ -961,14 +958,6 @@ export default function ScriptDetailPage({
       ownedKnowledgeSum: stats.ownedKnowledgeSum,
     };
   };
-  const selectedVersionUsageState = selectedVersion
-    ? versionUsageOf(selectedVersionUsage, selectedVersion.codeHash)
-    : null;
-  // The cell list's total comes from the usage; without it the list states no total.
-  const selectedVersionLiveCellsCount =
-    selectedVersionUsageState?.state === 'ready'
-      ? selectedVersionUsageState.liveCellsCount
-      : undefined;
   const selectedVersionCellsData = useMemo(() => {
     const merged = new Map<
       string,
@@ -1042,9 +1031,9 @@ export default function ScriptDetailPage({
 
     return {
       data: pageEntries.map((entry) => entry.cell),
-      // the page the references' pages are merged into: this many rows
+      // the page the references' pages are merged into: this many rows, counting none (the
+      // usage's live cells are another read, at another tip: lane c2-finish, 1c)
       limit: cellsPageSize,
-      total: selectedVersionLiveCellsCount,
       hasMore,
       nextCursor:
         hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
@@ -1053,18 +1042,14 @@ export default function ScriptDetailPage({
     cellsKind,
     cellsPageSize,
     selectedVersionCellsQueries,
-    selectedVersionLiveCellsCount,
     versionCellsCursorState,
     cellReferences,
   ]);
   // The page waits while its reads are awaited: fetching, or paused (offline, or a hidden tab
   // between retries). A disabled read (the code cells of an ambiguous reference) is not awaited.
-  // The version's cells, oldest first, counted of the usage's live cells where the API states
-  // them: the pager's pages mode, null for one page (a list with no count is a list in time).
-  const versionCellsAt =
-    selectedVersionCellsData.total === undefined
-      ? null
-      : rankedPageAt('cells', cellsPagination.page, selectedVersionCellsData);
+  // The version's cells, oldest first: the pager's pages mode by its rows and its "more" (its
+  // merged page counts none), null for one page.
+  const versionCellsAt = rankedPageAt('cells', cellsPagination.page, selectedVersionCellsData);
   const isAwaiting = isCodeHashMode
     ? isAwaited(codeHashLookupRead) || isAwaited(codeHashCodeCellsRead)
     : isAwaited(namedScriptDetailRead) || isAwaited(usageRead);
@@ -1725,37 +1710,17 @@ export default function ScriptDetailPage({
                       empty="No live cells currently use this version."
                     />
                   )}
-                  {/* The cells oldest first: counted of the usage's live cells where the API
-                      states them, else a list in time whose newer end is the next page. */}
-                  {selectedVersionCellsData.data.length > 0 &&
-                    (selectedVersionCellsData.total === undefined ? (
-                      <Pager
-                        mode="time"
-                        label="cells"
-                        order="oldest first"
-                        page={cellsPagination.page}
-                        onNewer={
-                          selectedVersionCellsData.hasMore
-                            ? () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)
-                            : undefined
-                        }
-                        onOlder={
-                          cellsPagination.hasPrevious ? cellsPagination.goToPrevious : undefined
-                        }
-                      />
-                    ) : (
-                      versionCellsAt && (
-                        <Pager
-                          mode="pages"
-                          label="cells"
-                          {...versionCellsAt}
-                          onPrevious={cellsPagination.goToPrevious}
-                          onNext={() =>
-                            cellsPagination.goToNext(selectedVersionCellsData.nextCursor)
-                          }
-                        />
-                      )
-                    ))}
+                  {/* The cells oldest first, paged by their rows and their "more" (the usage
+                      states their count: lane c2-finish, 1c). */}
+                  {versionCellsAt && (
+                    <Pager
+                      mode="pages"
+                      label="cells"
+                      {...versionCellsAt}
+                      onPrevious={cellsPagination.goToPrevious}
+                      onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
+                    />
+                  )}
                 </DetailSection>
               )}
             </>

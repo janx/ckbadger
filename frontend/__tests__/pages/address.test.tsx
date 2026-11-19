@@ -423,10 +423,15 @@ describe('Address v3', () => {
     // page answers (the old pager drew "Showing 1–2 of 6 objects · 10 per page" from the
     // mock's hasMore); the collection's total stays apart from the page's two rows on the way
     // onward to it.
+    // Re-pinned again (lane c2-finish, 1c): the 6 is the holdings' count, another read; the page
+    // is counted only by its own response, which counts no rows and says there is more, so the
+    // pager draws its rows, its page and a way on (the page's "more" is the API's word on it).
     const table = await screen.findByRole('table', { name: '拯救民主 objects held here' });
     expect(within(table).getAllByRole('row')).toHaveLength(3);
     expect(screen.getByRole('link', { name: 'All 6 in the collection →' })).toBeInTheDocument();
-    expect(screen.queryByRole('navigation', { name: '拯救民主 objects' })).toBeNull();
+    const objectsPager = screen.getByRole('navigation', { name: '拯救民主 objects' });
+    expect(within(objectsPager).getByText('page 1')).toBeInTheDocument();
+    expect(objectsPager).not.toHaveTextContent(/ of /);
     expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThan(0);
   });
   it('links object tiles and exact collection identity', async () => {
@@ -485,10 +490,14 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     // re-pinned (lane c2-chain): the library's pager, its range as the board writes it (was
-    // "Showing 1–9 of 101 token kinds · 20 per page" and a Next button)
+    // "Showing 1–9 of 101 token kinds · 20 per page" and a Next button). Re-pinned again (lane
+    // c2-finish, 1c): the 101 was the holdings' read, at another tip than the page; the page's own
+    // response counts no rows, so the pager draws its rows and its page, the next by its "more",
+    // and the 101 stands where the page states it, the holdings' count of token kinds.
     const pages = await screen.findByRole('navigation', { name: 'token kinds' });
-    expect(pages).toHaveTextContent(/^1–9 of 101 · 20 a page/);
-    expect(within(pages).getByText('page 1 of 6')).toBeInTheDocument();
+    expect(pages).toHaveTextContent(/^1–9 · 20 a page/);
+    expect(within(pages).getByText('page 1')).toBeInTheDocument();
+    expect(pages).not.toHaveTextContent(/of 101|page 1 of/);
     const section = screen.getByRole('heading', { name: /Tokens/ }).closest('section')!;
     fireEvent.click(within(section).getByRole('button', { name: 'next →' }));
     expect(await screen.findByText('Last token')).toBeInTheDocument();
