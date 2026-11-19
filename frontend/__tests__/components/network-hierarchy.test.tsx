@@ -503,9 +503,9 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     expect(words).toEqual(['', '', '']);
     const lines = [...section.querySelectorAll('[data-provider-line]')];
     expect(lines.map((line) => line.textContent)).toEqual([
-      'Amazon.com 54.55% · 36 nodes',
-      'Hetzner Online GmbH 30.30% · 20 nodes',
-      'Unknown 15.15% · 10 nodes',
+      'Amazon.com 54.55% · 36 nodes',
+      'Hetzner Online GmbH 30.30% · 20 nodes',
+      'Unknown 15.15% · 10 nodes',
     ]);
   });
 
@@ -517,7 +517,7 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     expect(section.querySelector('[data-role="exact-amounts"]')).toBeNull();
     const lines = section.querySelector('[aria-label="Hosting networks named under the bar"]')!;
     expect([...lines.querySelectorAll('[data-provider-line]')].map((l) => l.textContent)).toEqual([
-      'Unknown 15.15% · 10 nodes',
+      'Unknown 15.15% · 10 nodes',
     ]);
     const caption = section.lastElementChild as HTMLElement;
     expect(caption).toHaveAttribute('data-role', 'caption');
@@ -576,15 +576,15 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     // the three networks of 5 rank by their names
     const expected = [
       // from 765.75 its 202.2 px end at 967.95, inside the bar
-      ['Chinanet 6.25% · 5 nodes', leftOf(50, 1)],
-      ['DigitalOcean, LLC 6.25% · 5 nodes', leftOf(55, 2)],
+      ['Chinanet 6.25% · 5 nodes', leftOf(50, 1)],
+      ['DigitalOcean, LLC 6.25% · 5 nodes', leftOf(55, 2)],
       // from 922.5 its 288 px end at 1,210.5
-      ['Hetzner Online GmbH 6.25% · 5 nodes', leftOf(60, 3)],
+      ['Hetzner Online GmbH 6.25% · 5 nodes', leftOf(60, 3)],
       // from 1,000.875 its 311.4 px would end at 1,312.3, past the bar: it ends at its part's
       // right edge, 1,061.975, and starts at 750.575
-      ['Akamai Connected Cloud 5.00% · 4 nodes', leftOf(69, 4) - line(38)],
+      ['Akamai Connected Cloud 5.00% · 4 nodes', leftOf(69, 4) - line(38)],
       // from 1,063.975 its 264.6 px would end past the bar: it ends at the bar's end, 967.4
-      ['other networks 13.75% · 11 nodes', 1232 - line(32)],
+      ['other networks 13.75% · 11 nodes', 1232 - line(32)],
     ] as const;
     const lines = [...section.querySelectorAll('[data-provider-line]')] as HTMLElement[];
     expect(lines.map((l) => l.textContent)).toEqual(expected.map(([words]) => words));
@@ -805,9 +805,19 @@ describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
     );
     render(wrap(<AdvertisementGraph roundId={5} />));
     await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(10));
-    fireEvent.click(screen.getByRole('button', { name: 'Show all 12 observations' }));
+    // Re-pinned on purpose (P4 topics, from the placement lane): the fold both ways was
+    // "Show all 12 observations" / "Show first 10 observations", an underlined celadon word 18 px
+    // high; it takes the fold's form gate B passed for the rows' fold, "all N … ↓" (the controls
+    // library's short-list form) and "fewer ↑", each a target 28 px high from 640 and 32 below.
+    const all = screen.getByRole('button', { name: 'all 12\u00a0observations ↓' });
+    expect(all).toHaveClass('h-8', 'sm:h-7');
+    fireEvent.click(all);
     expect(screen.getAllByRole('listitem')).toHaveLength(12);
-    expect(screen.getByRole('button', { name: 'Show first 10 observations' })).toBeInTheDocument();
+    const fewer = screen.getByRole('button', { name: 'fewer ↑' });
+    expect(fewer).toHaveClass('h-8', 'sm:h-7', 'text-jade', 'text-small');
+    expect(fewer).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(fewer);
+    expect(screen.getAllByRole('listitem')).toHaveLength(10);
   });
 });
 

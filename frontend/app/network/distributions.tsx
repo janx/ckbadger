@@ -277,7 +277,7 @@ function HostingSection({
               />
               {org} <span className="tabular-nums">{share(count)}</span>
               <span className="text-text-dim"> · </span>
-              <span className="tabular-nums">{formatCount(count, 'node')}</span>
+              <span className="tabular-nums">{unitNode(formatCount(count, 'node'))}</span>
             </li>
           ))}
         </ul>

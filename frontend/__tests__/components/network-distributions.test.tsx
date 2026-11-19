@@ -97,7 +97,7 @@ describe('NetworkDistributions', () => {
     // 17 × 7.8 = 197.6 px and 20 of padding.
     expect(segment.textContent).toBe('');
     const line = container.querySelector('[data-provider-line="中国电信"]') as HTMLElement;
-    expect(line.textContent).toBe('中国电信 50.00% · 5 nodes');
+    expect(line.textContent).toBe('中国电信 50.00% · 5 nodes');
     // two parts of 5 rank by their names, Hetzner first: from its part's left edge, 121 px (119
     // and the 2 px gap), its line, 9 + 6 + 197.6 = 212.6 px, would run past the bar's end, so it
     // ends at its part's right edge, the bar's end: 240 − 212.6
