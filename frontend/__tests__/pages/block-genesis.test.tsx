@@ -101,12 +101,16 @@ describe('the genesis block page', () => {
   // yet", which is true only of a later block whose reward is still to be paid.
   it('says genesis has no miner and no mining reward', async () => {
     render(<BlockDetailPage />);
-    const facts = await screen.findByRole('complementary', { name: 'Block facts' });
+    // re-pinned on purpose (lane D2): the miner and the reward are the status strip's facts, their
+    // labels lowercase ("miner", "reward"; the aside's were "Miner", "Miner reward"); the fees
+    // stand in the evidence tier's facts (they were the aside's last)
+    const facts = await screen.findByRole('group', { name: 'Block status' });
     const fact = (label: string) => within(facts).getByText(label).parentElement as HTMLElement;
-    expect(fact('Miner')).toHaveTextContent(/^MinerGenesis$/);
-    expect(fact('Miner reward')).toHaveTextContent(/^Miner rewardNone: genesis has no miner$/);
+    expect(fact('miner')).toHaveTextContent(/^minerGenesis$/);
+    expect(fact('reward')).toHaveTextContent(/^rewardNone: genesis has no miner$/);
     expect(facts).not.toHaveTextContent('Not finalized yet');
-    expect(fact('Fees')).toHaveTextContent(/^Fees0 CKB$/);
+    const tier2 = screen.getByTestId('block-tier2-facts');
+    expect(within(tier2).getByText('Fees').parentElement).toHaveTextContent(/^Fees0 CKB$/);
     const reward = (await screen.findByRole('heading', { name: 'Reward breakdown' })).closest(
       'section'
     )!;

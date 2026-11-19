@@ -2,7 +2,8 @@ import { afterEach, onTestFinished, vi } from 'vitest';
 import { fireEvent } from '@testing-library/react';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { AddressBalance, AddressMetrics } from '@/components/address/address-holdings';
+import { AddressBalance, addressStripFacts } from '@/components/address/address-holdings';
+import { StatusStrip } from '@/components/ui/status-strip';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   AddressActivity,
@@ -153,25 +154,28 @@ describe('Address v3 components', () => {
   });
 
   // Lane P: the four metrics under the balance — Holdings · Live cells · Transactions · Lock.
-  describe('the metrics row (Address.dc.html)', () => {
-    it('names the holdings, the live cells by class, the transactions and the lock', () => {
-      render(<AddressMetrics holdings={holdingsFixture} address={addressFixture} />);
-      const row = screen.getByRole('region', { name: 'Metrics' });
-      const items = [...row.querySelectorAll('dl > div')];
-      expect(items.map((i) => i.querySelector('dt')!.textContent)).toEqual([
-        'Holdings',
-        'Live cells',
-        'Transactions',
-        'Lock',
-      ]);
-      expect(items.map((i) => i.querySelector('dd')!.textContent)).toEqual([
+  // Re-pinned on purpose (lane D2, PA-13; renamed, the describe was "the metrics row"): the four
+  // are the status strip's facts under the id line, said once (the kind line said three of them
+  // again), in the strip's order and lowercase labels: lock, live cells, transactions, holdings.
+  // The live cells' note by class went: the holdings section states each class's cells under its
+  // heading, so the strip states the count alone.
+  describe('the status strip (lane D2; the metrics row before)', () => {
+    it('names the lock, the live cells, the transactions and the holdings', () => {
+      render(
+        <StatusStrip
+          label="Address status"
+          facts={addressStripFacts(addressFixture, holdingsFixture)}
+        />
+      );
+      const strip = screen.getByRole('group', { name: 'Address status' });
+      expect(factsOf(strip)).toEqual([
+        ['lock', 'JoyID · type · 22-byte args'],
+        ['live cells', '40'],
+        ['transactions', '1,021'],
         // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space
-        '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
-        '40 · 5 DAO cells + 15 token cells + 14 objects + 1 identity + 3 other-script cells + 2 plain CKB',
-        '1,021',
-        'JoyID · type · 22-byte args',
+        ['holdings', '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity'],
       ]);
-      expect(within(items[3] as HTMLElement).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
+      expect(within(strip).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
         'href',
         expect.stringContaining('/scripts/')
       );
@@ -186,9 +190,31 @@ describe('Address v3 components', () => {
           id: `0x${String(i).padStart(2, '0').repeat(32)}`,
         })),
       };
-      render(<AddressMetrics holdings={objectsOnly} address={addressFixture} />);
-      const holdings = screen.getByRole('region', { name: 'Metrics' }).querySelector('dd')!;
-      expect(holdings).toHaveTextContent(/^827 objects · in 14 collections$/);
+      render(
+        <StatusStrip
+          label="Address status"
+          facts={addressStripFacts(addressFixture, objectsOnly)}
+        />
+      );
+      const holdings = factsOf(screen.getByRole('group', { name: 'Address status' }))[3];
+      expect(holdings).toEqual(['holdings', '827 objects · in 14 collections']);
+    });
+
+    // Lane D2: a fact the page does not know is not passed: before the holdings read answers, the
+    // strip states the lock and the transactions alone; the class counts must add up to the live
+    // cells it states, or it refuses them by name.
+    it('states what it knows before the holdings answer, and refuses class counts that do not add up', () => {
+      const { unmount } = render(
+        <StatusStrip label="Address status" facts={addressStripFacts(addressFixture, undefined)} />
+      );
+      expect(factsOf(screen.getByRole('group', { name: 'Address status' }))).toEqual([
+        ['lock', 'JoyID · type · 22-byte args'],
+        ['transactions', '1,021'],
+      ]);
+      unmount();
+      expect(() =>
+        addressStripFacts(addressFixture, { ...holdingsFixture, liveCellsCount: 41 })
+      ).toThrow('class cell counts add up to 40, not its 41 live cells');
     });
   });
   it('shows exact producer cell amounts and the data1 script reference', () => {

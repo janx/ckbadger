@@ -27,7 +27,7 @@ const PAGE_TITLE = 'Where the nodes are';
 function PageShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen">
-      <main className="container mx-auto py-4">{children}</main>
+      <main className="container mx-auto pb-4 pt-8">{children}</main>
     </div>
   );
 }
@@ -255,7 +255,8 @@ function Hero({
           </div>
         )}
         <div data-role="figure" className="mt-9 min-w-0">
-          <div className="text-text-dim text-meta mb-1.5">Reachable now</div>
+          {/* the figure's label: the eyebrow every topic hero gives its figure (lane D2, U-11) */}
+          <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">Reachable now</div>
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
             {/* The display line box (40 px) holds the figure and its scale as one line. */}
             <span className="text-index sm:text-display whitespace-nowrap">

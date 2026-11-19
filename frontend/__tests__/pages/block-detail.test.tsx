@@ -6,6 +6,7 @@ import { onlineManager } from '@tanstack/react-query';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { render } from '@/__tests__/utils/test-utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { factsOf } from '@/__tests__/utils/facts';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
 
@@ -150,6 +151,43 @@ describe('BlockDetailPage', () => {
       tipTimestampMs: null,
       events: [],
     });
+  });
+
+  // Lane D2 (PA-13; gate D0′'s strip, with the block's own four facts): the facts aside beside the
+  // block's contents becomes the status strip under the id line — its state, its time, who mined
+  // it and its reward — and the contents take the whole measure. The fees stay in the evidence
+  // tier's facts; the paying cellbase stays in the reward breakdown's head.
+  it('states status, time, miner and reward in one strip under the id line (lane D2)', async () => {
+    const { container } = render(<BlockDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Block status' });
+    const facts = factsOf(strip);
+    expect(facts.map(([label]) => label)).toEqual(['status', 'time', 'miner', 'reward']);
+    expect(facts[0][1]).toBe('canonical · 12 confirmations');
+    expect(facts[1][1]).toMatch(/^2026-02-22 08:00:00 UTC\+8 · \S+ ago · 10 s after its parent$/);
+    expect(facts[2][1]).toBe('ckb1…ysf30a0g');
+    expect(facts[3][1]).toBe('100 CKB · paid in #8,775,649');
+    expect(within(strip).getByRole('link', { name: '#8,775,649' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/8775649'
+    );
+    // under the stone and the plate, before the summary
+    const below = container.querySelector('[data-sealed-below]') as HTMLElement;
+    expect(below.firstElementChild).toBe(strip);
+    expect(below.lastElementChild).toContainElement(screen.getByTestId('block-summary'));
+    // the fees stand in the evidence tier's facts
+    const tier2 = screen.getByTestId('block-tier2-facts');
+    expect(within(tier2).getByText('Fees').parentElement).toHaveTextContent(
+      /^Fees0\.00012345 CKB$/
+    );
+  });
+
+  it('lets the block’s contents take the whole measure: no facts aside beside them (lane D2)', async () => {
+    const { container } = render(<BlockDetailPage />);
+    await screen.findByRole('group', { name: 'Block status' });
+    expect(screen.queryByRole('complementary', { name: 'Block facts' })).toBeNull();
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1.querySelector('aside')).toBeNull();
+    expect(tier1.innerHTML).not.toMatch(/_240px\]/);
   });
 
   it('routes only a true block 404 to typed identifier evidence', async () => {
@@ -584,16 +622,20 @@ describe('BlockDetailPage', () => {
         timestamp: new Date(T0 - 20_000).toISOString(),
       });
       const { unmount } = render(<BlockDetailPage />);
-      const facts = () => screen.queryByRole('complementary', { name: 'Block facts' });
+      // re-pinned on purpose (lane D2): the time is the status strip's fact, its age one unit of
+      // its own (Utc8Age), the interval to the parent another note after it (the aside wrote the
+      // age and the interval as one line, "20s ago · 10 s after its parent")
+      const facts = () => screen.queryByRole('group', { name: 'Block status' });
       await loadUnderStillClock(() => facts() !== null);
-      const age = () => within(facts()!).getByText(/ ago/).textContent;
-      expect(age()).toMatch(/^20s ago · /);
+      const age = () => within(facts()!).getByText(/ ago$/).textContent;
+      expect(age()).toBe('20s ago');
       tick(1000);
-      expect(age()).toMatch(/^21s ago · /);
+      expect(age()).toBe('21s ago');
       tick(38_000);
-      expect(age()).toMatch(/^59s ago · /);
+      expect(age()).toBe('59s ago');
       tick(1000);
-      expect(age()).toMatch(/^1m ago · /);
+      expect(age()).toBe('1m ago');
+      expect(facts()).toHaveTextContent(/1m ago · [\d,.]+ s after its parent/);
       unmount();
       expect(vi.getTimerCount()).toBe(0);
     } finally {

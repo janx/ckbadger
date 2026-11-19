@@ -337,6 +337,11 @@ export function CanonicalIdentityDetail({
       ) : (
         <AssetReadState label="identity document" error={protocol.error} read={protocol} />
       )}
+      {/* One section order on the four identity pages (lane D2, PB-22): the term first, the lease
+          a name is and when it ends; then what it resolves to (its records, a did:ckb's
+          document); then who controls it (a .cell's roles); then the CKB its cell holds. The
+          .bit page read so already; the .cell page read its records and roles before its term. */}
+      {termSection}
       {p?.kind === 'did_ckb' && (
         <>
           <DidDocumentReadout protocol={p} />
@@ -367,7 +372,6 @@ export function CanonicalIdentityDetail({
           />
         </>
       )}
-      {termSection}
       {p?.kind === 'dotbit' && records.length > 0 && (
         <IdentityRecords subject={subject} records={records} />
       )}

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Seal } from '@/components/ui/seal';
+import { StatusStrip, type StatusStripProps } from '@/components/ui/status-strip';
 import { assertSealId, type SealId, type SealKind, type SealState } from '@/lib/seal/stones';
 import { cn } from '@/lib/utils';
 
@@ -80,7 +81,12 @@ export interface SealedHeadProps extends SealedHeadOf {
    * the page gives carries no size or ink of its own (a copy control keeps its own).
    */
   identity: ReactNode;
-  /** The rest of the head: under the stone and the plate, from the page's left edge. */
+  /**
+   * The status strip (lane D2): the facts a reader checks first, the first thing under the stone
+   * and the plate, from the page's left edge, before `below`.
+   */
+  strip?: StatusStripProps;
+  /** The rest of the head: under the stone and the plate (and the strip), from the left edge. */
   below?: ReactNode;
   className?: string;
 }
@@ -93,8 +99,10 @@ export interface SealedHeadProps extends SealedHeadOf {
  * line in one voice, set here once (C10 round 2: the four pages' id lines spoke in three sizes and
  * inks, the cell's full out point bright under its h1): the kind line's small size, in the reading
  * ink, since the id is a value and the kind word a label (readability ruling R3). Everything else
- * of the head is `below`: under the stone and the plate, from the page's left edge at every width,
- * so the head's prose starts where every section under the head starts.
+ * of the head is under the stone and the plate, from the page's left edge at every width, so the
+ * head's prose starts where every section under the head starts: first the status strip (`strip`,
+ * lane D2: the object's state, time, place and figure, in one placement on every entity page and
+ * at every width), then `below` 18 px under the strip's rule.
  *
  * From md up the plate is one column beside the stone, centred on it (`items-center`): its lines 8
  * px apart keep a plate with a one-line name no taller than the stone on every page (kind line 18
@@ -115,6 +123,7 @@ export function SealedHead({
   status,
   children,
   identity,
+  strip,
   below,
   className,
 }: SealedHeadProps) {
@@ -141,8 +150,12 @@ export function SealedHead({
           </div>
         </div>
       </div>
-      {below !== undefined && (
+      {(strip !== undefined || below !== undefined) && (
         <div data-sealed-below="" className="col-span-2 min-w-0">
+          {/* the strip, then the lede 18 px under its rule (the transaction board) */}
+          {strip !== undefined && (
+            <StatusStrip {...strip} className={below !== undefined ? 'mb-[18px]' : undefined} />
+          )}
           {below}
         </div>
       )}

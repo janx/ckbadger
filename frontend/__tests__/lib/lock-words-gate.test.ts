@@ -242,7 +242,9 @@ const KNOWN: Reads = {
   'app/cell/[outpoint]/client-page.tsx': { 'api name': 1, 'registry name': 1 },
   'components/cell/cell-transactions.tsx': { 'api name': 2, 'registry name': 1 },
   'components/cell/cell-microscope.tsx': { 'api name': 1 },
-  'app/address/[addr]/client-page.tsx': { 'script info name': 4 },
+  // 4 → 2 (lane D2): the kind line's lock link and name went to the status strip, whose lock is
+  // address-holdings.tsx's one read
+  'app/address/[addr]/client-page.tsx': { 'script info name': 2 },
   'app/tx/[hash]/client-page.tsx': { 'registry name': 3 },
 };
 
@@ -301,11 +303,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   });
 
   // the old gate (a regex): 21 reads in 12 files, the known writers six files and 14 reads
-  it('pins the totals: 41 reads in 20 files, the known writers 12 files and 28 reads', () => {
+  // Re-pinned on purpose (lane D2; renamed, it was "… 41 reads in 20 files, … 28 reads"): the
+  // address page's kind line read the lock's name twice for its link; the status strip's lock is
+  // address-holdings.tsx's one read, so the known reads fall 28 → 26 and all 41 → 39
+  it('pins the totals: 39 reads in 20 files, the known writers 12 files and 26 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
     expect(Object.keys(all)).toHaveLength(20);
-    expect(total(all)).toBe(41);
+    expect(total(all)).toBe(39);
     expect(Object.keys(KNOWN)).toHaveLength(12);
-    expect(total(KNOWN)).toBe(28);
+    expect(total(KNOWN)).toBe(26);
   });
 });

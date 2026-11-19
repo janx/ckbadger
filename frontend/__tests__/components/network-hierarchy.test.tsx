@@ -221,6 +221,15 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     expect(hero.querySelector('.uppercase')).toBeNull();
   });
 
+  // Lane D2 (U-11, PB-24): the figure's label is the eyebrow the other topic heroes give their
+  // figure (TopicHero's figure layout: `.eyebrow`, the meta step, the quiet ink, 6 px over the
+  // figure, as wide as its words), where it was a plain quiet line.
+  it('names the figure with the topic heroes’ eyebrow', async () => {
+    const { hero } = await renderPage();
+    const label = within(hero).getByText('Reachable now');
+    expect(label).toHaveClass('eyebrow', 'text-meta', 'text-text-dim', 'mb-1.5', 'w-fit');
+  });
+
   it('draws the map right under the figure, inside the hero, with no heading of its own', async () => {
     const { hero, container } = await renderPage();
     const figure = hero.querySelector('[data-role="reachable"]')!;
