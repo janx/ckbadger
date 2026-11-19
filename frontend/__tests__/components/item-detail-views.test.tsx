@@ -20,13 +20,24 @@ it('keeps object capacity primary, one versions heading and exact occupied value
   // F2 objects (OB-9): the versions are the board's "CKB held in its cell" — one heading for both.
   expect(await screen.findByLabelText(/cell versions$/)).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: /^Cell versions/ })).not.toBeInTheDocument();
-  // Phase 5 (D12): the board's heading is "CKB held", its rate and split the note beside it.
-  const held = screen.getAllByRole('heading', { name: 'CKB held' });
-  expect(held).toHaveLength(1);
-  expect(held[0].parentElement).toHaveTextContent('1 CKB per byte');
+  // re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.queryByRole('heading', { name: 'CKB held' })).toBeNull();
+  const history = screen.getByRole('region', { name: 'History' });
+  const heading = within(history).getByRole('heading', { name: 'History' });
+  expect(heading.parentElement).toHaveTextContent('1 CKB per byte');
+  expect(heading.parentElement).not.toHaveTextContent(/occupied|free/);
   expect(
-    screen.getByLabelText(`Object ${sporeDetailProducer.sporeId} capacity partition`)
-  ).toHaveTextContent('229');
+    screen.queryByLabelText(`Object ${sporeDetailProducer.sporeId} capacity partition`)
+  ).toBeNull();
+  // the sentence computed from its points stands first in the section, before the versions
+  const sentence = history.querySelector('[data-role="history-sentence"]')!;
+  expect(
+    sentence.compareDocumentPosition(screen.getByLabelText(/cell versions$/)) &
+      Node.DOCUMENT_POSITION_FOLLOWING
+  ).toBeTruthy();
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    /CKB held in its cell.+229 occupied · 271 free/
+  );
   expect(
     screen.getByRole('region', { name: 'Raw item evidence' }).closest('[data-tier]')
   ).toHaveAttribute('data-tier', '2');

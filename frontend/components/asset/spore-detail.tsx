@@ -28,7 +28,6 @@ import {
   ItemLife,
   LockFootnote,
 } from '@/components/asset/object-hero';
-import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { AppLink } from '@/components/ui/app-link';
@@ -415,7 +414,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           )}
         </>
       )}
-      <div role="region" aria-label="CKB held in its cell" className="space-y-4">
+      {/* Lane P2's third round (item 1): the asset pages' one pattern. CKB held and its occupied /
+          free split are the metric, a fact of the page; this section is headed "History" and holds
+          the sentence its versions give and the versions, no display figure of its own (a
+          capacity partition and a note of occupied and free said the metric again) */}
+      <div role="region" aria-label="History" className="space-y-4">
         {!object.isLive && (
           <p className="text-text-dim text-meta" title="melted, in Spore’s words">
             No live cell holds capacity for this burned object.
@@ -428,38 +431,19 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               subject={title}
               history={versions.data}
               life
-              title="CKB held"
-              actions={
-                <span className="text-text-dim text-small">
-                  1 CKB per byte ·{' '}
-                  {held === occupied ? (
-                    <>
-                      <span className="text-text">all occupied</span>, none free
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-text">{ckbText(occupied)} occupied</span>,{' '}
-                      {ckbText(held - occupied)} free
-                    </>
-                  )}
-                </span>
+              title="History"
+              actions={<span className="text-text-dim text-small">1 CKB per byte</span>}
+              intro={
+                versions.data.data.length > 0 && (
+                  <p data-role="history-sentence" className="text-text text-body max-w-measure">
+                    {cellLifeSentence(versions.data.data, 'object')}
+                  </p>
+                )
               }
             />
           </>
         ) : (
           <AssetReadState label="cell versions" error={versions.error} read={versions} />
-        )}
-        <CapacityPartition
-          subject={`Object ${id}`}
-          total={object.ownedCapacity}
-          occupied={object.ownedKnowledge}
-          free={(held - occupied).toString()}
-        />
-        {/* Hierarchy v3 (F4): the cell's story is the caption under its evidence. */}
-        {versions.data && versions.data.data.length > 0 && (
-          <p data-role="caption" className="text-text text-body max-w-measure">
-            {cellLifeSentence(versions.data.data, 'object')}
-          </p>
         )}
       </div>
       {object.clusterId && (

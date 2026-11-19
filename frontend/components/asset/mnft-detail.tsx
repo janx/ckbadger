@@ -2,13 +2,13 @@
 
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { useQuery } from '@tanstack/react-query';
-import { api, isNotFoundApiError, type ItemCellVersion } from '@/lib/api';
+import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { NotFoundPage } from '@/components/not-found-page';
-import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
+import { ReadFailure } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetCount } from '@/components/asset/inventory-table';
@@ -35,7 +35,7 @@ import {
 } from '@/components/asset/object-hero';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
-import { cellLockSentence, cellOwnerLockPart } from '@/components/ui/lock-kind';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -261,15 +261,6 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               <dd className="text-text-bright">{transferWords(item)}</dd>
             </div>
             <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
-              <dt className="text-text-dim">Issuer</dt>
-              <dd className="text-text-bright">
-                {item.issuer.name ?? 'Unnamed issuer'}{' '}
-                <span className="text-text-dim">
-                  · <AssetCount value={item.issuer.classCount} /> classes
-                </span>
-              </dd>
-            </div>
-            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
               <dt className="text-text-dim">Characteristic</dt>
               <dd className="text-text-bright min-w-0 [overflow-wrap:anywhere]">
                 {characteristic.every((b) => b === '00') ? (
@@ -331,7 +322,6 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                   {className}
                 </AppLink>
               ),
-              note: `by ${item.issuer.name ?? 'an unnamed issuer'}`,
             },
             {
               label: 'Issued',
@@ -341,8 +331,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 <>
                   <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
-                  </AppLink>{' '}
-                  · to <IssuedTo cell={first} />
+                  </AppLink>
                 </>
               ) : undefined,
             },
@@ -468,27 +457,23 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         read={protocol}
       />
       {history && (
-        <div role="region" aria-label="CKB held in its cell" className="space-y-3">
+        // Lane P2's third round (item 1): the asset pages' one pattern, CKB held and its split the
+        // metric, this section headed "History" with the sentence its versions give and the
+        // versions, no figure of its own
+        <div role="region" aria-label="History" className="space-y-3">
           <CellVersions
             history={history}
             subject="m-NFT"
             life
             firstLabel="Issued"
-            title="CKB held"
-            actions={
-              current && (
-                <span className="text-text-dim text-small">
-                  1 CKB per byte ·{' '}
-                  <span className="text-jade">
-                    {ckbText(BigInt(current.occupiedCapacity))} occupied
-                  </span>{' '}
-                  · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))} free
-                </span>
-              )
-            }
+            title="History"
+            actions={<span className="text-text-dim text-small">1 CKB per byte</span>}
             intro={
               history.data.length > 0 && (
-                <p className="text-body max-w-measure mb-4 leading-relaxed">
+                <p
+                  data-role="history-sentence"
+                  className="text-text text-body max-w-measure mb-4 leading-relaxed"
+                >
                   {cellLifeSentence(history.data, 'token')}
                 </p>
               )
@@ -565,19 +550,6 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       </section>
     </AssetDetailShell>
   );
-}
-
-/**
- * The lock the token was issued to, in the Issued fact's note: the one decision's sentence form
- * (lane P2's follow-up, item 6), a refusal failing the note's part in place (ruling D7).
- */
-function IssuedTo({ cell }: { cell: ItemCellVersion }) {
-  const read = readPart(() => cellLockSentence(cell, 'row'));
-  if (read.error !== undefined)
-    return (
-      <PartReadError what="the lock it was issued to" where="the Issued fact" error={read.error} />
-    );
-  return <>{read.value}</>;
 }
 
 /**
