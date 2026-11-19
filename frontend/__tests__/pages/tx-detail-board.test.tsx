@@ -1114,6 +1114,19 @@ describe('Transaction variants (D4)', () => {
     );
   });
 
+  // Lane P1 (lane D3's note): the witnesses' heading stated "29 bytes", their sizes added in the
+  // page; a stated total is the API's figure, and the API sends none, so the heading counts the
+  // witnesses (the API's list) and each row states its own size.
+  it('states no total of the witnesses’ sizes, which the page would have to add (P1)', async () => {
+    render(<TransactionDetailPage />);
+    const witnesses = await screen.findByRole('heading', { name: 'Witnesses · 2' });
+    const head = witnesses.parentElement!;
+    expect(head).not.toHaveTextContent(/byte/);
+    // each row its own size, the API's
+    expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent('22 B');
+    expect(screen.getByTestId('tx-witness-item-1')).toHaveTextContent('7 B');
+  });
+
   // Review 2026-11-03: the evidence tier reads the witnesses and the cell deps first, then the
   // script groups that read them.
   it('sets Witnesses and Cell deps above Script groups in the evidence tier', async () => {
