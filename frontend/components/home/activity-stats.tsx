@@ -12,12 +12,7 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
-import {
-  activityTypeShares,
-  nonCellbaseCount,
-  scriptShares,
-  totalActivities,
-} from '@/lib/activity-stats';
+import { activityTypeShares, nonCellbaseCount, scriptShares } from '@/lib/activity-stats';
 import {
   api,
   type ActivitySummary24h,
@@ -107,7 +102,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   }
   return {
     activities: s.activityCount,
-    occurrences: totalActivities(s),
+    occurrences: s.kindOccurrences,
     addresses: s.uniqueAddressCount,
     ckbMoved: {
       text: ckbAmountText(parseShannons(s.totalCkbMoved, 'CKB moved'), 'compact'),
@@ -117,7 +112,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
       key: r.key,
       label: r.label,
       count: r.count,
-      total: totalActivities(s),
+      total: s.kindOccurrences,
       href: TYPE_BREAKDOWN,
     })),
     scripts: rows,

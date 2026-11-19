@@ -4664,6 +4664,9 @@ pub struct DailyActivityStatsResponse {
     /// DAO actions, tokens, objects, identities, script calls), summed here. Kinds overlap — an
     /// action counts in each kind it is — so this is not a count of distinct activities.
     pub kind_occurrences: u64,
+    /// The day's Nervos DAO actions (deposits, withdrawal requests and completions), summed here:
+    /// the DAO kind's count, which a page states and never adds up itself.
+    pub dao_action_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4695,6 +4698,39 @@ pub struct ActivitySummary24hResponse {
     pub script_counts: Vec<ScriptCountEntry>,
     /// UTC hour buckets containing activity; a rolling 24h window can span 25.
     pub hours_covered: u32,
+    /// The window's activity-kind occurrences, as the daily rows count them (`kind_occurrences`).
+    pub kind_occurrences: u64,
+    /// The window's Nervos DAO actions, as the daily rows count them (`dao_action_count`).
+    pub dao_action_count: u64,
+}
+
+/// The eight activity kinds the charts read, summed: kinds overlap, so not distinct activities.
+fn kind_occurrences(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
+    [
+        s.transfer_count,
+        s.dao_deposit_count,
+        s.dao_withdraw_request_count,
+        s.dao_withdraw_complete_count,
+        s.token_count,
+        s.object_count,
+        s.identity_count,
+        s.script_call_count,
+    ]
+    .into_iter()
+    .map(u64::from)
+    .sum()
+}
+
+/// The three Nervos DAO actions, summed: the DAO kind's one count.
+fn dao_action_count(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
+    [
+        s.dao_deposit_count,
+        s.dao_withdraw_request_count,
+        s.dao_withdraw_complete_count,
+    ]
+    .into_iter()
+    .map(u64::from)
+    .sum()
 }
 
 #[derive(Debug, Deserialize)]
@@ -4715,7 +4751,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:v2:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v3:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -4810,19 +4846,8 @@ async fn get_daily_activity_stats(
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),
                 script_counts,
-                kind_occurrences: [
-                    s.transfer_count,
-                    s.dao_deposit_count,
-                    s.dao_withdraw_request_count,
-                    s.dao_withdraw_complete_count,
-                    s.token_count,
-                    s.object_count,
-                    s.identity_count,
-                    s.script_call_count,
-                ]
-                .into_iter()
-                .map(u64::from)
-                .sum(),
+                kind_occurrences: kind_occurrences(&s),
+                dao_action_count: dao_action_count(&s),
             }
         })
         .collect();
@@ -4854,7 +4879,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:tip:{}",
+            "stats:activity-summary-24h:v2:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -4919,6 +4944,8 @@ async fn get_activity_summary_24h(
         total_ckb_moved: agg.total_ckb_moved.to_string(),
         script_counts,
         hours_covered,
+        kind_occurrences: kind_occurrences(&agg),
+        dao_action_count: dao_action_count(&agg),
     };
 
     if let Some(key) = cache_key {

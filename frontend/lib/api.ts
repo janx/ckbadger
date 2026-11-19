@@ -297,13 +297,8 @@ interface HardforkActivation {
 }
 
 type TransactionActivityType =
-  | 'ckb'
-  | 'script'
-  | 'cellbase'
-  | 'dao'
-  | 'token'
-  | 'object'
-  | 'identity';
+  /** Every committed transaction but the cellbase (the Transactions page opens on them). */
+  'user' | 'ckb' | 'script' | 'cellbase' | 'dao' | 'token' | 'object' | 'identity';
 
 interface Transaction {
   value: string;
@@ -1467,6 +1462,8 @@ interface DailyActivityStats {
    * D1): kinds overlap, so it is not a count of distinct activities.
    */
   kindOccurrences: number;
+  /** The day's Nervos DAO actions (deposits, requests, completions), the API's count. */
+  daoActionCount: number;
 }
 
 interface ActivitySummary24h {
@@ -1486,6 +1483,10 @@ interface ActivitySummary24h {
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
   hoursCovered: number;
+  /** The window's activity-kind occurrences, the API's count (kinds overlap). */
+  kindOccurrences: number;
+  /** The window's Nervos DAO actions, the API's count. */
+  daoActionCount: number;
 }
 
 interface GraphNode {

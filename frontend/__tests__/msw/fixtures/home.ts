@@ -253,6 +253,9 @@ export const activitySummary24h: ActivitySummary24h = {
   totalCkbMoved: '34628000000000000',
   scriptCounts: SCRIPT_COUNTS,
   hoursCovered: 24,
+  // the API's counts: the eight kinds (1,302 + 8 + 10 + 5,795) and the three DAO actions
+  kindOccurrences: 7115,
+  daoActionCount: 8,
 };
 
 /** 29 complete days, 09/25 … 10/23, oldest first; the last day has 6,691 activities. */
@@ -274,6 +277,7 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
     totalCkbMoved: '0',
     scriptCounts: [],
     kindOccurrences: total,
+    daoActionCount: 0,
   };
 });
 

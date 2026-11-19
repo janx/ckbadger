@@ -188,7 +188,8 @@ fn pool_transactions_page(
         if filter != "all" && filter != record.pool_status.as_str() {
             continue;
         }
-        if let Some(filter) = activity_filter {
+        // a pool transaction is never a cellbase: `user` names every one, partly read or not
+        if let Some(filter) = activity_filter.filter(|filter| *filter != "user") {
             if record.interpretation.is_partial()
                 || !record.actions.as_ref().is_some_and(|actions| {
                     super::activities::matches_global_activity_filter(actions, Some(filter))

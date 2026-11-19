@@ -10,29 +10,24 @@ import {
   formatShare,
   scriptLabel,
   scriptShares,
-  totalActivities,
   type ActivityCounts,
 } from '@/lib/activity-stats';
 
+// Re-pinned on purpose (lists lane P3: a page sums no count): the DAO kind's count and the kind
+// occurrences are the API's figures (`daoActionCount`, `kindOccurrences`); totalActivities, the
+// page's sum of the eight kinds, went with the three DAO steps' sum.
 const counts: ActivityCounts = {
   transferCount: 1302,
-  daoDepositCount: 4,
-  daoWithdrawRequestCount: 3,
-  daoWithdrawCompleteCount: 1,
+  daoActionCount: 8,
   tokenCount: 0,
   objectCount: 0,
   identityCount: 10,
   scriptCallCount: 5795,
+  kindOccurrences: 7115,
 };
 
-describe('totalActivities', () => {
-  it('sums every typed activity', () => {
-    expect(totalActivities(counts)).toBe(7115);
-  });
-});
-
 describe('activityTypeShares', () => {
-  it('ranks the types by count, folds the three DAO steps into one row and hides empty types', () => {
+  it('ranks the types by count, the DAO row the API’s count of its actions, and hides empty types', () => {
     const rows = activityTypeShares(counts);
     expect(rows.map((r) => [r.label, r.count])).toEqual([
       ['Script call', 5795],
@@ -48,11 +43,10 @@ describe('activityTypeShares', () => {
       activityTypeShares({
         ...counts,
         transferCount: 0,
-        daoDepositCount: 0,
-        daoWithdrawRequestCount: 0,
-        daoWithdrawCompleteCount: 0,
+        daoActionCount: 0,
         identityCount: 0,
         scriptCallCount: 0,
+        kindOccurrences: 0,
       })
     ).toEqual([]);
   });
@@ -160,6 +154,8 @@ describe('exact completed day counts', () => {
   it('keeps unique totals separate from overlapping occurrences', () => {
     expect(activityFilterCounts(counts, 10).all).toBe(10);
     expect(activityFilterCounts(counts).all).toBeUndefined();
+    // the DAO chip states the API's count of the day's DAO actions, summed nowhere in the page
+    expect(activityFilterCounts({ ...counts, daoActionCount: 13 }).dao).toBe(13);
     expect(nonCellbaseCount(25, 10, '2026-10-25')).toBe(15);
     expect(() => nonCellbaseCount(9, 10, '2026-10-25')).toThrow(
       'Invalid transaction/cellbase counts'

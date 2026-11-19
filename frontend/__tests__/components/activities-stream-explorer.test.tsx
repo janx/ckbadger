@@ -150,6 +150,8 @@ describe('ActivitiesStreamExplorer', () => {
           daoDepositCount: 1,
           daoWithdrawRequestCount: 2,
           daoWithdrawCompleteCount: 3,
+          // the API's count of the DAO actions (lists lane P3: the page sums none)
+          daoActionCount: 6,
           tokenCount: 0,
           objectCount: 4,
           identityCount: 5,

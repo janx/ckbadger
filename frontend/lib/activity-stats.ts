@@ -12,32 +12,21 @@ import type {
 import { shortenHash } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
 
-/** The activity-type counters a summary or a daily row carries. */
+/**
+ * The activity-type counters a summary or a daily row carries, with the two the API counts for
+ * the page (lists lane P3: a page sums no count): its kind occurrences (categories overlap; never a
+ * transaction total) and its DAO actions.
+ */
 export type ActivityCounts = Pick<
   ActivitySummary24h,
   | 'transferCount'
-  | 'daoDepositCount'
-  | 'daoWithdrawRequestCount'
-  | 'daoWithdrawCompleteCount'
+  | 'daoActionCount'
   | 'tokenCount'
   | 'objectCount'
   | 'identityCount'
   | 'scriptCallCount'
+  | 'kindOccurrences'
 >;
-
-/** Typed activity occurrences: categories can overlap. Never use as a transaction total. */
-export function totalActivities(c: ActivityCounts): number {
-  return (
-    c.transferCount +
-    c.daoDepositCount +
-    c.daoWithdrawRequestCount +
-    c.daoWithdrawCompleteCount +
-    c.tokenCount +
-    c.objectCount +
-    c.identityCount +
-    c.scriptCallCount
-  );
-}
 
 export interface ShareRow {
   key: string;
@@ -47,9 +36,9 @@ export interface ShareRow {
   share: number;
 }
 
-/** Each activity type's share of `totalActivities`, largest first; types with no activity are left out. */
+/** Each activity type's share of the kind occurrences, largest first; types with no activity are left out. */
 export function activityTypeShares(c: ActivityCounts): ShareRow[] {
-  const total = totalActivities(c);
+  const total = c.kindOccurrences;
   if (total === 0) return [];
   return [
     { key: 'script', label: 'Script call', count: c.scriptCallCount },
@@ -57,11 +46,7 @@ export function activityTypeShares(c: ActivityCounts): ShareRow[] {
     { key: 'token', label: 'Token', count: c.tokenCount },
     { key: 'object', label: 'Object', count: c.objectCount },
     { key: 'identity', label: 'Identity', count: c.identityCount },
-    {
-      key: 'dao',
-      label: 'DAO',
-      count: c.daoDepositCount + c.daoWithdrawRequestCount + c.daoWithdrawCompleteCount,
-    },
+    { key: 'dao', label: 'DAO', count: c.daoActionCount },
   ]
     .filter((row) => row.count > 0)
     .map((row) => ({ ...row, share: row.count / total }))
@@ -165,8 +150,7 @@ export function activityFilterCounts(
     token: summary.tokenCount,
     object: summary.objectCount,
     identity: summary.identityCount,
-    dao:
-      summary.daoDepositCount + summary.daoWithdrawRequestCount + summary.daoWithdrawCompleteCount,
+    dao: summary.daoActionCount,
     script: summary.scriptCallCount,
   };
 }

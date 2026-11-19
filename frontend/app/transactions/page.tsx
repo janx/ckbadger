@@ -36,7 +36,6 @@ import {
   completedYesterdayActivities,
   completedYesterdayTransactions,
   previousChainDay,
-  totalActivities,
 } from '@/lib/activity-stats';
 import { formatCount } from '@/lib/format-count';
 import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
@@ -502,7 +501,7 @@ export default function TransactionsPage() {
     : total === undefined
       ? {}
       : { all: total };
-  const occurrences = day ? totalActivities(day) + day.coinbaseCount : 0;
+  const occurrences = day ? day.kindOccurrences + day.coinbaseCount : 0;
   const largestPoolSize = poolHead.data?.data.length
     ? Math.max(...poolHead.data.data.map((row) => row.txSize))
     : undefined;

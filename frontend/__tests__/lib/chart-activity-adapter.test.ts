@@ -25,6 +25,8 @@ describe('daily activity chart adapter', () => {
         scriptCounts: [],
         // the API's sum of the eight kinds (8 × 4,294,967,295)
         kindOccurrences: 34359738360,
+        // the API's count of the three DAO actions (3 × 4,294,967,295)
+        daoActionCount: 12884901885,
       },
     ]);
     const volume = chartModel(

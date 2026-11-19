@@ -7,7 +7,7 @@ import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { cssVars, STREAM_COLORS } from '@/lib/design-tokens';
 import { KIND_FILTER_LABEL, kindColor, kindFilterValues, kindWords } from '@/lib/kind-filter';
-import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
+import { activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
@@ -242,7 +242,7 @@ function ActivityStreamToolbar({
   totalCount?: number;
 }) {
   const counts = summary ? activityFilterCounts(summary, totalCount) : null;
-  const occurrences = summary ? totalActivities(summary) : 0;
+  const occurrences = summary ? summary.kindOccurrences : 0;
   return (
     <div
       data-testid="activities-stream-toolbar"

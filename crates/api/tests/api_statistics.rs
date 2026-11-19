@@ -2442,6 +2442,8 @@ async fn test_daily_activities_state_their_kind_occurrences() {
     let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json[0]["kindOccurrences"], 52, "{json}");
+    // the DAO kind's count, the three actions (lists lane P3: the page sums nothing)
+    assert_eq!(json[0]["daoActionCount"], 4, "{json}");
 }
 
 /// Cell size states its wholes (the D1 hand-back, item 2): the page's "of live cells" and "of it"
@@ -2871,6 +2873,9 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
     assert_eq!(json["activityCount"], 522);
     assert_eq!(json["totalCkbMoved"], "645");
     assert_eq!(json["hoursCovered"], 2);
+    // the window's kinds and its DAO actions, counted by the route (lists lane P3)
+    assert_eq!(json["kindOccurrences"], 522);
+    assert_eq!(json["daoActionCount"], 0);
 
     // A shallow reorg can replace the same-number tip before the TTL expires.
     // Its new hash must force a fresh window scan and address set.

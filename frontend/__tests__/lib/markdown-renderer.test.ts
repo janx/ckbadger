@@ -214,6 +214,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '123000000000',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 29,
+      daoActionCount: 5,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -285,6 +287,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '0',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 1,
+      daoActionCount: 1,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -350,6 +354,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '0',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 1,
+      daoActionCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -407,6 +413,8 @@ describe('renderMarkdownPage', () => {
       totalCkbMoved: '0',
       scriptCounts: [],
       hoursCovered: 24,
+      kindOccurrences: 1,
+      daoActionCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
