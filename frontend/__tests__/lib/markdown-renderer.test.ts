@@ -1420,3 +1420,57 @@ describe('renderMarkdownPage', () => {
     expect(bad.status).toBe(404);
   });
 });
+
+// Lane P2's fifth round (item 3): the AI view's ownerLock / managerLock cells read the party
+// through the page's one reader, which refuses a party an older API sends (no lockScriptName).
+describe('the .cell AI view on an API older than this page', () => {
+  it('refuses a party with no lockScriptName by name', async () => {
+    const manager = {
+      hashPrefix: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867',
+      lockHash: '0x57d926a44d83fc13b21ce037b1e31f4223e3c867cfa3f60e1324d5bfd5cd742d',
+      address: ckbAddress({
+        codeHash: DEFAULT_LOCK_CODE_HASH,
+        args: '0x' + '57'.repeat(20),
+        network: 'ckt',
+      }),
+      scriptName: 'SECP256K1_BLAKE160',
+    };
+    vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+      identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+      label: 'support',
+      name: 'support.cell',
+      isLive: true,
+      createdAtBlock: 18_000_000,
+      createdAtTx: `0x${'1'.repeat(64)}`,
+      layoutVersion: 1,
+      namespaceArgs: '0x' + '34'.repeat(20),
+      expiredAt: 1900000000,
+      state: 'active',
+      graceEndsAt: 1902592000,
+      owner: manager,
+      manager,
+      ownerNameCount: 1,
+      sale: null,
+      records: [],
+      recordsHash: `0x${'0'.repeat(64)}`,
+      nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
+      parent: null,
+      children: [],
+      childrenHasMore: false,
+      childrenNextCursor: null,
+      liveOutPoint: { txHash: `0x${'7'.repeat(64)}`, index: 0 },
+    } as any);
+    vi.mocked(api.getDotCellItemActivities).mockResolvedValue(
+      pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null }) as any
+    );
+    await expect(
+      renderMarkdownPage({
+        page: parseMarkdownSourcePath(
+          '/identities/dotcell/0x62d71147ac82b83c8531126cacb0d2f072bfd94a'
+        ),
+        searchParams: new URLSearchParams(),
+        origin: 'https://explorer.example',
+      })
+    ).rejects.toThrow(/the API sends no lockScriptName: it is older than this page/);
+  });
+});

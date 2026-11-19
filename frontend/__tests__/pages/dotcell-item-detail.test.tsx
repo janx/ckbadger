@@ -465,3 +465,33 @@ describe('a .cell name’s versions fold only where nothing changed', () => {
     expect(fold).not.toHaveTextContent('owner');
   });
 });
+
+// Lane P2's fifth round (item 3): on an API one version older the .cell page's parties send
+// `scriptName`; the page refuses them by name instead of writing "an undefined lock".
+it('refuses by name a party an API older than this page sends', async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const item = dotcellItem();
+  const older = <T extends { lockScriptName: string | null }>(party: T) => {
+    const { lockScriptName, ...rest } = party;
+    return { ...rest, scriptName: lockScriptName } as unknown as T;
+  };
+  vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+    ...item,
+    owner: older({
+      ...item.owner,
+      lockHash: `0x${'22'.repeat(32)}`,
+      address: seededAddress('older'),
+    }),
+    manager: older(item.manager),
+  });
+  render(<Page identityId="alice" />);
+  // each place that says the party's lock says the refusal in its place; the page stands
+  const refusals = await screen.findAllByText(
+    /a \.cell party: the API sends no lockScriptName: it is older than this page/
+  );
+  expect(refusals.length).toBeGreaterThan(0);
+  for (const r of refusals) expect(r).toHaveAttribute('role', 'alert');
+  expect(screen.getAllByRole('heading', { name: /alice/ }).length).toBeGreaterThan(0);
+  expect(document.body).not.toHaveTextContent('undefined');
+  log.mockRestore();
+});

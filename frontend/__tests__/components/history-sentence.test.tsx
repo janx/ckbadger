@@ -302,28 +302,31 @@ describe('the script history: 160 px under its sentence', () => {
   it('reads each day’s capacity as the route states it, and refuses a day without it', () => {
     stubChartWidth(1248);
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect(() =>
-      render(
-        <ScriptHistoryFigure
-          family={fixture.family as never}
-          chart={
-            {
-              ...(fixture.chart as never as object),
-              data: [
-                {
-                  date: '2025-01-07',
-                  values: { used: String(600 * 1e8), unused: String(400 * 1e8) },
-                },
-              ],
-            } as never
-          }
-          lineage={null}
-          numbers={new Map()}
-          active={null}
-          onActive={() => {}}
-        />
-      )
-    ).toThrow(/2025-01-07: capacity/);
+    expect(
+      () =>
+        render(
+          <ScriptHistoryFigure
+            family={fixture.family as never}
+            chart={
+              {
+                ...(fixture.chart as never as object),
+                data: [
+                  {
+                    date: '2025-01-07',
+                    values: { used: String(600 * 1e8), unused: String(400 * 1e8) },
+                  },
+                ],
+              } as never
+            }
+            lineage={null}
+            numbers={new Map()}
+            active={null}
+            onActive={() => {}}
+          />
+        )
+      // re-pinned on purpose (lane P2's fifth round, item 3): a day without the whole is from an API
+      // older than this page, refused by name (it was "2025-01-07: capacity", the number reader's)
+    ).toThrow('JoyID 2025-01-07: the API sends no capacity: it is older than this page');
     error.mockRestore();
   });
 });

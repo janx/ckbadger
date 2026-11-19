@@ -298,3 +298,27 @@ describe('script code evidence', () => {
     expect(document.body.textContent).toContain('1.00000000 CKB');
   });
 });
+
+// Lane P2's fifth round (item 3): the custody's verifiedCodeCell, sent with verifiedByTx from this
+// plan on; a verified spend from an API older than this page sends no code cell: refused by name
+// (it read `undefined` as an out point).
+it('refuses by name a verified spend an API older than this page sends', () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const custody = {
+    class: 'multisig',
+    lockCodeHash: '0x01',
+    lockHashType: 'type',
+    lockArgs: '0x02',
+    threshold: 3,
+    keyCount: 5,
+    requireFirstN: 0,
+    keyHashes: [],
+    verifiedByTx: `0x${'12'.repeat(32)}`,
+    witnessState: 'verified',
+    owners: [],
+  } as unknown as Parameters<typeof ScriptCustodyEvidence>[0]['custody'];
+  expect(() => render(<ScriptCustodyEvidence custody={custody} />)).toThrow(
+    'custody 0x02: the API sends no verifiedCodeCell: it is older than this page'
+  );
+  log.mockRestore();
+});

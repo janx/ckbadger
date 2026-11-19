@@ -82,16 +82,23 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   ).toThrow('occupied');
   // a day without the whole its cells hold, which the route states, fails too: the page sums
   // nothing in its place
-  expect(() =>
-    render(
-      <CapacityHistory
-        assetClass="objects"
-        subject="Broken"
-        history={{ ...history, data: [{ date: '2023-11-01', values: { used: '1', unused: '1' } }] }}
-        weekly={[]}
-      />
-    )
-  ).toThrow('Broken 2023-11-01: capacity');
+  expect(
+    () =>
+      render(
+        <CapacityHistory
+          assetClass="objects"
+          subject="Broken"
+          history={{
+            ...history,
+            data: [{ date: '2023-11-01', values: { used: '1', unused: '1' } }],
+          }}
+          weekly={[]}
+        />
+      )
+    // re-pinned on purpose (lane P2's fifth round, item 3): the route states each day's capacity from
+    // this plan on; a day without it is from an API older than this page, refused by name (it was
+    // "Broken 2023-11-01: capacity", the number reader's message)
+  ).toThrow('Broken 2023-11-01: the API sends no capacity: it is older than this page');
   // Lane P2's third round (item 13): the day's free part is the route's `unused`, read beside the
   // other two (it was capacity − occupied, in the page): a day without it fails, and parts that do
   // not make the whole are refused
