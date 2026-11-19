@@ -216,7 +216,9 @@ function reads(): Reads {
   for (const dir of READ_DIRS)
     for (const path of files(join(ROOT, dir))) {
       const rel = relative(ROOT, path);
-      if (rel === 'components/ui/lock-kind.tsx') continue;
+      // the decision itself: its drawn half and its text half (lib/lock-words.ts, which the agent
+      // renderer imports without React; lane P2's third round)
+      if (rel === 'components/ui/lock-kind.tsx' || rel === 'lib/lock-words.ts') continue;
       const found = lockNameReads(readFileSync(path, 'utf8'), rel);
       if (Object.keys(found).length > 0) out[rel] = found;
     }

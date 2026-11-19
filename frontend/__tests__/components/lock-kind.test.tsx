@@ -5,12 +5,12 @@ import {
   cellLockSentence,
   cellOwnerLock,
   LockKind,
-  lockPhrase,
   lockWords,
   LockWordsView,
   namedLockWords,
   rowLock,
 } from '@/components/ui/lock-kind';
+import { lockPhrase } from '@/lib/lock-words';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';

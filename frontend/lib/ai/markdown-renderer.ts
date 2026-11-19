@@ -1,5 +1,5 @@
 import { CHART_ROUTES } from '@/lib/ai/page-registry';
-import { partyLockWordsText } from '@/components/ui/lock-kind';
+import { partyLockWordsText } from '@/lib/lock-words';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import {
   api,
