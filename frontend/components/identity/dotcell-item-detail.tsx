@@ -12,6 +12,7 @@ import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { Pager } from '@/components/ui/pager';
 import { NamedParty } from '@/components/asset/identity-document';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -74,14 +75,21 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
         <p className="text-negative text-small mt-2">Failed to load more sub-names</p>
       )}
       {hasMore && (
-        <button
-          type="button"
-          disabled={more.isFetching}
-          onClick={() => (wantsMore ? void more.fetchNextPage() : setWantsMore(true))}
-          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small mt-2 border px-3 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          Show more sub-names
-        </button>
+        // the controls board's short-list form, "next 20 ↓": the rows the next load asks for; a
+        // load in flight is not asked for again
+        <div className="mt-2">
+          <Pager
+            mode="more"
+            next={
+              more.isFetching
+                ? undefined
+                : {
+                    count: pageSize,
+                    onShow: () => (wantsMore ? void more.fetchNextPage() : setWantsMore(true)),
+                  }
+            }
+          />
+        </div>
       )}
     </div>
   );

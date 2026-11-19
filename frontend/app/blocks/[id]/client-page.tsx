@@ -25,7 +25,7 @@ import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { cursorPageFigures } from '@/lib/pagination';
+import { rankedPageAt } from '@/lib/pagination';
 import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
@@ -222,6 +222,20 @@ export default function BlockDetailPage() {
   // the proposals read itself.
   const ownProposals = proposals?.filter((p) => p.uncle === null);
   const activityRows = activities.data?.data;
+  // Both lists are read in tx order and counted of the block's transactions (one activity row per
+  // transaction, the block feed's contract): the pager's pages mode, null for one page.
+  const activitiesAt =
+    activities.data &&
+    rankedPageAt('activities', activityPagination.page, {
+      ...activities.data,
+      total: block.transactionsCount,
+    });
+  const transactionsAt =
+    transactions.data &&
+    rankedPageAt('transactions', pagination.page, {
+      ...transactions.data,
+      total: block.transactionsCount,
+    });
   const parentElapsedMs =
     block.parentTimestamp === null
       ? null
@@ -673,17 +687,11 @@ export default function BlockDetailPage() {
                           {activityRows.length === 0 && (
                             <p className="text-text-dim text-small">No activities in this block.</p>
                           )}
-                          {(activities.data.hasMore || activityPagination.hasPrevious) && (
-                            // in tx order, counted of the block's transactions, one row each
+                          {activitiesAt && (
                             <Pager
                               mode="pages"
                               label="activities"
-                              {...cursorPageFigures({
-                                page: activityPagination.page,
-                                pageSize,
-                                rows: activities.data.data.length,
-                                total: block.transactionsCount,
-                              })}
+                              {...activitiesAt}
                               onPrevious={activityPagination.goToPrevious}
                               onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
                             />
@@ -705,16 +713,11 @@ export default function BlockDetailPage() {
                             transactions={transactions.data.data}
                             blockNumber={block.number}
                           />
-                          {(transactions.data.hasMore || pagination.hasPrevious) && (
+                          {transactionsAt && (
                             <Pager
                               mode="pages"
                               label="transactions"
-                              {...cursorPageFigures({
-                                page: pagination.page,
-                                pageSize,
-                                rows: transactions.data.data.length,
-                                total: block.transactionsCount,
-                              })}
+                              {...transactionsAt}
                               onPrevious={pagination.goToPrevious}
                               onNext={() => pagination.goToNext(transactions.data.nextCursor)}
                             />

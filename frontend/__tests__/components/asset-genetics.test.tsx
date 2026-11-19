@@ -332,8 +332,11 @@ describe('Per-version raw protocol and item context', () => {
     old.cell.isLive = false;
     protocol.versions.unshift(old);
     render(<ItemEvidence protocol={protocol} />);
-    expect(screen.getByRole('combobox')).toHaveValue(`${protocol.versions[1].cell.txHash}:0`);
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: `${old.cell.txHash}:0` } });
+    // re-pinned (lane c2-assets): the version select is the controls board's Select, named by the
+    // label it stands after, "cell version" (it was named by "Cell version" around it)
+    const version = screen.getByRole('combobox', { name: 'cell version' });
+    expect(version).toHaveValue(`${protocol.versions[1].cell.txHash}:0`);
+    fireEvent.change(version, { target: { value: `${old.cell.txHash}:0` } });
     expect(screen.getByRole('heading', { name: /version 1/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: new RegExp(old.cell.txHash) })).toHaveAttribute(
       'href',

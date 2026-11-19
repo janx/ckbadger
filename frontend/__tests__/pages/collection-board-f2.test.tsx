@@ -1,4 +1,7 @@
 // F2 group `objects` (round 2): a Spore cluster against the approved Collection board — the
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 // Objects section is one allele gel + a Newest list with mini gels and row ↔ genotype linking
 // (OB-C1 P0 page height, OB-C2, OB-C3), board section order (OB-C5), header (OB-C4), history line
 // (OB-C6), holder bars (OB-C7), rail (OB-C8), coverage out of tier 1 (OB-C11) and the blueprint
@@ -245,7 +248,7 @@ it('opens Recent activity with five rows and two links that open the full feed i
   expect(within(note).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
   expect(within(note).getByRole('button', { name: '184 transactions →' })).toBeInTheDocument();
   fireEvent.click(within(recent).getByRole('button', { name: '184 transactions →' }));
-  expect(await screen.findByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+  expect(await screen.findByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
   );

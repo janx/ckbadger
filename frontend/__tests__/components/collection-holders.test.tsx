@@ -149,13 +149,18 @@ describe('Collection holders', () => {
   });
 
   it('uses backend ordering and cursor pages, and resets mode and cursor for a new collection', async () => {
+    // Re-pinned (lane c2-assets): the pager is the controls board's (words, not boxes: "← prev",
+    // "next →", an end that cannot be taken quiet words and no control, where the Previous / Next
+    // buttons were disabled), and it reads its pages from the response: the count is 21 holders,
+    // two pages of 20, where the cursor ends (it was 51, three pages, while the cursor ended on
+    // the second).
     const load = vi
       .fn()
       .mockImplementation(({ limit, cursor }) =>
         Promise.resolve(
           cursor
-            ? page([resolved], { limit, total: 51 })
-            : page([named], { limit, total: 51, hasMore: true, nextCursor: 'next-50' })
+            ? page([resolved], { limit, total: 21 })
+            : page([named], { limit, total: 21, hasMore: true, nextCursor: 'next-50' })
         )
       );
     const { rerender } = render(
@@ -164,17 +169,22 @@ describe('Collection holders', () => {
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     fireEvent.click(screen.getByRole('button', { name: 'All holders →' }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: undefined }));
-    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    const pager = await screen.findByRole('navigation', { name: 'holders' });
+    expect(pager).toHaveTextContent('1–1 of 21');
+    expect(pager).toHaveTextContent('page 1 of 2');
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
     await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: 'next-50' }));
     const table = await screen.findByRole('table', { name: 'All collection holders' });
     expect(within(table).getAllByRole('row')[1]).toHaveTextContent('21');
-    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled());
+    expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('page 2 of 2');
+    expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '← prev' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: '← prev' })).toBeNull());
+    expect(screen.getByRole('navigation', { name: 'holders' })).toHaveTextContent('page 1 of 2');
     rerender(<CollectionHolders assetClass="objects" load={load} queryKey="second" />);
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     expect(load).toHaveBeenLastCalledWith({ limit: 10, cursor: undefined });
-    expect(screen.queryByRole('button', { name: 'Previous' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'holders' })).not.toBeInTheDocument();
   });
 
   it('shows refresh failures while retaining the previously read holder rows', async () => {

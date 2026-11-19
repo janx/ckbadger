@@ -116,40 +116,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'the newest cells’ “All N cells ↓”: the short list’s form, or a way onward',
   },
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
-  'app/tokens/[typeHash]/client-page.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason: 'the supply events’ pager',
-  },
-  'components/asset/asset-feed.tsx': {
-    lane: 'c2-assets',
-    sites: { tab: 2, pager: 1 },
-    reason: 'the feed’s tablist and its tabs, the feed’s pager',
-  },
   'components/asset/collection-gallery.tsx': {
     lane: 'c2-assets',
-    sites: { select: 1, 'text-input': 1, pager: 1 },
-    reason: 'the gallery’s name search, its sort select and its pager',
-  },
-  'components/asset/collection-holders.tsx': {
-    lane: 'c2-assets',
     sites: { pager: 1 },
-    reason: 'a collection’s holders pager',
-  },
-  'components/asset/collection-objects.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason: 'a collection’s objects pager',
-  },
-  'components/asset/item-evidence.tsx': {
-    lane: 'c2-assets',
-    sites: { select: 1 },
-    reason: 'the evidence’s version select',
-  },
-  'components/asset/token-holders.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason: 'a token’s holders pager',
+    reason:
+      'a collection’s items pager: a list in id order whose search pages carry no total, which no mode of the Pager draws (pages needs the count; time says newer / older; more appends)',
   },
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
   'app/fiber/channels/client-page.tsx': {
@@ -192,7 +163,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 41;
+const TOLERATED_TOTAL = 31;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

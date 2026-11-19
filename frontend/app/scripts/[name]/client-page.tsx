@@ -36,7 +36,7 @@ import {
   getCapacityRangeParams,
   CapacityRangeKey,
 } from '@/lib/capacity-range';
-import { cursorPageFigures, ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import {
   encodeCellsByScriptCursor,
@@ -1042,11 +1042,12 @@ export default function ScriptDetailPage({
 
     return {
       data: pageEntries.map((entry) => entry.cell),
+      // the page the references' pages are merged into: this many rows
+      limit: cellsPageSize,
       total: selectedVersionLiveCellsCount,
       hasMore,
       nextCursor:
         hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
-      currentCount: pageEntries.length,
     };
   }, [
     cellsKind,
@@ -1058,6 +1059,12 @@ export default function ScriptDetailPage({
   ]);
   // The page waits while its reads are awaited: fetching, or paused (offline, or a hidden tab
   // between retries). A disabled read (the code cells of an ambiguous reference) is not awaited.
+  // The version's cells, oldest first, counted of the usage's live cells where the API states
+  // them: the pager's pages mode, null for one page (a list with no count is a list in time).
+  const versionCellsAt =
+    selectedVersionCellsData.total === undefined
+      ? null
+      : rankedPageAt('cells', cellsPagination.page, selectedVersionCellsData);
   const isAwaiting = isCodeHashMode
     ? isAwaited(codeHashLookupRead) || isAwaited(codeHashCodeCellsRead)
     : isAwaited(namedScriptDetailRead) || isAwaited(usageRead);
@@ -1314,7 +1321,7 @@ export default function ScriptDetailPage({
           rows: selectedVersionCellsData.data,
           loading: isVersionCellsLoading,
           page: cellsPagination.page,
-          currentCount: selectedVersionCellsData.currentCount,
+          hasMore: selectedVersionCellsData.hasMore,
           onNext: () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor),
           onPrevious: cellsPagination.goToPrevious,
         }}
@@ -1737,18 +1744,17 @@ export default function ScriptDetailPage({
                         }
                       />
                     ) : (
-                      <Pager
-                        mode="pages"
-                        label="cells"
-                        {...cursorPageFigures({
-                          page: cellsPagination.page,
-                          pageSize: cellsPageSize,
-                          rows: selectedVersionCellsData.currentCount,
-                          total: selectedVersionCellsData.total,
-                        })}
-                        onPrevious={cellsPagination.goToPrevious}
-                        onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
-                      />
+                      versionCellsAt && (
+                        <Pager
+                          mode="pages"
+                          label="cells"
+                          {...versionCellsAt}
+                          onPrevious={cellsPagination.goToPrevious}
+                          onNext={() =>
+                            cellsPagination.goToNext(selectedVersionCellsData.nextCursor)
+                          }
+                        />
+                      )
                     ))}
                 </DetailSection>
               )}

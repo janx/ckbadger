@@ -4,7 +4,7 @@ import Link from '@/components/ui/link';
 import { CellBar } from '@/components/ui/cell-bar';
 import { RangeSelect } from '@/components/ui/range-select';
 import { Pager } from '@/components/ui/pager';
-import { cursorPageFigures } from '@/lib/pagination';
+import { rankedPageAt } from '@/lib/pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -87,15 +87,16 @@ export interface ScriptFamilyPageProps {
   /** Lane S: the newest live cells, from `/cells/by-script?order=desc` (one index). */
   newest: NewestCellsState;
   /**
-   * The family's cells, a page of them: the pager counts them of the family's live cells
-   * (`family.liveCellsCount`), the page the walk is on, the page size asked and the rows shown.
+   * The family's cells, a page of them, merged from its references' pages: the pager counts them
+   * of the family's live cells (`family.liveCellsCount`) from the page the walk is on, the page
+   * size and the rows shown (lib/pagination.ts rankedPageAt).
    */
   cells: {
     pageSize: number;
     rows: readonly Cell[];
     loading: boolean;
     page: number;
-    currentCount: number;
+    hasMore: boolean;
     onNext: () => void;
     onPrevious: () => void;
   };
@@ -541,6 +542,17 @@ export function ScriptFamilyPage({
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
   const history = family.history;
+  // The family's cells, oldest first, counted of its live cells: the pager's pages mode, null for
+  // one page (an empty page draws none either).
+  const cellsAt =
+    cells.rows.length > 0
+      ? rankedPageAt('cells', cells.page, {
+          data: cells.rows,
+          limit: cells.pageSize,
+          hasMore: cells.hasMore,
+          total: family.liveCellsCount,
+        })
+      : null;
   const numbers = versionNumbers(family);
   const lineage = typeLineage(history);
   const holders = lineage ? codeHolders(lineage, history, numbers) : [];
@@ -1323,16 +1335,11 @@ export function ScriptFamilyPage({
                   {family.liveCellsCount.toLocaleString('en-US')}
                 </p>
               )}
-              {cells.rows.length > 0 && (
+              {cellsAt && (
                 <Pager
                   mode="pages"
                   label="cells"
-                  {...cursorPageFigures({
-                    page: cells.page,
-                    pageSize: cells.pageSize,
-                    rows: cells.currentCount,
-                    total: family.liveCellsCount,
-                  })}
+                  {...cellsAt}
                   onPrevious={cells.onPrevious}
                   onNext={cells.onNext}
                 />

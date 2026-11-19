@@ -579,12 +579,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       )}
                       <AddressPagination
                         pagination={activityPage}
-                        hasMore={activities.data.hasMore}
-                        nextCursor={activities.data.nextCursor}
-                        pageSize={pageSize}
+                        read={activities.data}
                         label="activities"
                         order="newest first"
-                        total={activities.data.total}
                       />
                     </>
                   ) : (
@@ -600,12 +597,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       <AddressTransactions rows={transactions.data.data} />
                       <AddressPagination
                         pagination={txPage}
-                        hasMore={transactions.data.hasMore}
-                        nextCursor={transactions.data.nextCursor}
-                        pageSize={pageSize}
+                        read={transactions.data}
                         label="transactions"
                         order="newest first"
-                        total={transactions.data.total}
                       />
                     </>
                   ) : (
@@ -621,12 +615,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       <AddressLiveCells rows={cells.data.data} />
                       <AddressPagination
                         pagination={cellPage}
-                        hasMore={cells.data.hasMore}
-                        nextCursor={cells.data.nextCursor}
-                        pageSize={pageSize}
+                        read={{
+                          ...cells.data,
+                          total: liveCellsTotal(cells.data.total, cellClass, holdings.data, addr),
+                        }}
                         label="live cells"
-                        rows={cells.data.data.length}
-                        total={liveCellsTotal(cells.data.total, cellClass, holdings.data, addr)}
                       />
                     </>
                   ) : (

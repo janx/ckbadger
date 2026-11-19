@@ -3,6 +3,9 @@ import Page from '@/app/identities/[collectionId]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
 import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 it('shows a collection 404 with its exact identity endpoint', async () => {
@@ -30,8 +33,8 @@ it('shows identities, exact created/live counts, capacity history and parallel r
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
     'of 2 minted / created'
   );
-  expect(screen.getByRole('tab', { name: 'Activities' })).toHaveAttribute('aria-selected', 'true');
-  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  expect(screen.getByRole('tab', { name: 'activities' })).toHaveAttribute('aria-selected', 'true');
+  fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
   expect(api.getCollectionTransactions).toHaveBeenCalledWith(
     'identity',
@@ -41,12 +44,14 @@ it('shows identities, exact created/live counts, capacity history and parallel r
 });
 it('searches the entire identity collection and applies status before pagination', async () => {
   render(<Page collectionId="dotbit" />);
-  fireEvent.change(await screen.findByRole('textbox', { name: 'Search collection' }), {
+  // re-pinned (lane c2-assets): the board's search field (a searchbox, was a textbox) and status
+  // chips (a radio group "status", was a select "Item status")
+  fireEvent.change(await screen.findByRole('searchbox', { name: 'Search collection' }), {
     target: { value: 'alice' },
   });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
-    target: { value: 'live' },
-  });
+  fireEvent.click(
+    within(screen.getByRole('radiogroup', { name: 'status' })).getByRole('radio', { name: 'live' })
+  );
   await waitFor(() =>
     expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith('dotbit', {
       limit: 24,
@@ -83,7 +88,7 @@ it('keeps holders visible independently of the records tabs and handles empty pa
   vi.mocked(api.getIdentityCollectionHolders).mockResolvedValue(emptyPage());
   render(<Page collectionId="dotbit" />);
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
   expect(screen.getByText('No current holders.')).toBeInTheDocument();
 });
 it('uses whole-scope current DID documents for PDS grouping with explicit overlapping endpoints', async () => {
