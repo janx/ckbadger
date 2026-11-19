@@ -7,6 +7,7 @@ import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { DetailFacts } from '@/components/ui/detail-layout';
 import { CkbAmount } from '@/components/ui/ckb-amount';
+import type { RangeOption } from '@/components/ui/range-select';
 import { ckbAmountText, ckbShortenedTitle } from '@/lib/amount-form';
 import { formatSignedCkbInteger, parseCkbDecimal } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
@@ -68,7 +69,15 @@ export const MULTIPLE_DATA_H = 54;
 export const MULTIPLE_H = multipleBand(1) + MULTIPLE_DATA_H;
 
 export type HistoryRange = '1M' | '1Y' | 'All';
-export const HISTORY_RANGES: readonly HistoryRange[] = ['1M', '1Y', 'All'];
+/**
+ * The picture's ranges in the one spelling of a span (the controls board's `1 m · 1 y · all`):
+ * the last 30 complete days, the last 365, every one (`historySeries`).
+ */
+export const HISTORY_RANGES: readonly RangeOption<HistoryRange>[] = [
+  { key: '1M', label: '1 m' },
+  { key: '1Y', label: '1 y' },
+  { key: 'All', label: 'all' },
+];
 
 interface Day {
   date: string;
@@ -206,37 +215,6 @@ function plotHandlers(pin: PinnedReadout<number>, last: number, left = 0) {
     onClick: (e: MouseEvent<SVGSVGElement>) =>
       pin.toggle(dayAt(e.clientX, e.currentTarget, last, left)),
   };
-}
-
-/** The range buttons: one inline group, so the three sit on one line as one control. */
-export function HistoryRangeToggle({
-  range,
-  onChange,
-}: {
-  range: HistoryRange;
-  onChange: (range: HistoryRange) => void;
-}) {
-  return (
-    <div role="group" aria-label="History range" className="whitespace-nowrap">
-      {HISTORY_RANGES.map((choice, i) => (
-        <button
-          key={choice}
-          type="button"
-          aria-pressed={range === choice}
-          onClick={() => onChange(choice)}
-          className={cn(
-            'text-small inline-flex h-7 items-center border px-2.5 font-mono',
-            i > 0 && 'ml-1',
-            range === choice
-              ? 'border-base-border bg-base-border-subtle text-text-bright'
-              : 'border-base-border-subtle text-text hover:text-text-bright'
-          )}
-        >
-          {choice}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 /**
