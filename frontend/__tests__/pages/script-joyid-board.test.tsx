@@ -621,6 +621,9 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const row = amount.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(row.lastElementChild).toHaveTextContent(/^in 161,049 live cells · 4\.19% occupied$/);
+    // lane P2's third round (item 10): the companion line states the figure's counts, a statement
+    // in the reading ink
+    expect(row.lastElementChild).toHaveClass('text-body', 'text-text');
     expect(within(row.lastElementChild as HTMLElement).getByRole('link')).toHaveAttribute(
       'href',
       '#its-cells'

@@ -350,12 +350,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'notes in table cells: 5 (two dashes, two no-deployment notes, custody unavailable); prose by kind: 2 loading (capacity history, cells), 1 empty (no capacity history)',
   },
-  'components/scripts/script-hero.tsx': {
-    family: 'lists',
-    sites: { prose: 1 },
-    reason:
-      "the hero's companion line, shared with the scripts list page (P3's, left to it by lane P2's follow-up)",
-  },
+  // components/scripts/script-hero.tsx left the list (lane P2's third round, item 10): the hero's
+  // companion line reads in the reading ink (the scripts list page no longer draws it)
   'components/scripts/script-newest-cells.tsx': {
     // link 1 → 0 (lane p-assets: each link states its look)
     // prose 2 → 1 (lane P2's follow-up, item 4): the caption reads in the reading ink
