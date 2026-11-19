@@ -367,18 +367,19 @@ function typeCallRef(sc: ActivityTypeCall): CallRef {
 }
 
 function lockCallRef(lc: ActivityLockCall): CallRef {
-  // a lock's words are the one decision's (components/ui/lock-kind.tsx), as a list names locks
-  const name = lockNoun(
-    namedLockWords(
-      {
-        name: lc.scriptName ?? null,
-        codeHash: lc.lockCodeHash,
-        hashType: normalizeScriptRefHashType(lc.lockHashType),
-      },
-      'column'
-    ),
-    'row'
+  // a lock's words and its page are the one decision's (lib/lock-words.ts), fed its code hash, hash
+  // type and the API's name together, as a list names locks: a lock on a registered code hash by
+  // another hash type is not that lock, so neither its words nor its link take the name (the lead's
+  // final round, item 7: a Default Lock code by data read "Default Lock" and opened its page)
+  const words = namedLockWords(
+    {
+      name: lc.scriptName ?? null,
+      codeHash: lc.lockCodeHash,
+      hashType: normalizeScriptRefHashType(lc.lockHashType),
+    },
+    'column'
   );
+  const name = lockNoun(words, 'row');
   const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
   const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError, 'row') : null;
@@ -386,7 +387,7 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
     name,
     call: notDecoded ? `${call} ${notDecoded}` : call,
     href: getScriptDetailHref({
-      name: lc.scriptName,
+      name: words.form === 'not-indexed' ? undefined : (words.name ?? undefined),
       codeHash: lc.lockCodeHash,
       hashType: lc.lockHashType,
       scriptKind: 'lock',

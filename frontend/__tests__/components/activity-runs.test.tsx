@@ -775,3 +775,52 @@ describe('a run is set back as its rows are (R4)', () => {
     ).toEqual([rows[2].txHash]);
   });
 });
+
+// The lead's final round, item 7: a called lock is written by the one lock decision from its code
+// hash, hash type and name together. A lock on the Default Lock's code hash referenced by data is
+// not the Default Lock: today's API sends it the registered name ("Default Lock"), which the row
+// must not write, in a row's head, a folded head or the opened run's rows, nor in a link's hover or
+// address; it is written by its code hash and "by data".
+describe('a called lock on a registered code hash by another hash type (the lock decision)', () => {
+  const BY_DATA = {
+    lockCodeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
+    lockHashType: 'data',
+    lockArgs: '0x' + 'ab'.repeat(20),
+    scriptHash: '0x' + 'cd'.repeat(32),
+    scriptName: 'Default Lock',
+    decoded: null,
+    decodeError: null,
+  };
+  const called = (n: number): GlobalActivity => ({
+    ...oracle(n, 'q3q7ue', '0x00', n * 49),
+    lockCalls: [BY_DATA],
+  });
+  const said = (el: Element) =>
+    [
+      el.textContent ?? '',
+      ...[...el.querySelectorAll('[title]')].map((e) => e.getAttribute('title') ?? ''),
+      ...[...el.querySelectorAll('a[href]')].map((a) =>
+        decodeURIComponent(a.getAttribute('href') ?? '')
+      ),
+    ].join('\n');
+
+  it('writes it by its code hash and "by data", never "Default Lock", in a row and a run, opened or not', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page([called(1), called(2)]));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded.querySelector('[data-role="head-main"]')).toHaveTextContent(
+      /lock 0x9bd7e06f…a3cce8 by data/
+    );
+    expect(said(folded)).not.toMatch(/Default Lock/);
+    await userEvent
+      .setup({ advanceTimers: () => {} })
+      .click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
+    const rows = [...document.querySelectorAll('article[data-feed-row]')];
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.querySelector('[data-role="head-main"]')).toHaveTextContent(/by data/);
+      expect(said(row)).not.toMatch(/Default Lock/);
+    }
+  });
+});

@@ -270,6 +270,10 @@ const FEEDS: Reads = {
   // an address record that is the owner's or manager's own: the party's name handed with the
   // record's address to `partyLockSentence` (lane P2's third round, item 12)
   'components/identity/identity-records.tsx': { 'api name': 1 },
+  // a called lock: its `scriptName` handed with its code hash and hash type to the decision, whose
+  // words and name its link takes (the lead's final round, item 7; it was known, 2 reads, the
+  // link's name the API's as read)
+  'components/activity/activity-row.tsx': { 'api name': 1 },
 };
 /** The decision's words already written: a tile's `lockKind` (`lockWordsText` of the decision). */
 const DECIDED: Reads = {
@@ -334,9 +338,9 @@ const KNOWN: Reads = {
   // identity overview (4), the roles (1), the records (2 → 1, which feeds it), the party chip (2,
   // its badge gone), the named party (2) and the AI view's owner and manager rows (2). Left: the
   // AI view's primary lock call (an activity's called lock, its hash type not sent) and the lists
-  // lane's activity row, not this lane's to edit
+  // lane's activity row, not this lane's to edit; the activity row's left (the lead's final round,
+  // item 7: its called lock's name feeds the decision, its link's name the decision's)
   'lib/ai/markdown-renderer.ts': { 'api name': 1 },
-  'components/activity/activity-row.tsx': { 'api name': 2 },
 };
 
 describe('the gate reads the syntax, every form (lane B4 third round)', () => {
@@ -491,11 +495,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // known writers, this lane the identity parties'; what is left known is the Fiber graph's (2),
   // the AI view's primary lock call (1) and the lists lane's activity row (2): 5 known reads in 3
   // files; the records' read feeds the decision; 23 reads in all in 16 files
-  it('pins the totals: 23 reads in 16 files, the known writers 3 files and 5 reads', () => {
+  // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "… 23 reads in 16
+  // files, … 3 files and 5 reads"): the activity row's called lock feeds the decision, one read
+  // where there were two: 22 reads in 16 files, the known writers 2 files and 3 reads
+  it('pins the totals: 22 reads in 16 files, the known writers 2 files and 3 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
     expect(Object.keys(all)).toHaveLength(16);
-    expect(total(all)).toBe(23);
-    expect(Object.keys(KNOWN)).toHaveLength(3);
-    expect(total(KNOWN)).toBe(5);
+    expect(total(all)).toBe(22);
+    expect(Object.keys(KNOWN)).toHaveLength(2);
+    expect(total(KNOWN)).toBe(3);
   });
 });
