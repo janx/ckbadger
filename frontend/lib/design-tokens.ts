@@ -185,8 +185,6 @@ export const FIBER_COLORS = {
   count: color('text-bright'),
   halo: color('base-bg'),
   note: color('text-dim'),
-  /** The edge of the pressed state filter on the channels list (the "other" slate). */
-  filterOn: color('slate-other'),
 } as const;
 /** Uncles on chain are grey ink; this node's view and an uncle inclusion are jade. */
 export const FORK_COLORS = {

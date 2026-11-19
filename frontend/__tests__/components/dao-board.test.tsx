@@ -153,7 +153,9 @@ describe('DaoBoard', () => {
         circulationHistory={ratio}
       />
     );
-    fireEvent.click(screen.getByRole('button', { name: '1M' }));
+    // re-pinned (lane C2 topics): the controls board's range, its spans in the one spelling (it
+    // was the pressed button "1M")
+    fireEvent.click(screen.getByRole('radio', { name: '1 m' }));
     // One History reading (DAO-11) carries the amounts of the last complete day, in the summary
     // form (readability R5, re-pinned on purpose: was "500.00000000"); a cut one has its exact
     // value in its title.
@@ -161,6 +163,31 @@ describe('DaoBoard', () => {
     // re-pinned with readability R4 (lane B7): the reading is labelled facts, the detail pages' dl rows (was one line of facts joined by "·")
     expect(factsOf(reading)).toContainEqual(['deposited', '500']);
     expect(factsOf(reading)).toContainEqual(['share', '1.25%']);
+  });
+
+  // Lane C2 (topics), written before the range's control is replaced: a day pinned on the picture
+  // is a day of the range it was pinned in, so a new range lets it go and the reading opens on its
+  // last day again.
+  it('lets a pinned day go when the range changes', () => {
+    stubChartWidth(1200);
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const reading = () => screen.getByRole('status', { name: 'History reading' });
+    // re-pinned (lane C2 topics): a span of the controls board's range (it was a pressed button)
+    const range = (name: string) => screen.getByRole('radio', { name });
+    expect(reading()).not.toHaveTextContent(/selected/);
+    // a click on the deposited plot pins a day (jsdom lays nothing out: the plot's last day)
+    fireEvent.click(document.querySelector('svg[data-panel="deposited"]')!);
+    expect(reading()).toHaveTextContent(/selected 2024-01-15/);
+    fireEvent.click(range('1 m'));
+    expect(reading()).not.toHaveTextContent(/selected/);
+    expect(factsOf(reading())).toContainEqual(['day', '2024-01-15']);
   });
 
   it('keeps the owner link bound to the source address', () => {
@@ -638,7 +665,20 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
     const title = within(hero()).getByRole('heading', { level: 1, name: 'Nervos DAO' });
     expect(title).toHaveClass('text-index');
     const row = title.parentElement!;
-    expect(row).toContainElement(within(hero()).getByRole('group', { name: 'History range' }));
+    // re-pinned (lane C2 topics): the range is the controls board's, a radio group of its spans
+    // in the one spelling, 1 m · 1 y · all, all chosen (it was a group of pressed buttons 1M ·
+    // 1Y · All)
+    const range = within(hero()).getByRole('radiogroup', { name: 'History range' });
+    expect(row).toContainElement(range);
+    expect(
+      within(range)
+        .getAllByRole('radio')
+        .map((r) => r.textContent)
+    ).toEqual(['1 m', '1 y', 'all']);
+    expect(within(range).getByRole('radio', { name: 'all' })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
     expect(row).toContainElement(
       within(hero()).getByRole('link', { name: 'Explore DAO charts →' })
     );
@@ -698,7 +738,8 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
       'DAO daily history could not be loaded from indexed snapshots.'
     );
     expect(within(hero()).getByRole('link', { name: 'Explore DAO charts →' })).toBeInTheDocument();
-    expect(within(hero()).queryByRole('group', { name: 'History range' })).toBeNull();
+    // re-pinned (lane C2 topics): no range's radio group (it was no group of buttons)
+    expect(within(hero()).queryByRole('radiogroup', { name: 'History range' })).toBeNull();
   });
 });
 

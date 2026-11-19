@@ -192,12 +192,15 @@ describe('NetworkSection', () => {
   it('shows the 24 h hourly view by default: the headline is the last full hour, the current hour faint', async () => {
     render(<NetworkSection />);
     const fig = figure('home-transactions');
-    const group = within(fig).getByRole('group', { name: 'Transactions range' });
-    const h24 = within(group).getByRole('button', { name: '24 h' });
-    const d14 = within(group).getByRole('button', { name: '14 d' });
-    expect(h24).toHaveAttribute('aria-pressed', 'true');
-    expect(d14).toHaveAttribute('aria-pressed', 'false');
-    expect(h24).toHaveClass('h-8');
+    // re-pinned (lane C2 topics): the controls board's range, a radio group of the chips joined,
+    // 28 px from 640 and 32 below it (it was a group of pressed buttons, 32 px at every width)
+    const group = within(fig).getByRole('radiogroup', { name: 'Transactions range' });
+    const h24 = within(group).getByRole('radio', { name: '24 h' });
+    const d14 = within(group).getByRole('radio', { name: '14 d' });
+    expect(h24).toHaveAttribute('aria-checked', 'true');
+    expect(d14).toHaveAttribute('aria-checked', 'false');
+    expect(h24).toHaveClass('h-8', 'sm:h-7', 'border-jade');
+    expect(d14).toHaveClass('-ml-px');
 
     await waitFor(() =>
       expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('731')
@@ -239,13 +242,14 @@ describe('NetworkSection', () => {
       expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('731')
     );
 
-    await user.click(within(fig).getByRole('button', { name: '14 d' }));
-    expect(within(fig).getByRole('button', { name: '14 d' })).toHaveAttribute(
-      'aria-pressed',
+    // re-pinned (lane C2 topics): the range's radios (they were pressed buttons)
+    await user.click(within(fig).getByRole('radio', { name: '14 d' }));
+    expect(within(fig).getByRole('radio', { name: '14 d' })).toHaveAttribute(
+      'aria-checked',
       'true'
     );
-    expect(within(fig).getByRole('button', { name: '24 h' })).toHaveAttribute(
-      'aria-pressed',
+    expect(within(fig).getByRole('radio', { name: '24 h' })).toHaveAttribute(
+      'aria-checked',
       'false'
     );
     expect(screen.getByTestId('home-transactions-headline')).toHaveTextContent('15,710');

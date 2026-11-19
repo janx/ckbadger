@@ -285,9 +285,13 @@ describe('ForksPage', () => {
     const bodyRows = () => table().querySelectorAll('tbody tr');
     // collapsed by default: the first five rows, the expander, no pager yet
     expect(bodyRows()).toHaveLength(5);
-    const more = screen.getByRole('button', { name: 'Show all 18 branch switches ↓' });
-    expect(more).toHaveClass('text-small');
-    expect(more).toHaveAttribute('aria-expanded', 'false');
+    // re-pinned (lane C2 topics): the expander is the controls board's short-list form of the
+    // pager, "all 18 branch switches ↓" in celadon words (it was "Show all 18 branch switches ↓"
+    // in the reading ink, a disclosure with aria-expanded; the board's is a way to go, the rest of
+    // the list, and it goes once taken); the count is a unit, held by no-break spaces
+    const more = screen.getByRole('button', { name: 'all 18 branch switches ↓' });
+    expect(more).toHaveClass('text-small', 'text-jade');
+    expect(more).not.toHaveAttribute('aria-expanded');
     expect(screen.queryByText(fullText(/18 switches/))).toBeNull();
     // expanding is the link: every row, every column, in place. Re-pinned on purpose (readability
     // B5): the eighteen are one page, and one page draws no pager (it said "Showing 1–18 of 18
@@ -295,9 +299,49 @@ describe('ForksPage', () => {
     fireEvent.click(more);
     expect(bodyRows()).toHaveLength(18);
     expect(within(table()).getAllByRole('columnheader')).toHaveLength(6);
-    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'branch switches' })).toBeNull();
     expect(screen.queryByText(/18 switches/)).toBeNull();
     expect(heading).toHaveAccessibleName('branch switches 18 · this node');
+  });
+
+  // Lane C2 (topics), written before the expander and the pager are replaced: a list longer than
+  // a page shows its first five, then its first page whole, then pages older by the cursor the API
+  // served and newer back to the page before, a later page always whole.
+  it('pages a list longer than a page by its served cursor once expanded, a later page whole', async () => {
+    // the API answers eight a page (fewer rows keep the test quick): fifteen take two pages
+    const event = list().data[0];
+    const first = Array.from({ length: 8 }, (_, i) => ({ ...event, id: i + 1 }));
+    const second = Array.from({ length: 7 }, (_, i) => ({ ...event, id: 9 + i }));
+    vi.mocked(api.getForks).mockImplementation(async (params) =>
+      params?.cursor === 'after-eight'
+        ? { ...list(), data: second, total: 15, limit: 8, hasMore: false, nextCursor: null }
+        : { ...list(), data: first, total: 15, limit: 8, hasMore: true, nextCursor: 'after-eight' }
+    );
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    // re-pinned (lane C2 topics): the controls board's cursor in time, newest first, and its
+    // short-list form (they were the buttons Next and Previous, and "Show all 15 branch
+    // switches ↓")
+    const older = () => screen.getByRole('button', { name: 'older →' });
+    const newer = () => screen.getByRole('button', { name: '← newer' });
+    const pager = () => screen.getByRole('navigation', { name: 'branch switches' });
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const bodyRows = () => table().querySelectorAll('tbody tr');
+    expect(bodyRows()).toHaveLength(5);
+    fireEvent.click(screen.getByRole('button', { name: 'all 15 branch switches ↓' }));
+    expect(bodyRows()).toHaveLength(8);
+    // the page of the pages the served total makes at the served page size; newer is quiet words
+    expect(pager()).toHaveTextContent('newest first← newerpage 1 of 2older →');
+    expect(within(pager()).queryByRole('button', { name: '← newer' })).toBeNull();
+    fireEvent.click(older());
+    await waitFor(() => expect(bodyRows()).toHaveLength(7));
+    expect(api.getForks).toHaveBeenLastCalledWith({ cursor: 'after-eight', limit: 50 });
+    expect(pager()).toHaveTextContent('newest first← newerpage 2 of 2older →');
+    expect(within(pager()).queryByRole('button', { name: 'older →' })).toBeNull();
+    fireEvent.click(newer());
+    await waitFor(() => expect(bodyRows()).toHaveLength(8));
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
   });
 
   it('needs no expander for five switches or fewer', async () => {
@@ -308,7 +352,8 @@ describe('ForksPage', () => {
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(table().querySelectorAll('tbody tr')).toHaveLength(5);
-    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    // re-pinned (lane C2 topics): the short-list form's words, "all … ↓" (was "Show all …")
+    expect(screen.queryByRole('button', { name: /^all \d/ })).toBeNull();
     // Re-pinned on purpose (readability B5): five switches are one page, and one page draws no
     // pager (it said "Showing 1–5 of 5 switches"); the count stays in the heading.
     expect(screen.queryByText(/5 switches/)).toBeNull();

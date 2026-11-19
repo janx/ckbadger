@@ -18,6 +18,7 @@ import {
   derive,
   viewOf,
 } from '@/components/home/section';
+import { RangeSelect } from '@/components/ui/range-select';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { api, type ChartResponse, type TxStatsDataPoint } from '@/lib/api';
 import { chartNumber, dayLabel, splitByCompleteness } from '@/lib/daily-series';
@@ -32,7 +33,6 @@ import {
   formatOrphanRateTarget,
   orphanRateTargetPercent,
 } from '@/lib/network-metrics';
-import { cn } from '@/lib/utils';
 
 /** Daily charts show their last 14 points: complete days, by the endpoints' contract. */
 const DAYS = 14;
@@ -269,11 +269,16 @@ function UncleRateFigure() {
 
 type TxRange = '24h' | '14d';
 
-// The toggle names the range, so the sub-label names only the bucket.
-const TX_RANGES: Record<TxRange, { button: string; subtitle: string; series: string }> = {
-  '24h': { button: '24 h', subtitle: 'per hour', series: 'hourlyData' },
-  '14d': { button: '14 d', subtitle: 'per day', series: 'dailyData' },
+// The range names the span, so the sub-label names only the bucket.
+const TX_RANGES: Record<TxRange, { span: string; subtitle: string; series: string }> = {
+  '24h': { span: '24 h', subtitle: 'per hour', series: 'hourlyData' },
+  '14d': { span: '14 d', subtitle: 'per day', series: 'dailyData' },
 };
+/** The range's spans, in the one spelling of a span (the controls board's `24 h · 14 d`). */
+const TX_SPANS = (Object.keys(TX_RANGES) as TxRange[]).map((key) => ({
+  key,
+  label: TX_RANGES[key].span,
+}));
 
 interface TxView {
   bars: Bar[];
@@ -355,28 +360,13 @@ function TransactionsFigure() {
       subtitle={meta.subtitle}
       headline={v ? (v.last ? n(v.last.value) : '—') : undefined}
       controls={
-        <span
-          role="group"
-          aria-label="Transactions range"
-          className="border-base-border flex overflow-hidden border"
-        >
-          {(Object.keys(TX_RANGES) as TxRange[]).map((r) => (
-            <button
-              key={r}
-              type="button"
-              aria-pressed={txRange === r}
-              onClick={() => setTxRange(r)}
-              className={cn(
-                'text-small h-8 whitespace-nowrap px-[9px] transition-colors',
-                txRange === r
-                  ? 'bg-base-border-subtle text-text-bright'
-                  : 'text-text-dim hover:text-text bg-transparent'
-              )}
-            >
-              {TX_RANGES[r].button}
-            </button>
-          ))}
-        </span>
+        // the controls board's range: the chips joined, one span at a time
+        <RangeSelect
+          label="Transactions range"
+          options={TX_SPANS}
+          value={txRange}
+          onChange={setTxRange}
+        />
       }
       body={bodyOf(d, (view) => (
         <SparkChart bars={view.bars} formatValue={n} ariaLabel={ariaLabel(view)} />
