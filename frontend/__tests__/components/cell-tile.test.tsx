@@ -263,6 +263,24 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     expectOneRowSeal(screen.getByTestId('tx-io-output-0'), live.seal.id, 'pressed', IN_MARK_COLUMN);
   });
 
+  // Lane P1 (the plan: an output's state reads "spent later", not the "consumed" its input
+  // neighbours carry; review chain-a tx-transfer and tx-cellbase: "consumed" on a CREATED output
+  // read as a contradiction): an input is consumed by this transaction; an output spent since was
+  // spent by a later one.
+  it('writes an output spent since "spent later", and an input "consumed" (P1)', () => {
+    const { inputs, outputs } = cellTiles(transfer('committed', 'consumed'), undefined);
+    expect(inputs.length).toBeGreaterThan(0);
+    expect(outputs.length).toBeGreaterThan(0);
+    expect(inputs.map((c) => c.state)).toEqual(inputs.map(() => 'consumed'));
+    expect(outputs.map((c) => c.state)).toEqual(outputs.map(() => 'spent later'));
+    render(<CellTile cell={outputs[0]} />);
+    const [, , , occupied] = tileRows(screen.getByTestId('tx-io-output-0'));
+    expectEnd(occupied.text, /^spent later$/);
+    // a live output and one in the pool keep their words
+    expect(cellTiles(transfer('committed', 'live'), undefined).outputs[0].state).toBe('live');
+    expect(cellTiles(transfer('pending'), undefined).outputs[0].state).toBe('pending');
+  });
+
   it('draws the outputs of a transaction not yet committed dashed, and its inputs still pressed', () => {
     const { inputs, outputs } = cellTiles(transfer('pending'), undefined);
     for (const cell of outputs) {
