@@ -278,12 +278,8 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               {genetics.eligibleItems.toLocaleString('en-US')} decoded.
             </p>
           )}
-          {ruled && (
-            // the caption as narrow as it was (400 px), its box around it
-            <div className="max-w-[400px]">
-              <DroppedGenesCaption dropped={ruled.dropped} objects={total} />
-            </div>
-          )}
+          {/* the caption as narrow as it was (400 px), in its own box, drawn only with it */}
+          {ruled && <DroppedGenesCaption dropped={ruled.dropped} objects={total} narrow />}
         </div>
         <div className="min-w-0 space-y-1.5">
           <div className="text-text-dim text-small flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
