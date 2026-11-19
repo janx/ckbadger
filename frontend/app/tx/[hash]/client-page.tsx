@@ -8,7 +8,6 @@ import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { HeadId } from '@/components/ui/head-id';
-import { CopyButton } from '@/components/ui/copy-button';
 import { SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
@@ -1246,14 +1245,10 @@ export default function TransactionDetailPage() {
             id={seal.id}
             state={seal.state}
             kind="Transaction"
-            // the id line, in the plate's quiet voice (the plate sets it); the copy is the
-            // library's CopyButton, its icon after the hash and its answer in words beside it
-            identity={
-              <div className="flex min-w-0 items-center gap-0.5">
-                <HeadId value={tx.hash} kind="hash" />
-                <CopyButton value={tx.hash} label="copy transaction hash" className="shrink-0" />
-              </div>
-            }
+            // the id line, in the plate's voice (the plate sets it); the copy is the library's
+            // CopyButton, its icon after the hash and its answer in words beside it, the head id's
+            // one form (lane c2-finish, item 4: 8 px after the id, at its first line)
+            identity={<HeadId value={tx.hash} kind="hash" copy="copy transaction hash" />}
             below={
               <>
                 {summary}

@@ -283,7 +283,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           : []),
       ]}
       status={<LiveBadge live={object.isLive} gone="Burned" />}
-      identity={<HeadId value={id} kind="hash" copyable />}
+      identity={<HeadId value={id} kind="hash" copy="copy object id" />}
       // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
       // moved to tier 2 ("This object, in words").
       lede={

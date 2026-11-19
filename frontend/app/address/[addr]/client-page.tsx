@@ -8,7 +8,6 @@ import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
-import { CopyButton } from '@/components/ui/copy-button';
 import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
@@ -115,14 +114,11 @@ export default function AddressDetailPage() {
  */
 function AddressIdentity({ value, kind }: { value: string; kind: 'address' | 'hash' }) {
   return (
-    <span className="flex min-w-0 items-start gap-2">
-      <HeadId value={value} kind={kind} />
-      <CopyButton
-        value={value}
-        label={kind === 'address' ? 'copy address' : 'copy lock script hash'}
-        className="shrink-0"
-      />
-    </span>
+    <HeadId
+      value={value}
+      kind={kind}
+      copy={kind === 'address' ? 'copy address' : 'copy lock script hash'}
+    />
   );
 }
 function AddressDetailPageContent({ addr }: { addr: string }) {

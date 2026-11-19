@@ -174,7 +174,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           {/* C7: the type hash the rail listed names the token under its title, as an id does;
               the head's full id on a line of its own (A4 Chrome F3): one line from 435.6 px
               (66 characters at 11 px), else the two halves */}
-          <HeadId value={t.typeScriptHash} kind="hash" copyable />
+          <HeadId value={t.typeScriptHash} kind="hash" copy="copy type hash" />
         </>
       }
       intro={

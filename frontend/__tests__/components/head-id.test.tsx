@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { HeadId } from '@/components/ui/head-id';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { boxPx, gapPx, shrinksAt } from '@/__tests__/utils/tailwind-box';
 
 /**
  * A full id in a page's head (the lead's ruling a, 2026-11-14, widened to every head by the A4
@@ -159,18 +160,21 @@ describe('HeadId, a full id in a page head', () => {
     expect(texts()).toEqual([ADDRESS]);
   });
 
+  // Re-pinned (lane c2-finish, item 4: copy has one form): the id was a click target whose tick
+  // stood over it; now the id is text and the library's CopyButton after it copies it whole,
+  // answering `copied` in words beside its icon while the id keeps its lines, never hidden.
   it('copies the whole id when it copies, keeping its lines', async () => {
     stubLine(326);
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
-    render(<HeadId value={HASH} kind="hash" copyable />);
-    fireEvent.click(head());
+    render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+    fireEvent.click(screen.getByRole('button', { name: 'copy block hash' }));
     expect(writeText).toHaveBeenCalledWith(HASH);
     expect(screen.getByTitle(HASH)).toBe(head());
-    // the ✓ stands over the id, which keeps its lines (hidden), so the page under it never moves
-    await waitFor(() => expect(screen.getByText('✓')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^copied$/));
+    expect(screen.queryByText('✓')).toBeNull();
     expect(lines()).toHaveLength(2);
-    expect(lines()[0].parentElement).toHaveClass('invisible');
+    expect(head().querySelector('.invisible')).toBeNull();
   });
 
   // A4 round 2, task 4: a line narrower than one designed line (a hash's `0x` and a digit, 21.6 px
@@ -205,6 +209,9 @@ describe('HeadId, a full id in a page head', () => {
   // A4 review 3: the piece copies through the one copy path (hooks/useCopy). A copy that cannot
   // work (no clipboard, as over plain HTTP on a LAN address; or a refusal) shows no tick and
   // rejects nothing; a copy that worked shows its tick, then the id again; no timer outlives it.
+  // Re-pinned (lane c2-finish, item 4): the copy is the CopyButton after the id, so a copy that
+  // cannot work says `not copied` and rejects nothing, one that worked says `copied` and then
+  // nothing, and the id is never hidden; no timer outlives it.
   describe('through the one copy path', () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);
@@ -220,7 +227,7 @@ describe('HeadId, a full id in a page head', () => {
     // a click, then every pending promise and a macrotask for an unhandled rejection to surface
     const clickAndSettle = async () => {
       await act(async () => {
-        fireEvent.click(head());
+        fireEvent.click(screen.getByRole('button', { name: 'copy block hash' }));
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
     };
@@ -230,36 +237,93 @@ describe('HeadId, a full id in a page head', () => {
       ['is absent', () => undefined],
       ['refuses', () => ({ writeText: vi.fn().mockRejectedValue(new DOMException('denied')) })],
     ] as const)
-      it(`shows no tick and throws nothing where the clipboard ${label}`, async () => {
+      it(`says not copied and throws nothing where the clipboard ${label}`, async () => {
         stubLine(600);
         Object.assign(navigator, { clipboard: clipboard() });
-        render(<HeadId value={HASH} kind="hash" copyable />);
+        render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
         await clickAndSettle();
+        expect(screen.getByRole('status')).toHaveTextContent(/^not copied$/);
         expect(screen.queryByText('✓')).toBeNull();
-        expect(lines()[0].parentElement).not.toHaveClass('invisible');
+        expect(head().querySelector('.invisible')).toBeNull();
         expect(rejections).toEqual([]);
       });
 
-    it('shows the tick, then the id again, and leaves no timer when it goes', async () => {
+    it('says copied, then nothing, and leaves no timer when it goes', async () => {
       stubLine(600);
       Object.assign(navigator, { clipboard: { writeText: vi.fn().mockResolvedValue(undefined) } });
       vi.useFakeTimers();
       const click = () =>
         act(async () => {
-          fireEvent.click(head());
+          fireEvent.click(screen.getByRole('button', { name: 'copy block hash' }));
         });
-      const { unmount } = render(<HeadId value={HASH} kind="hash" copyable />);
+      const { unmount } = render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       await click();
-      expect(screen.getByText('✓')).toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent(/^copied$/);
       expect(vi.getTimerCount()).toBe(1);
       unmount();
       expect(vi.getTimerCount()).toBe(0);
-      render(<HeadId value={HASH} kind="hash" copyable />);
+      render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       await click();
-      expect(screen.getByText('✓')).toBeInTheDocument();
+      expect(screen.getByRole('status')).toHaveTextContent(/^copied$/);
       act(() => vi.advanceTimersByTime(1500));
-      expect(screen.queryByText('✓')).toBeNull();
-      expect(lines()[0].parentElement).not.toHaveClass('invisible');
+      expect(screen.getByRole('status')).toBeEmptyDOMElement();
+      expect(head().textContent).toBe(HASH);
+    });
+  });
+
+  // Lane c2-finish, item 4: copy has one form. A head's id is a value in the line's ink, and one
+  // icon after it copies it: the id is text (no click of its own, no hover glow), the library's
+  // CopyButton after it, 8 px apart, at the id's first line; the id measures the line the button
+  // leaves it (its box 24 px from 640, 32 below, and the 6 px before its answer).
+  describe('with its copy button after it', () => {
+    it('is the id as text, the copy button after it, named for what it copies', () => {
+      render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+      const button = screen.getByRole('button', { name: 'copy block hash' });
+      expect(
+        head().compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(head()).not.toContainElement(button);
+      expect(head().className).not.toMatch(/cursor-pointer|hover-lit/);
+      expect(head().textContent).toBe(HASH);
+      const row = head().parentElement!;
+      expect(row).toContainElement(button);
+      expect(row).toHaveClass('flex', 'items-start', 'gap-2');
+    });
+
+    it('leaves the id the line less 46 px below 640 and 38 from it', () => {
+      render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+      const row = head().parentElement!;
+      const button = screen.getByRole('button', { name: 'copy block hash' });
+      const copyRoot = button.parentElement!;
+      const taken = (w: number) => gapPx(row, w) + boxPx(button, w)! + gapPx(copyRoot, w);
+      expect([1280, 640, 390, 360].map(taken)).toEqual([38, 38, 46, 46]);
+      expect(shrinksAt(copyRoot, 390)).toBe(false);
+    });
+
+    it('keeps a hash at 13 px in the lines it had: one at 640 (570 px of 608), two at 390', () => {
+      // 66 × 7.8 = 514.8 px: 570 holds it; at 390, 358 − 46 = 312 holds a half (34 × 7.8 = 265.2)
+      stubLine(570, 13);
+      const one = render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+      expect(lines()).toHaveLength(1);
+      one.unmount();
+      vi.restoreAllMocks();
+      stubLine(312, 13);
+      render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+      expect(texts()).toEqual([HASH.slice(0, 34), HASH.slice(34)]);
+    });
+
+    it('sets a DID as an id of its own kind, in equal lines where the line cannot hold it', () => {
+      const DID = 'did:ckb:ceirceirceirceirceirceirceirceir';
+      stubLine(1000, 14);
+      const one = render(<HeadId value={DID} kind="did" copy="copy DID" />);
+      expect(texts()).toEqual([DID]);
+      one.unmount();
+      vi.restoreAllMocks();
+      // 40 × 8.4 = 336 px; 312 holds 37 characters: two lines of 20
+      stubLine(312, 14);
+      render(<HeadId value={DID} kind="did" copy="copy DID" />);
+      expect(texts()).toEqual([DID.slice(0, 20), DID.slice(20)]);
+      expect(() => render(<HeadId value="did:web:x" kind="did" />)).toThrow('not a did:ckb');
     });
   });
 });

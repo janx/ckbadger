@@ -61,13 +61,18 @@ describe('Uncle detail page', () => {
   });
 
   // The review's item E: the plate's id is the uncle's copy control; a click writes the WHOLE hash
+  // Re-pinned (lane c2-finish, item 4: copy has one form): the id is text; the copy button after
+  // it copies the whole hash (the id itself was the click target, its tick over it).
   it('copies the whole uncle hash when the plate’s id is clicked', async () => {
     params.current = { id: '8775638', index: '0' };
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     const { container } = render(<UncleDetailPage />);
     await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
-    fireEvent.click(container.querySelector('[data-head-id]') as HTMLElement);
+    const id = container.querySelector('[data-head-id]') as HTMLElement;
+    fireEvent.click(id);
+    expect(writeText).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'copy uncle hash' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(blockUncle.hash));
     expect(blockUncle.hash).toBe(`0x${'ee'.repeat(32)}`);
   });

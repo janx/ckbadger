@@ -118,7 +118,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
     <DetailLayout
       title={`Uncle ${formatBlockNumber(uncle.number)}`}
       documentTitle={[formatBlockNumber(uncle.number), 'uncle']}
-      identity={<HeadId value={uncle.hash} kind="hash" copyable />}
+      identity={<HeadId value={uncle.hash} kind="hash" copy="copy uncle hash" />}
       facts={[
         {
           label: 'Included by',

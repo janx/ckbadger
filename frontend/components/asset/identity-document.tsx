@@ -3,6 +3,7 @@ import { useDetailTier } from '@/components/ui/detail-layout';
 import type { MnftProtocol, DotCellPartyRef } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
+import { CopyButton } from '@/components/ui/copy-button';
 export function NamedParty({ party, label }: { party: DotCellPartyRef; label: string }) {
   return (
     <div className="min-w-0">
@@ -20,7 +21,13 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
           </AppLink>
         ) : (
           <>
-            <Hash hash={party.hashPrefix} truncate={false} className="text-meta" />
+            <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-meta" />{' '}
+            {/* a full id on its own line in tier 2: the id is text, the icon after it copies */}
+            <CopyButton
+              value={party.hashPrefix}
+              label="copy lock hash prefix"
+              className="align-middle"
+            />
             <span className="text-text-dim text-meta mt-1 block">
               Named lock-hash prefix · no uniquely resolved address
             </span>

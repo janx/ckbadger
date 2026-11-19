@@ -22,6 +22,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
+import { CopyButton } from '@/components/ui/copy-button';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import {
@@ -191,7 +192,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         { label: className, href: classHref },
       ]}
       status={<LiveBadge live={item.isLive} gone="Burned" />}
-      identity={<HeadId value={item.nftId} kind="hash" copyable />}
+      identity={<HeadId value={item.nftId} kind="hash" copy="copy object id" />}
       intro={
         <div className="space-y-4 pt-1">
           <AssetReadState error={detail.error} label="m-NFT" retained />
@@ -416,7 +417,18 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             <p className="text-meta max-w-measure">Name · {item.issuer.name ?? 'not recorded'}</p>
             <p className="text-meta max-w-measure">
               Issuer ID ·{' '}
-              <Hash hash={item.issuer.issuerId} truncate={false} className="text-meta break-all" />
+              <Hash
+                hash={item.issuer.issuerId}
+                truncate={false}
+                copyable={false}
+                className="text-meta break-all"
+              />{' '}
+              {/* a full id on its own line in tier 2: the id is text, the icon after it copies */}
+              <CopyButton
+                value={item.issuer.issuerId}
+                label="copy issuer id"
+                className="align-middle"
+              />
             </p>
             <p className="text-text-dim text-meta max-w-measure mt-2">
               <AssetCount value={item.issuer.classCount} /> classes ·{' '}

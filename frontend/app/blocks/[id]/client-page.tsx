@@ -273,10 +273,10 @@ export default function BlockDetailPage() {
               </span>
             </span>
           }
-          // The id line: the full hash alone (the kind line says "Block"), in the plate's quiet
-          // voice (C10 round 2), click to copy as before; one line or two halves, never a
-          // scroller (the lead's ruling a).
-          identity={<HeadId value={block.hash} kind="hash" copyable />}
+          // The id line: the full hash alone (the kind line says "Block"), in the plate's voice
+          // (C10 round 2), the copy button after it (copy has one form: lane c2-finish, item 4);
+          // one line or two halves, never a scroller (the lead's ruling a).
+          identity={<HeadId value={block.hash} kind="hash" copy="copy block hash" />}
           // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its name plate: its
           // hash, and the transactions it holds in rods. A count the API did not serve is refused
           // (the summary below reads it first), never filled in.
