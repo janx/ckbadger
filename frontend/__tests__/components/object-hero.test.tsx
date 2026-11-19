@@ -7,9 +7,11 @@ import {
   cellLifeSentence,
   itemLifeSentence,
   itemLifeAges,
-  lockPhrase,
+  lockFootnote,
   spelledDuration,
 } from '@/components/asset/object-hero';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { sporeCellVersionsProducer } from '@/__tests__/msw/fixtures/item-producer';
 import type { ItemCellVersion } from '@/lib/api';
 
@@ -24,10 +26,45 @@ it('spells durations and lock phrases for prose', () => {
   expect(spelledDuration(2 * 86_400_000)).toBe('2\u00a0days');
   expect(spelledDuration(800 * 86_400_000)).toBe('2\u00a0years');
   expect(() => spelledDuration(-1)).toThrow('invalid duration');
-  expect(lockPhrase('Nervape Shadow Lock')).toBe('a Nervape Shadow Lock');
-  expect(lockPhrase('secp256k1')).toBe('a secp256k1 lock');
-  expect(lockPhrase('Omnilock')).toBe('an Omnilock');
-  expect(lockPhrase(null)).toBe('an unregistered lock');
+});
+
+// Re-pinned on purpose (lane P2's follow-up, item 6): the life sentence says the lock a cell sits
+// under through the one decision's sentence form (lockPhrase in components/ui/lock-kind.tsx), off
+// the cell's lock and its owner's address, where it said the API's name with its own article rule:
+// a lock the registry does not name was "an unregistered lock" and is its code hash, and a lock on
+// the default lock's code hash by data, which the registry's name does not cover, was called the
+// default lock's name and is its code hash by data.
+it('says the lock a cell sits under through the decision’s sentence form', () => {
+  const at = (lockName: string | null) => v({ timestamp: '0', lockName, isLive: true });
+  expect(itemLifeSentence([at('Nervape Shadow Lock')])).toBe(
+    'Minted to a Nervape Shadow Lock, where it sits now.'
+  );
+  expect(itemLifeSentence([at('secp256k1')])).toBe(
+    'Minted to a secp256k1 lock, where it sits now.'
+  );
+  expect(itemLifeSentence([at('Omnilock')])).toBe('Minted to an Omnilock, where it sits now.');
+  expect(itemLifeSentence([at(null)])).toBe(
+    'Minted to a lock 0x41414141…414141, where it sits now.'
+  );
+  const args = `0x${'01'.repeat(20)}`;
+  const byData = v({
+    timestamp: '0',
+    isLive: true,
+    lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+    lockName: 'Default Lock',
+    ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+  });
+  expect(itemLifeSentence([byData])).toBe(
+    'Minted to a lock 0x9bd7e06f…a3cce8 by data, where it sits now.'
+  );
+  // the footnote says the same words without the article
+  expect(lockFootnote([at(null), at(null)], 'object')).toBe(
+    'Lock: lock 0x41414141…414141 throughout. Type and data never changed.'
+  );
+  // a cell whose address spells another lock is refused, the cell named
+  expect(() =>
+    itemLifeSentence([{ ...byData, lock: { ...byData.lock, hashType: 'type' } }])
+  ).toThrow(`cell ${byData.txHash}:${byData.outputIndex}`);
 });
 
 // Lane P (after lane F's C3): the sentence tells the path; its dates are the page's Minted and Last

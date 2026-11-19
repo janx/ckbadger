@@ -119,15 +119,17 @@ it('names the owner lock kind and dates the mint in UTC+8 on each Newest row', a
         lockCodeHash: JOYID_CODE_HASH,
         lockKind: 'JoyID',
       },
+      // re-pinned on purpose (lane P2's follow-up, item 3): minted on other days, so the minting
+      // day varies on the page and keeps its column (the same day on every row is said once)
       {
         ...base,
         sporeId: `0x${'03'.repeat(32)}`,
-        chainTime: '1700000000100',
+        chainTime: '1700100000100',
         ownerAddress: seededAddress('unreg1', `0x${'43'.repeat(32)}`),
         lockCodeHash: `0x${'43'.repeat(32)}`,
         lockKind: null,
       },
-      { ...base, sporeId: `0x${'04'.repeat(32)}`, chainTime: '1700000000100' },
+      { ...base, sporeId: `0x${'04'.repeat(32)}`, chainTime: '1700200000100' },
     ])
   );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
@@ -254,16 +256,21 @@ it('says a gene the same on every row of the page once over the list, not as a c
   );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   const table = await screen.findByRole('table', { name: 'Newest objects' });
+  // re-pinned on purpose (lane P2's follow-up, item 3): the two rows share their owner and their
+  // minting day too, so neither is a column; both are said once with the gene (it kept Owner and
+  // Minted)
   expect(
     within(table)
       .getAllByRole('columnheader')
       .map((h) => h.textContent)
-  ).toEqual(['Object', 'Made of', 'Owner', 'Minted']);
+  ).toEqual(['Object', 'Made of']);
   const once = screen
     .getByRole('region', { name: 'Objects' })
     .querySelector('[data-role="said-once"]')!;
   expect(once).toHaveTextContent(
-    new RegExp(`^every one of the 2\\sobjects listed · Face ${own.value}`)
+    new RegExp(
+      `^every one of the 2\\sobjects listed · Face ${own.value} .* · held by ckb1.* · minted on 2023-11-15$`
+    )
   );
   expect(once.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   // the row's title still names its genes
@@ -277,11 +284,15 @@ it('writes each Newest row on one line with the name bright and the rest in its 
       { ...base, number: '7' },
       // re-pinned on purpose (lane p-assets): its own Face, so the gene varies on the page and
       // keeps its column (a gene the same on every row is said once over the list)
+      // re-pinned on purpose (lane P2's follow-up, item 3): its own owner's lock hash and its own
+      // minting day, so the owner and the day vary on the page and keep their columns
       {
         ...base,
         sporeId: `0x${'03'.repeat(32)}`,
         number: null,
         ownerAddress: null,
+        ownerLockHash: `0x${'05'.repeat(32)}`,
+        chainTime: '1700100000100',
         traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
       },
     ])
@@ -307,7 +318,56 @@ it('writes each Newest row on one line with the name bright and the rest in its 
     // for the default lock (it wrote the API's name, 'SECP256K1/blake160')
     `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
   );
-  expect(plain.getAttribute('title')).toContain(`owner ${base.ownerLockHash}`);
+  expect(plain.getAttribute('title')).toContain(`owner 0x${'05'.repeat(32)}`);
+});
+
+// Lane P2's follow-up (item 3): the owner and the minting day the same on every row of the page
+// are no columns and no phone sub-line: said once over the list, by the one helper (SaidOnce).
+it('says an owner and a minting day the same on every row once, as it says a gene', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const rows = [
+    { ...base, number: '7' },
+    {
+      ...base,
+      sporeId: `0x${'03'.repeat(32)}`,
+      number: '8',
+      traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
+    },
+  ];
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage(rows));
+  const { unmount } = render(
+    <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+  );
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+  ).toEqual(['Object', 'Face', 'Made of']);
+  const once = screen
+    .getByRole('region', { name: 'Objects' })
+    .querySelector<HTMLElement>('[data-role="said-once"]')!;
+  expect(once).toHaveTextContent(
+    /^every one of the 2\sobjects listed · held by ckb1\S+ · minted on 2023-11-15$/
+  );
+  expect(within(once).getByRole('link')).toHaveAttribute(
+    'href',
+    `/mainnet/address/${base.ownerAddress}`
+  );
+  // each row's title still names its owner and its mint
+  expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
+    `owner ${base.ownerAddress}`
+  );
+  unmount();
+  // on a phone the holder's line keeps the chip alone and the mint leaves the genes' line
+  atViewportWidth(390);
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const [first] = await screen.findAllByTestId('cluster-object-row-mobile');
+  expect(phoneLines(first).map((l) => [l.key, l.left, l.right])).toEqual([
+    ['name', '#7', null],
+    ['holder', 'Unknown', null],
+    ['minted', 'Face Blue', null],
+  ]);
 });
 
 // Consistency round (Main.dc.html) + RESPONSIVE_LAYOUT rule 4: the gel sits beside the table only
@@ -577,6 +637,9 @@ describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
           // re-pinned on purpose (lane p-assets): its own Face, so the gene varies on the page
           // and each row says its own (a gene the same on every row is said once over the list)
           traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
+          // re-pinned on purpose (lane P2's follow-up, item 3): minted on its own day, so each
+          // row says its mint (the same day on every row is said once over the list)
+          chainTime: '1700100000100',
         },
       ])
     );
@@ -608,7 +671,7 @@ describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
     expect(phoneLines(ownerless).map((l) => [l.key, l.left, l.right])).toEqual([
       ['name', '0x04040404…040404', null],
       ['holder', 'No live owner', 'not recorded'],
-      ['minted', 'Face Red · minted at #100 on 2023-11-15', null],
+      ['minted', 'Face Red · minted at #100 on 2023-11-16', null],
     ]);
     // line 1 is the name alone at its widest: the mark and its gap and a u64 object number
     expect(statedHeadPx(held)).toBe(246.8);

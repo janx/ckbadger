@@ -250,11 +250,12 @@ export function CellScriptGroups({ cell }: { cell: Cell }) {
 /** The dashed "Not spent yet" box: the groups the transaction that spends this cell will run. */
 function NotSpentYet({
   cell,
-  lockName,
+  lockLabel,
   typeName,
 }: {
   cell: Cell;
-  lockName: string | null;
+  /** The lock's name as the one decision gives it (`lockWords`): null where it names none. */
+  lockLabel: string | null;
   typeName: string | null;
 }) {
   const replaced =
@@ -268,7 +269,8 @@ function NotSpentYet({
       <div className="flex flex-wrap justify-between gap-2">
         <span className="text-text-bright">{replaced ? 'Not replaced yet' : 'Not spent yet'}</span>
         {cell.liveAgeMs != null && (
-          <span className="text-text-dim">
+          // its age and the block it is as of: values, the reading ink (R3; P1 follow-up)
+          <span className="text-text">
             {formatDurationMs(cell.liveAgeMs)}
             {cell.liveAgeAtBlock != null && (
               <>
@@ -294,7 +296,7 @@ function NotSpentYet({
                 href={`/script/${requirement.referenceHash}?hashType=${requirement.hashType}&kind=${requirement.kind}`}
                 title={`${requirement.hashType} ${requirement.referenceHash}`}
               >
-                {(requirement.kind === 'lock' ? lockName : typeName) ?? (
+                {(requirement.kind === 'lock' ? lockLabel : typeName) ?? (
                   <ShortId value={requirement.referenceHash} kind="hash" size="row" />
                 )}
               </Link>
@@ -337,11 +339,11 @@ function NotSpentYet({
 
 export function CellTransactions({
   cell,
-  lockName = null,
+  lockLabel = null,
   typeName = null,
 }: {
   cell: Cell;
-  lockName?: string | null;
+  lockLabel?: string | null;
   typeName?: string | null;
 }) {
   if (cell.status === 'dead' && (!cell.consumedByTx || cell.consumingInputIndex == null))
@@ -361,7 +363,9 @@ export function CellTransactions({
           cell={outPoint}
           onward={spent ? 'this cell, onward: spent below' : 'this cell, onward: not spent yet'}
           afterOnward={
-            spent ? undefined : <NotSpentYet cell={cell} lockName={lockName} typeName={typeName} />
+            spent ? undefined : (
+              <NotSpentYet cell={cell} lockLabel={lockLabel} typeName={typeName} />
+            )
           }
         />
         {spent && (

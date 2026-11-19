@@ -65,9 +65,9 @@ export function TransactionCellContent({ display, cellHref, size }: TransactionC
         {display.kind === 'token' ? (
           <span className="tabular-nums">
             {display.amount === null ? (
-              <span title={noAmountReason(display)} className="text-text-dim">
-                no readable amount of
-              </span>
+              // the words stand where the amount would, in the link's own ink (no ink by hand
+              // inside a link: the link-look gate; lane P1 follow-up)
+              <span title={noAmountReason(display)}>no readable amount of</span>
             ) : (
               // a figure: one unit the line's [overflow-wrap:anywhere] (for a long name) never cuts
               <NoBreak>

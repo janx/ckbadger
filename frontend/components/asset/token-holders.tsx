@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type TokenDistribution, type TokenHolder } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -12,7 +12,7 @@ import { AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Pager } from '@/components/ui/pager';
-import { FoldBack } from '@/components/transaction/tx-structure';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/aligned-bar';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
-import { shortChars } from '@/lib/list-bounds';
+import { WIDEST_TOKEN_HOLDER_RANK, WIDEST_TOKEN_HOLDERS, shortChars } from '@/lib/list-bounds';
 import { PartReadBoundary, PartReadError, readPart } from '@/components/read-failure';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
@@ -42,13 +42,16 @@ import { PartReadBoundary, PartReadError, readPart } from '@/components/read-fai
 // Readability F3-e: every column budgeted from what it holds (lib/list-bounds.ts), the 13 px cells
 // at 0.6 em a glyph and the 16 px gap after every column but the last.
 /**
- * A token's holders: under 100,000, so a holder's rank is five digits ("99999", as the rank is
- * written) and a range's holder count six characters ("99,999").
+ * A lock's name a column ends in the one ellipsis: 12 characters of it, so the default lock's,
+ * "Default Lock", stands whole.
  */
-const WIDEST_RANK = '99999';
-const WIDEST_HOLDERS = '99,999';
-/** A name a column ends in the one ellipsis (a lock's kind, a balance): 12 characters of it. */
 const NAME_CHARS = 12;
+/**
+ * A balance the column ends in the one ellipsis, exact in its title: 11 characters of it. Lane P2's
+ * follow-up (item 7): the rank's bound grew a digit (WIDEST_TOKEN_HOLDER_RANK, a token's holders
+ * under a million), and in the 554 px column the table has at 1280 the balance gives that 8 px.
+ */
+const BALANCE_CHARS = 11;
 const cell = (chars: number) => textPx(chars, fontPx('small'));
 /**
  * The holders-per-range bar of "Holders by balance", and the share bar of the holder list: each
@@ -62,7 +65,7 @@ const SHARE_TRACK = SHARE_TRACK_PX;
  * The figures right of those bars: a range's holder count, "99,999" (it was 44, five
  * characters), and a holder's share, "100.00%" (it was 48, "41.23%").
  */
-const BUCKET_FIGURE = columnPx(cell(WIDEST_HOLDERS.length));
+const BUCKET_FIGURE = columnPx(cell(WIDEST_TOKEN_HOLDERS.length));
 // the share's box is its text exactly (54.6): its column rounds once, the 50.4 px track, the gap
 // and the figure together, 115 px (two roundings, 55 and then 116, made the table 555 px, a pixel
 // wider than the token page's 554 px column at 1280)
@@ -337,10 +340,21 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     setAll(open);
     pagination.reset();
   };
-  const holders = useQuery({
-    queryKey: ['token-holders', typeHash, all, pagination.cursor, limit],
-    queryFn: pagination.ask((cursor) => api.getTokenHolders(typeHash, { limit, cursor })),
+  // The top ten, read whether the list is folded or open: the fold's count is theirs, and folding
+  // back finds them read, so the fold's one button never waits on a read (lane P2's follow-up,
+  // item 10: the loading list unmounted it and the focus fell to the page)
+  const top = useQuery({
+    queryKey: ['token-holders', typeHash, 'top'],
+    queryFn: () => api.getTokenHolders(typeHash, { limit: 10, cursor: undefined }),
   });
+  // all holders, in pages of the walk
+  const allHolders = useQuery({
+    queryKey: ['token-holders', typeHash, 'all', pagination.cursor, limit],
+    queryFn: pagination.ask((cursor) => api.getTokenHolders(typeHash, { limit, cursor })),
+    enabled: all,
+  });
+  const holders = all ? allHolders : top;
+  const listId = useId();
   /**
    * A holder's share of the same response's supply: the stated share is its text (`percentOf`);
    * the bar's width is drawing, the share in hundredths cut by `formatScaledInteger`, never a
@@ -368,8 +382,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'rank',
         label: '#',
-        // A rank of five digits, "99999" (39 at 13 px), and the gap; it was 32, two digits.
-        minWidth: columnPx(cell(WIDEST_RANK.length) + CELL_GAP_PX),
+        // A rank of six digits, "999999" (46.8 at 13 px; WIDEST_TOKEN_HOLDER_RANK), and the gap; it
+        // was five (lane P2's follow-up, item 7), 32 before, two digits.
+        minWidth: columnPx(cell(WIDEST_TOKEN_HOLDER_RANK.length) + CELL_GAP_PX),
         className: 'whitespace-nowrap',
         render: (h) => <span className="text-text-bright">{rank(h)}</span>,
       },
@@ -429,8 +444,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'balance',
         label: symbol ?? 'Balance',
-        // 12 characters of the amount (93.6 at 13 px) and the gap. It was 112.
-        minWidth: columnPx(cell(NAME_CHARS) + CELL_GAP_PX),
+        // 11 characters of the amount (85.8 at 13 px) and the gap (lane P2's follow-up, item 7: it
+        // was 12, 110, before the rank's bound grew a digit; 112 before that).
+        minWidth: columnPx(cell(BALANCE_CHARS) + CELL_GAP_PX),
         numeric: true,
         // One line; an amount too long for the column ends in an ellipsis, exact in the hover.
         render: (h) => (
@@ -485,100 +501,95 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   const rank = (h: TokenHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(h) + 1;
   // "All holders" pages through the list; the top ten are one page
-  const holdersAt = all && holders.data ? rankedPageAt('holders', holders.data, pagination) : null;
+  const holdersAt =
+    all && allHolders.data ? rankedPageAt('holders', allHolders.data, pagination) : null;
   const holderTable = (
     <div className="min-w-0">
-      {holders.data ? (
-        <>
-          <AssetReadState error={holders.error} label="holders" retained />
-          <PartReadBoundary
-            what="the holders"
-            where={`token ${typeHash}, ${all ? `all holders, page ${pagination.page}` : 'top 10'}`}
-            render={() => (
-              <ListTable
-                label={all ? 'All holders' : 'Top 10 holders'}
-                columns={wordHeads(holderColumns(holders.data.data))}
-                rows={holders.data.data}
-                rowKey={(h) => h.lockScriptHash}
-                empty="No holders."
-                density="row"
-                rowTitle={holderTitle}
-                mobileRow={(h, wide) => {
-                  const share = holderShare(h);
-                  const rows = holders.data!.data;
-                  const scale = shareScaleOf(rows);
-                  return (
-                    <HolderPhoneRow
-                      rank={rank(h)}
-                      party={
-                        <AppLink look="key" href={`/address/${h.address ?? h.lockScriptHash}`}>
-                          {/* Below sm the tight size, 11 characters for an address, 4…6: rank,
+      <div id={listId} className="min-w-0">
+        {holders.data ? (
+          <>
+            <AssetReadState error={holders.error} label="holders" retained />
+            <PartReadBoundary
+              what="the holders"
+              where={`token ${typeHash}, ${all ? `all holders, page ${pagination.page}` : 'top 10'}`}
+              render={() => (
+                <ListTable
+                  label={all ? 'All holders' : 'Top 10 holders'}
+                  columns={wordHeads(holderColumns(holders.data.data))}
+                  rows={holders.data.data}
+                  rowKey={(h) => h.lockScriptHash}
+                  empty="No holders."
+                  density="row"
+                  rowTitle={holderTitle}
+                  mobileRow={(h, wide) => {
+                    const share = holderShare(h);
+                    const rows = holders.data!.data;
+                    const scale = shareScaleOf(rows);
+                    return (
+                      <HolderPhoneRow
+                        rank={rank(h)}
+                        party={
+                          <AppLink look="key" href={`/address/${h.address ?? h.lockScriptHash}`}>
+                            {/* Below sm the tight size, 11 characters for an address, 4…6: rank,
                           address, lock and amount share a 358 px line (L5); from sm the row
                           size, the table's (R9). */}
-                          <Hash
-                            hash={h.address ?? h.lockScriptHash}
-                            kind={h.address ? 'address' : 'hash'}
-                            size={phoneSize}
-                            className="text-body"
-                          />
-                        </AppLink>
-                      }
-                      lock={
-                        // In the row's own dim small ink, as the kind was written before U-15; no
-                        // part where the row names no lock (B4)
-                        phoneLock(h) && (
-                          <LockWordsView
-                            words={phoneLock(h)!}
-                            size={phoneSize}
-                            className="text-text-dim text-small"
-                          />
-                        )
-                      }
-                      // the balance named by its token's symbol (the table heads its column with it)
-                      amount={
-                        <span className="whitespace-nowrap">
-                          <TokenAmount form="summary" amount={h.balance} decimals={decimals} />
-                          {symbol && ` ${symbol}`}
-                        </span>
-                      }
-                      share={share.text}
-                      bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
-                      axis={rows[0] === h ? formatShareTick(scale) : undefined}
-                      head={TOKEN_HOLDER_PHONE_HEAD_PX}
-                      wide={wide}
-                    />
-                  );
-                }}
-              />
-            )}
-          />
-          {all ? (
-            <div className="mt-3 space-y-1">
-              {holdersAt && (
-                // the controls board's pager: a ranked list in pages, every figure the response's
-                <Pager mode="pages" label="holders" {...holdersAt} />
-              )}
-              <FoldBack onFold={() => showAll(false)} />
-            </div>
-          ) : (
-            holders.data.hasMore && (
-              // the short list's form, opened in place (the placement lane's toggles, the lead's
-              // ruling): "all 522 holders ↓", the count its response's own
-              <div className="mt-3">
-                <Pager
-                  mode="more"
-                  all={{
-                    count: listTotal(holders.data, `the holders of token ${typeHash}`),
-                    singular: 'holder',
-                    onShow: () => showAll(true),
+                            <Hash
+                              hash={h.address ?? h.lockScriptHash}
+                              kind={h.address ? 'address' : 'hash'}
+                              size={phoneSize}
+                              className="text-body"
+                            />
+                          </AppLink>
+                        }
+                        lock={
+                          // In the row's own dim small ink, as the kind was written before U-15; no
+                          // part where the row names no lock (B4)
+                          phoneLock(h) && (
+                            <LockWordsView
+                              words={phoneLock(h)!}
+                              size={phoneSize}
+                              className="text-text-dim text-small"
+                            />
+                          )
+                        }
+                        // the balance named by its token's symbol (the table heads its column with it)
+                        amount={
+                          <span className="whitespace-nowrap">
+                            <TokenAmount form="summary" amount={h.balance} decimals={decimals} />
+                            {symbol && ` ${symbol}`}
+                          </span>
+                        }
+                        share={share.text}
+                        bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
+                        axis={rows[0] === h ? formatShareTick(scale) : undefined}
+                        head={TOKEN_HOLDER_PHONE_HEAD_PX}
+                        wide={wide}
+                      />
+                    );
                   }}
                 />
-              </div>
-            )
-          )}
-        </>
-      ) : (
-        <AssetReadState error={holders.error} read={holders} label="holders" />
+              )}
+            />
+          </>
+        ) : (
+          <AssetReadState error={holders.error} read={holders} label="holders" />
+        )}
+      </div>
+      {top.data && (all || top.data.hasMore) && (
+        // the list's one disclosure control (FoldToggle, lane P1): "all 522 holders ↓", the count
+        // the top ten's own response states, opens the list in place; "fewer ↑" folds it back. It
+        // stays mounted while the list loads and keeps the focus; the pager stands over it, a
+        // ranked list in pages, every figure the response's
+        <div className="mt-3 space-y-1">
+          {holdersAt && <Pager mode="pages" label="holders" {...holdersAt} />}
+          <FoldToggle
+            open={all}
+            count={listTotal(top.data, `the holders of token ${typeHash}`)}
+            singular="holder"
+            controls={listId}
+            onToggle={showAll}
+          />
+        </div>
       )}
     </div>
   );

@@ -3,6 +3,8 @@
 // for both pages (OB-15), the composition badge with its one plain sentence (OB-6, OB-M4), the
 // readable traits linked to their genes (OB-5/6), and the life summary sentence (OB-6, OB-M5).
 import type { ItemCellVersion } from '@/lib/api';
+import { cellLockSentence, cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { isReadableTrait, traitDisplay, type DnaTrait } from '@/lib/dob-genes';
@@ -120,7 +122,7 @@ export function ObjectTraits({
           );
         })}
       </dl>
-      <p className="text-text-dim text-meta max-w-measure">
+      <p className="text-text text-meta max-w-measure">
         Each trait is read from the object’s DNA, below
         {/* PB-23: the dot goes with the hint; when the page's one hint is elsewhere, no dot */}
         <TapOrHoverHint what="one to find its gene" dotted />
@@ -148,13 +150,6 @@ export function spelledDuration(ms: number): string {
   return 'under a second';
 }
 
-export function lockPhrase(name: string | null): string {
-  if (!name) return 'an unregistered lock';
-  // "an Omnilock", "a UniPass lock": a leading U usually sounds like "you".
-  const article = /^[aeio]/i.test(name) ? 'an' : 'a';
-  return /lock$/i.test(name) ? `${article} ${name}` : `${article} ${name} lock`;
-}
-
 function timeOf(v: ItemCellVersion): number {
   if (!/^\d+$/.test(v.timestamp))
     throw new Error(`${v.txHash}:${v.outputIndex}: invalid cell timestamp ${v.timestamp}`);
@@ -178,7 +173,9 @@ export function itemLifeSentence(
   if (!first || !last) throw new Error('item life sentence needs at least one cell version');
   // Lane P: the sentence tells the path, not the time — the dates are the page's Minted and Last
   // moved metrics (C7: the lede restates no metric), how long ago its hover (itemLifeAges).
-  const born = `${verb}${by ? ` by ${by}` : ''} to ${lockPhrase(first.lockName)}`;
+  // the lock a cell sits under, through the one decision's sentence form (lane P2's follow-up,
+  // item 6): never silent, a lock the registry does not name by its code hash
+  const born = `${verb}${by ? ` by ${by}` : ''} to ${cellLockSentence(first, 'row')}`;
   const moves = versions.length - 1;
   if (!last.isLive) {
     const gone = last.consumedAtBlock;
@@ -187,7 +184,7 @@ export function itemLifeSentence(
     return `${born}${moves ? `, moved ${moves} ${countNoun(moves, 'time')}` : ''}; its last cell was consumed${gone === null ? '' : ` at block ${gone.toLocaleString('en-US')}`}.`;
   }
   if (moves === 0) return `${born}, where it sits now.`;
-  const now = lockPhrase(last.lockName);
+  const now = cellLockSentence(last, 'row');
   // Two header times need not run forward (a block's timestamp only has to pass the median of the
   // 37 before it), so a move whose header time is earlier than the mint's is told without a span.
   const span = timeOf(last) - timeOf(first);
@@ -238,7 +235,13 @@ export function ItemLife({
   lede?: boolean;
 }) {
   const ages = useClockText((now) => itemLifeAges(versions, now, verb));
-  return <span title={ages}>{itemLifeSentence(versions, verb, by, lede)}</span>;
+  // a lock the decision refuses fails the sentence in its place, said with the refusal (ruling D7)
+  const read = readPart(() => itemLifeSentence(versions, verb, by, lede));
+  if (read.error !== undefined)
+    return (
+      <PartReadError what="the item’s life" where="the lock it sits under" error={read.error} />
+    );
+  return <span title={ages}>{read.value}</span>;
 }
 
 // ── The cell over its life (OB-9, OB-M7) ──
@@ -286,6 +289,31 @@ export function cellLifeSentence(
   return `${now} It held ${ckbText(was)} ${noun === 'token' ? 'at issue' : 'at minting'}${why}`;
 }
 
+/**
+ * The lock footnote drawn (`lockFootnote`), nothing for one version; a lock the decision refuses
+ * fails the footnote in its place, said with the refusal (ruling D7), never the page.
+ */
+export function LockFootnote({
+  versions,
+  noun,
+  small = false,
+}: {
+  versions: readonly ItemCellVersion[];
+  noun: 'object' | 'token';
+  /** At the small step (an m-NFT's history), else at its prose's size. */
+  small?: boolean;
+}) {
+  const read = readPart(() => lockFootnote(versions, noun));
+  if (read.error !== undefined)
+    return <PartReadError what="the lock footnote" where="its cell versions" error={read.error} />;
+  // a statement of the lock (the reading ink, R3), running text inside the measure (R4)
+  return read.value === null ? null : (
+    <p className={small ? 'text-text text-small max-w-measure' : 'text-text max-w-measure'}>
+      {read.value}
+    </p>
+  );
+}
+
 export function lockFootnote(
   versions: readonly ItemCellVersion[],
   noun: 'object' | 'token'
@@ -297,9 +325,11 @@ export function lockFootnote(
   const sameType = versions.every(
     (v) => JSON.stringify(v.type) === JSON.stringify(first.type) && v.dataHash === first.dataHash
   );
+  // the decision's words in a sentence, without an article (lane P2's follow-up, item 6)
+  const words = (v: ItemCellVersion) => lockWordsText(cellLockWords(v), 'row');
   const lock =
     first.lock.codeHash === last.lock.codeHash && first.lock.args === last.lock.args
-      ? `Lock: ${first.lockName ?? 'unregistered lock'} throughout.`
-      : `Lock: ${first.lockName ?? 'unregistered lock'} with ${args(first)}-byte args ${noun === 'token' ? 'at issue' : 'at minting'} → ${last.lockName ?? 'unregistered lock'} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
+      ? `Lock: ${words(first)} throughout.`
+      : `Lock: ${words(first)} with ${args(first)}-byte args ${noun === 'token' ? 'at issue' : 'at minting'} → ${words(last)} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
   return `${lock}${sameType ? ' Type and data never changed.' : ''}`;
 }

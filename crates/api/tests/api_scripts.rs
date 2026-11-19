@@ -2923,8 +2923,10 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
             assert_eq!(
                 json["data"],
                 serde_json::json!([
-                    {"date": "2024-01-15", "values": {"used": "600", "unused": "400"}},
-                    {"date": "2024-01-16", "values": {"used": "500", "unused": "300"}},
+                    // re-pinned on purpose (lane p-assets): each day states the whole its cells
+                    // hold, `capacity`, beside its parts, so a page sums nothing
+                    {"date": "2024-01-15", "values": {"used": "600", "unused": "400", "capacity": "1000"}},
+                    {"date": "2024-01-16", "values": {"used": "500", "unused": "300", "capacity": "800"}},
                 ])
             );
         }
@@ -3057,8 +3059,9 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     assert_eq!(
         chart["data"],
         serde_json::json!([
-            {"date": "2024-01-15", "values": {"used": "600", "unused": "400"}},
-            {"date": "2024-01-16", "values": {"used": "500", "unused": "300"}},
+            // re-pinned on purpose (lane p-assets): `capacity` beside the parts
+            {"date": "2024-01-15", "values": {"used": "600", "unused": "400", "capacity": "1000"}},
+            {"date": "2024-01-16", "values": {"used": "500", "unused": "300", "capacity": "800"}},
         ])
     );
     for suffix in ["", "&hash_type=type"] {
@@ -4531,9 +4534,10 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                 let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
                 if suffix.starts_with("/charts") {
                     if owns {
+                        // re-pinned on purpose (lane p-assets): `capacity` beside the parts
                         assert_eq!(
                             json["data"][0]["values"],
-                            serde_json::json!({"used":"500","unused":"300"})
+                            serde_json::json!({"used":"500","unused":"300","capacity":"800"})
                         );
                     } else {
                         assert_eq!(json["data"], serde_json::json!([]));

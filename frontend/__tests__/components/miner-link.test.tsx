@@ -14,13 +14,16 @@ describe('MinerLink', () => {
     expect(link).toHaveAttribute('title', address);
   });
 
-  it('names a miner by the pool pools.toml names, keeping the address in the title (R-12)', () => {
+  // Re-pinned on purpose (lane P1 follow-up; the F3-e note: the title was the address alone, so a
+  // pool name a narrow place cuts showed nowhere whole): the title names the pool whole, then the
+  // address it is read from
+  it('names a miner by the pool pools.toml names, the pool whole and the address in the title (R-12)', () => {
     render(
       <MinerLink size="row" address={address} pool="Example Pool" unnamed={<span>full</span>} />
     );
     const link = screen.getByRole('link', { name: 'Example Pool' });
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
-    expect(link).toHaveAttribute('title', address);
+    expect(link).toHaveAttribute('title', `Example Pool · ${address}`);
     expect(screen.queryByText('full')).toBeNull();
   });
 

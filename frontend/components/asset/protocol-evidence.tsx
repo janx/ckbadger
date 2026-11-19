@@ -231,7 +231,7 @@ function ProtocolEvidenceView({
       {decodedJson !== undefined && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">Decoded fields</summary>
-          <p className="text-text-dim text-meta mt-3">
+          <p className="text-text text-meta mt-3">
             Protocol interpretation; raw cell bytes remain the evidence.
           </p>
           <TintedJson text={decodedJson} className="mt-2" />
@@ -294,7 +294,7 @@ function FieldDetail({
           [{fmt(reading.start)}..{fmt(reading.end)}) · {fmt(n)} B
         </span>
       </div>
-      <p className="text-text-dim text-small max-w-measure mt-1 [overflow-wrap:anywhere]">
+      <p className="text-text text-small max-w-measure mt-1 [overflow-wrap:anywhere]">
         {reading.words}
       </p>
       {rows.map((row) => {
@@ -328,9 +328,7 @@ function FieldDetail({
       })}
       {n > WHOLE_LIMIT && (
         <>
-          <p className="text-text-dim text-meta max-w-measure mt-1.5">
-            … {fmt(n - shown)} more bytes
-          </p>
+          <p className="text-text text-meta max-w-measure mt-1.5">… {fmt(n - shown)} more bytes</p>
           <details className="mt-1.5 min-w-0">
             <summary className="text-text-dim text-meta cursor-pointer">
               All {unitNode(formatCount(n, 'byte'))} of {reading.name}
@@ -342,7 +340,7 @@ function FieldDetail({
         </>
       )}
       {hint && (
-        <p className="text-text-dim text-meta max-w-measure ml-auto mt-2 text-right">
+        <p className="text-text text-meta max-w-measure ml-auto mt-2 text-right">
           <TapOrHoverHint what="a field" />
         </p>
       )}

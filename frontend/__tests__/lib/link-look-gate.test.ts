@@ -60,40 +60,25 @@ interface Tolerated {
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- p-chain ----
-  'app/address/[addr]/client-page.tsx': {
-    lane: 'p-chain',
-    // look 5 → 4, ink 2 → 1 (lane D2): the kind line's lock link went to the status strip. Look 4 →
-    // 0, ink 1 → 0 (lane P1): every link states its look. The raw <a> stays: the address's JSON is
-    // the API's URL, which the site's Link would prefix with the network
-    sites: { raw: 1 },
-    reason: "1 raw <a>: the address's JSON at the API's own URL",
-  },
-  'app/blocks/[id]/client-page.tsx': {
-    lane: 'p-chain',
-    // look 22 → 20 (lane D2): the facts aside's two links went with it; the strip's state a look.
-    // Look 20 → 18 (lane P1): the lede's miner went, the cellbase row's paid block states its look.
-    // Look 18 → 0, ink 7 → 1 (lane P1): every link states its look; the step arrows are blocks
-    // whose mark draws its own ink. The hardfork resources' raw <a> and its ink stay (an external
-    // link with the page's test id, which ExternalLink does not carry). Ink 1 → 2 (lane
-    // cd-fixes-controls, at its merge with P1: the reader reads an ink inside a link): a step
-    // arrow's mark, an <svg> in the quiet ink turning celadon with its block's group hover
-    sites: { ink: 2, raw: 1 },
-    reason:
-      "the hardfork resources' raw <a>, inked by hand (text-interactive); a step arrow's mark inked inside its block link (text-text-dim, group-hover:text-jade)",
-  },
+  // app/address/[addr]/client-page.tsx left the list (lane P1 follow-up): the address's JSON is a
+  // way out of the site, an ExternalLink to the API's absolute URL (raw 1 → 0); look 5 → 4, ink
+  // 2 → 1 in lane D2, look 4 → 0, ink 1 → 0 in lane P1
+  // app/blocks/[id]/client-page.tsx left the list (lane P1 follow-up): the hardfork resources are
+  // ExternalLinks in the onward look (raw 1 → 0, ink 1 → 0), a step arrow's mark takes its block
+  // link's ink (ink 1 → 0); look 22 → 0, ink 7 → 1 in lanes D2 and P1, ink 1 → 2 at the merge with
+  // cd-fixes-controls (the reader of an ink inside a link)
   'components/participant-ref.tsx': {
-    lane: 'p-chain',
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (hover:text-jade, text-text, text-jade-dim)',
-  },
-  // lane P1 took this file's own inks off the list; the reader of an ink inside a link (lane
-  // cd-fixes-controls) finds one left, on a token amount's "no readable amount of"
-  'components/transaction/transaction-cell-content.tsx': {
-    lane: 'p-chain',
-    sites: { ink: 1 },
+    // look 3 → 0 (lane P1 follow-up): its three links hand their caller's look through (`look`,
+    // as an Address's), and the chain pages state theirs; the inks by hand stay for a caller that
+    // states none, the feeds' call sites, which are the lists lane's
+    lane: 'p-lists',
+    sites: { ink: 2 },
     reason:
-      'an ink on a child of its inline link: the “no readable amount of” span’s text-text-dim',
+      "inks by hand where a caller states no look (hover:text-jade, text-text, text-jade-dim): the feeds' call sites",
   },
+  // components/transaction/transaction-cell-content.tsx left the list (lane P1 follow-up): a token
+  // amount's "no readable amount of" takes its link's ink (ink 1 → 0; lane P1 took the file's own
+  // inks, the reader of an ink inside a link found this one)
   // 'components/transaction/transaction-list-table.tsx' left the list (lane P3: look 2, ink 3 →
   // 0; the hash a key's look, the Hash inheriting its ink; the blocks inline)
   // ---- p-assets ----
@@ -261,9 +246,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
 // (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14) → 63
 // (lane P3: the blocks list, 14) → 55 (lane P3: the activity row, 8) → 48 (lane P3: the DAO
-// depositors, 7) → 37 (the P3 follow-up's 2c: the item facts and protocol notes, 11) → 32 (the
-// pipeline panel's 5, NAMED: the owner's accepted design)
-const TOLERATED_TOTAL = 32;
+// depositors, 7) → 40 (the merge with lane P1's follow-up, 8: participant-ref.tsx's three links
+// hand their caller's look through, 3; the address's API JSON and the block's hardfork resources
+// are ExternalLinks, 2, the resources' hand ink with them, 1; the block's step arrow mark and a
+// token cell's "no readable amount of" take their link's ink, 2) → 24 (the P3 follow-up, 16: the
+// item facts and protocol notes of activity-event-row.tsx, 11, its 2c; the pipeline panel's 5,
+// NAMED: the owner's accepted design)
+const TOLERATED_TOTAL = 24;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {

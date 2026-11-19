@@ -255,11 +255,19 @@ describe('the script history: 160 px under its sentence', () => {
             data: [
               {
                 date: '2025-01-07',
-                values: { used: String(600 * 1e8), unused: String(400 * 1e8) },
+                values: {
+                  used: String(600 * 1e8),
+                  unused: String(400 * 1e8),
+                  capacity: String(1000 * 1e8),
+                },
               },
               {
                 date: '2025-01-08',
-                values: { used: String(600 * 1e8), unused: String(400 * 1e8) },
+                values: {
+                  used: String(600 * 1e8),
+                  unused: String(400 * 1e8),
+                  capacity: String(1000 * 1e8),
+                },
               },
             ],
           } as never
@@ -276,5 +284,35 @@ describe('the script history: 160 px under its sentence', () => {
     expect(
       sentence().compareDocumentPosition(held) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  // Lane p-assets (the follow-up's item 12): the route states each day's whole, `capacity`; the
+  // page reads it and sums nothing, so a day without it is a contract break, named
+  it('reads each day’s capacity as the route states it, and refuses a day without it', () => {
+    stubChartWidth(1248);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <ScriptHistoryFigure
+          family={fixture.family as never}
+          chart={
+            {
+              ...(fixture.chart as never as object),
+              data: [
+                {
+                  date: '2025-01-07',
+                  values: { used: String(600 * 1e8), unused: String(400 * 1e8) },
+                },
+              ],
+            } as never
+          }
+          lineage={null}
+          numbers={new Map()}
+          active={null}
+          onActive={() => {}}
+        />
+      )
+    ).toThrow(/2025-01-07: capacity/);
+    error.mockRestore();
   });
 });

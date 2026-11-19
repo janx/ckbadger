@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
+use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
 use crate::response::{
     decode_cursor_single, default_limit, encode_cursor_single, ok, ApiError, ApiResult,
     ApiRouteError, CursorPaginatedResponse, ScriptCodeClassTotalResponse,
@@ -3398,14 +3398,15 @@ fn build_script_capacity_history_chart(
             used_delta,
             &format!("building script capacity history chart at date {}", date),
         )?;
-        let unused = cumulative_capacity - cumulative_used;
-        data.push(StackedAreaDataPoint {
-            date: format_yyyymmdd_for_chart(date),
-            values: HashMap::from([
-                ("used".to_string(), cumulative_used.to_string()),
-                ("unused".to_string(), unused.to_string()),
-            ]),
-        });
+        data.push(
+            super::asset_calendar::held_point(
+                format_yyyymmdd_for_chart(date),
+                cumulative_capacity,
+                cumulative_used,
+                "script capacity history",
+            )
+            .map_err(ApiError::internal)?,
+        );
     }
 
     Ok(StackedAreaChartResponse {

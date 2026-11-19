@@ -470,7 +470,9 @@ function GroupList({
                 {g.ran || g.status ? cyclesLine(g, 'cycles not available') : 'not run'}
               </span>
             </div>
-            <p data-line="runs" className="text-meta max-w-measure">
+            {/* what the group runs on or guards: a statement in the reading ink, for a group only
+                attached as for one that ran (R3; lane P1 follow-up) */}
+            <p data-line="runs" className="text-text text-meta max-w-measure">
               <span
                 aria-hidden="true"
                 data-dot={g.ran ? 'ran' : 'attached'}

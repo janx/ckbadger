@@ -92,9 +92,7 @@ function BtcfsReading({ uri, network }: { uri: string; network: string }) {
   const single = parseBtcfsUri(uri);
   const inscriptions = single ? [single] : inscriptionList(uri);
   if (inscriptions === null)
-    return (
-      <p className="text-text-dim text-meta">Not a recognisable btcfs inscription reference.</p>
-    );
+    return <p className="text-text text-meta">Not a recognisable btcfs inscription reference.</p>;
   const readings = inscriptions.map((inscription) => (
     <InscriptionReading
       key={`${inscription.txid}i${inscription.index}`}
@@ -146,16 +144,18 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
     <section aria-label="Object media" className="min-w-0 space-y-4">
       {/* F2 objects (OB-6): the composition badge and its sentence now open the page hero. */}
       {firstReference ? (
-        <figure className="border-copper/40 space-y-3 border p-6 text-center">
-          <div className="text-copper text-hero">Its image lives on Bitcoin</div>
-          <div className="min-w-0 space-y-2">
-            <div className="text-text-dim text-meta break-all">{firstReference.uri}</div>
-            <BtcfsReading uri={firstReference.uri} network={network} />
-          </div>
+        // Lane P2's follow-up (item 2): where the picture comes from is a note after the way to
+        // the picture, in the quiet ink, said once (a copper box with a 22 px title over the
+        // facts, and a caption that said it again, made a missing picture the page's loudest
+        // words); the first reference's inscription after it, its raw URI in the disclosure
+        <figure className="m-0 min-w-0 space-y-3 text-center">
           {omigaLink && omiga && <ViewImage href={omiga} />}
-          <figcaption className="text-text-dim text-meta max-w-measure">
-            CKBadger reads CKB only. This object points to Bitcoin; its inscription is not fetched
-            here.
+          <figcaption className="text-meta max-w-measure mx-auto min-w-0 space-y-1">
+            {/* a note under the figure, the figure's caption: quiet by rule (R3) */}
+            <span className="text-text-dim text-meta block">
+              Its image lives on Bitcoin; CKBadger reads CKB only and does not fetch it.
+            </span>
+            <BtcfsReading uri={firstReference.uri} network={network} />
           </figcaption>
         </figure>
       ) : preview ? (

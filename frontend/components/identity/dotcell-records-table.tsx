@@ -34,7 +34,7 @@ export function DotCellRecordsTable({ records }: Props) {
               className="border-row-rule border-b last:border-b-0"
             >
               <td className="text-text-bright px-4 py-2 align-top">{record.key}</td>
-              <td className="text-text-dim px-4 py-2 align-top">{record.label}</td>
+              <td className="text-text px-4 py-2 align-top">{record.label}</td>
               <td className="text-text px-4 py-2 align-top [overflow-wrap:anywhere]">
                 {record.decodedAddress ? (
                   <Link
@@ -50,7 +50,7 @@ export function DotCellRecordsTable({ records }: Props) {
                   (record.valueUtf8 ?? record.valueHex)
                 )}
               </td>
-              <td className="text-text-dim px-4 py-2 text-right align-top">{record.ttl}</td>
+              <td className="text-text px-4 py-2 text-right align-top">{record.ttl}</td>
             </tr>
           ))}
         </tbody>

@@ -146,7 +146,9 @@ describe('Asset history', () => {
       expect(factsOf(readout)).toEqual([
         ['day', '2024-01-08'],
         ['held', '200.00000001 CKB'],
-        ['occupied', '61.00000000 CKB 30.50%'],
+        // re-pinned on purpose (lane P2's follow-up, item 5): the readout's exact form, no padding (it was
+        // "61.00000000 CKB")
+        ['occupied', '61 CKB 30.50%'],
         ['free', '139.00000001 CKB'],
         ['week', 'Latest complete week, from 2024-01-01: 3 transfers'],
         ['peak', '200.00000001 CKB on 2024-01-08'],

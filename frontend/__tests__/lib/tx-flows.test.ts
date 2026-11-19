@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  daoStepOf,
   flowKey,
   foldEnds,
   onlyFeeMoved,
@@ -366,5 +367,33 @@ describe('ribbonWeight', () => {
     expect(ribbonWeight(BigInt(0), BigInt(5))).toBe(2);
     expect(() => ribbonWeight(BigInt(1), BigInt(0))).toThrow('total 0');
     expect(() => ribbonWeight(BigInt(3), BigInt(2))).toThrow('not within');
+  });
+});
+
+// Lane P1 follow-up (review chain-b tx-dao-deposit): a party's Nervos DAO step, from the activity's
+// own kind: its DAO tag and the transaction's DAO actions, each named once.
+describe('daoStepOf', () => {
+  const dao = (...actions: string[]) => ({
+    txHash: '0xdao',
+    protocolActions: actions.map((action) => ({
+      protocol: 'dao',
+      protocolName: 'Nervos DAO',
+      action,
+      metadata: {},
+    })),
+  });
+  it('names the step of a party the activity tags DAO, and of no other', () => {
+    expect(daoStepOf(dao('deposit', 'deposit'), { tags: 8 })).toBe('Nervos DAO deposit');
+    expect(daoStepOf(dao('deposit'), { tags: 0 })).toBeNull();
+    expect(daoStepOf(dao(), { tags: 8 })).toBeNull();
+    expect(daoStepOf(dao('withdraw_request'), { tags: 8 | 1 })).toBe(
+      'Nervos DAO withdrawal request'
+    );
+    expect(daoStepOf(dao('withdraw_complete', 'deposit'), { tags: 8 })).toBe(
+      'Nervos DAO withdrawal, Nervos DAO deposit'
+    );
+  });
+  it('refuses a DAO step it has no words for', () => {
+    expect(() => daoStepOf(dao('merge'), { tags: 8 })).toThrow('0xdao: a Nervos DAO step "merge"');
   });
 });

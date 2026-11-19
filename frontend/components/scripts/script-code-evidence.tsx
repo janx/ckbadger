@@ -274,7 +274,7 @@ export function ScriptCodeClassSummary({
       {total > BigInt(0) && (
         <Prose className="mb-3">
           <p data-testid="code-class-sentence">
-            Of the <CkbAmount form="column" shannons={total} signed={false} tone="plain" /> under
+            Of the <CkbAmount form="summary" shannons={total} signed={false} tone="plain" /> under
             these {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
             {joinClauses(
               groups.map(
@@ -295,7 +295,7 @@ export function ScriptCodeClassSummary({
             <CodeClassSwatch value={row.class} />
             <span>{scriptClassLabel(row.class)}</span>·
             <CkbAmount
-              form="column"
+              form="summary"
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
@@ -305,7 +305,7 @@ export function ScriptCodeClassSummary({
         ))}
       </ul>
       {classes.some((row) => row.class === 'unspendable') && (
-        <p data-testid="unspendable-note" className="text-text-dim text-body max-w-measure mt-3">
+        <p data-testid="unspendable-note" className="text-text text-body max-w-measure mt-3">
           Unspendable: the code cell sits under a lock no one can unlock — the all-zero lock, or a
           secp256k1 lock over 20 zero bytes, which no known key matches — so its code is effectively
           immutable.
