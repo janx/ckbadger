@@ -604,7 +604,11 @@ describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
   };
 
-  it('keeps the balance on line 1 and the lock at the bar line’s right, whatever its length', async () => {
+  // Re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4; renamed, it was "…, whatever
+  // its length"): the bar and its share are 202.4 px that cannot wrap; a lock beside them on a 328 px
+  // line holds the right edge up to 113.6 px of words, and a longer one ("UTXOSwap Proxy Lock",
+  // 148.2 px) goes under the bar at the right edge, where it was drawn under the share figure
+  it('keeps the balance on line 1 and the lock at the bar line’s right where it fits, else under the bar', async () => {
     atContainerWidth(358);
     atViewportWidth(390);
     mount();
@@ -618,9 +622,12 @@ describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
       ['holder', `2ckb1…${UNREGISTERED_HOLDER.slice(-6)}`, '200 T'],
       ['share', '33.33%', 'lock 0x4343…4343'],
     ]);
-    // the bar's line holds its right part: the lock never drops under the share
+    // the bar's line holds its right part where it fits beside the bar, by the row's own rule
     for (const row of [named, unnamed])
-      expect(row.querySelector('[data-line="share"]')).toHaveClass('flex-nowrap');
+      expect(row.querySelector('[data-line="share"] > [data-part="left"]')).toHaveClass(
+        'basis-0',
+        'min-w-min'
+      );
     // a rank of three digits widens its box; it never runs into the address (it was a 22 px box)
     expect(named.querySelector('[data-role="rank"]')).toHaveClass('min-w-[22px]');
     expect(named.querySelector('[data-role="rank"]')).not.toHaveClass('w-[22px]');

@@ -551,7 +551,13 @@ describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
       ['minted', 'quiet', 'Face Blue · minted at #100 on 2023-11-15', null],
     ]);
     // the chip holds the holder's line's right edge; the lock is words, never a tag cut to "…"
-    expect(held.querySelector('[data-line="holder"]')).toHaveClass('flex-nowrap');
+    // re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4): a held line wraps by
+    // its own rule, the chip under the left only where it and the left's widest item cannot share
+    // the line (its left part's basis nothing, its least width its min-content; it was flex-nowrap)
+    expect(held.querySelector('[data-line="holder"] > [data-part="left"]')).toHaveClass(
+      'basis-0',
+      'min-w-min'
+    );
     expect(held.querySelector('[data-line="holder"] [data-row-tag]')).toBeNull();
     expect(dottedItems(held.querySelector('[data-line="minted"]')!)).toEqual([
       'Face Blue',

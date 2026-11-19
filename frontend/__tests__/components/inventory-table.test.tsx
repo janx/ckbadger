@@ -855,7 +855,10 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     ]);
     // the chip holds line 2's right edge: the line does not wrap it under its figures
     const what = row.querySelector('[data-line="what"]')!;
-    expect(what).toHaveClass('flex-nowrap');
+    // re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4): a held line wraps by
+    // its own rule, the chip under the left only where it and the left's widest item cannot share
+    // the line (its left part's basis nothing, its least width its min-content; it was flex-nowrap)
+    expect(what.querySelector(':scope > [data-part="left"]')).toHaveClass('basis-0', 'min-w-min');
     expect(what.querySelector('[data-part="right"] [data-composition="pure_ckb"]')).not.toBeNull();
     expect(row.textContent).not.toMatch(/0xcdcd/);
   });

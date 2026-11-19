@@ -214,7 +214,13 @@ describe('collection items on a phone (lane D4, PB-03)', () => {
       ['minted', 'quiet', 'minted at #6,140,203', null],
     ]);
     // the chip holds the holder's line's right edge, whatever the holder's length
-    expect(live.querySelector('[data-line="holder"]')).toHaveClass('flex-nowrap');
+    // re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4): a held line wraps by
+    // its own rule, the chip under the left only where it and the left's widest item cannot share
+    // the line (its left part's basis nothing, its least width its min-content; it was flex-nowrap)
+    expect(live.querySelector('[data-line="holder"] > [data-part="left"]')).toHaveClass(
+      'basis-0',
+      'min-w-min'
+    );
     expect(phoneLines(gone).map((l) => [l.key, l.left, l.right])).toEqual([
       ['name', 'Non-Fungible Santa Claus #2', null],
       ['holder', 'No live owner', 'Centralized mix'],
