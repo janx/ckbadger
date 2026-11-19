@@ -301,6 +301,25 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
   });
 
+  // Lane c2-chain, written before the cells' pager became the library's Pager: what it does,
+  // whatever draws it — the next page asks for the family's cells after the last one shown, five
+  // a page, and the previous one comes back to the first; the page is counted of the family's
+  // live cells (161,049 at five a page: 32,210 pages).
+  it('pages its cells forward from a cursor and back to the first page', async () => {
+    await renderJoyid();
+    const cells = document.getElementById('its-cells')!;
+    expect(within(cells).getByText(/^page 1 of 32,210$/i)).toBeInTheDocument();
+    fireEvent.click(within(cells).getByRole('button', { name: /^next( →)?$/i }));
+    await waitFor(() =>
+      expect(api.getCellsByScriptRef).toHaveBeenLastCalledWith(
+        expect.objectContaining({ scriptKind: 'lock', limit: 5, cursor: expect.any(String) })
+      )
+    );
+    expect(await within(cells).findByText(/^page 2 of 32,210$/i)).toBeInTheDocument();
+    fireEvent.click(within(cells).getByRole('button', { name: /^(previous|← prev)$/i }));
+    expect(await within(cells).findByText(/^page 1 of 32,210$/i)).toBeInTheDocument();
+  });
+
   // Table-rows L1-5: the registered references are "The script" facts, one list per reference.
   it('keeps registered references in the developer tier (SC-S9, L1-5)', async () => {
     await renderJoyid();
