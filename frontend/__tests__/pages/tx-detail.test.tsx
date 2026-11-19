@@ -984,6 +984,51 @@ describe('TransactionDetailPage', () => {
     expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
   });
 
+  // What the Cell graph's toggle does (lane cd-fixes-controls, the disclosure sweep, second part):
+  // its state is its page's (`graphOpen`, also opened by `?tab=graph`), so opening it asks for the
+  // graph; and "Raw data" around it is drawn open by the same state, so folding the graph folds
+  // the raw section with it. Pinned as it is, before and after the sweep.
+  it('holds the Cell graph’s state in its page: opened, the graph loads; folded, Raw data folds too', async () => {
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+    const raw = screen.getByText('Raw data').closest('details')!;
+    const graph = screen.getByText('Cell graph').closest('details')!;
+    fireEvent.click(screen.getByText('Raw data'));
+    expect(raw).toHaveAttribute('open');
+    fireEvent.click(screen.getByText('Cell graph'));
+    expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
+    expect(api.getTransactionGraph).toHaveBeenCalledWith(TX_HASH);
+    fireEvent.click(screen.getByText('Cell graph'));
+    await waitFor(() => expect(graph).not.toHaveAttribute('open'));
+    expect(raw).not.toHaveAttribute('open');
+  });
+
+  // The raw evidence's disclosures are the library's (lane cd-fixes-controls, the disclosure sweep,
+  // second part): "Raw data" the section form under the tier's rule, the six inside it the inner
+  // form; their words 13 px in tier 2's quiet ink, all seven shut until a reader opens one
+  it('draws its raw evidence in the library’s disclosures, their words 13 px in tier 2’s quiet ink', async () => {
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
+    const raw = screen.getByText('Raw data').closest('details')!;
+    expect(raw).toHaveClass('border-t');
+    const summaries = [...raw.querySelectorAll('summary')];
+    expect(summaries.map((s) => s.textContent!.replace(/ · .*$/, ''))).toEqual([
+      'Raw data',
+      'Cells',
+      'Scripts',
+      'Witness bytes',
+      'Header deps',
+      'Cell graph',
+      'JSON',
+    ]);
+    for (const summary of summaries) {
+      expect(summary).toHaveClass('text-small', 'text-text-dim');
+      expect(summary.closest('details')).not.toHaveAttribute('open');
+    }
+    for (const summary of summaries.slice(1))
+      expect(summary.closest('details')).not.toHaveClass('border-t');
+  });
+
   it('renders witness tab with deterministic decode and byte interaction', async () => {
     render(<TransactionDetailPage />);
 
@@ -1480,6 +1525,8 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('mock-cell-graph')).toBeInTheDocument();
     expect(screen.getByText('Raw data').parentElement).toHaveAttribute('open');
+    // and the Cell graph itself (lane cd-fixes-controls, the disclosure sweep: its state the page's)
+    expect(screen.getByText('Cell graph').closest('details')).toHaveAttribute('open');
   });
 
   it('shows not found message for 404 transaction errors', async () => {

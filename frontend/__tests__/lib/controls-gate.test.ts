@@ -187,12 +187,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // is the library's one): recorded for the page lanes in these files, converted in one sweep
   // after their rounds merge. Each says whether it is the section disclosure as it stands or needs
   // a form the component lacks (an inner disclosure, no rule of its own; a state its page holds) ----
-  'app/tx/[hash]/client-page.tsx': {
-    lane: 'p-chain',
-    sites: { fold: 7 },
-    reason:
-      'the raw section’s Cells, Scripts, Witness bytes, Header deps and JSON, inner disclosures with no rule (a form the component lacks); its Cell graph, whose state the page holds (onToggle: a form it lacks); and the page’s own Raw data, the section disclosure as it stands',
-  },
   // ---- shell ----
   'components/crash-page.tsx': {
     lane: 'shell',
@@ -235,7 +229,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 10 (a custody's committed key hashes are SectionDisclosure's inner form)
 // → 9 (a family's every reference in full is SectionDisclosure's inner form; the p-assets sites are all the library's, the p-chain ones wait for the exactness lane)
 // → 8 (the disclosure sweep, second part: the code cell's Type ID lineage is SectionDisclosure's inner form)
-const TOLERATED_TOTAL = 8;
+// → 1 (the transaction page's raw evidence is SectionDisclosure's: Raw data the section form, Cells, Scripts, Witness bytes, Header deps and JSON the inner form, the Cell graph the inner form with its state held by its page; the crash page's reload is the list's last site)
+const TOLERATED_TOTAL = 1;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

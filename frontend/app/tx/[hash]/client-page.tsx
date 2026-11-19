@@ -12,6 +12,7 @@ import {
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { HeadId } from '@/components/ui/head-id';
 import { SealedHead } from '@/components/ui/page-seal';
@@ -1439,15 +1440,15 @@ export default function TransactionDetailPage() {
           Markdown
         </Link>
       </p>
-      <details>
-        <summary className="text-text-dim cursor-pointer">Cells</summary>
-        <pre className="mt-3 whitespace-pre-wrap break-all">
+      {/* the library's disclosures (lane cd-fixes-controls, the disclosure sweep): the inner form
+          inside the raw section; the Cell graph's state its page's */}
+      <SectionDisclosure form="inner" summary="Cells">
+        <pre className="whitespace-pre-wrap break-all">
           {JSON.stringify({ inputs: tx.inputs, outputs: tx.outputs }, null, 2)}
         </pre>
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">Scripts</summary>
-        <div className="mt-3 space-y-3">
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary="Scripts">
+        <div className="space-y-3">
           {groups.map((g) => (
             <div key={groupKey(g)}>
               <Link look="inline" href={groupHref(g, lookup)}>
@@ -1459,12 +1460,12 @@ export default function TransactionDetailPage() {
             </div>
           ))}
         </div>
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">
-          Witness bytes · {tx.witnessesAvailable ? tx.witnesses.length : 'unavailable'}
-        </summary>
-        <div className="mt-3 space-y-2">
+      </SectionDisclosure>
+      <SectionDisclosure
+        form="inner"
+        summary={<>Witness bytes · {tx.witnessesAvailable ? tx.witnesses.length : 'unavailable'}</>}
+      >
+        <div className="space-y-2">
           {tx.witnesses.map((w, i) => (
             <p key={i} className="break-all">
               <span className="text-text-dim">#{i} </span>
@@ -1472,21 +1473,17 @@ export default function TransactionDetailPage() {
             </p>
           ))}
         </div>
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">
-          Header deps · {headerDeps.length}
-        </summary>
-        <div className="mt-3 space-y-2">
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary={<>Header deps · {headerDeps.length}</>}>
+        <div className="space-y-2">
           {headerDeps.map((h) => (
             <p key={h.blockHash} className="break-all">
               {h.blockHash}
             </p>
           ))}
         </div>
-      </details>
-      <details open={graphOpen} onToggle={(e) => setGraphOpen(e.currentTarget.open)}>
-        <summary className="text-text-dim cursor-pointer">Cell graph</summary>
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary="Cell graph" open={graphOpen} onToggle={setGraphOpen}>
         {isProvisional ? (
           <PendingValue />
         ) : graphError ? (
@@ -1512,11 +1509,10 @@ export default function TransactionDetailPage() {
         ) : (
           <p className="text-text-dim py-4">Loading graph…</p>
         )}
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">JSON</summary>
-        <pre className="mt-3 whitespace-pre-wrap break-all">{JSON.stringify(tx, null, 2)}</pre>
-      </details>
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary="JSON">
+        <pre className="whitespace-pre-wrap break-all">{JSON.stringify(tx, null, 2)}</pre>
+      </SectionDisclosure>
     </div>
   );
 
@@ -2030,12 +2026,11 @@ export default function TransactionDetailPage() {
           </div>
         </dl>
 
-        <details open={graphOpen} className="border-row-rule border-t pt-4">
-          <summary className="text-text-dim hover:text-text text-small cursor-pointer">
-            Raw data
-          </summary>
-          <div className="text-small mt-4 min-w-0 overflow-x-auto">{raw}</div>
-        </details>
+        {/* the library's section disclosure, drawn open by the Cell graph's state as before (a
+            `?tab=graph` link opens both); its raw content scrolls sideways itself */}
+        <SectionDisclosure summary="Raw data" open={graphOpen}>
+          <div className="overflow-x-auto">{raw}</div>
+        </SectionDisclosure>
       </DetailTier2>
     </div>
   );
