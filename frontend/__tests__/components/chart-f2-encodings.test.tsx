@@ -457,8 +457,10 @@ describe('Chart named inside its plot (hierarchy v3)', () => {
     expect(container.querySelector('figcaption')).toBeNull();
     const name = container.querySelector('svg [data-role="chart-name"]')!;
     expect(name).toHaveTextContent('AR, the accumulated rate');
-    // re-pinned (readability R4): the label role is 12 px (was 11)
-    expect(name).toHaveAttribute('font-size', '12');
+    // re-pinned (the ink and size roles, finished): a plot's name line is a sentence, the reading
+    // ink at 13 px (it was the label role, 12 px, quiet; 11 before readability R4)
+    expect(name).toHaveAttribute('font-size', '13');
+    expect(name).toHaveAttribute('fill', 'var(--c-text)');
     // The accessible name still carries the title.
     expect(screen.getByRole('img', { name: /^AR by date/ })).toBeInTheDocument();
   });

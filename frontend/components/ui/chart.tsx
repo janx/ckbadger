@@ -5,14 +5,7 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { useScanFill } from '@/components/ui/scan-fill';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
-import {
-  AXIS_CHAR_PX,
-  niceTicks,
-  formatTick,
-  placeXTicks,
-  tickGutter,
-  type Ticks,
-} from '@/lib/chart-ticks';
+import { niceTicks, formatTick, placeXTicks, tickGutter, type Ticks } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
@@ -130,8 +123,16 @@ export interface ChartProps {
    */
   pin?: PinnedReadout<number>;
   // --- hierarchy v3 (DAO page, R13): every one opt-in ---
-  /** The chart's name written inside the plot, top left (meta, dim); no caption is drawn then. */
+  /**
+   * The chart's name written inside the plot, top left; no caption is drawn then. A name line is
+   * a sentence ("CKB held · occupied, free"), prose: the reading ink at the sentence size, 13 px.
+   */
   plotName?: string;
+  /**
+   * In place of `plotName`, the plot's unit alone ("CKB", an index card's): a label, the quiet ink
+   * at the label size, 12 px, in the same place. Never both.
+   */
+  plotUnit?: string;
   /**
    * Round values written inside the plot from its left edge (ghost ink), with no axis gutter.
    * `'over'` (lane P, additive): the same, the labels written over the plotted series — for a
@@ -187,20 +188,28 @@ export function lineHalo(
 /** The theme's jade, the halo's own colour; `jadeRamp(1)[0]` is the chart default. */
 const JADE = 'var(--c-jade)';
 /*
- * The chart's text (lib/chart-type.ts): its ticks, x labels, gap notes, markers and target-line keys
- * at the tick size, an in-plot name and the hover reading's head at the label size, an end label and
- * the hover reading's figures at the reading size. The bands and baselines below are computed from
- * those sizes, so they move with the scale.
+ * The chart's text (lib/chart-type.ts): its ticks, x labels, gap notes and markers at the tick
+ * size, the quiet ink; a plot's unit alone and the hover reading's head at the label size; a
+ * sentence in the plot (its name line, an axis cap's note) at the sentence size and a target
+ * line's key at the head size, the reading ink (the ink and size roles, finished); an end label
+ * and the hover reading's figures at the reading size. The bands and baselines below are computed
+ * from those sizes, so they move with the scale.
  */
-/** hierarchy v3: an in-plot name's baseline, one tight line of it under the svg's top (15 px). */
-export const PLOT_NAME_Y = tightLinePx(SVG_TEXT.label);
+/**
+ * hierarchy v3: an in-plot name's baseline, one tight line of it under the svg's top: a name line
+ * that is a sentence, at the sentence size (13 + 3 = 16 px); a plot's unit alone, at the label size
+ * (12 + 3 = 15 px).
+ */
+export const PLOT_NAME_Y = tightLinePx(SVG_TEXT.sentence);
+export const PLOT_UNIT_Y = tightLinePx(SVG_TEXT.label);
 /**
  * hierarchy v3: the band above the data that holds an in-plot name of one line: its baseline and
- * as much again (30 px). A name too long for its plot is broken between words (an SVG text does not
- * wrap) and the band grows by a tight line for each line after the first.
+ * as much again (32 px for a sentence, 30 for a unit). A name too long for its plot is broken
+ * between words (an SVG text does not wrap) and the band grows by a tight line for each line after
+ * the first.
  */
 export const PLOT_NAME_BAND = 2 * PLOT_NAME_Y;
-const PLOT_NAME_LINE = tightLinePx(SVG_TEXT.label);
+export const PLOT_UNIT_BAND = 2 * PLOT_UNIT_Y;
 /** How far a marker's label stands over the plot. */
 const MARKER_LABEL_GAP = 6;
 /** The top of a plot with no name: a marker's label at the tick size over it, its cap inside the svg (18 px). */
@@ -212,10 +221,11 @@ export const X_AXIS_BAND = X_AXIS_FOOT + SVG_TEXT.tick + 11;
 /** The height of each extra row of x labels a categorical axis stacks under the plot: a tight tick line (15 px). */
 export const X_LABEL_ROW = tightLinePx(SVG_TEXT.tick);
 /**
- * The band above the plot that keys its target lines: its label's baseline at the label's own
- * size (its cap at the band's top) and 4 px under it for the descent; the swatch's length.
+ * The band above the plot that keys its target lines: its key's baseline at the key's own size,
+ * the head size (a name and its value, the reading ink: its cap at the band's top), and 4 px under
+ * it for the descent; the swatch's length.
  */
-export const REFERENCE_KEY_Y = SVG_TEXT.tick;
+export const REFERENCE_KEY_Y = SVG_TEXT.head;
 export const REFERENCE_KEY_BAND = REFERENCE_KEY_Y + 4;
 const REFERENCE_SWATCH = 18;
 /** An in-plot tick is written where its line lies at least a label's size and a pixel under the band. */
@@ -241,6 +251,8 @@ const BAND_PLOT_SHARE = 0.6;
 const BAND_LINE = tightLinePx(SVG_TEXT.head);
 /** Rule 6: the gold mark before an axis cap's note, and its room. */
 const CAP_MARK = 16;
+/** Rule 6: a line of an axis cap's note, a sentence: a tight line at the sentence size (16 px). */
+const CAP_LINE = tightLinePx(SVG_TEXT.sentence);
 /**
  * The hover reading (F2 charts group, CH-22): its head's baseline (the label size and 5 px of
  * padding over its cap) and the line of each figure under it, set tight at the reading size.
@@ -339,7 +351,7 @@ function referenceKeys(
   let end = right;
   return lines.map(({ label }) => {
     const textEnd = end;
-    const swatch = textEnd - label.length * AXIS_CHAR_PX - 4 - REFERENCE_SWATCH;
+    const swatch = textEnd - textPx(label.length, SVG_TEXT.head) - 4 - REFERENCE_SWATCH;
     end = swatch - 12;
     return { label, swatch, textEnd };
   });
@@ -489,7 +501,8 @@ export function Chart({
   seriesLegend = false,
   pinnedReadout,
   pin,
-  plotName,
+  plotName: plotSentence,
+  plotUnit,
   insideYTicks = false,
   bareTicks = false,
   integerTicks = false,
@@ -579,6 +592,14 @@ export function Chart({
     integerTicks,
     axisCap,
   });
+  if (plotSentence !== undefined && plotUnit !== undefined)
+    throw new Error(`${title}: a plot is named by a sentence or by its unit, not both`);
+  // the name line's words and role: a sentence in the reading ink at 13 px, or a unit alone, a
+  // label in the quiet ink at 12 (the ink and size roles, finished)
+  const plotName = plotSentence ?? plotUnit;
+  const namePx = plotSentence !== undefined ? SVG_TEXT.sentence : SVG_TEXT.label;
+  const nameY = plotSentence !== undefined ? PLOT_NAME_Y : PLOT_UNIT_Y;
+  const nameLine = tightLinePx(namePx);
   if (bareTicks && plotName === undefined)
     throw new Error(`${title}: bare ticks need the plot's name to say the unit`);
   if (axisCap && plotName === undefined)
@@ -640,28 +661,27 @@ export function Chart({
       ? []
       : right === null
         ? [plotName]
-        : wrapWords(plotName, SVG_TEXT.label, right - left - 8);
+        : wrapWords(plotName, namePx, right - left - 8);
   // Rule 6: the cap's note, after its gold mark, broken between words where the plot is narrow;
   // its first line stands a line under the name's last.
   const capY =
-    PLOT_NAME_Y +
-    nameLines.length * PLOT_NAME_LINE +
-    (referenceLines.length ? REFERENCE_KEY_BAND : 0);
+    nameY + nameLines.length * nameLine + (referenceLines.length ? REFERENCE_KEY_BAND : 0);
   const capLines =
     axisCap === undefined
       ? []
       : right === null
         ? [axisCap.note]
-        : wrapWords(axisCap.note, SVG_TEXT.label, right - left - 8 - CAP_MARK);
+        : wrapWords(axisCap.note, SVG_TEXT.sentence, right - left - 8 - CAP_MARK);
   // A target line is keyed in its own band above the plot, never on the plot (C#16).
   const keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
     top =
       (plotName === undefined
         ? PLOT_TOP
-        : PLOT_NAME_BAND + (nameLines.length - 1) * PLOT_NAME_LINE) +
+        : (plotSentence !== undefined ? PLOT_NAME_BAND : PLOT_UNIT_BAND) +
+          (nameLines.length - 1) * nameLine) +
       keyBand +
-      // the cap's note takes its own lines under the name (rule 6)
-      capLines.length * PLOT_NAME_LINE +
+      // the cap's note takes its own lines under the name (rule 6), tight lines of a sentence
+      capLines.length * CAP_LINE +
       // the fork markers' labels stand a tight line under the name's last line and the cap's,
       // as many lines as they are measured to take, at every width (the D1 hand-back, item 4)
       (plotName !== undefined && markers.length ? MARKER_LABEL_GAP : 0),
@@ -1020,9 +1040,9 @@ export function Chart({
                 <text
                   data-role="chart-name"
                   x={left + 8}
-                  y={PLOT_NAME_Y + keyBand}
-                  fill="var(--c-text-dim)"
-                  fontSize={SVG_TEXT.label}
+                  y={nameY + keyBand}
+                  fill={plotSentence !== undefined ? 'var(--c-text)' : 'var(--c-text-dim)'}
+                  fontSize={namePx}
                 >
                   {nameLines.length === 1
                     ? plotName
@@ -1030,7 +1050,7 @@ export function Chart({
                         <tspan
                           key={`${i}:${line}`}
                           x={i ? left + 8 : undefined}
-                          dy={i ? PLOT_NAME_LINE : undefined}
+                          dy={i ? nameLine : undefined}
                         >
                           {line}
                         </tspan>
@@ -1228,13 +1248,13 @@ export function Chart({
                     x={left + 8 + CAP_MARK}
                     y={capY}
                     fill="var(--c-text)"
-                    fontSize={SVG_TEXT.label}
+                    fontSize={SVG_TEXT.sentence}
                   >
                     {capLines.map((line, i) => (
                       <tspan
                         key={`${i}:${line}`}
                         x={i ? left + 8 + CAP_MARK : undefined}
-                        dy={i ? PLOT_NAME_LINE : undefined}
+                        dy={i ? CAP_LINE : undefined}
                       >
                         {line}
                       </tspan>
@@ -1324,14 +1344,14 @@ export function Chart({
                   <ReferenceStroke
                     x1={swatch}
                     x2={swatch + REFERENCE_SWATCH}
-                    y={REFERENCE_KEY_Y - centreShift(SVG_TEXT.tick)}
+                    y={REFERENCE_KEY_Y - centreShift(SVG_TEXT.head)}
                   />
                   <text
                     x={textEnd}
                     y={REFERENCE_KEY_Y}
                     textAnchor="end"
                     fill="var(--c-text)"
-                    fontSize={SVG_TEXT.tick}
+                    fontSize={SVG_TEXT.head}
                   >
                     {label}
                   </text>

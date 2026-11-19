@@ -33,7 +33,9 @@ function RankedPreview({ model }: { model: ChartModel }) {
   return (
     <ol className="space-y-2" aria-label={`${model.title} ranked preview`}>
       {model.rankedPreview.rows.map((row) => (
-        <li key={row.title} className="text-meta min-w-0">
+        // a name, a link's words and a share: the reading ink at 13 px (the ink and size roles,
+        // finished; the row was 12 px); the name truncates where the card is narrow
+        <li key={row.title} className="text-small min-w-0">
           <div className="flex justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1.5" title={row.title}>
               {/* The Assets ranking shows each entry's class by its mark (CH-06). */}
@@ -156,12 +158,15 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             </span>
           )}
         </div>
-        <div className="text-text-dim text-meta mt-0.5 flex min-w-0 gap-x-2.5">
-          <span data-role="card-caption" className="whitespace-nowrap">
+        <div className="text-meta mt-0.5 flex min-w-0 gap-x-2.5">
+          {/* the caption, what the figure counts: a label, the quiet ink */}
+          <span data-role="card-caption" className="text-text-dim whitespace-nowrap">
             {definition.cardSubtitle}
           </span>
           {head?.at && (
-            <span data-role="card-date" className="ml-auto whitespace-nowrap">
+            // the date is the datum, the reading ink; line 2 keeps the chart-hero board's 12 px
+            // (rule 9: two lines that fit the narrowest card, 278 px; chart-card-head.test.tsx)
+            <span data-role="card-date" className="text-text ml-auto whitespace-nowrap">
               {head.at}
             </span>
           )}
@@ -185,9 +190,9 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         </p>
       )}
       {model && !model.latest && model.kind !== 'ranked' && (
-        <span className="text-text-dim text-small block py-8">
+        <p className="text-text text-small max-w-measure py-8">
           No indexed observations for this chart.
-        </span>
+        </p>
       )}
       {model &&
         (model.kind === 'ranked' ? (
@@ -219,17 +224,21 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
               axisCap={drawing?.axisCap}
               // Rule 4: every plot's left edge on one line; its ticks inside it, bare, its unit
               // named once; rule 5: a stack in the page's solid bands.
-              plotName={drawing?.yScale === 'log' ? `${model.unit} · log scale` : model.unit}
+              // the plot's unit alone, a label (the ink and size roles, finished: a page's name
+              // line is a sentence, a card's is its unit)
+              plotUnit={drawing?.yScale === 'log' ? `${model.unit} · log scale` : model.unit}
               insideYTicks
               bareTicks
               solidBands={model.kind === 'stacked'}
             />
           )
         ))}
+      {/* the key: each band's name and its figure, a name and a value, the reading ink at 13 px
+          (the ink and size roles, finished; they were 12 px); it wraps between its entries */}
       {model?.card && model.card.legend.length > 0 && (
         <ul
           aria-label={`${definition.title} legend`}
-          className="text-text-dim text-meta mt-1 flex flex-wrap gap-x-3 gap-y-0.5"
+          className="text-small mt-1 flex flex-wrap gap-x-3 gap-y-0.5"
         >
           {model.card.legend.map((entry) => (
             <li key={entry.key} className="flex items-center gap-1.5">
