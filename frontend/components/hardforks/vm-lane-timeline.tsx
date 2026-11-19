@@ -8,7 +8,9 @@ import {
   markName,
   useDeploymentReadout,
 } from '@/components/hardforks/script-deployment-timeline';
-import { DATA_COLOR } from '@/lib/design-tokens';
+import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
+import { color, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
@@ -42,8 +44,14 @@ const LANE_TEXT: Record<Lane, string> = {
   data2: 'pinned to VM2',
   data: 'pinned to VM0',
 };
-/** The VMs are one hue, deeper for newer: the board's encoding. */
-const VM_OPACITY = { VM0: 0.16, VM1: 0.32, VM2: 0.55 } as const;
+/**
+ * The VMs are one hue, deeper for newer: the board's encoding, in even steps of 0.14. A VM's name
+ * is written on its bar, so every step keeps the jade where one of the two fill inks reads at
+ * 4.5 : 1 in both themes (readability page lane P4, the notes' F1 follow-up: VM2 at 0.55 sat in
+ * the night's mid-tone band, where the bright ink read 3.81 : 1 and the well's 4.13 : 1). At 0.44
+ * by night the bright ink reads 5.11 : 1 (Lc 71), by day 7.78 : 1; at 0.30, 7.51 and 9.73.
+ */
+const VM_OPACITY = { VM0: 0.16, VM1: 0.3, VM2: 0.44 } as const;
 const UTC8_MS = 8 * 3_600_000;
 /** On a phone, the clear space kept above the first lane's header line for the rules. */
 const LANE_HEAD_CLEAR = 4;
@@ -141,6 +149,10 @@ export function VmLaneTimeline({
   const [ref, width] = useElementWidth<HTMLDivElement>();
   // One readout for lane dots and strip dots (R6): hover names a version, a tap pins it.
   const readout = useDeploymentReadout();
+  const { resolved: theme } = useTheme();
+  /** A word on a VM's bar: the one ink its fill calls for in this theme (DY-03, inkOnFill). */
+  const onBar = (vm: keyof typeof VM_OPACITY) =>
+    color(inkOnFill(theme, DATA_KEY, VM_OPACITY[vm]).ink);
   if (!(genesisMs < tipMs)) throw new Error('VM lane timeline needs a tip after genesis');
   if (lanes.map((lane) => lane.hashType).join() !== LANE_ORDER.join())
     throw new Error(`hash-type lanes out of VM order: ${lanes.map((l) => l.hashType).join()}`);
@@ -473,19 +485,20 @@ export function VmLaneTimeline({
                       x={x(from) + 6}
                       y={y + bar.y + barLabelY}
                       fontSize={SVG_TEXT.note}
-                      fill="var(--c-text-bright)"
+                      fill={onBar(vm)}
                     >
                       {vm}
                     </text>
                   </g>
                 ))}
-                {/* On a phone the empty lane says so on its header line (PB-02). */}
+                {/* On a phone the empty lane says so on its header line (PB-02). It stands on
+                    the lane's first bar, in the ink that bar's fill calls for. */}
                 {lane.knownVersions === 0 && !narrow && (
                   <text
                     x={x(segments[hashType][0][0]) + 40}
                     y={y + bar.y + barLabelY}
                     fontSize={SVG_TEXT.note}
-                    fill="var(--c-text-bright)"
+                    fill={onBar(segments[hashType][0][2])}
                   >
                     no known script yet
                   </text>
