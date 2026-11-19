@@ -202,7 +202,8 @@ describe('29 chart variants', () => {
     expect(formatChartReadout('-1234.5', 'CKB')).toBe('−1.23k');
     // Rates and durations at two decimals, as charts.json shows them (91.34 PH/s, 1.34%).
     expect(formatChartReadout('12.5', '%')).toBe('12.50');
-    expect(formatChartReadout('93.685105781336746', 'PH/s')).toBe('93.69');
+    // re-pinned for the D1 hand-back, item 1: a rate is cut, never rounded (was 93.69)
+    expect(formatChartReadout('93.685105781336746', 'PH/s')).toBe('93.68');
     expect(formatChartReadout('815.691763309692958', 'P')).toBe('815.69');
     expect(formatChartReadout('+1.114235248953059', 'PH/s')).toBe('+1.11');
     expect(formatChartReadout('+208801027.17121727', 'CKB')).toBe('+208.80M');

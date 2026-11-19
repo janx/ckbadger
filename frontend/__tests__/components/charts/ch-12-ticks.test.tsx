@@ -261,6 +261,9 @@ describe('axis ticks (CH-12)', () => {
       data: ['<100 CKB', '100-1k CKB', '1k-10k CKB', '10k-100k CKB', '100k-1m CKB', '>=1m CKB'].map(
         (date, i) => ({ date, value: String(600 - i * 100), value2: '1' })
       ),
+      // the route's wholes (lane D1): 600 + 500 + … + 100 cells, 1 CKB in each bucket
+      liveCells: '2100',
+      occupiedCapacity: '6',
     });
     render(<ChartDetail slug="cell-size-distribution" />);
     await screen.findByRole('img', { name: 'Cell size' });

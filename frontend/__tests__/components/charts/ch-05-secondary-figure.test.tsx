@@ -50,6 +50,9 @@ describe('a secondary figure says what it reads (CH-05)', () => {
         { date: '100-1k CKB', value: '400', value2: '75000000' },
         { date: '>=1m CKB', value: '1', value2: '1048617' },
       ],
+      // the route's wholes (lane D1)
+      liveCells: '1301',
+      occupiedCapacity: '128048617',
     });
     render(<ChartDetail slug="cell-size-distribution" />);
     const reading = await screen.findByRole('group', { name: 'Common knowledge reading' });

@@ -390,6 +390,9 @@ describe('shared chart detail', () => {
       title: 'Cell Size Distribution',
       yAxisLabel: 'Live Cells',
       data: labels.map((date, i) => ({ date, value: String(1000 - i) })),
+      // the route's wholes (lane D1): 1,000 + 999 + … + 995 cells; no CKB series sent
+      liveCells: '5985',
+      occupiedCapacity: '0',
     });
     render(<ChartDetail slug="cell-size-distribution" />);
     // re-pinned for lane D1: under its figure, with no command line (was "Distribution 6 buckets")

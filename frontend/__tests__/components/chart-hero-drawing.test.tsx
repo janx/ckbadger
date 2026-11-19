@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { Chart } from '@/components/ui/chart';
+import { CHARTS } from '@/components/charts/chart-catalogue';
+import { lineAscentPx, SVG_TEXT } from '@/lib/chart-type';
+import { descentPx, tightLinePx } from '@/lib/type-metrics';
 
 /**
  * The shared drawing's opt-ins for the chart pages on the chart-hero board (lane D1). Each is opt-in,
@@ -182,5 +185,54 @@ describe('the chart pages’ drawing (lane D1)', () => {
       />
     );
     expect(container.querySelector('.chart-line-halo')).toBeNull();
+  });
+
+  // The D1 hand-back, item 4: at 360 the plot's name met the fork markers' labels on
+  // /charts/circulation-ratio. The plot's top takes the name's lines, as many as it is measured to
+  // take, then the markers' labels a line under them, at every width.
+  it('stands the fork markers’ labels under every line of the plot’s name, at every width', () => {
+    const longest = CHARTS.map((chart) => chart.plotUnit).reduce((a, b) =>
+      b.length > a.length ? b : a
+    );
+    const name = `${longest} · every complete day since 2019-11-16`;
+    for (const width of [328, 390, 480, 640, 960, 1232]) {
+      stubChartWidth(width);
+      const { container, unmount } = render(
+        <Chart
+          title="Markers"
+          subtitle="x"
+          data={line([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])}
+          series={[{ key: 'v', label: 'v' }]}
+          unit="u"
+          height={360}
+          formatValue={(v) => v}
+          markers={[
+            { index: 1, label: 'Mirana', plotLabel: 'Mirana', href: '/hardforks' },
+            { index: 4, label: 'Meepo', plotLabel: 'Meepo', href: '/hardforks' },
+            { index: 9, label: 'Hardfork 3', plotLabel: 'Hardfork 3', href: '/hardforks' },
+          ]}
+          plotName={name}
+          insideYTicks
+          bareTicks
+        />
+      );
+      const nameText = container.querySelector('[data-role="chart-name"]')!;
+      const lines = Math.max(1, nameText.querySelectorAll('tspan').length);
+      // the name's last line: its baseline and its descent
+      const nameFoot =
+        Number(nameText.getAttribute('y')) +
+        (lines - 1) * tightLinePx(SVG_TEXT.label) +
+        descentPx(SVG_TEXT.label);
+      const labels = [...container.querySelectorAll('g > title')]
+        .filter((title) => ['Mirana', 'Meepo', 'Hardfork 3'].includes(title.textContent ?? ''))
+        .map((title) => title.parentElement!.querySelector('text')!);
+      expect(labels).toHaveLength(3);
+      for (const label of labels)
+        expect(
+          Number(label.getAttribute('y')) - lineAscentPx(SVG_TEXT.tick),
+          `${width} px: ${label.textContent} under ${lines} line(s) of the name`
+        ).toBeGreaterThanOrEqual(nameFoot);
+      unmount();
+    }
   });
 });

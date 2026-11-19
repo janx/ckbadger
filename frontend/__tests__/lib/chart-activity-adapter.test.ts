@@ -23,6 +23,8 @@ describe('daily activity chart adapter', () => {
         uniqueAddressCount: 4294967295,
         totalCkbMoved: '900719925474099300',
         scriptCounts: [],
+        // the API's sum of the eight kinds (8 × 4,294,967,295)
+        kindOccurrences: 34359738360,
       },
     ]);
     const volume = chartModel(

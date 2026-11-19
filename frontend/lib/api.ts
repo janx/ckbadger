@@ -1462,6 +1462,11 @@ interface DailyActivityStats {
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
+  /**
+   * The day's activity-kind occurrences, the API's sum of the eight kinds the charts read (lane
+   * D1): kinds overlap, so it is not a count of distinct activities.
+   */
+  kindOccurrences: number;
 }
 
 interface ActivitySummary24h {
@@ -2843,11 +2848,21 @@ interface MinerDistributionResponse {
   toDate: string;
 }
 
+/** Cell size: the histogram and the two wholes its page divides by (lane D1). */
+export interface CellSizeDistributionChartResponse extends ChartResponse {
+  /** The live cells of every bucket. */
+  liveCells: string;
+  /** The CKB those cells occupy. */
+  occupiedCapacity: string;
+}
+
 interface StackedAreaDataPoint {
   date: string;
   values: Record<string, string>;
   protocolTotalShannons?: string;
   phase1CompensationShannons?: string;
+  /** Secondary issuance: the total of its three destinations, in shannons (lane D1). */
+  componentsTotalShannons?: string;
 }
 
 interface StackedAreaSeries {
@@ -5154,7 +5169,7 @@ export const api = {
     return fetchApi('/charts/capacity-turnover-ratio');
   },
 
-  getCellSizeDistributionChart: (): Promise<ChartResponse> => {
+  getCellSizeDistributionChart: (): Promise<CellSizeDistributionChartResponse> => {
     return fetchApi('/charts/cell-size-distribution');
   },
 
