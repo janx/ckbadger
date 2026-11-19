@@ -814,3 +814,39 @@ describe('no raw control outside the control components (lane C1)', () => {
     expect(total).toBe(TOLERATED_TOTAL);
   });
 });
+
+// The proof page (lane C1): the controls mounted in every state of the board, for a real browser,
+// served by the dev server and never built (proof/controls.html). Its entry is no input of the
+// build, it is linted with the app, and it mounts every control but the help mark, which
+// HelpPopover draws.
+describe('the controls’ proof page is the dev server’s alone', () => {
+  const root = join(__dirname, '..', '..');
+
+  it('loads its own module from its own page', () => {
+    const html = readFileSync(join(root, 'proof/controls.html'), 'utf8');
+    expect([...html.matchAll(/<script type="module" src="([^"]+)">/g)].map((m) => m[1])).toEqual([
+      '/proof/controls.tsx',
+    ]);
+  });
+
+  it('is no input of the build, which builds index.html alone, and is linted with the app', () => {
+    // Vite's build takes index.html when its config names no other input (build.rollupOptions)
+    expect(readFileSync(join(root, 'vite.config.ts'), 'utf8')).not.toMatch(
+      /rollupOptions|\binput\s*:|proof/
+    );
+    expect(readFileSync(join(root, 'package.json'), 'utf8')).toContain(
+      '"lint": "eslint app components hooks lib src proof"'
+    );
+  });
+
+  it('mounts every control of the library', () => {
+    const code = readFileSync(join(root, 'proof/controls.tsx'), 'utf8');
+    const imported = [...code.matchAll(/from '@\/(components\/ui\/[a-z-]+)'/g)].map(
+      (m) => `${m[1]}.tsx`
+    );
+    expect(CONTROL_FILES.filter((path) => !imported.includes(path))).toEqual([
+      'components/ui/help-mark.tsx',
+    ]);
+    expect(imported).toContain('components/ui/help-popover.tsx');
+  });
+});
