@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
-import { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
+import { cellDataParts, cellOutputParts, elfRegions } from '@/lib/cell-parts';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
 import { sectionsWithManyHints } from '@/__tests__/utils/hints';
@@ -501,7 +501,10 @@ describe('cell microscope field detail rail (old issue B)', () => {
     expect(labelled.length).toBeGreaterThan(0);
     for (const region of labelled) {
       expect(region).not.toHaveClass('text-base-bg');
-      const key = /^var\(--c-(.+)\)$/.exec(region.style.borderTopColor)![1] as PaletteKey;
+      const tone = elfRegions(cellDataParts(elfCell)).find(
+        (r) => r.id === region.dataset.region
+      )!.tone;
+      const key = /^var\(--c-(.+)\)$/.exec(tone)![1] as PaletteKey;
       const { ink, contrast } = inkOnFill('dark', key, 0.35);
       expect(region.style.color, region.textContent!).toBe(color(ink));
       expect(contrast, region.textContent!).toBeGreaterThanOrEqual(4.5);

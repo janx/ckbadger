@@ -5,7 +5,8 @@ import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-pa
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
-import { fade } from '@/lib/palette';
+import { color, fade, inkOnFill, paletteKeyOf } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import type { Cell } from '@/lib/api';
 import {
   BOARD_INKS,
@@ -54,6 +55,8 @@ const targetKey = (t: Target) => (t.kind === 'group' ? `group:${t.group}` : `${t
 
 /** A part's tone (a theme reference) at `alpha`, as a background. */
 const rgba = fade;
+/** An ELF region's fill: its tone at this alpha, its words in the ink that reads on it. */
+const REGION_FILL = 0.35;
 
 const alignDown = (n: number) => n - (n % ROW);
 const alignUp = (n: number, max: number) => Math.min(max, n % ROW ? n + ROW - (n % ROW) : n);
@@ -238,6 +241,7 @@ export interface CellMicroscopeProps {
  * bytes, until a second tap on it or Escape (R6).
  */
 export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps) {
+  const { resolved: theme } = useTheme();
   const molecule = cell.cellOutputMolecule;
   const outBytes = useMemo(
     () => (molecule ? hexBytes(molecule.bytes, 'CellOutput') : []),
@@ -618,12 +622,15 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
                 {...handlers({ kind: 'region', id: region.id })}
-                className="text-meta text-base-bg flex items-center justify-center overflow-hidden"
+                className="text-meta flex items-center justify-center overflow-hidden"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
                   minWidth: 3,
-                  backgroundColor: rgba(region.tone, 0.35),
+                  backgroundColor: rgba(region.tone, REGION_FILL),
                   borderTop: `2px solid ${region.tone}`,
+                  // its words in the ink its fill reads in, the fill-ink rule's (lane P1: the page
+                  // ground's ink stood on it at 2.04 : 1 by night)
+                  color: color(inkOnFill(theme, paletteKeyOf(region.tone), REGION_FILL).ink),
                 }}
               >
                 {(region.end - region.start) * 5 > dataBytes.length
