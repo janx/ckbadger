@@ -4,7 +4,11 @@
  * supply-event rows gain `lockCodeHash` as the producer now writes it (null: the fixture indexes
  * no lock script, so its addresses are null too). Lane P2's third round (item 13): the history's
  * days gain `freeCapacity` as the producer now writes it (capacity − occupied, stated by the
- * route). */
+ * route). Regenerated 2026-11-20 from the route (the third read's T SHOULD-1: CKBADGER_CONTRACT_OUTPUT
+ * over real_token_router_producer_contract and the inventory contract): the feeds' rows name the
+ * token's type script (`itemTypes`, the code 0x72…, where they said []), the holders' `firstRank`,
+ * the token's `transfersCount` (4, it said 0), the transactions' `pays` (null), the inventory
+ * page's `hMultiplier` cut to two places ("1.66", it said "1.67") and its `anchor` (null). */
 import type {
   Token,
   TokenHistory,
@@ -25,7 +29,13 @@ export const tokenProducer = {
         blockNumber: 2,
         isCellbase: false,
         lockCalls: [],
-        itemTypes: [],
+        itemTypes: [
+          {
+            scriptName: null,
+            typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
+            typeHashType: 'type',
+          },
+        ],
         itemTypesUnread: null,
         participants: [
           {
@@ -70,7 +80,13 @@ export const tokenProducer = {
         blockNumber: 1,
         isCellbase: false,
         lockCalls: [],
-        itemTypes: [],
+        itemTypes: [
+          {
+            scriptName: null,
+            typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
+            typeHashType: 'type',
+          },
+        ],
         itemTypesUnread: null,
         participants: [
           {
@@ -115,7 +131,13 @@ export const tokenProducer = {
         blockNumber: 0,
         isCellbase: false,
         lockCalls: [],
-        itemTypes: [],
+        itemTypes: [
+          {
+            scriptName: null,
+            typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
+            typeHashType: 'type',
+          },
+        ],
         itemTypesUnread: null,
         participants: [
           {
@@ -371,6 +393,7 @@ export const tokenProducer = {
     nextCursor: null,
     total: 1,
     totalSupply: '90',
+    firstRank: 1,
   }),
   token: {
     cellsCount: 1,
@@ -410,7 +433,7 @@ export const tokenProducer = {
     totalCommonKnowledgeSize: '600',
     totalSupply: '90',
     transfers24h: 0,
-    transfersCount: 0,
+    transfersCount: 4,
     typeArgs: '0x7373737373737373737373737373737373737373737373737373737373737373',
     typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
     typeHashType: 'type',
@@ -424,7 +447,13 @@ export const tokenProducer = {
           blockNumber: 2,
           isCellbase: false,
           lockCalls: [],
-          itemTypes: [],
+          itemTypes: [
+            {
+              scriptName: null,
+              typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
+              typeHashType: 'type',
+            },
+          ],
           itemTypesUnread: null,
           participants: [
             {
@@ -475,6 +504,7 @@ export const tokenProducer = {
         inputsCount: 1,
         isCellbase: false,
         outputCapacity: '1000',
+        pays: null,
         outputsCount: 1,
         timestamp: '2026-10-08T00:00:00+00:00',
         txSize: 104,
@@ -485,7 +515,13 @@ export const tokenProducer = {
           blockNumber: 1,
           isCellbase: false,
           lockCalls: [],
-          itemTypes: [],
+          itemTypes: [
+            {
+              scriptName: null,
+              typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
+              typeHashType: 'type',
+            },
+          ],
           itemTypesUnread: null,
           participants: [
             {
@@ -536,6 +572,7 @@ export const tokenProducer = {
         inputsCount: 1,
         isCellbase: false,
         outputCapacity: '0',
+        pays: null,
         outputsCount: 0,
         timestamp: '2026-10-02T00:00:00+00:00',
         txSize: 104,
@@ -546,7 +583,13 @@ export const tokenProducer = {
           blockNumber: 0,
           isCellbase: false,
           lockCalls: [],
-          itemTypes: [],
+          itemTypes: [
+            {
+              scriptName: null,
+              typeCodeHash: '0x7272727272727272727272727272727272727272727272727272727272727272',
+              typeHashType: 'type',
+            },
+          ],
           itemTypesUnread: null,
           participants: [
             {
@@ -597,6 +640,7 @@ export const tokenProducer = {
         inputsCount: 1,
         isCellbase: false,
         outputCapacity: '0',
+        pays: null,
         outputsCount: 0,
         timestamp: '2026-10-01T00:00:00+00:00',
         txSize: 104,
@@ -630,7 +674,7 @@ export const inventoryProducer = {
         contentType: null,
         decimals: null,
         famous: false,
-        hMultiplier: '1.67',
+        hMultiplier: '1.66',
         holdersCount: 1,
         iconUrl: null,
         id: '0x4141414141414141414141414141414141414141414141414141414141414141',
@@ -648,6 +692,7 @@ export const inventoryProducer = {
         transfers24h: 0,
       },
     ],
+    anchor: null,
     hasMore: false,
     limit: 1,
     nextCursor: null,
