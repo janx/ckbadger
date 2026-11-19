@@ -492,12 +492,14 @@ describe('Asset history', () => {
         // its sign and a billion whole units less one, at the token's 0 decimals
         ceil(at('+999,999,999', 13) + 16),
         ceil(at('999,999,999', 13) + 16),
-        // the party's lock hash at the row size over "lock 0x43434343…434343" at 12 px; the last
-        ceil(Math.max(at('0x11111111…111111', 13), at('lock 0x43434343…434343', 12))),
+        // the party's lock hash at the row size over "lock 0x43434343…434343"; the last. Re-pinned
+        // on purpose (lane cd-fixes-controls, the ink and size round): the code hash is an id, at
+        // 13 px after the 12 px word (36 + 132.6 = 168.6: it was 158.4, all at 12 px), 159 → 169
+        ceil(Math.max(at('0x11111111…111111', 13), at('lock ', 12) + at('0x43434343…434343', 13))),
       ];
-      expect(budgets).toEqual([94, 60, 182, 110, 102, 159]);
+      expect(budgets).toEqual([94, 60, 182, 110, 102, 169]);
       const sum = budgets.reduce((s, w) => s + w, 0);
-      expect(sum).toBe(707);
+      expect(sum).toBe(717);
       mount();
       const table = screen.getByRole('table', { name: 'Mints and burns' });
       const cols = [...table.querySelectorAll('col')].map((c) =>
@@ -509,8 +511,8 @@ describe('Asset history', () => {
       try {
         for (const [width, form] of [
           [1232, 'table'],
-          [707, 'table'],
-          [706, 'rows'],
+          [717, 'table'],
+          [716, 'rows'],
           [608, 'rows'],
           [358, 'rows'],
         ] as const) {

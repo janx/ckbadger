@@ -364,7 +364,7 @@ function ShareTrend({
           Failed to load {title.toLowerCase()}.
         </p>
       ) : !history ? (
-        <p className="text-text-dim text-small">Loading observations…</p>
+        <p className="text-text text-small">Loading observations…</p>
       ) : history.points.length === 0 ? (
         <p className="text-text text-small">No completed daily crawler observations yet.</p>
       ) : (
@@ -439,7 +439,7 @@ export function NetworkTrends() {
           {peerHistoryError}
         </p>
       ) : peerHistoryLoading ? (
-        <p role="status" className="text-text-dim text-small font-mono">
+        <p role="status" className="text-text text-small font-mono">
           Loading verified peer history…
         </p>
       ) : days.length === 0 ? (

@@ -434,12 +434,13 @@ export function AssetHistory({
       key: 'party',
       label: 'To / from',
       // the party's lock hash at the row size (17 characters at 13 px; an address is 13) over its
-      // lock, "lock 0x43434343…434343" at 12 px (158.4, the wider); the last column, no gap after
-      // it. It was 160.
+      // lock, "lock 0x43434343…434343": the word at 12 px and the code hash, an id, at 13 px (lane
+      // cd-fixes-controls, the ink and size round: the lock words' code hash reads at 13 px), 36 +
+      // 132.6 = 168.6, the wider; the last column, no gap after it. It was 158.4 at 12 px, and 160.
       minWidth: columnPx(
         Math.max(
           cell(shortChars(SHORT_FORMS.row.hash)),
-          textPx('lock '.length + shortChars(SHORT_FORMS.row.hash), fontPx('meta'))
+          textPx('lock '.length, fontPx('meta')) + cell(shortChars(SHORT_FORMS.row.hash))
         )
       ),
       render: (e) => (

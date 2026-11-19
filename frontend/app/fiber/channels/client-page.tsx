@@ -362,7 +362,7 @@ export default function FiberChannelsPage() {
                   Fiber network evidence could not be loaded: {String(network.error)}
                 </p>
               ) : (
-                <p className="text-text-dim text-body">Loading indexed Fiber network…</p>
+                <p className="text-text text-body">Loading indexed Fiber network…</p>
               )
             }
             reading={network.data && <FiberNetworkReading network={network.data} pin={pin} />}
@@ -403,9 +403,7 @@ export default function FiberChannelsPage() {
                 Channel list could not be loaded: {String(channels.error)}
               </p>
             )}
-            {isAwaited(channels) && (
-              <p className="text-text-dim text-body py-7">Loading channels…</p>
-            )}
+            {isAwaited(channels) && <p className="text-text text-body py-7">Loading channels…</p>}
             {channels.data && (
               <>
                 <ListTable

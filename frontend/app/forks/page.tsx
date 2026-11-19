@@ -449,7 +449,7 @@ export default function ForksPage() {
             figure={data ? uncleRate(data) : undefined}
             picture={
               isAwaited(overview) ? (
-                <p role="status" className="text-text-dim text-small">
+                <p role="status" className="text-text text-small">
                   Loading fork history…
                 </p>
               ) : overview.error ? (

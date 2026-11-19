@@ -660,7 +660,8 @@ export function NotGenesNote({ traits }: { traits: readonly string[] }) {
   const names =
     traits.length > 1 ? `${traits.slice(0, -1).join(', ')} and ${traits.at(-1)}` : traits[0];
   return (
-    <p className="text-text-dim text-meta max-w-measure [overflow-wrap:anywhere]">
+    // a sentence: the reading ink at 13 px (lane cd-fixes-controls, the ink and size round)
+    <p className="text-text text-small max-w-measure [overflow-wrap:anywhere]">
       Not drawn: {names}, {traits.length > 1 ? 'outputs' : 'an output'} of the decoder that the
       pattern does not declare as {traits.length > 1 ? 'genes' : 'a gene'}.
     </p>

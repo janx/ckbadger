@@ -28,7 +28,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
   }, [data, roundId, queryClient]);
   // awaited, not isLoading: a read paused offline or between retries is still awaited
   if (isAwaited(read))
-    return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
+    return <p className="text-text text-small">Loading advertisement evidence…</p>;
   if (error)
     return (
       <p role="alert" className="text-negative text-small max-w-measure">
@@ -37,7 +37,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
     );
   if (!data || data.roundId !== roundId)
     return (
-      <p role="status" className="text-text-dim text-small">
+      <p role="status" className="text-text text-small">
         Crawler round changed; refreshing advertisement evidence…
       </p>
     );

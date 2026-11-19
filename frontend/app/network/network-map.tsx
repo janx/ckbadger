@@ -493,7 +493,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
           <TerminalPanelContent padding="sm">
             <div ref={ref} className="flex min-w-0 flex-col gap-3">
               {awaited ? (
-                <p className="text-text-dim text-small">Loading crawler locations…</p>
+                <p className="text-text text-small">Loading crawler locations…</p>
               ) : !ready ? (
                 <p role="alert" className="text-negative text-small max-w-measure">
                   Crawler locations unavailable: {String(error)}

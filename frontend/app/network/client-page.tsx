@@ -139,7 +139,9 @@ function MaxMindAttribution() {
   if (!data || !hasGeoData(data.countries)) return null;
 
   return (
-    <p className="text-text-dim border-base-border/60 text-meta mt-8 border-t pt-3 font-mono">
+    // the data's source, a statement: the reading ink at 13 px (lane cd-fixes-controls, the ink and
+    // size round: it was quiet at 12 px)
+    <p className="text-text border-base-border/60 text-small mt-8 border-t pt-3 font-mono">
       Geo/ASN data © MaxMind (GeoLite2)
     </p>
   );

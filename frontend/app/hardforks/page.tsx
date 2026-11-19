@@ -366,7 +366,7 @@ export default function HardforksPage() {
               />
               <Lede />
               {/* isAwaited: the read is waited for while paused offline too (A1 round 2) */}
-              {isAwaited(read) && <p className="text-text-dim mt-8">Loading hardfork timeline…</p>}
+              {isAwaited(read) && <p className="text-text mt-8">Loading hardfork timeline…</p>}
               {error && (
                 <p role="alert" className="text-negative max-w-measure mt-8">
                   Failed to load hardfork timeline: {String(error)}

@@ -342,13 +342,16 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   chain: 3,
   assets: 13,
   lists: 6,
-  topics: 2,
+  // topics 2 → 0 (lane cd-fixes-controls): the DAO board's two notes at 13 px
+  topics: 0,
   charts: 1,
-  // shared 3 → 2 (lane cd-fixes-controls): the chart's markers' legend at 13 px
-  shared: 2,
+  // shared 3 → 2 (lane cd-fixes-controls): the chart's markers' legend at 13 px; 2 → 1: the lock
+  // words' code-hash link at 13 px
+  shared: 1,
 };
-// 18 → 17 (lane cd-fixes-controls): components/ui/chart.tsx left the list
-const TOLERATED_FILES = 17;
+// 18 → 17 (lane cd-fixes-controls): components/ui/chart.tsx left the list; 17 → 15: the DAO board
+// and the lock words
+const TOLERATED_FILES = 15;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -422,11 +425,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: `the pipeline's pinned readout link in a 12 px line; ${WORK}`,
   },
   // ---- topics ----
-  'components/dao/dao-board.tsx': {
-    family: 'topics',
-    sites: { link: 2 },
-    reason: `the block links of the capacity-use caption and the 365-day anchor line, 12 px notes; ${WORK}`,
-  },
+  // 'components/dao/dao-board.tsx' left the list (lane cd-fixes-controls): the capacity-use caption
+  // and the 365-day anchor line read at 13 px, their block links with them
   // ---- charts ----
   'components/charts/chart-small-multiple.tsx': {
     family: 'charts',
@@ -441,11 +441,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // 'components/ui/chart.tsx' left the list (lane cd-fixes-controls): the markers' legend, links,
   // reads at 13 px
-  'components/ui/lock-kind.tsx': {
-    family: 'shared',
-    sites: { link: 1 },
-    reason: `an unregistered lock's code-hash link in the 12 px lock-kind label; ${WORK}`,
-  },
+  // 'components/ui/lock-kind.tsx' left the list (lane cd-fixes-controls): an unregistered lock's
+  // code hash is an id, its link at 13 px inside the label's words
 };
 
 const ROOT = join(__dirname, '..', '..');

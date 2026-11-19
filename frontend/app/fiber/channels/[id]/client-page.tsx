@@ -73,7 +73,7 @@ export default function FiberChannelDetailPage() {
           </>
         )}
         {isAwaited(channel) && (
-          <p className="text-text-dim text-body py-8">Loading channel evidence…</p>
+          <p className="text-text text-body py-8">Loading channel evidence…</p>
         )}
         {channel.error && <ReadFailure what="channel" error={channel.error} />}
         {token.isError && (

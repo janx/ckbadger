@@ -660,8 +660,10 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
   ];
   return (
     <div ref={ref} className="mt-3.5 flex min-w-0 flex-col">
-      {/* the bar's caption, a note over the figure: quiet, on the measure (R4) */}
-      <div className="text-text-dim text-meta max-w-measure">
+      {/* the bar's caption, a sentence over the figure, on the measure (R4): the reading ink at
+          13 px, its block a link inside it (lane cd-fixes-controls, the ink and size round: it was
+          quiet at 12 px) */}
+      <div className="text-text text-small max-w-measure">
         How all{' '}
         <span className="text-text">
           <Amount form="summary" value={issued.toString()} />
@@ -1279,7 +1281,9 @@ function RawEvidence({
         depositors’ share.
       </p>
       {evidence.ar.year365 && (
-        <div className="text-text-dim text-meta max-w-measure mt-2 font-mono">
+        // the anchor's values and what they are, a sentence: the reading ink at 13 px (lane
+        // cd-fixes-controls, the ink and size round: it was quiet at 12 px)
+        <div className="text-text text-small max-w-measure mt-2 font-mono">
           365-day anchor: block{' '}
           <BlockLink number={evidence.ar.year365.anchorBlockNumber} look="inline" /> · chain time{' '}
           <Utc8DateTime timestamp={evidence.ar.year365.anchorChainTimeMs} /> · AR{' '}

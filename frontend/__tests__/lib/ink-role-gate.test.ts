@@ -79,12 +79,14 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
   // prose site gone with its entry
   lists: 23,
-  topics: 14,
-  shared: 9,
+  // topics 14 → 0, shared 9 → 0 (lane cd-fixes-controls, the ink and size round)
+  topics: 0,
+  shared: 0,
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
 // 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
-const TOLERATED_FILES = 51;
+// 51 → 34 (lane cd-fixes-controls, the ink and size round): the topics and shared files left the list
+const TOLERATED_FILES = 34;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
@@ -355,132 +357,18 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // components/transaction/transaction-list-table.tsx left the list (lane P3: td 3 → 0; the
   // cellbase reward left with the cellbases' own list, the cycles state with the cycles column, the
   // cells count reads in the reading ink)
-  // ---- topics ----
-  // 'app/dao/depositors/page.tsx' left the list (the P3 follow-up's 2d: link 2, td 1, prose 1 → 0):
-  // a depositor's rank is a value and the ranking-moved sentence a statement, its block links in its
-  // line, all in the reading ink
-  'app/fiber/channels/[id]/client-page.tsx': {
-    family: 'topics',
-    // link 1 → 0, prose 2 → 1 (lane P4): the breadcrumb's link and the channel id line read
-    sites: { prose: 1 },
-    reason: 'the loading line, a transient note in the quiet ink',
-  },
-  'app/fiber/channels/client-page.tsx': {
-    family: 'topics',
-    // td 1 → 0 (lane P4): a channel's opening day reads in the reading ink
-    sites: { prose: 2 },
-    reason: 'the two loading lines, transient notes in the quiet ink',
-  },
-  // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4): the breadcrumb link
-  // takes its look, a row's clock and the uncle sentence read in the reading ink
-  'app/forks/page.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (lane P4): the empty fork-history line reads in the reading ink
-    sites: { prose: 1 },
-    reason: 'the loading fork-history line, a transient note',
-  },
-  'app/hardforks/page.tsx': {
-    family: 'topics',
-    // prose 10 → 5 (B7): the lede, the two editions paragraphs, the hash-type paragraph and the
-    // RFC note explain, in the reading ink; link 2 → 0, prose 5 → 1 (page lane P4): an edition's
-    // epoch, block and day line reads in the reading ink, its block a link inside the line; "How
-    // it works" is a way onward; the no-header and not-reached states read; the consensus line
-    // (the RPC's name) went to tier 2
-    sites: { prose: 1 },
-    reason: 'the loading line, a transient note while the timeline is read',
-  },
-  'app/network/advertisement-graph.tsx': {
-    family: 'topics',
-    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink; 3 → 2 (P4 topics):
-    // the empty line reads
-    sites: { prose: 2 },
-    reason: 'the loading and refreshing lines, transient notes in the quiet ink',
-  },
-  'app/network/client-page.tsx': {
-    family: 'topics',
-    // link 1 → 0, prose 8 → 3 (B7): the lede, the crawler explanations and the note explain, in
-    // the reading ink; prose 3 → 1 (P4 topics): the two round lines' counts and age are values
-    sites: { prose: 1 },
-    reason: 'the MaxMind credit, a note in the quiet ink',
-  },
-  'app/network/network-map.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (P4 topics): the one-node countries line under a phone map went; every country
-    // is a row of the ranked list beside the map
-    sites: { prose: 1 },
-    reason: 'the loading line, a transient note in the quiet ink',
-  },
-  'app/network/trends.tsx': {
-    family: 'topics',
-    // prose 5 → 4 (B7): the top-label note explains, in the reading ink; td 1 → 0, prose 4 → 2
-    // (P4 topics): a day's label count is a value, and the two empty lines read
-    sites: { prose: 2 },
-    reason: 'the two loading lines, transient notes in the quiet ink',
-  },
-  'components/dao/dao-board.tsx': {
-    family: 'topics',
-    // link 6 → 3, prose 3 → 1 (B7): the lede and the AR explanation, with their links, read in
-    // the reading ink; link 3 → 2 (B4 second fix round): a depositor's lock is written by the one
-    // decision (LockWordsView, components/ui/lock-kind.tsx), its link no longer this file's
-    // td 2 → 0, prose 1 → 0 (lane P4): a holder's rank and share read in the reading ink, the
-    // amounts line under the icicle reads, its labels quiet
-    sites: { link: 2 },
-    reason:
-      'the block links in the capacity-use caption and the 365-day anchor line, notes under a figure',
-  },
-  // 'components/dao/dao-grows.tsx' left the list (lane P4): the deposit reading reads in the
-  // reading ink, its block link with it
-  // 'components/dao/dao-history.tsx' left the list (lane P4): the not-enough-days sentence, an
-  // empty state, reads in the reading ink
-  'components/fiber/fiber-channel-step.tsx': {
-    family: 'topics',
-    // link 1 → 0 (lane P4): the step's header reads in the reading ink, its block link with it
-    sites: { prose: 1 },
-    reason: "the step's loading line, a transient note in the quiet ink",
-  },
-  // ---- shared ----
-  // 'components/activity/activity-row.tsx' left the list (lane P3: link 3 → 0; its links take the
-  // inline look and the ink of the line they stand in, the evidence's and the detail run's, a note)
-  'components/command-palette.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason:
-      "the shortcuts panel's release and clock line: chrome, the rule's open point (B1 hand-back)",
-  },
-  // components/error-page-shell.tsx left the list (readability R6): the caption under the seal,
-  // a note under a figure, quiet by rule, is the seal's <figcaption> now that the seal stands in a
-  // figure of its own beside or below the text, no longer a <p> (this gate's other route for it).
-  'components/layout/site-footer.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the footer's release and zone line: chrome, the rule's open point (B1 hand-back)",
-  },
-  'components/ui/allele-gel.tsx': {
-    family: 'shared',
-    sites: { prose: 3 },
-    reason:
-      "the gel's two reading notes and its not-drawn note: notes under a figure, quiet by rule",
-  },
-  'components/ui/detail-layout.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the evidence tier's eyebrow, a label set as a <p>: quiet by rule",
-  },
-  'components/ui/lock-kind.tsx': {
-    family: 'shared',
-    sites: { link: 1 },
-    reason: "B4 rows: an unregistered lock's code-hash link inside the quiet lock-kind label",
-  },
-  'components/ui/script-byte-map.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the byte map's caption: a note under a figure, quiet by rule",
-  },
-  'components/ui/sequencing-gel.tsx': {
-    family: 'shared',
-    sites: { prose: 1 },
-    reason: "the gel's reading note: a note under a figure, quiet by rule",
-  },
+  // ---- topics ---- (lane cd-fixes-controls, the ink and size round: 14 → 0, each converted)
+  // the loading and refreshing lines of the Fiber channel and channels pages (3), the forks page,
+  // the hardforks page, the advertisement graph (2), the network map, the trends (2) and the Fiber
+  // step are short sentences of a state, in the reading ink; the MaxMind credit states the data's
+  // source, in the reading ink at 13 px; the DAO board's capacity-use caption and 365-day anchor
+  // line are a sentence and a line of values, in the reading ink at 13 px, their block links in them
+  // ---- shared ---- (lane cd-fixes-controls, the ink and size round: 9 → 0)
+  // converted: the shortcuts panel's release and clock line and the footer's release and zone line
+  // are values, in the reading ink; the allele gel's not-drawn line is a sentence, in the reading
+  // ink at 13 px; an unregistered lock's code hash is an id, its link in the reading ink at 13 px
+  // inside the lock words' quiet label; decided (DECIDED): the evidence tier's eyebrow, the two
+  // gels' keys and the byte map's name
 };
 
 // ---- the scan ----
@@ -916,6 +804,31 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
     reason:
       'decided (the P3 follow-up): the pool’s two interpretation states (unavailable, partial) for an empty value in table cells; the empty line (no complete statistics), the note under the kind chips and the two loading lines',
   },
+  // ---- shared (lane cd-fixes-controls, the ink and size round): each a role of the rule ----
+  'components/ui/detail-layout.tsx': {
+    family: 'shared',
+    sites: { prose: 1 },
+    reason:
+      'decided (the shared lane): the evidence tier’s “Evidence · for developers”, an eyebrow set as a <p>',
+  },
+  'components/ui/allele-gel.tsx': {
+    family: 'shared',
+    sites: { prose: 2 },
+    reason:
+      'decided (the shared lane): the gel’s two keys, its axis labels (“variants per gene ↑ · one lane per gene…”, “genes ranked by how many variants…”) and a hint of how to use it (“open a gene for every variant”)',
+  },
+  'components/ui/sequencing-gel.tsx': {
+    family: 'shared',
+    sites: { prose: 1 },
+    reason:
+      'decided (the shared lane): the gel’s key, a hint of how to read it (“read top to bottom: each band is one hex digit…”)',
+  },
+  'components/ui/script-byte-map.tsx': {
+    family: 'shared',
+    sites: { prose: 1 },
+    reason:
+      'decided (the shared lane): the byte map’s name, the label of the figure (“Script · 33 bytes, then the args each cell sets”)',
+  },
   'components/activities-stream-explorer.tsx': {
     family: 'lists',
     // prose 5 → 4 (the P3 follow-up's 2d): the error's message is a statement, the reading ink
@@ -924,9 +837,13 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
       'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
   },
 };
-/** The pinned sites and files of DECIDED: 15 sites in 6 files, the P3 follow-up's 2d. */
-const DECIDED_SITES = 15;
-const DECIDED_FILES = 6;
+/**
+ * The pinned sites and files of DECIDED: 15 sites in 6 files, the P3 follow-up's 2d; 20 in 10 with
+ * the shared lane's 5 (lane cd-fixes-controls, the ink and size round: an eyebrow, two gels' keys
+ * and a figure's name).
+ */
+const DECIDED_SITES = 20;
+const DECIDED_FILES = 10;
 
 /**
  * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
@@ -1229,18 +1146,24 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   // Re-pinned on purpose (lane P2's third round, item 10, at its merge; renamed, it was "… 123 sites
   // in 58 files …" on the base): the script hero's companion line left the list. Re-pinned on
   // purpose (the third read's T NOTE-3; renamed, it was "122 sites in 57 files"): the decided
-  // sites left the work list for DECIDED, 15 in 6 files
-  it('tolerates 107 sites in 51 files: the pinned totals by family, which only fall', () => {
+  // sites left the work list for DECIDED, 15 in 6 files. Re-pinned on purpose (lane
+  // cd-fixes-controls, the ink and size round; renamed, it was "107 sites in 51 files"): the topics
+  // and shared families' 23 sites in 17 files left the list; a family at 0 has no entry
+  it('tolerates 84 sites in 34 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
         (byFamily[entry.family] ?? 0) +
         Object.values(entry.sites).reduce((sum, n) => sum + (n ?? 0), 0);
-    expect(byFamily).toEqual(TOLERATED_BY_FAMILY);
+    expect(byFamily).toEqual(
+      Object.fromEntries(Object.entries(TOLERATED_BY_FAMILY).filter(([, n]) => n > 0))
+    );
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
-  it('holds the decided sites apart, 15 in 6 files, none of them also on the work list', () => {
+  // re-pinned on purpose (lane cd-fixes-controls, the ink and size round; it was "15 in 6 files"):
+  // the shared lane's five decided sites joined
+  it('holds the decided sites apart, 20 in 10 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
       0
