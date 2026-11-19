@@ -72,3 +72,30 @@ describe('exact integer display', () => {
     expect(() => exactDecimalRatio('1e3', 'chart')).toThrow('chart');
   });
 });
+
+// Lane D4 follow-up (the coordinator's item 3; the house rule, readability R5 and the brief's rule
+// 5: a shortened figure is the exact value CUT, never rounded, as a rounded figure can show a digit
+// that is not on chain). The one function that shortens an exact ratio to a few decimals,
+// formatScaledInteger, rounded half-up: 1.005 read "1.01" and 999,999 read "1.00M". It cuts, and the
+// compact forms take the next unit only where the value reaches it.
+describe('an exact ratio shortened is cut, never rounded', () => {
+  it('cuts at the display precision where half-up and cut differ', () => {
+    expect(formatScaledInteger(BigInt(1005), BigInt(1000), 2)).toBe('1.00');
+    expect(formatScaledInteger(BigInt(1999), BigInt(1000), 2)).toBe('1.99');
+    expect(formatScaledInteger(BigInt(15), BigInt(10), 0)).toBe('1');
+    expect(formatScaledInteger(BigInt('9007199254740993'), BigInt('1000000000000000'), 2)).toBe(
+      '9.00'
+    );
+    expect(formatDecimal('1.005', 2)).toBe('1.00');
+    expect(formatDecimal('15019.0999', 2)).toBe('15019.09');
+    expect(formatDecimal('0.126499999999999999', 2, 100)).toBe('12.64');
+  });
+
+  it('takes the next compact unit only where the value reaches it', () => {
+    expect(formatCompactInteger('999999', 'count')).toBe('999.99k');
+    expect(formatCompactInteger('1000000', 'count')).toBe('1.00M');
+    expect(formatCompactInteger('9007199254740993', 'difficulty')).toBe('9.00P');
+    expect(formatCompactRatio(BigInt(999999), BigInt(1))).toBe('999.99k');
+    expect(formatCompactRatio(BigInt(1005), BigInt(1000))).toBe('1.00');
+  });
+});

@@ -912,3 +912,33 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     expect(phoneHeadPx(row, 360)).toBe(statedHeadPx(row));
   });
 });
+
+// Lane D4 follow-up (the coordinator's item 3): the inventory's H-multiplier, in the table's cell
+// and on the phone row, is cut at two decimals, never rounded: the API's 1.0059 reads ×1.00 (it read
+// ×1.01) and 15019.0999 reads ×15,019.09 (×15,019.10).
+describe('the inventory’s H-multiplier is cut, never rounded', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const rows = [
+    { ...asset, id: '0x' + 'a1'.repeat(32), hMultiplier: '1.0059' },
+    { ...asset, id: '0x' + 'a2'.repeat(32), hMultiplier: '15019.0999' },
+  ];
+
+  it('in the table', () => {
+    atContainerWidth(1248);
+    render(<InventoryRows assetType="token" rows={rows} />);
+    const table = screen.getByRole('table');
+    expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent(/^×1\.00$/);
+    expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent(/^×15,019\.09$/);
+  });
+
+  it('on the phone row', () => {
+    atContainerWidth(358);
+    render(<InventoryRows assetType="token" rows={rows} />);
+    const [first, second] = screen.getAllByTestId('inventory-row-mobile');
+    expect(phoneLines(first)[1].left).toMatch(/ · H-mult\. ×1\.00$/);
+    expect(phoneLines(second)[1].left).toMatch(/ · H-mult\. ×15,019\.09$/);
+  });
+});
