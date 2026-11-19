@@ -74,7 +74,9 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
               }}
             />
           </span>
-          <span className="text-text text-right tabular-nums">{it.count.toLocaleString()}</span>
+          <span className="text-text text-right tabular-nums">
+            {it.count.toLocaleString('en-US')}
+          </span>
         </div>
       ))}
     </div>

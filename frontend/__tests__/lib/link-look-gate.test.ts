@@ -445,11 +445,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       '3 without a look; inks by hand (hover:text-text-bright, hover:underline, text-text); 1 raw <a>',
   },
-  'app/network/client-page.tsx': {
-    lane: 'p-topics',
-    sites: { ink: 1, raw: 1 },
-    reason: 'inks by hand (hover:text-text-bright, hover:underline); 1 raw <a>',
-  },
   'components/dao/dao-board.tsx': {
     lane: 'p-topics',
     sites: { look: 13, ink: 8, raw: 1 },
@@ -515,8 +510,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // party's lock-hash link states `block` and its hand-written underline went, 2) → 554 (lane D4
 // follow-up: the asset feed's phone row, its key and its block link, 3: two looks, one ink) → 551
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
-// and one ink)
-const TOLERATED_TOTAL = 551;
+// and one ink) → 549 (P4 topics, the network page: its lede's "How it works" is a Link of the
+// onward look, 2: one ink, one raw <a>)
+const TOLERATED_TOTAL = 549;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

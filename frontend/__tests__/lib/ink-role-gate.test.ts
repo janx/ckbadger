@@ -437,9 +437,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'app/network/client-page.tsx': {
     family: 'topics',
     // link 1 → 0, prose 8 → 3 (B7): the lede, the crawler explanations and the note explain, in
-    // the reading ink
-    sites: { prose: 3 },
-    reason: 'the round lines and the MaxMind credit in the quiet ink',
+    // the reading ink; prose 3 → 1 (P4 topics): the two round lines' counts and age are values
+    sites: { prose: 1 },
+    reason: 'the MaxMind credit, a note in the quiet ink',
   },
   'app/network/network-map.tsx': {
     family: 'topics',

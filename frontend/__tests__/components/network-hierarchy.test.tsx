@@ -176,7 +176,9 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     expect(h1).toHaveClass('text-index', 'text-text-bright');
     // The round and its age sit on the title row.
     const round = within(hero).getByText(/^Round #97 · updated /);
-    expect(round).toHaveClass('text-small', 'text-text-dim');
+    // Re-pinned on purpose (P4 topics, the ink-role gate's work list): the round and its age are
+    // values, in the reading ink (it was text-text-dim)
+    expect(round).toHaveClass('text-small', 'text-text');
     expect(h1.parentElement!.contains(round)).toBe(true);
     const lede = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'lede');
     expect(lede.textContent).toMatch(/^Nodes find each other by word of mouth/);
@@ -185,10 +187,13 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     // re-pinned with readability R3 / R4 (lane B7): a lede is a sentence that explains, the
     // reading ink (was text-text-dim)
     expect(lede).toHaveClass('text-body', 'text-text', 'max-w-measure');
-    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
-      'href',
-      '#evidence'
-    );
+    // Re-pinned on purpose (P4 topics, the link-look gate's work list): the way down states the
+    // onward look, whose component writes the arrow, glued to the last word and hidden from
+    // assistive technology (it was a raw <a> with a typed " ↓" and its ink and underline by hand)
+    const down = within(lede).getByRole('link', { name: 'How it works' });
+    expect(down).toHaveAttribute('href', '#evidence');
+    expect(down).toHaveClass('text-jade');
+    expect(down.textContent).toBe('How it works ↓');
     expect(tier2.closest('#evidence')).not.toBeNull();
     // The four-line paragraph is not in tier 1; it opens tier 2's explanation.
     expect(within(tier1).queryByText(/each node tells its peers about other nodes/)).toBeNull();
@@ -294,9 +299,15 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
         )
     );
     expect(coloured.length).toBeGreaterThan(0);
-    for (const el of coloured) expect(figure.contains(el)).toBe(true);
+    // Re-pinned on purpose (P4 topics, the link-look gate's work list): the lede's way down is a
+    // link of the onward look, whose celadon is the look's (components/ui/link.tsx), as on the chart
+    // pages; every other coloured word is the figure's
+    const down = within(hero).getByRole('link', { name: 'How it works' });
+    for (const el of coloured) expect(figure.contains(el) || el === down).toBe(true);
+    // Re-pinned on purpose (P4 topics): a round in progress reads as neutral words in the reading
+    // ink, as the round and its age before it (it was text-text-dim)
     const active = within(hero).getByText(/round #98 crawling 40\/181/);
-    expect(active).toHaveClass('text-text-dim');
+    expect(active).toHaveClass('text-text');
   });
 });
 

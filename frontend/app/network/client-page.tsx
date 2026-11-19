@@ -21,6 +21,7 @@ import { Prose } from '@/components/ui/prose';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ClockText } from '@/components/ui/utc8-date';
 import { useDocumentTitle } from '@/lib/use-document-title';
+import Link from '@/components/ui/link';
 
 const PAGE_TITLE = 'Where the nodes are';
 
@@ -170,17 +171,17 @@ function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
       className="mt-7 grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-3"
     >
       <Metric label="Verified before, not now">
-        {lastRound.verifiedUnavailablePeers.toLocaleString()}
+        {lastRound.verifiedUnavailablePeers.toLocaleString('en-US')}
       </Metric>
       <Metric
         label="Heard of"
-        note={`${lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString()} never verified`}
+        note={`${lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString('en-US')} never verified`}
       >
-        {lastRound.candidatePeers.toLocaleString()}
+        {lastRound.candidatePeers.toLocaleString('en-US')}
       </Metric>
       <Metric
         label="Latest round"
-        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${minutes} min · ${lastRound.addressAttempts.toLocaleString()} dials`}
+        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${minutes} min · ${lastRound.addressAttempts.toLocaleString('en-US')} dials`}
       >
         #{lastRound.roundId}
       </Metric>
@@ -198,9 +199,10 @@ function NetworkLede() {
   return (
     <p data-role="lede" className="text-text text-body max-w-measure mt-1.5">
       Nodes find each other by word of mouth; unreachable is not gone.{' '}
-      <a href="#evidence" className="hover:text-text-bright hover:underline">
-        How it works<span className="whitespace-nowrap"> ↓</span>
-      </a>
+      {/* the way down to tier 2: its look's arrow, "↓" to a place on this page, is the link's */}
+      <Link href="#evidence" look="onward">
+        How it works
+      </Link>
     </p>
   );
 }
@@ -232,7 +234,8 @@ function Hero({
       <section aria-label={PAGE_TITLE} className="min-w-0">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
           <NetworkHeading />
-          <p className="text-text-dim text-small max-w-measure">
+          {/* the round, its age and a round in progress are values: the reading ink */}
+          <p className="text-text text-small max-w-measure">
             Round #{lastRound.roundId} · updated {updatedAgo}
             {activeRound &&
               (activeRound.blockedReason
@@ -264,12 +267,12 @@ function Hero({
                 data-role="reachable"
                 className="text-jade text-index sm:text-display tabular-nums"
               >
-                {lastRound.reachablePeers.toLocaleString()}
+                {lastRound.reachablePeers.toLocaleString('en-US')}
               </span>
               {/* Its scale, dim, as the DAO figure's fraction: of the verified nodes retained. */}
               <span data-role="reachable-of" className="text-hero text-text-dim tabular-nums">
                 {' '}
-                of {lastRound.verifiedRetainedPeers.toLocaleString()}
+                of {lastRound.verifiedRetainedPeers.toLocaleString('en-US')}
               </span>
             </span>
             <span className="text-text-dim text-body">answered as CKB {network} nodes</span>
@@ -343,12 +346,14 @@ function PeersDashboard({
           <div className="flex min-w-0 flex-col gap-8">
             <HowTheCrawlerSees />
             <DetailSection title="Crawler round evidence">
-              <p className="text-text-dim text-small max-w-measure leading-relaxed">
-                Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
-                attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
-                observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates
-                · {lastRound.foreignPeers.toLocaleString()} foreign peers ·{' '}
-                {lastRound.newVerifiedPeers.toLocaleString()} newly verified
+              {/* the round's counts are values, in the reading ink */}
+              <p className="text-text text-small max-w-measure leading-relaxed">
+                Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString('en-US')}{' '}
+                address attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString('en-US')}{' '}
+                non-successful observations ·{' '}
+                {lastRound.exhaustedCandidates.toLocaleString('en-US')} exhausted candidates ·{' '}
+                {lastRound.foreignPeers.toLocaleString('en-US')} foreign peers ·{' '}
+                {lastRound.newVerifiedPeers.toLocaleString('en-US')} newly verified
               </p>
               <ReachabilityCaveat className="mt-3" />
             </DetailSection>

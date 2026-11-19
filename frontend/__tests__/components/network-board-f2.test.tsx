@@ -135,7 +135,9 @@ describe('Network board (F2 charts)', () => {
       expect(el.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
     // The old tier-1 evidence box and per-round counters moved to the developer tier.
     const tier2 = container.querySelector('[data-tier="2"]')!;
-    expect(within(tier2 as HTMLElement).getByText(/2,345 address attempts/)).toBeInTheDocument();
+    const evidence = within(tier2 as HTMLElement).getByText(/2,345 address attempts/);
+    // P4 topics (the ink-role gate's work list): the round's counts are values in the reading ink
+    expect(evidence).toHaveClass('text-text');
   });
 
   it('draws reachable dots solid, verified-before hollow, this node’s session peers ringed (CH-51)', async () => {
