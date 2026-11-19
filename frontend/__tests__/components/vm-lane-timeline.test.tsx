@@ -513,8 +513,9 @@ describe('VmLaneTimeline: each lane named in plain words, its hash type second (
     );
     return screen.getByRole('img');
   };
+  /** A word the lane writes itself (a child of its group), not one of its bars or dots. */
   const own = (lane: Element, text: string) =>
-    [...lane.querySelectorAll(':scope > text')].find((t) => t.textContent === text);
+    [...lane.children].find((t) => t.tagName.toLowerCase() === 'text' && t.textContent === text);
 
   it('on the desktop: the words as the lane head, its hash type the quiet note under them', () => {
     const svg = draw(1232);
