@@ -1332,11 +1332,10 @@ interface ActivityTypeCall {
 }
 
 /**
- * A type script a committed activity's items or its Nervos DAO step carry, by its code
- * (`itemTypes`, the P3 follow-up): the code hash and hash type the indexer classified the item by,
- * and the registry's name.
+ * A type script code the indexer recognises that ran in an activity's transaction (C7,
+ * `recognizedTypes`): the code hash and hash type, never the args, and the registry's name.
  */
-interface ActivityItemType {
+interface RecognizedType {
   typeCodeHash: string;
   typeHashType: string;
   scriptName: string | null;
@@ -1386,6 +1385,13 @@ const TAG_IDENTITY = 4;
  */
 const TAG_DAO = 8;
 const TAG_CELLBASE = 32;
+/**
+ * A party for whom a type script ran that moved none of its items: an unrecognised one (the
+ * transaction's `typeCalls`), or a recognised one with no item change and no DAO step (C7: a wallet
+ * merging its own token cells, its code in `recognizedTypes`). The indexer's TAG_TYPE_CALL
+ * (crates/ckbadger-store/src/types.rs, bit 6): the transaction is a script call.
+ */
+const TAG_TYPE_CALL = 64;
 
 /** Address activity response (GET /addresses/{addr}/activities). */
 interface Activity {
@@ -1406,11 +1412,11 @@ interface Activity {
   /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
   /**
-   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
-   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   * Every type script code the indexer recognises that ran in the transaction, each once (C7: the
+   * row's `recognized_type_codes`, on a committed row and a pool row alike). With `typeCalls` (the
+   * unrecognised ones, with their args) they are every type script code that ran.
    */
-  itemTypes: ActivityItemType[] | null;
-  itemTypesUnread: string | null;
+  recognizedTypes: RecognizedType[];
   protocolActions: ActivityProtocolAction[];
   /** The OTHER parties of this transaction. */
   participants: ParticipantRef[];
@@ -1460,11 +1466,11 @@ interface GlobalActivity {
   /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
   /**
-   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
-   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   * Every type script code the indexer recognises that ran in the transaction, each once (C7: the
+   * row's `recognized_type_codes`, on a committed row and a pool row alike). With `typeCalls` (the
+   * unrecognised ones, with their args) they are every type script code that ran.
    */
-  itemTypes: ActivityItemType[] | null;
-  itemTypesUnread: string | null;
+  recognizedTypes: RecognizedType[];
   participants: ParticipantInfo[];
 }
 
@@ -4004,7 +4010,7 @@ export type {
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
-  ActivityItemType,
+  RecognizedType,
   ActivityProtocolAction,
   ParticipantInfo,
   ParticipantRef,
@@ -4030,7 +4036,7 @@ export type {
   FiberChannelQueryParams,
 };
 
-export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_CELLBASE };
+export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_CELLBASE, TAG_TYPE_CALL };
 
 export interface LabelCount {
   label: string;

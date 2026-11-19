@@ -43,15 +43,14 @@ const activity = {
   ],
   typeCalls: [],
   lockCalls: [],
-  // the Nervos DAO's type script, the code a DAO step carries (the P3 follow-up's itemTypes)
-  itemTypes: [
+  // the Nervos DAO's type script, the recognised code that ran in a DAO step (C7)
+  recognizedTypes: [
     {
       typeCodeHash: '0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e',
       typeHashType: 'type',
       scriptName: 'Nervos DAO',
     },
   ],
-  itemTypesUnread: null,
   protocolActions: [
     {
       protocol: 'dao',

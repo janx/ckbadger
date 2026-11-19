@@ -46,8 +46,7 @@ const activity: GlobalActivity = {
   ],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [],
-  itemTypesUnread: null,
+  recognizedTypes: [],
   protocolActions: [],
 };
 const transaction: Transaction = {

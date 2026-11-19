@@ -71,8 +71,7 @@ describe('the participant line says "occupied ±N B"', () => {
           protocolActions: [],
           typeCalls: [],
           lockCalls: [],
-          itemTypes: [],
-          itemTypesUnread: null,
+          recognizedTypes: [],
           participants: [party, { ...party, lockHash: `0x${'02'.repeat(32)}`, ckbDelta: '1' }],
         }}
       />

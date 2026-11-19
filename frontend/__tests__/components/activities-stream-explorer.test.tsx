@@ -30,6 +30,8 @@ vi.mock('@/lib/api', async (importOriginal) => ({
   TAG_OBJECT: 2,
   TAG_IDENTITY: 4,
   TAG_CELLBASE: 32,
+  // C7: the classifier reads a party's TAG_TYPE_CALL (a recognised script that moved nothing)
+  TAG_TYPE_CALL: 64,
 }));
 
 /**
@@ -69,8 +71,7 @@ function makeActivity(
     isCellbase: overrides.isCellbase ?? false,
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants,
   };

@@ -69,8 +69,7 @@ describe('an activity row names a lock on the default code hash by data as anoth
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
+      recognizedTypes: [],
       participants: [party(BY_DATA_ADDRESS, 'Default Lock', '01', '-100000000')],
     };
     const { container } = render(<ActivityRow activity={row} />);
@@ -253,8 +252,7 @@ describe('a place that may name no lock leaves the part out', () => {
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
+      recognizedTypes: [],
       participants: [
         party(DEFAULT_ADDRESS, 'Default Lock', '01', '-100008888'),
         party(seededAddress('recvr1', JOYID_CODE_HASH), 'JoyID', '02', '100000000'),

@@ -53,8 +53,7 @@ function row(over: Partial<ActivityRowData> = {}): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [
       {
         address: seededAddress('q3q7ue'),

@@ -308,8 +308,7 @@ describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
+      recognizedTypes: [],
       participants: [
         {
           address: seededAddress('usdc1'),

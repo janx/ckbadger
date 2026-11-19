@@ -37,8 +37,7 @@ describe('a refused lock fails its part, in its place', () => {
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
+      recognizedTypes: [],
       participants: [
         {
           address,
@@ -86,8 +85,7 @@ describe('a refused lock fails its part, in its place', () => {
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
-      itemTypesUnread: null,
+      recognizedTypes: [],
       participants: [
         {
           address,

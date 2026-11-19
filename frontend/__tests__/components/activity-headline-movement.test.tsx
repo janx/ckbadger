@@ -119,7 +119,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       protocolActions: [ringRelink],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
+      recognizedTypes: [],
       parties: [],
     })
   ).toBe(
@@ -134,7 +134,7 @@ it('names a .cell ring_relink as the ring pointer it changed, without throwing',
       protocolActions: [ringRelink],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
+      recognizedTypes: [],
       parties: [],
     })
   );

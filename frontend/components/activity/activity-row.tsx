@@ -32,7 +32,7 @@ import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
 import type {
-  ActivityItemType,
+  RecognizedType,
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
@@ -396,10 +396,10 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
 }
 
 /**
- * The code a run's items and its DAO step carry (`itemTypes`), as its folded row names it: each code
- * once, by the registry's name (else its short code hash), a link to its page.
+ * A recognised type script code that ran (`recognizedTypes`, C7), as a row's head and a folded run's
+ * name it: each code once, by the registry's name (else its short code hash), a link to its page.
  */
-function itemTypeRef(t: ActivityItemType): CallRef {
+function recognizedTypeRef(t: RecognizedType): CallRef {
   const name = formatScriptRef(
     { codeHash: t.typeCodeHash, scriptName: t.scriptName ?? undefined },
     'row'
@@ -715,17 +715,17 @@ export function rowReadFails(activity: ActivityBody): boolean {
 
 /**
  * The tx-level facts of an activity, from the one event classification (T7): the protocol actions
- * (`actions`, drawn inline or as a list by `ActivityRow`), then the type calls and the lock calls by
- * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
- * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
+ * (`actions`, drawn inline or as a list by `ActivityRow`), then the recognised type codes that ran
+ * (`recognizedTypes`, C7: "Script call · Simple UDT" for a wallet merging its own sUDT cells), the
+ * type calls and the lock calls by name ("lock …"), their args in each name's hover, a long call run
+ * folded behind "+N more" (`calls`): one rule for a row's head and a folded run's. A protocol action
+ * that cannot be read is an error line under the headline (`errors`).
  */
 function activityDetails(
-  activity: ActivityBody & { txHash: string },
+  activity: ActivityBody & { txHash: string; recognizedTypes: readonly RecognizedType[] },
   showScriptDetails: boolean,
   fold: HeadFold,
-  args = true,
-  /** A folded run's head: the code its rows' items carry, named first (`itemTypes`). */
-  itemTypes: readonly ActivityItemType[] = []
+  args = true
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
@@ -759,7 +759,7 @@ function activityDetails(
     });
   });
   const runs: ScriptRun[] = [
-    { kind: 'type', parts: callNames(itemTypes.map(itemTypeRef), args) },
+    { kind: 'type', parts: callNames(activity.recognizedTypes.map(recognizedTypeRef), args) },
     ...(showScriptDetails
       ? [
           { kind: 'type' as const, parts: callNames(types.map(typeCallRef), args) },
@@ -1492,19 +1492,16 @@ export function FoldedActivityRow({
     // every committed transaction but a cellbase has an input: "0 senders" cannot be
     if (senders < 1) throw new Error(`transaction ${first.txHash}: a folded run names no sender`);
   }
-  if (first.itemTypes === null)
-    throw new Error(`transaction ${first.txHash}: a folded run's rows state their item types`);
   const [namesOpen, setNamesOpen] = useState(false);
   const namesId = useId();
-  // the script code is the same on every row of a run: the first row's item types and calls, by
-  // name, are the run's (with no row's count or args), by a row's head's one rule (`headScripts`):
-  // "Token transfer · Simple UDT"
+  // the script code is the same on every row of a run: the first row's recognised codes and calls,
+  // by name, are the run's (with no row's count or args), by a row's head's one rule
+  // (`headScripts`): "Token transfer · Simple UDT"
   const { calls: details } = activityDetails(
     first,
     showScriptDetails,
     { open: namesOpen, onToggle: setNamesOpen, controls: namesId },
-    false,
-    first.itemTypes
+    false
   );
   const transactions = formatCount(rows.length, 'transaction');
   const toggle = (

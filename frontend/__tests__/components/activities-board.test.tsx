@@ -35,8 +35,7 @@ const activity = (
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [],
-  itemTypesUnread: null,
+  recognizedTypes: [],
   participants: [
     {
       address: seededAddress('wlng7r'),

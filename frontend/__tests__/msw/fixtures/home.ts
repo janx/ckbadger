@@ -341,8 +341,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
       },
     ],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [
       {
         address: ADDRS[i % 2],
@@ -414,8 +413,7 @@ function sample(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     ...overrides,
   };
 }

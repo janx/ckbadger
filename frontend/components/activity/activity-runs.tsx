@@ -42,10 +42,11 @@ export interface FeedRow {
  * protocol actions and the code its items carry and its scripts called; and its parties, which a
  * run counts (the row's own, unless the feed knows more of them: the address page's other
  * parties). Null for a row that cannot read one of its protocol actions (`rowReadFails`): it
- * reports the error in its place, so it is never folded (lane B4 fix round, review NOTE 1); and for
- * a committed row whose item types the API could not state (`itemTypesUnread`): its code is not
- * known, so it stands alone (the lead's ruling on the item types' security read). A pending row
- * carries none and folds with nothing anyway.
+ * reports the error in its place, so it is never folded (lane B4 fix round, review NOTE 1). Every
+ * other row has one, a committed row and a pending row alike: its recognised codes are read from
+ * its row (`recognizedTypes`, C7), never resolved per item, so no row stands alone for codes it
+ * cannot say (a pending row folds with nothing anyway). A row that states no list is refused: an
+ * API older than the page.
  */
 export function runSubject(
   activity: ActivityRowData,
@@ -53,17 +54,10 @@ export function runSubject(
   parties: readonly ParticipantRef[] = activity.participants
 ): RunSubject | null {
   if (rowReadFails(activity)) return null;
-  const pending = activity.blockNumber === null;
-  // the API states the field on every row (null where it has none): one without it is not this API
-  if (activity.itemTypes === undefined)
-    throw new Error(`transaction ${activity.txHash}: the row states no itemTypes field`);
-  if (!pending && activity.itemTypes === null) {
-    if (activity.itemTypesUnread === null)
-      throw new Error(
-        `transaction ${activity.txHash}: a committed row with no item types says no why`
-      );
-    return null;
-  }
+  // the API states the list on every row (empty where no recognised code ran): a row without it,
+  // or with no list, is not this API
+  if (!Array.isArray(activity.recognizedTypes))
+    throw new Error(`transaction ${activity.txHash}: the row states no recognizedTypes list`);
   return {
     title,
     txHash: activity.txHash,
@@ -72,7 +66,7 @@ export function runSubject(
     protocolActions: activity.protocolActions,
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
-    itemTypes: activity.itemTypes ?? [],
+    recognizedTypes: activity.recognizedTypes,
     parties,
   };
 }

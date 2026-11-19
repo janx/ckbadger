@@ -41,8 +41,7 @@ function activity(participants: ParticipantInfo[]): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants,
   };
 }

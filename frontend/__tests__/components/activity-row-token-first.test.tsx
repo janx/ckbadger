@@ -44,8 +44,7 @@ const swap: GlobalActivity = {
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [],
-  itemTypesUnread: null,
+  recognizedTypes: [],
   participants: [
     // pays the page's token and another, and the CKB
     party('payer1', '-276411026713', [

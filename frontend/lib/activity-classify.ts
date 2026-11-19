@@ -5,7 +5,7 @@ import type {
   ActivityTypeCall,
   GlobalActivity,
 } from '@/lib/api';
-import { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE } from '@/lib/api';
+import { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE, TAG_TYPE_CALL } from '@/lib/api';
 
 /** Interpretation needs only transaction contents, including before a block is known. */
 export type ActivityBody = Readonly<
@@ -166,6 +166,20 @@ export function classifyActivity<T extends ActivityBody>(activity: T): Classifie
       activity,
       primaryItemDelta: null,
       primaryTypeCall: activity.typeCalls[0],
+      primaryLockCall,
+      primaryProtocolAction: null,
+    };
+  }
+
+  // Layer 2 (C7): a recognised type script ran and moved no item and no DAO step (a wallet merging
+  // its own token cells): the indexer sets the party's TAG_TYPE_CALL, as for an unrecognised call,
+  // and the code is in the row's `recognizedTypes`. A script call, with no unrecognised call.
+  if (tags & TAG_TYPE_CALL) {
+    return {
+      displayType: 'typeCall',
+      activity,
+      primaryItemDelta: null,
+      primaryTypeCall: null,
       primaryLockCall,
       primaryProtocolAction: null,
     };

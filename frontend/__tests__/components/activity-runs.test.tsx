@@ -14,9 +14,9 @@ import { AssetFeed } from '@/components/asset/asset-feed';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
-import { api } from '@/lib/api';
+import { api, TAG_TYPE_CALL } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
-import live from '@/__tests__/fixtures/activities-live-mainnet.json';
+import { liveFeeds } from '@/__tests__/utils/live-activities';
 import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { SCREENS } from '@/__tests__/utils/tailwind-box';
 import resolveConfig from 'tailwindcss/resolveConfig';
@@ -74,8 +74,7 @@ function oracle(n: number, seed: string, args: string, secondsAgo: number): Glob
     protocolActions: [],
     typeCalls: [call('.bit Time Index State', '3a'), call('.bit Time Info', '9e')],
     lockCalls: [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     participants: [oracleParty(seed)],
   };
 }
@@ -89,8 +88,7 @@ const transfer: GlobalActivity = {
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [],
-  itemTypesUnread: null,
+  recognizedTypes: [],
   participants: [
     { ...oracleParty('sendr1'), ckbDelta: '-100000000' },
     { ...oracleParty('recvr1'), ckbDelta: '99970000', sent: false },
@@ -230,7 +228,7 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   });
 
   // The live feeds (re-captured for the P3 follow-up through this lane's API build over the live
-  // mainnet stores on 2026-11-19, with itemTypes; the capture is said in the fixture): the first
+  // mainnet stores on 2026-11-19, with the item types of then; the capture is said in the fixture): the first
   // page of /activities, and the token feed's sUDT transfers, whose runs name their standard.
   // The live capture (2026-11-19) predates the senders bit: its parties do not say whether they
   // sent. Until it is re-captured over a re-synced store, these tests mark as senders the parties
@@ -238,18 +236,16 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   // (exact that way round; a sender whose CKB did not fall is not marked, so the counts pinned
   // below are of those parties).
   const feeds = Object.fromEntries(
-    Object.entries((live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds).map(
-      ([feed, rows]) => [
-        feed,
-        rows.map((a) => ({
-          ...a,
-          participants: a.participants.map((p) => ({
-            ...p,
-            sent: BigInt(p.ckbDelta) < BigInt(0),
-          })),
+    Object.entries(liveFeeds()).map(([feed, rows]) => [
+      feed,
+      rows.map((a) => ({
+        ...a,
+        participants: a.participants.map((p) => ({
+          ...p,
+          sent: BigInt(p.ckbDelta) < BigInt(0),
         })),
-      ]
-    )
+      })),
+    ])
   );
   const said = (el: Element) =>
     el.getAttribute('data-role') === 'activity-run'
@@ -356,6 +352,86 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     await screen.findAllByRole('article');
     const runs = [...document.querySelectorAll('[data-role="activity-run"]')];
     expect(runs.map((r) => r.getAttribute('data-run-count'))).toEqual(['2', '2']);
+  });
+});
+
+// C7 (resync/type-codes): the API states on every row the recognised type script codes that ran
+// (`recognizedTypes`, read from the row), where it stated the items' codes or why it could not
+// (`itemTypes`, `itemTypesUnread`). A wallet merging its own sUDT cells moves no item: it read as
+// a CKB transfer with no code, and folded with the plain transfers around it. Its code is on the
+// row now and its party carries TAG_TYPE_CALL: it is a script call that names the code that ran.
+describe('a row’s recognised codes (C7)', () => {
+  const SUDT = {
+    typeCodeHash: '0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5',
+    typeHashType: 'type',
+    scriptName: 'Simple UDT',
+  };
+  /** A wallet merging its own sUDT cells: the code ran, no token changed hands. */
+  const merge = (n: number): GlobalActivity => ({
+    ...transfer,
+    txHash: `0x${String(n).repeat(32)}`,
+    blockNumber: 21047700 - n,
+    timestamp: String(NOW - 600_000 - n * 1000),
+    recognizedTypes: [SUDT],
+    participants: [{ ...oracleParty('mergr1'), tags: TAG_TYPE_CALL }],
+  });
+  const plain = (n: number): GlobalActivity => ({
+    ...transfer,
+    txHash: `0x${String(n).repeat(32)}`,
+    blockNumber: 21047700 - n,
+    timestamp: String(NOW - 600_000 - n * 1000),
+  });
+  const said = (el: Element) =>
+    el.getAttribute('data-role') === 'activity-run'
+      ? `${el.querySelector('[data-role="head-main"]')!.textContent!.replace(/\s+/g, ' ')} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
+      : el.querySelector('[data-role="head-main"]')!.textContent!.replace(/\s+/g, ' ');
+  const drawnFeed = async (rows: GlobalActivity[]) => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page(rows));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    return [...document.querySelectorAll('[data-role="activity-run"], article[data-feed-row]')].map(
+      said
+    );
+  };
+
+  it('never folds a wallet’s sUDT merge with the plain CKB transfers around it, and names its code', async () => {
+    expect(await drawnFeed([plain(11), merge(12), plain(13)])).toEqual([
+      'CKB Transfer',
+      'Script call · Simple UDT',
+      'CKB Transfer',
+    ]);
+  });
+
+  it('folds merges of one code into a run whose head names the code that ran', async () => {
+    expect(await drawnFeed([plain(11), merge(12), merge(13), merge(14)])).toEqual([
+      'CKB Transfer',
+      'Script call · Simple UDT | all 3 transactions ↓ · 1 sender',
+    ]);
+  });
+
+  // runSubject's refusals change with the field: a row WITHOUT the list (or with no list, null) is
+  // refused, an API older than the page; there is no row "whose codes the stores cannot say" any
+  // more (the list is read from the row, never resolved per item), so no committed row stands
+  // alone for its codes: each has a subject that compares them.
+  it('refuses a row that states no list of recognised codes, naming the transaction', () => {
+    // the row as an API older than the page sends it: no list (a missing key reads undefined)
+    const older = { ...transfer, recognizedTypes: undefined } as unknown as GlobalActivity;
+    expect(() => runSubject(older, 'CKB Transfer')).toThrow(
+      `transaction ${transfer.txHash}: the row states no recognizedTypes list`
+    );
+    expect(() =>
+      runSubject(
+        { ...transfer, recognizedTypes: null } as unknown as GlobalActivity,
+        'CKB Transfer'
+      )
+    ).toThrow(`transaction ${transfer.txHash}: the row states no recognizedTypes list`);
+  });
+
+  it('gives every row its subject by the codes it states, a committed row and a pool row alike', () => {
+    expect(runSubject(merge(12), 'Script call')?.recognizedTypes).toEqual([SUDT]);
+    expect(runSubject(plain(11), 'CKB Transfer')?.recognizedTypes).toEqual([]);
+    const pending = { ...merge(12), blockNumber: null, timestamp: null };
+    expect(runSubject(pending, 'Script call')?.recognizedTypes).toEqual([SUDT]);
   });
 });
 

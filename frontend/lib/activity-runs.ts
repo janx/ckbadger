@@ -21,9 +21,10 @@
  *    outputs were two runs, which no reader would call two things done). Not the args: the same
  *    code with other args is the same (the three oracles' 0x00, 0x01, 0x02; two tokens of one
  *    standard). Three lists, as the API states them:
- *    - `itemTypes`, the type script of every token, object and identity the row moved and the
- *      Nervos DAO's, as the indexer classified each item (the page-phase review's MUST-1: an
- *      item's type is never a call, so without them an sUDT and an xUDT transfer were one run);
+ *    - `recognizedTypes`, every type script code the indexer recognises that ran, read from the
+ *      row (C7): the codes of the items that changed hands and of a recognised script that moved
+ *      nothing, so a wallet merging its own sUDT cells never folds with a plain CKB transfer, and
+ *      an sUDT and an xUDT transfer are two runs (the page-phase review's MUST-1);
  *    - `typeCalls`, the type scripts the indexer does not recognise;
  *    - `lockCalls`, the non-standard locks ATTACHED to the row's outputs. An output's lock does
  *      not run: these are not the locks the transaction ran. The locks that ran, its inputs', are
@@ -68,8 +69,8 @@ export interface RunSubject {
   protocolActions: readonly { protocol: string; action: string }[];
   typeCalls: readonly { typeCodeHash: string; typeHashType: string }[];
   lockCalls: readonly { lockCodeHash: string; lockHashType: string }[];
-  /** Its items' and its DAO step's type scripts, each code once (the API's `itemTypes`). */
-  itemTypes: readonly { typeCodeHash: string; typeHashType: string }[];
+  /** The recognised type script codes that ran, each once (the API's `recognizedTypes`). */
+  recognizedTypes: readonly { typeCodeHash: string; typeHashType: string }[];
   /** The row's parties (the feed's: a feed may know more of them than the row draws), counted. */
   parties: readonly RunParty[];
 }
@@ -93,7 +94,7 @@ export function runKey(s: RunSubject): string {
     s.isCellbase ? 'cellbase' : 'transaction',
     s.title,
     multiset(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
-    codeSet(s.itemTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
+    codeSet(s.recognizedTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.typeCalls.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     codeSet(s.lockCalls.map((c) => `${c.lockCodeHash}|${c.lockHashType}`)),
   ]);

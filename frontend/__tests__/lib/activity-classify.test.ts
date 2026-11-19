@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { GlobalActivity } from '@/lib/api';
+import { TAG_TYPE_CALL } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { activityHeadline } from '@/components/activity-event-row';
 
 function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
   return {
@@ -11,8 +13,7 @@ function makeActivity(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     isCellbase: overrides.isCellbase ?? false,
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
-    itemTypes: [],
-    itemTypesUnread: null,
+    recognizedTypes: [],
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants ?? [
       {
@@ -167,6 +168,34 @@ describe('classifyActivity', () => {
       })
     );
     expect(result.displayType).toBe('typeCall');
+  });
+
+  // C7 (resync/type-codes): a recognised type script that ran for a party and moved none of its
+  // items, no DAO step (a wallet merging its own sUDT cells), sets the party's TAG_TYPE_CALL in the
+  // indexer, the bit an unrecognised call sets; its transaction is a script call, which the global
+  // kind already says (Script), never a CKB transfer. It has no unrecognised call to name.
+  it('classifies a recognised type that moved nothing (the party’s TAG_TYPE_CALL) as a script call', () => {
+    // the indexer's bit 6 (crates/ckbadger-store/src/types.rs)
+    expect(TAG_TYPE_CALL).toBe(1 << 6);
+    const merge = makeActivity({
+      participants: [
+        {
+          address: 'ckb1qtest',
+          lockHash: '0xaa',
+          lockHashPrefix: null,
+          sent: true,
+          roles: [],
+          ckbDelta: '-30000',
+          usedDelta: '0',
+          itemDeltas: [],
+          tags: TAG_TYPE_CALL,
+        },
+      ],
+    });
+    const result = classifyActivity(merge);
+    expect(result.displayType).toBe('typeCall');
+    expect(result.primaryTypeCall).toBeNull();
+    expect(activityHeadline(merge)).toBe('Script call');
   });
 
   it('classifies CKB transfer as fallback', () => {
