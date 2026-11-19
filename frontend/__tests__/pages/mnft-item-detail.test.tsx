@@ -25,6 +25,7 @@ import {
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -218,6 +219,9 @@ describe('MnftItemDetailPage', () => {
         )
     ).toBe(true);
     expect(screen.getByRole('heading', { name: 'm-NFT token ID' })).toBeInTheDocument();
+    // lane c2-finish (item 4, and rulings round 1): the issuer's id copies by the icon after it,
+    // its answer out of the line's flow with nothing above it to clip it
+    expectAnswerUnclipped(screen.getByRole('button', { name: 'copy issuer id' }));
     expect(
       screen.getByRole('heading', { name: 'm-nft cell data · version 1' })
     ).toBeInTheDocument();

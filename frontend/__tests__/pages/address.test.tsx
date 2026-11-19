@@ -44,6 +44,7 @@ import {
 } from '@/__tests__/msw/fixtures/address';
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -276,10 +277,15 @@ describe('Address v3', () => {
     // Re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
     // icon in the quiet ink with its answer in words beside it, the pair kept whole beside the id
     // (was a bare button whose name said what happened, "Address copied", and drew a ✓).
+    // Re-pinned again (lane c2-finish, rulings round 1): the answer is no longer beside the icon in
+    // the line (it took 6 px and its words, 43.2 or 72 px, from the address's line while it
+    // stood); it hangs under the whole id out of the line's flow, the copy the row's full height.
     const copy = screen.getByRole('button', { name: 'copy address' });
     expect(copy).toHaveClass('text-text-dim', 'hover:text-jade');
-    expect(copy.parentElement).toHaveClass('shrink-0');
-    expect(within(copy.parentElement!).getByRole('status')).toBeEmptyDOMElement();
+    expect(copy.parentElement).toHaveClass('shrink-0', 'self-stretch');
+    const answer = within(copy.parentElement!).getByRole('status');
+    expect(answer).toBeEmptyDOMElement();
+    expect(answer).toHaveClass('absolute', 'top-full');
   });
 
   // The seals by kind (C3 for the address's cells): the Live cells tab leads every row with the
@@ -1212,6 +1218,9 @@ describe('Address v3', () => {
     // re-pinned (lane c2-chain): the library's CopyButton keeps its name and answers in words
     // beside it, `copied`, heard as a status (it renamed itself "Address copied")
     const copy = screen.getByRole('button', { name: 'copy address' });
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(copy);
     fireEvent.click(copy);
     await waitFor(() =>
       expect(within(copy.parentElement!).getByRole('status')).toHaveTextContent(/^copied$/)

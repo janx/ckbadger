@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/te
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { HexMap } from '@/components/ui/hex-map';
 import { fullText } from '@/__tests__/utils/full-text';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 
 const fields = [
   { name: 'Version', start: 0, end: 1, valueHex: '0x01' },
@@ -348,6 +349,9 @@ describe('protocol byte evidence', () => {
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     const value = '0x' + 'AB'.repeat(300);
     const { rerender } = render(<ProtocolEvidence title="Copy" dataHex={value} fields={[]} />);
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(screen.getByRole('button', { name: 'copy raw bytes' }));
     fireEvent.click(screen.getByRole('button', { name: 'copy raw bytes' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(value));
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^copied$/));

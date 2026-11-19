@@ -1,4 +1,5 @@
 import { expect } from 'vitest';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 
 /**
  * A4 Chrome F3: a full id in a page's head is the head's HeadId — one line where the measured line
@@ -15,4 +16,9 @@ export function expectHeadId(value: string) {
   expect(id.className).not.toMatch(/(^|\s)text-/);
   expect(header.querySelector('.overflow-x-auto')).toBeNull();
   expect(header.querySelector('[data-full-value]')).toBeNull();
+  // lane c2-finish (item 4, and rulings round 1): the copy button after the id, its answer out
+  // of the line's flow with nothing above it to clip it
+  const copy = id.parentElement!.querySelector<HTMLElement>(':scope > span > button');
+  expect(copy, 'the head’s copy button stands after its id').not.toBeNull();
+  expectAnswerUnclipped(copy!);
 }

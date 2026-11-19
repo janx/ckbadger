@@ -82,11 +82,13 @@ function useCharactersPerLine(): [RefObject<HTMLSpanElement | null>, number | nu
  *
  * Copy has one form (lane c2-finish, item 4; the controls board): the id is a value, text in its
  * line's ink, and `copy` (the button's name, `copy block hash`) puts the library's CopyButton after
- * it, 8 px apart, at its first line; it copies the id whole and answers in words beside its icon.
- * The id then measures the line the button leaves it: its box (24 px from 640, 32 below), the 8 px
- * gap and the 6 px before its answer, 38 px or 46. A hash at 13 px keeps the lines it had alone:
- * one at 640 (570 of 608 px holds 514.8) and from md beside a stone, two halves at 390 (312 holds
- * a half's 265.2). A did:ckb (kind `did`) is set as an address is, in equal lines with no prefix.
+ * it, 8 px apart, its icon at the id's first line; it copies the id whole. Its answer takes no room
+ * in the line (lane c2-finish, rulings round 1): the copy stands the row's full height, so the
+ * answer hangs under the whole id, over none of its lines. The id measures the line the button
+ * leaves it, the same whatever the answer says: its box (24 px from 640, 32 below) and the 8 px
+ * gap, 32 px or 40. A hash at 13 px keeps the lines it had alone: one at 640 (576 of 608 px holds
+ * 514.8) and from md beside a stone, two halves at 390 (318 holds a half's 265.2). A did:ckb (kind
+ * `did`) is set as an address is, in equal lines with no prefix.
  */
 export function HeadId({
   value,
@@ -120,7 +122,7 @@ export function HeadId({
   return (
     <span className="flex min-w-0 items-start gap-2">
       {id}
-      <CopyButton value={value} label={copy} className="shrink-0" />
+      <CopyButton value={value} label={copy} className="shrink-0 self-stretch" />
     </span>
   );
 }

@@ -7,6 +7,7 @@ import { server } from '@/__tests__/msw/server';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import UncleDetailPage from '@/app/blocks/[id]/uncles/[index]/client-page';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 
 const params = vi.hoisted(() => ({ current: { id: '8775638', index: '0' } }));
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -72,6 +73,9 @@ describe('Uncle detail page', () => {
     const id = container.querySelector('[data-head-id]') as HTMLElement;
     fireEvent.click(id);
     expect(writeText).not.toHaveBeenCalled();
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(screen.getByRole('button', { name: 'copy uncle hash' }));
     fireEvent.click(screen.getByRole('button', { name: 'copy uncle hash' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(blockUncle.hash));
     expect(blockUncle.hash).toBe(`0x${'ee'.repeat(32)}`);

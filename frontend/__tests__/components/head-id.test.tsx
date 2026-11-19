@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { HeadId } from '@/components/ui/head-id';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { boxPx, gapPx, shrinksAt } from '@/__tests__/utils/tailwind-box';
+import { boxPx, contentPx, gapPx, inFlowAt, shrinksAt } from '@/__tests__/utils/tailwind-box';
 
 /**
  * A full id in a page's head (the lead's ruling a, 2026-11-14, widened to every head by the A4
@@ -290,24 +290,42 @@ describe('HeadId, a full id in a page head', () => {
       expect(row).toHaveClass('flex', 'items-start', 'gap-2');
     });
 
-    it('leaves the id the line less 46 px below 640 and 38 from it', () => {
+    // Re-pinned (lane c2-finish, rulings round 1): the copy's answer is out of the line's flow,
+    // so the id's line is the line less the gap and the box alone, 32 px from 640 and 40 below
+    // (it was 38 and 46: the 6 px gap before the answer, and the answer's words beside the box
+    // while they stood, 43.2 or 72 px more)
+    it('leaves the id the line less 40 px below 640 and 32 from it, whatever the answer says', () => {
       render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       const row = head().parentElement!;
       const button = screen.getByRole('button', { name: 'copy block hash' });
       const copyRoot = button.parentElement!;
-      const taken = (w: number) => gapPx(row, w) + boxPx(button, w)! + gapPx(copyRoot, w);
-      expect([1280, 640, 390, 360].map(taken)).toEqual([38, 38, 46, 46]);
+      const taken = (w: number) => gapPx(row, w) + contentPx(copyRoot, w);
+      expect([1280, 640, 390, 360].map(taken)).toEqual([32, 32, 40, 40]);
+      expect(boxPx(button, 390)).toBe(32);
+      expect(inFlowAt(within(copyRoot).getByRole('status'), 390)).toBe(false);
       expect(shrinksAt(copyRoot, 390)).toBe(false);
     });
 
-    it('keeps a hash at 13 px in the lines it had: one at 640 (570 px of 608), two at 390', () => {
-      // 66 × 7.8 = 514.8 px: 570 holds it; at 390, 358 − 46 = 312 holds a half (34 × 7.8 = 265.2)
-      stubLine(570, 13);
+    // An id in two or three lines stands beside its box: an answer hung under the box alone would
+    // lie over the id's later lines. The copy stands the row's full height, its icon at the
+    // first line, so its answer hangs under the whole id, over none of it.
+    it('hangs the answer under the whole id, the icon at its first line', () => {
+      render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
+      const button = screen.getByRole('button', { name: 'copy block hash' });
+      const copyRoot = button.parentElement!;
+      expect(copyRoot).toHaveClass('self-stretch', 'items-start');
+      expect(copyRoot).not.toHaveClass('items-center');
+      expect(within(copyRoot).getByRole('status')).toHaveClass('top-full');
+    });
+
+    it('keeps a hash at 13 px in the lines it had: one at 640 (576 px of 608), two at 390', () => {
+      // 66 × 7.8 = 514.8 px: 576 holds it; at 390, 358 − 40 = 318 holds a half (34 × 7.8 = 265.2)
+      stubLine(576, 13);
       const one = render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       expect(lines()).toHaveLength(1);
       one.unmount();
       vi.restoreAllMocks();
-      stubLine(312, 13);
+      stubLine(318, 13);
       render(<HeadId value={HASH} kind="hash" copy="copy block hash" />);
       expect(texts()).toEqual([HASH.slice(0, 34), HASH.slice(34)]);
     });

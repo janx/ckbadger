@@ -5,6 +5,7 @@ import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -83,6 +84,9 @@ describe('Cell page against the Cell board', () => {
       Object.assign(navigator, { clipboard: undefined });
       const { unmount } = view();
       const button = await screen.findByRole('button', { name: 'copy out point' });
+      // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+      // its box, and nothing above the copy clips it
+      expectAnswerUnclipped(button);
       await act(async () => {
         fireEvent.click(button);
         await new Promise((resolve) => setTimeout(resolve, 0));
