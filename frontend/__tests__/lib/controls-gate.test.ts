@@ -169,11 +169,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'components/activity/activity-row.tsx': {
     lane: 'p-lists',
     // fold 5 → 4 (the P3 follow-up, the tests review: a protocol list's lines open and fold by
-    // FoldToggle, e03f828f): the four left are "+N more" words inside a line of names, not a list's
-    // way to go under it
-    sites: { fold: 4 },
+    // FoldToggle, e03f828f) → 3 (the lead's final round, items 2 and 3: the head's names fold by
+    // FoldToggle's inline form, one rule for a row's head and a run's)
+    sites: { fold: 3 },
     reason:
-      'inline “+N more” inside a line of names: the head’s calls’, a participant’s objects’ and its phone object count, the participants’ “+N” and its way back; FoldToggle’s box is a list’s way to go under it, for the lead to rule',
+      'a participant’s objects’ “+N more” and its phone object count, the participants’ “+N” and its way back: FoldToggle’s inline and box forms (the lead’s final round, item 3)',
   },
   'components/address/address-holdings.tsx': {
     lane: 'p-chain',
@@ -220,8 +220,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 13 (lane cd-fixes-controls, review-p-tests SHOULD-6: the reader learned a disclosure by hand,
 // and twelve came to light for the page lanes: the activity row 5, the nodes table 4, the address
 // holdings 1, what-moved 1, the advertisement graph 1) → 12 (the merge with the P3 follow-up: the
-// activity row's protocol list folds by FoldToggle, e03f828f)
-const TOLERATED_TOTAL = 12;
+// activity row's protocol list folds by FoldToggle, e03f828f) → 11 (the lead's final round: the
+// head's names fold by FoldToggle's inline form)
+const TOLERATED_TOTAL = 11;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

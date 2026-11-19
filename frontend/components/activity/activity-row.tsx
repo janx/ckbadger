@@ -136,6 +136,7 @@ export function ActivityRowHead({
   layout = 'wrap',
   href,
   details,
+  detailsId,
   age = false,
 }: {
   /** F2 blocks: replaces the default "#block · hash · age" (a block page names the tx index). */
@@ -153,6 +154,8 @@ export function ActivityRowHead({
   href?: string;
   /** T7 (line layout): the tx-level facts after the title, as parts of the head's one list. */
   details?: readonly (ReactNode | DottedGroup)[];
+  /** The id of the element that holds `details`, which the head's names' fold controls. */
+  detailsId?: string;
   /** PA-22: a row of a live list says its age, the date-time its hover; else the date. */
   age?: boolean;
 }) {
@@ -196,7 +199,7 @@ export function ActivityRowHead({
           {headline}
         </span>
       ) : line ? (
-        <span data-role="head-main" className="min-w-0">
+        <span id={detailsId} data-role="head-main" className="min-w-0">
           <Dotted parts={[headline, ...(details ?? [])]} />
         </span>
       ) : (
@@ -267,7 +270,7 @@ export function ActivityRowHead({
   return (
     <>
       {head}
-      <div data-role="head-details" className="text-small leading-row min-w-0">
+      <div id={detailsId} data-role="head-details" className="text-small leading-row min-w-0">
         <Dotted parts={details} />
       </div>
     </>
@@ -286,38 +289,61 @@ function protocolLineKey(pa: ActivityProtocolAction, isPrimary: boolean): string
   );
 }
 
+/** A run of a head's script names: type scripts (a run's item types, the type calls) or locks. */
+interface ScriptRun {
+  kind: 'type' | 'lock';
+  parts: ReactNode[];
+}
+
+/** The fold of a head's script names: open or not, the way to turn it, the names' element. */
+export interface HeadFold {
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  controls: string;
+}
+
 /**
- * A run of calls as parts of the head's list. Over PARTICIPANT_LIMIT, the first five and an
- * explicit "+N more locks" that opens the rest in place (B#26: 29 lock calls, one per line at 390),
- * written after the last name shown, so it never stands alone after a separator.
+ * The scripts a head names, by ONE rule for a row's head and a folded run's (the lead's final
+ * round, item 2: "the same list of the same things"): one list, in its runs' order (a run's item
+ * types first, then the type calls, then the lock calls), of at most PARTICIPANT_LIMIT names, six;
+ * over six, the first five and "+N more locks" (types, scripts: what the fold holds), the inline
+ * fold that opens the rest in place and folds it back (B#26: 29 lock calls, one per line at 390).
+ * The fold is written after the last name shown, so it never stands alone after a separator.
  */
-function foldedCalls(
-  parts: ReactNode[],
-  noun: 'types' | 'locks',
-  open: boolean,
-  onOpen: () => void
-): ReactNode[] {
-  const folded = !open && parts.length > PARTICIPANT_LIMIT;
-  if (!folded) return parts;
-  const shown = parts.slice(0, PARTICIPANT_LIMIT - 1);
-  const last = shown.length - 1;
-  return shown.map((part, i) =>
-    i < last ? (
-      part
-    ) : (
-      <>
-        {part}{' '}
-        <button
-          type="button"
-          aria-expanded={false}
-          onClick={onOpen}
-          className="text-interactive hover:text-jade whitespace-nowrap bg-transparent transition-colors"
-        >
-          +{parts.length - shown.length} more {noun}
-        </button>
-      </>
-    )
-  );
+function headScripts(runs: readonly ScriptRun[], fold: HeadFold): DottedGroup[] {
+  const total = runs.reduce((n, r) => n + r.parts.length, 0);
+  const foldable = total > PARTICIPANT_LIMIT;
+  const keep = foldable && !fold.open ? PARTICIPANT_LIMIT - 1 : total;
+  const held = new Set<ScriptRun['kind']>();
+  let before = 0;
+  // one group a run in both states (an empty one draws nothing), so the fold's group keeps its
+  // place in the head's list and stays the same element as the names open and fold
+  const groups = runs.map((r) => {
+    const take = Math.max(0, Math.min(r.parts.length, keep - before));
+    before += r.parts.length;
+    if (take < r.parts.length) held.add(r.kind);
+    return detailRun(r.parts.slice(0, take));
+  });
+  if (!foldable) return groups;
+  const noun = held.size === 1 ? [...held][0] : 'script';
+  return [
+    ...groups,
+    // after the last name shown, joined to it: never alone after a separator
+    dottedGroup(
+      [
+        <FoldToggle
+          key="fold"
+          form="inline"
+          open={fold.open}
+          count={total - (PARTICIPANT_LIMIT - 1)}
+          singular={noun}
+          controls={fold.controls}
+          onToggle={fold.onToggle}
+        />,
+      ],
+      { role: 'names-fold', className: DETAIL, joined: true }
+    ),
+  ];
 }
 
 /** A called script as the row names it (T7): its name, its page, and the call with its full args. */
@@ -696,8 +722,10 @@ export function rowReadFails(activity: ActivityBody): boolean {
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean,
-  folds: { types: boolean; locks: boolean; open: (run: 'types' | 'locks') => void },
-  args = true
+  fold: HeadFold,
+  args = true,
+  /** A folded run's head: the code its rows' items carry, named first (`itemTypes`). */
+  itemTypes: readonly ActivityItemType[] = []
 ): {
   actions: ProtocolActionView[];
   primaryAction: string | null;
@@ -730,24 +758,20 @@ function activityDetails(
       facts,
     });
   });
-  const calls: DottedGroup[] = [];
-  if (showScriptDetails && types.length > 0)
-    calls.push(
-      detailRun(
-        foldedCalls(callNames(types.map(typeCallRef), args), 'types', folds.types, () =>
-          folds.open('types')
-        )
-      )
-    );
-  if (showScriptDetails && locks.length > 0)
-    // each name says it is a lock (`lockNoun`): "JoyID lock", "lock 0x9b9b…9b9b"
-    calls.push(
-      detailRun(
-        foldedCalls(callNames(locks.map(lockCallRef), args), 'locks', folds.locks, () =>
-          folds.open('locks')
-        )
-      )
-    );
+  const runs: ScriptRun[] = [
+    { kind: 'type', parts: callNames(itemTypes.map(itemTypeRef), args) },
+    ...(showScriptDetails
+      ? [
+          { kind: 'type' as const, parts: callNames(types.map(typeCallRef), args) },
+          // each name says it is a lock (`lockNoun`): "JoyID lock", "lock 0x9b9b…9b9b"
+          { kind: 'lock' as const, parts: callNames(locks.map(lockCallRef), args) },
+        ]
+      : []),
+  ];
+  const calls = headScripts(
+    runs.filter((r) => r.parts.length > 0),
+    fold
+  );
   return {
     actions,
     primaryAction: primary ? `${primary.protocol}:${primary.action}` : null,
@@ -1269,10 +1293,12 @@ export function ActivityRow({
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const [openRuns, setOpenRuns] = useState({ types: false, locks: false });
+  const [namesOpen, setNamesOpen] = useState(false);
+  const namesId = useId();
   const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails, {
-    ...openRuns,
-    open: (run) => setOpenRuns((runs) => ({ ...runs, [run]: true })),
+    open: namesOpen,
+    onToggle: setNamesOpen,
+    controls: namesId,
   });
   // Lane F follow-up 2: over PARTICIPANT_LIMIT lines the run is a list under the head; two to six
   // stay inline while the rendered head stays one line (`headIsOneLine`, measured once per
@@ -1318,6 +1344,7 @@ export function ActivityRow({
         // headline stays text, which also keeps a headline with links of its own unnested.
         href={evidence === undefined ? `/tx/${activity.txHash}` : undefined}
         details={runs}
+        detailsId={namesId}
         hash={activity.txHash}
         blockNumber={activity.blockNumber}
         timestamp={activity.timestamp}
@@ -1442,19 +1469,18 @@ export function FoldedActivityRow({
     throw new Error(`transaction ${first.txHash}: a folded run names no participant`);
   if (first.itemTypes === null)
     throw new Error(`transaction ${first.txHash}: a folded run's rows state their item types`);
-  const [openCalls, setOpenCalls] = useState({ types: false, locks: false });
+  const [namesOpen, setNamesOpen] = useState(false);
+  const namesId = useId();
   // the script code is the same on every row of a run: the first row's item types and calls, by
-  // name, are the run's (with no row's args in their hover): "Token transfer · Simple UDT"
-  const { calls } = activityDetails(
+  // name, are the run's (with no row's count or args), by a row's head's one rule (`headScripts`):
+  // "Token transfer · Simple UDT"
+  const { calls: details } = activityDetails(
     first,
     showScriptDetails,
-    { ...openCalls, open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })) },
-    false
+    { open: namesOpen, onToggle: setNamesOpen, controls: namesId },
+    false,
+    first.itemTypes
   );
-  const details =
-    first.itemTypes.length > 0
-      ? [detailRun(callNames(first.itemTypes.map(itemTypeRef), false)), ...calls]
-      : calls;
   const transactions = formatCount(rows.length, 'transaction');
   const toggle = (
     <FoldToggle
@@ -1475,6 +1501,7 @@ export function FoldedActivityRow({
         layout="line"
         title={title}
         details={details}
+        detailsId={namesId}
         hash={first.txHash}
         blockNumber={first.blockNumber}
         timestamp={first.timestamp}
