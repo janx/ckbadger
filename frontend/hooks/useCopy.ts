@@ -7,17 +7,17 @@ export const COPIED_MS = 1500;
 
 /**
  * The one copy path (A4 review 3): the controls that copy a value and show it for a moment copy
- * through it (HexCode, HexDisplay, a head's HeadId, the transaction page's and the cell
- * page's copy buttons). Three that say a failure in words of their own (the address page's copy,
- * the protocol evidence's, the crash page's report) keep their handlers for the controls lane.
- * `copy()` writes `text` and resolves whether it did; `copied` is true for COPIED_MS after a copy
- * that worked, and a second copy starts that over.
+ * through it (HexCode, HexDisplay, a head's HeadId, and the controls library's CopyButton, which
+ * the address, transaction, cell and crash pages draw). The protocol evidence's copy, which says a
+ * failure in words of its own, keeps its handler for its placement lane. `copy()` writes `text`
+ * and resolves whether it did; `copied` is true for COPIED_MS after a copy that worked, and a
+ * second copy starts that over.
  *
- * A copy that cannot work says nothing: where there is no clipboard (a page served over plain HTTP
- * on a LAN address has no `navigator.clipboard`) or the browser refuses, `copy()` resolves false,
- * `copied` stays false and nothing is thrown or left rejected. The controls show no state of
- * their own for that today; the boolean is there for the one they will. The timer goes with the
- * component, and a copy that finishes after the component has gone sets nothing.
+ * A copy that cannot work claims nothing: where there is no clipboard (a page served over plain
+ * HTTP on a LAN address has no `navigator.clipboard`) or the browser refuses, `copy()` resolves
+ * false, `copied` stays false and nothing is thrown or left rejected; CopyButton says `not copied`
+ * from that boolean. The timer goes with the component, and a copy that finishes after the
+ * component has gone sets nothing.
  */
 export function useCopy(text: string): { copied: boolean; copy: () => Promise<boolean> } {
   const [copied, setCopied] = useState(false);

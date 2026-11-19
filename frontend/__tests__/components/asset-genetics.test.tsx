@@ -14,6 +14,8 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { CurrentPattern, ObjectGenetics, ItemProtocol } from '@/lib/api';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { boxPx, gapPx, insetsPx, textRunPx } from '@/__tests__/utils/tailwind-box';
+import { NARROWEST_LINE_PX } from '@/lib/control-row-fit';
 import { fullText } from '@/__tests__/utils/full-text';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
@@ -324,6 +326,44 @@ describe('How an object is read (C5)', () => {
 });
 
 describe('Per-version raw protocol and item context', () => {
+  // The coordinator's Chrome check (lane c2-assets): a native select is as wide as its widest
+  // option and, where its well is narrower, clips its value without a mark, and a clipped number is
+  // another number ("block #15,064,08" for #15,064,087). The widest real option — a two-digit
+  // version, an eight-digit block, the current one — and the label it stands after hold the 328 px
+  // line of a 360 px phone, read from the drawn classes (the label, the gap, the well's border, the
+  // select's padding) and the glyphs of lib/type-metrics.ts.
+  it('holds its widest version and its label in a 360 px phone’s line', () => {
+    const protocol: ItemProtocol = structuredClone(didProtocolProducer);
+    const base = protocol.versions[0];
+    protocol.versions = Array.from({ length: 12 }, (_, i) => {
+      const v = structuredClone(base);
+      v.cell.txHash = `0x${(i + 1).toString(16).padStart(64, '0')}`;
+      v.cell.blockNumber = 21_016_890 + i;
+      v.cell.isLive = i === 11;
+      return v;
+    });
+    render(<ItemEvidence protocol={protocol} />);
+    const select = screen.getByRole<HTMLSelectElement>('combobox');
+    const well = select.parentElement!;
+    const pair = well.parentElement!;
+    const label = pair.querySelector('label')!;
+    const widest = Math.max(
+      ...Array.from(select.options, (o) => textRunPx(o.textContent!, select, 360))
+    );
+    const px =
+      boxPx(label, 360)! +
+      gapPx(pair, 360) +
+      insetsPx(well, 360).box +
+      insetsPx(select, 360).box +
+      widest;
+    expect(Math.round(px * 100) / 100).toBeLessThanOrEqual(NARROWEST_LINE_PX);
+    expect(Array.from(select.options, (o) => o.textContent)).toEqual([
+      ...Array.from({ length: 11 }, (_, i) => `${i + 1} · #21,016,${890 + i}`),
+      '12 · #21,016,901 · current',
+    ]);
+    expect(select).toHaveAccessibleName('version');
+  });
+
   it('switches canonical cell evidence while preserving lossless decoded integers', () => {
     const protocol: ItemProtocol = structuredClone(didProtocolProducer);
     const old = structuredClone(protocol.versions[0]);
@@ -332,8 +372,12 @@ describe('Per-version raw protocol and item context', () => {
     old.cell.isLive = false;
     protocol.versions.unshift(old);
     render(<ItemEvidence protocol={protocol} />);
-    expect(screen.getByRole('combobox')).toHaveValue(`${protocol.versions[1].cell.txHash}:0`);
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: `${old.cell.txHash}:0` } });
+    // re-pinned (lane c2-assets): the version select is the controls board's Select, named by the
+    // label it stands after, "version" (it was named by "Cell version" around it, then "cell
+    // version", which with the options' words left them no room on a phone)
+    const version = screen.getByRole('combobox', { name: 'version' });
+    expect(version).toHaveValue(`${protocol.versions[1].cell.txHash}:0`);
+    fireEvent.change(version, { target: { value: `${old.cell.txHash}:0` } });
     expect(screen.getByRole('heading', { name: /version 1/ })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: new RegExp(old.cell.txHash) })).toHaveAttribute(
       'href',

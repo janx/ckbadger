@@ -2,8 +2,8 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { ENTITY_PAGE_SIZE, timePageAt } from '@/lib/pagination';
+import { Pager } from '@/components/ui/pager';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -84,6 +84,13 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     queryKey: ['token-distribution', typeHash],
     queryFn: () => api.getTokenDistribution(typeHash),
   });
+  // where the open page of supply events stands (the route always counts them)
+  const supplyAt = supplyEvents.data
+    ? timePageAt('supply changes', supplyPages.page, {
+        ...supplyEvents.data,
+        total: supplyEventsTotal(supplyEvents.data),
+      })
+    : null;
   const t = token.data;
   if (!t && isNotFoundApiError(token.error)) {
     return (
@@ -415,18 +422,22 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   : undefined
               }
               supplyPager={
-                supplyEvents.data && (
-                  <CursorPagination
-                    total={supplyEventsTotal(supplyEvents.data)}
-                    totalLabel="supply changes"
-                    pageSize={supplyPageSize}
-                    page={supplyPages.page}
-                    currentCount={supplyEvents.data.data.length}
-                    hasMore={supplyEvents.data.hasMore}
-                    hasPrevious={supplyPages.hasPrevious}
-                    onNext={() => supplyPages.goToNext(supplyEvents.data!.nextCursor)}
-                    onPrevious={supplyPages.goToPrevious}
-                  />
+                supplyAt && (
+                  // the controls board's pager: a list in time, newest first
+                  <div className="mt-3">
+                    <Pager
+                      mode="time"
+                      label="supply changes"
+                      order="newest first"
+                      {...supplyAt}
+                      onNewer={supplyPages.hasPrevious ? supplyPages.goToPrevious : undefined}
+                      onOlder={
+                        supplyEvents.data!.hasMore
+                          ? () => supplyPages.goToNext(supplyEvents.data!.nextCursor)
+                          : undefined
+                      }
+                    />
+                  </div>
                 )
               }
               footnote={

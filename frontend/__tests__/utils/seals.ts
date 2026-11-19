@@ -131,6 +131,15 @@ export const ID_LINE_CLASS = 'text-text text-small min-w-0 [overflow-wrap:anywhe
 const VOICE_CLASS = /(^|\s)([a-z-]+:)*text-/;
 
 /**
+ * Whether `element` is part of an id line's copy control: its button, or the words the library's
+ * CopyButton answers in beside it (`copied`, a status in its own 12 px; lane c2-chain).
+ */
+const inCopyControl = (element: HTMLElement): boolean =>
+  element.closest('button') !== null ||
+  (element.getAttribute('role') === 'status' &&
+    element.parentElement?.querySelector(':scope > button[aria-label^="copy "]') != null);
+
+/**
  * `idLine` is a name plate's id line in its one voice (seals by kind, C10 round 2): exactly
  * `ID_LINE_CLASS` (text-small in the reading ink, R3), and nothing in it outside its copy control
  * sets a size or an ink of its own, so the hash, the out point or the address takes the line's
@@ -140,8 +149,7 @@ export function expectOneVoiceIdLine(idLine: HTMLElement): void {
   expect(idLine).toHaveAttribute('data-sealed-id');
   expect(idLine.className).toBe(ID_LINE_CLASS);
   const voiced = Array.from(idLine.querySelectorAll<HTMLElement>('[class]')).filter(
-    (element) =>
-      element.closest('button') === null && VOICE_CLASS.test(element.getAttribute('class')!)
+    (element) => !inCopyControl(element) && VOICE_CLASS.test(element.getAttribute('class')!)
   );
   const markup = voiced.map((element) => element.outerHTML).join(' ');
   expect(voiced, `the id line's pieces set a voice of their own: ${markup}`).toEqual([]);

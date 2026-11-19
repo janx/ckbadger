@@ -7,6 +7,9 @@ import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 beforeEach(mockItemReads);
 // F2 objects (round 2): the 24-card CollectionGallery was replaced by the Newest list; its two
 // tests moved to __tests__/components/collection-objects.test.tsx.
+// Re-pinned (lane c2-assets): the name search is the controls board's search field (a searchbox,
+// was a textbox) and the status is its filter chips, a radio group named "status" whose radios
+// are "all", "live", "inactive" (was a select "Item status" with options All, Live, Inactive).
 it('resets server pagination when search or status changes and preserves item-specific links', async () => {
   vi.mocked(api.getIdentityCollectionItems).mockResolvedValue({
     ...emptyPage([identityItem('bit-cell')]),
@@ -26,7 +29,7 @@ it('resets server pagination when search or status changes and preserves item-sp
       expect.objectContaining({ cursor: 'later' })
     )
   );
-  fireEvent.change(screen.getByRole('textbox', { name: 'Search collection' }), {
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search collection' }), {
     target: { value: 'alice' },
   });
   await waitFor(() =>
@@ -37,9 +40,11 @@ it('resets server pagination when search or status changes and preserves item-sp
       status: 'live',
     })
   );
-  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
-    target: { value: 'recycled' },
-  });
+  fireEvent.click(
+    within(screen.getByRole('radiogroup', { name: 'status' })).getByRole('radio', {
+      name: 'inactive',
+    })
+  );
   await waitFor(() =>
     expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith('bit-cell', {
       limit: 24,
@@ -63,10 +68,17 @@ it('opens on live items, and keeps All and Inactive one choice away', async () =
       status: 'live',
     })
   );
-  const status = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Item status' });
-  expect(status.value).toBe('live');
-  expect(Array.from(status.options, (o) => o.textContent)).toEqual(['All', 'Live', 'Inactive']);
-  fireEvent.change(status, { target: { value: 'all' } });
+  const status = screen.getByRole('radiogroup', { name: 'status' });
+  expect(within(status).getByRole('radio', { name: 'live' })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  expect(
+    within(status)
+      .getAllByRole('radio')
+      .map((r) => r.textContent)
+  ).toEqual(['all', 'live', 'inactive']);
+  fireEvent.click(within(status).getByRole('radio', { name: 'all' }));
   await waitFor(() =>
     expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith(
       'dotbit',
@@ -76,7 +88,7 @@ it('opens on live items, and keeps All and Inactive one choice away', async () =
 });
 
 // Rubbing × Song print, phase 5 (A12): the heading runs on the count the chosen status holds and
-// that status, in the select's own words; a search page has no total, so the status stands alone.
+// that status, in the chips' own words; a search page has no total, so the status stands alone.
 it('runs the items command on the total and the chosen status, the controls beside it', async () => {
   vi.mocked(api.getIdentityCollectionItems).mockImplementation(async (_id, params) =>
     params?.search
@@ -86,21 +98,20 @@ it('runs the items command on the total and the chosen status, the controls besi
   render(<CollectionItems id="dotbit" kind="identity" />);
   const heading = await screen.findByRole('heading', { name: 'Identities 1,204 live' });
   expectPrompt(heading, 'Identities', '1,204 live');
-  // the search and the status select stay the row's actions, outside the heading
+  // the search and the status chips stay the row's actions, outside the heading
   const row = heading.parentElement!;
-  expect(row).toContainElement(screen.getByRole('combobox', { name: 'Item status' }));
-  expect(heading).not.toContainElement(screen.getByRole('textbox', { name: 'Search collection' }));
-  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
-    target: { value: 'recycled' },
-  });
+  const status = screen.getByRole('radiogroup', { name: 'status' });
+  expect(row).toContainElement(status);
+  expect(heading).not.toContainElement(
+    screen.getByRole('searchbox', { name: 'Search collection' })
+  );
+  fireEvent.click(within(status).getByRole('radio', { name: 'inactive' }));
   expect(
     await screen.findByRole('heading', { name: 'Identities 37 inactive' })
   ).toBeInTheDocument();
-  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
-    target: { value: 'all' },
-  });
+  fireEvent.click(within(status).getByRole('radio', { name: 'all' }));
   expect(await screen.findByRole('heading', { name: 'Identities 37 all' })).toBeInTheDocument();
-  fireEvent.change(screen.getByRole('textbox', { name: 'Search collection' }), {
+  fireEvent.change(screen.getByRole('searchbox', { name: 'Search collection' }), {
     target: { value: 'alice' },
   });
   await waitFor(() =>

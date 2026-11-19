@@ -5,13 +5,13 @@ import { api, type TokenDistribution, type TokenHolder } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { TokenAmount } from '@/components/ui/ckb-amount';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
@@ -455,6 +455,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     ].join(' · ');
   const rank = (h: TokenHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(h) + 1;
+  // "All holders" pages through the list; the top ten are one page
+  const holdersAt =
+    all && holders.data ? rankedPageAt('holders', pagination.page, holders.data) : null;
   const holderTable = (
     <div className="min-w-0">
       {holders.data ? (
@@ -515,18 +518,17 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               />
             )}
           />
-          {all && (
-            <CursorPagination
-              page={pagination.page}
-              pageSize={limit}
-              total={holders.data.total ?? undefined}
-              totalLabel="holders"
-              currentCount={holders.data.data.length}
-              hasMore={holders.data.hasMore}
-              hasPrevious={pagination.hasPrevious}
-              onNext={() => pagination.goToNext(holders.data.nextCursor)}
-              onPrevious={pagination.goToPrevious}
-            />
+          {holdersAt && (
+            // the controls board's pager: a ranked list in pages, every figure the response's
+            <div className="mt-3">
+              <Pager
+                mode="pages"
+                label="holders"
+                {...holdersAt}
+                onPrevious={pagination.goToPrevious}
+                onNext={() => pagination.goToNext(holders.data.nextCursor)}
+              />
+            </div>
           )}
         </>
       ) : (

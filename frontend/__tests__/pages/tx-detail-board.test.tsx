@@ -396,19 +396,21 @@ describe('Transaction board, tier 1', () => {
       `Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}. The sender paid a 0.00064119 CKB fee.`
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    const copy = screen.getByRole('button', { name: 'copy transaction hash' });
+    fireEvent.click(copy);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(TX_HASH));
-    // A4 review 3: the one copy path; a copy that worked says so in its title for a moment
+    // A4 review 3: the one copy path; a copy that worked says so for a moment. Re-pinned on
+    // purpose (lane c2-chain): the library's CopyButton says it in words beside the icon, heard
+    // as a status, `copied` (it was the button's title, "Copied"); the name stays lowercase.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveAttribute(
-        'title',
-        'Copied'
-      )
+      expect(within(copy.parentElement!).getByRole('status')).toHaveTextContent(/^copied$/)
     );
   });
 
   // A4 review 3: over plain HTTP on a LAN address there is no clipboard. The copy button copies
-  // through the one copy path: nothing claims a copy, and nothing rejects unhandled.
+  // through the one copy path: nothing claims a copy, and nothing rejects unhandled. Re-pinned on
+  // purpose (lane c2-chain): the library's CopyButton says so, `not copied` (the controls board;
+  // the old button's title stayed "Copy transaction hash" and said nothing).
   it('claims no copy and rejects nothing where the clipboard is absent', async () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);
@@ -417,12 +419,14 @@ describe('Transaction board, tier 1', () => {
       Object.assign(navigator, { clipboard: undefined });
       render(<TransactionDetailPage />);
       await screen.findByRole('heading', { level: 1, name: 'Object transfer' });
-      const button = screen.getByRole('button', { name: 'Copy transaction hash' });
+      const button = screen.getByRole('button', { name: 'copy transaction hash' });
       await act(async () => {
         fireEvent.click(button);
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(button).toHaveAttribute('title', 'Copy transaction hash');
+      const answer = within(button.parentElement!).getByRole('status');
+      expect(answer).toHaveTextContent(/^not copied$/);
+      expect(answer).not.toHaveTextContent(/^copied$/);
       expect(rejections).toEqual([]);
     } finally {
       process.off('unhandledRejection', onRejection);
@@ -453,7 +457,7 @@ describe('Transaction board, tier 1', () => {
     expect(nameBox.children).toHaveLength(2);
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${TX_HASH}$`));
-    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy transaction hash' }));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'copy transaction hash' }));
     // C10 round 2: the id line in the plate's one voice, set by the plate; the hash and its
     // row carry no size or ink of their own (the row was text-small, the hash text-text-dim), and
     // the copy button keeps its own classes
@@ -468,13 +472,12 @@ describe('Transaction board, tier 1', () => {
     expect(hash.className).toBe('relative block min-w-0 flex-1 font-mono');
     expect(hash.querySelector('.overflow-x-auto')).toBeNull();
     expect(hash.parentElement!.className).toBe('flex min-w-0 items-center gap-0.5');
-    expect(screen.getByRole('button', { name: 'Copy transaction hash' })).toHaveClass(
-      'text-text-dim',
-      'hover:text-jade',
-      '-my-3',
-      'h-11',
-      'w-11'
-    );
+    // re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
+    // icon in the quiet ink in a 32 px box below 640 and 24 px from it, kept whole beside the
+    // hash (was a 44 px box pulled 12 px into the line, -my-3 h-11 w-11)
+    const copy = screen.getByRole('button', { name: 'copy transaction hash' });
+    expect(copy).toHaveClass('text-text-dim', 'hover:text-jade', 'h-8', 'w-8', 'sm:h-6', 'sm:w-6');
+    expect(copy.parentElement).toHaveClass('shrink-0');
     // under both: the summary first
     expect(below!.firstElementChild).toBe(screen.getByTestId('tx-summary'));
     expect(nameBox).not.toContainElement(screen.getByTestId('tx-summary'));
@@ -551,7 +554,7 @@ describe('Transaction board, tier 1', () => {
     expect(head.closest('header')).toContainElement(comment);
     // reading order: the identity (the hash and its copy button), the summary, the comment, then
     // the facts
-    expectBefore(screen.getByRole('button', { name: 'Copy transaction hash' }), comment);
+    expectBefore(screen.getByRole('button', { name: 'copy transaction hash' }), comment);
     expectBefore(comment, screen.getByRole('complementary', { name: 'Transaction facts' }));
     // the fee is the one the rail prints, digit for digit
     expect(screen.getByRole('complementary', { name: 'Transaction facts' })).toHaveTextContent(
@@ -579,7 +582,7 @@ describe('Transaction board, tier 1', () => {
     const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
     const before = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
-    const hash = screen.getByRole('button', { name: 'Copy transaction hash' });
+    const hash = screen.getByRole('button', { name: 'copy transaction hash' });
     const cells = screen.getByRole('heading', { name: 'Cells 1 in → 1 out' });
     expect(before(hash, rail)).toBe(true);
     expect(before(rail, table)).toBe(true);

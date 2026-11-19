@@ -24,10 +24,19 @@ const row = (rank: number) => ({
   depositCount: rank,
   sharePercent: '1.00',
 });
-const page = (rows: number[], nextCursor: string | null, tip = 20879205) => ({
+// `limit` is the page size the API answers with: 2 where three depositors take two pages, so a
+// fixture holds together (the controls lane's pager refuses figures that do not; it was 50 with a
+// second page, which the old pager drew).
+const page = (
+  rows: number[],
+  nextCursor: string | null,
+  tip = 20879205,
+  limit = 50,
+  total = 3
+) => ({
   anchor: { blockNumber: tip, blockHash: '0x' + 'a'.repeat(64) },
-  total: 3,
-  limit: 50,
+  total,
+  limit,
   hasMore: nextCursor !== null,
   nextCursor,
   data: rows.map(row),
@@ -40,8 +49,8 @@ describe('DAO depositors page (DAO-12)', () => {
 
   it('lists every depositor ranked at one tip and pages by rank (L1)', async () => {
     vi.mocked(api.getDaoDepositors)
-      .mockResolvedValueOnce(page([1, 2], '2'))
-      .mockResolvedValueOnce(page([3], null));
+      .mockResolvedValueOnce(page([1, 2], '2', undefined, 2))
+      .mockResolvedValueOnce(page([3], null, undefined, 2));
     render(<DaoDepositorsPage />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Nervos DAO depositors');
     const table = await screen.findByRole('table', { name: 'DAO depositors' });
@@ -55,23 +64,27 @@ describe('DAO depositors page (DAO-12)', () => {
       '/mainnet/blocks/20879205'
     );
     expect(api.getDaoDepositors).toHaveBeenCalledWith({ limit: 50, cursor: undefined });
-    fireEvent.click(screen.getByRole('button', { name: 'Next 50 →' }));
+    // Re-pinned on purpose (controls lane C2): the controls board's pager, "next →" and "← prev"
+    // in words (they were the buttons "Next 50 →" and "← Previous").
+    fireEvent.click(screen.getByRole('button', { name: 'next →' }));
     await waitFor(() =>
       expect(api.getDaoDepositors).toHaveBeenLastCalledWith({ limit: 50, cursor: '2' })
     );
     const next = await screen.findByRole('table', { name: 'DAO depositors' });
     await waitFor(() => expect(next.querySelector('tbody tr')).toHaveTextContent('997.00000000'));
-    // Re-pinned on purpose (readability B5): the page pages with the site's one pager, whose
-    // last page keeps a disabled Next (it hid the button).
-    expect(screen.getByRole('button', { name: 'Next 50 →' })).toBeDisabled();
+    // Re-pinned on purpose (controls lane C2): at the last page "next →" is quiet words and no
+    // control (it was a disabled button).
+    const pager = screen.getByRole('navigation', { name: 'depositors' });
+    expect(pager.textContent).toBe('3–3 of 3 · 2 a page← prevpage 2 of 2next →');
+    expect(within(pager).queryByRole('button', { name: 'next →' })).toBeNull();
     // Back to the page already ranked at the same tip (kept, not re-ranked).
-    fireEvent.click(screen.getByRole('button', { name: '← Previous' }));
+    fireEvent.click(within(pager).getByRole('button', { name: '← prev' }));
     await waitFor(() =>
       expect(
         screen.getByRole('table', { name: 'DAO depositors' }).querySelector('tbody tr')
       ).toHaveTextContent('999.00000000')
     );
-    expect(screen.getByRole('button', { name: 'Next 50 →' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'next →' })).toBeInTheDocument();
   });
 
   it('waits behind the catching-up banner while the store catches up, never the error (contracts S)', async () => {
@@ -141,20 +154,23 @@ describe('DAO depositors page (DAO-12)', () => {
 
   // Readability B5: the page drew its own Previous / Next, the same control as the site's pager
   // without its count; it now pages with the one pager, which draws nothing for one page.
+  // Re-pinned on purpose (controls lane C2): the controls board's pager, whose figures are the
+  // API's — the first and last rank shown, its total and its page size — "← prev" quiet and no
+  // control on the first page (it was "Showing 1–2 of 3 depositors · 50 per page" beside a
+  // disabled "← Previous" and a "Next 50 →" button).
   it('pages with the site’s one pager, and draws none for one page (B5)', async () => {
-    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], '2'));
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], '2', undefined, 2));
     const { unmount } = render(<DaoDepositorsPage />);
     await screen.findByRole('table', { name: 'DAO depositors' });
-    const controls = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
-    expect(controls).not.toBeNull();
-    expect(within(controls).getByRole('button', { name: '← Previous' })).toBeDisabled();
-    expect(within(controls).getByRole('button', { name: 'Next 50 →' })).toBeEnabled();
-    expect(screen.getByText('Showing 1–2 of 3 depositors · 50 per page')).toBeInTheDocument();
+    const pager = screen.getByRole('navigation', { name: 'depositors' });
+    expect(pager.textContent).toBe('1–2 of 3 · 2 a page← prevpage 1 of 2next →');
+    expect(within(pager).queryByRole('button', { name: '← prev' })).toBeNull();
+    expect(within(pager).getByRole('button', { name: 'next →' })).toBeInTheDocument();
     unmount();
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
     render(<DaoDepositorsPage />);
     await screen.findByRole('table', { name: 'DAO depositors' });
-    expect(document.querySelector('[data-role="pager-controls"]')).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'depositors' })).toBeNull();
     expect(screen.queryByRole('button')).toBeNull();
   });
 
@@ -280,24 +296,28 @@ describe('DAO depositors page (DAO-12)', () => {
     ]);
   });
 
-  it('ranks twenty depositors a page below md and says so on the button (R2)', async () => {
+  // Re-pinned on purpose (controls lane C2): the page's size is said by the pager's count line,
+  // from the size the API answered with (it was the button "Next 20 →").
+  it('ranks twenty depositors a page below md and says so on its pager (R2)', async () => {
     stubViewportFromMd(false);
     onTestFinished(() => {
       vi.unstubAllGlobals();
     });
-    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], '2'));
+    const twenty = Array.from({ length: 20 }, (_, i) => i + 1);
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page(twenty, '20', undefined, 20, 45));
     render(<DaoDepositorsPage />);
-    expect(await screen.findByRole('button', { name: 'Next 20 →' })).toBeInTheDocument();
+    const pager = await screen.findByRole('navigation', { name: 'depositors' });
+    expect(pager.textContent).toBe('1–20 of 45 · 20 a page← prevpage 1 of 3next →');
     expect(api.getDaoDepositors).toHaveBeenCalledWith({ limit: 20, cursor: undefined });
   });
 
   it('says which tip each page was ranked at when the tip moved between pages (L1, J2)', async () => {
     vi.mocked(api.getDaoDepositors)
-      .mockResolvedValueOnce(page([1, 2], '2'))
-      .mockResolvedValueOnce(page([3], null, 20879300));
+      .mockResolvedValueOnce(page([1, 2], '2', undefined, 2))
+      .mockResolvedValueOnce(page([3], null, 20879300, 2));
     render(<DaoDepositorsPage />);
     await screen.findByRole('table', { name: 'DAO depositors' });
-    fireEvent.click(screen.getByRole('button', { name: 'Next 50 →' }));
+    fireEvent.click(screen.getByRole('button', { name: 'next →' }));
     await waitFor(() =>
       expect(
         screen.getByText((_, el) => el?.getAttribute('data-role') === 'ranked-at')

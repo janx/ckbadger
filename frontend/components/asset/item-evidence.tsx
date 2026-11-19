@@ -14,6 +14,7 @@ import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import { cn } from '@/lib/utils';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
+import { Select } from '@/components/ui/select';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
   /** F2 identities (round 2, ID-C9): the data map's title for the selected version. */
@@ -29,24 +30,22 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
   const { cell } = version;
   return (
     <section aria-label="Raw item evidence" className="min-w-0 space-y-5">
-      <label className="text-meta flex flex-wrap items-center gap-3">
-        Cell version{' '}
-        <select
-          className="bg-base-bg border-base-border max-w-full border p-2"
-          value={`${cell.txHash}:${cell.outputIndex}`}
-          onChange={(e) => setSelected(e.target.value)}
-        >
-          {protocol.versions.map((v, i) => (
-            <option
-              key={`${v.cell.txHash}:${v.cell.outputIndex}`}
-              value={`${v.cell.txHash}:${v.cell.outputIndex}`}
-            >
-              Version {i + 1} · block {formatBlockNumber(v.cell.blockNumber)}
-              {v.cell.isLive ? ' · current' : ''}
-            </option>
-          ))}
-        </select>
-      </label>
+      {/* the controls board's select, after its label; the well no wider than the column. A
+          native select is as wide as its widest option and clips its value where its well is
+          narrower, so an option is the version's number, its block and "current", no word the
+          label says: "12 · #21,016,901 · current", 26 glyphs, 202.8 px at 13 px, the pair 304.4 px
+          with the label "version" (54.6), the gap (10), the well's border (2) and the select's
+          padding (35), inside a 360 px phone's 328 px line up to a five-digit version */}
+      <Select
+        label="version"
+        value={`${cell.txHash}:${cell.outputIndex}`}
+        options={protocol.versions.map((v, i) => ({
+          value: `${v.cell.txHash}:${v.cell.outputIndex}`,
+          label: `${i + 1} · ${formatBlockNumber(v.cell.blockNumber)}${v.cell.isLive ? ' · current' : ''}`,
+        }))}
+        onChange={setSelected}
+        className="max-w-full"
+      />
       <div className="text-meta [overflow-wrap:anywhere]">
         Outpoint{' '}
         {/* the hash at its line's 11 px (A4 Chrome F4): 66 × 6.6 = 435.6 px and ":N", within a

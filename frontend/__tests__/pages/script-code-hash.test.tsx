@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import ScriptByCodeHashPage from '@/app/script/[codeHash]/client-page';
@@ -410,6 +410,52 @@ describe('ScriptByCodeHashPage', () => {
     } finally {
       vi.unstubAllGlobals();
       vi.restoreAllMocks();
+    }
+  });
+
+  // Lane c2-chain, written before the cells' pager became the library's Pager: what it does,
+  // whatever draws it — the next page asks for the cells after the last one shown, twenty a page,
+  // and the previous one comes back; the page is counted of the version's live cells (45 here:
+  // three pages).
+  it('pages its cells forward from a cursor and back to the first page', async () => {
+    const lookup = vi.mocked(api.lookupScripts).getMockImplementation()!;
+    vi.mocked(api.lookupScripts).mockImplementation(async (hashes) => {
+      const found = await lookup(hashes);
+      return { ...found, [mockCodeHash]: { ...found[mockCodeHash], liveCellsCount: 45 } };
+    });
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
+      ...emptyCells,
+      total: 45,
+      hasMore: true,
+      nextCursor: 'next',
+      data: [
+        {
+          txHash: mockDeploymentTxHash,
+          outputIndex: 1,
+          capacity: '16100000000',
+          commonKnowledgeSize: '6100000000',
+          lockScriptHash: '0x01',
+          dataSize: 0,
+          createdAtBlock: 123456,
+          status: 'live',
+        },
+      ],
+    });
+    stubLayoutWidths({ chart: 900, list: 1232 });
+    try {
+      render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+      expect(await screen.findByText(/^page 1 of 3$/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /^next( →)?$/i }));
+      await waitFor(() =>
+        expect(api.getCellsByScriptRef).toHaveBeenLastCalledWith(
+          expect.objectContaining({ limit: 20, cursor: expect.any(String) })
+        )
+      );
+      expect(await screen.findByText(/^page 2 of 3$/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /^(previous|← prev)$/i }));
+      expect(await screen.findByText(/^page 1 of 3$/i)).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 

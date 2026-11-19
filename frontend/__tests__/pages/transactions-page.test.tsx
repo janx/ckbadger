@@ -1,7 +1,7 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
-import { stubViewportFromMd } from '@/__tests__/utils/viewport';
+import { atViewportWidth, stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
@@ -141,8 +141,10 @@ describe('TransactionsPage', () => {
     expect(table).toHaveTextContent('What it did');
     expect(screen.getByText('newest first · cellbase rows set back')).toBeInTheDocument();
     // Re-pinned on purpose (readability B5): this fixture is one page (no older, no newer), and
-    // one page draws no pager (it drew a disabled "Older →").
-    expect(screen.queryByRole('button', { name: 'Older →' })).toBeNull();
+    // one page draws no pager (it drew a disabled "Older →"). Controls lane C2: the board's
+    // pager, whose way older is "older →".
+    expect(screen.queryByRole('navigation', { name: 'committed transactions' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'older →' })).toBeNull();
   });
 });
 
@@ -183,7 +185,7 @@ describe('Transactions pool view', () => {
       ],
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     // re-pinned with readability R4 (lane F3, step 2): the table text 13 px (7.8 a glyph, was 7.2), the hash 14 px (8.4, was 7.8): the table is drawn from 1,272 px (was within 1,248)
     // re-pinned on purpose (readability F3-e): every column its content, 1,220 px, which the
@@ -274,7 +276,7 @@ describe('Transactions pool view', () => {
       })),
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     const heads = within(table).getAllByRole('columnheader');
     const at = heads.findIndex((th) => th.textContent === 'Status · waiting');
@@ -363,7 +365,7 @@ describe('Transactions pool view', () => {
       ],
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     const sentence = within(table).getByText(CLOCK_BEHIND);
     expect(sentence.closest('[data-nobreak], .whitespace-nowrap')).toBeNull();
@@ -405,7 +407,7 @@ describe('Transactions pool view', () => {
       ],
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     const at = within(table)
       .getAllByRole('columnheader')
@@ -472,7 +474,7 @@ describe('Transactions pool view', () => {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
       atContainerWidth(width);
       const { unmount } = render(<TransactionsPage />);
-      fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
       const shown = await screen.findByRole(form === 'table' ? 'table' : 'list', {
         name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
       });
@@ -603,7 +605,7 @@ describe('Transactions pool view', () => {
     };
     vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
     const { unmount } = render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
@@ -624,7 +626,7 @@ describe('Transactions pool view', () => {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
       atContainerWidth(width);
       const shown = render(<TransactionsPage />);
-      fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+      fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
       const list = await screen.findByRole(form === 'table' ? 'table' : 'list', {
         name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
       });
@@ -687,7 +689,7 @@ describe('Transactions pool view', () => {
       { kind: 'tx', hash: cellbaseHash, consumed: 0, created: 1 },
     ] as const;
     const { unmount } = render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     const rows = Array.from(table.querySelectorAll('tbody tr'));
     expect(rows).toHaveLength(2);
@@ -709,7 +711,7 @@ describe('Transactions pool view', () => {
       vi.restoreAllMocks();
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const cards = await screen.findAllByTestId('pool-row-mobile');
     expect(cards).toHaveLength(2);
     cards.forEach((card, i) => {
@@ -795,7 +797,7 @@ describe('Transactions pool view', () => {
       lastPolledAt: '2026-10-25T00:00:00Z',
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     expect(
       await screen.findByRole('table', { name: 'Transactions in the pool' })
     ).toHaveTextContent('Interpretation partial');
@@ -880,7 +882,7 @@ describe('Transactions pool view', () => {
       lastPolledAt: '2026-10-25T00:00:00Z',
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     expect(screen.queryByRole('table', { name: 'Transactions in the pool' })).toBeNull();
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
@@ -927,21 +929,25 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
     total: 0,
   });
   render(<TransactionsPage />);
-  expect(await screen.findByRole('button', { name: 'All' })).toBeInTheDocument();
+  // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, a
+  // radio per kind named by its lowercase words and yesterday's count, and the views a tablist
+  // (they were the aria-pressed buttons All / Nervos DAO / Tokens / Cellbase and the group
+  // "Transaction views").
+  expect(await screen.findByRole('radio', { name: /^all/ })).toBeInTheDocument();
   await waitFor(() =>
-    expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All20')
+    expect(screen.getByRole('radio', { name: /^all/ })).toHaveTextContent('all 20')
   );
-  expect(screen.getByRole('button', { name: 'Nervos DAO' })).toHaveTextContent(/^Nervos DAO3$/);
+  expect(screen.getByRole('radio', { name: /^nervos dao/ })).toHaveTextContent(/^nervos dao 3$/);
   expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Tokens' })).toHaveTextContent('11');
-  expect(screen.getByRole('button', { name: 'Cellbase' })).toHaveTextContent('3');
+  expect(screen.getByRole('radio', { name: /^tokens/ })).toHaveTextContent('11');
+  expect(screen.getByRole('radio', { name: /^cellbase/ })).toHaveTextContent('3');
   expect(
     screen
       .getByTestId('pool-banner')
-      .compareDocumentPosition(screen.getByRole('group', { name: 'Transaction views' })) &
+      .compareDocumentPosition(screen.getByRole('tablist', { name: 'Transaction views' })) &
       Node.DOCUMENT_POSITION_FOLLOWING
   ).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
+  fireEvent.click(screen.getByRole('radio', { name: /^tokens/ }));
   await waitFor(() =>
     expect(api.getTransactions).toHaveBeenLastCalledWith({
       cursor: undefined,
@@ -983,7 +989,8 @@ it('does not infer a transaction total from kind counts when yesterday is incomp
   expect(
     await screen.findByText(`No complete transaction count for ${yesterday} (UTC+8).`)
   ).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent(/^All$/);
+  // the kind filter's radio, lowercase (controls lane C2; it was the button "All")
+  expect(screen.getByRole('radio', { name: 'all' })).toHaveTextContent(/^all$/);
 });
 
 it('draws awaiting-index pool squares hollow, apart from pending (cyan) and proposed (gold) (TX-38)', async () => {
@@ -1021,7 +1028,9 @@ it('draws awaiting-index pool squares hollow, apart from pending (cyan) and prop
   const awaiting = banner.querySelector('[data-pool-status="committed_awaiting_index"]');
   expect(awaiting).toHaveClass('border', 'border-text-dim');
   expect(awaiting).not.toHaveClass('bg-info');
-  expect(screen.getByRole('button', { name: /^In the pool/ })).toHaveTextContent('In the pool2');
+  // the views' tab, lowercase, its count after its name (controls lane C2; it was the button
+  // "In the pool2")
+  expect(screen.getByRole('tab', { name: /^in the pool/ })).toHaveTextContent('in the pool 2');
 });
 
 // L4 (responsive plan, board L2): below sm the chrome is one control line, and a phone reads
@@ -1094,7 +1103,7 @@ describe('Transactions notes a reader needs, above the table (readability B5)', 
       ],
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     for (const note of [
       screen.getByText(/^Newest first, 50 a page\. A proposed transaction enters a block/),
@@ -1107,7 +1116,14 @@ describe('Transactions notes a reader needs, above the table (readability B5)', 
 describe('Transactions chrome on a phone (board L2, R2)', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it('folds the kind chips into one select with yesterday’s counts beside a pool chip', async () => {
+  // Re-pinned on purpose (controls lane C2): the kinds are the controls board's filter chips, and
+  // their phone form is the chips' own: below sm a select after "kind" (eight kinds are wider than
+  // a 360 px window's 328 px line), with yesterday's counts and the same words and order; the
+  // pool is the views' tab at every width, its count after it. It was the page's own line below
+  // sm, a select ("All kinds", "Tokens 11") beside a "pool · 4 pending" toggle, the chips, the
+  // pool banner and the view tabs hidden there by their classes.
+  it('folds the kind chips into one select after "kind" below sm; the pool is the views’ tab', async () => {
+    atViewportWidth(390);
     const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
     vi.mocked(api.getDailyActivityStats).mockResolvedValue([
       { ...dailyActivities[0], date: yesterday, tokenCount: 11, coinbaseCount: 3 },
@@ -1124,40 +1140,35 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
       totals: { pending: 4, proposed: 1, awaitingIndex: 0 },
     });
     render(<TransactionsPage />);
-    const line = await screen.findByTestId('kind-pool-line');
-    expect(line).toHaveClass('sm:hidden');
-    const select = within(line).getByLabelText("Filter by kind, with yesterday's counts");
+    const select = await screen.findByRole('combobox', { name: 'kind' });
     await waitFor(() =>
-      expect(within(select).getByRole('option', { name: /^Tokens/ })).toHaveTextContent('Tokens 11')
+      expect(within(select).getByRole('option', { name: /^tokens/ })).toHaveTextContent('tokens 11')
     );
-    // The same kinds as the chips, in the same order (the board's "All kinds ▾").
+    // The same kinds as the chips, in the same order and words.
     expect(
       within(select)
         .getAllByRole('option')
         .map((o) => o.getAttribute('value'))
     ).toEqual(['all', 'ckb', 'script', 'cellbase', 'dao', 'token', 'object', 'identity']);
-    expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^All kinds/);
-    // From sm the chips, the pool banner and the view tabs; below it the line replaces them.
-    expect(
-      screen.getByRole('group', { name: "Filter by kind, with yesterday's counts" })
-    ).toHaveClass('hidden', 'sm:flex');
+    expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^all/);
+    expect(screen.queryByRole('radiogroup', { name: 'kind' })).toBeNull();
+    // The pool banner stays from sm; the views' tab row is drawn at every width.
     expect(screen.getByTestId('pool-banner')).toHaveClass('hidden', 'sm:flex');
-    expect(screen.getByRole('group', { name: 'Transaction views' })).toHaveClass(
-      'hidden',
-      'sm:flex'
-    );
+    expect(screen.getByRole('tablist', { name: 'Transaction views' })).toBeInTheDocument();
     fireEvent.change(select, { target: { value: 'token' } });
+    // a phone's window, so a phone's twenty a page (R2; the test drew the phone line in a
+    // desktop's window, which asked for fifty)
     await waitFor(() =>
       expect(api.getTransactions).toHaveBeenLastCalledWith({
         cursor: undefined,
-        limit: 50,
+        limit: 20,
         activityType: 'token',
       })
     );
-    const pool = within(line).getByRole('button', { name: 'pool · 4 pending' });
-    expect(pool).toHaveAttribute('aria-pressed', 'false');
+    const pool = screen.getByRole('tab', { name: 'in the pool 5' });
+    expect(pool).toHaveAttribute('aria-selected', 'false');
     fireEvent.click(pool);
-    expect(pool).toHaveAttribute('aria-pressed', 'true');
+    expect(pool).toHaveAttribute('aria-selected', 'true');
     expect(await screen.findByText('not yet in a block · newest first')).toBeInTheDocument();
   });
 
@@ -1198,18 +1209,23 @@ describe('Transactions kind in the URL (D11)', () => {
     render(<RouterProvider router={router} />);
     return router;
   }
+  // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, a
+  // radio group named "kind", a radio per kind named by its lowercase words, the chosen one
+  // aria-checked (it was the aria-pressed group "Filter by kind, with yesterday's counts": "Nervos
+  // DAO", "All", "Tokens", "Objects").
   const chip = (name: string) =>
-    within(
-      screen.getByRole('group', { name: "Filter by kind, with yesterday's counts" })
-    ).getByRole('button', { name });
+    within(screen.getByRole('radiogroup', { name: 'kind' })).getByRole('radio', { name });
 
   it('starts on the kind its URL names and asks for it (?kind=dao)', async () => {
     renderAt('/mainnet/transactions?kind=dao');
-    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
-    expect(chip('All')).toHaveAttribute('aria-pressed', 'false');
-    expect(
-      screen.getByLabelText("Filter by kind, with yesterday's counts", { selector: 'select' })
-    ).toHaveValue('dao');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'true');
+    expect(chip('all')).toHaveAttribute('aria-checked', 'false');
+    // The phone's form of the filter, the select after "kind", names the same kind (controls
+    // lane C2: it was the page's own select, always drawn and hidden from sm by its class).
+    atViewportWidth(390);
+    renderAt('/mainnet/transactions?kind=dao');
+    expect(screen.getByRole('combobox', { name: 'kind' })).toHaveValue('dao');
+    vi.unstubAllGlobals();
     await waitFor(() =>
       expect(api.getTransactions).toHaveBeenCalledWith({
         cursor: undefined,
@@ -1224,7 +1240,7 @@ describe('Transactions kind in the URL (D11)', () => {
     'starts on All when the URL names an unknown kind or none (%s)',
     async (search) => {
       renderAt(`/mainnet/transactions${search}`);
-      expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+      expect(chip('all')).toHaveAttribute('aria-checked', 'true');
       await waitFor(() =>
         expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 50 })
       );
@@ -1233,7 +1249,7 @@ describe('Transactions kind in the URL (D11)', () => {
 
   it('writes a chosen kind back to the URL by replace, and All drops it', async () => {
     const router = renderAt('/mainnet/transactions?kind=dao');
-    fireEvent.click(chip('Tokens'));
+    fireEvent.click(chip('tokens'));
     await waitFor(() => expect(router.state.location.search).toBe('?kind=token'));
     expect(router.state.location.pathname).toBe('/mainnet/transactions');
     expect(router.state.historyAction).toBe('REPLACE');
@@ -1244,24 +1260,131 @@ describe('Transactions kind in the URL (D11)', () => {
         activityType: 'token',
       })
     );
-    fireEvent.click(chip('All'));
+    fireEvent.click(chip('all'));
     await waitFor(() => expect(router.state.location.search).toBe(''));
-    expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('all')).toHaveAttribute('aria-checked', 'true');
   });
 
   it('follows the URL when it changes under the mounted page', async () => {
     const router = renderAt('/mainnet/transactions?kind=dao');
-    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'true');
     await act(async () => {
       await router.navigate('/mainnet/transactions?kind=object');
     });
-    expect(chip('Objects')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('objects')).toHaveAttribute('aria-checked', 'true');
     await waitFor(() =>
       expect(api.getTransactions).toHaveBeenLastCalledWith({
         cursor: undefined,
         limit: 50,
         activityType: 'object',
       })
+    );
+  });
+});
+
+// The controls lane (C2, c2-lists), written before the page's chips, tabs and pagers became the
+// controls board's: what each of them asks for, so the new controls are proven against it.
+describe('Transactions paging and kind (what the controls ask for)', () => {
+  const tx = (n: number) => ({
+    hash: `0x${n.toString(16).padStart(64, '0')}`,
+    blockNumber: n,
+    blockHash: `0x${'bb'.repeat(32)}`,
+    index: 1,
+    inputsCount: 2,
+    outputsCount: 3,
+    fee: '100000000',
+    value: '123456789012',
+    txSize: 226,
+    cycles: 1000000,
+    cyclesStatus: 'complete' as const,
+    activity: feedSamples.eightParties,
+    isCellbase: false,
+    timestamp: '2026-02-20T00:00:00Z',
+  });
+  const committed = (from: number, nextCursor: string | null) => ({
+    data: [tx(from), tx(from - 1)],
+    total: 120,
+    limit: 50,
+    hasMore: nextCursor !== null,
+    nextCursor,
+  });
+  const block = async (n: number) =>
+    within(await screen.findByRole('table', { name: 'Committed transactions' })).findByRole(
+      'link',
+      { name: `#${n.toLocaleString('en-US')}` }
+    );
+
+  it('walks the committed list older by its served cursor and newer back to the page before', async () => {
+    vi.mocked(api.getTransactions).mockImplementation(async ({ cursor } = {}) =>
+      cursor === 'c2' ? committed(500, null) : committed(900, 'c2')
+    );
+    render(<TransactionsPage />);
+    expect(await block(900)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({ cursor: 'c2', limit: 50 })
+    );
+    expect(await block(500)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /newer$/i }));
+    expect(await block(900)).toBeInTheDocument();
+  });
+
+  it('starts the committed list again from its newest when a kind is chosen', async () => {
+    vi.mocked(api.getTransactions).mockImplementation(async ({ cursor } = {}) =>
+      cursor === 'c2' ? committed(500, null) : committed(900, 'c2')
+    );
+    render(<TransactionsPage />);
+    expect(await block(900)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    expect(await block(500)).toBeInTheDocument();
+    // the kind filter's radio (controls lane C2, the same commit: it was the button "Tokens")
+    fireEvent.click(screen.getByRole('radio', { name: /^tokens/ }));
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'token',
+      })
+    );
+  });
+
+  it('walks the pool older by its served cursor', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue(committed(900, null));
+    const poolRow = (n: number) => ({
+      hash: `0x${n.toString(16).padStart(64, '0')}`,
+      status: 'pending' as const,
+      value: '100000000',
+      fee: '1000',
+      feeRate: '1000',
+      txSize: 226,
+      cycles: '1000',
+      inputsCount: 1,
+      outputsCount: 2,
+      timestamp: '1792886400000',
+      interpretation: { status: 'complete' as const },
+      activity: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockImplementation(async ({ cursor } = {}) => ({
+      ...emptyPool,
+      data: cursor === 'p2' ? [poolRow(2)] : [poolRow(1)],
+      total: 2,
+      nextCursor: cursor === 'p2' ? null : 'p2',
+      totals: { pending: 2, proposed: 0, awaitingIndex: 0 },
+    }));
+    render(<TransactionsPage />);
+    fireEvent.click(await screen.findByRole('tab', { name: /^in the pool/ }));
+    const pool = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    expect(within(pool).getAllByTitle(poolRow(1).hash).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    await waitFor(() =>
+      expect(api.getPoolTransactions).toHaveBeenCalledWith({ cursor: 'p2', limit: 50 })
+    );
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole('table', { name: 'Transactions in the pool' })).getAllByTitle(
+          poolRow(2).hash
+        ).length
+      ).toBeGreaterThan(0)
     );
   });
 });

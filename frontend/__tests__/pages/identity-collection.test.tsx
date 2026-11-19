@@ -3,6 +3,10 @@ import Page from '@/app/identities/[collectionId]/client-page';
 import { api, ApiRequestError } from '@/lib/api';
 import { mockItemReads, emptyPage, identityItem } from '@/__tests__/utils/item-read-fixtures';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 it('shows a collection 404 with its exact identity endpoint', async () => {
@@ -30,8 +34,14 @@ it('shows identities, exact created/live counts, capacity history and parallel r
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
     'of 2 minted / created'
   );
-  expect(screen.getByRole('tab', { name: 'Activities' })).toHaveAttribute('aria-selected', 'true');
-  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  // re-pinned (PB-28, lane c2-assets): the two layers open from the last five, in place (the page
+  // opened on them)
+  fireEvent.click(await screen.findByRole('button', { name: 'All activity →' }));
+  expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
   expect(api.getCollectionTransactions).toHaveBeenCalledWith(
     'identity',
@@ -39,14 +49,56 @@ it('shows identities, exact created/live counts, capacity history and parallel r
     expect.anything()
   );
 });
+// PB-28 (UI review 2026-11-14; the controls lane c2-assets): the feeds on collection pages take one
+// form, the cluster's and the class's — the last five and the ways onward to the whole feed, not a
+// pager inside the page. The same activity feed is read, five rows of it; the count of the way to
+// the transactions is the collection's own (activitiesCount, 3), read with the page.
+it('opens its activity as the last five and the ways onward to the whole feed (PB-28)', async () => {
+  vi.mocked(api.getCollectionActivityFeed).mockImplementation(async (_kind, _id, p) => ({
+    ...collectionActivityFeedProducer,
+    data: Array.from({ length: p?.limit ?? 50 }, (_, i) => ({
+      ...collectionActivityFeedProducer.data[0],
+      txHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
+    })),
+  }));
+  render(<Page collectionId="dotbit" />);
+  const recent = await screen.findByRole('region', { name: 'Recent activity' });
+  expect(api.getCollectionActivityFeed).toHaveBeenCalledWith('identity', 'dotbit', { limit: 5 });
+  // five rows, however they fold into runs
+  await waitFor(() =>
+    expect(
+      within(recent)
+        .getAllByRole('article')
+        .reduce((n, a) => n + Number(a.getAttribute('data-run-count') ?? 1), 0)
+    ).toBe(5)
+  );
+  expect(within(recent).queryByRole('tab')).toBeNull();
+  expect(screen.queryByRole('navigation', { name: 'activities' })).toBeNull();
+  const heading = within(recent).getByRole('heading', { name: 'Activity --last 5' });
+  expectPrompt(heading, 'Activity', '--last 5');
+  expect(within(recent).getByRole('button', { name: 'All activity →' })).toBeInTheDocument();
+  fireEvent.click(within(recent).getByRole('button', { name: '3 transactions →' }));
+  expect(await screen.findByRole('tab', { name: 'transactions' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  expect(screen.queryByRole('region', { name: 'Recent activity' })).toBeNull();
+  expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
+  expect(api.getCollectionTransactions).toHaveBeenCalledWith('identity', 'dotbit', {
+    limit: 20,
+    cursor: undefined,
+  });
+});
 it('searches the entire identity collection and applies status before pagination', async () => {
   render(<Page collectionId="dotbit" />);
-  fireEvent.change(await screen.findByRole('textbox', { name: 'Search collection' }), {
+  // re-pinned (lane c2-assets): the board's search field (a searchbox, was a textbox) and status
+  // chips (a radio group "status", was a select "Item status")
+  fireEvent.change(await screen.findByRole('searchbox', { name: 'Search collection' }), {
     target: { value: 'alice' },
   });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
-    target: { value: 'live' },
-  });
+  fireEvent.click(
+    within(screen.getByRole('radiogroup', { name: 'status' })).getByRole('radio', { name: 'live' })
+  );
   await waitFor(() =>
     expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith('dotbit', {
       limit: 24,
@@ -83,7 +135,10 @@ it('keeps holders visible independently of the records tabs and handles empty pa
   vi.mocked(api.getIdentityCollectionHolders).mockResolvedValue(emptyPage());
   render(<Page collectionId="dotbit" />);
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  // re-pinned (PB-28, lane c2-assets): the layers open from the last five, then the tabs switch
+  // them (the page opened on the tabs)
+  fireEvent.click(await screen.findByRole('button', { name: 'All activity →' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   expect(screen.getByText('No current holders.')).toBeInTheDocument();
 });
 it('uses whole-scope current DID documents for PDS grouping with explicit overlapping endpoints', async () => {

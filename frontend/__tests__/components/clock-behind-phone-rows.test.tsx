@@ -162,7 +162,7 @@ describe('"this device\'s clock is behind" breaks between its words in a phone r
     const line = containerContentPx(viewport) - ROW_SEAL.tx.footprint;
     atContainerWidth(containerContentPx(viewport));
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     const right = identityRight(row);
     expect(right).toHaveTextContent(`Confirming· ${CLOCK_BEHIND}`);

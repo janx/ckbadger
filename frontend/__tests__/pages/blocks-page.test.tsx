@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { contentPx, gapPx } from '@/__tests__/utils/tailwind-box';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
 import { render } from '../utils/test-utils';
@@ -131,6 +131,20 @@ describe('BlocksPage', () => {
   });
 
   // Lane L (charts ↔ topics): the blocks list links the charts drawn from blocks.
+  // The controls lane (C2, c2-lists), regression test first: a list with no row has no page to be
+  // on (0 pages), and the time pager refuses "page 1 of 0"; the page says it is empty and draws no
+  // pager, as an empty ranked list does.
+  it('says an empty list is empty and draws no pager for it', async () => {
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      ...mockBlocksResponse,
+      data: [],
+      total: 0,
+    });
+    render(<BlocksPage />);
+    expect(await screen.findByText('No blocks indexed.')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation', { name: 'blocks' })).toBeNull();
+  });
+
   it('links every chart whose numbers come from blocks (lane L)', async () => {
     render(<BlocksPage />);
     const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
@@ -371,12 +385,52 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })).toHaveLength(1);
   });
 
-  it('pages as newest first: "2 newest of 20,828,902", Newer and Older (BA-06)', async () => {
+  // Re-pinned on purpose (controls lane C2): the list pages with the controls board's cursor in
+  // time — its order in words, the page of the pages the served total makes at the served page
+  // size (20,828,902 ÷ 50: 416,578 whole pages and one more), "← newer" quiet and no control at
+  // the newest end, "older →" a way to go. It wrote "2 newest of 20,828,902" beside a disabled
+  // "Newer" and an "Older →" button, with no page.
+  it('pages as newest first: page 1 of 416,579, ← newer at its end, older → (BA-06)', async () => {
     render(<BlocksPage />);
-    expect(await screen.findByText('2 newest of 20,828,902')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Newer' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
-    expect(screen.queryByText(/Page 1 of/)).not.toBeInTheDocument();
+    const pager = await screen.findByRole('navigation', { name: 'blocks' });
+    expect(pager.textContent).toBe('newest first← newerpage 1 of 416,579older →');
+    expect(within(pager).queryByRole('button', { name: '← newer' })).toBeNull();
+    expect(within(pager).getByRole('button', { name: 'older →' })).toBeInTheDocument();
+    expect(screen.queryByText(/newest of/)).not.toBeInTheDocument();
+  });
+
+  // The controls lane (C2, c2-lists), written before the pager became the controls board's: older
+  // asks for the page after the cursor the list served, newer goes back to the page before it.
+  it('walks older by the cursor the list served, and newer back to the page before (BA-06)', async () => {
+    const older = {
+      ...page,
+      data: [
+        row(20_828_892, { transactionSizes: [355] }),
+        row(20_828_891, { transactionSizes: [355] }),
+      ],
+      nextCursor: '20828890',
+    };
+    vi.mocked(api.getBlocks).mockImplementation(async ({ cursor } = {}) =>
+      cursor === '20828892' ? older : page
+    );
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    expect(within(table).getByRole('link', { name: '#20,828,894' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^older/i }));
+    await waitFor(() =>
+      expect(api.getBlocks).toHaveBeenLastCalledWith({ cursor: '20828892', limit: 50 })
+    );
+    expect(
+      await within(screen.getByRole('table', { name: 'Latest blocks' })).findByRole('link', {
+        name: '#20,828,892',
+      })
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /newer$/i }));
+    expect(
+      await within(screen.getByRole('table', { name: 'Latest blocks' })).findByRole('link', {
+        name: '#20,828,894',
+      })
+    ).toBeInTheDocument();
   });
 
   // F2 blocks visual pass (2026-10-30, live 1440 / 390): one-line rows and compact cards.
@@ -554,7 +608,8 @@ describe('BlocksPage · Blocks v3 board', () => {
     const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
     const table = screen.getByRole('table', { name: 'Latest blocks' });
     expect(note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const pager = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    // the controls board's pager (controls lane C2; it was the old pager's controls row)
+    const pager = screen.getByRole('navigation', { name: 'blocks' });
     expect(table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 

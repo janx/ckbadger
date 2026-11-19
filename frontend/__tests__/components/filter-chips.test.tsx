@@ -120,6 +120,24 @@ describe('FilterChips: the board’s look', () => {
     expect(screen.getByRole('radio', { name: /^all/ }).querySelector('[data-mark]')).toBeNull();
   });
 
+  // Lane c2-chain (added prop): a value whose count is not exact draws no number, and its chip
+  // says why on hover (the address page's activity kinds: a filtered page tells 0, 1 or more).
+  it('puts a value’s title on its chip, and none where it has none', () => {
+    render(
+      <Filter
+        values={[
+          KINDS[0],
+          { ...KINDS[1], count: undefined, title: 'more than one; no count is kept' },
+          ...KINDS.slice(2),
+        ]}
+      />
+    );
+    const ckb = screen.getByRole('radio', { name: 'ckb transfers' });
+    expect(ckb).toHaveAttribute('title', 'more than one; no count is kept');
+    expect(ckb.textContent).toBe('ckb transfers');
+    expect(screen.getByRole('radio', { name: /^all/ })).not.toHaveAttribute('title');
+  });
+
   it('stands 28 px high from 640 and 32 below it', () => {
     render(<Filter />);
     const chip = screen.getAllByRole('radio')[0];

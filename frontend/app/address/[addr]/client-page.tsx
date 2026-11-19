@@ -1,14 +1,17 @@
 'use client';
 
-import { useState } from 'react';
-import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useId, useState } from 'react';
+import { useInfiniteQuery, useQueries, useQuery, keepPreviousData } from '@tanstack/react-query';
 import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
-import { ClassMark } from '@/components/ui/class-mark';
+import { CopyButton } from '@/components/ui/copy-button';
+import { FilterChips } from '@/components/ui/filter-chips';
+import { Pager } from '@/components/ui/pager';
+import { Tabs } from '@/components/ui/tabs';
 import {
   AddressBalance,
   AddressMetrics,
@@ -26,13 +29,15 @@ import {
 import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
+import { api, isNotFoundApiError, type AddressCellClass, type AddressHoldings } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
 import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
-import { cn, formatUtc8Date } from '@/lib/utils';
+import { formatUtc8Date } from '@/lib/utils';
+import { CLASS_KEYS } from '@/lib/design-tokens';
+import type { PaletteKey } from '@/lib/palette';
 import { shortenAddress, shortenHash } from '@/lib/shorten';
 import { apiBaseFor } from '@/lib/active-network';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -74,6 +79,33 @@ function chipCount(page: {
 }
 /** A chip's title when its count is not exact: what its one-row page proved. */
 const MANY_TITLE = 'more than one; the API keeps no count of filtered activity';
+/** The kinds a 7 px mark leads, in their class colour (the controls board's address in place). */
+const ACTIVITY_MARKS: Partial<Record<ActivityFilter, PaletteKey>> = {
+  token: CLASS_KEYS.tokens,
+  object: CLASS_KEYS.objects,
+  identity: CLASS_KEYS.identities,
+  dao: CLASS_KEYS.dao,
+};
+/**
+ * The live cells a page of the list is counted of: the API's total of the unfiltered list, or
+ * the holdings read's count of the class chosen (a class's page carries no total of its own; the
+ * class filter is offered once the holdings have answered).
+ */
+function liveCellsTotal(
+  total: number | undefined,
+  cellClass: AddressCellClass | undefined,
+  holdings: AddressHoldings | undefined,
+  addr: string
+): number {
+  const count = cellClass ? holdings?.classes[cellClass].cellCount : total;
+  if (count === undefined)
+    throw new Error(
+      cellClass
+        ? `address ${addr}: the ${cellClass} cells are listed before the holdings that count them`
+        : `address ${addr}: an unfiltered live cells page carries no total`
+    );
+  return count;
+}
 /** One address activity page; the list and the tab count share it, so they share its cache entry. */
 const activityPageQuery = (
   lockHash: string | undefined,
@@ -92,44 +124,24 @@ export default function AddressDetailPage() {
 /**
  * The address's id line: the full address and its copy button, in the plate's quiet voice (seals
  * by kind, C10 round 2). The address is the head's full id (A4 Chrome F3): one line where the
- * measured line holds it (97 characters, 698.4 px at 12 px), else in equal unbroken lines — at 390
- * the line beside the button is 328 px, three lines of 33, 33 and 31; at 640, 578 px, two of 49 and
- * 48 — never the own-box scroller it was. Without an address the page is its lock hash, a hash.
+ * measured line holds it (97 characters, 698.4 px at 12 px), else in equal unbroken lines — never
+ * the own-box scroller it was. Without an address the page is its lock hash, a hash. The copy is
+ * the library's CopyButton (the controls board): its icon in a 24 px box from 640 and a 32 px one
+ * below it, its answer (`copied`, `not copied`) in words 6 px after it. The id measures the line
+ * the button leaves it: at 390, 358 − 8 − 32 − 6 = 312 px, 43 characters at 7.2 px, three lines
+ * of 33, 33 and 31; at 640, 608 − 8 − 24 − 6 = 570 px, 79 characters, two of 49 and 48 (the
+ * lines it had beside the old button). While `copied` stands beside it (43.2 px) the line is
+ * 268.8 and 526.8 px, 37 and 73 characters: the same lines, so a copy moves nothing.
  */
 function AddressIdentity({ value, kind }: { value: string; kind: 'address' | 'hash' }) {
-  const [copyState, setCopyState] = useState('Copy address');
   return (
     <span className="flex min-w-0 items-start gap-2">
       <HeadId value={value} kind={kind} />
-      <button
-        aria-label={copyState}
-        title={copyState}
-        className="hover:text-jade shrink-0 p-1"
-        onClick={async () => {
-          try {
-            await navigator.clipboard.writeText(value);
-            setCopyState('Address copied');
-          } catch {
-            setCopyState('Unable to copy address');
-          }
-        }}
-      >
-        {copyState === 'Address copied' ? (
-          '✓'
-        ) : (
-          <svg
-            aria-hidden="true"
-            width="14"
-            height="14"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-          >
-            <rect x="5" y="5" width="8" height="8" rx="1" />
-            <path d="M3 11H2V2h9v1" />
-          </svg>
-        )}
-      </button>
+      <CopyButton
+        value={value}
+        label={kind === 'address' ? 'copy address' : 'copy lock script hash'}
+        className="shrink-0"
+      />
     </span>
   );
 }
@@ -141,8 +153,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
   const activityPage = useCursorPagination(),
     txPage = useCursorPagination(),
-    cellPage = useCursorPagination(),
-    namesPage = useCursorPagination();
+    cellPage = useCursorPagination();
+  const historyId = useId();
   const address = useQuery({
     queryKey: ['address', addr],
     queryFn: () => api.getAddress(addr),
@@ -205,13 +217,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!lockHash && tab === 'cells',
     placeholderData: keepPreviousData,
   });
-  const names = useQuery({
-    queryKey: ['address-dotcell-names', lockHash, namesPage.cursor, pageSize],
-    queryFn: () =>
-      api.getAddressDotCellNames(lockHash!, { limit: pageSize, cursor: namesPage.cursor }),
+  // The .cell names are a short list the API sends no total of, read in name order: the pager's
+  // short-list form, each load added under the names already shown (`next 20 ↓`).
+  const names = useInfiniteQuery({
+    queryKey: ['address-dotcell-names', lockHash, pageSize],
+    queryFn: ({ pageParam }) =>
+      api.getAddressDotCellNames(lockHash!, { limit: pageSize, cursor: pageParam }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => (page.hasMore && page.nextCursor ? page.nextCursor : undefined),
     enabled: !!lockHash,
-    placeholderData: keepPreviousData,
   });
+  const nameRows = names.data?.pages.flatMap((page) => page.data);
   const fiber = useQuery({
     queryKey: ['address-fiber-channels', lockHash],
     queryFn: () => api.getAddressFiberChannels(lockHash!, { limit: 100 }),
@@ -384,15 +400,15 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {names.error ? (
               <AddressLoadState label=".cell named rights" error={names.error} read={names} />
             ) : (
-              names.data &&
-              names.data.data.length > 0 && (
+              nameRows &&
+              nameRows.length > 0 && (
                 <DetailSection title=".cell named rights">
                   <div data-testid="address-dotcell-names">
                     <p className="text-text-dim text-small max-w-measure mb-3">
                       Names this protocol assigns to the address. These rights do not add the name
                       cell’s capacity to this address’s physical holdings.
                     </p>
-                    {names.data.data.map((n) => (
+                    {nameRows.map((n) => (
                       <div
                         key={n.identityId}
                         className="border-row-rule text-small flex flex-wrap justify-between gap-2 border-b py-2"
@@ -412,15 +428,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         </span>
                       </div>
                     ))}
-                    <AddressPagination
-                      pagination={namesPage}
-                      hasMore={names.data.hasMore}
-                      nextCursor={names.data.nextCursor}
-                      currentCount={names.data.data.length}
-                      total={names.data.total}
-                      pageSize={pageSize}
-                      label="names"
-                    />
+                    {names.hasNextPage && (
+                      <div className="mt-3">
+                        <Pager
+                          mode="more"
+                          next={{
+                            count: pageSize,
+                            onShow: () => void names.fetchNextPage({ cancelRefetch: false }),
+                          }}
+                        />
+                      </div>
+                    )}
                   </div>
                 </DetailSection>
               )
@@ -470,7 +488,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 </DetailSection>
               )
             )}
-            <section aria-label="History" className="min-w-0">
+            <section aria-labelledby={historyId} className="min-w-0">
+              {/* The history opens on its command line, the tab row (the controls board's first
+                  composition in place); the section keeps its name for the outline. */}
+              <h2 id={historyId} className="sr-only">
+                History
+              </h2>
               {tab === 'activities' && activities.data && (
                 <AddressStaleNotice error={activities.error} label="activities" />
               )}
@@ -480,201 +503,129 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               {tab === 'cells' && cells.data && (
                 <AddressStaleNotice error={cells.error} label="live cells" />
               )}
-              {/* The Address board: views on the left, activity filters on the right of one row. */}
-              <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
-                <div
-                  role="group"
-                  aria-label="History views"
-                  className="flex flex-wrap gap-x-6 gap-y-1 max-md:gap-x-4"
-                >
-                  {(
-                    [
-                      ['activities', 'Activities'],
-                      ['transactions', 'Transactions'],
-                      ['cells', 'Live cells'],
-                    ] as const
-                  ).map(([id, label]) => (
-                    <button
-                      key={id}
-                      type="button"
-                      aria-pressed={tab === id}
-                      onClick={() => setTab(id)}
-                      className={cn(
-                        'text-section max-md:text-body flex h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5',
-                        tab === id
-                          ? 'border-jade text-text-bright'
-                          : 'text-text-dim border-transparent'
-                      )}
-                    >
-                      {label}
-                      {id === 'activities' && activitiesCount.data !== undefined && (
-                        <span className="text-text-dim text-small max-md:text-meta font-normal">
-                          {activitiesCount.data.toLocaleString('en-US')}
-                        </span>
-                      )}
-                      {id === 'transactions' && (
-                        <span className="text-text-dim text-small max-md:text-meta font-normal">
-                          {a.transactionsCount.toLocaleString('en-US')}
-                        </span>
-                      )}
-                      {id === 'cells' && holdings.data && (
-                        <span className="text-text-dim text-small max-md:text-meta font-normal">
-                          {holdings.data.liveCellsCount.toLocaleString('en-US')}
-                        </span>
-                      )}
-                    </button>
-                  ))}
-                </div>
+              <Tabs
+                label="history"
+                command
+                tabs={[
+                  { key: 'activities', label: 'activities', count: activitiesCount.data },
+                  { key: 'transactions', label: 'transactions', count: a.transactionsCount },
+                  { key: 'cells', label: 'live cells', count: holdings.data?.liveCellsCount },
+                ]}
+                value={tab}
+                onChange={setTab}
+              >
+                {/* The filter under the row, 14 px down (the board's address in place). */}
                 {tab === 'activities' && (
-                  <div
-                    role="group"
-                    aria-label="Filter activity"
-                    className="flex flex-wrap gap-1 py-1.5"
-                  >
-                    {activityFilters.map(([value, label], i) => {
+                  <FilterChips
+                    label="kind"
+                    values={activityFilters.map(([value, label], i) => {
                       const page = value === 'all' ? undefined : chipPages[i - 1].data;
-                      // Exact or none: "All" is the address's total, a filter 0 or 1, else no number.
-                      const count: number | 'many' | undefined =
+                      // Exact or none: "all" is the address's total, a filter 0 or 1, else no
+                      // number, its chip saying why on hover.
+                      const count =
                         value === 'all' ? activitiesCount.data : page && chipCount(page);
-                      // An empty filter says so with its "0", in the dim ink of every other chip:
-                      // a count of nothing is a datum, never the ghost (R4).
-                      return (
-                        <button
-                          key={value}
-                          title={count === 'many' ? MANY_TITLE : undefined}
-                          aria-pressed={filter === value}
-                          onClick={() => {
-                            setFilter(value);
-                            activityPage.reset();
-                          }}
-                          className={cn(
-                            'text-small border px-2.5 py-1.5',
-                            filter === value
-                              ? 'border-base-border bg-base-elevated text-text-bright'
-                              : 'border-base-border-subtle text-text-dim'
-                          )}
-                        >
-                          {label}
-                          {typeof count === 'number' && (
-                            <>
-                              {' '}
-                              <span data-chip-count className="tabular-nums">
-                                {count.toLocaleString('en-US')}
-                              </span>
-                            </>
-                          )}
-                        </button>
-                      );
+                      return {
+                        key: value,
+                        label: label.toLowerCase(),
+                        count: typeof count === 'number' ? count : undefined,
+                        title: count === 'many' ? MANY_TITLE : undefined,
+                        mark: ACTIVITY_MARKS[value],
+                      };
                     })}
-                  </div>
-                )}
-              </div>
-              {tab === 'cells' && (
-                <div
-                  role="group"
-                  aria-label="Filter live cells"
-                  className="my-4 flex flex-wrap gap-2"
-                >
-                  {[{ key: undefined, label: 'All', mark: undefined }, ...ADDRESS_CLASSES].map(
-                    (c) => (
-                      <button
-                        key={c.key ?? 'all'}
-                        aria-pressed={cellClass === c.key}
-                        onClick={() => {
-                          setCellClass(c.key);
-                          cellPage.reset();
-                        }}
-                        className={cn(
-                          'text-small flex items-center gap-1.5 border px-2.5 py-1.5',
-                          cellClass === c.key
-                            ? 'border-base-border bg-base-elevated text-text-bright'
-                            : 'border-base-border-subtle text-text-dim'
-                        )}
-                      >
-                        {c.mark && <ClassMark kind={c.mark} size={12} />}
-                        {c.label}
-                        {holdings.data && c.key && (
-                          <span>{holdings.data.classes[c.key].cellCount}</span>
-                        )}
-                      </button>
-                    )
-                  )}
-                </div>
-              )}
-              {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
-              {pool?.enabled && pool.healthy && pool.truncated && <PoolTruncatedNotice />}
-              {tab === 'activities' &&
-                (activities.data ? (
-                  <>
-                    {activities.data.data.length ? (
-                      // B4: its runs folded, within the page shown
-                      <AddressActivities rows={activities.data.data} address={a} />
-                    ) : (
-                      <p className="text-text-dim text-small max-w-measure py-6">
-                        {filter === 'all'
-                          ? 'No activities.'
-                          : `No ${activityFilters.find((f) => f[0] === filter)![1]} activities on this page.`}
-                      </p>
-                    )}
-                    <AddressPagination
-                      pagination={activityPage}
-                      hasMore={activities.data.hasMore}
-                      nextCursor={activities.data.nextCursor}
-                      currentCount={
-                        activities.data.data.filter((row) => row.poolStatus === undefined).length
-                      }
-                      total={activities.data.total}
-                      pageSize={pageSize}
-                      label="activities"
-                    />
-                  </>
-                ) : (
-                  <AddressLoadState label="activities" error={activities.error} read={activities} />
-                ))}
-              {tab === 'transactions' &&
-                (transactions.data ? (
-                  <>
-                    <AddressTransactions rows={transactions.data.data} />
-                    <AddressPagination
-                      pagination={txPage}
-                      hasMore={transactions.data.hasMore}
-                      nextCursor={transactions.data.nextCursor}
-                      currentCount={
-                        transactions.data.data.filter((row) => row.poolStatus === undefined).length
-                      }
-                      total={transactions.data.total}
-                      pageSize={pageSize}
-                      label="transactions"
-                    />
-                  </>
-                ) : (
-                  <AddressLoadState
-                    label="transactions"
-                    error={transactions.error}
-                    read={transactions}
+                    value={filter}
+                    onChange={(value) => {
+                      setFilter(value);
+                      activityPage.reset();
+                    }}
+                    className="mt-3.5"
                   />
-                ))}
-              {tab === 'cells' &&
-                (cells.data ? (
-                  <>
-                    <AddressLiveCells rows={cells.data.data} />
-                    <AddressPagination
-                      pagination={cellPage}
-                      hasMore={cells.data.hasMore}
-                      nextCursor={cells.data.nextCursor}
-                      currentCount={cells.data.data.length}
-                      total={
-                        cellClass && holdings.data
-                          ? holdings.data.classes[cellClass].cellCount
-                          : cells.data.total
-                      }
-                      pageSize={pageSize}
-                      label="live cells"
+                )}
+                {/* The classes are counted by the holdings read, so they are offered once it has
+                    answered, and a class's cells are counted of it. */}
+                {tab === 'cells' && holdings.data && (
+                  <FilterChips
+                    label="class"
+                    values={[
+                      { key: 'all', label: 'all' },
+                      ...ADDRESS_CLASSES.map((c) => ({
+                        key: c.key,
+                        label: c.label.toLowerCase(),
+                        count: holdings.data.classes[c.key].cellCount,
+                        mark: CLASS_KEYS[c.mark],
+                      })),
+                    ]}
+                    value={cellClass ?? 'all'}
+                    onChange={(value) => {
+                      setCellClass(value === 'all' ? undefined : value);
+                      cellPage.reset();
+                    }}
+                    className="mt-3.5"
+                  />
+                )}
+                {pool?.enabled && !pool.healthy && <PoolUnavailableNotice />}
+                {pool?.enabled && pool.healthy && pool.truncated && <PoolTruncatedNotice />}
+                {tab === 'activities' &&
+                  (activities.data ? (
+                    <>
+                      {activities.data.data.length ? (
+                        // B4: its runs folded, within the page shown
+                        <AddressActivities rows={activities.data.data} address={a} />
+                      ) : (
+                        <p className="text-text-dim text-small max-w-measure py-6">
+                          {filter === 'all'
+                            ? 'No activities.'
+                            : `No ${activityFilters.find((f) => f[0] === filter)![1]} activities on this page.`}
+                        </p>
+                      )}
+                      <AddressPagination
+                        pagination={activityPage}
+                        read={activities.data}
+                        label="activities"
+                        order="newest first"
+                      />
+                    </>
+                  ) : (
+                    <AddressLoadState
+                      label="activities"
+                      error={activities.error}
+                      read={activities}
                     />
-                  </>
-                ) : (
-                  <AddressLoadState label="live cells" error={cells.error} read={cells} />
-                ))}
+                  ))}
+                {tab === 'transactions' &&
+                  (transactions.data ? (
+                    <>
+                      <AddressTransactions rows={transactions.data.data} />
+                      <AddressPagination
+                        pagination={txPage}
+                        read={transactions.data}
+                        label="transactions"
+                        order="newest first"
+                      />
+                    </>
+                  ) : (
+                    <AddressLoadState
+                      label="transactions"
+                      error={transactions.error}
+                      read={transactions}
+                    />
+                  ))}
+                {tab === 'cells' &&
+                  (cells.data ? (
+                    <>
+                      <AddressLiveCells rows={cells.data.data} />
+                      <AddressPagination
+                        pagination={cellPage}
+                        read={{
+                          ...cells.data,
+                          total: liveCellsTotal(cells.data.total, cellClass, holdings.data, addr),
+                        }}
+                        label="live cells"
+                      />
+                    </>
+                  ) : (
+                    <AddressLoadState label="live cells" error={cells.error} read={cells} />
+                  ))}
+              </Tabs>
             </section>
           </DetailLayout>
         )}

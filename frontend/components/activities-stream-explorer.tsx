@@ -3,14 +3,10 @@
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
-import { ClassMark } from '@/components/ui/class-mark';
-import {
-  CLASS_COLORS,
-  cssVars,
-  DATA_COLOR,
-  STREAM_COLORS,
-  type AssetClass,
-} from '@/lib/design-tokens';
+import { FilterChips } from '@/components/ui/filter-chips';
+import { Pager } from '@/components/ui/pager';
+import { cssVars, STREAM_COLORS } from '@/lib/design-tokens';
+import { KIND_FILTER_LABEL, kindColor, kindFilterValues, kindWords } from '@/lib/kind-filter';
 import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
@@ -34,30 +30,28 @@ const POLL_INTERVAL_MS = 10_000;
 const NEAR_TOP_THRESHOLD_PX = 120;
 const ROW_HIGHLIGHT_DURATION_MS = 2_000;
 
-/** The Activities board's chips, in its order and words (TX-30), shared with Transactions. */
-const FILTER_OPTIONS: Array<{
-  label: string;
-  value: GlobalActivityFilter;
-  swatch?: string;
-  mark?: AssetClass;
-}> = [
-  { label: 'All', value: 'all' },
-  { label: 'CKB transfers', value: 'ckb', swatch: DATA_COLOR },
-  { label: 'Script calls', value: 'script', swatch: CLASS_COLORS.ckb },
-  { label: 'Nervos DAO', value: 'dao', mark: 'dao' },
-  { label: 'Tokens', value: 'token', mark: 'tokens' },
-  { label: 'Objects', value: 'object', mark: 'objects' },
-  { label: 'Identities', value: 'identity', mark: 'identities' },
-  { label: 'Protocols', value: 'protocol' },
+/**
+ * The Activities board's kinds, in its order (TX-30): the kind filter's values (lib/kind-filter.ts,
+ * the words and marks the transactions list's filter shares, PA-15).
+ */
+const ACTIVITY_KINDS: readonly GlobalActivityFilter[] = [
+  'all',
+  'ckb',
+  'script',
+  'dao',
+  'token',
+  'object',
+  'identity',
+  'protocol',
 ];
 
 /**
  * The filter a URL names (`/activities?filter=dao`, the DAO page's "All DAO activity →"): a known
- * chip value, else All (hierarchy D11).
+ * kind, else All (hierarchy D11).
  */
 function filterFromUrl(raw: string | null): GlobalActivityFilter {
-  const known = FILTER_OPTIONS.find((option) => option.value === raw);
-  return known ? known.value : 'all';
+  const known = ACTIVITY_KINDS.find((kind) => kind === raw);
+  return known ?? 'all';
 }
 
 const STREAM_KEYFRAMES = `
@@ -243,7 +237,7 @@ function ActivityStreamToolbar({
   totalCount,
 }: {
   selectedFilter: GlobalActivityFilter;
-  onFilterChange: (value: string | number | undefined) => void;
+  onFilterChange: (value: GlobalActivityFilter) => void;
   summary?: DailyActivityStats;
   totalCount?: number;
 }) {
@@ -254,39 +248,13 @@ function ActivityStreamToolbar({
       data-testid="activities-stream-toolbar"
       className="bg-base-bg border-row-rule border-b py-3"
     >
-      <div role="group" aria-label="Filter by kind" className="flex flex-wrap items-center gap-2">
-        {FILTER_OPTIONS.map((option) => (
-          <button
-            type="button"
-            key={option.value}
-            aria-label={option.label}
-            aria-pressed={selectedFilter === option.value}
-            onClick={() => onFilterChange(option.value)}
-            className={cn(
-              'text-small flex items-center gap-2 border px-3 py-2 transition-colors',
-              selectedFilter === option.value
-                ? 'border-base-border text-text-bright bg-base-surface'
-                : 'text-text-dim hover:text-text border-transparent'
-            )}
-          >
-            {option.mark && <ClassMark kind={option.mark} />}
-            {option.swatch && (
-              <span
-                aria-hidden="true"
-                data-swatch
-                className="h-[9px] w-[9px]"
-                style={{ backgroundColor: option.swatch }}
-              />
-            )}
-            {option.label}
-            {counts && counts[option.value] !== undefined && (
-              <span className="text-text-dim text-meta tabular-nums">
-                {counts[option.value]!.toLocaleString('en-US')}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* The controls board's kind filter (PA-15: the transactions list's, the same control) */}
+      <FilterChips
+        label={KIND_FILTER_LABEL}
+        values={kindFilterValues(ACTIVITY_KINDS, counts ?? {})}
+        value={selectedFilter}
+        onChange={onFilterChange}
+      />
       {summary && (
         <p className="text-text-dim text-meta mt-2">
           Yesterday, UTC+8 · kind occurrences may overlap; DAO counts actions.
@@ -298,15 +266,15 @@ function ActivityStreamToolbar({
           aria-label={`Activity kind occurrences on ${summary!.date}; categories overlap`}
           className="mt-3 flex h-2 overflow-hidden"
         >
-          {FILTER_OPTIONS.filter(
-            (o) => o.value !== 'all' && counts[o.value] !== undefined && counts[o.value]! > 0
-          ).map((o) => (
+          {ACTIVITY_KINDS.filter(
+            (kind) => kind !== 'all' && counts[kind] !== undefined && counts[kind]! > 0
+          ).map((kind) => (
             <span
-              key={o.value}
-              title={`${o.label}: ${counts[o.value]}`}
+              key={kind}
+              title={`${kindWords(kind)}: ${counts[kind]}`}
               style={{
-                width: `${(counts[o.value]! / occurrences) * 100}%`,
-                backgroundColor: o.mark ? CLASS_COLORS[o.mark] : (o.swatch ?? CLASS_COLORS.other),
+                width: `${(counts[kind]! / occurrences) * 100}%`,
+                backgroundColor: kindColor(kind),
               }}
             />
           ))}
@@ -504,8 +472,7 @@ export function ActivitiesStreamExplorer({
     return () => observer.disconnect();
   }, [fetchNextPage, hasNextPage, isFetchingNextPage, visibleItems.length]);
 
-  const handleFilterChange = (value: string | number | undefined) => {
-    const nextFilter = (value as GlobalActivityFilter | undefined) ?? 'all';
+  const handleFilterChange = (nextFilter: GlobalActivityFilter) => {
     startTransition(() => {
       setSelectedFilter(nextFilter);
     });
@@ -636,15 +603,17 @@ export function ActivitiesStreamExplorer({
             ))}
 
             <div ref={sentinelRef} data-testid="activities-stream-sentinel" className="h-4" />
+            {/* The controls board's pager for a stream that grows downward: the next page's rows,
+                as many as the stream's pages hold (the size the API answered with). */}
             {hasNextPage && !isFetchingNextPage && (
-              <div className="flex justify-center py-4">
-                <button
-                  type="button"
-                  onClick={() => void fetchNextPage()}
-                  className="border-base-border text-text hover:text-text-bright text-small border px-5 py-2"
-                >
-                  Older
-                </button>
+              <div className="py-4">
+                <Pager
+                  mode="more"
+                  next={{
+                    count: data!.pages[data!.pages.length - 1].limit,
+                    onShow: () => void fetchNextPage(),
+                  }}
+                />
               </div>
             )}
 

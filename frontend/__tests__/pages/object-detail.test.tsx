@@ -21,6 +21,9 @@ import {
   sporeCellVersionsProducer,
   objectGeneticsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 const replace = vi.fn();
 vi.mock('@/src/navigation', () => ({
@@ -357,8 +360,8 @@ it('keeps object data visible with a background refresh error', async () => {
 it('switches to real transaction layer and requests its own full scope', async () => {
   vi.mocked(api.getItemTransactions).mockResolvedValue(emptyPage());
   render(<SporeDetailPage sporeId={id} />);
-  await screen.findByRole('tab', { name: 'Transactions' });
-  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  await screen.findByRole('tab', { name: 'transactions' });
+  fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
   expect(await screen.findByText('No transactions.')).toBeInTheDocument();
   expect(api.getItemTransactions).toHaveBeenCalledWith('spore', id, {
     limit: 20,

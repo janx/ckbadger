@@ -22,14 +22,15 @@ import {
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
 import type { PoolStatus } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { FilterChips } from '@/components/ui/filter-chips';
+import { Pager } from '@/components/ui/pager';
+import { Tabs } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
+import { KIND_FILTER_LABEL, kindColor, kindFilterValues, kindWords } from '@/lib/kind-filter';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { cn } from '@/lib/utils';
-import { ClassMark } from '@/components/ui/class-mark';
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
   activityFilterCounts,
   completedYesterdayActivities,
@@ -62,23 +63,27 @@ type TransactionKind =
   | 'token'
   | 'object'
   | 'identity';
-const KINDS: { value: TransactionKind; label: string; mark?: AssetClass; color: string }[] = [
-  { value: 'all', label: 'All', color: 'var(--c-text-dim)' },
-  { value: 'ckb', label: 'CKB transfers', color: 'var(--c-jade)' },
-  { value: 'script', label: 'Script calls', color: CLASS_COLORS.ckb },
-  { value: 'cellbase', label: 'Cellbase', color: CLASS_COLORS.other },
-  { value: 'dao', label: 'Nervos DAO', mark: 'dao', color: CLASS_COLORS.dao },
-  { value: 'token', label: 'Tokens', mark: 'tokens', color: CLASS_COLORS.tokens },
-  { value: 'object', label: 'Objects', mark: 'objects', color: CLASS_COLORS.objects },
-  { value: 'identity', label: 'Identities', mark: 'identities', color: CLASS_COLORS.identities },
+/**
+ * The list's kinds, in the board's order: the kind filter's values (lib/kind-filter.ts, the words
+ * and marks the activities stream's filter shares, PA-15).
+ */
+const TRANSACTION_KINDS: readonly TransactionKind[] = [
+  'all',
+  'ckb',
+  'script',
+  'cellbase',
+  'dao',
+  'token',
+  'object',
+  'identity',
 ];
 /**
  * The kind a URL names (`/transactions?kind=dao`, the DAO page's "DAO transactions →"): a known
  * kind, else All (hierarchy D11).
  */
 function kindFromUrl(raw: string | null): TransactionKind {
-  const known = KINDS.find((option) => option.value === raw);
-  return known ? known.value : 'all';
+  const known = TRANSACTION_KINDS.find((kind) => kind === raw);
+  return known ?? 'all';
 }
 type PoolRow = Awaited<ReturnType<typeof api.getPoolTransactions>>['data'][number];
 /**
@@ -510,6 +515,11 @@ export default function TransactionsPage() {
     }
   };
   const active = tab === 'committed' ? committed : pool;
+  // where the committed list stands in time (lib/pagination.ts): its page, and the pages its
+  // served total makes where it states one (a kind's list states none); nothing for one page
+  const committedAt = committed.data
+    ? timePageAt('committed transactions', committedPage.page, committed.data)
+    : null;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
@@ -560,84 +570,17 @@ export default function TransactionsPage() {
                 No complete transaction count for {yesterday} (UTC+8).
               </p>
             )}
-            {/* Board L2: below sm the kind chips and the pool banner fold into one control line
-                — the kinds, each with yesterday's count, as one select, and the pool as a chip
-                that opens it — so the first transaction is on the first screen. */}
-            <div data-testid="kind-pool-line" className="flex items-center gap-2 sm:hidden">
-              <label htmlFor="transactions-kind" className="sr-only">
-                Filter by kind, with yesterday's counts
-              </label>
-              <select
-                id="transactions-kind"
-                value={kind}
-                onChange={(e) => chooseKind(e.target.value as TransactionKind)}
-                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 border px-2"
-              >
-                {KINDS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.value === 'all' ? 'All kinds' : option.label}
-                    {counts[option.value] !== undefined &&
-                      ` ${counts[option.value]!.toLocaleString('en-US')}`}
-                  </option>
-                ))}
-              </select>
-              {poolHead.data && (
-                <button
-                  type="button"
-                  aria-pressed={tab === 'pool'}
-                  onClick={() => setTab(tab === 'pool' ? 'committed' : 'pool')}
-                  className={cn(
-                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5',
-                    tab === 'pool'
-                      ? 'border-base-border bg-base-surface text-text-bright'
-                      : 'border-base-border-subtle text-text'
-                  )}
-                >
-                  <span aria-hidden="true" className="bg-info h-1.5 w-1.5 rounded-full" />
-                  pool · {poolHead.data.totals.pending.toLocaleString('en-US')} pending
-                </button>
-              )}
-            </div>
-            <div
-              role="group"
-              aria-label="Filter by kind, with yesterday's counts"
-              className="hidden flex-wrap gap-2 sm:flex"
-            >
-              {KINDS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  aria-label={option.label}
-                  aria-pressed={kind === option.value}
-                  onClick={() => chooseKind(option.value)}
-                  className={cn(
-                    'text-small flex min-h-[34px] items-center gap-2 border px-3',
-                    kind === option.value
-                      ? 'border-base-border bg-base-surface text-text-bright'
-                      : 'text-text-dim hover:text-text border-transparent'
-                  )}
-                >
-                  {option.mark ? (
-                    <ClassMark kind={option.mark} />
-                  ) : option.value !== 'all' ? (
-                    <span
-                      aria-hidden="true"
-                      className="h-2 w-2"
-                      style={{ backgroundColor: option.color }}
-                    />
-                  ) : null}
-                  {option.label}
-                  {counts[option.value] !== undefined && (
-                    <span className="text-text-dim text-meta">
-                      {counts[option.value]!.toLocaleString('en-US')}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
+            {/* The controls board's kind filter, with yesterday's counts (PA-15: the activities
+                stream's, the same control; on a phone a select after "kind"). */}
+            <FilterChips
+              label={KIND_FILTER_LABEL}
+              values={kindFilterValues(TRANSACTION_KINDS, counts)}
+              value={kind}
+              onChange={chooseKind}
+            />
             {day && (
               <p className="text-text-dim text-meta max-w-measure">
-                Kind occurrences may overlap; DAO counts actions. “All” counts unique transactions.
+                Kind occurrences may overlap; DAO counts actions. “all” counts unique transactions.
               </p>
             )}
             {occurrences > 0 && (
@@ -646,18 +589,15 @@ export default function TransactionsPage() {
                 aria-label={`Yesterday's kind occurrences; categories overlap`}
                 className="flex h-2 overflow-hidden"
               >
-                {KINDS.filter(
-                  (option) =>
-                    option.value !== 'all' &&
-                    counts[option.value] !== undefined &&
-                    counts[option.value]! > 0
-                ).map((option) => (
+                {TRANSACTION_KINDS.filter(
+                  (k) => k !== 'all' && counts[k] !== undefined && counts[k]! > 0
+                ).map((k) => (
                   <span
-                    key={option.value}
-                    title={`${option.label}: ${counts[option.value]}`}
+                    key={k}
+                    title={`${kindWords(k)}: ${counts[k]}`}
                     style={{
-                      width: `${(counts[option.value]! / occurrences) * 100}%`,
-                      backgroundColor: option.color,
+                      width: `${(counts[k]! / occurrences) * 100}%`,
+                      backgroundColor: kindColor(k),
                     }}
                   />
                 ))}
@@ -721,144 +661,138 @@ export default function TransactionsPage() {
               <p className="text-text-dim text-small">Reading the pool…</p>
             )}
           </section>
-          <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
-            <div
-              role="group"
-              aria-label="Transaction views"
-              className="hidden flex-wrap gap-6 max-md:gap-x-4 sm:flex"
-            >
-              {(['committed', 'pool'] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={tab === value}
-                  onClick={() => setTab(value)}
-                  className={cn(
-                    'text-section max-md:text-body -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5',
-                    tab === value
-                      ? 'border-jade text-text-bright'
-                      : 'text-text-dim border-transparent'
-                  )}
-                >
-                  {value === 'committed' ? 'Committed' : 'In the pool'}
-                  {value === 'pool' && poolHead.data && (
-                    <span className="text-text-dim text-small max-md:text-meta font-normal">
-                      {(
-                        poolHead.data.totals.pending + poolHead.data.totals.proposed
-                      ).toLocaleString('en-US')}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            <span className="text-text-dim text-small">
-              {tab === 'committed'
-                ? 'newest first · cellbase rows set back'
-                : 'not yet in a block · newest first'}
-            </span>
-          </div>
-          {isAwaited(active) && (
-            <p role="status" className="text-text-dim">
-              Loading transactions…
-            </p>
-          )}
-          {active.error && (
-            <p role="alert" className="text-text-dim max-w-measure">
-              Unable to read transactions: {active.error.message}
-            </p>
-          )}
-          {tab === 'committed' && committed.data && (
-            <>
-              {/* B5: how to read the Value column, above the table, not after its last row. */}
-              <p className="text-text-dim text-small max-w-measure">
-                Value is what the participants received. A cellbase row shows, grey, the reward it
-                pays; no total counts it.
-              </p>
-              <TransactionListTable
-                transactions={committed.data.data}
-                formWidth={TRANSACTIONS_FORM_PX}
-              />
-              <CursorPagination
-                className="flex-col items-start gap-3 sm:flex-row sm:items-center"
-                total={committed.data.total ?? undefined}
-                totalLabel="transactions"
-                pageSize={limit}
-                page={committedPage.page}
-                currentCount={committed.data.data.length}
-                hasMore={committed.data.hasMore}
-                hasPrevious={committedPage.hasPrevious}
-                onNext={() => committedPage.goToNext(committed.data.nextCursor)}
-                onPrevious={committedPage.goToPrevious}
-                previousLabel="Newer"
-                nextLabel="Older →"
-              />
-            </>
-          )}
-          {tab === 'pool' && pool.data && (
-            <>
-              <dl className="text-small flex flex-wrap gap-x-9 gap-y-2.5" aria-label="Pool summary">
-                <div>
-                  <dt className="text-text-dim">Pending · proposed</dt>
-                  <dd className="text-text-bright text-body mt-0.5">
-                    {pool.data.totals.pending.toLocaleString('en-US')} ·{' '}
-                    {pool.data.totals.proposed.toLocaleString('en-US')}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-text-dim">Total size</dt>
-                  <dd className="text-text-bright text-body mt-0.5">
-                    {BigInt(pool.data.summary.size).toLocaleString('en-US')} B
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-text-dim">Total cycles</dt>
-                  <dd className="text-text-bright text-body mt-0.5">
-                    {BigInt(pool.data.summary.cycles).toLocaleString('en-US')}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-text-dim">Fee rate, shannon/KB</dt>
-                  <dd className="text-text-bright text-body mt-0.5">
-                    {pool.data.summary.minFeeRate === null || pool.data.summary.maxFeeRate === null
-                      ? 'No fee rates'
-                      : `${BigInt(pool.data.summary.minFeeRate).toLocaleString('en-US')} – ${BigInt(pool.data.summary.maxFeeRate).toLocaleString('en-US')}`}
-                  </dd>
-                </div>
-              </dl>
-              {/* B5: how to read the list, above it, not after its last row. */}
-              <p className="text-text-dim text-small max-w-measure">
-                Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
-                after its proposal.
-              </p>
-              {pool.data.truncated && (
-                <p className="text-text-dim text-small">
-                  This node's tracked pool is truncated; more transactions may be present.
+          {/* The list's command line (the controls board's tab row): committed or in the pool. */}
+          <Tabs
+            label="Transaction views"
+            command
+            tabs={[
+              { key: 'committed', label: 'committed' },
+              {
+                key: 'pool',
+                label: 'in the pool',
+                count: poolHead.data
+                  ? poolHead.data.totals.pending + poolHead.data.totals.proposed
+                  : undefined,
+              },
+            ]}
+            value={tab}
+            onChange={setTab}
+          >
+            <div className="mt-3 space-y-8">
+              <div className="text-text-dim text-small">
+                {tab === 'committed'
+                  ? 'newest first · cellbase rows set back'
+                  : 'not yet in a block · newest first'}
+              </div>
+              {isAwaited(active) && (
+                <p role="status" className="text-text-dim">
+                  Loading transactions…
                 </p>
               )}
-              <ListTable
-                label="Transactions in the pool"
-                columns={POOL_COLUMNS}
-                rows={pool.data.data}
-                rowKey={(tx) => tx.hash}
-                empty="The node's pool is empty."
-                mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
-              />
-              <CursorPagination
-                className="flex-col items-start gap-3 sm:flex-row sm:items-center"
-                total={pool.data.total}
-                totalLabel="pool transactions"
-                pageSize={limit}
-                page={poolPage.page}
-                currentCount={pool.data.data.length}
-                hasMore={pool.data.nextCursor !== null}
-                hasPrevious={poolPage.hasPrevious}
-                onNext={() => poolPage.goToNext(pool.data.nextCursor)}
-                onPrevious={poolPage.goToPrevious}
-                previousLabel="Newer"
-                nextLabel="Older →"
-              />
-            </>
-          )}
+              {active.error && (
+                <p role="alert" className="text-text-dim max-w-measure">
+                  Unable to read transactions: {active.error.message}
+                </p>
+              )}
+              {tab === 'committed' && committed.data && (
+                <>
+                  {/* B5: how to read the Value column, above the table, not after its last row. */}
+                  <p className="text-text-dim text-small max-w-measure">
+                    Value is what the participants received. A cellbase row shows, grey, the reward
+                    it pays; no total counts it.
+                  </p>
+                  <TransactionListTable
+                    transactions={committed.data.data}
+                    formWidth={TRANSACTIONS_FORM_PX}
+                  />
+                  {/* The controls board's cursor in time. */}
+                  {committedAt && (
+                    <Pager
+                      mode="time"
+                      label="committed transactions"
+                      order="newest first"
+                      {...committedAt}
+                      onNewer={committedPage.hasPrevious ? committedPage.goToPrevious : undefined}
+                      onOlder={
+                        committed.data.hasMore
+                          ? () => committedPage.goToNext(committed.data.nextCursor)
+                          : undefined
+                      }
+                    />
+                  )}
+                </>
+              )}
+              {tab === 'pool' && pool.data && (
+                <>
+                  <dl
+                    className="text-small flex flex-wrap gap-x-9 gap-y-2.5"
+                    aria-label="Pool summary"
+                  >
+                    <div>
+                      <dt className="text-text-dim">Pending · proposed</dt>
+                      <dd className="text-text-bright text-body mt-0.5">
+                        {pool.data.totals.pending.toLocaleString('en-US')} ·{' '}
+                        {pool.data.totals.proposed.toLocaleString('en-US')}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-text-dim">Total size</dt>
+                      <dd className="text-text-bright text-body mt-0.5">
+                        {BigInt(pool.data.summary.size).toLocaleString('en-US')} B
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-text-dim">Total cycles</dt>
+                      <dd className="text-text-bright text-body mt-0.5">
+                        {BigInt(pool.data.summary.cycles).toLocaleString('en-US')}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-text-dim">Fee rate, shannon/KB</dt>
+                      <dd className="text-text-bright text-body mt-0.5">
+                        {pool.data.summary.minFeeRate === null ||
+                        pool.data.summary.maxFeeRate === null
+                          ? 'No fee rates'
+                          : `${BigInt(pool.data.summary.minFeeRate).toLocaleString('en-US')} – ${BigInt(pool.data.summary.maxFeeRate).toLocaleString('en-US')}`}
+                      </dd>
+                    </div>
+                  </dl>
+                  {/* B5: how to read the list, above it, not after its last row. */}
+                  <p className="text-text-dim text-small max-w-measure">
+                    Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
+                    after its proposal.
+                  </p>
+                  {pool.data.truncated && (
+                    <p className="text-text-dim text-small">
+                      This node's tracked pool is truncated; more transactions may be present.
+                    </p>
+                  )}
+                  <ListTable
+                    label="Transactions in the pool"
+                    columns={POOL_COLUMNS}
+                    rows={pool.data.data}
+                    rowKey={(tx) => tx.hash}
+                    empty="The node's pool is empty."
+                    mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
+                  />
+                  {/* The controls board's cursor in time, without a count of pages: the pool moves
+                      under the reader (every five seconds), so its pages are no fixed number. */}
+                  <Pager
+                    mode="time"
+                    label="pool transactions"
+                    order="newest first"
+                    page={poolPage.page}
+                    onNewer={poolPage.hasPrevious ? poolPage.goToPrevious : undefined}
+                    onOlder={
+                      pool.data.nextCursor !== null
+                        ? () => poolPage.goToNext(pool.data.nextCursor)
+                        : undefined
+                    }
+                  />
+                </>
+              )}
+            </div>
+          </Tabs>
         </DetailLayout>
         <TopicCharts topic="/transactions" />
       </main>

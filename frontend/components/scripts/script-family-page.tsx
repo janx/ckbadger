@@ -2,8 +2,9 @@
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { CellBar } from '@/components/ui/cell-bar';
-import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { RangeSelect } from '@/components/ui/range-select';
+import { Pager } from '@/components/ui/pager';
+import { rankedPageAt } from '@/lib/pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -33,7 +34,7 @@ import {
   blockLink,
 } from '@/components/scripts/script-family-board';
 import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/api';
-import type { CapacityRangeKey } from '@/lib/capacity-range';
+import { CAPACITY_RANGE_OPTIONS, type CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
@@ -85,14 +86,17 @@ export interface ScriptFamilyPageProps {
   codeCells: ReadonlyMap<string, CodeCellState>;
   /** Lane S: the newest live cells, from `/cells/by-script?order=desc` (one index). */
   newest: NewestCellsState;
+  /**
+   * The family's cells, a page of them, merged from its references' pages: the pager counts them
+   * of the family's live cells (`family.liveCellsCount`) from the page the walk is on, the page
+   * size and the rows shown (lib/pagination.ts rankedPageAt).
+   */
   cells: {
     pageSize: number;
     rows: readonly Cell[];
     loading: boolean;
     page: number;
     hasMore: boolean;
-    hasPrevious: boolean;
-    currentCount: number;
     onNext: () => void;
     onPrevious: () => void;
   };
@@ -524,19 +528,31 @@ export function ScriptFamilyPage({
   // caption row, right over the picture it redraws, below md.
   const fromMd = useFromMd();
   const range = (
-    <CapacityRangeSelector
+    <RangeSelect
+      label="range"
+      options={CAPACITY_RANGE_OPTIONS}
       value={capacityRange}
       onChange={(next) => {
         // Another range draws other days: a hovered day of the old one lets go.
         setActive(null);
         onCapacityRange(next);
       }}
-      quiet
     />
   );
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
   const history = family.history;
+  // The family's cells, oldest first, counted of its live cells: the pager's pages mode, null for
+  // one page (an empty page draws none either).
+  const cellsAt =
+    cells.rows.length > 0
+      ? rankedPageAt('cells', cells.page, {
+          data: cells.rows,
+          limit: cells.pageSize,
+          hasMore: cells.hasMore,
+          total: family.liveCellsCount,
+        })
+      : null;
   const numbers = versionNumbers(family);
   const lineage = typeLineage(history);
   const holders = lineage ? codeHolders(lineage, history, numbers) : [];
@@ -1319,17 +1335,13 @@ export function ScriptFamilyPage({
                   {family.liveCellsCount.toLocaleString('en-US')}
                 </p>
               )}
-              {cells.rows.length > 0 && (
-                <CursorPagination
-                  total={family.liveCellsCount}
-                  totalLabel="cells"
-                  pageSize={cells.pageSize}
-                  page={cells.page}
-                  currentCount={cells.currentCount}
-                  hasMore={cells.hasMore}
-                  hasPrevious={cells.hasPrevious}
-                  onNext={cells.onNext}
+              {cellsAt && (
+                <Pager
+                  mode="pages"
+                  label="cells"
+                  {...cellsAt}
                   onPrevious={cells.onPrevious}
+                  onNext={cells.onNext}
                 />
               )}
             </section>

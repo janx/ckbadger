@@ -9,6 +9,9 @@ import {
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 let query = '';
 const replace = vi.fn();
@@ -118,7 +121,7 @@ it('hydrates the explicit activity cursor and advances full-record pagination', 
       cursor: '100:0',
     })
   );
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
       limit: 20,
@@ -139,7 +142,7 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
     })),
   });
   render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   await screen.findByRole('table', { name: 'Asset transactions' });
   // ID-C8: the identity boards carry no Cycles (or Output capacity) column, so a pending cycles
   // count is not shown at all rather than as "Not computed".
@@ -162,7 +165,7 @@ it('starts a new identity on its own first cursor page', async () => {
     nextCursor: '90:0',
   });
   const { rerender } = render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotbit', evidence.itemId, {
       limit: 20,
@@ -333,7 +336,7 @@ it('says nothing of .bit Cells while the index is not derived (L3: bitCells null
 // Cells · Fee · Size · This name's cell after it.
 it('lays the .bit Transactions out in the board columns (ID-C8)', async () => {
   render(<Page identityId={evidence.itemId} />);
-  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   const table = await screen.findByRole('table', { name: 'Asset transactions' });
   const headers = Array.from(table.querySelectorAll('th')).map((th) =>
     th.textContent!.replace(/0[\d,]+$/, '')

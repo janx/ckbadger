@@ -236,8 +236,39 @@ describe('Asset history', () => {
     expect(
       within(readout).getByTitle('complete UTC+8 days through 2024-01-08 · indexed chain time')
     ).toHaveTextContent(/^2024-01-08$/);
-    fireEvent.click(screen.getByRole('button', { name: '1W' }));
+    // re-pinned (lane c2-assets): the range is the controls board's RangeSelect, a radio group
+    // whose spans are spelled "1 w · 1 m · 1 y · all" (was a button "1W")
+    fireEvent.click(screen.getByRole('radio', { name: '1 w' }));
     expect(readout).toHaveTextContent('2024-01-08');
+  });
+  // Pinned before the controls lane (C2) put the range on RangeSelect: another span drops the day
+  // the reader chose, and the reading returns to the newest complete day.
+  it('reads the newest day again when another span is chosen', () => {
+    stubChartWidth(358);
+    try {
+      render(
+        <AssetHistory
+          assetClass="tokens"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 8 }}
+        />
+      );
+      const readout = screen.getByLabelText('History readout');
+      const day = () =>
+        within(readout).getByTitle('complete UTC+8 days through 2024-01-08 · indexed chain time');
+      expect(day()).toHaveTextContent(/^2024-01-08$/);
+      fireEvent.keyDown(screen.getByRole('img', { name: 'Supply, T' }), { key: 'ArrowLeft' });
+      expect(day()).toHaveTextContent(/^2024-01-01$/);
+      // re-pinned (lane c2-assets): the span is a radio of RangeSelect, "1 m" (was a button "1M")
+      fireEvent.click(screen.getByRole('radio', { name: '1 m' }));
+      expect(day()).toHaveTextContent(/^2024-01-08$/);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
   it('labels supply events in UTC+8 and distinguishes raw block dates from indexed chart days', () => {
     render(

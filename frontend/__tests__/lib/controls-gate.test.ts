@@ -78,103 +78,18 @@ const CONTROL_FILES = [
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
-  'app/blocks/page.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the blocks list’s cursor pager (newer / older)',
-  },
-  'app/dao/depositors/page.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the depositors list’s cursor pager',
-  },
-  'app/inventory/inventory-page-client.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 2, 'text-input': 1, tab: 1, pager: 1 },
-    reason:
-      'the standard filter’s phone select and the sort select, the name search, the class tabs (links), the pager',
-  },
-  'app/scripts/page.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 1, 'text-input': 1, tab: 1, pager: 1 },
-    reason: 'the sort select, the name search, the role tabs, the pager',
-  },
-  'app/transactions/page.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 1, tab: 1, pager: 2 },
-    reason: 'the kind select, the committed / pool tabs, the two lists’ pagers',
-  },
-  'components/activities-stream-explorer.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the activities stream’s boxed “Older” button',
-  },
   // ---- c2-chain: block, transaction, cell, address, script pages ----
-  'app/address/[addr]/client-page.tsx': {
-    lane: 'c2-chain',
-    sites: { tab: 1 },
-    reason: 'the activities / transactions / live cells tabs (buttons, aria-pressed)',
-  },
-  'app/blocks/[id]/client-page.tsx': {
-    lane: 'c2-chain',
-    sites: { tab: 1, pager: 2 },
-    reason: 'the transactions / activities tabs and their two pagers',
-  },
-  'app/scripts/[name]/client-page.tsx': {
-    lane: 'c2-chain',
-    sites: { pager: 1 },
-    reason: 'the script version’s cells pager',
-  },
-  'components/address/address-holdings.tsx': {
-    lane: 'c2-chain',
-    sites: { pager: 2 },
-    reason: 'the holdings lists’ pager and the objects list’s',
-  },
-  'components/scripts/script-family-page.tsx': {
-    lane: 'c2-chain',
-    sites: { pager: 1 },
-    reason: 'a script family’s cells pager',
-  },
   'components/scripts/script-newest-cells.tsx': {
     lane: 'c2-chain',
     sites: { pager: 1 },
     reason: 'the newest cells’ “All N cells ↓”: the short list’s form, or a way onward',
   },
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
-  'app/tokens/[typeHash]/client-page.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason: 'the supply events’ pager',
-  },
-  'components/asset/asset-feed.tsx': {
-    lane: 'c2-assets',
-    sites: { tab: 2, pager: 1 },
-    reason: 'the feed’s tablist and its tabs, the feed’s pager',
-  },
   'components/asset/collection-gallery.tsx': {
     lane: 'c2-assets',
-    sites: { select: 1, 'text-input': 1, pager: 1 },
-    reason: 'the gallery’s name search, its sort select and its pager',
-  },
-  'components/asset/collection-holders.tsx': {
-    lane: 'c2-assets',
     sites: { pager: 1 },
-    reason: 'a collection’s holders pager',
-  },
-  'components/asset/collection-objects.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason: 'a collection’s objects pager',
-  },
-  'components/asset/item-evidence.tsx': {
-    lane: 'c2-assets',
-    sites: { select: 1 },
-    reason: 'the evidence’s version select',
-  },
-  'components/asset/token-holders.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason: 'a token’s holders pager',
+    reason:
+      'a collection’s items pager: a list in id order whose search pages carry no total, which no mode of the Pager draws (pages needs the count; time says newer / older; more appends)',
   },
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
   // ---- shell: the header's search field and the command palette ----
@@ -201,7 +116,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 40;
+const TOLERATED_TOTAL = 6;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

@@ -279,6 +279,24 @@ describe('BlockDetailPage', () => {
     expect(pushMock).toHaveBeenNthCalledWith(4, `/blocks/${mockBlock.number + 1}`);
   });
 
+  // Lane c2-chain: the block's contents open on the library's tab row, whose ← and → move between
+  // its views (WAI-ARIA tabs); a key the row took is not also the page's step to another block.
+  it('moves between the views with ← and → on the tab row without leaving the block', async () => {
+    render(<BlockDetailPage />);
+    const activities = await screen.findByRole('tab', { name: /^activities/ });
+    const transactions = screen.getByRole('tab', { name: /^transactions/ });
+    act(() => activities.focus());
+    fireEvent.keyDown(activities, { key: 'ArrowRight' });
+    expect(transactions).toHaveAttribute('aria-selected', 'true');
+    expect(transactions).toHaveFocus();
+    fireEvent.keyDown(transactions, { key: 'ArrowLeft' });
+    expect(activities).toHaveAttribute('aria-selected', 'true');
+    expect(pushMock).not.toHaveBeenCalled();
+    // away from the row the keys still step through the chain
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(pushMock).toHaveBeenCalledWith(`/blocks/${mockBlock.number + 1}`);
+  });
+
   it('loads hardfork resources from timeline when block payload has no resources', async () => {
     vi.mocked(api.getBlock).mockResolvedValue({
       ...mockBlock,
@@ -484,8 +502,9 @@ describe('BlockDetailPage', () => {
 
   it('shows block activities first and puts exact developer evidence below the shared tier boundary', async () => {
     render(<BlockDetailPage />);
-    expect(await screen.findByRole('button', { name: /^Activities/ })).toHaveAttribute(
-      'aria-pressed',
+    // re-pinned (lane c2-chain): the views are the library's tab row (were pressed buttons)
+    expect(await screen.findByRole('tab', { name: /^activities/ })).toHaveAttribute(
+      'aria-selected',
       'true'
     );
     expect(api.getGlobalActivities).toHaveBeenCalledWith({
@@ -507,7 +526,7 @@ describe('BlockDetailPage', () => {
         name: 'Size, bytes: 1,200, 974 overhead, 226 user transactions',
       })
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
     expect(
       await screen.findByRole('table', { name: 'Transactions in this block' })
     ).toBeInTheDocument();
@@ -590,13 +609,13 @@ describe('BlockDetailPage', () => {
       client.setQueryData(['block', BLOCK_ID], mockBlock)
     );
     expect(await screen.findByText('Loading activities…')).toHaveAttribute('role', 'status');
-    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^transactions/ }));
     expect(await screen.findByText('Loading transactions…')).toHaveAttribute('role', 'status');
     resume();
     expect(
       await screen.findByRole('table', { name: 'Transactions in this block' })
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^Activities/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /^activities/ }));
     expect(await screen.findByText('No activities in this block.')).toBeInTheDocument();
   });
 });

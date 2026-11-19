@@ -5,7 +5,10 @@ import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { AppLink } from '@/components/ui/app-link';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
+import { Select } from '@/components/ui/select';
+import { Tabs } from '@/components/ui/tabs';
+import { TextField } from '@/components/ui/text-field';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -28,7 +31,7 @@ import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
@@ -41,6 +44,16 @@ import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
+type Role = 'all' | 'lock' | 'type';
+
+/** The sort select's choices, in the page's own words (the controls board's select, lowercase). */
+const SORTS: readonly { value: SortKey; label: string }[] = [
+  { value: 'capacity', label: 'ckb in their cells' },
+  { value: 'used', label: 'occupied ckb' },
+  { value: 'liveCells', label: 'live cells' },
+  { value: 'cells', label: 'cells ever' },
+  { value: 'name', label: 'name' },
+];
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 
 function hasName(script: KnownScript): boolean {
@@ -406,10 +419,12 @@ export default function ScriptsPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   // The table's page (declared first: its request goes first).
+  // The page a response was asked as travels with it: the table keeps the page it shows while the
+  // next one loads (keepPreviousData), and the pager writes that page's figures, not the next's.
   const read = useQuery({
     queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
-    queryFn: () =>
-      api.getScripts({
+    queryFn: async () => ({
+      ...(await api.getScripts({
         limit: pageSize,
         cursor: pagination.cursor,
         decoderType: undefined,
@@ -417,7 +432,9 @@ export default function ScriptsPage() {
         role,
         sortKey,
         sortDirection,
-      }),
+      })),
+      page: pagination.page,
+    }),
     placeholderData: keepPreviousData,
   });
   const { data, isError, error } = read;
@@ -436,6 +453,8 @@ export default function ScriptsPage() {
   }
 
   const rows = data?.data ?? [];
+  // the shown page's figures (lib/pagination.ts), at the page it was asked as; nothing for one page
+  const scriptsAt = data && data.data.length > 0 ? rankedPageAt('scripts', data.page, data) : null;
   const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
@@ -545,12 +564,13 @@ export default function ScriptsPage() {
       // One inline group (as the DAO page's range buttons): one line on the title row.
       className="min-w-0 whitespace-nowrap"
     >
-      <input
+      <TextField
+        label="Search scripts"
+        search
         value={searchInput}
-        onChange={(event) => setSearchInput(event.target.value)}
+        onChange={setSearchInput}
         placeholder="search by name or code hash"
-        aria-label="Search scripts"
-        className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 border px-3 align-middle sm:w-64"
+        className="w-48 align-middle sm:w-64"
       />
       {search && (
         <button
@@ -615,103 +635,76 @@ export default function ScriptsPage() {
               </>
             )}
             <section aria-label="Script list" className="mt-16 min-w-0">
-              <div
-                role="group"
-                aria-label="Role"
-                className="border-base-border mb-[18px] flex flex-wrap gap-7 border-b max-md:gap-x-4"
+              {/* The section's command line (the controls board's tab row): the role the table
+                  lists; the hero above never follows it. */}
+              <Tabs
+                label="Role"
+                command
+                tabs={[
+                  { key: 'all', label: 'all', count: data?.roleCounts?.all },
+                  { key: 'lock', label: 'locks', count: data?.roleCounts?.locks },
+                  { key: 'type', label: 'types', count: data?.roleCounts?.types },
+                ]}
+                value={role ?? 'all'}
+                onChange={(next: Role) => {
+                  setRole(next === 'all' ? undefined : next);
+                  pagination.reset();
+                }}
               >
-                {(
-                  [
-                    [undefined, 'All', data?.roleCounts?.all],
-                    ['lock', 'Locks', data?.roleCounts?.locks],
-                    ['type', 'Types', data?.roleCounts?.types],
-                  ] as const
-                ).map(([value, label, count]) => (
-                  <button
-                    key={label}
-                    type="button"
-                    aria-pressed={role === value}
-                    onClick={() => {
-                      setRole(value);
-                      pagination.reset();
-                    }}
-                    className={`text-section max-md:text-body -mb-px flex h-11 items-center gap-2 border-b-2 font-medium max-md:gap-1.5 ${role === value ? 'text-text-bright border-jade' : 'text-text-dim border-transparent'}`}
-                  >
-                    {label}{' '}
-                    {count !== undefined && (
-                      <span className="text-text-dim text-small max-md:text-meta font-normal">
-                        {count.toLocaleString('en-US')}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-              <div className="text-text-dim text-small mb-3 flex flex-wrap items-center gap-2">
-                <label htmlFor="scripts-sort">sorted by</label>
-                <select
-                  id="scripts-sort"
-                  aria-label="Sort scripts"
-                  value={sortKey}
-                  onChange={(event) => {
-                    const next = event.target.value as SortKey;
-                    sortBy(next, next === 'name' ? 'asc' : 'desc');
-                  }}
-                  className="border-base-border bg-base-surface text-text text-small border px-2 py-1"
-                >
-                  <option value="capacity">CKB in their cells</option>
-                  <option value="used">Occupied CKB</option>
-                  <option value="liveCells">Live cells</option>
-                  <option value="cells">Cells ever</option>
-                  <option value="name">Name</option>
-                </select>
-                <button
-                  type="button"
-                  aria-label="Reverse order"
-                  onClick={() => sortBy(sortKey, sortDirection === 'asc' ? 'desc' : 'asc')}
-                  className="hover:text-text-bright"
-                >
-                  {sortDirection === 'asc' ? '↑' : '↓'}
-                </button>
-                {data?.total !== undefined && data.total !== null && (
-                  <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
-                )}
-              </div>
-              {isAwaited(read) ? (
-                <div className="text-text-dim text-small py-8">Loading scripts…</div>
-              ) : isError ? (
-                <div role="alert" className="text-negative text-small py-8">
-                  <strong>Failed to load scripts</strong>:{' '}
-                  {error instanceof Error ? error.message : 'Unknown error'}
-                </div>
-              ) : (
-                <ListTable
-                  label="Scripts"
-                  columns={columns}
-                  rows={rows}
-                  rowKey={(s) => s.codeHash}
-                  empty="No scripts."
-                  density="row"
-                  rowTitle={scriptRowTitle}
-                  // T5: body ink for the row, the name alone bright.
-                  rowClassName={() => 'text-text'}
-                  mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
-                />
-              )}
-              {data && data.data.length > 0 && (
-                <div className="border-base-border mt-4 border-t pt-4">
-                  <CursorPagination
-                    total={data.total ?? undefined}
-                    totalLabel="scripts"
-                    pageSize={pageSize}
-                    page={pagination.page}
-                    currentCount={data.data.length}
-                    hasMore={data.hasMore}
-                    hasPrevious={pagination.hasPrevious}
-                    onNext={() => pagination.goToNext(data.nextCursor)}
-                    onPrevious={pagination.goToPrevious}
+                <div className="text-text-dim text-small mb-3 mt-[18px] flex flex-wrap items-center gap-2">
+                  <Select
+                    label="sorted by"
+                    value={sortKey}
+                    options={SORTS}
+                    onChange={(next) => sortBy(next, next === 'name' ? 'asc' : 'desc')}
                   />
+                  <button
+                    type="button"
+                    aria-label="Reverse order"
+                    onClick={() => sortBy(sortKey, sortDirection === 'asc' ? 'desc' : 'asc')}
+                    className="hover:text-text-bright"
+                  >
+                    {sortDirection === 'asc' ? '↑' : '↓'}
+                  </button>
+                  {data?.total !== undefined && data.total !== null && (
+                    <span className="ml-auto">{unitNode(formatCount(data.total, 'script'))}</span>
+                  )}
                 </div>
-              )}
+                {isAwaited(read) ? (
+                  <div className="text-text-dim text-small py-8">Loading scripts…</div>
+                ) : isError ? (
+                  <div role="alert" className="text-negative text-small py-8">
+                    <strong>Failed to load scripts</strong>:{' '}
+                    {error instanceof Error ? error.message : 'Unknown error'}
+                  </div>
+                ) : (
+                  <ListTable
+                    label="Scripts"
+                    columns={columns}
+                    rows={rows}
+                    rowKey={(s) => s.codeHash}
+                    empty="No scripts."
+                    density="row"
+                    rowTitle={scriptRowTitle}
+                    // T5: body ink for the row, the name alone bright.
+                    rowClassName={() => 'text-text'}
+                    mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
+                  />
+                )}
+                {data && data.data.length > 0 && (
+                  <div className="border-base-border mt-4 border-t pt-4">
+                    {scriptsAt && (
+                      <Pager
+                        mode="pages"
+                        label="scripts"
+                        {...scriptsAt}
+                        onPrevious={pagination.goToPrevious}
+                        onNext={() => pagination.goToNext(data.nextCursor)}
+                      />
+                    )}
+                  </div>
+                )}
+              </Tabs>
             </section>
           </div>
           <div id="evidence" className="scroll-mt-4">

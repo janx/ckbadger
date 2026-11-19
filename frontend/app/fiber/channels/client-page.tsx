@@ -18,7 +18,7 @@ import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
-import { DEFAULT_PAGE_SIZE, rankedPage } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
@@ -312,6 +312,12 @@ export default function FiberChannelsPage() {
       }),
   });
   const summary = network.data?.summary;
+  // where the ranked list stands (lib/pagination.ts): the rows shown of the response's total at
+  // its page size, the page the response was asked as (the list keeps no previous page while the
+  // next loads, so the two never part); nothing for a list on one page, an empty one too
+  const channelsAt = channels.data
+    ? rankedPageAt('Fiber channels', pagination.page, channels.data)
+    : null;
   const chosen = filters.find((filter) => filter.value === stateFilter)!;
   const lastColumn = stateFilter === 'open' ? 'Open for' : 'Lifetime';
   return (
@@ -497,15 +503,12 @@ export default function FiberChannelsPage() {
                   ])}
                   mobileRow={(channel, wide) => <ChannelPhoneRow channel={channel} wide={wide} />}
                 />
-                {/* The controls board's pager for a ranked list (the channels by capacity): its
-                    figures are the response's (rankedPage), nothing for one page. The page is the
-                    one the response was asked as: the list keeps no previous page while the next
-                    loads, so the two never part. */}
-                {channels.data.data.length > 0 && (
+                {/* The controls board's pager for a ranked list (the channels by capacity). */}
+                {channelsAt && (
                   <Pager
                     mode="pages"
                     label="channels"
-                    {...rankedPage('Fiber channels', pagination.page, channels.data)}
+                    {...channelsAt}
                     onPrevious={pagination.goToPrevious}
                     onNext={() => pagination.goToNext(channels.data?.nextCursor)}
                   />

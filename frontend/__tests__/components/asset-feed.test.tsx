@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import {
   AssetFeed,
   AssetTransactions,
@@ -6,6 +6,9 @@ import {
   tokenMoved,
 } from '@/components/asset/asset-feed';
 import type { Transaction, GlobalActivity, ItemActivity } from '@/lib/api';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 const token = '0x' + 'ab'.repeat(32);
 const activity: GlobalActivity = {
   txHash: '0x' + 'cd'.repeat(32),
@@ -292,11 +295,58 @@ describe('Shared asset feeds', () => {
     await waitFor(() =>
       expect(loadActivities).toHaveBeenCalledWith({ limit: 20, cursor: undefined })
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     expect(await screen.findByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
       'Not computed'
     );
     expect(loadTransactions).toHaveBeenCalledWith({ limit: 20, cursor: undefined });
+  });
+  // The controls lane (C2): the full feed opens on the controls board's tab row as the section's
+  // command line (the prompt square, lowercase names; an h2 keeps the section in the outline) and
+  // pages as a list in time, the page counted from the newest end and its pages from the count.
+  it('opens on the board’s tab row and says where a page of the feed stands', async () => {
+    const loadActivities = vi.fn().mockImplementation(async ({ cursor }) => ({
+      data: [activity],
+      total: 100,
+      limit: 20,
+      hasMore: true,
+      nextCursor: cursor ? 'older-still' : 'older',
+    }));
+    const { container } = render(
+      <AssetFeed
+        queryKey="where"
+        scope="This token"
+        loadActivities={loadActivities}
+        loadTransactions={async () => ({ data: [], limit: 20, hasMore: false, nextCursor: null })}
+      />
+    );
+    const feed = screen.getByRole('region', { name: 'What happened' });
+    expect(within(feed).getByRole('heading', { level: 2, name: 'What happened' })).toHaveClass(
+      'sr-only'
+    );
+    const row = within(feed).getByRole('tablist', { name: 'What happened' });
+    expect(
+      within(row)
+        .getAllByRole('tab')
+        .map((t) => t.textContent)
+    ).toEqual(['activities', 'transactions']);
+    expect(row.querySelector('.section-mark')).not.toBeNull();
+    expect(feed).toHaveTextContent('This token · newest first');
+    const pager = await screen.findByRole('navigation', { name: 'activities' });
+    expect(pager).toHaveTextContent(/^newest first← newerpage 1 of 5older →$/);
+    fireEvent.click(within(pager).getByRole('button', { name: 'older →' }));
+    await waitFor(() =>
+      expect(loadActivities).toHaveBeenLastCalledWith({ limit: 20, cursor: 'older' })
+    );
+    expect(await screen.findByText('page 2 of 5')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('navigation', { name: 'activities' })).getByRole('button', {
+        name: '← newer',
+      })
+    ).toBeInTheDocument();
+    expect(container.querySelector('[role="tabpanel"]')).toContainElement(
+      screen.getByRole('navigation', { name: 'activities' })
+    );
   });
   it('hydrates an activity cursor and returns to that exact starting page without affecting transactions', async () => {
     const loadActivities = vi.fn().mockResolvedValue({
@@ -323,11 +373,16 @@ describe('Shared asset feeds', () => {
     await waitFor(() =>
       expect(loadActivities).toHaveBeenLastCalledWith({ limit: 20, cursor: '100:2' })
     );
-    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    // a page opened at a cursor from the URL is not counted from the newest end: it names no page
+    // (the old pager wrote "Page 1 of 5" there)
+    expect(await screen.findByRole('navigation', { name: 'activities' })).not.toHaveTextContent(
+      /page/
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
     await waitFor(() => expect(changed).toHaveBeenLastCalledWith('older'));
-    fireEvent.click(await screen.findByRole('button', { name: 'Previous' }));
+    fireEvent.click(await screen.findByRole('button', { name: '← newer' }));
     await waitFor(() => expect(changed).toHaveBeenLastCalledWith('100:2'));
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     await waitFor(() =>
       expect(loadTransactions).toHaveBeenCalledWith({ limit: 20, cursor: undefined })
     );

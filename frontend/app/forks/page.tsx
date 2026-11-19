@@ -16,7 +16,7 @@ import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ForkNodeRecord, type ReorgEvent } from '@/lib/api';
-import { DEFAULT_PAGE_SIZE, pageCount } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -393,6 +393,9 @@ export default function ForksPage() {
   // again only when one of the titles shown changes (lane E4).
   const now = useClockTime((t) => shown.map((e) => switchTitle(e, t)).join('\n'));
   const total = events.data?.total;
+  // where the list stands in time (lib/pagination.ts): its page and the pages its served total
+  // makes at the served page size; nothing for a list on one page, an empty one too
+  const switchesAt = events.data ? timePageAt('branch switches', page, events.data) : null;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
@@ -555,9 +558,8 @@ export default function ForksPage() {
                 />
                 {/* The controls board's pager: the short list's own form while the first five
                     stand for the list ("all 18 branch switches ↓"), then a cursor in time, newest
-                    first, the page of the pages the served total makes at the served page size;
-                    nothing under an empty list. */}
-                {events.data.data.length === 0 ? null : collapsed ? (
+                    first (switchesAt). */}
+                {collapsed ? (
                   <div className="mt-3">
                     <Pager
                       mode="more"
@@ -570,19 +572,20 @@ export default function ForksPage() {
                     />
                   </div>
                 ) : (
-                  <div className="mt-5">
-                    <Pager
-                      mode="time"
-                      label="branch switches"
-                      order="newest first"
-                      page={page}
-                      pages={pageCount(switchesTotal(events.data.total), events.data.limit)}
-                      onNewer={hasPrevious ? goToPrevious : undefined}
-                      onOlder={
-                        events.data.hasMore ? () => goToNext(events.data!.nextCursor) : undefined
-                      }
-                    />
-                  </div>
+                  switchesAt && (
+                    <div className="mt-5">
+                      <Pager
+                        mode="time"
+                        label="branch switches"
+                        order="newest first"
+                        {...switchesAt}
+                        onNewer={hasPrevious ? goToPrevious : undefined}
+                        onOlder={
+                          events.data.hasMore ? () => goToNext(events.data!.nextCursor) : undefined
+                        }
+                      />
+                    </div>
+                  )
                 )}
               </>
             )}
