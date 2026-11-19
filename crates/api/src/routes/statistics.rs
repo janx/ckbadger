@@ -5435,8 +5435,11 @@ async fn get_asset_ecosystem(
 
 #[cfg(test)]
 mod tests {
+    // re-pinned for lane exactness, part B (the third read's S3): the unit is the one the exact value reaches, and the figure is cut in
+    // it: one under the unit is 999.99 of the unit below, the unit itself 1.00 (half up, the unit
+    // was chosen at scale − scale / 200,000 so a carry landed in it: 999,995 read 1.00 M)
     #[test]
-    fn compact_work_display_promotes_rounded_unit_boundaries() {
+    fn compact_work_display_takes_the_unit_the_value_reaches() {
         for (scale, previous, next) in [
             (1_000_000u128, "K", "M"),
             (1_000_000_000, "M", "G"),
@@ -5444,26 +5447,31 @@ mod tests {
             (1_000_000_000_000_000, "T", "P"),
             (1_000_000_000_000_000_000, "P", "E"),
         ] {
-            let boundary = scale - scale / 200_000;
+            let lowered = scale - scale / 200_000;
+            assert_eq!(format_hash_rate(scale - 1), format!("999.99 {previous}H/s"));
+            assert_eq!(format_hash_rate(lowered), format!("999.99 {previous}H/s"));
+            assert_eq!(format_hash_rate(scale), format!("1.00 {next}H/s"));
             assert_eq!(
-                format_hash_rate(boundary - 1),
-                format!("999.99 {previous}H/s")
-            );
-            assert_eq!(format_hash_rate(boundary), format!("1.00 {next}H/s"));
-            assert_eq!(
-                format_difficulty((boundary - 1) as u64),
+                format_difficulty((scale - 1) as u64),
                 format!("999.99 {previous}")
             );
-            assert_eq!(format_difficulty(boundary as u64), format!("1.00 {next}"));
+            assert_eq!(
+                format_difficulty(lowered as u64),
+                format!("999.99 {previous}")
+            );
+            assert_eq!(format_difficulty(scale as u64), format!("1.00 {next}"));
         }
     }
 
+    // re-pinned for lane exactness, part B (the third read's S3): cut, never rounded: 9.007… P is 9.00 P (was 9.01), 9.005… P 9.00 P (was
+    // 9.01), 1.005 P 1.00 P (was 1.01)
     #[test]
-    fn difficulty_display_rounds_exactly_above_f64_integer_precision() {
-        assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.01 P");
-        assert_eq!(super::format_difficulty(9_005_000_000_000_001), "9.01 P");
-        assert_eq!(super::format_difficulty(9_004_999_999_999_999), "9.00 P");
-        assert_eq!(super::format_difficulty(1_005_000_000_000_000), "1.01 P");
+    fn difficulty_display_cuts_exactly_above_f64_integer_precision() {
+        assert_eq!(super::format_difficulty(9_007_199_254_740_993), "9.00 P");
+        assert_eq!(super::format_difficulty(9_005_000_000_000_001), "9.00 P");
+        assert_eq!(super::format_difficulty(9_009_999_999_999_999), "9.00 P");
+        assert_eq!(super::format_difficulty(9_010_000_000_000_000), "9.01 P");
+        assert_eq!(super::format_difficulty(1_005_000_000_000_000), "1.00 P");
     }
     use super::*;
 
@@ -5999,8 +6007,9 @@ mod tests {
 
     #[test]
     fn test_network_hash_rate_formats_integer_without_float_rounding() {
-        assert_eq!(format_hash_rate(93_905_000_000_000_000), "93.91 PH/s");
-        assert_eq!(format_hash_rate(9_007_199_254_740_993), "9.01 PH/s");
+        // re-pinned for lane exactness, part B (the third read's S3): cut, 93.905 PH/s is 93.90 (was 93.91), 9.007… PH/s 9.00 (was 9.01)
+        assert_eq!(format_hash_rate(93_905_000_000_000_000), "93.90 PH/s");
+        assert_eq!(format_hash_rate(9_007_199_254_740_993), "9.00 PH/s");
         assert_eq!(format_hash_rate(999), "999.00 H/s");
     }
 
@@ -6011,11 +6020,14 @@ mod tests {
             block_count: 2,
             total_uncles: 0,
         };
+        // re-pinned for lane exactness, part B (the third read's S3): the day's average difficulty is cut to the integer, never rounded:
+        // (2 × 9,007,199,254,740,993 + 1) / 2 is 9,007,199,254,740,993.5, 9,007,199,254,740,993
+        // (half up …994)
         assert_eq!(
             average_daily_difficulty("20261024", &stats)
                 .unwrap()
                 .to_string(),
-            "9007199254740994"
+            "9007199254740993"
         );
         let corrupt = ckbadger_store::DailyBlockStats {
             difficulty_sum: 0,
