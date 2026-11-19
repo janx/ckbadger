@@ -196,6 +196,9 @@ pub struct TokenIssuer {
     pub lock_hash: String,
     pub address: Option<String>,
     pub lock_code_hash: Option<String>,
+    /// The lock's hash type beside its code hash: the pair names the lock
+    /// (lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
     pub lock_kind: Option<String>,
 }
 
@@ -207,6 +210,9 @@ pub struct TokenHolderResponse {
     pub address: Option<String>,
     pub balance: String,
     pub lock_code_hash: Option<String>,
+    /// The lock's hash type beside its code hash: the pair names the lock
+    /// (lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
     pub lock_kind: Option<String>,
 }
 
@@ -643,6 +649,7 @@ async fn get_token(
                     lock_hash: format!("0x{}", hex::encode(lock)),
                     address: owner.as_ref().and_then(|owner| owner.address.clone()),
                     lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                    lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
                     lock_kind: owner.and_then(|owner| owner.lock_kind),
                 });
             }
@@ -726,6 +733,7 @@ async fn get_token_holders(
             Ok(TokenHolderResponse {
                 address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
                 lock_script_hash: format!("0x{}", hex::encode(lock)),
                 balance: balance.to_string(),

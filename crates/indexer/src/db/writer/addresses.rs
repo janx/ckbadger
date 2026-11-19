@@ -17,68 +17,6 @@ use super::BatchWriter;
 // takes below zero is rebuild-required (the stored aggregate no longer
 // matches the chain, D-4c); an overflow stays a plain error, as in finding 13.
 
-fn checked_next_script_metric_i64(
-    code_hash: &[u8],
-    script_kind: &str,
-    metric: &str,
-    current: i64,
-    delta: i64,
-) -> Result<i64> {
-    let next = current.checked_add(delta).ok_or_else(|| {
-        anyhow::anyhow!(
-            "script {} {} overflow: code_hash=0x{}, current={}, delta={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta
-        )
-    })?;
-    if next < 0 {
-        return Err(super::aggregate_underflow(format!(
-            "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            next
-        )));
-    }
-    Ok(next)
-}
-
-fn checked_next_script_metric_i128(
-    code_hash: &[u8],
-    script_kind: &str,
-    metric: &str,
-    current: i128,
-    delta: i128,
-) -> Result<i128> {
-    let next = current.checked_add(delta).ok_or_else(|| {
-        anyhow::anyhow!(
-            "script {} {} overflow: code_hash=0x{}, current={}, delta={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta
-        )
-    })?;
-    if next < 0 {
-        return Err(super::aggregate_underflow(format!(
-            "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            next
-        )));
-    }
-    Ok(next)
-}
-
 fn checked_next_script_reference_metric_i64(
     reference_hash: &[u8],
     hash_type: u8,
@@ -139,22 +77,6 @@ fn checked_next_script_reference_metric_i128(
         )));
     }
     Ok(next)
-}
-
-fn overlay_script_metadata(
-    mut base: ckbadger_store::types::ScriptInfo,
-    fresh: &ckbadger_store::types::ScriptInfo,
-) -> ckbadger_store::types::ScriptInfo {
-    base.hash_type = fresh.hash_type;
-    base.name = fresh.name.clone();
-    base.deprecated = fresh.deprecated;
-    base.category = fresh.category.clone();
-    base.website = fresh.website.clone();
-    base.description = fresh.description.clone();
-    // Note: dep_type_hash, dep_data_hash, code_cell_tx_hash, code_cell_output_index
-    // are no longer overlaid here. Label import no longer writes these correctness
-    // fields; code cell resolution uses script_references/script_versions CFs instead.
-    base
 }
 
 fn clear_script_family_usage(info: &mut ScriptFamilyInfo) {
@@ -981,271 +903,6 @@ impl BatchWriter {
         Ok(written)
     }
 
-    pub fn read_script_info(
-        &self,
-        code_hashes: &[&Vec<u8>],
-    ) -> Result<HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>> {
-        if code_hashes.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let cf_keys: Vec<_> = code_hashes
-            .iter()
-            .map(|k| (self.store.cf_script_info(), k.as_slice()))
-            .collect();
-        let results = self.store.multi_get_cf(cf_keys);
-
-        let mut map = HashMap::with_capacity(code_hashes.len());
-        for (res, code_hash) in results.into_iter().zip(code_hashes.iter()) {
-            let existing: Option<ckbadger_store::types::ScriptInfo> = match res {
-                Ok(Some(value)) => Some(super::decode_script_info_row(code_hash, &value)?),
-                Ok(None) => None,
-                Err(e) => {
-                    bail!(
-                        "failed to read script info: code_hash=0x{}, error={}",
-                        hex::encode(code_hash),
-                        e
-                    );
-                }
-            };
-            map.insert((*code_hash).clone(), existing);
-        }
-
-        Ok(map)
-    }
-
-    /// Apply a live batch's script usage block by block (see
-    /// [`Self::apply_address_balance_changes`]).
-    pub(crate) fn apply_script_usage_changes(
-        &self,
-        mut current: HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
-        changes: &crate::sync::types::ScriptUsageChanges,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        for (block, block_changes) in changes.by_block() {
-            let updated =
-                self.apply_script_usage_deltas(&current, block_changes, &mut batch.at(*block))?;
-            for (code_hash, info) in updated {
-                current.insert(code_hash, Some(info));
-            }
-        }
-        Ok(())
-    }
-
-    /// Apply ONE block's script usage on top of `existing`; returns the rows
-    /// written.
-    pub fn apply_script_usage_deltas(
-        &self,
-        existing: &HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
-        batch: &mut StoreBatch,
-    ) -> Result<HashMap<Vec<u8>, ckbadger_store::types::ScriptInfo>> {
-        if changes.is_empty() {
-            return Ok(HashMap::new());
-        }
-
-        let mut updated_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
-            HashMap::with_capacity(existing.len());
-
-        for (
-            (code_hash, is_type),
-            (
-                cells_delta,
-                live_delta,
-                cap_delta,
-                owned_cap_delta,
-                used_delta,
-                owned_knowledge_delta,
-            ),
-        ) in changes
-        {
-            let existing_info = existing.get(code_hash).and_then(|o| o.clone());
-            if existing_info.is_none()
-                && (*cells_delta < 0
-                    || *live_delta < 0
-                    || *cap_delta < 0
-                    || *owned_cap_delta < 0
-                    || *used_delta < 0
-                    || *owned_knowledge_delta < 0)
-            {
-                return Err(super::aggregate_underflow(format!(
-                    "script delta underflow for unseen code_hash: code_hash=0x{}, is_type={}, cells_delta={}, live_delta={}, capacity_delta={}, owned_capacity_delta={}, used_delta={}, owned_knowledge_delta={}",
-                    hex::encode(code_hash),
-                    is_type,
-                    cells_delta,
-                    live_delta,
-                    cap_delta,
-                    owned_cap_delta,
-                    used_delta,
-                    owned_knowledge_delta
-                )));
-            }
-
-            let info = match updated_map.entry(code_hash) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    let mut info =
-                        existing_info.unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
-                            code_hash: code_hash.clone(),
-                            ..Default::default()
-                        });
-                    // The label fields as stored now; a row that cannot be
-                    // read fails the batch (the error names the code hash),
-                    // and a corrupt one is rebuild-required (finding 12).
-                    if let Some(fresh) = super::read_script_info_row(&self.store, code_hash)? {
-                        info = overlay_script_metadata(info, &fresh);
-                    }
-                    entry.insert(info)
-                }
-            };
-
-            if *is_type {
-                let next_type_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "type",
-                    "cells_count",
-                    info.type_cells_count,
-                    *cells_delta,
-                )?;
-                let next_type_live_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "type",
-                    "live_cells_count",
-                    info.type_live_cells_count,
-                    *live_delta,
-                )?;
-                let next_type_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "capacity_sum",
-                    info.type_capacity_sum,
-                    *cap_delta,
-                )?;
-                let next_type_owned_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "owned_capacity_sum",
-                    info.type_owned_capacity_sum,
-                    *owned_cap_delta,
-                )?;
-                let next_type_used_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "used_capacity_sum",
-                    info.type_used_capacity_sum,
-                    *used_delta,
-                )?;
-                let next_type_owned_knowledge_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "type",
-                    "owned_knowledge_sum",
-                    info.type_owned_knowledge_sum,
-                    *owned_knowledge_delta,
-                )?;
-
-                if next_type_used_capacity_sum > next_type_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script type used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_type_used_capacity_sum,
-                        next_type_capacity_sum
-                    )));
-                }
-                if next_type_owned_knowledge_sum > next_type_owned_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script type owned knowledge exceeds owned capacity: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_type_owned_knowledge_sum,
-                        next_type_owned_capacity_sum
-                    )));
-                }
-
-                info.type_cells_count = next_type_cells_count;
-                info.type_live_cells_count = next_type_live_cells_count;
-                info.type_capacity_sum = next_type_capacity_sum;
-                info.type_owned_capacity_sum = next_type_owned_capacity_sum;
-                info.type_used_capacity_sum = next_type_used_capacity_sum;
-                info.type_owned_knowledge_sum = next_type_owned_knowledge_sum;
-            } else {
-                let next_lock_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "lock",
-                    "cells_count",
-                    info.lock_cells_count,
-                    *cells_delta,
-                )?;
-                let next_lock_live_cells_count = checked_next_script_metric_i64(
-                    code_hash,
-                    "lock",
-                    "live_cells_count",
-                    info.lock_live_cells_count,
-                    *live_delta,
-                )?;
-                let next_lock_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "capacity_sum",
-                    info.lock_capacity_sum,
-                    *cap_delta,
-                )?;
-                let next_lock_owned_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "owned_capacity_sum",
-                    info.lock_owned_capacity_sum,
-                    *owned_cap_delta,
-                )?;
-                let next_lock_used_capacity_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "used_capacity_sum",
-                    info.lock_used_capacity_sum,
-                    *used_delta,
-                )?;
-                let next_lock_owned_knowledge_sum = checked_next_script_metric_i128(
-                    code_hash,
-                    "lock",
-                    "owned_knowledge_sum",
-                    info.lock_owned_knowledge_sum,
-                    *owned_knowledge_delta,
-                )?;
-
-                if next_lock_used_capacity_sum > next_lock_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script lock used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_lock_used_capacity_sum,
-                        next_lock_capacity_sum
-                    )));
-                }
-                if next_lock_owned_knowledge_sum > next_lock_owned_capacity_sum {
-                    return Err(super::aggregate_out_of_range(format!(
-                        "script lock owned knowledge exceeds owned capacity: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
-                        hex::encode(code_hash),
-                        next_lock_owned_knowledge_sum,
-                        next_lock_owned_capacity_sum
-                    )));
-                }
-
-                info.lock_cells_count = next_lock_cells_count;
-                info.lock_live_cells_count = next_lock_live_cells_count;
-                info.lock_capacity_sum = next_lock_capacity_sum;
-                info.lock_owned_capacity_sum = next_lock_owned_capacity_sum;
-                info.lock_used_capacity_sum = next_lock_used_capacity_sum;
-                info.lock_owned_knowledge_sum = next_lock_owned_knowledge_sum;
-            }
-        }
-
-        for (code_hash, info) in &updated_map {
-            batch.put_script_info(code_hash, info);
-        }
-
-        Ok(updated_map
-            .into_iter()
-            .map(|(code_hash, info)| (code_hash.clone(), info))
-            .collect())
-    }
-
     pub fn read_script_reference_info(
         &self,
         references: &[(Vec<u8>, u8)],
@@ -1525,35 +1182,6 @@ impl BatchWriter {
         }
 
         Ok(updated_map)
-    }
-
-    pub fn update_script_usage_batch(
-        &self,
-        changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        if changes.is_empty() {
-            return Ok(());
-        }
-
-        let unique_code_hashes: Vec<Vec<u8>> = {
-            let mut seen = std::collections::HashSet::new();
-            changes
-                .keys()
-                .filter_map(|(code_hash, _)| {
-                    if seen.insert(code_hash.clone()) {
-                        Some(code_hash.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        };
-
-        let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
-        let existing = self.read_script_info(&refs)?;
-        self.apply_script_usage_deltas(&existing, changes, batch)
-            .map(|_| ())
     }
 
     pub fn update_script_reference_usage_batch(
@@ -2023,15 +1651,19 @@ mod tests {
         assert_eq!(data_form.owned_knowledge_delta, 98);
     }
 
+    /// Lane rd/api-lock-names: the per-pair usage writer is the one script
+    /// usage path (the lumped `script_info` writer is gone); an owned capacity
+    /// its stored row cannot explain fails, rebuild-required.
     #[test]
-    fn test_apply_script_usage_deltas_rejects_owned_capacity_underflow() {
+    fn script_reference_usage_rejects_owned_capacity_underflow() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xAA; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xAA; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
             lock_capacity_sum: 100,
@@ -2040,33 +1672,30 @@ mod tests {
             lock_owned_knowledge_sum: 60,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (0, -1, 0, -200, 0, -120));
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
+        let changes = HashMap::from([((reference.clone(), 1u8, false), (0, -1, 0, -200, 0, -120))]);
 
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("script lock owned_capacity_sum underflow"));
+            .contains("script reference lock owned_capacity_sum underflow"));
         // D-4c: the stored aggregate cannot explain the delta.
         assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
     #[test]
-    fn test_apply_script_usage_deltas_rejects_owned_knowledge_over_capacity() {
+    fn script_reference_usage_rejects_owned_knowledge_over_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xBB; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xBB; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             type_cells_count: 1,
             type_live_cells_count: 1,
             type_capacity_sum: 200,
@@ -2075,70 +1704,30 @@ mod tests {
             type_owned_knowledge_sum: 100,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), true), (0, 0, 0, 10, 0, 200));
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
+        let changes = HashMap::from([((reference.clone(), 1u8, true), (0, 0, 0, 10, 0, 200))]);
 
         let mut batch = StoreBatch::new(&store);
         let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap_err();
         assert!(err
             .to_string()
-            .contains("script type owned knowledge exceeds owned capacity"));
+            .contains("script reference type owned knowledge exceeds owned capacity"));
         // D-4c: an aggregate outside the range the chain can produce.
         assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
     }
 
-    /// Ruling 6: the label overlay's read of the stored row propagates its
-    /// error — a corrupt `script_info` row fails the batch naming the code
-    /// hash instead of being skipped.
     #[test]
-    fn a_corrupt_script_info_row_fails_the_usage_update_with_its_code_hash() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-        let code_hash = vec![0x6c; 32];
-        store
-            .put_cf(store.cf_script_info(), &code_hash, b"garbage")
-            .unwrap();
-        let mut existing = HashMap::new();
-        existing.insert(
-            code_hash.clone(),
-            Some(ScriptInfo {
-                code_hash: code_hash.clone(),
-                lock_cells_count: 1,
-                lock_live_cells_count: 1,
-                ..Default::default()
-            }),
-        );
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (1, 1, 100, 100, 61, 61));
-        let mut batch = StoreBatch::new(&store);
-        let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
-            .unwrap_err();
-        let text = format!("{err:#}");
-        assert!(text.contains(&hex::encode(&code_hash)), "{text}");
-        assert!(text.contains("script info"), "{text}");
-        assert!(
-            crate::lifecycle::is_rebuild_required(&err),
-            "a corrupt script_info row is rebuild-required (finding 12): {text}"
-        );
-    }
-
-    #[test]
-    fn test_apply_script_usage_deltas_allows_capacity_sum_above_i64_max() {
+    fn script_reference_usage_allows_capacity_sum_above_i64_max() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xCC; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xCC; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
             lock_capacity_sum: i64::MAX as i128,
@@ -2147,20 +1736,20 @@ mod tests {
             lock_owned_knowledge_sum: i64::MAX as i128 - 100,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (0, 0, 500, 500, 400, 400));
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
+        let changes =
+            HashMap::from([((reference.clone(), 1u8, false), (0, 0, 500, 500, 400, 400))]);
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
-        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
+        let updated = store
+            .get_script_reference_info(1, &reference)
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.lock_capacity_sum, i64::MAX as i128 + 500);
         assert_eq!(updated.lock_owned_capacity_sum, i64::MAX as i128 + 500);
         assert_eq!(updated.lock_used_capacity_sum, i64::MAX as i128 + 300);
@@ -2168,87 +1757,82 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_script_usage_deltas_accepts_capacity_delta_exceeding_i64() {
+    fn script_reference_usage_accepts_capacity_delta_exceeding_i64() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let code_hash = vec![0xDD; 32];
-        let existing_info = ScriptInfo {
-            code_hash: code_hash.clone(),
+        let reference = vec![0xDD; 32];
+        let row = ScriptReferenceInfo {
+            reference_hash: reference.clone(),
+            hash_type: 1,
             lock_cells_count: 1,
             lock_live_cells_count: 1,
-            lock_capacity_sum: 0,
-            lock_owned_capacity_sum: 0,
-            lock_used_capacity_sum: 0,
-            lock_owned_knowledge_sum: 0,
             ..Default::default()
         };
-
-        let mut existing = HashMap::new();
-        existing.insert(code_hash.clone(), Some(existing_info));
-
+        let existing = HashMap::from([((reference.clone(), 1u8), Some(row))]);
         let huge_delta = i128::from(i64::MAX) + 42;
-        let mut changes = HashMap::new();
-        changes.insert(
-            (code_hash.clone(), false),
+        let changes = HashMap::from([(
+            (reference.clone(), 1u8, false),
             (0, 0, huge_delta, huge_delta, 0, 0),
-        );
+        )]);
 
         let mut batch = StoreBatch::new(&store);
         writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
-        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
+        let updated = store
+            .get_script_reference_info(1, &reference)
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.lock_capacity_sum, huge_delta);
         assert_eq!(updated.lock_owned_capacity_sum, huge_delta);
     }
 
+    /// Lane rd/api-lock-names: a live usage update writes the pair's
+    /// reference row only; the registry's label row (label import's alone)
+    /// is left exactly as it was, and no other label row appears.
     #[test]
-    fn test_apply_script_usage_deltas_preserves_fresh_script_metadata_when_snapshot_is_stale() {
+    fn script_usage_update_leaves_the_label_row_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
         let code_hash = vec![0x9b; 32];
-        let latest = ScriptInfo {
-            code_hash: code_hash.clone(),
-            hash_type: 1,
-            name: Some("Default Lock".to_string()),
+        let label = ScriptInfo {
+            name: "Default Lock".to_string(),
             deprecated: true,
             description: Some("mainnet default lock".to_string()),
             ..Default::default()
         };
-        store.put_script_info_direct(&code_hash, &latest).unwrap();
+        store.put_script_info_direct(&code_hash, 1, &label).unwrap();
 
-        let existing = HashMap::new();
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (1, 1, 100, 100, 61, 61));
-
+        let existing = HashMap::from([((code_hash.clone(), 1u8), None)]);
+        let changes = HashMap::from([((code_hash.clone(), 1u8, false), (1, 1, 100, 100, 61, 61))]);
         let mut batch = StoreBatch::new(&store);
         writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
+            .apply_script_reference_usage_deltas(&existing, &changes, &mut batch)
             .unwrap();
         batch.commit().unwrap();
 
-        let updated = store.get_script_info(&code_hash).unwrap().unwrap();
-        assert_eq!(updated.hash_type, 1);
-        assert_eq!(updated.name.as_deref(), Some("Default Lock"));
-        assert!(updated.deprecated);
-        assert_eq!(updated.description.as_deref(), Some("mainnet default lock"));
-        // Correctness fields (dep_type_hash, dep_data_hash, code_cell_tx_hash,
-        // code_cell_output_index) are NOT overlaid from existing records. Label import
-        // no longer writes these; code cell resolution uses script_references/versions CFs.
-        assert_eq!(updated.dep_type_hash, None);
-        assert_eq!(updated.dep_data_hash, None);
-        assert_eq!(updated.lock_cells_count, 1);
-        assert_eq!(updated.lock_live_cells_count, 1);
-        assert_eq!(updated.lock_capacity_sum, 100);
-        assert_eq!(updated.lock_owned_capacity_sum, 100);
-        assert_eq!(updated.lock_used_capacity_sum, 61);
-        assert_eq!(updated.lock_owned_knowledge_sum, 61);
+        assert_eq!(
+            store.list_script_infos().unwrap(),
+            vec![((code_hash.clone(), 1), label)]
+        );
+        let usage = store
+            .get_script_reference_info(1, &code_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                usage.lock_cells_count,
+                usage.lock_live_cells_count,
+                usage.lock_owned_capacity_sum
+            ),
+            (1, 1, 100)
+        );
     }
 
     #[test]
@@ -3971,34 +3555,6 @@ mod tests {
         store
             .put_script_reference_to_version_direct(1, &unlabeled_ref, &unlabeled)
             .unwrap();
-        store
-            .put_script_info_direct(
-                &labeled_ref,
-                &ScriptInfo {
-                    code_hash: labeled_ref.clone(),
-                    hash_type: 1,
-                    lock_cells_count: 1,
-                    lock_live_cells_count: 1,
-                    lock_capacity_sum: 100,
-                    lock_owned_capacity_sum: 100,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        store
-            .put_script_info_direct(
-                &unlabeled_ref,
-                &ScriptInfo {
-                    code_hash: unlabeled_ref.clone(),
-                    hash_type: 1,
-                    lock_cells_count: 1,
-                    lock_live_cells_count: 1,
-                    lock_capacity_sum: 50,
-                    lock_owned_capacity_sum: 50,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
 
         // Discover `unlabeled` via Type ID lineage from `labeled_ref`, which
         // copies `name: Some("PW Lock")` and `family_id: Some("pw-lock")` while
@@ -4323,31 +3879,6 @@ mod tests {
     }
 
     #[test]
-    fn test_read_script_info_errors_on_deserialize_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-        let code_hash = vec![0xEE; 32];
-
-        store
-            .put_cf(store.cf_script_info(), &code_hash, &[0xFF, 0x00])
-            .unwrap();
-
-        let refs = vec![&code_hash];
-        let err = writer.read_script_info(&refs).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to deserialize script info"));
-        // Finding 12: the batch prefetch types a corrupt row as
-        // rebuild-required, naming the code hash.
-        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
-        assert!(
-            err.to_string().contains(&hex::encode(&code_hash)),
-            "{err:#}"
-        );
-    }
-
-    #[test]
     fn test_read_address_balances_errors_on_deserialize_failure() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
@@ -4372,28 +3903,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_apply_script_usage_deltas_rejects_negative_delta_for_unseen_script() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-
-        let code_hash = vec![0xAB; 32];
-        let existing = HashMap::new();
-        let mut changes = HashMap::new();
-        changes.insert((code_hash.clone(), false), (0, -1, 0, -1, 0, -1));
-
-        let mut batch = StoreBatch::new(&store);
-        let err = writer
-            .apply_script_usage_deltas(&existing, &changes, &mut batch)
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("script delta underflow for unseen code_hash"));
-        // D-4c: no stored row can explain a negative delta.
-        assert!(crate::lifecycle::is_rebuild_required(&err), "{err:#}");
-    }
-
     fn assert_rebuild_required(err: &anyhow::Error, what: &str) {
         assert!(
             crate::lifecycle::is_rebuild_required(err),
@@ -4416,14 +3925,6 @@ mod tests {
     fn script_metric_underflows_are_rebuild_required() {
         let hash = [0x5c; 32];
         assert_rebuild_required(
-            &checked_next_script_metric_i64(&hash, "lock", "cells_count", 0, -1).unwrap_err(),
-            "script lock cells_count underflow",
-        );
-        assert_rebuild_required(
-            &checked_next_script_metric_i128(&hash, "type", "capacity_sum", 0, -1).unwrap_err(),
-            "script type capacity_sum underflow",
-        );
-        assert_rebuild_required(
             &checked_next_script_reference_metric_i64(&hash, 1, "lock cells_count", 0, -1)
                 .unwrap_err(),
             "script reference lock cells_count underflow",
@@ -4434,7 +3935,8 @@ mod tests {
             "script reference type capacity_sum underflow",
         );
         assert_plain(
-            &checked_next_script_metric_i64(&hash, "lock", "cells_count", i64::MAX, 1).unwrap_err(),
+            &checked_next_script_reference_metric_i64(&hash, 1, "lock cells_count", i64::MAX, 1)
+                .unwrap_err(),
             "overflow",
         );
         assert_plain(
@@ -4538,50 +4040,6 @@ mod tests {
             &apply(Some(full), address_delta(1, 0, 0, 0, 0, 0)),
             "address balance overflow",
         );
-    }
-
-    /// D-4c: a script usage aggregate outside the range the chain can
-    /// produce (used capacity above capacity, owned knowledge above owned
-    /// capacity) is rebuild-required, for lock and type usage alike.
-    #[test]
-    fn script_usage_out_of_range_is_rebuild_required() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
-        let code_hash = vec![0x5d; 32];
-        let row = ScriptInfo {
-            code_hash: code_hash.clone(),
-            lock_capacity_sum: 100,
-            lock_owned_capacity_sum: 100,
-            type_capacity_sum: 100,
-            type_owned_capacity_sum: 100,
-            ..Default::default()
-        };
-        let existing = HashMap::from([(code_hash.clone(), Some(row))]);
-        for (is_type, delta, what) in [
-            (
-                false,
-                (0, 0, 0, 0, 101, 0),
-                "script lock used capacity exceeds total",
-            ),
-            (
-                false,
-                (0, 0, 0, 0, 0, 101),
-                "script lock owned knowledge exceeds owned capacity",
-            ),
-            (
-                true,
-                (0, 0, 0, 0, 101, 0),
-                "script type used capacity exceeds total",
-            ),
-        ] {
-            let changes = HashMap::from([((code_hash.clone(), is_type), delta)]);
-            let mut batch = StoreBatch::new(&store);
-            let err = writer
-                .apply_script_usage_deltas(&existing, &changes, &mut batch)
-                .unwrap_err();
-            assert_rebuild_required(&err, what);
-        }
     }
 
     /// D-4c: a script reference usage delta its stored row cannot explain (a

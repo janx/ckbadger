@@ -4,7 +4,7 @@ use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
     AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, ParticipantDelta, ParticipantId,
-    ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
+    ScriptReferenceInfo, TokenInfo, TxActions,
 };
 use ckbadger_store::{commit_journaled_block, CkbadgerStore};
 use ckbadger_store::{
@@ -249,18 +249,6 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_args: &[u8], block_count: i6
             };
             batch.put_addr_balance(lock_hash, &addr_bal);
 
-            let lock_si = ScriptInfo {
-                code_hash: lock_code_hash.clone(),
-                hash_type: 1,
-                lock_cells_count: cells,
-                lock_live_cells_count: cells,
-                lock_capacity_sum: cells as i128 * cap_per_cell,
-                lock_owned_capacity_sum: cells as i128 * cap_per_cell,
-                lock_used_capacity_sum: cells as i128 * occupied_per_cell,
-                lock_owned_knowledge_sum: cells as i128 * occupied_per_cell,
-                ..Default::default()
-            };
-            batch.put_script_info(&lock_code_hash, &lock_si);
             batch.put_script_reference_info(
                 1,
                 &lock_code_hash,
@@ -688,21 +676,6 @@ fn test_rollback_updates_derived_cfs_inline() {
                     last_activity_tx_idx: 0,
                 },
             );
-            // script_info for lock_code_hash [0xAA;32]
-            batch.put_script_info(
-                &lock_code_hash,
-                &ScriptInfo {
-                    code_hash: lock_code_hash.clone(),
-                    hash_type: 1,
-                    lock_cells_count: cells as i64,
-                    lock_live_cells_count: cells as i64,
-                    lock_capacity_sum: reg * reg_cap + udt * udt_cap,
-                    lock_owned_capacity_sum: reg * reg_cap + udt * udt_cap,
-                    lock_used_capacity_sum: reg * reg_occ + udt * udt_cap,
-                    lock_owned_knowledge_sum: reg * reg_occ + udt * udt_cap,
-                    ..Default::default()
-                },
-            );
             batch.put_script_reference_info(
                 1,
                 &lock_code_hash,
@@ -721,21 +694,6 @@ fn test_rollback_updates_derived_cfs_inline() {
             if udt == 0 {
                 return;
             }
-            // script_info for type_code_hash [0xDD;32], first seen at block 3
-            batch.put_script_info(
-                &type_code_hash,
-                &ScriptInfo {
-                    code_hash: type_code_hash.clone(),
-                    hash_type: 1,
-                    type_cells_count: udt as i64,
-                    type_live_cells_count: udt as i64,
-                    type_capacity_sum: udt * udt_cap,
-                    type_owned_capacity_sum: udt * udt_cap,
-                    type_used_capacity_sum: udt * udt_cap,
-                    type_owned_knowledge_sum: udt * udt_cap,
-                    ..Default::default()
-                },
-            );
             batch.put_script_reference_info(
                 1,
                 &type_code_hash,
@@ -805,11 +763,15 @@ fn test_rollback_updates_derived_cfs_inline() {
     // txs_count is not tracked by inline rollback deltas; the rebuild path
     // recomputes it from addr_txs which is not populated in this test.
 
-    // script_info for lock_code_hash: only 2 regular cells remain as lock
-    let lock_si = store.get_script_info(&lock_code_hash).unwrap().unwrap();
+    // The lock script's usage (its pair's row, lane rd/api-lock-names): only
+    // 2 regular cells remain as lock
+    let lock_si = store
+        .get_script_reference_info(1, &lock_code_hash)
+        .unwrap()
+        .unwrap();
     assert_eq!(
         lock_si.lock_live_cells_count, 2,
-        "lock script_info: 6 - 4 = 2 live cells"
+        "lock script usage: 6 - 4 = 2 live cells"
     );
     assert_eq!(lock_si.lock_cells_count, 2);
     assert_eq!(lock_si.lock_capacity_sum, 2 * reg_cap);
@@ -817,16 +779,19 @@ fn test_rollback_updates_derived_cfs_inline() {
     assert_eq!(
         lock_si.lock_owned_capacity_sum,
         2 * reg_cap,
-        "lock script_info: capacity of 2 regular cells"
+        "lock script usage: capacity of 2 regular cells"
     );
 
-    // script_info for type_code_hash: the script was first seen in a
+    // The type script's usage row: the script was first seen in a
     // rolled-back block, so its row is gone, as in a store that never saw
     // blocks 3-4 (B-0 finding 3: the reverse-counted rollback left an
     // all-zero row behind, which this test used to pin).
     assert!(
-        store.get_script_info(&type_code_hash).unwrap().is_none(),
-        "type script_info first written at block 3 must be gone"
+        store
+            .get_script_reference_info(1, &type_code_hash)
+            .unwrap()
+            .is_none(),
+        "type script usage first written at block 3 must be gone"
     );
 
     // token_holder: balance reached 0, should be deleted

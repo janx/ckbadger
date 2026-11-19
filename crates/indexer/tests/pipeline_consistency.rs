@@ -444,21 +444,24 @@ fn test_typed_cell_lacking_type_args_is_never_stored() {
 fn test_script_usage_cell_creation() {
     let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
-    let mut changes: HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)> = HashMap::new();
+    // A script's usage is its pair's row (code hash, hash type): the one
+    // script usage writer (lane rd/api-lock-names).
+    let mut changes: HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)> =
+        HashMap::new();
 
     changes.insert(
-        (lock_code_hash.clone(), false),
+        (lock_code_hash.clone(), 1, false),
         (1, 1, 100_00000000, 100_00000000, 61_00000000, 61_00000000),
     );
 
     let mut batch = StoreBatch::new(&store);
     writer
-        .update_script_usage_batch(&changes, &mut batch)
+        .update_script_reference_usage_batch(&changes, &mut batch)
         .unwrap();
     batch.commit().unwrap();
 
-    // Verify via ScriptInfo in store
-    let info = store.get_script_info(&lock_code_hash).unwrap();
+    // Verify via the pair's usage row in store
+    let info = store.get_script_reference_info(1, &lock_code_hash).unwrap();
     assert!(info.is_some());
     let info = info.unwrap();
     assert_eq!(info.lock_cells_count, 1);
@@ -474,31 +477,31 @@ fn test_script_usage_cell_consumption() {
     let (store, writer) = setup_store();
     let lock_code_hash = vec![0x11u8; 32];
 
-    let mut create_changes: HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)> =
+    let mut create_changes: HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)> =
         HashMap::new();
     create_changes.insert(
-        (lock_code_hash.clone(), false),
+        (lock_code_hash.clone(), 1, false),
         (1, 1, 100_00000000, 100_00000000, 61_00000000, 61_00000000),
     );
     let mut batch = StoreBatch::new(&store);
     writer
-        .update_script_usage_batch(&create_changes, &mut batch)
+        .update_script_reference_usage_batch(&create_changes, &mut batch)
         .unwrap();
     batch.commit().unwrap();
 
-    let mut consume_changes: HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)> =
+    let mut consume_changes: HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)> =
         HashMap::new();
     consume_changes.insert(
-        (lock_code_hash.clone(), false),
+        (lock_code_hash.clone(), 1, false),
         (0, -1, 0, -100_00000000, 0, -61_00000000),
     );
     let mut batch = StoreBatch::new(&store);
     writer
-        .update_script_usage_batch(&consume_changes, &mut batch)
+        .update_script_reference_usage_batch(&consume_changes, &mut batch)
         .unwrap();
     batch.commit().unwrap();
 
-    let info = store.get_script_info(&lock_code_hash).unwrap();
+    let info = store.get_script_reference_info(1, &lock_code_hash).unwrap();
     let info = info.unwrap();
     assert_eq!(info.lock_cells_count, 1);
     assert_eq!(info.lock_live_cells_count, 0);

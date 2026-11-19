@@ -268,14 +268,21 @@ async fn list_identity_collection_holders(
                     ))
                 })?;
             let (party, lock) = resolver.resolve_with_lock(&owner20)?;
-            let lock_code_hash = lock.as_ref().map(|lock| &lock.entry.code_hash);
+            let lock_pair = lock
+                .as_ref()
+                .map(|lock| (&lock.entry.code_hash, lock.entry.hash_type));
             rows.push(CollectionHolderResponse {
                 lock_script_hash: party.lock_hash,
                 owner_hash_prefix: Some(party.hash_prefix),
                 address: party.address,
-                lock_code_hash: lock_code_hash.map(|code| format!("0x{}", hex::encode(code))),
-                lock_kind: lock_code_hash
-                    .map(|code| super::assets::lock_kind(state.store.as_ref(), code))
+                lock_code_hash: lock_pair.map(|(code, _)| format!("0x{}", hex::encode(code))),
+                lock_hash_type: lock_pair
+                    .map(|(code, hash_type)| super::assets::lock_hash_type_label(code, hash_type))
+                    .transpose()?,
+                lock_kind: lock_pair
+                    .map(|(code, hash_type)| {
+                        super::assets::lock_kind(state.store.as_ref(), code, hash_type)
+                    })
                     .transpose()?
                     .flatten(),
                 item_count: *count,
@@ -1075,11 +1082,11 @@ impl DotCellPartyResolver<'_> {
             self.network,
         )
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
-        let script_name = self
-            .store
-            .get_script_info(&entry.code_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .and_then(|info| info.name);
+        // The registry's name of the lock's pair, the one name rule (lane
+        // rd/api-lock-names).
+        let script_name =
+            crate::utils::registered_script_name(self.store, &entry.code_hash, entry.hash_type)
+                .map_err(|e| ApiError::internal(format!("{e:#}")))?;
         Ok((
             PartyRef {
                 hash_prefix,
@@ -1101,10 +1108,12 @@ impl DotCellPartyResolver<'_> {
         let (address, script_name) = match resolved {
             Some(resolved) => (
                 resolved.address,
-                self.store
-                    .get_script_info(&resolved.entry.code_hash)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                    .and_then(|info| info.name),
+                crate::utils::registered_script_name(
+                    self.store,
+                    &resolved.entry.code_hash,
+                    resolved.entry.hash_type,
+                )
+                .map_err(|e| ApiError::internal(format!("{e:#}")))?,
             ),
             None => (None, None),
         };

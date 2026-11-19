@@ -934,7 +934,6 @@ pub(crate) struct LiveBatchPrecompute {
     pub(crate) input_script_hashes: InputScriptHashes,
     pub(crate) batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     pub(crate) address_balance_changes: AddressBalanceChanges,
-    pub(crate) script_usage_changes: ScriptUsageChanges,
     pub(crate) script_reference_usage_changes: ScriptReferenceUsageChanges,
     pub(crate) script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
     pub(crate) token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
@@ -1075,10 +1074,9 @@ pub(crate) fn precompute_live_batch(
     }
     precompute_phase_metrics.compute_fee_ms = compute_fee_started.elapsed().as_secs_f64() * 1000.0;
 
-    // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
+    // Pass 3: cell_cache update + address_balance_changes + script reference usage
     let cache_balance_and_script_started = Instant::now();
     let mut address_balance_changes = AddressBalanceChanges::new();
-    let mut script_usage_changes = ScriptUsageChanges::new();
     let mut script_reference_usage_changes = ScriptReferenceUsageChanges::new();
     // Entity daily deltas are accumulated PER BLOCK: a committed
     // batch spans many blocks, and a shallow fork can land in the
@@ -1165,9 +1163,8 @@ pub(crate) fn precompute_live_batch(
         // `add_token_daily_tx` turns them into one contribution
         // (and one transaction) per token once both sides are seen.
         let mut tx_token_daily_members: Vec<TokenDailyMember> = Vec::new();
-        // script_usage_changes - outputs
+        // script reference usage - outputs, by each script's pair
         for cell in &tx_data.cells {
-            let lock_key = (cell.lock_code_hash.clone(), false);
             let lock_hash_type = match parse_script_reference_hash_type(
                 cell.lock_hash_type,
                 "lock",
@@ -1199,16 +1196,6 @@ pub(crate) fn precompute_live_batch(
             reference_entry.3 += i128::from(cell.capacity);
             reference_entry.4 += i128::from(cell_occupied);
             reference_entry.5 += i128::from(cell_occupied);
-            let entry = script_usage_changes
-                .block_mut(tx_data.block_number)?
-                .entry(lock_key)
-                .or_insert((0, 0, 0, 0, 0, 0));
-            entry.0 += 1;
-            entry.1 += 1;
-            entry.2 += i128::from(cell.capacity);
-            entry.3 += i128::from(cell.capacity);
-            entry.4 += i128::from(cell_occupied);
-            entry.5 += i128::from(cell_occupied);
             accumulate_daily!(
                 script_daily_changes,
                 tx_data.block_number,
@@ -1244,7 +1231,6 @@ pub(crate) fn precompute_live_batch(
                         ));
                     }
                 };
-                let type_key = (type_code_hash.clone(), true);
                 let reference_entry = script_reference_usage_changes
                     .block_mut(tx_data.block_number)?
                     .entry((type_code_hash.clone(), type_hash_type, true))
@@ -1255,16 +1241,6 @@ pub(crate) fn precompute_live_batch(
                 reference_entry.3 += i128::from(cell.capacity);
                 reference_entry.4 += i128::from(cell_occupied);
                 reference_entry.5 += i128::from(cell_occupied);
-                let entry = script_usage_changes
-                    .block_mut(tx_data.block_number)?
-                    .entry(type_key)
-                    .or_insert((0, 0, 0, 0, 0, 0));
-                entry.0 += 1;
-                entry.1 += 1;
-                entry.2 += i128::from(cell.capacity);
-                entry.3 += i128::from(cell.capacity);
-                entry.4 += i128::from(cell_occupied);
-                entry.5 += i128::from(cell_occupied);
                 accumulate_daily!(
                     script_daily_changes,
                     tx_data.block_number,
@@ -1402,8 +1378,7 @@ pub(crate) fn precompute_live_batch(
                         .or_default() += 1;
                     *tx_occupied_changes.entry(lock_script_hash).or_default() -=
                         i128::from(info.occupied_capacity());
-                    // script usage - inputs
-                    let lock_key = (info.lock_code_hash.to_vec(), false);
+                    // script reference usage - inputs, by each script's pair
                     let lock_hash_type = match parse_script_reference_hash_type(
                         info.lock_hash_type,
                         "lock",
@@ -1427,13 +1402,6 @@ pub(crate) fn precompute_live_batch(
                     reference_entry.1 -= 1;
                     reference_entry.3 -= i128::from(info.capacity);
                     reference_entry.5 -= i128::from(info.occupied_capacity());
-                    let entry = script_usage_changes
-                        .block_mut(tx_data.block_number)?
-                        .entry(lock_key)
-                        .or_insert((0, 0, 0, 0, 0, 0));
-                    entry.1 -= 1;
-                    entry.3 -= i128::from(info.capacity);
-                    entry.5 -= i128::from(info.occupied_capacity());
                     accumulate_daily!(
                         script_daily_changes,
                         tx_data.block_number,
@@ -1469,7 +1437,6 @@ pub(crate) fn precompute_live_batch(
                                 ));
                             }
                         };
-                        let type_key = (type_code_hash.to_vec(), true);
                         let reference_entry = script_reference_usage_changes
                             .block_mut(tx_data.block_number)?
                             .entry((type_code_hash.to_vec(), type_hash_type, true))
@@ -1477,13 +1444,6 @@ pub(crate) fn precompute_live_batch(
                         reference_entry.1 -= 1;
                         reference_entry.3 -= i128::from(info.capacity);
                         reference_entry.5 -= i128::from(info.occupied_capacity());
-                        let entry = script_usage_changes
-                            .block_mut(tx_data.block_number)?
-                            .entry(type_key)
-                            .or_insert((0, 0, 0, 0, 0, 0));
-                        entry.1 -= 1;
-                        entry.3 -= i128::from(info.capacity);
-                        entry.5 -= i128::from(info.occupied_capacity());
                         accumulate_daily!(
                             script_daily_changes,
                             tx_data.block_number,
@@ -1618,7 +1578,6 @@ pub(crate) fn precompute_live_batch(
         input_script_hashes,
         batch_cell_infos,
         address_balance_changes,
-        script_usage_changes,
         script_reference_usage_changes,
         script_daily_changes,
         token_daily_changes,
@@ -1650,7 +1609,6 @@ impl Indexer {
             batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             input_script_hashes: InputScriptHashes,
             address_balance_changes: AddressBalanceChanges,
-            script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
             script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
             token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
@@ -2413,7 +2371,6 @@ impl Indexer {
                     input_script_hashes,
                     batch_cell_infos,
                     address_balance_changes,
-                    script_usage_changes,
                     script_reference_usage_changes,
                     script_daily_changes,
                     token_daily_changes,
@@ -2527,7 +2484,6 @@ impl Indexer {
                         batch_cell_infos,
                         input_script_hashes,
                         address_balance_changes,
-                        script_usage_changes,
                         script_reference_usage_changes,
                         script_daily_changes,
                         token_daily_changes,
@@ -2640,7 +2596,6 @@ impl Indexer {
                     batch_cell_infos,
                     input_script_hashes,
                     address_balance_changes,
-                    script_usage_changes,
                     script_reference_usage_changes,
                     script_daily_changes,
                     token_daily_changes,
@@ -2967,7 +2922,6 @@ impl Indexer {
                             batch_cell_infos,
                             input_script_hashes,
                             address_balance_changes,
-                            script_usage_changes,
                             script_reference_usage_changes,
                             script_daily_changes,
                             token_daily_changes,

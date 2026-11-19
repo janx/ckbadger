@@ -1091,15 +1091,19 @@ async fn test_scripts_list_sorts_before_cursor_pagination() {
 async fn test_scripts_list_ignores_unlabeled_references_without_family_metadata() {
     let store = test_store();
 
+    // Two references the chain has used (their pairs' usage rows), which the
+    // registry does not label and no family claims.
     for code_byte in [0x11u8, 0x22u8] {
         let code_hash = vec![code_byte; 32];
         store
-            .put_script_info_direct(
+            .put_script_reference_info_direct(
+                1,
                 &code_hash,
-                &ScriptInfo {
-                    code_hash: code_hash.clone(),
+                &ckbadger_store::ScriptReferenceInfo {
+                    reference_hash: code_hash.clone(),
                     hash_type: 1,
-                    name: None,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
                     ..Default::default()
                 },
             )
@@ -1134,10 +1138,20 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
     store
         .put_script_info_direct(
             &version_hash,
-            &ScriptInfo {
-                code_hash: version_hash.to_vec(),
+            0,
+            &ckbadger_store::ScriptInfo {
+                name: "Default Lock".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            0,
+            &version_hash,
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: version_hash.to_vec(),
                 hash_type: 0,
-                name: Some("Default Lock".to_string()),
                 lock_cells_count: 10,
                 lock_live_cells_count: 10,
                 lock_capacity_sum: 1_000_000_000,
@@ -1201,7 +1215,7 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}"]}}"#,
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"data"}}]}}"#,
             version_hash_hex
         )))
         .unwrap();
@@ -1211,14 +1225,26 @@ async fn test_script_lookup_and_code_cell_resolve_data_reference() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json[&version_hash_hex]["name"], "Default Lock");
-    assert_eq!(json[&version_hash_hex]["codeHash"], version_hash_hex);
-    assert_eq!(json[&version_hash_hex]["hashType"], "data");
     assert_eq!(
-        json[&version_hash_hex]["codeCellTxHash"],
+        json[&format!("{version_hash_hex}:data")]["name"],
+        "Default Lock"
+    );
+    assert_eq!(
+        json[&format!("{version_hash_hex}:data")]["codeHash"],
+        version_hash_hex
+    );
+    assert_eq!(
+        json[&format!("{version_hash_hex}:data")]["hashType"],
+        "data"
+    );
+    assert_eq!(
+        json[&format!("{version_hash_hex}:data")]["codeCellTxHash"],
         code_cell_tx_hash_hex
     );
-    assert_eq!(json[&version_hash_hex]["codeCellOutputIndex"], 1);
+    assert_eq!(
+        json[&format!("{version_hash_hex}:data")]["codeCellOutputIndex"],
+        1
+    );
 
     let request = Request::builder()
         .uri(format!(
@@ -1321,13 +1347,12 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
     let code_cell_output_index = 2i16;
 
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            1,
             &type_hash,
-            &ScriptInfo {
-                code_hash: type_hash.clone(),
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: type_hash.to_vec(),
                 hash_type: 1,
-                dep_type_hash: Some(type_hash.clone()),
-                dep_data_hash: Some(version_hash.to_vec()),
                 lock_cells_count: 4,
                 lock_live_cells_count: 2,
                 lock_capacity_sum: 900,
@@ -1376,7 +1401,7 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}"]}}"#,
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"type"}}]}}"#,
             type_hash_hex
         )))
         .unwrap();
@@ -1385,21 +1410,42 @@ async fn test_script_lookup_and_code_cells_allow_unlabeled_resolved_type_referen
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json[&type_hash_hex]["resolutionState"], "resolved");
-    assert_eq!(json[&type_hash_hex]["name"], "Unknown");
-    assert_eq!(json[&type_hash_hex]["codeHash"], version_hash_hex);
-    assert_eq!(json[&type_hash_hex]["hashType"], "type");
-    assert_eq!(json[&type_hash_hex]["deploymentTypeHash"], type_hash_hex);
-    assert_eq!(json[&type_hash_hex]["deploymentDataHash"], version_hash_hex);
-    assert_eq!(json[&type_hash_hex]["scriptKind"], "lock");
-    assert_eq!(json[&type_hash_hex]["liveCellsCount"], 2);
-    assert_eq!(json[&type_hash_hex]["ownedCapacitySum"], "500");
-    assert_eq!(json[&type_hash_hex]["ownedKnowledgeSum"], "350");
     assert_eq!(
-        json[&type_hash_hex]["codeCellTxHash"],
+        json[&format!("{type_hash_hex}:type")]["resolutionState"],
+        "resolved"
+    );
+    assert_eq!(json[&format!("{type_hash_hex}:type")]["name"], "Unknown");
+    assert_eq!(
+        json[&format!("{type_hash_hex}:type")]["codeHash"],
+        version_hash_hex
+    );
+    assert_eq!(json[&format!("{type_hash_hex}:type")]["hashType"], "type");
+    assert_eq!(
+        json[&format!("{type_hash_hex}:type")]["deploymentTypeHash"],
+        type_hash_hex
+    );
+    assert_eq!(
+        json[&format!("{type_hash_hex}:type")]["deploymentDataHash"],
+        version_hash_hex
+    );
+    assert_eq!(json[&format!("{type_hash_hex}:type")]["scriptKind"], "lock");
+    assert_eq!(json[&format!("{type_hash_hex}:type")]["liveCellsCount"], 2);
+    assert_eq!(
+        json[&format!("{type_hash_hex}:type")]["ownedCapacitySum"],
+        "500"
+    );
+    assert_eq!(
+        json[&format!("{type_hash_hex}:type")]["ownedKnowledgeSum"],
+        "350"
+    );
+    assert_eq!(
+        json[&format!("{type_hash_hex}:type")]["codeCellTxHash"],
         code_cell_tx_hash_hex
     );
-    assert_eq!(json[&type_hash_hex]["codeCellOutputIndex"], 2);
+    assert_eq!(
+        json[&format!("{type_hash_hex}:type")]["codeCellOutputIndex"],
+        2
+    );
 
     let request = Request::builder()
         .uri(format!(
@@ -1604,26 +1650,27 @@ async fn test_scripts_list_merges_unknown_reference_into_known_deployment() {
     batch.put_script_family_by_name("Default Lock", family_id);
     batch.commit().unwrap();
 
+    // An unknown reference the chain has used (its pair's usage row, no
+    // registry label).
     store
-        .put_script_info_direct(
-            &type_hash,
-            &ScriptInfo {
-                code_hash: type_hash.clone(),
-                hash_type: 1,
-                name: Some("Default Lock".to_string()),
-                dep_type_hash: Some(type_hash.clone()),
-                dep_data_hash: Some(data_hash.to_vec()),
+        .put_script_reference_info_direct(
+            0,
+            &data_hash,
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: data_hash.to_vec(),
+                hash_type: 0,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
                 ..Default::default()
             },
         )
         .unwrap();
     store
         .put_script_info_direct(
-            &data_hash,
-            &ScriptInfo {
-                code_hash: data_hash.to_vec(),
-                hash_type: 0,
-                name: None,
+            &type_hash,
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Default Lock".to_string(),
                 ..Default::default()
             },
         )
@@ -1659,10 +1706,11 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
     let code_cell_output_index = 2i16;
 
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            0,
             &data_hash,
-            &ScriptInfo {
-                code_hash: data_hash.clone(),
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: data_hash.to_vec(),
                 hash_type: 0,
                 lock_live_cells_count: 3,
                 ..Default::default()
@@ -1710,7 +1758,7 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}"]}}"#,
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"data"}}]}}"#,
             data_hash_hex
         )))
         .unwrap();
@@ -1720,13 +1768,16 @@ async fn test_unknown_data_hash_script_resolves_code_cell_via_data_hash_index() 
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json[&data_hash_hex]["name"], "Unknown");
-    assert_eq!(json[&data_hash_hex]["hashType"], "data");
+    assert_eq!(json[&format!("{data_hash_hex}:data")]["name"], "Unknown");
+    assert_eq!(json[&format!("{data_hash_hex}:data")]["hashType"], "data");
     assert_eq!(
-        json[&data_hash_hex]["codeCellTxHash"],
+        json[&format!("{data_hash_hex}:data")]["codeCellTxHash"],
         code_cell_tx_hash_hex
     );
-    assert_eq!(json[&data_hash_hex]["codeCellOutputIndex"], 2);
+    assert_eq!(
+        json[&format!("{data_hash_hex}:data")]["codeCellOutputIndex"],
+        2
+    );
 
     let request = Request::builder()
         .uri(format!(
@@ -1750,11 +1801,15 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     let reference_hash = [0x77; 32];
     let code_cell_tx_hash = vec![0xce; 32];
 
+    // The registry's label of the pair (reference, data), as label import
+    // writes it: the lookup names a pair by its own label only.
+    seed_script_label(&store, &reference_hash, 0, "UniqueScript");
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            0,
             &reference_hash,
-            &ScriptInfo {
-                code_hash: reference_hash.to_vec(),
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: reference_hash.to_vec(),
                 hash_type: 0,
                 lock_cells_count: 3,
                 lock_live_cells_count: 1,
@@ -1812,7 +1867,7 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}"]}}"#,
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"data"}}]}}"#,
             reference_hash_hex
         )))
         .unwrap();
@@ -1820,12 +1875,24 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json[&reference_hash_hex]["resolutionState"], "resolved");
-    assert_eq!(json[&reference_hash_hex]["name"], "UniqueScript");
-    assert_eq!(json[&reference_hash_hex]["codeHash"], reference_hash_hex);
-    assert_eq!(json[&reference_hash_hex]["hashType"], "data");
     assert_eq!(
-        json[&reference_hash_hex]["codeCellTxHash"],
+        json[&format!("{reference_hash_hex}:data")]["resolutionState"],
+        "resolved"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:data")]["name"],
+        "UniqueScript"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:data")]["codeHash"],
+        reference_hash_hex
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:data")]["hashType"],
+        "data"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:data")]["codeCellTxHash"],
         code_cell_tx_hash_hex
     );
 
@@ -1904,7 +1971,7 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}"]}}"#,
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"type"}}]}}"#,
             reference_hash_hex
         )))
         .unwrap();
@@ -1912,9 +1979,12 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json[&reference_hash_hex]["resolutionState"], "ambiguous");
     assert_eq!(
-        json[&reference_hash_hex]["ambiguity"]["versionHashes"],
+        json[&format!("{reference_hash_hex}:type")]["resolutionState"],
+        "ambiguous"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:type")]["ambiguity"]["versionHashes"],
         serde_json::json!([version_hash_a_hex, version_hash_b_hex])
     );
 
@@ -1950,24 +2020,21 @@ async fn test_cells_by_script_uses_exact_reference_form_without_alias() {
     store
         .put_script_info_direct(
             &type_hash,
-            &ScriptInfo {
-                code_hash: type_hash.to_vec(),
-                hash_type: 1,
-                name: Some("Default Lock".to_string()),
-                dep_type_hash: Some(type_hash.to_vec()),
-                dep_data_hash: Some(data_hash.clone()),
-                lock_live_cells_count: 1,
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Default Lock".to_string(),
                 ..Default::default()
             },
         )
         .unwrap();
     store
-        .put_script_info_direct(
-            &data_hash,
-            &ScriptInfo {
-                code_hash: data_hash.clone(),
-                hash_type: 0,
-                name: None,
+        .put_script_reference_info_direct(
+            1,
+            &type_hash,
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: type_hash.to_vec(),
+                hash_type: 1,
+                lock_live_cells_count: 1,
                 ..Default::default()
             },
         )
@@ -2060,10 +2127,11 @@ async fn test_cells_by_script_type_request_returns_empty_for_data_only_deploymen
     let tx_hash = vec![0xab; 32];
 
     store
-        .put_script_info_direct(
+        .put_script_reference_info_direct(
+            0,
             &data_hash,
-            &ScriptInfo {
-                code_hash: data_hash.to_vec(),
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: data_hash.to_vec(),
                 hash_type: 0,
                 lock_live_cells_count: 1,
                 ..Default::default()
@@ -2163,10 +2231,20 @@ async fn test_cells_by_script_hash_type_filters_rows_strictly() {
     store
         .put_script_info_direct(
             &code_hash,
-            &ScriptInfo {
-                code_hash: code_hash.to_vec(),
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Default Lock".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            1,
+            &code_hash,
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: code_hash.to_vec(),
                 hash_type: 1,
-                name: Some("Default Lock".to_string()),
                 lock_cells_count: 2,
                 lock_live_cells_count: 2,
                 ..Default::default()
@@ -3329,10 +3407,20 @@ async fn test_get_script_usage_aggregates_family_references() {
     store
         .put_script_info_direct(
             &[0xaa; 32],
-            &ScriptInfo {
-                code_hash: vec![0xaa; 32],
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Default Lock".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            1,
+            &[0xaa; 32],
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: [0xaa; 32].to_vec(),
                 hash_type: 1,
-                name: Some("Default Lock".to_string()),
                 lock_cells_count: 999,
                 lock_live_cells_count: 999,
                 lock_capacity_sum: 999_999,
@@ -3846,15 +3934,17 @@ async fn test_deprecated_script_labels_resolve_by_name_and_api_flag() {
     run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
 
     let app = create_router(test_config(store)).await;
-    let pw_lock_data_hash = "0xd6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee";
+    // The registry names PW Lock by its pair (its type id reference by
+    // `type`), not by its binary's data hash (lane rd/api-lock-names).
+    let pw_lock = "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc";
 
     let request = Request::builder()
         .method("POST")
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}"]}}"#,
-            pw_lock_data_hash
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"type"}}]}}"#,
+            pw_lock
         )))
         .unwrap();
     let response = app.clone().oneshot(request).await.unwrap();
@@ -3862,9 +3952,11 @@ async fn test_deprecated_script_labels_resolve_by_name_and_api_flag() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json[pw_lock_data_hash]["name"], "PW Lock");
-    assert_eq!(json[pw_lock_data_hash]["deprecated"], true);
-    assert_eq!(json[pw_lock_data_hash]["resolutionState"], "resolved");
+    let entry = &json[&format!("{pw_lock}:type")];
+    assert_eq!(entry["name"], "PW Lock", "{json}");
+    assert_eq!(entry["deprecated"], true, "{json}");
+    // Label import alone: no code cell resolves the type id here.
+    assert_eq!(entry["resolutionState"], "unresolved", "{json}");
 
     let request = Request::builder()
         .uri("/api/v1/scripts/PW%20Lock")
@@ -3893,7 +3985,7 @@ async fn test_lookup_scripts_accepts_tx_hash_parameter() {
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(
-            r#"{"codeHashes":[],"txHash":"0x0000000000000000000000000000000000000000000000000000000000000000"}"#,
+            r#"{"scripts":[],"txHash":"0x0000000000000000000000000000000000000000000000000000000000000000"}"#,
         ))
         .unwrap();
 
@@ -3947,10 +4039,20 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
     store
         .put_script_info_direct(
             &ref_signet,
-            &ScriptInfo {
-                code_hash: ref_signet.clone(),
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "RGB++".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            1,
+            &ref_signet,
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: ref_signet.to_vec(),
                 hash_type: 1,
-                name: Some("RGB++".to_string()),
                 lock_cells_count: 1337,
                 lock_live_cells_count: 680,
                 lock_capacity_sum: 20_000_000_000_000,
@@ -3964,10 +4066,20 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
     store
         .put_script_info_direct(
             &ref_testnet3,
-            &ScriptInfo {
-                code_hash: ref_testnet3.clone(),
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "RGB++".to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            1,
+            &ref_testnet3,
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: ref_testnet3.to_vec(),
                 hash_type: 1,
-                name: Some("RGB++".to_string()),
                 lock_cells_count: 21009,
                 lock_live_cells_count: 12486,
                 lock_capacity_sum: 480_000_000_000_000,
@@ -4016,7 +4128,7 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}","{}"]}}"#,
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"type"}},{{"codeHash":"{}","hashType":"type"}}]}}"#,
             ref_signet_hex, ref_testnet3_hex
         )))
         .unwrap();
@@ -4026,32 +4138,50 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
     // The testnet3 reference serves ITS OWN stats and ITS OWN code cell.
-    assert_eq!(json[&ref_testnet3_hex]["name"], "RGB++");
-    assert_eq!(json[&ref_testnet3_hex]["liveCellsCount"], 12486);
+    assert_eq!(json[&format!("{ref_testnet3_hex}:type")]["name"], "RGB++");
     assert_eq!(
-        json[&ref_testnet3_hex]["ownedCapacitySum"],
+        json[&format!("{ref_testnet3_hex}:type")]["liveCellsCount"],
+        12486
+    );
+    assert_eq!(
+        json[&format!("{ref_testnet3_hex}:type")]["ownedCapacitySum"],
         "475592296325729"
     );
     assert_eq!(
-        json[&ref_testnet3_hex]["ownedKnowledgeSum"],
+        json[&format!("{ref_testnet3_hex}:type")]["ownedKnowledgeSum"],
         "279292400000000"
     );
     assert_eq!(
-        json[&ref_testnet3_hex]["codeCellTxHash"],
+        json[&format!("{ref_testnet3_hex}:type")]["codeCellTxHash"],
         format!("0x{}", hex::encode(&testnet3_code_cell_tx))
     );
-    assert_eq!(json[&ref_testnet3_hex]["codeCellsTotal"], 1);
-    assert_eq!(json[&ref_testnet3_hex]["codeCellsLiveCount"], 1);
+    assert_eq!(
+        json[&format!("{ref_testnet3_hex}:type")]["codeCellsTotal"],
+        1
+    );
+    assert_eq!(
+        json[&format!("{ref_testnet3_hex}:type")]["codeCellsLiveCount"],
+        1
+    );
 
     // The signet reference likewise serves only its own deployment.
-    assert_eq!(json[&ref_signet_hex]["liveCellsCount"], 680);
-    assert_eq!(json[&ref_signet_hex]["ownedCapacitySum"], "17587097961011");
-    assert_eq!(json[&ref_signet_hex]["ownedKnowledgeSum"], "11771100000000");
     assert_eq!(
-        json[&ref_signet_hex]["codeCellTxHash"],
+        json[&format!("{ref_signet_hex}:type")]["liveCellsCount"],
+        680
+    );
+    assert_eq!(
+        json[&format!("{ref_signet_hex}:type")]["ownedCapacitySum"],
+        "17587097961011"
+    );
+    assert_eq!(
+        json[&format!("{ref_signet_hex}:type")]["ownedKnowledgeSum"],
+        "11771100000000"
+    );
+    assert_eq!(
+        json[&format!("{ref_signet_hex}:type")]["codeCellTxHash"],
         format!("0x{}", hex::encode(&signet_code_cell_tx))
     );
-    assert_eq!(json[&ref_signet_hex]["codeCellsTotal"], 1);
+    assert_eq!(json[&format!("{ref_signet_hex}:type")]["codeCellsTotal"], 1);
 }
 
 /// An ambiguous type reference (two live bytecode versions) still describes
@@ -4069,11 +4199,21 @@ async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
     store
         .put_script_info_direct(
             &reference_hash,
-            &ScriptInfo {
-                code_hash: reference_hash.clone(),
-                hash_type: 1,
-                name: Some("Old Deprecated Lock".to_string()),
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Old Deprecated Lock".to_string(),
                 deprecated: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_reference_info_direct(
+            1,
+            &reference_hash,
+            &ckbadger_store::ScriptReferenceInfo {
+                reference_hash: reference_hash.to_vec(),
+                hash_type: 1,
                 lock_cells_count: 5,
                 lock_live_cells_count: 2,
                 lock_capacity_sum: 1_000,
@@ -4120,7 +4260,7 @@ async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
         .uri("/api/v1/scripts/lookup")
         .header("content-type", "application/json")
         .body(Body::from(format!(
-            r#"{{"codeHashes":["{}"]}}"#,
+            r#"{{"scripts":[{{"codeHash":"{}","hashType":"type"}}]}}"#,
             reference_hash_hex
         )))
         .unwrap();
@@ -4129,14 +4269,20 @@ async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(json[&reference_hash_hex]["resolutionState"], "ambiguous");
-    assert_eq!(json[&reference_hash_hex]["name"], "Old Deprecated Lock");
     assert_eq!(
-        json[&reference_hash_hex]["deprecated"], true,
+        json[&format!("{reference_hash_hex}:type")]["resolutionState"],
+        "ambiguous"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:type")]["name"],
+        "Old Deprecated Lock"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:type")]["deprecated"], true,
         "the queried reference is marked deprecated in the store; the ambiguous fallback record must not hardcode false"
     );
     assert_eq!(
-        json[&reference_hash_hex]["ambiguity"]["versionHashes"]
+        json[&format!("{reference_hash_hex}:type")]["ambiguity"]["versionHashes"]
             .as_array()
             .unwrap()
             .len(),
@@ -4144,8 +4290,14 @@ async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
     );
 }
 
+/// `POST /scripts/lookup` for each code hash by `type`, the form these
+/// fixtures' references take.
 async fn post_script_lookup(app: axum::Router, code_hashes: &[&str]) -> serde_json::Value {
-    let body = serde_json::json!({ "codeHashes": code_hashes }).to_string();
+    let scripts: Vec<serde_json::Value> = code_hashes
+        .iter()
+        .map(|code_hash| serde_json::json!({ "codeHash": code_hash, "hashType": "type" }))
+        .collect();
+    let body = serde_json::json!({ "scripts": scripts }).to_string();
     let request = Request::builder()
         .method("POST")
         .uri("/api/v1/scripts/lookup")
@@ -4195,10 +4347,9 @@ async fn test_script_lookup_serves_the_references_description() {
     store
         .put_script_info_direct(
             &described,
-            &ScriptInfo {
-                code_hash: described.clone(),
-                hash_type: 1,
-                name: Some("Cells Account Lock".to_string()),
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Cells Account Lock".to_string(),
                 description: Some(DESCRIPTION.to_string()),
                 ..Default::default()
             },
@@ -4207,10 +4358,9 @@ async fn test_script_lookup_serves_the_references_description() {
     store
         .put_script_info_direct(
             &undescribed,
-            &ScriptInfo {
-                code_hash: undescribed.clone(),
-                hash_type: 1,
-                name: Some("Cells Account Lock".to_string()),
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Cells Account Lock".to_string(),
                 description: None,
                 ..Default::default()
             },
@@ -4249,9 +4399,15 @@ async fn test_script_lookup_serves_the_references_description() {
     let undescribed_hex = format!("0x{}", hex::encode(&undescribed));
     let json = post_script_lookup(app, &[&described_hex, &undescribed_hex]).await;
 
-    assert_eq!(json[&described_hex]["resolutionState"], "resolved");
-    assert_eq!(json[&described_hex]["description"], DESCRIPTION);
-    let undescribed_entry = json[&undescribed_hex]
+    assert_eq!(
+        json[&format!("{described_hex}:type")]["resolutionState"],
+        "resolved"
+    );
+    assert_eq!(
+        json[&format!("{described_hex}:type")]["description"],
+        DESCRIPTION
+    );
+    let undescribed_entry = json[&format!("{undescribed_hex}:type")]
         .as_object()
         .unwrap_or_else(|| panic!("lookup entry missing: {json}"));
     assert_eq!(
@@ -4274,10 +4430,9 @@ async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
     store
         .put_script_info_direct(
             &reference_hash,
-            &ScriptInfo {
-                code_hash: reference_hash.clone(),
-                hash_type: 1,
-                name: Some("Described Lock".to_string()),
+            1,
+            &ckbadger_store::ScriptInfo {
+                name: "Described Lock".to_string(),
                 description: Some("What this lock decides.".to_string()),
                 ..Default::default()
             },
@@ -4315,9 +4470,12 @@ async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
     let reference_hash_hex = format!("0x{}", hex::encode(&reference_hash));
     let json = post_script_lookup(app, &[&reference_hash_hex]).await;
 
-    assert_eq!(json[&reference_hash_hex]["resolutionState"], "ambiguous");
     assert_eq!(
-        json[&reference_hash_hex]["description"],
+        json[&format!("{reference_hash_hex}:type")]["resolutionState"],
+        "ambiguous"
+    );
+    assert_eq!(
+        json[&format!("{reference_hash_hex}:type")]["description"],
         "What this lock decides."
     );
 }
@@ -4332,13 +4490,8 @@ async fn test_bundled_mainnet_usdi_deployment_belongs_to_xudt_family() {
     let binary =
         hex::decode("50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95").unwrap();
     assert_eq!(
-        store
-            .get_script_info(&reference)
-            .unwrap()
-            .unwrap()
-            .name
-            .as_deref(),
-        Some("xUDT")
+        store.get_script_info(&reference, 1).unwrap().unwrap().name,
+        "xUDT"
     );
     let version = store.get_script_version(&binary).unwrap().unwrap();
     assert_eq!(version.family_id.as_deref(), Some("xudt"));
@@ -5065,7 +5218,11 @@ async fn post_script_lookup_in_tx(
     code_hash: &str,
     tx_hash: &str,
 ) -> (StatusCode, serde_json::Value) {
-    let body = serde_json::json!({ "codeHashes": [code_hash], "txHash": tx_hash }).to_string();
+    let body = serde_json::json!({
+        "scripts": [{ "codeHash": code_hash, "hashType": "type" }],
+        "txHash": tx_hash
+    })
+    .to_string();
     let request = Request::builder()
         .method("POST")
         .uri("/api/v1/scripts/lookup")
@@ -5187,4 +5344,85 @@ async fn an_empty_dep_group_fails_both_dep_group_expansions() {
         message.contains(&format!("malformed dep group {deployment_hash}:0")),
         "{message}"
     );
+}
+
+/// `POST /scripts/lookup` asked by pairs (code hash, hash type).
+async fn post_script_lookup_pairs(
+    app: &axum::Router,
+    pairs: &[(&str, &str)],
+) -> (StatusCode, serde_json::Value) {
+    let scripts: Vec<serde_json::Value> = pairs
+        .iter()
+        .map(|(code_hash, hash_type)| {
+            serde_json::json!({ "codeHash": code_hash, "hashType": hash_type })
+        })
+        .collect();
+    let body = serde_json::json!({ "scripts": scripts }).to_string();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// Lane rd/api-lock-names: the lookup is asked by the pair (code hash, hash
+/// type) and answers each pair with its own name and its own figures. Under
+/// the default lock's code hash, the pair by `type` is the default lock (7
+/// live cells here); the pair by `data` is another script (2 live cells),
+/// which the registry does not name: the default lock's name and figures do
+/// not reach it, and its own figures are not summed into the default lock's.
+#[tokio::test]
+async fn by_pair_lookup_answers_each_pair_with_its_own_name_and_figures() {
+    let store = test_store();
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    let secp = default_lock_code_hash();
+    for (hash_type, live, capacity) in [(1u8, 7i64, 700_00000000i128), (0, 2, 200_00000000)] {
+        store
+            .put_script_reference_info_direct(
+                hash_type,
+                &secp,
+                &ScriptReferenceInfo {
+                    reference_hash: secp.clone(),
+                    hash_type,
+                    lock_cells_count: live,
+                    lock_live_cells_count: live,
+                    lock_capacity_sum: capacity,
+                    lock_owned_capacity_sum: capacity,
+                    lock_used_capacity_sum: i128::from(live) * 61_00000000,
+                    lock_owned_knowledge_sum: i128::from(live) * 61_00000000,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = post_script_lookup_pairs(
+        &app,
+        &[
+            (TEST_SECP_LOCK_CODE_HASH, "type"),
+            (TEST_SECP_LOCK_CODE_HASH, "data"),
+        ],
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let by_type = &json[format!("{TEST_SECP_LOCK_CODE_HASH}:type")];
+    assert_eq!(by_type["name"], "Default Lock", "{json}");
+    assert_eq!(by_type["hashType"], "type", "{json}");
+    assert_eq!(by_type["liveCellsCount"], 7, "{json}");
+    assert_eq!(by_type["ownedCapacitySum"], "70000000000", "{json}");
+    let by_data = &json[format!("{TEST_SECP_LOCK_CODE_HASH}:data")];
+    assert_eq!(by_data["referenceHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert_eq!(by_data["hashType"], "data", "{json}");
+    assert_ne!(
+        by_data["name"], "Default Lock",
+        "the default lock's name does not reach the script by data: {json}"
+    );
+    assert_eq!(by_data["liveCellsCount"], 2, "{json}");
+    assert_eq!(by_data["ownedCapacitySum"], "20000000000", "{json}");
 }

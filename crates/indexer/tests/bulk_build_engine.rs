@@ -256,8 +256,9 @@ fn bulk_build_core_owner_pass_materializes_multiple_reducers_from_single_resolve
 
     assert!(snapshot.address_balances.contains_key(lock_hash.as_slice()));
     assert!(snapshot
-        .script_infos
-        .contains_key(spore_code_hash.as_slice()));
+        .script_reference_infos
+        .keys()
+        .any(|(code_hash, _)| code_hash.as_slice() == spore_code_hash.as_slice()));
     assert!(snapshot
         .object_state
         .spores

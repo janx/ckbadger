@@ -370,7 +370,7 @@ fn observed_party(
                     script_to_address(&lock.code_hash, lock.hash_type, &lock.args, network)
                         .map_err(anyhow::Error::msg)?,
                 ),
-                registered_script_name(store, &lock.code_hash)?,
+                registered_script_name(store, &lock.code_hash, lock.hash_type)?,
             )
         }
         None => (None, None),

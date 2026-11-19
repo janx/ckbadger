@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use anyhow::{anyhow, bail, Result};
 use ckbadger_store::keys;
 use ckbadger_store::{
-    CkbadgerStore, ScriptDailyDelta, ScriptInfo, ScriptReferenceInfo, CF_SCRIPT_INFO,
-    CF_SCRIPT_REFERENCE_INFO, CF_STATS_SCRIPT,
+    CkbadgerStore, ScriptDailyDelta, ScriptReferenceInfo, CF_SCRIPT_REFERENCE_INFO, CF_STATS_SCRIPT,
 };
 use rustc_hash::FxHashMap;
 
@@ -21,7 +20,10 @@ use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
 
 #[derive(Debug, Default)]
 pub(crate) struct ScriptOwner {
-    infos: FxHashMap<Vec<u8>, ScriptInfo>,
+    /// Usage by the script's pair (code hash, hash type): the one script usage
+    /// the bulk build keeps (lane rd/api-lock-names; a second, lumped copy by
+    /// the code hash alone summed every hash type's cells into one
+    /// `script_info` row and is gone).
     reference_infos: FxHashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     type_id_reference_live_versions: FxHashMap<Vec<u8>, FxHashMap<Vec<u8>, u32>>,
     type_id_reference_versions: FxHashMap<Vec<u8>, Option<Vec<u8>>>,
@@ -36,16 +38,8 @@ enum TypeIdReferenceResolution {
 }
 
 impl ScriptOwner {
-    #[cfg(test)]
-    pub(crate) fn infos(&self) -> &FxHashMap<Vec<u8>, ScriptInfo> {
-        &self.infos
-    }
-
     pub(crate) fn estimated_bytes(&self) -> u64 {
-        crate::sync::bulk_build::accounting::hash_map_bytes(&self.infos, |code_hash, info| {
-            crate::sync::bulk_build::accounting::bytes_vec_bytes(code_hash)
-                + crate::sync::bulk_build::accounting::serialized_bytes(info)
-        }) + crate::sync::bulk_build::accounting::hash_map_bytes(
+        crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.reference_infos,
             |(reference_hash, _hash_type), info| {
                 crate::sync::bulk_build::accounting::bytes_vec_bytes(reference_hash)
@@ -238,54 +232,9 @@ impl ScriptOwner {
     }
 
     fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
-        let mut code_hashes: Vec<&Vec<u8>> = self.infos.keys().collect();
-        code_hashes.sort();
-
-        let mut all_rows = code_hashes
-            .into_iter()
-            .map(|code_hash| {
-                let mut info = self
-                    .infos
-                    .get(code_hash)
-                    .expect("sorted code hash must exist in script owner")
-                    .clone();
-
-                // Preserve label fields from existing store data (written by
-                // label import); a row that cannot be read fails the finalize
-                // (the error names the code hash), and a corrupt one is
-                // rebuild-required (finding 12). Finalize stage, once per
-                // script: no per-row bulk work.
-                if let Some(existing) =
-                    crate::db::writer::read_script_info_row(domain_store, code_hash)?
-                {
-                    if info.name.is_none() {
-                        info.name = existing.name;
-                    }
-                    if !info.deprecated {
-                        info.deprecated = existing.deprecated;
-                    }
-                    if info.category.is_none() {
-                        info.category = existing.category;
-                    }
-                    if info.website.is_none() {
-                        info.website = existing.website;
-                    }
-                    if info.description.is_none() {
-                        info.description = existing.description;
-                    }
-                }
-
-                Ok(MaterializedRow::new(
-                    CF_SCRIPT_INFO,
-                    code_hash.clone(),
-                    bincode::serialize(&info)?,
-                ))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
         let mut reference_keys: Vec<&(Vec<u8>, u8)> = self.reference_infos.keys().collect();
         reference_keys.sort();
-        let reference_rows = reference_keys
+        let mut all_rows = reference_keys
             .into_iter()
             .map(|(reference_hash, hash_type)| {
                 let info = self
@@ -299,7 +248,6 @@ impl ScriptOwner {
                 ))
             })
             .collect::<Result<Vec<_>>>()?;
-        all_rows.extend(reference_rows);
 
         let mut mapping_keys = self.reference_infos.keys().cloned().collect::<Vec<_>>();
         mapping_keys.extend(
@@ -471,12 +419,10 @@ impl ScriptOwner {
 
 impl BulkReducer for ScriptOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        let mut deltas: FxHashMap<Vec<u8>, ScriptDelta> = FxHashMap::default();
         let mut reference_deltas: FxHashMap<(Vec<u8>, u8), ScriptReferenceDelta> =
             FxHashMap::default();
 
         for input in &tx.resolved_inputs {
-            apply_input_deltas(input, ctx, &mut deltas, tx)?;
             apply_input_reference_deltas(input, ctx, &mut reference_deltas, tx)?;
             let native_type_id = input
                 .type_code_hash_id
@@ -499,7 +445,6 @@ impl BulkReducer for ScriptOwner {
             }
         }
         for cell in tx.cells.iter() {
-            apply_output_deltas(cell, ctx, &mut deltas, tx)?;
             apply_output_reference_deltas(cell, ctx, &mut reference_deltas, tx)?;
             let native_type_id = cell
                 .type_code_hash_id
@@ -535,51 +480,6 @@ impl BulkReducer for ScriptOwner {
         }
 
         let date_yyyymmdd = keys::timestamp_ms_to_date(tx.chain_time_ms);
-        for (code_hash, delta) in deltas {
-            {
-                let info = self
-                    .infos
-                    .entry(code_hash.clone())
-                    .or_insert_with(|| ScriptInfo {
-                        code_hash: code_hash.clone(),
-                        hash_type: delta.hash_type,
-                        ..Default::default()
-                    });
-
-                // CKB allows the same code_hash to be referenced with different
-                // hash_types (data=0, type=1, data1=2, data2=4). The pipeline
-                // path handles this by overwriting; match that behavior here.
-                if info.hash_type != delta.hash_type {
-                    info.hash_type = delta.hash_type;
-                }
-
-                apply_lock_delta(info, &code_hash, &delta, tx)?;
-                apply_type_delta(info, &code_hash, &delta, tx)?;
-                info.cells_count = info
-                    .lock_cells_count
-                    .checked_add(info.type_cells_count)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "script total cells_count overflow: code_hash=0x{}, lock_cells_count={}, type_cells_count={}",
-                            hex::encode(&code_hash),
-                            info.lock_cells_count,
-                            info.type_cells_count
-                        )
-                    })?;
-                info.capacity_used = info
-                    .lock_capacity_sum
-                    .checked_add(info.type_capacity_sum)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "script total capacity_used overflow: code_hash=0x{}, lock_capacity_sum={}, type_capacity_sum={}",
-                            hex::encode(&code_hash),
-                            info.lock_capacity_sum,
-                            info.type_capacity_sum
-                        )
-                    })?;
-            }
-        }
-
         for ((reference_hash, hash_type), delta) in reference_deltas {
             let info = self
                 .reference_infos
@@ -632,23 +532,6 @@ impl BulkReducer for ScriptOwner {
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct ScriptDelta {
-    hash_type: u8,
-    lock_cells_delta: i64,
-    lock_live_cells_delta: i64,
-    lock_capacity_delta: i128,
-    lock_owned_capacity_delta: i128,
-    lock_used_capacity_delta: i128,
-    lock_owned_knowledge_delta: i128,
-    type_cells_delta: i64,
-    type_live_cells_delta: i64,
-    type_capacity_delta: i128,
-    type_owned_capacity_delta: i128,
-    type_used_capacity_delta: i128,
-    type_owned_knowledge_delta: i128,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct ScriptReferenceDelta {
     lock_cells_delta: i64,
     lock_live_cells_delta: i64,
@@ -693,44 +576,6 @@ fn parse_hash_type_u8(
     }
 }
 
-fn apply_input_deltas(
-    input: &ResolvedInputFacts,
-    ctx: &ReducerContext<'_>,
-    deltas: &mut FxHashMap<Vec<u8>, ScriptDelta>,
-    tx: &ResolvedTxFacts<'_>,
-) -> Result<()> {
-    let lock_code_hash = input.lock_code_hash_id;
-    let lock_delta = deltas
-        .entry(ctx.resolve_identity(lock_code_hash).to_vec())
-        .or_default();
-    set_or_confirm_hash_type(lock_delta, input.lock_hash_type, "lock", tx, lock_code_hash)?;
-    lock_delta.lock_live_cells_delta -= 1;
-    lock_delta.lock_owned_capacity_delta -= i128::from(input.capacity);
-    lock_delta.lock_owned_knowledge_delta -= i128::from(input.occupied_capacity);
-
-    if let Some(type_code_hash_id) = input.type_code_hash_id {
-        let type_hash_type = input.type_hash_type.ok_or_else(|| {
-            anyhow!(
-                "missing type hash_type for resolved typed input: block={}, tx=0x{}, tx_index={}, outpoint=0x{}:{}",
-                tx.block_number,
-                hex::encode(tx.tx_hash),
-                tx.tx_index,
-                hex::encode(input.outpoint.tx_hash),
-                input.outpoint.index
-            )
-        })?;
-        let type_delta = deltas
-            .entry(ctx.resolve_identity(type_code_hash_id).to_vec())
-            .or_default();
-        set_or_confirm_hash_type(type_delta, type_hash_type, "type", tx, type_code_hash_id)?;
-        type_delta.type_live_cells_delta -= 1;
-        type_delta.type_owned_capacity_delta -= i128::from(input.capacity);
-        type_delta.type_owned_knowledge_delta -= i128::from(input.occupied_capacity);
-    }
-
-    Ok(())
-}
-
 fn apply_input_reference_deltas(
     input: &ResolvedInputFacts,
     ctx: &ReducerContext<'_>,
@@ -766,55 +611,6 @@ fn apply_input_reference_deltas(
         type_delta.type_live_cells_delta -= 1;
         type_delta.type_owned_capacity_delta -= i128::from(input.capacity);
         type_delta.type_owned_knowledge_delta -= i128::from(input.occupied_capacity);
-    }
-
-    Ok(())
-}
-
-fn apply_output_deltas(
-    cell: &CellFacts,
-    ctx: &ReducerContext<'_>,
-    deltas: &mut FxHashMap<Vec<u8>, ScriptDelta>,
-    tx: &ResolvedTxFacts<'_>,
-) -> Result<()> {
-    let lock_delta = deltas
-        .entry(ctx.resolve_identity(cell.lock_code_hash_id).to_vec())
-        .or_default();
-    set_or_confirm_hash_type(
-        lock_delta,
-        cell.lock_hash_type,
-        "lock",
-        tx,
-        cell.lock_code_hash_id,
-    )?;
-    lock_delta.lock_cells_delta += 1;
-    lock_delta.lock_live_cells_delta += 1;
-    lock_delta.lock_capacity_delta += i128::from(cell.capacity);
-    lock_delta.lock_owned_capacity_delta += i128::from(cell.capacity);
-    lock_delta.lock_used_capacity_delta += i128::from(cell.occupied_capacity);
-    lock_delta.lock_owned_knowledge_delta += i128::from(cell.occupied_capacity);
-
-    if let Some(type_code_hash_id) = cell.type_code_hash_id {
-        let type_hash_type = cell.type_hash_type.ok_or_else(|| {
-            anyhow!(
-                "missing type hash_type for typed output: block={}, tx=0x{}, tx_index={}, outpoint=0x{}:{}",
-                tx.block_number,
-                hex::encode(tx.tx_hash),
-                tx.tx_index,
-                hex::encode(cell.outpoint.tx_hash),
-                cell.outpoint.index
-            )
-        })?;
-        let type_delta = deltas
-            .entry(ctx.resolve_identity(type_code_hash_id).to_vec())
-            .or_default();
-        set_or_confirm_hash_type(type_delta, type_hash_type, "type", tx, type_code_hash_id)?;
-        type_delta.type_cells_delta += 1;
-        type_delta.type_live_cells_delta += 1;
-        type_delta.type_capacity_delta += i128::from(cell.capacity);
-        type_delta.type_owned_capacity_delta += i128::from(cell.capacity);
-        type_delta.type_used_capacity_delta += i128::from(cell.occupied_capacity);
-        type_delta.type_owned_knowledge_delta += i128::from(cell.occupied_capacity);
     }
 
     Ok(())
@@ -861,81 +657,6 @@ fn apply_output_reference_deltas(
         type_delta.type_owned_capacity_delta += i128::from(cell.capacity);
         type_delta.type_used_capacity_delta += i128::from(cell.occupied_capacity);
         type_delta.type_owned_knowledge_delta += i128::from(cell.occupied_capacity);
-    }
-
-    Ok(())
-}
-
-fn apply_lock_delta(
-    info: &mut ScriptInfo,
-    code_hash: &[u8],
-    delta: &ScriptDelta,
-    tx: &ResolvedTxFacts<'_>,
-) -> Result<()> {
-    info.lock_cells_count = checked_next_i64(
-        code_hash,
-        "lock",
-        "cells_count",
-        info.lock_cells_count,
-        delta.lock_cells_delta,
-        tx,
-    )?;
-    info.lock_live_cells_count = checked_next_i64(
-        code_hash,
-        "lock",
-        "live_cells_count",
-        info.lock_live_cells_count,
-        delta.lock_live_cells_delta,
-        tx,
-    )?;
-    info.lock_capacity_sum = checked_next_i128(
-        code_hash,
-        "lock",
-        "capacity_sum",
-        info.lock_capacity_sum,
-        delta.lock_capacity_delta,
-        tx,
-    )?;
-    info.lock_owned_capacity_sum = checked_next_i128(
-        code_hash,
-        "lock",
-        "owned_capacity_sum",
-        info.lock_owned_capacity_sum,
-        delta.lock_owned_capacity_delta,
-        tx,
-    )?;
-    info.lock_used_capacity_sum = checked_next_i128(
-        code_hash,
-        "lock",
-        "used_capacity_sum",
-        info.lock_used_capacity_sum,
-        delta.lock_used_capacity_delta,
-        tx,
-    )?;
-    info.lock_owned_knowledge_sum = checked_next_i128(
-        code_hash,
-        "lock",
-        "owned_knowledge_sum",
-        info.lock_owned_knowledge_sum,
-        delta.lock_owned_knowledge_delta,
-        tx,
-    )?;
-
-    if info.lock_used_capacity_sum > info.lock_capacity_sum {
-        bail!(
-            "script lock used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
-            hex::encode(code_hash),
-            info.lock_used_capacity_sum,
-            info.lock_capacity_sum
-        );
-    }
-    if info.lock_owned_knowledge_sum > info.lock_owned_capacity_sum {
-        bail!(
-            "script lock owned knowledge exceeds total: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
-            hex::encode(code_hash),
-            info.lock_owned_knowledge_sum,
-            info.lock_owned_capacity_sum
-        );
     }
 
     Ok(())
@@ -1086,105 +807,6 @@ fn apply_reference_delta(
     Ok(())
 }
 
-fn apply_type_delta(
-    info: &mut ScriptInfo,
-    code_hash: &[u8],
-    delta: &ScriptDelta,
-    tx: &ResolvedTxFacts<'_>,
-) -> Result<()> {
-    info.type_cells_count = checked_next_i64(
-        code_hash,
-        "type",
-        "cells_count",
-        info.type_cells_count,
-        delta.type_cells_delta,
-        tx,
-    )?;
-    info.type_live_cells_count = checked_next_i64(
-        code_hash,
-        "type",
-        "live_cells_count",
-        info.type_live_cells_count,
-        delta.type_live_cells_delta,
-        tx,
-    )?;
-    info.type_capacity_sum = checked_next_i128(
-        code_hash,
-        "type",
-        "capacity_sum",
-        info.type_capacity_sum,
-        delta.type_capacity_delta,
-        tx,
-    )?;
-    info.type_owned_capacity_sum = checked_next_i128(
-        code_hash,
-        "type",
-        "owned_capacity_sum",
-        info.type_owned_capacity_sum,
-        delta.type_owned_capacity_delta,
-        tx,
-    )?;
-    info.type_used_capacity_sum = checked_next_i128(
-        code_hash,
-        "type",
-        "used_capacity_sum",
-        info.type_used_capacity_sum,
-        delta.type_used_capacity_delta,
-        tx,
-    )?;
-    info.type_owned_knowledge_sum = checked_next_i128(
-        code_hash,
-        "type",
-        "owned_knowledge_sum",
-        info.type_owned_knowledge_sum,
-        delta.type_owned_knowledge_delta,
-        tx,
-    )?;
-
-    if info.type_used_capacity_sum > info.type_capacity_sum {
-        bail!(
-            "script type used capacity exceeds total: code_hash=0x{}, used_capacity_sum={}, capacity_sum={}",
-            hex::encode(code_hash),
-            info.type_used_capacity_sum,
-            info.type_capacity_sum
-        );
-    }
-    if info.type_owned_knowledge_sum > info.type_owned_capacity_sum {
-        bail!(
-            "script type owned knowledge exceeds total: code_hash=0x{}, owned_knowledge_sum={}, owned_capacity_sum={}",
-            hex::encode(code_hash),
-            info.type_owned_knowledge_sum,
-            info.type_owned_capacity_sum
-        );
-    }
-
-    Ok(())
-}
-
-fn set_or_confirm_hash_type(
-    delta: &mut ScriptDelta,
-    hash_type: i16,
-    script_kind: &str,
-    tx: &ResolvedTxFacts<'_>,
-    code_hash_id: crate::sync::types::InternId,
-) -> Result<()> {
-    let next_hash_type = parse_hash_type_u8(hash_type, script_kind, tx, code_hash_id)?;
-
-    if delta == &ScriptDelta::default() {
-        delta.hash_type = next_hash_type;
-        return Ok(());
-    }
-
-    // Same code_hash can appear with different hash_types within one tx
-    // (e.g. a lock script used as data hash and a type script used as type hash
-    // that happen to share the same code_hash). Accept latest, matching pipeline.
-    if delta.hash_type != next_hash_type {
-        delta.hash_type = next_hash_type;
-    }
-
-    Ok(())
-}
-
 fn checked_next_reference_i64(
     reference_hash: &[u8],
     hash_type: u8,
@@ -1261,82 +883,6 @@ fn checked_next_reference_i128(
     Ok(next)
 }
 
-fn checked_next_i64(
-    code_hash: &[u8],
-    script_kind: &str,
-    metric: &str,
-    current: i64,
-    delta: i64,
-    tx: &ResolvedTxFacts<'_>,
-) -> Result<i64> {
-    let next = current.checked_add(delta).ok_or_else(|| {
-        anyhow!(
-            "script {} {} overflow: code_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        )
-    })?;
-    if next < 0 {
-        bail!(
-            "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            next,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        );
-    }
-    Ok(next)
-}
-
-fn checked_next_i128(
-    code_hash: &[u8],
-    script_kind: &str,
-    metric: &str,
-    current: i128,
-    delta: i128,
-    tx: &ResolvedTxFacts<'_>,
-) -> Result<i128> {
-    let next = current.checked_add(delta).ok_or_else(|| {
-        anyhow!(
-            "script {} {} overflow: code_hash=0x{}, current={}, delta={}, block={}, tx=0x{}, tx_index={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        )
-    })?;
-    if next < 0 {
-        bail!(
-            "script {} {} underflow: code_hash=0x{}, current={}, delta={}, next={}, block={}, tx=0x{}, tx_index={}",
-            script_kind,
-            metric,
-            hex::encode(code_hash),
-            current,
-            delta,
-            next,
-            tx.block_number,
-            hex::encode(tx.tx_hash),
-            tx.tx_index
-        );
-    }
-    Ok(next)
-}
-
 fn checked_signed_i128(
     code_hash: &[u8],
     script_kind: impl std::fmt::Display,
@@ -1358,44 +904,6 @@ fn checked_signed_i128(
             tx.tx_index
         )
     })
-}
-
-#[doc(hidden)]
-pub(crate) fn materialize_script_infos_for_test(
-    blocks: &[BlockResponseWithCycles],
-) -> Result<HashMap<Vec<u8>, ScriptInfo>> {
-    let interner = IdentityInterner::default();
-    let (arena, _) = build_bulk_facts_arena_from_blocks(blocks, &interner)?;
-    let resolved = BulkSequencer::default().resolve(&arena)?;
-    let frozen = interner.snapshot_for_reads();
-    let ctx = ReducerContext::new(&frozen);
-    let mut owner = ScriptOwner::default();
-
-    for tx in &resolved {
-        owner.apply_tx(tx, &ctx)?;
-    }
-
-    let root = super::super::unique_temp_test_dir("bulk-build-script-owner");
-    std::fs::create_dir_all(&root)?;
-    let domain_path = root.join("domain");
-    let append_path = root.join("append-only");
-    std::fs::create_dir_all(&domain_path)?;
-    std::fs::create_dir_all(&append_path)?;
-
-    let infos = {
-        let domain_store = CkbadgerStore::open_domain(&domain_path)?;
-        let append_store = CkbadgerStore::open_append_only(&append_path)?;
-        let mut materializer = Materializer::new(&domain_store, &append_store);
-        owner.materialize_final(&mut materializer)?;
-        let _ = materializer.finish();
-        domain_store
-            .list_script_infos()?
-            .into_iter()
-            .collect::<HashMap<_, _>>()
-    };
-
-    let _ = std::fs::remove_dir_all(&root);
-    Ok(infos)
 }
 
 pub(crate) fn materialize_script_reference_infos_for_test(
@@ -1614,7 +1122,11 @@ mod tests {
         owner.apply_tx(&tx0, &ctx).expect("apply tx0");
         owner.apply_tx(&tx1, &ctx).expect("apply tx1");
 
-        let lock_info = owner.infos().get(&lock_code_hash).expect("lock info");
+        // Every cell here is by `type`: each script's usage is its pair's row.
+        let lock_info = owner
+            .reference_infos
+            .get(&(lock_code_hash.clone(), 1))
+            .expect("lock info");
         assert_eq!(lock_info.lock_cells_count, 3);
         assert_eq!(lock_info.lock_live_cells_count, 2);
         assert_eq!(lock_info.lock_capacity_sum, 380_00000000);
@@ -1622,7 +1134,10 @@ mod tests {
         assert_eq!(lock_info.lock_used_capacity_sum, 264_00000000);
         assert_eq!(lock_info.lock_owned_knowledge_sum, 122_00000000);
 
-        let type_info = owner.infos().get(&type_code_hash).expect("type info");
+        let type_info = owner
+            .reference_infos
+            .get(&(type_code_hash.clone(), 1))
+            .expect("type info");
         assert_eq!(type_info.type_cells_count, 1);
         assert_eq!(type_info.type_live_cells_count, 0);
         assert_eq!(type_info.type_capacity_sum, 200_00000000);
@@ -1631,11 +1146,14 @@ mod tests {
         assert_eq!(type_info.type_owned_knowledge_sum, 0);
     }
 
-    /// Ruling 6: finalize's read of the label fields propagates its error —
-    /// a corrupt `script_info` row fails the bulk finalize naming the code
-    /// hash instead of being skipped.
+    /// Lane rd/api-lock-names: the bulk build neither reads nor writes
+    /// `script_info` (the registry's labels, label import's alone): a corrupt
+    /// label row is no business of the bulk finalize, which leaves it exactly
+    /// as it found it. Its readers (label import's preflight, the API) fail
+    /// on it naming the pair. (Before, the finalize read the row to carry its
+    /// labels into the lumped usage row, and failed on it rebuild-required.)
     #[test]
-    fn script_owner_materialize_final_fails_on_a_corrupt_script_info_row() {
+    fn script_owner_materialize_final_leaves_a_script_info_row_untouched() {
         let dir = tempfile::tempdir().unwrap();
         let domain_path = dir.path().join("domain");
         let append_path = dir.path().join("append-only");
@@ -1643,33 +1161,39 @@ mod tests {
         std::fs::create_dir_all(&append_path).unwrap();
         let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
         let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
-        let code_hash = vec![0x6d; 32];
+        let key = keys::encode_script_info_key(&[0x6d; 32], 1);
         domain_store
-            .put_cf(domain_store.cf_script_info(), &code_hash, b"garbage")
+            .put_cf(domain_store.cf_script_info(), &key, b"garbage")
             .unwrap();
         let mut owner = ScriptOwner::default();
-        owner.infos.insert(
-            code_hash.clone(),
-            ScriptInfo {
-                code_hash: code_hash.clone(),
+        owner.reference_infos.insert(
+            (vec![0x6d; 32], 1),
+            ScriptReferenceInfo {
+                reference_hash: vec![0x6d; 32],
                 hash_type: 1,
-                cells_count: 1,
                 lock_cells_count: 1,
                 lock_live_cells_count: 1,
                 ..Default::default()
             },
         );
         let mut materializer = Materializer::new(&domain_store, &append_store);
-        let err = owner.materialize_final(&mut materializer).unwrap_err();
-        let text = format!("{err:#}");
-        assert!(text.contains(&hex::encode(&code_hash)), "{text}");
-        assert!(text.contains("script info"), "{text}");
-        assert!(
-            crate::lifecycle::is_rebuild_required(&err),
-            "a corrupt script_info row is rebuild-required (finding 12): {text}"
+        owner.materialize_final(&mut materializer).unwrap();
+        let _ = materializer.finish();
+        assert_eq!(
+            domain_store
+                .get_cf(domain_store.cf_script_info(), &key)
+                .unwrap()
+                .as_deref(),
+            Some(b"garbage".as_slice())
         );
     }
 
+    /// Lane rd/api-lock-names: the label row label import wrote for a pair
+    /// (name, deprecated flag, description) is exactly as it was after the
+    /// bulk build: the build writes the pair's usage to its reference row and
+    /// no label. (Before, the finalize rewrote the row with the lumped usage,
+    /// carried the label fields over and set the hash type to the last
+    /// cell's.)
     #[test]
     fn script_owner_materialize_final_preserves_existing_deprecated_flag() {
         let dir = tempfile::tempdir().unwrap();
@@ -1682,28 +1206,22 @@ mod tests {
         let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
 
         let code_hash = vec![0x44; 32];
+        let label = ckbadger_store::ScriptInfo {
+            name: "PW Lock".to_string(),
+            deprecated: true,
+            description: Some("deprecated ethereum-compatible lock".to_string()),
+            ..Default::default()
+        };
         domain_store
-            .put_script_info_direct(
-                &code_hash,
-                &ScriptInfo {
-                    code_hash: code_hash.clone(),
-                    hash_type: 1,
-                    name: Some("PW Lock".to_string()),
-                    deprecated: true,
-                    description: Some("deprecated ethereum-compatible lock".to_string()),
-                    ..Default::default()
-                },
-            )
+            .put_script_info_direct(&code_hash, 1, &label)
             .unwrap();
 
         let mut owner = ScriptOwner::default();
-        owner.infos.insert(
-            code_hash.clone(),
-            ScriptInfo {
-                code_hash: code_hash.clone(),
+        owner.reference_infos.insert(
+            (code_hash.clone(), 1),
+            ScriptReferenceInfo {
+                reference_hash: code_hash.clone(),
                 hash_type: 1,
-                cells_count: 1,
-                capacity_used: 100_00000000,
                 lock_cells_count: 1,
                 lock_live_cells_count: 1,
                 lock_capacity_sum: 100_00000000,
@@ -1718,15 +1236,16 @@ mod tests {
         owner.materialize_final(&mut materializer).unwrap();
         let _ = materializer.finish();
 
-        let updated = domain_store.get_script_info(&code_hash).unwrap().unwrap();
-        assert_eq!(updated.name.as_deref(), Some("PW Lock"));
-        assert!(updated.deprecated);
         assert_eq!(
-            updated.description.as_deref(),
-            Some("deprecated ethereum-compatible lock")
+            domain_store.list_script_infos().unwrap(),
+            vec![((code_hash.clone(), 1), label)]
         );
-        assert_eq!(updated.lock_cells_count, 1);
-        assert_eq!(updated.lock_live_cells_count, 1);
+        let usage = domain_store
+            .get_script_reference_info(1, &code_hash)
+            .unwrap()
+            .unwrap();
+        assert_eq!(usage.lock_cells_count, 1);
+        assert_eq!(usage.lock_live_cells_count, 1);
     }
 
     #[test]
@@ -3015,5 +2534,103 @@ mod tests {
         assert_eq!(family.live_cells_count, 1);
         assert_eq!(family.owned_capacity_sum, 150_00000000);
         assert_eq!(family.owned_knowledge_sum, 61_00000000);
+    }
+
+    /// Lane rd/api-lock-names (domain store): CKB names a script by the pair
+    /// (code hash, hash type). The bulk owner summed every cell of a code hash
+    /// into one `script_info` row and gave it the last cell's hash type: over
+    /// a (secp, type) lock cell and a (secp, data) lock cell, the row label
+    /// import wrote as "Default Lock" by `type` came out by `data` with both
+    /// cells (RAN before the fix: `name=Some("Default Lock") hash_type=0
+    /// lock_cells_count=2 lock_capacity_sum=25000000000`). The bulk build
+    /// writes no `script_info` row now (the row is the registry's label of one
+    /// pair, label import's alone), and each pair's usage is its own
+    /// `script_reference_info` row.
+    #[test]
+    fn bulk_build_writes_no_script_info_row_and_counts_each_pair_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain_path = dir.path().join("domain");
+        let append_path = dir.path().join("append-only");
+        std::fs::create_dir_all(&domain_path).unwrap();
+        std::fs::create_dir_all(&append_path).unwrap();
+        let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+        let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+
+        let secp = hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+            .unwrap();
+        let interner = IdentityInterner::default();
+        interner.intern_bytes(vec![0xaa; 32]);
+        let code_hash_id = interner.intern_bytes(secp.clone());
+        interner.intern_bytes(vec![0xab; 20]);
+        interner.intern_bytes(vec![0xbb; 32]);
+        interner.intern_bytes(vec![0xac; 20]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let cell =
+            |index: u32, hash_type: i16, lock_hash: usize, args: usize, capacity: i64| CellFacts {
+                outpoint: OutPointKey::new([0x41; 32], index),
+                created_at_block: 200,
+                created_by_block_dao_ar: 1,
+                capacity,
+                lock_script_hash_id: InternId::new(lock_hash),
+                lock_code_hash_id: code_hash_id,
+                lock_hash_type: hash_type,
+                lock_args_id: InternId::new(args),
+                type_script_hash_id: None,
+                type_code_hash_id: None,
+                type_hash_type: None,
+                type_args_id: None,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: crate::sync::CellSemanticTag::Plain,
+                dao_state: None,
+                protocol_facts: None,
+            };
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x41; 32],
+            block_number: 200,
+            block_hash: [0x09; 32],
+            timestamp_ms: 1_700_000_100_000,
+            chain_time_ms: 1_700_000_100_000,
+            block_dao_ar: 1,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            // (secp, type) then (secp, data): two different locks.
+            cells: vec![
+                cell(0, 1, 0, 2, 150_00000000),
+                cell(1, 0, 3, 4, 100_00000000),
+            ]
+            .into(),
+        };
+        let mut owner = ScriptOwner::default();
+        owner.apply_tx(&tx, &ctx).unwrap();
+        let mut materializer = Materializer::new(&domain_store, &append_store);
+        owner.materialize_final(&mut materializer).unwrap();
+        let _ = materializer.finish();
+
+        let rows = domain_store
+            .iterator_cf(domain_store.cf_script_info(), rocksdb::IteratorMode::Start)
+            .count();
+        assert_eq!(rows, 0, "the bulk build writes no script_info row");
+        let by_type = domain_store
+            .get_script_reference_info(1, &secp)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (by_type.lock_cells_count, by_type.lock_capacity_sum),
+            (1, 150_00000000)
+        );
+        let by_data = domain_store
+            .get_script_reference_info(0, &secp)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (by_data.lock_cells_count, by_data.lock_capacity_sum),
+            (1, 100_00000000)
+        );
     }
 }

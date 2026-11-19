@@ -1565,15 +1565,7 @@ async fn fiber_channels_sort_by_capacity_with_totals_and_network_names_parties_p
     batch.put_fiber_channel(&[0x05; 32], &late);
     batch.put_lock_script(&party_a, &lock_a);
     batch.put_lock_script(&party_b, &lock_b);
-    batch.put_script_info(
-        &lock_a.code_hash,
-        &ckbadger_store::types::ScriptInfo {
-            code_hash: lock_a.code_hash.clone(),
-            hash_type: 1,
-            name: Some("Default Lock".into()),
-            ..Default::default()
-        },
-    );
+    seed_script_label(&store, &lock_a.code_hash, 1, "Default Lock");
     batch.put_token(
         &[0x77; 32],
         &ckbadger_store::types::TokenInfo {

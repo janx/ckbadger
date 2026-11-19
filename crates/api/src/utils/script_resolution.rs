@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use ckbadger_store::{
-    types::{PositionedCellInfo, ScriptInfo, ScriptVersionInfo},
+    types::{PositionedCellInfo, ScriptVersionInfo},
     CkbadgerStore,
 };
 
@@ -15,19 +15,53 @@ pub fn is_known_script_name(name: Option<&str>) -> bool {
     !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(UNKNOWN_SCRIPT_NAME)
 }
 
-/// The script registry's name for a reference (`code_hash`): the name label
-/// import recorded for it — the registry's and Scripts page's name, so a COTA
-/// or JoyID reference is named even though no protocol parser covers it.
-/// `None` when the reference is not registered or carries no known name.
+/// The script registry's name for the script (`code_hash`, `hash_type`): the
+/// name label import recorded for that pair — the registry's and Scripts
+/// page's name, so a COTA or JoyID reference is named even though no protocol
+/// parser covers it. CKB identifies a script by the pair: the same code hash
+/// by another hash type is another script, which this names only when the
+/// registry names that pair too (lane rd/api-lock-names; there is no read by
+/// the code hash alone, and no fall back to another pair). `None` when the
+/// registry does not name the pair. A hash type CKB does not define is an
+/// error, named.
 pub fn registered_script_name(
     store: &CkbadgerStore,
     code_hash: &[u8],
+    hash_type: i16,
 ) -> anyhow::Result<Option<String>> {
+    let hash_type = script_hash_type(code_hash, hash_type)?;
     Ok(store
-        .get_script_info(code_hash)?
-        .and_then(|info| info.name)
-        .map(|name| name.trim().to_string())
+        .get_script_info(code_hash, hash_type)?
+        .map(|info| info.name.trim().to_string())
         .filter(|name| is_known_script_name(Some(name))))
+}
+
+/// A script's hash type as stored (`i16`), checked to be one CKB defines
+/// (data 0, type 1, data1 2, data2 4); anything else names the script.
+pub fn script_hash_type(code_hash: &[u8], hash_type: i16) -> anyhow::Result<u8> {
+    u8::try_from(hash_type)
+        .ok()
+        .filter(|byte| hash_type_to_string(*byte).is_some())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "script 0x{} has hash type {hash_type}, not a CKB hash type",
+                hex::encode(code_hash)
+            )
+        })
+}
+
+/// The deployment hashes a script's pair names: by `type` the code hash is
+/// the deployment's type hash, by `data` / `data1` / `data2` its data hash.
+/// `(type hash, data hash)`.
+pub fn pair_deployment_hashes(
+    code_hash: &[u8],
+    hash_type: u8,
+) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
+    if hash_type == 1 {
+        (Some(code_hash.to_vec()), None)
+    } else {
+        (None, Some(code_hash.to_vec()))
+    }
 }
 
 pub fn hash_type_to_u8(hash_type: &str) -> Option<u8> {
@@ -64,238 +98,6 @@ pub enum CurrentScriptVersionResolution {
     NotFound,
     Resolved(Box<CurrentScriptVersion>),
     Ambiguous(Box<AmbiguousCurrentScriptVersion>),
-}
-
-fn matches_any_reference(info: &ScriptInfo, refs: &HashSet<Vec<u8>>) -> bool {
-    refs.contains(&info.code_hash)
-        || info
-            .dep_type_hash
-            .as_ref()
-            .map(|h| refs.contains(h))
-            .unwrap_or(false)
-        || info
-            .dep_data_hash
-            .as_ref()
-            .map(|h| refs.contains(h))
-            .unwrap_or(false)
-}
-
-fn extend_references(info: &ScriptInfo, refs: &mut HashSet<Vec<u8>>) -> bool {
-    let mut changed = false;
-
-    if refs.insert(info.code_hash.clone()) {
-        changed = true;
-    }
-    if let Some(dep_type_hash) = &info.dep_type_hash {
-        if refs.insert(dep_type_hash.clone()) {
-            changed = true;
-        }
-    }
-    if let Some(dep_data_hash) = &info.dep_data_hash {
-        if refs.insert(dep_data_hash.clone()) {
-            changed = true;
-        }
-    }
-
-    changed
-}
-
-fn collect_related_infos<'a>(
-    all_infos: &'a [ScriptInfo],
-    reference_hash: &[u8],
-) -> Vec<&'a ScriptInfo> {
-    let mut refs = HashSet::new();
-    refs.insert(reference_hash.to_vec());
-
-    let mut seen_codes = HashSet::new();
-    let mut related = Vec::new();
-
-    loop {
-        let mut changed = false;
-
-        for info in all_infos {
-            if seen_codes.contains(&info.code_hash) {
-                continue;
-            }
-            if matches_any_reference(info, &refs) {
-                seen_codes.insert(info.code_hash.clone());
-                related.push(info);
-                extend_references(info, &mut refs);
-                changed = true;
-            }
-        }
-
-        if !changed {
-            break;
-        }
-    }
-
-    related
-}
-
-fn preferred_info<'a>(infos: &[&'a ScriptInfo], reference_hash: &[u8]) -> &'a ScriptInfo {
-    infos
-        .iter()
-        .copied()
-        .max_by_key(|info| {
-            (
-                u8::from(is_known_script_name(info.name.as_deref())),
-                u8::from(info.hash_type == 1),
-                u8::from(info.dep_type_hash.is_some()),
-                u8::from(info.code_cell_tx_hash.is_some() && info.code_cell_output_index.is_some()),
-                u8::from(info.code_hash == reference_hash),
-            )
-        })
-        .unwrap_or(infos[0])
-}
-
-pub fn related_code_hashes_for_reference(
-    all_infos: &[ScriptInfo],
-    reference_hash: &[u8],
-) -> Vec<Vec<u8>> {
-    let mut seen = HashSet::new();
-    let mut hashes = Vec::new();
-
-    for info in collect_related_infos(all_infos, reference_hash) {
-        if seen.insert(info.code_hash.clone()) {
-            hashes.push(info.code_hash.clone());
-        }
-    }
-
-    hashes
-}
-
-pub fn merge_script_info_for_reference(
-    all_infos: &[ScriptInfo],
-    reference_hash: &[u8],
-) -> Option<ScriptInfo> {
-    let related = collect_related_infos(all_infos, reference_hash);
-    if related.is_empty() {
-        return None;
-    }
-
-    let direct = related
-        .iter()
-        .copied()
-        .find(|info| info.code_hash == reference_hash);
-    let preferred = preferred_info(&related, reference_hash);
-
-    let mut merged = direct.cloned().unwrap_or_else(|| preferred.clone());
-    merged.code_hash = reference_hash.to_vec();
-
-    if !is_known_script_name(merged.name.as_deref()) {
-        merged.name = related
-            .iter()
-            .find_map(|info| {
-                if is_known_script_name(info.name.as_deref()) {
-                    info.name.clone()
-                } else {
-                    None
-                }
-            })
-            .or_else(|| preferred.name.clone());
-    }
-    if !merged.deprecated {
-        merged.deprecated = related.iter().any(|info| info.deprecated);
-    }
-
-    if merged.description.is_none() {
-        merged.description = preferred.description.clone();
-    }
-    if merged.website.is_none() {
-        merged.website = preferred.website.clone();
-    }
-    if merged.category.is_none() {
-        merged.category = preferred.category.clone();
-    }
-
-    if merged.dep_type_hash.is_none() {
-        merged.dep_type_hash = preferred
-            .dep_type_hash
-            .clone()
-            .or_else(|| related.iter().find_map(|info| info.dep_type_hash.clone()));
-    }
-    if merged.dep_data_hash.is_none() {
-        merged.dep_data_hash = preferred
-            .dep_data_hash
-            .clone()
-            .or_else(|| related.iter().find_map(|info| info.dep_data_hash.clone()));
-    }
-
-    if merged.code_cell_tx_hash.is_none() || merged.code_cell_output_index.is_none() {
-        if let Some(info) = related
-            .iter()
-            .copied()
-            .find(|info| info.code_cell_tx_hash.is_some() && info.code_cell_output_index.is_some())
-        {
-            merged.code_cell_tx_hash = info.code_cell_tx_hash.clone();
-            merged.code_cell_output_index = info.code_cell_output_index;
-        }
-    }
-
-    Some(merged)
-}
-
-pub fn resolve_code_hash_for_hash_type(
-    all_infos: &[ScriptInfo],
-    reference_hash: &[u8],
-    hash_type: &str,
-) -> Option<Vec<u8>> {
-    let hash_type_u8 = hash_type_to_u8(hash_type)?;
-    let related = collect_related_infos(all_infos, reference_hash);
-    if related.is_empty() {
-        return None;
-    }
-
-    if let Some(info) = related
-        .iter()
-        .copied()
-        .find(|info| info.hash_type == hash_type_u8)
-    {
-        return Some(info.code_hash.clone());
-    }
-
-    // "type" is a strict capability: if no type reference exists in the deployment,
-    // do not silently fall back to a data-family reference.
-    if hash_type_u8 == 1 {
-        return None;
-    }
-
-    if related
-        .iter()
-        .any(|info| info.code_hash.as_slice() == reference_hash)
-    {
-        return Some(reference_hash.to_vec());
-    }
-
-    Some(preferred_info(&related, reference_hash).code_hash.clone())
-}
-
-pub fn deployment_key_for_script(info: &ScriptInfo) -> Vec<u8> {
-    if let Some(dep_type_hash) = &info.dep_type_hash {
-        return dep_type_hash.clone();
-    }
-    if info.hash_type == 1 {
-        return info.code_hash.clone();
-    }
-    if let Some(dep_data_hash) = &info.dep_data_hash {
-        return dep_data_hash.clone();
-    }
-    info.code_hash.clone()
-}
-
-pub fn deployment_reference_hashes(info: &ScriptInfo) -> (Option<Vec<u8>>, Option<Vec<u8>>) {
-    let type_ref = info
-        .dep_type_hash
-        .clone()
-        .or_else(|| (info.hash_type == 1).then(|| info.code_hash.clone()));
-
-    let data_ref = info.dep_data_hash.clone().or_else(|| {
-        (info.hash_type == 0 || info.hash_type == 2 || info.hash_type == 4)
-            .then(|| info.code_hash.clone())
-    });
-
-    (type_ref, data_ref)
 }
 
 /// Minimal cell metadata needed for per-transaction script resolution.
@@ -1160,79 +962,6 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_reference_uses_known_metadata() {
-        let data_hash = vec![0x70; 32];
-        let type_hash = vec![0x9b; 32];
-
-        let data_ref = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0,
-            name: None,
-            lock_live_cells_count: 7,
-            ..Default::default()
-        };
-
-        let type_ref = ScriptInfo {
-            code_hash: type_hash.clone(),
-            hash_type: 1,
-            name: Some("SECP256K1_BLAKE160".to_string()),
-            dep_data_hash: Some(data_hash.clone()),
-            dep_type_hash: Some(type_hash.clone()),
-            ..Default::default()
-        };
-
-        let merged = merge_script_info_for_reference(&[data_ref, type_ref], &data_hash).unwrap();
-        assert_eq!(merged.code_hash, data_hash);
-        assert_eq!(merged.hash_type, 0);
-        assert_eq!(merged.name.as_deref(), Some("SECP256K1_BLAKE160"));
-        assert_eq!(merged.dep_type_hash, Some(type_hash));
-    }
-
-    #[test]
-    fn test_resolve_code_hash_for_hash_type_switches_reference() {
-        let data_hash = vec![0x70; 32];
-        let type_hash = vec![0x9b; 32];
-
-        let data_ref = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0,
-            ..Default::default()
-        };
-        let type_ref = ScriptInfo {
-            code_hash: type_hash.clone(),
-            hash_type: 1,
-            dep_data_hash: Some(data_hash.clone()),
-            dep_type_hash: Some(type_hash.clone()),
-            ..Default::default()
-        };
-
-        let all = [data_ref, type_ref];
-        assert_eq!(
-            resolve_code_hash_for_hash_type(&all, &data_hash, "data"),
-            Some(data_hash.clone())
-        );
-        assert_eq!(
-            resolve_code_hash_for_hash_type(&all, &data_hash, "type"),
-            Some(type_hash)
-        );
-    }
-
-    #[test]
-    fn test_resolve_code_hash_for_hash_type_does_not_fallback_to_data_for_type_request() {
-        let data_hash = vec![0x70; 32];
-        let data_only = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0,
-            ..Default::default()
-        };
-
-        assert_eq!(
-            resolve_code_hash_for_hash_type(&[data_only], &data_hash, "type"),
-            None
-        );
-    }
-
-    #[test]
     fn test_resolve_script_by_hash_returns_ambiguity_for_live_type_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -1821,18 +1550,6 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x52; 32];
 
-        store
-            .put_script_info_direct(
-                &reference_hash,
-                &ScriptInfo {
-                    code_hash: reference_hash.clone(),
-                    hash_type: 0,
-                    lock_cells_count: 1,
-                    lock_live_cells_count: 1,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
         store
             .put_script_version(
                 &reference_hash,

@@ -577,9 +577,13 @@ pub fn resolved_dependencies(
                             .get(hash)
                             .or_else(|| output_locks.get(hash))
                             .expect("matched hash is a key of its set");
+                        // Named by its pair (code hash, hash type): lane
+                        // rd/api-lock-names.
+                        let hash_type: u8 = script.hash_type().into();
                         if let Some(name) = crate::utils::script_resolution::registered_script_name(
                             store,
                             script.code_hash().as_slice(),
+                            i16::from(hash_type),
                         )? {
                             script_names.insert(name);
                         }

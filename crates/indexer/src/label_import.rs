@@ -786,7 +786,9 @@ fn validate_existing_family(
 struct ScriptRegistrations {
     binaries: std::collections::HashMap<Vec<u8>, String>,
     references: std::collections::HashMap<(Vec<u8>, u8), String>,
-    label_hashes: std::collections::HashSet<Vec<u8>>,
+    /// The pairs (code hash, hash type) the active metadata labels: the keys
+    /// of the `script_info` rows this import writes.
+    label_pairs: std::collections::HashSet<(Vec<u8>, u8)>,
 }
 
 fn deployment_reference(deployment: &ImportDeployment) -> &str {
@@ -794,6 +796,21 @@ fn deployment_reference(deployment: &ImportDeployment) -> &str {
         ImportDeployment::Version(version) => &version.canonical_ref_hash,
         ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
     }
+}
+
+/// The script a deployment labels: its pair (code hash, hash type), the key
+/// of its `script_info` row. A version labels its canonical reference by its
+/// canonical hash type; a pseudo deployment (Zero Lock by `data`, Type ID by
+/// `type`) its code hash by its hash type.
+fn deployment_pair(deployment: &ImportDeployment) -> Result<(Vec<u8>, u8)> {
+    let hash_type = match deployment {
+        ImportDeployment::Version(version) => version.canonical_hash_type.as_str(),
+        ImportDeployment::Pseudo(pseudo) => pseudo.hash_type.as_str(),
+    };
+    Ok((
+        decode_hex(deployment_reference(deployment))?,
+        ScriptParser::parse_hash_type(hash_type),
+    ))
 }
 
 fn validate_script_registrations(
@@ -821,9 +838,20 @@ fn validate_script_registrations(
         let lineage_owned =
             validate_existing_family(store, family, &registrations).with_context(context)?;
         for deployment in &active {
-            active_registrations
-                .label_hashes
-                .insert(decode_hex(deployment_reference(deployment)).with_context(context)?);
+            let pair = deployment_pair(deployment).with_context(context)?;
+            // The label is written whole below, so a corrupt stored row would
+            // be overwritten unseen: read it first, and a corrupt row fails
+            // the import before any write, naming the pair.
+            store.get_script_info(&pair.0, pair.1).with_context(|| {
+                format!(
+                    "{} script={} reference=0x{} hash_type={}",
+                    context(),
+                    script.name,
+                    hex::encode(&pair.0),
+                    pair.1
+                )
+            })?;
+            active_registrations.label_pairs.insert(pair);
         }
         for (hash, registration) in registrations {
             if lineage_owned.contains(&hash) {
@@ -853,11 +881,16 @@ fn validate_script_registrations(
         // mutation; a later store error stops the import too (finding 14).
         for deployment in &excluded {
             let reference = deployment_reference(deployment);
-            let code_hash = decode_hex(reference)
+            let (code_hash, hash_type) = deployment_pair(deployment)
                 .with_context(|| format!("{} excluded reference={reference}", context()))?;
             store
-                .get_script_info(&code_hash)
-                .with_context(|| format!("{} excluded reference={reference}", context()))?;
+                .get_script_info(&code_hash, hash_type)
+                .with_context(|| {
+                    format!(
+                        "{} excluded reference={reference} hash_type={hash_type}",
+                        context()
+                    )
+                })?;
             if let ImportDeployment::Version(version) = deployment {
                 let hash = decode_hex(&version.version_hash).with_context(|| {
                     format!("{} excluded binary={}", context(), version.version_hash)
@@ -967,20 +1000,17 @@ fn upsert_script_label_validated(
     }
 
     for deployment in &excluded {
-        let code_hash = decode_hex(deployment_reference(deployment))?;
-        if !active_registrations.label_hashes.contains(&code_hash) {
-            if let Some(mut info) = store.get_script_info(&code_hash)? {
-                if info.name.as_deref() == Some(&script.name)
-                    || info
-                        .name
-                        .as_ref()
-                        .is_some_and(|name| Some(name) == previous_name.as_ref())
-                {
-                    info.name = None;
-                    info.deprecated = false;
-                    info.description = None;
-                    info.website = None;
-                    store.put_script_info_direct(&code_hash, &info)?;
+        let (code_hash, hash_type) = deployment_pair(deployment)?;
+        if !active_registrations
+            .label_pairs
+            .contains(&(code_hash.clone(), hash_type))
+        {
+            // The row is this family's label of the pair and nothing else (no
+            // usage lives here): the registry no longer names the pair on
+            // this network, so its label goes.
+            if let Some(info) = store.get_script_info(&code_hash, hash_type)? {
+                if info.name == script.name || Some(&info.name) == previous_name.as_ref() {
+                    store.delete_script_info_direct(&code_hash, hash_type)?;
                 }
             }
         }
@@ -1112,41 +1142,20 @@ fn import_single_deployment(
     deployment: &ImportDeployment,
     registrations: &std::collections::BTreeMap<Vec<u8>, ImportedVersionRegistration>,
 ) -> Result<()> {
-    let (code_hash_hex, hash_type) = match deployment {
-        ImportDeployment::Version(version) => (
-            version.canonical_ref_hash.as_str(),
-            version.canonical_hash_type.as_str(),
-        ),
-        ImportDeployment::Pseudo(pseudo) => (pseudo.code_hash.as_str(), pseudo.hash_type.as_str()),
+    // The registry's label of the script this deployment names, keyed by its
+    // pair (code hash, hash type): the same code hash by another hash type is
+    // another script and gets no label from here. The row is the label alone;
+    // the pair's usage is its `script_reference_info` row (domain store, label
+    // import's write, outside the journal).
+    let (code_hash, hash_type) = deployment_pair(deployment)?;
+    let info = ckbadger_store::types::ScriptInfo {
+        name: script.name.clone(),
+        deprecated: matches!(deployment, ImportDeployment::Version(version) if version.deprecated),
+        category: script.category.clone(),
+        website: script.website.clone(),
+        description: script.description.clone(),
     };
-    let code_hash = decode_hex(code_hash_hex)?;
-    let deployment_hash_type = ScriptParser::parse_hash_type(hash_type);
-
-    let mut info =
-        store
-            .get_script_info(&code_hash)?
-            .unwrap_or_else(|| ckbadger_store::types::ScriptInfo {
-                code_hash: code_hash.clone(),
-                hash_type: deployment_hash_type,
-                ..Default::default()
-            });
-
-    // Always sync code_hash and hash_type from label data.
-    info.code_hash = code_hash.clone();
-    info.hash_type = deployment_hash_type;
-
-    // Update label fields only (preserve indexer-maintained stats).
-    // Label import does NOT write correctness metadata (dep_type_hash, dep_data_hash,
-    // code_cell_tx_hash, code_cell_output_index) — those are resolved by the sync
-    // pipeline from actual chain data via script_references and script_versions CFs.
-    info.name = Some(script.name.clone());
-    info.deprecated =
-        matches!(deployment, ImportDeployment::Version(version) if version.deprecated);
-    info.category = script.category.clone();
-    info.description = script.description.clone();
-    info.website = script.website.clone();
-
-    store.put_script_info_direct(&code_hash, &info)?;
+    store.put_script_info_direct(&code_hash, hash_type, &info)?;
 
     // Resolve version_hash from the deployment metadata.
     // Pseudo-scripts (Type ID, Zero Lock) have no deployed code cell and therefore
@@ -1826,12 +1835,7 @@ disabled = true
                         .list_script_version_hashes_by_label("Startup Family")
                         .unwrap()
                         .contains(&vec![0x42; 32]));
-                    assert!(store
-                        .get_script_info(&[0x62; 32])
-                        .unwrap()
-                        .unwrap()
-                        .name
-                        .is_none());
+                    assert!(store.get_script_info(&[0x62; 32], 1).unwrap().is_none());
                 }
                 // Revoking the last active anchor does not erase existing bytecode
                 // attribution or turn observations into imported registrations.
@@ -1921,7 +1925,12 @@ disabled = true
         script.mainnet.as_mut().unwrap().versions.push(declaration);
         let before_versions = store.list_script_versions().unwrap();
         let before_families = store.list_script_families().unwrap();
-        let before_info = store.get_cf(store.cf_script_info(), &[0x51; 32]).unwrap();
+        let before_info = store
+            .get_cf(
+                store.cf_script_info(),
+                &ckbadger_store::keys::encode_script_info_key(&[0x51; 32], 1),
+            )
+            .unwrap();
         let error = import_all(&store, "mainnet", &[], &[script]).unwrap_err();
         let message = format!("{error:#}");
         for context in [
@@ -1935,7 +1944,12 @@ disabled = true
         assert_eq!(store.list_script_versions().unwrap(), before_versions);
         assert_eq!(store.list_script_families().unwrap(), before_families);
         assert_eq!(
-            store.get_cf(store.cf_script_info(), &[0x51; 32]).unwrap(),
+            store
+                .get_cf(
+                    store.cf_script_info(),
+                    &ckbadger_store::keys::encode_script_info_key(&[0x51; 32], 1),
+                )
+                .unwrap(),
             before_info
         );
     }
@@ -1960,7 +1974,7 @@ disabled = true
         );
         assert!(store.get_token(&token_hash).unwrap().is_none());
         assert!(store.list_script_versions().unwrap().is_empty());
-        assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+        assert!(store.get_script_info(&[0x51; 32], 1).unwrap().is_none());
         assert_eq!(
             store
                 .get_cf(store.cf_script_families(), b"startup-family")
@@ -2006,7 +2020,7 @@ disabled = true
                 "preflight must precede token writes as well as script writes"
             );
             assert!(store.list_script_families().unwrap().is_empty());
-            assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+            assert!(store.get_script_info(&[0x51; 32], 1).unwrap().is_none());
         }
     }
 
@@ -2018,7 +2032,11 @@ disabled = true
             let mut script = startup_metadata();
             if corrupt_row {
                 store
-                    .put_cf(store.cf_script_info(), &[0x62; 32], b"corrupt")
+                    .put_cf(
+                        store.cf_script_info(),
+                        &ckbadger_store::keys::encode_script_info_key(&[0x62; 32], 1),
+                        b"corrupt",
+                    )
                     .unwrap();
             } else {
                 script.testnet.as_mut().unwrap().versions[0].canonical_ref_hash = "0xgg".into();
@@ -2035,7 +2053,7 @@ disabled = true
             );
             assert!(store.list_script_versions().unwrap().is_empty());
             assert!(store.list_script_families().unwrap().is_empty());
-            assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+            assert!(store.get_script_info(&[0x51; 32], 1).unwrap().is_none());
         }
     }
 
@@ -2066,7 +2084,11 @@ disabled = true
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         store
-            .put_cf(store.cf_script_info(), &[0x51; 32], b"corrupt")
+            .put_cf(
+                store.cf_script_info(),
+                &ckbadger_store::keys::encode_script_info_key(&[0x51; 32], 1),
+                b"corrupt",
+            )
             .unwrap();
         let error = import_all(&store, "mainnet", &[], &[startup_metadata()]).unwrap_err();
         let message = format!("{error:#}");
@@ -2118,12 +2140,7 @@ disabled = true
             .list_script_version_hashes_by_label("Startup Family")
             .unwrap()
             .is_empty());
-        assert!(store
-            .get_script_info(&[0x62; 32])
-            .unwrap()
-            .unwrap()
-            .name
-            .is_none());
+        assert!(store.get_script_info(&[0x62; 32], 1).unwrap().is_none());
 
         // An excluded entry must not revoke a reference explicitly active in
         // another metadata entry, regardless of metadata iteration order.
@@ -2140,13 +2157,8 @@ disabled = true
             assert_eq!(active.family_id.as_deref(), Some("other-family"));
             assert_eq!(active.registered_references, vec![(vec![0x62; 32], 1)]);
             assert_eq!(
-                store
-                    .get_script_info(&[0x62; 32])
-                    .unwrap()
-                    .unwrap()
-                    .name
-                    .as_deref(),
-                Some("Startup Family")
+                store.get_script_info(&[0x62; 32], 1).unwrap().unwrap().name,
+                "Startup Family"
             );
         }
     }
@@ -2264,7 +2276,7 @@ disabled = true
             assert!(error.to_string().contains(expected), "{error:#}");
             assert!(store.list_script_versions().unwrap().is_empty());
             assert!(store.list_script_families().unwrap().is_empty());
-            assert!(store.get_script_info(&[0x51; 32]).unwrap().is_none());
+            assert!(store.get_script_info(&[0x51; 32], 1).unwrap().is_none());
         }
     }
 
@@ -2586,38 +2598,26 @@ canonical_hash_type = "data1"
 
         super::run_label_import_bundled(&store, "mainnet").unwrap();
 
-        // SECP256K1_BLAKE160 is a well-known type-ref script with non-zero
-        // typeHash and dataHash in the label data. Label import must write
-        // name/description/website but NOT dep_type_hash, dep_data_hash,
-        // code_cell_tx_hash, or code_cell_output_index.
+        // SECP256K1_BLAKE160 is a well-known type-ref script. Label import
+        // writes its label (the row holds the label and nothing else: no
+        // usage, no deployment fields) under its pair, the code hash by
+        // `type` (lane rd/api-lock-names): the same code hash by `data` is
+        // another script, which the registry does not name.
         let secp_code_hash =
             hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
                 .unwrap();
         let info = store
-            .get_script_info(&secp_code_hash)
+            .get_script_info(&secp_code_hash, 1)
             .unwrap()
-            .expect("SECP256K1_BLAKE160 script should be imported");
-
-        // Label metadata IS written
-        assert!(info.name.is_some(), "label import should write script name");
-
-        // Correctness metadata is NOT written
-        assert_eq!(
-            info.dep_type_hash, None,
-            "label import must not write dep_type_hash"
-        );
-        assert_eq!(
-            info.dep_data_hash, None,
-            "label import must not write dep_data_hash"
-        );
-        assert_eq!(
-            info.code_cell_tx_hash, None,
-            "label import must not write code_cell_tx_hash"
-        );
-        assert_eq!(
-            info.code_cell_output_index, None,
-            "label import must not write code_cell_output_index"
-        );
+            .expect("SECP256K1_BLAKE160 script should be imported by its pair");
+        assert_eq!(info.name, "Default Lock");
+        for other in [0u8, 2, 4] {
+            assert_eq!(
+                store.get_script_info(&secp_code_hash, other).unwrap(),
+                None,
+                "the default lock's code hash by hash type {other} is not the default lock"
+            );
+        }
 
         // Version enrichment IS written
         let version_hash =
@@ -2628,6 +2628,42 @@ canonical_hash_type = "data1"
             version.is_some(),
             "label import should write script version"
         );
+    }
+
+    /// Lane rd/api-lock-names: the pseudo deployments, which have no version
+    /// row and live only in `script_info`, are labelled by their own pairs:
+    /// Zero Lock is the all-zero code hash by `data`, Type ID its code hash by
+    /// `type`. The other hash types of those code hashes have no label.
+    #[test]
+    fn label_import_keys_the_pseudo_deployments_by_their_pairs() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().to_str().unwrap()).unwrap();
+        super::run_label_import_bundled(&store, "mainnet").unwrap();
+
+        let zero = vec![0u8; 32];
+        let type_id =
+            hex::decode("00000000000000000000000000000000000000000000000000545950455f4944")
+                .unwrap();
+        for (code_hash, hash_type, name) in [(&zero, 0u8, "Zero Lock"), (&type_id, 1, "Type ID")] {
+            assert_eq!(
+                store
+                    .get_script_info(code_hash, hash_type)
+                    .unwrap()
+                    .unwrap()
+                    .name,
+                name
+            );
+            for other in [0u8, 1, 2, 4]
+                .into_iter()
+                .filter(|other| *other != hash_type)
+            {
+                assert_eq!(
+                    store.get_script_info(code_hash, other).unwrap(),
+                    None,
+                    "{name}'s code hash by hash type {other} is another script"
+                );
+            }
+        }
     }
 
     #[test]
@@ -2666,8 +2702,10 @@ canonical_hash_type = "data1"
         let code_hash =
             hex::decode("00000000000000000000000000000000000000000000000000545950455f4944")
                 .unwrap();
-        let info = store.get_script_info(&code_hash).unwrap().unwrap();
-        assert_eq!(info.name.as_deref(), Some("Type ID"));
+        // Type ID is a pseudo deployment by `type`: its label is keyed by that pair.
+        let info = store.get_script_info(&code_hash, 1).unwrap().unwrap();
+        assert_eq!(info.name, "Type ID");
+        assert_eq!(store.get_script_info(&code_hash, 0).unwrap(), None);
 
         // No version entry (no real dataHash to key on).
         let zero_hash = vec![0u8; 32];
@@ -2773,8 +2811,8 @@ canonical_hash_type = "data1"
         let code_hash =
             hex::decode("bf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc")
                 .unwrap();
-        let script_info = store.get_script_info(&code_hash).unwrap().unwrap();
-        assert_eq!(script_info.name.as_deref(), Some("Deprecated Script"));
+        let script_info = store.get_script_info(&code_hash, 1).unwrap().unwrap();
+        assert_eq!(script_info.name, "Deprecated Script");
 
         let version_hash =
             hex::decode("d6a5a0edb152e88e8bbc702e164441cb3890fae35da672b408d28ca9a1bde3ee")
@@ -2855,10 +2893,13 @@ canonical_hash_type = "data1"
             hex::decode("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
                 .unwrap();
 
-        let mainnet_info = store.get_script_info(&mainnet_code_hash).unwrap().unwrap();
-        assert_eq!(mainnet_info.name.as_deref(), Some("Shared Version"));
+        let mainnet_info = store
+            .get_script_info(&mainnet_code_hash, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(mainnet_info.name, "Shared Version");
 
-        let testnet_info = store.get_script_info(&testnet_code_hash).unwrap();
+        let testnet_info = store.get_script_info(&testnet_code_hash, 1).unwrap();
         assert!(
             testnet_info.is_none(),
             "excluded network code hash should not retain label state"
@@ -3397,10 +3438,10 @@ mod version_identity_tests {
         // The canonical reference itself is real chain vocabulary — its
         // reference-level label survives so the deployment is still named.
         let info = store
-            .get_script_info(&placeholder_bytes)
+            .get_script_info(&placeholder_bytes, 1)
             .unwrap()
             .expect("reference-level script info should be labeled");
-        assert_eq!(info.name.as_deref(), Some("Placeholder Lock"));
+        assert_eq!(info.name, "Placeholder Lock");
     }
 
     #[test]
@@ -3512,10 +3553,10 @@ mod version_identity_tests {
             "0x6161616161616161616161616161616161616161616161616161616161616161",
         ] {
             let info = store
-                .get_script_info(&decode_hex(reference).unwrap())
+                .get_script_info(&decode_hex(reference).unwrap(), 1)
                 .unwrap()
                 .expect("reference label should be written");
-            assert_eq!(info.name.as_deref(), Some("Shared Bytecode"));
+            assert_eq!(info.name, "Shared Bytecode");
         }
     }
 

@@ -26,15 +26,11 @@ use crate::response::{
 use crate::utils::address::compute_script_hash;
 use crate::utils::script_resolution::{list_version_code_cells, CurrentScriptVersionResolution};
 use crate::utils::{
-    address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_address_to_script,
+    address_to_lock_script_hash, is_ckb_address, is_known_script_name, parse_address_to_script,
     parse_hash32, parse_optional_block_tx_cursor, parse_output_index, registered_script_name,
-    resolve_code_hash_for_hash_type, resolve_script_form_by_hash, script_to_address,
-    shannon_to_ckb_u128,
+    resolve_script_form_by_hash, script_to_address, shannon_to_ckb_u128,
 };
-use crate::warmup::{
-    CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
-};
+use crate::warmup::{CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP};
 use crate::AppState;
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::{keys, CkbadgerStore};
@@ -2363,22 +2359,30 @@ fn named_cell_response(
     virtual_occupied: i128,
 ) -> Result<CellResponse, ApiRouteError> {
     let mut cell = cell_info_to_response(tx_hash, output_index, info, network, virtual_occupied)?;
-    let name = |code_hash: &[u8]| {
-        registered_script_name(store, code_hash).map_err(|e| {
+    // Each script by its pair (code hash, hash type): the same code hash by
+    // another hash type is another script (lane rd/api-lock-names).
+    let name = |code_hash: &[u8], hash_type: i16| {
+        registered_script_name(store, code_hash, hash_type).map_err(|e| {
             ApiError::internal(format!(
-                "cell {}:{output_index} script name of 0x{}: {e:#}",
+                "cell {}:{output_index} script name of 0x{} by hash type {hash_type}: {e:#}",
                 hex::encode(tx_hash),
                 hex::encode(code_hash)
             ))
         })
     };
-    cell.lock_script_name = Some(name(&info.lock_code_hash)?);
-    cell.type_script_name = Some(
-        match info.type_code_hash.as_ref().map(|hash| hash.as_slice()) {
-            Some(code_hash) => name(code_hash)?,
-            None => None,
-        },
-    );
+    cell.lock_script_name = Some(name(&info.lock_code_hash, info.lock_hash_type)?);
+    cell.type_script_name = Some(match (&info.type_code_hash, info.type_hash_type) {
+        (Some(code_hash), Some(hash_type)) => name(code_hash, hash_type)?,
+        (None, None) => None,
+        (code_hash, hash_type) => {
+            return Err(ApiError::internal(format!(
+                "cell {}:{output_index} type script is partial: code_hash={:?}, hash_type={:?}",
+                hex::encode(tx_hash),
+                code_hash.as_ref().map(hex::encode),
+                hash_type
+            )))
+        }
+    });
     Ok(cell)
 }
 
@@ -3017,16 +3021,6 @@ fn parse_hash_type(hash_type: &str) -> Option<u8> {
     ckbadger_common::hash_type_from_label(hash_type)
 }
 
-fn load_script_infos_cached(
-    state: &Arc<AppState>,
-) -> Result<Vec<ckbadger_store::ScriptInfo>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    state
-        .mem_cache
-        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
-        .map(|rows| rows.into_iter().map(|(_, info)| info).collect())
-        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
-}
-
 /// Which cell-by-code index a by-script row was enumerated from. In
 /// `script_kind=both` the lock index is exhausted before the type index
 /// starts, so the phase plus the row's raw index key resumes pagination
@@ -3482,13 +3476,6 @@ async fn get_address(
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (lock_script, lock_script_info, address) = if let Some(entry) = lock_script_entry {
-        let store = state.store.clone();
-        let code_hash_c = entry.code_hash.clone();
-        let script_info = tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
         // The stored per-lock hash_type is authoritative (never a script_info
         // canonical default). Only 0/1/2/4 are valid on chain, so anything else is
         // upstream store corruption and must be reported, not rendered as a guess.
@@ -3499,6 +3486,18 @@ async fn get_address(
                 entry.hash_type
             ))
         })?;
+        // The registry's label of the lock's pair (code hash, hash type): a
+        // lock on a registered code hash by another hash type is another
+        // script and has none (lane rd/api-lock-names).
+        let hash_type_u8 = crate::utils::script_hash_type(&entry.code_hash, entry.hash_type)
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+        let store = state.store.clone();
+        let code_hash_c = entry.code_hash.clone();
+        let script_info =
+            tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c, hash_type_u8))
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(e.to_string()))?;
 
         let script = ScriptResponse {
             code_hash: format!("0x{}", hex::encode(&entry.code_hash)),
@@ -3526,8 +3525,8 @@ async fn get_address(
         );
 
         let script_info_response = script_info.map(|si| LockScriptInfo {
-            code_hash: format!("0x{}", hex::encode(&si.code_hash)),
-            name: si.name.unwrap_or_else(|| "Unknown".to_string()),
+            code_hash: format!("0x{}", hex::encode(&entry.code_hash)),
+            name: si.name,
             script_kind: Some("lock".to_string()),
             deprecated: si.deprecated,
         });
@@ -3593,68 +3592,58 @@ async fn address_pending_summary(
     .map_err(|e| ApiError::internal(e.to_string()))
 }
 
+/// The scripts a code cell serves, each by its pair (code hash, hash type):
+/// its type script hash by `type` (when it has a type script) and its data
+/// hash by `data`, `data1` and `data2`. A pair is listed when the registry
+/// names it (its `script_info` label) or the chain has used it (its
+/// `script_reference_info` row), named by the registry's name of that pair or
+/// "Unknown"; each pair is itself, never merged into another pair's entry
+/// (lane rd/api-lock-names). `None` when the cell serves no such pair.
 fn lookup_code_cell_scripts(
     state: &Arc<AppState>,
     data_hash: &[u8],
     type_script_hash: Option<&Vec<u8>>,
 ) -> Result<Option<Vec<CodeCellScript>>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(state)?;
+    let mut pairs: Vec<(&[u8], u8)> = Vec::new();
+    if let Some(type_hash) = type_script_hash {
+        pairs.push((type_hash.as_slice(), 1));
+    }
+    for data_hash_type in [0u8, 2, 4] {
+        pairs.push((data_hash, data_hash_type));
+    }
 
     let mut scripts: Vec<CodeCellScript> = Vec::new();
-    let mut deployment_index: HashMap<Vec<u8>, usize> = HashMap::new();
-
-    let mut upsert = |reference_hash: &[u8], hash_type_hint: &str| {
-        let Some(resolved) = merge_script_info_for_reference(&all_script_infos, reference_hash)
-        else {
-            return;
+    for (reference_hash, hash_type) in pairs {
+        let context = || {
+            format!(
+                "code cell script 0x{} by hash type {hash_type}",
+                hex::encode(reference_hash)
+            )
         };
-
-        let deployment_key = deployment_key_for_script(&resolved);
-        let code_hash_for_link =
-            resolve_code_hash_for_hash_type(&all_script_infos, reference_hash, "type")
-                .unwrap_or_else(|| reference_hash.to_vec());
-        let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&resolved);
-        let name = resolved.name.unwrap_or_else(|| "Unknown".to_string());
-
-        let entry = CodeCellScript {
-            name,
-            code_hash: format!("0x{}", hex::encode(code_hash_for_link)),
-            hash_type: hash_type_hint.to_string(),
-            deployment_type_hash: deployment_type_hash
-                .as_ref()
-                .map(|h| format!("0x{}", hex::encode(h))),
-            deployment_data_hash: deployment_data_hash
-                .as_ref()
-                .map(|h| format!("0x{}", hex::encode(h))),
-        };
-
-        if let Some(idx) = deployment_index.get(&deployment_key).copied() {
-            let existing = &mut scripts[idx];
-            if !is_known_script_name(Some(existing.name.as_str()))
-                && is_known_script_name(Some(entry.name.as_str()))
-            {
-                existing.name = entry.name.clone();
-            }
-            if existing.hash_type != "type" && entry.hash_type == "type" {
-                existing.hash_type = "type".to_string();
-                existing.code_hash = entry.code_hash.clone();
-            }
-            if existing.deployment_type_hash.is_none() {
-                existing.deployment_type_hash = entry.deployment_type_hash.clone();
-            }
-            if existing.deployment_data_hash.is_none() {
-                existing.deployment_data_hash = entry.deployment_data_hash.clone();
-            }
-            return;
+        let label = state
+            .store
+            .get_script_info(reference_hash, hash_type)
+            .map_err(|e| ApiError::internal(format!("{}: {e:#}", context())))?;
+        let used = state
+            .store
+            .get_script_reference_info(hash_type, reference_hash)
+            .map_err(|e| ApiError::internal(format!("{}: {e:#}", context())))?
+            .is_some();
+        if label.is_none() && !used {
+            continue;
         }
-
-        deployment_index.insert(deployment_key, scripts.len());
-        scripts.push(entry);
-    };
-
-    upsert(data_hash, "data");
-    if let Some(type_hash) = type_script_hash {
-        upsert(type_hash, "type");
+        let hash_type_label = hash_type_to_str(i16::from(hash_type))
+            .ok_or_else(|| ApiError::internal(format!("{}: not a CKB hash type", context())))?;
+        scripts.push(CodeCellScript {
+            name: label
+                .map(|label| label.name)
+                .filter(|name| is_known_script_name(Some(name)))
+                .unwrap_or_else(|| "Unknown".to_string()),
+            code_hash: format!("0x{}", hex::encode(reference_hash)),
+            hash_type: hash_type_label.to_string(),
+            deployment_type_hash: type_script_hash.map(|hash| format!("0x{}", hex::encode(hash))),
+            deployment_data_hash: Some(format!("0x{}", hex::encode(data_hash))),
+        });
     }
 
     if scripts.is_empty() {

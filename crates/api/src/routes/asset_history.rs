@@ -283,16 +283,24 @@ fn canonical_version_from_marker(
             data_hash: cell
                 .script_data_hash()
                 .map(|h| format!("0x{}", hex::encode(h))),
-            lock_name: state
-                .store
-                .get_script_info(&cell.lock_code_hash)?
-                .and_then(|info| info.name),
-            type_name: match &cell.type_code_hash {
-                Some(code) => state
-                    .store
-                    .get_script_info(code)?
-                    .and_then(|info| info.name),
-                None => None,
+            // Each script named by its pair (code hash, hash type), through
+            // the one name rule (lane rd/api-lock-names).
+            lock_name: crate::utils::registered_script_name(
+                &state.store,
+                &cell.lock_code_hash,
+                cell.lock_hash_type,
+            )?,
+            type_name: match (&cell.type_code_hash, cell.type_hash_type) {
+                (Some(code), Some(hash_type)) => {
+                    crate::utils::registered_script_name(&state.store, code, hash_type)?
+                }
+                (None, None) => None,
+                (code, hash_type) => anyhow::bail!(
+                    "cell 0x{}: partial type script code_hash={:?} hash_type={:?}",
+                    hex::encode(tx_hash),
+                    code.as_ref().map(hex::encode),
+                    hash_type
+                ),
             },
         },
         tx_hash: tx_hash.to_vec(),

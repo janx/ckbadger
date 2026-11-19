@@ -504,11 +504,11 @@ fn build_evidence(
                 hex::encode(lock_hash)
             ),
         };
-        let lock_kind = store
-            .get_script_info(&lock.code_hash)?
-            .and_then(|info| info.name)
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("unknown"));
+        // The registry's name of the lock's pair (code hash, hash type), the
+        // one name rule (lane rd/api-lock-names): the default lock's code hash
+        // by `data` is another lock and is not named "Default Lock".
+        let lock_kind =
+            crate::utils::registered_script_name(store, &lock.code_hash, lock.hash_type)?;
         owner_rows.push(DaoOwner {
             rank: index + 1,
             lock_script_hash: format!("0x{}", hex::encode(lock_hash)),

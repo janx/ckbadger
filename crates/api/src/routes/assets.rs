@@ -585,34 +585,59 @@ pub struct CollectionHolderResponse {
     pub address: Option<String>,
     /// The holder lock's code hash; `None` when its script is not indexed.
     pub lock_code_hash: Option<String>,
-    /// The scripts registry's name for `lock_code_hash` (OB-C7); `None` when
-    /// the registry names none — never a label guessed from the args.
+    /// The holder lock's hash type beside its code hash (the pair names the
+    /// lock: lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
+    /// The scripts registry's name for the lock's pair (OB-C7); `None` when
+    /// the registry names none — never a label guessed from the args, never
+    /// the name of the code hash by another hash type.
     pub lock_kind: Option<String>,
     pub item_count: i64,
 }
 
 /// A holder's or object owner's lock as one row shows it: its address, its
-/// code hash and the scripts registry's name for that code hash.
+/// pair (code hash, hash type) and the scripts registry's name for the pair.
 pub(super) struct OwnerLock {
     /// `None` when the lock has no address form (`encode_lock_address`).
     pub(super) address: Option<String>,
     pub(super) lock_code_hash: String,
+    pub(super) lock_hash_type: String,
     pub(super) lock_kind: Option<String>,
 }
 
-/// The lock kind of a code hash: the scripts registry's name for it, through
-/// `utils::registered_script_name` (the one name rule `/cells` and the
-/// activity participants use). `None` when the registry names none.
+/// The lock kind of a lock script (`code_hash`, `hash_type`): the scripts
+/// registry's name for that pair, through `utils::registered_script_name`
+/// (the one name rule `/cells` and the activity participants use). `None`
+/// when the registry names none.
 pub(super) fn lock_kind(
     store: &CkbadgerStore,
     code_hash: &[u8],
+    hash_type: i16,
 ) -> Result<Option<String>, ApiRouteError> {
-    crate::utils::registered_script_name(store, code_hash).map_err(|e| {
+    crate::utils::registered_script_name(store, code_hash, hash_type).map_err(|e| {
         ApiError::internal(format!(
-            "lock code hash 0x{} registry name: {e:#}",
+            "lock 0x{} by hash type {hash_type} registry name: {e:#}",
             hex::encode(code_hash)
         ))
     })
+}
+
+/// A lock's hash type as the API writes it (`data`, `type`, `data1`,
+/// `data2`); a stored value CKB does not define is an error, named.
+pub(super) fn lock_hash_type_label(
+    code_hash: &[u8],
+    hash_type: i16,
+) -> Result<String, ApiRouteError> {
+    crate::utils::script_hash_type(code_hash, hash_type)
+        .ok()
+        .and_then(crate::utils::hash_type_to_string)
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "lock 0x{} has hash type {hash_type}, not a CKB hash type",
+                hex::encode(code_hash)
+            ))
+        })
 }
 
 /// [`OwnerLock`] of `lock_hash` from one `CF_LOCK_SCRIPTS` read; `None` when
@@ -633,7 +658,8 @@ pub(super) fn owner_lock(
         return Ok(None);
     };
     Ok(Some(OwnerLock {
-        lock_kind: lock_kind(store, &resolved.entry.code_hash)?,
+        lock_kind: lock_kind(store, &resolved.entry.code_hash, resolved.entry.hash_type)?,
+        lock_hash_type: lock_hash_type_label(&resolved.entry.code_hash, resolved.entry.hash_type)?,
         lock_code_hash: format!("0x{}", hex::encode(&resolved.entry.code_hash)),
         address: resolved.address,
     }))
@@ -652,6 +678,7 @@ pub(super) fn holder_row(
         owner_hash_prefix: None,
         address: owner.as_ref().and_then(|owner| owner.address.clone()),
         lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+        lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
         lock_kind: owner.and_then(|owner| owner.lock_kind),
         item_count,
     })

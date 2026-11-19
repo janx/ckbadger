@@ -672,17 +672,7 @@ async fn collection_gallery_rows_carry_mint_chain_time_and_owner_lock_kind() {
     let registered = lock_code.clone();
     let app = spore_genetics_fixture_seeded(false, 0, false, false, move |store| {
         seed_block_headers_at(store, &[(99, 1_700_000_000_500), (100, 1_700_000_000_100)]);
-        let mut batch = StoreBatch::new(store);
-        batch.put_script_info(
-            &registered,
-            &ckbadger_store::types::ScriptInfo {
-                code_hash: registered.clone(),
-                hash_type: 1,
-                name: Some("JoyID".into()),
-                ..Default::default()
-            },
-        );
-        batch.commit().unwrap();
+        seed_script_label(store, &registered, 1, "JoyID");
     })
     .await;
     let (status, gallery) = get_json(

@@ -917,9 +917,7 @@ mod tests {
     use super::*;
     use crate::db::writer::BatchWriter;
     use ckbadger_store::store::CkbadgerStore;
-    use ckbadger_store::{
-        CachedBlockHeader, LiveCellInfo, ScriptInfo, ScriptReferenceInfo, TxIndexEntry,
-    };
+    use ckbadger_store::{CachedBlockHeader, LiveCellInfo, ScriptReferenceInfo, TxIndexEntry};
     use std::sync::Arc;
 
     /// One batch's .bit writer state, built the way `write_parsed_batch`
@@ -1920,26 +1918,13 @@ mod tests {
         let initial_tx_hash = vec![0xB1; 32];
         let reactivate_tx_hash = vec![0xC1; 32];
 
-        // The lock script rollups each block leaves (lock code hash 0x55):
-        // created at 100, consumed at 120, a second cell created at 200.
+        // The lock script rollups each block leaves (lock code hash 0x55 by
+        // `type`, its pair's reference row): created at 100, consumed at 120,
+        // a second cell created at 200.
         let script_rows = |batch: &mut StoreBatch, cells: i64, live: i64, owned: i128| {
             let capacity = i128::from(cells) * 100_00000000;
             let used = i128::from(cells) * 61_00000000;
             let knowledge = i128::from(live) * 61_00000000;
-            batch.put_script_info(
-                &[0x55; 32],
-                &ScriptInfo {
-                    code_hash: vec![0x55; 32],
-                    hash_type: 1,
-                    lock_cells_count: cells,
-                    lock_live_cells_count: live,
-                    lock_capacity_sum: capacity,
-                    lock_owned_capacity_sum: owned,
-                    lock_used_capacity_sum: used,
-                    lock_owned_knowledge_sum: knowledge,
-                    ..Default::default()
-                },
-            );
             batch.put_script_reference_info(
                 1,
                 &[0x55; 32],
@@ -2066,16 +2051,13 @@ mod tests {
             !live_outpoints.contains_key(account_id.as_slice()),
             "rolled-back reactivation must not leave a live outpoint behind"
         );
-        let script = domain.get_script_info(&[0x55; 32]).unwrap().unwrap();
-        assert_eq!(script.lock_cells_count, 1);
-        assert_eq!(script.lock_live_cells_count, 0);
-        assert_eq!(script.lock_capacity_sum, 100_00000000);
-        assert_eq!(script.lock_owned_capacity_sum, 0);
         let reference = domain
             .get_script_reference_info(1, &[0x55; 32])
             .unwrap()
             .unwrap();
         assert_eq!(reference.lock_cells_count, 1);
         assert_eq!(reference.lock_live_cells_count, 0);
+        assert_eq!(reference.lock_capacity_sum, 100_00000000);
+        assert_eq!(reference.lock_owned_capacity_sum, 0);
     }
 }

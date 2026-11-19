@@ -1471,21 +1471,7 @@ async fn test_cells_by_script_type_reference_does_not_alias_sibling_anchor() {
     seed_genesis_baseline(&store);
     let anchor_a = vec![0xa1; 32];
     let anchor_b = vec![0xb2; 32];
-    let shared_binary = vec![0xee; 32];
     for (anchor, count, first) in [(&anchor_a, 3u8, 0x10u8), (&anchor_b, 2, 0x20)] {
-        store
-            .put_script_info_direct(
-                anchor,
-                &ckbadger_store::types::ScriptInfo {
-                    code_hash: anchor.clone(),
-                    hash_type: 1,
-                    dep_data_hash: Some(shared_binary.clone()),
-                    lock_cells_count: i64::from(count),
-                    lock_live_cells_count: i64::from(count),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
         store
             .put_script_reference_info_direct(
                 1,
@@ -2379,13 +2365,10 @@ async fn test_get_address_lock_script_info_reports_deprecated_version() {
     store
         .put_script_info_direct(
             &code_hash,
+            1,
             &ckbadger_store::types::ScriptInfo {
-                code_hash: code_hash.clone(),
-                hash_type: 1,
-                name: Some("Anyone-Can-Pay Lock".to_string()),
+                name: "Anyone-Can-Pay Lock".to_string(),
                 deprecated: true,
-                lock_cells_count: 1,
-                lock_live_cells_count: 1,
                 ..Default::default()
             },
         )
@@ -3365,4 +3348,115 @@ async fn test_address_detail_is_memoized_within_one_block() {
     seed_pool_address_balance(&store, &lock, 2);
     let (_, detail) = get_json(&app, &detail_path).await;
     assert_eq!(detail["transactionsCount"], 1);
+}
+
+/// Lane rd/api-lock-names: a cell row names its lock by the pair (code hash,
+/// hash type). Under the default lock's code hash a cell locked by `type` is
+/// the default lock's; one locked by `data` is another script, and the
+/// default lock's name does not reach it.
+#[tokio::test]
+async fn by_pair_cells_by_script_rows_name_a_lock_by_its_pair() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    let secp = default_lock_code_hash();
+    insert_by_script_cell(&store, &[0x51; 32], 10, &secp, 1, None, None);
+    insert_by_script_cell(&store, &[0x52; 32], 11, &secp, 0, None, None);
+    for hash_type in [1u8, 0] {
+        store
+            .put_script_reference_info_direct(
+                hash_type,
+                &secp,
+                &ScriptReferenceInfo {
+                    reference_hash: secp.clone(),
+                    hash_type,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = fetch_by_script(&app, &secp, "type", "lock", 10, None).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{json}");
+    assert_eq!(rows[0]["lockScriptName"], "Default Lock", "{json}");
+
+    let (status, json) = fetch_by_script(&app, &secp, "data", "lock", 10, None).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{json}");
+    assert_eq!(
+        rows[0]["txHash"],
+        format!("0x{}", hex::encode([0x52; 32])),
+        "{json}"
+    );
+    assert!(
+        rows[0]["lockScriptName"].is_null(),
+        "the default lock's name does not reach the lock by data: {json}"
+    );
+}
+
+/// Lane rd/api-lock-names: an address's `lockScriptInfo` is the registry's
+/// label of its lock's pair. An address whose lock is the default lock's code
+/// hash by `data` has no label: it is not the default lock.
+#[tokio::test]
+async fn by_pair_address_lock_info_names_only_the_registered_pair() {
+    let store = test_store();
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    let secp = default_lock_code_hash();
+    let args = vec![0x46; 20];
+    let mut batch = StoreBatch::new(store.as_ref());
+    let mut lock_hashes = Vec::new();
+    for hash_type in [1u8, 0] {
+        let lock_hash = compute_script_hash(&secp, hash_type, &args);
+        batch.put_lock_script(
+            &lock_hash,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type: hash_type.into(),
+                args: args.clone(),
+            },
+        );
+        batch.put_addr_balance(
+            &lock_hash,
+            &ckbadger_store::types::AddressBalance {
+                balance: 100_00000000,
+                used_capacity: 61_00000000,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                txs_count: 1,
+                cellbase_txs_count: 0,
+                first_seen_block: 10,
+                first_seen_tx_idx: 0,
+                last_activity_block: 20,
+                last_activity_tx_idx: 0,
+            },
+        );
+        lock_hashes.push(lock_hash);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}", hex::encode(&lock_hashes[0])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["lockScriptInfo"]["name"], "Default Lock", "{json}");
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}", hex::encode(&lock_hashes[1])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["lockScript"]["hashType"], "data", "{json}");
+    assert!(
+        json["lockScriptInfo"].is_null(),
+        "the default lock's label does not reach the lock by data: {json}"
+    );
 }

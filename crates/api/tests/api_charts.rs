@@ -468,24 +468,14 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     let code_hash_b = vec![0x21; 32];
     let code_hash_unknown = vec![0x31; 32];
 
-    // Entities are derived from per-form reference counters; ScriptInfos
-    // provide the labels for loose (non-family) references.
+    // Entities are derived from per-form reference counters; the registry's
+    // labels, keyed by each form's pair, name loose (non-family) references.
     for (code_hash, name) in [
-        (&code_hash_a1, Some("Script A")),
-        (&code_hash_a2, Some("Script A")),
-        (&code_hash_b, Some("Script B")),
-        (&code_hash_unknown, None),
+        (&code_hash_a1, "Script A"),
+        (&code_hash_a2, "Script A"),
+        (&code_hash_b, "Script B"),
     ] {
-        store
-            .put_script_info_direct(
-                code_hash,
-                &ScriptInfo {
-                    code_hash: (*code_hash).clone(),
-                    name: name.map(str::to_string),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        seed_script_label(&store, code_hash, 1, name);
     }
     store
         .put_script_reference_info_direct(
@@ -681,16 +671,7 @@ async fn test_most_utilized_scripts_chart_draws_five_largest_and_the_rest() {
         .map(|i| (vec![0x40 + i; 32], 700 - 100 * i128::from(i)))
         .collect();
     for (i, (code_hash, knowledge)) in scripts.iter().enumerate() {
-        store
-            .put_script_info_direct(
-                code_hash,
-                &ScriptInfo {
-                    code_hash: code_hash.clone(),
-                    name: Some(format!("Script {}", i + 1)),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        seed_script_label(&store, code_hash, 1, &format!("Script {}", i + 1));
         store
             .put_script_reference_info_direct(
                 1,
@@ -900,9 +881,12 @@ async fn test_most_utilized_scripts_chart_groups_family_members_like_usage() {
 #[tokio::test]
 async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket() {
     // Aggregation keys must be identities, not display names. A junk data-form
-    // usage of a family's type reference hash (the mainnet secp case: ScriptInfo
-    // is keyed by code_hash, so the junk form inherits the family-named label)
-    // must stay its own entity instead of folding back into the family bucket.
+    // usage of a family's type reference hash (the mainnet secp case) must stay
+    // its own entity instead of folding back into the family bucket, and it is
+    // named by its own pair: the registry names the family's type form, not the
+    // data form, so the data form is labelled by its code hash and form (lane
+    // rd/api-lock-names; it borrowed the family's name while the label row was
+    // keyed by the code hash alone).
     let store = test_store();
     seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
 
@@ -946,8 +930,8 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
 
     // Junk data form: same reference bytes as the family's type form, but no
     // code cell carries data hashing to it and no persisted mapping resolves
-    // it into the family. Its ScriptInfo label (keyed by code_hash) is the
-    // family name, which must NOT merge it into the family bucket.
+    // it into the family. The registry names the type form only: the data form
+    // has no name, and must NOT merge into the family bucket.
     store
         .put_script_reference_info_direct(
             0,
@@ -1009,15 +993,17 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
     };
 
     // Family bucket keeps the member forms only (300/180); the junk data form
-    // is a separate entity (400/250) whose label carries its form. A single
-    // merged 700/430 bucket is the bug.
+    // is a separate entity (400/250) labelled by its code hash and form. A
+    // single merged 700/430 bucket is the bug, and so is the family's name on
+    // the data form.
+    let junk_label = format!("0x{} (data)", hex::encode(&r_main));
     let capacity = buckets(&json["capacityShare"]);
     assert!(
         capacity.contains(&("SecpFamily".to_string(), "300".to_string())),
         "family bucket must keep only its member forms, got {capacity:?}"
     );
     assert!(
-        capacity.contains(&("SecpFamily (data)".to_string(), "400".to_string())),
+        capacity.contains(&(junk_label.clone(), "400".to_string())),
         "junk data form must be its own bucket, got {capacity:?}"
     );
     // CH-29: every named series carries its stable identity, so the family and
@@ -1041,7 +1027,7 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
         "{ids:?}"
     );
     assert!(
-        id_of("SecpFamily (data)")
+        id_of(&junk_label)
             .as_str()
             .is_some_and(|id| id.starts_with("ref:0x") && id.ends_with(":data")),
         "{ids:?}"
@@ -1053,7 +1039,7 @@ async fn test_most_utilized_scripts_chart_keeps_junk_form_out_of_family_bucket()
         "family bucket must keep only its member forms, got {used:?}"
     );
     assert!(
-        used.contains(&("SecpFamily (data)".to_string(), "250".to_string())),
+        used.contains(&(junk_label.clone(), "250".to_string())),
         "junk data form must be its own bucket, got {used:?}"
     );
 

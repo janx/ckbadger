@@ -1741,50 +1741,26 @@ pub struct DailyBlockStats {
     pub total_uncles: i32,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// A script's identity: its code hash and its hash type byte (data 0, type 1,
+/// data1 2, data2 4).
+pub type ScriptPair = (Vec<u8>, u8);
+
+/// The scripts registry's label of ONE script, a `CF_SCRIPT_INFO` row keyed
+/// by the script's pair (code hash, hash type) (`keys::encode_script_info_key`).
+///
+/// CKB identifies a script by the pair: the same code hash by `type` and by
+/// `data` are two scripts (lane rd/api-lock-names). Label import is the only
+/// writer, one row per registered deployment, the pseudo deployments (Zero
+/// Lock, Type ID) included; the row carries no usage. A script's usage is its
+/// `script_reference_info` row, keyed by the same pair.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptInfo {
-    pub code_hash: Vec<u8>,
-    pub hash_type: u8,
-    pub name: Option<String>,
+    pub name: String,
     #[serde(default)]
     pub deprecated: bool,
     pub category: Option<String>,
     pub website: Option<String>,
     pub description: Option<String>,
-    pub cells_count: i64,
-    pub capacity_used: i128,
-    // Per-kind usage stats (lock vs type)
-    pub lock_cells_count: i64,
-    pub lock_live_cells_count: i64,
-    pub lock_capacity_sum: i128,
-    pub lock_owned_capacity_sum: i128,
-    #[serde(default)]
-    pub lock_used_capacity_sum: i128,
-    #[serde(default)]
-    pub lock_owned_knowledge_sum: i128,
-    pub type_cells_count: i64,
-    pub type_live_cells_count: i64,
-    pub type_capacity_sum: i128,
-    pub type_owned_capacity_sum: i128,
-    #[serde(default)]
-    pub type_used_capacity_sum: i128,
-    #[serde(default)]
-    pub type_owned_knowledge_sum: i128,
-    /// type_script_hash of the deployment cell (from label data).
-    /// Used to find the code cell for hash_type="data"/"data1"/"data2" scripts.
-    #[serde(default)]
-    pub dep_type_hash: Option<Vec<u8>>,
-    /// data_hash of the deployment cell (from label data).
-    /// Used as fallback when dep_type_hash is absent (e.g. genesis cells).
-    #[serde(default)]
-    pub dep_data_hash: Option<Vec<u8>>,
-    /// Pre-resolved code cell outpoint (resolved during label import).
-    /// Only populated for scripts where runtime lookup is expensive
-    /// (data/data1/data2 without dep_type_hash).
-    #[serde(default)]
-    pub code_cell_tx_hash: Option<Vec<u8>>,
-    #[serde(default)]
-    pub code_cell_output_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -3060,12 +3036,47 @@ pub struct DailyActivityStats {
     pub unique_address_count: u32,
     /// Sum of positive participant CKB deltas in shannons, excluding cellbase
     pub total_ckb_moved: u128,
-    /// Per-script activity counts: hex code_hash -> count
+    /// Per-script activity counts, keyed by the script's pair:
+    /// `"<hex code hash>:<hash type>"` (`script_count_key`) -> count. CKB names a
+    /// script by the pair; the same code hash by another hash type is another
+    /// script, counted apart (lane rd/api-lock-names; the key was the code hash
+    /// alone).
     #[serde(default)]
     pub script_counts: BTreeMap<String, u32>,
     /// Per-protocol action counts: "rgbpp:leap_to_ckb" -> count
     #[serde(default)]
     pub protocol_action_counts: BTreeMap<String, u32>,
+}
+
+/// A [`DailyActivityStats::script_counts`] key: the script's pair,
+/// `"<hex code hash>:<hash type>"` (e.g. `"9bd7…cce8:type"`). A hash type CKB
+/// does not define is an error, named.
+pub fn script_count_key(code_hash: &[u8], hash_type: i16) -> anyhow::Result<String> {
+    let label = u8::try_from(hash_type)
+        .ok()
+        .and_then(ckbadger_common::hash_type_label)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "script 0x{} has hash type {hash_type}, not a CKB hash type",
+                hex::encode(code_hash)
+            )
+        })?;
+    Ok(format!("{}:{label}", hex::encode(code_hash)))
+}
+
+/// The pair a [`script_count_key`] names: the code hash and its hash type
+/// byte. Any other key is a corrupt row, named.
+pub fn decode_script_count_key(key: &str) -> anyhow::Result<(Vec<u8>, u8)> {
+    let (code_hash, label) = key.split_once(':').ok_or_else(|| {
+        anyhow::anyhow!("script count key {key:?} is not <code hash>:<hash type>")
+    })?;
+    let code_hash = hex::decode(code_hash)
+        .ok()
+        .filter(|bytes| bytes.len() == 32)
+        .ok_or_else(|| anyhow::anyhow!("script count key {key:?}: not a 32-byte code hash"))?;
+    let hash_type = ckbadger_common::hash_type_from_label(label)
+        .ok_or_else(|| anyhow::anyhow!("script count key {key:?}: not a CKB hash type"))?;
+    Ok((code_hash, hash_type))
 }
 
 impl DailyActivityStats {
@@ -3091,14 +3102,27 @@ impl DailyActivityStats {
                 )
             });
 
-        // Count each involved script from type_calls and lock_calls — excludes coinbase
+        // Count each involved script, by its pair, from type_calls and
+        // lock_calls — excludes coinbase
         for tc in &tx_actions.type_calls {
-            let hex = hex::encode(&tc.type_code_hash);
-            *self.script_counts.entry(hex).or_insert(0) += 1;
+            let key = script_count_key(&tc.type_code_hash, tc.type_hash_type).unwrap_or_else(|e| {
+                panic!(
+                    "type call of block={} tx=0x{}: {e}",
+                    tx_actions.block_number,
+                    hex::encode(&tx_actions.tx_hash)
+                )
+            });
+            *self.script_counts.entry(key).or_insert(0) += 1;
         }
         for lc in &tx_actions.lock_calls {
-            let hex = hex::encode(&lc.lock_code_hash);
-            *self.script_counts.entry(hex).or_insert(0) += 1;
+            let key = script_count_key(&lc.lock_code_hash, lc.lock_hash_type).unwrap_or_else(|e| {
+                panic!(
+                    "lock call of block={} tx=0x{}: {e}",
+                    tx_actions.block_number,
+                    hex::encode(&tx_actions.tx_hash)
+                )
+            });
+            *self.script_counts.entry(key).or_insert(0) += 1;
         }
 
         // Count each protocol action — excludes coinbase

@@ -304,6 +304,9 @@ pub struct ClusterHolderResponse {
     pub address: Option<String>,
     /// The holder lock's code hash; `None` when its script is not indexed.
     pub lock_code_hash: Option<String>,
+    /// The lock's hash type beside its code hash: the pair names the lock
+    /// (lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
     /// The scripts registry's name for `lock_code_hash` (OB-C7).
     pub lock_kind: Option<String>,
     pub item_count: i64,
@@ -920,6 +923,7 @@ async fn get_cluster_holders(
                 lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
                 address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
                 item_count: *count,
             })

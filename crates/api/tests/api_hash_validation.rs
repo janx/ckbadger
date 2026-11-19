@@ -165,9 +165,12 @@ async fn test_scripts_lookup_rejects_malformed_code_hash_in_batch() {
         // Malformed entry alone, and mixed into an otherwise valid batch:
         // one bad item must fail the whole request, never be silently
         // truncated into a lookup for a different script.
+        // Each script is asked by its pair (lane rd/api-lock-names).
+        let pair =
+            |code_hash: &str| serde_json::json!({ "codeHash": code_hash, "hashType": "type" });
         for body in [
-            serde_json::json!({ "codeHashes": [malformed] }),
-            serde_json::json!({ "codeHashes": [valid, malformed] }),
+            serde_json::json!({ "scripts": [pair(&malformed)] }),
+            serde_json::json!({ "scripts": [pair(&valid), pair(&malformed)] }),
         ] {
             let request = Request::builder()
                 .method("POST")
@@ -191,7 +194,10 @@ async fn test_scripts_lookup_rejects_malformed_tx_hash_hint() {
     let valid = format!("0x{}", "11".repeat(32));
 
     for malformed in [short_hash_hex(), long_hash_hex()] {
-        let body = serde_json::json!({ "codeHashes": [valid], "txHash": malformed });
+        let body = serde_json::json!({
+            "scripts": [{ "codeHash": valid, "hashType": "type" }],
+            "txHash": malformed
+        });
         let request = Request::builder()
             .method("POST")
             .uri("/api/v1/scripts/lookup")

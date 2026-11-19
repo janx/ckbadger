@@ -3537,17 +3537,7 @@ async fn cell_deps_name_output_locks_code_sizes_and_script_names() {
     let store = test_store();
     let code_data = vec![0x7fu8; 52];
     let code_hash = ckb_types::packed::CellOutput::calc_data_hash(&code_data);
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_info(
-        code_hash.as_slice(),
-        &ScriptInfo {
-            code_hash: code_hash.as_slice().to_vec(),
-            hash_type: 2,
-            name: Some("Test Lock".into()),
-            ..Default::default()
-        },
-    );
-    batch.commit().unwrap();
+    seed_script_label(store.as_ref(), code_hash.as_slice(), 2, "Test Lock");
     let code = ckb_types::core::TransactionBuilder::default()
         .output(ckb_types::packed::CellOutput::default())
         .output_data(code_data.pack())

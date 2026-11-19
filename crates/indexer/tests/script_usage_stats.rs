@@ -1,18 +1,17 @@
 //! Integration tests for script usage statistics in ckbadger-store.
 //!
-//! Tests ScriptInfo insertion for lock and type scripts, stat adjustments
-//! on cell consumption, and listing of all script infos.
+//! Tests a script's label (`script_info`) and usage (`script_reference_info`)
+//! rows, both keyed by the script's pair (code hash, hash type), stat
+//! adjustments on cell consumption, and listing of all script labels.
 
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
 };
-use ckbadger_indexer::sync::{
-    materialize_script_infos_for_test, materialize_script_reference_infos_for_test,
-};
+use ckbadger_indexer::sync::materialize_script_reference_infos_for_test;
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::CkbadgerStore;
-use ckbadger_store::ScriptInfo;
+use ckbadger_store::{ScriptInfo, ScriptReferenceInfo};
 use std::sync::Arc;
 
 /// Real mainnet cellbase first witness (block 12,000,000): block parsing
@@ -115,79 +114,59 @@ fn bulk_build_script_fixture() -> BlockResponseWithCycles {
     }
 }
 
-fn make_script_info_lock(
+/// The registry's label of a script and its usage row, both keyed by the
+/// script's pair (code hash, hash type): `script_info` holds the label only,
+/// `script_reference_info` the usage (lane rd/api-lock-names: one row by the
+/// code hash alone used to hold both, every hash type's cells summed).
+fn make_label(name: &str, category: &str) -> ScriptInfo {
+    ScriptInfo {
+        name: name.to_string(),
+        deprecated: false,
+        category: Some(category.to_string()),
+        website: None,
+        description: Some(format!("A {category} script")),
+    }
+}
+
+fn make_lock_usage(
     code_hash_byte: u8,
+    hash_type: u8,
     cells_count: i64,
     live_cells_count: i64,
     capacity_sum: i128,
     owned_capacity_sum: i128,
-) -> ScriptInfo {
-    let used_capacity_sum = capacity_sum / 2;
-    let owned_knowledge_sum = owned_capacity_sum / 2;
-    ScriptInfo {
-        code_hash: vec![code_hash_byte; 32],
-        hash_type: 0,
-        name: Some(format!("Lock-{:02x}", code_hash_byte)),
-        deprecated: false,
-        category: Some("lock".to_string()),
-        website: None,
-        description: Some("A lock script".to_string()),
-        cells_count,
-        capacity_used: capacity_sum,
+) -> ScriptReferenceInfo {
+    ScriptReferenceInfo {
+        reference_hash: vec![code_hash_byte; 32],
+        hash_type,
         lock_cells_count: cells_count,
         lock_live_cells_count: live_cells_count,
         lock_capacity_sum: capacity_sum,
         lock_owned_capacity_sum: owned_capacity_sum,
-        lock_used_capacity_sum: used_capacity_sum,
-        lock_owned_knowledge_sum: owned_knowledge_sum,
-        type_cells_count: 0,
-        type_live_cells_count: 0,
-        type_capacity_sum: 0,
-        type_owned_capacity_sum: 0,
-        type_used_capacity_sum: 0,
-        type_owned_knowledge_sum: 0,
-        dep_type_hash: None,
-        dep_data_hash: None,
-        code_cell_tx_hash: None,
-        code_cell_output_index: None,
+        lock_used_capacity_sum: capacity_sum / 2,
+        lock_owned_knowledge_sum: owned_capacity_sum / 2,
+        ..Default::default()
     }
 }
 
-fn make_script_info_type(
+fn make_type_usage(
     code_hash_byte: u8,
+    hash_type: u8,
     cells_count: i64,
     live_cells_count: i64,
     capacity_sum: i128,
     owned_capacity_sum: i128,
-) -> ScriptInfo {
-    let used_capacity_sum = capacity_sum / 2;
-    let owned_knowledge_sum = owned_capacity_sum / 2;
-    ScriptInfo {
-        code_hash: vec![code_hash_byte; 32],
-        hash_type: 1,
-        name: Some(format!("Type-{:02x}", code_hash_byte)),
-        deprecated: false,
-        category: Some("type".to_string()),
-        website: None,
-        description: Some("A type script".to_string()),
-        cells_count,
-        capacity_used: capacity_sum,
-        lock_cells_count: 0,
-        lock_live_cells_count: 0,
-        lock_capacity_sum: 0,
-        lock_owned_capacity_sum: 0,
-        lock_used_capacity_sum: 0,
-        lock_owned_knowledge_sum: 0,
+) -> ScriptReferenceInfo {
+    ScriptReferenceInfo {
+        reference_hash: vec![code_hash_byte; 32],
+        hash_type,
         type_cells_count: cells_count,
         type_live_cells_count: live_cells_count,
         type_capacity_sum: capacity_sum,
         type_owned_capacity_sum: owned_capacity_sum,
-        type_used_capacity_sum: used_capacity_sum,
-        type_owned_knowledge_sum: owned_knowledge_sum,
-        dep_type_hash: None,
-        dep_data_hash: None,
-        code_cell_tx_hash: None,
-        code_cell_output_index: None,
+        type_used_capacity_sum: capacity_sum / 2,
+        type_owned_knowledge_sum: owned_capacity_sum / 2,
+        ..Default::default()
     }
 }
 
@@ -196,24 +175,29 @@ fn test_lock_script_usage_creation() {
     let store = setup_store();
     let code_hash = vec![0x11u8; 32];
 
-    let info = make_script_info_lock(0x11, 5, 3, 500_00000000, 300_00000000);
-
+    store
+        .put_script_info_direct(&code_hash, 0, &make_label("Lock-11", "lock"))
+        .unwrap();
     let mut batch = StoreBatch::new(&store);
-    batch.put_script_info(&code_hash, &info);
+    batch.put_script_reference_info(
+        0,
+        &code_hash,
+        &make_lock_usage(0x11, 0, 5, 3, 500_00000000, 300_00000000),
+    );
     batch.commit().unwrap();
 
-    let retrieved = store.get_script_info(&code_hash).unwrap();
-    assert!(
-        retrieved.is_some(),
-        "script info should exist after insertion"
-    );
-
-    let retrieved = retrieved.unwrap();
-    assert_eq!(retrieved.code_hash, vec![0x11u8; 32]);
+    let label = store
+        .get_script_info(&code_hash, 0)
+        .unwrap()
+        .expect("the label of the pair (code hash, data)");
+    assert_eq!(label.name, "Lock-11");
+    assert_eq!(label.category, Some("lock".to_string()));
+    let retrieved = store
+        .get_script_reference_info(0, &code_hash)
+        .unwrap()
+        .expect("the usage of the pair (code hash, data)");
+    assert_eq!(retrieved.reference_hash, vec![0x11u8; 32]);
     assert_eq!(retrieved.hash_type, 0);
-    assert_eq!(retrieved.name, Some("Lock-11".to_string()));
-    assert_eq!(retrieved.category, Some("lock".to_string()));
-    assert_eq!(retrieved.cells_count, 5);
     assert_eq!(retrieved.lock_cells_count, 5);
     assert_eq!(retrieved.lock_live_cells_count, 3);
     assert_eq!(retrieved.lock_capacity_sum, 500_00000000);
@@ -227,6 +211,12 @@ fn test_lock_script_usage_creation() {
     assert_eq!(retrieved.type_owned_capacity_sum, 0);
     assert_eq!(retrieved.type_used_capacity_sum, 0);
     assert_eq!(retrieved.type_owned_knowledge_sum, 0);
+    // The same code hash by another hash type is another script.
+    assert!(store.get_script_info(&code_hash, 1).unwrap().is_none());
+    assert!(store
+        .get_script_reference_info(1, &code_hash)
+        .unwrap()
+        .is_none());
 }
 
 #[test]
@@ -234,21 +224,26 @@ fn test_type_script_usage_creation() {
     let store = setup_store();
     let code_hash = vec![0x22u8; 32];
 
-    let info = make_script_info_type(0x22, 10, 8, 1000_00000000, 800_00000000);
-
+    store
+        .put_script_info_direct(&code_hash, 1, &make_label("Type-22", "type"))
+        .unwrap();
     let mut batch = StoreBatch::new(&store);
-    batch.put_script_info(&code_hash, &info);
+    batch.put_script_reference_info(
+        1,
+        &code_hash,
+        &make_type_usage(0x22, 1, 10, 8, 1000_00000000, 800_00000000),
+    );
     batch.commit().unwrap();
 
-    let retrieved = store.get_script_info(&code_hash).unwrap();
-    assert!(retrieved.is_some());
-
-    let retrieved = retrieved.unwrap();
-    assert_eq!(retrieved.code_hash, vec![0x22u8; 32]);
+    let label = store.get_script_info(&code_hash, 1).unwrap().unwrap();
+    assert_eq!(label.name, "Type-22");
+    assert_eq!(label.category, Some("type".to_string()));
+    let retrieved = store
+        .get_script_reference_info(1, &code_hash)
+        .unwrap()
+        .unwrap();
+    assert_eq!(retrieved.reference_hash, vec![0x22u8; 32]);
     assert_eq!(retrieved.hash_type, 1);
-    assert_eq!(retrieved.name, Some("Type-22".to_string()));
-    assert_eq!(retrieved.category, Some("type".to_string()));
-    assert_eq!(retrieved.cells_count, 10);
     assert_eq!(retrieved.type_cells_count, 10);
     assert_eq!(retrieved.type_live_cells_count, 8);
     assert_eq!(retrieved.type_capacity_sum, 1000_00000000);
@@ -268,15 +263,18 @@ fn test_type_script_usage_creation() {
 fn test_consume_cells_adjusts_stats() {
     let store = setup_store();
     let code_hash = vec![0x33u8; 32];
+    let put = |usage: &ScriptReferenceInfo| {
+        let mut batch = StoreBatch::new(&store);
+        batch.put_script_reference_info(0, &code_hash, usage);
+        batch.commit().unwrap();
+    };
 
     // Initial state: 5 total cells, 5 live, 500 CKB total/live
-    let initial = make_script_info_lock(0x33, 5, 5, 500_00000000, 500_00000000);
-
-    let mut batch = StoreBatch::new(&store);
-    batch.put_script_info(&code_hash, &initial);
-    batch.commit().unwrap();
-
-    let r1 = store.get_script_info(&code_hash).unwrap().unwrap();
+    put(&make_lock_usage(0x33, 0, 5, 5, 500_00000000, 500_00000000));
+    let r1 = store
+        .get_script_reference_info(0, &code_hash)
+        .unwrap()
+        .unwrap();
     assert_eq!(r1.lock_cells_count, 5);
     assert_eq!(r1.lock_live_cells_count, 5);
     assert_eq!(r1.lock_capacity_sum, 500_00000000);
@@ -284,39 +282,16 @@ fn test_consume_cells_adjusts_stats() {
 
     // Simulate consuming 2 cells (200 CKB capacity):
     // total stays 5, live drops to 3, total capacity stays, owned capacity drops
-    let after_consume = ScriptInfo {
-        code_hash: vec![0x33u8; 32],
-        hash_type: 0,
-        name: Some("Lock-33".to_string()),
-        deprecated: false,
-        category: Some("lock".to_string()),
-        website: None,
-        description: Some("A lock script".to_string()),
-        cells_count: 5,
-        capacity_used: 500_00000000,
-        lock_cells_count: 5,
+    put(&ScriptReferenceInfo {
         lock_live_cells_count: 3,
-        lock_capacity_sum: 500_00000000,
         lock_owned_capacity_sum: 300_00000000,
-        lock_used_capacity_sum: 250_00000000,
         lock_owned_knowledge_sum: 150_00000000,
-        type_cells_count: 0,
-        type_live_cells_count: 0,
-        type_capacity_sum: 0,
-        type_owned_capacity_sum: 0,
-        type_used_capacity_sum: 0,
-        type_owned_knowledge_sum: 0,
-        dep_type_hash: None,
-        dep_data_hash: None,
-        code_cell_tx_hash: None,
-        code_cell_output_index: None,
-    };
-
-    let mut batch = StoreBatch::new(&store);
-    batch.put_script_info(&code_hash, &after_consume);
-    batch.commit().unwrap();
-
-    let r2 = store.get_script_info(&code_hash).unwrap().unwrap();
+        ..make_lock_usage(0x33, 0, 5, 5, 500_00000000, 500_00000000)
+    });
+    let r2 = store
+        .get_script_reference_info(0, &code_hash)
+        .unwrap()
+        .unwrap();
     assert_eq!(r2.lock_cells_count, 5, "total cells should remain 5");
     assert_eq!(
         r2.lock_live_cells_count, 3,
@@ -332,39 +307,11 @@ fn test_consume_cells_adjusts_stats() {
     );
 
     // Simulate adding 1 new cell (150 CKB) on top of consumed state
-    let after_create = ScriptInfo {
-        code_hash: vec![0x33u8; 32],
-        hash_type: 0,
-        name: Some("Lock-33".to_string()),
-        deprecated: false,
-        category: Some("lock".to_string()),
-        website: None,
-        description: Some("A lock script".to_string()),
-        cells_count: 6,
-        capacity_used: 650_00000000,
-        lock_cells_count: 6,
-        lock_live_cells_count: 4,
-        lock_capacity_sum: 650_00000000,
-        lock_owned_capacity_sum: 450_00000000,
-        lock_used_capacity_sum: 325_00000000,
-        lock_owned_knowledge_sum: 225_00000000,
-        type_cells_count: 0,
-        type_live_cells_count: 0,
-        type_capacity_sum: 0,
-        type_owned_capacity_sum: 0,
-        type_used_capacity_sum: 0,
-        type_owned_knowledge_sum: 0,
-        dep_type_hash: None,
-        dep_data_hash: None,
-        code_cell_tx_hash: None,
-        code_cell_output_index: None,
-    };
-
-    let mut batch = StoreBatch::new(&store);
-    batch.put_script_info(&code_hash, &after_create);
-    batch.commit().unwrap();
-
-    let r3 = store.get_script_info(&code_hash).unwrap().unwrap();
+    put(&make_lock_usage(0x33, 0, 6, 4, 650_00000000, 450_00000000));
+    let r3 = store
+        .get_script_reference_info(0, &code_hash)
+        .unwrap()
+        .unwrap();
     assert_eq!(r3.lock_cells_count, 6);
     assert_eq!(r3.lock_live_cells_count, 4);
     assert_eq!(r3.lock_capacity_sum, 650_00000000);
@@ -377,82 +324,36 @@ fn test_list_script_infos() {
 
     let code1 = vec![0xAAu8; 32];
     let code2 = vec![0xBBu8; 32];
-    let code3 = vec![0xCCu8; 32];
 
-    let info1 = make_script_info_lock(0xAA, 10, 8, 1000_00000000, 800_00000000);
-    let info2 = make_script_info_type(0xBB, 20, 15, 2000_00000000, 1500_00000000);
-    let info3 = make_script_info_lock(0xCC, 5, 5, 500_00000000, 500_00000000);
-
-    let mut batch = StoreBatch::new(&store);
-    batch.put_script_info(&code1, &info1);
-    batch.put_script_info(&code2, &info2);
-    batch.put_script_info(&code3, &info3);
-    batch.commit().unwrap();
+    // Three labels; two share a code hash under two hash types, two scripts.
+    store
+        .put_script_info_direct(&code1, 0, &make_label("Lock-aa", "lock"))
+        .unwrap();
+    store
+        .put_script_info_direct(&code1, 1, &make_label("Lock-aa by type", "lock"))
+        .unwrap();
+    store
+        .put_script_info_direct(&code2, 1, &make_label("Type-bb", "type"))
+        .unwrap();
 
     let all = store.list_script_infos().unwrap();
-    assert_eq!(all.len(), 3, "should have 3 script infos");
+    assert_eq!(all.len(), 3, "should have 3 script labels");
+    let names: Vec<((Vec<u8>, u8), String)> = all
+        .into_iter()
+        .map(|(pair, info)| (pair, info.name))
+        .collect();
+    assert_eq!(
+        names,
+        vec![
+            ((code1.clone(), 0), "Lock-aa".to_string()),
+            ((code1.clone(), 1), "Lock-aa by type".to_string()),
+            ((code2.clone(), 1), "Type-bb".to_string()),
+        ]
+    );
 
-    // Collect all code hashes from results
-    let code_hashes: Vec<Vec<u8>> = all.iter().map(|(k, _)| k.clone()).collect();
-    assert!(code_hashes.contains(&code1));
-    assert!(code_hashes.contains(&code2));
-    assert!(code_hashes.contains(&code3));
-
-    // Verify specific info values
-    for (key, info) in &all {
-        if *key == code1 {
-            assert_eq!(info.lock_cells_count, 10);
-            assert_eq!(info.lock_live_cells_count, 8);
-            assert_eq!(info.name, Some("Lock-aa".to_string()));
-        } else if *key == code2 {
-            assert_eq!(info.type_cells_count, 20);
-            assert_eq!(info.type_live_cells_count, 15);
-            assert_eq!(info.name, Some("Type-bb".to_string()));
-        } else if *key == code3 {
-            assert_eq!(info.lock_cells_count, 5);
-            assert_eq!(info.lock_live_cells_count, 5);
-            assert_eq!(info.name, Some("Lock-cc".to_string()));
-        }
-    }
-
-    // Verify non-existent code hash returns None
-    let missing = store.get_script_info(&[0xFFu8; 32]).unwrap();
-    assert!(missing.is_none());
-}
-
-#[test]
-fn bulk_build_script_owner_materializes_lock_and_type_usage_without_db_reads() {
-    let infos =
-        materialize_script_infos_for_test(&[bulk_build_script_fixture()]).expect("script infos");
-
-    let lock_code_hash = vec![
-        0x9b, 0xd7, 0xe0, 0x6f, 0x3e, 0xcf, 0x4b, 0xe0, 0xf2, 0xfc, 0xd2, 0x18, 0x8b, 0x23, 0xf1,
-        0xb9, 0xfc, 0xc8, 0x8e, 0x5d, 0x4b, 0x65, 0xa8, 0x63, 0x7b, 0x17, 0x72, 0x3b, 0xbd, 0xa3,
-        0xcc, 0xe8,
-    ];
-    let type_code_hash = vec![
-        0xc5, 0xe5, 0xdc, 0xf2, 0x15, 0xd9, 0x9a, 0xf6, 0x28, 0x67, 0x16, 0x4d, 0x6f, 0xb9, 0xd1,
-        0x7c, 0xe6, 0x8a, 0x45, 0xb9, 0xe2, 0xae, 0xcd, 0x49, 0xc1, 0x96, 0x34, 0x42, 0x6f, 0x20,
-        0x56, 0xa3,
-    ];
-
-    let lock_info = infos.get(&lock_code_hash).expect("lock script info");
-    assert_eq!(lock_info.hash_type, 1);
-    assert_eq!(lock_info.lock_cells_count, 3);
-    assert_eq!(lock_info.lock_live_cells_count, 2);
-    assert_eq!(lock_info.lock_capacity_sum, 380_00000000);
-    assert_eq!(lock_info.lock_owned_capacity_sum, 180_00000000);
-    assert_eq!(lock_info.lock_used_capacity_sum, 264_00000000);
-    assert_eq!(lock_info.lock_owned_knowledge_sum, 122_00000000);
-
-    let type_info = infos.get(&type_code_hash).expect("type script info");
-    assert_eq!(type_info.hash_type, 1);
-    assert_eq!(type_info.type_cells_count, 1);
-    assert_eq!(type_info.type_live_cells_count, 0);
-    assert_eq!(type_info.type_capacity_sum, 200_00000000);
-    assert_eq!(type_info.type_owned_capacity_sum, 0);
-    assert_eq!(type_info.type_used_capacity_sum, 142_00000000);
-    assert_eq!(type_info.type_owned_knowledge_sum, 0);
+    // Verify non-existent pairs return None
+    assert!(store.get_script_info(&[0xFFu8; 32], 1).unwrap().is_none());
+    assert!(store.get_script_info(&code2, 0).unwrap().is_none());
 }
 
 #[test]

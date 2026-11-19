@@ -1962,3 +1962,56 @@ async fn token_transfers_tell_a_lock_with_no_address_form_from_a_corrupt_one() {
         );
     }
 }
+
+// ── Lane rd/api-lock-names: a lock is named by its pair ───────────────────
+//
+// CKB names a script by (code hash, hash type). The default lock is its code
+// hash by `type`; the same code hash by `data` is another script. A holder row
+// named a lock by the registry's name for its code hash alone, so a lock by
+// `data` on the default lock's code hash was called "Default Lock", and the
+// row carried no hash type for the page to tell the two apart.
+
+#[tokio::test]
+async fn by_pair_token_holders_name_a_lock_by_its_pair() {
+    let store = test_store();
+    let type_hash = vec![0x7E; 32];
+    store
+        .put_token_direct(&type_hash, &placeholder_token_without_metadata())
+        .unwrap();
+    let by_type = [0x44u8; 32];
+    let by_data = [0x45u8; 32];
+    seed_default_lock_by_type_and_by_data(&store, &by_type, &by_data);
+    let mut batch = StoreBatch::new(&store);
+    for (lock_hash, balance) in [(by_type, 900u128), (by_data, 500)] {
+        batch.put_token_holder(&type_hash, &lock_hash, balance);
+        batch.put_token_holder_by_balance(&type_hash, &lock_hash, balance);
+        batch.put_addr_token_by_balance(&lock_hash, &type_hash, balance);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/tokens/0x{}/holders?limit=10", hex::encode(&type_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{json}");
+    assert_eq!(
+        rows[0]["lockScriptHash"],
+        format!("0x{}", hex::encode(by_type))
+    );
+    assert_eq!(rows[0]["lockKind"], "Default Lock", "{json}");
+    assert_eq!(
+        rows[1]["lockScriptHash"],
+        format!("0x{}", hex::encode(by_data))
+    );
+    assert_eq!(rows[1]["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert!(
+        rows[1]["lockKind"].is_null(),
+        "the default lock's name does not reach the lock by data: {json}"
+    );
+    assert_eq!(rows[0]["lockHashType"], "type", "{json}");
+    assert_eq!(rows[1]["lockHashType"], "data", "{json}");
+}

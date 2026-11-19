@@ -171,14 +171,6 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
             chain_time_ms: 1_700_000_000_000,
         },
     );
-    batch.put_script_info(
-        file.code_hash().as_slice(),
-        &ckbadger_store::types::ScriptInfo {
-            code_hash: file.code_hash().as_slice().to_vec(),
-            hash_type: 1,
-            ..Default::default()
-        },
-    );
     batch.put_tx_hash_map(&tx_hash, 7, 1);
     batch.put_tx_index(
         7,

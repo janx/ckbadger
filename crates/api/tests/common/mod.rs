@@ -724,8 +724,56 @@ pub fn pending_transaction_rpc_response(hash: &str, status: &str) -> serde_json:
 pub const TEST_SECP_LOCK_CODE_HASH: &str =
     "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
 
+/// The default lock's code hash ([`TEST_SECP_LOCK_CODE_HASH`]) as bytes.
+pub fn default_lock_code_hash() -> Vec<u8> {
+    hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap()
+}
+
+/// The bundled mainnet registry (label import, which names the default lock
+/// by its pair: its code hash by `type`), and two locks on the default lock's
+/// code hash with a secp-shaped 20-byte args: `by_type` is the default lock,
+/// `by_data` the same code hash by `data`, another script (no cell's data
+/// hashes to a type hash, so it runs no code the registry names). CKB names a
+/// script by the pair (code hash, hash type).
+pub fn seed_default_lock_by_type_and_by_data(
+    store: &CkbadgerStore,
+    by_type: &[u8],
+    by_data: &[u8],
+) {
+    run_label_import_bundled(store, "mainnet").unwrap();
+    let secp = default_lock_code_hash();
+    let mut batch = StoreBatch::new(store);
+    for (lock_hash, hash_type) in [(by_type, 1), (by_data, 0)] {
+        batch.put_lock_script(
+            lock_hash,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type,
+                args: vec![lock_hash[0]; 20],
+            },
+        );
+    }
+    batch.commit().unwrap();
+}
+
 /// A lock code hash the scripts registry does not name.
 pub const UNREGISTERED_LOCK_CODE_HASH: [u8; 32] = [0x99; 32];
+
+/// Seed the scripts registry's label `name` for the script (`code_hash`,
+/// `hash_type`), as label import writes it: the label row is keyed by the
+/// pair, and names no other hash type of the code hash.
+pub fn seed_script_label(store: &CkbadgerStore, code_hash: &[u8], hash_type: u8, name: &str) {
+    store
+        .put_script_info_direct(
+            code_hash,
+            hash_type,
+            &ScriptInfo {
+                name: name.to_string(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
 
 /// [`UNREGISTERED_LOCK_CODE_HASH`] as the API writes a code hash.
 pub fn unregistered_lock_code_hash_hex() -> String {
@@ -743,16 +791,8 @@ pub const UNADDRESSABLE_LOCK_ARGS_LEN: usize = 600;
 /// bytes: a lock the chain accepts and no address can write.
 pub fn seed_unaddressable_lock(store: &CkbadgerStore, lock_hash: &[u8]) {
     let secp = hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap();
+    seed_script_label(store, &secp, 1, "SECP256K1/blake160");
     let mut batch = StoreBatch::new(store);
-    batch.put_script_info(
-        &secp,
-        &ScriptInfo {
-            code_hash: secp.clone(),
-            hash_type: 1,
-            name: Some("SECP256K1/blake160".into()),
-            ..Default::default()
-        },
-    );
     batch.put_lock_script(
         lock_hash,
         &ckbadger_store::types::LockScriptEntry {
@@ -770,16 +810,8 @@ pub fn seed_unaddressable_lock(store: &CkbadgerStore, lock_hash: &[u8]) {
 /// with a secp-shaped 20-byte args, so no kind can come from the args).
 pub fn seed_named_and_unnamed_locks(store: &CkbadgerStore, named: &[u8], unnamed: &[u8]) {
     let secp = hex::decode(&TEST_SECP_LOCK_CODE_HASH[2..]).unwrap();
+    seed_script_label(store, &secp, 1, "SECP256K1/blake160");
     let mut batch = StoreBatch::new(store);
-    batch.put_script_info(
-        &secp,
-        &ScriptInfo {
-            code_hash: secp.clone(),
-            hash_type: 1,
-            name: Some("SECP256K1/blake160".into()),
-            ..Default::default()
-        },
-    );
     for (lock_hash, code_hash) in [
         (named, secp.as_slice()),
         (unnamed, UNREGISTERED_LOCK_CODE_HASH.as_slice()),
@@ -1726,23 +1758,7 @@ pub fn seed_two_reference_script_family(
                 },
             )
             .unwrap();
-        store
-            .put_script_info_direct(
-                reference_hash,
-                &ScriptInfo {
-                    code_hash: reference_hash.to_vec(),
-                    hash_type: 1,
-                    name: Some(label.to_string()),
-                    type_cells_count: cells,
-                    type_live_cells_count: cells,
-                    type_capacity_sum: capacity,
-                    type_owned_capacity_sum: capacity,
-                    type_used_capacity_sum: knowledge,
-                    type_owned_knowledge_sum: knowledge,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
+        seed_script_label(store, reference_hash, 1, label);
     }
 }
 

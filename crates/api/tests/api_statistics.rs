@@ -4581,3 +4581,49 @@ async fn hardforks_counts_live_references_and_known_versions_per_hash_type() {
         "{body}"
     );
 }
+
+/// Lane rd/api-lock-names: a day's script counts count each script by its
+/// pair (code hash, hash type) and name it by its pair. A day that called the
+/// default lock (its code hash by `type`) once and the same code hash by
+/// `data` once called two scripts once each; the default lock's name does not
+/// reach the script by data, and the two are not summed under one code hash.
+#[tokio::test]
+async fn by_pair_daily_activity_script_counts_count_and_name_each_pair() {
+    let store = test_store();
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    let secp = default_lock_code_hash();
+    let mut day = ckbadger_store::types::DailyActivityStats::default();
+    let mut actions = make_test_tx_actions(&[0x12; 32], &[0xa1; 32], &[0xba; 32], 5, 1, 0, 0);
+    actions.lock_calls = [1i16, 0]
+        .into_iter()
+        .map(|hash_type| ckbadger_store::types::LockCallEntry {
+            lock_code_hash: secp.clone(),
+            lock_hash_type: hash_type,
+            lock_args: vec![0x12; 20],
+        })
+        .collect();
+    day.accumulate_from_tx_actions(&actions);
+    store.put_daily_activity_stats("20240115", &day).unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let counts = json[0]["scriptCounts"].as_array().unwrap();
+    assert_eq!(counts.len(), 2, "two scripts, one call each: {json}");
+    let of = |hash_type: &str| {
+        counts
+            .iter()
+            .find(|entry| entry["hashType"] == hash_type)
+            .unwrap_or_else(|| panic!("no count for the pair by {hash_type}: {json}"))
+    };
+    assert_eq!(of("type")["codeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert_eq!(of("type")["name"], "Default Lock", "{json}");
+    assert_eq!(of("type")["count"], 1, "{json}");
+    assert_eq!(of("data")["codeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert!(
+        of("data")["name"].is_null(),
+        "the default lock's name does not reach the script by data: {json}"
+    );
+    assert_eq!(of("data")["count"], 1, "{json}");
+}

@@ -411,10 +411,12 @@ pub(super) struct SupplyEvent {
     amount: String,
     supply_after: String,
     lock_hash: String,
-    /// This and the next two: the party's lock, named as
-    /// [`super::tokens::TokenIssuer`] names it.
+    /// This and the next three: the party's lock, named as
+    /// [`super::tokens::TokenIssuer`] names it, by its pair (code hash, hash
+    /// type).
     address: Option<String>,
     lock_code_hash: Option<String>,
+    lock_hash_type: Option<String>,
     lock_kind: Option<String>,
 }
 
@@ -778,6 +780,7 @@ fn build_supply_events(
                 lock_hash: format!("0x{}", hex::encode(lock)),
                 address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
             });
         }

@@ -36,12 +36,10 @@ pub use params::{
     validate_block_number, MAX_OUTPUT_INDEX,
 };
 pub use script_resolution::{
-    deployment_key_for_script, deployment_reference_hashes, hash_type_to_string, hash_type_to_u8,
-    historical_family_member_candidate, is_known_script_name, list_version_code_cells,
-    merge_script_info_for_reference, observed_type_id_references_from_versions,
+    hash_type_to_string, hash_type_to_u8, historical_family_member_candidate, is_known_script_name,
+    list_version_code_cells, observed_type_id_references_from_versions, pair_deployment_hashes,
     reference_form_member_version, reference_form_member_version_with_lineage,
-    registered_script_name, related_code_hashes_for_reference, resolve_code_hash_for_hash_type,
-    resolve_script_by_hash, resolve_script_form_by_hash, CurrentScriptVersionResolution,
-    VersionCodeCell,
+    registered_script_name, resolve_script_by_hash, resolve_script_form_by_hash, script_hash_type,
+    CurrentScriptVersionResolution, VersionCodeCell,
 };
 pub use supply::{dao_supply, dao_treasury, protocol_circulating, DaoSupply};

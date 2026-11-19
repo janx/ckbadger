@@ -204,6 +204,52 @@ pub fn decode_script_reference_key(key: &[u8]) -> (u8, Vec<u8>) {
     (key[0], key[1..].to_vec())
 }
 
+/// A `script_info` key: the script's pair, its code hash (32 B) then its hash
+/// type (1 B). CKB identifies a script by the pair, so the registry's label is
+/// keyed by it (lane rd/api-lock-names; it was the code hash alone).
+pub const SCRIPT_INFO_KEY_SIZE: usize = SCRIPT_VERSION_HASH_SIZE + 1;
+
+/// The hash types a script can have on chain: data, type, data1, data2.
+const SCRIPT_HASH_TYPES: [u8; 4] = [0, 1, 2, 4];
+
+pub fn encode_script_info_key(code_hash: &[u8], hash_type: u8) -> [u8; SCRIPT_INFO_KEY_SIZE] {
+    assert_key_component_len(
+        "encode_script_info_key",
+        "code_hash",
+        code_hash.len(),
+        SCRIPT_VERSION_HASH_SIZE,
+    );
+    assert!(
+        SCRIPT_HASH_TYPES.contains(&hash_type),
+        "encode_script_info_key: hash_type {hash_type} is not a CKB hash type (0, 1, 2, 4): \
+         code_hash=0x{}",
+        hex::encode(code_hash)
+    );
+    let mut key = [0u8; SCRIPT_INFO_KEY_SIZE];
+    key[..SCRIPT_VERSION_HASH_SIZE].copy_from_slice(code_hash);
+    key[SCRIPT_VERSION_HASH_SIZE] = hash_type;
+    key
+}
+
+/// The pair a `script_info` key names; a key of another length or hash type
+/// is a corrupt row, named.
+pub fn decode_script_info_key(key: &[u8]) -> anyhow::Result<(Vec<u8>, u8)> {
+    anyhow::ensure!(
+        key.len() == SCRIPT_INFO_KEY_SIZE,
+        "script_info key is {} bytes, not {SCRIPT_INFO_KEY_SIZE} (code hash + hash type): \
+         key=0x{}",
+        key.len(),
+        hex::encode(key)
+    );
+    let hash_type = key[SCRIPT_VERSION_HASH_SIZE];
+    anyhow::ensure!(
+        SCRIPT_HASH_TYPES.contains(&hash_type),
+        "script_info key names hash type {hash_type}, not a CKB hash type: key=0x{}",
+        hex::encode(key)
+    );
+    Ok((key[..SCRIPT_VERSION_HASH_SIZE].to_vec(), hash_type))
+}
+
 pub fn encode_block_num(n: i64) -> [u8; BLOCK_NUM_KEY_SIZE] {
     assert!(
         n >= 0,

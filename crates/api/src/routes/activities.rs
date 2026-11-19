@@ -86,14 +86,15 @@ pub(crate) fn participant_lock_kind(
     lock_hash: &[u8; 32],
     pool_record: Option<&PoolTxRecord>,
 ) -> anyhow::Result<Option<String>> {
-    let code_hash = if let Some(lock) = pool_record.and_then(|record| record.lock_script(lock_hash))
-    {
-        Some(lock.code_hash)
+    // The lock's pair (code hash, hash type), from the pool record or the store.
+    let lock = if let Some(lock) = pool_record.and_then(|record| record.lock_script(lock_hash)) {
+        Some((lock.code_hash, lock.hash_type))
     } else {
-        store.get_lock_script(lock_hash)?.map(|lock| lock.code_hash)
+        store
+            .get_lock_script(lock_hash)?
+            .map(|lock| (lock.code_hash, lock.hash_type))
     };
-    code_hash
-        .map(|hash| registered_script_name(store, &hash))
+    lock.map(|(code_hash, hash_type)| registered_script_name(store, &code_hash, hash_type))
         .transpose()
         .map(Option::flatten)
 }
@@ -127,7 +128,7 @@ fn participant_ref(
                 )?,
                 lock_hash: Some(format!("0x{}", hex::encode(hash))),
                 lock_hash_prefix: Some(format!("0x{}", hex::encode(prefix))),
-                lock_kind: registered_script_name(store, &entry.code_hash)?,
+                lock_kind: registered_script_name(store, &entry.code_hash, entry.hash_type)?,
                 roles,
             }),
             None => Ok(ParticipantRef {
@@ -434,20 +435,23 @@ fn lookup_token_info(
     Ok(result.unwrap_or((None, None)))
 }
 
-/// Registered script names already read by one response, keyed by code hash
-/// (`utils::registered_script_name`, the one name rule `/cells` also uses).
-pub(crate) type ScriptNameCache = HashMap<Vec<u8>, Option<String>>;
+/// Registered script names already read by one response, keyed by the
+/// script's pair (code hash, hash type) (`utils::registered_script_name`, the
+/// one name rule `/cells` also uses).
+pub(crate) type ScriptNameCache = HashMap<(Vec<u8>, i16), Option<String>>;
 
 fn cached_script_name(
     store: &CkbadgerStore,
     cache: &mut ScriptNameCache,
     code_hash: &[u8],
+    hash_type: i16,
 ) -> anyhow::Result<Option<String>> {
-    if let Some(name) = cache.get(code_hash) {
+    let key = (code_hash.to_vec(), hash_type);
+    if let Some(name) = cache.get(&key) {
         return Ok(name.clone());
     }
-    let name = registered_script_name(store, code_hash)?;
-    cache.insert(code_hash.to_vec(), name.clone());
+    let name = registered_script_name(store, code_hash, hash_type)?;
+    cache.insert(key, name.clone());
     Ok(name)
 }
 
@@ -467,7 +471,7 @@ fn convert_type_call(
         call.type_hash_type as u8,
         &call.type_args,
     );
-    let script_name = cached_script_name(store, cache, &call.type_code_hash)?;
+    let script_name = cached_script_name(store, cache, &call.type_code_hash, call.type_hash_type)?;
 
     Ok(TypeCallResponse {
         type_code_hash: format!("0x{}", hex::encode(&call.type_code_hash)),
@@ -822,7 +826,7 @@ fn convert_lock_call(
         call.lock_hash_type as u8,
         &call.lock_args,
     );
-    let script_name = cached_script_name(store, cache, &call.lock_code_hash)?;
+    let script_name = cached_script_name(store, cache, &call.lock_code_hash, call.lock_hash_type)?;
     let DecodedLockArgs {
         decoded,
         error: decode_error,
@@ -1739,44 +1743,50 @@ mod tests {
 
     /// Activity type/lock call names and participant lock kinds read the one
     /// registry name rule `/cells` uses (`utils::registered_script_name`):
-    /// trimmed, `None` for an unregistered or "Unknown" reference; and one
-    /// response reads each code hash once.
+    /// trimmed, `None` for an unregistered or "Unknown" reference, `None` for
+    /// a registered code hash by another hash type (another script: lane
+    /// rd/api-lock-names); and one response reads each pair once.
     #[test]
     fn activity_script_names_are_the_registered_names_read_once_per_response() {
         let dir = tempfile::TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let named = [0x01; 32];
         let unknown = [0x02; 32];
-        let mut batch = ckbadger_store::StoreBatch::new(&store);
         for (code_hash, name) in [(named, " JoyID "), (unknown, "Unknown")] {
-            batch.put_script_info(
-                &code_hash,
-                &ckbadger_store::types::ScriptInfo {
-                    code_hash: code_hash.to_vec(),
-                    name: Some(name.to_string()),
-                    ..Default::default()
-                },
-            );
+            store
+                .put_script_info_direct(
+                    &code_hash,
+                    1,
+                    &ckbadger_store::types::ScriptInfo {
+                        name: name.to_string(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
         }
-        batch.commit().unwrap();
 
         let mut cache = ScriptNameCache::new();
-        for code_hash in [named, unknown, [0x03; 32]] {
+        for (code_hash, hash_type) in [(named, 1), (named, 0), (unknown, 1), ([0x03; 32], 1)] {
             assert_eq!(
-                cached_script_name(&store, &mut cache, &code_hash).unwrap(),
-                registered_script_name(&store, &code_hash).unwrap()
+                cached_script_name(&store, &mut cache, &code_hash, hash_type).unwrap(),
+                registered_script_name(&store, &code_hash, hash_type).unwrap()
             );
         }
         assert_eq!(
-            cached_script_name(&store, &mut cache, &named).unwrap(),
+            cached_script_name(&store, &mut cache, &named, 1).unwrap(),
             Some("JoyID".to_string())
         );
         assert_eq!(
-            cached_script_name(&store, &mut cache, &unknown).unwrap(),
+            cached_script_name(&store, &mut cache, &named, 0).unwrap(),
+            None,
+            "the registry names JoyID by its pair; the code hash by data is another script"
+        );
+        assert_eq!(
+            cached_script_name(&store, &mut cache, &unknown, 1).unwrap(),
             None
         );
         store.reset_read_call_counters();
-        cached_script_name(&store, &mut cache, &named).unwrap();
+        cached_script_name(&store, &mut cache, &named, 1).unwrap();
         assert_eq!(
             store.read_call_counts(),
             (0, 0),

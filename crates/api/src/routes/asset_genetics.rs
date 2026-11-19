@@ -501,16 +501,25 @@ fn gallery_read(
         object.insert("traits".into(), traits["traits"].clone());
         object.insert("decodeStatus".into(), traits["status"].clone());
         object.insert("ownerAddress".into(), json!(current.response.owner_address));
-        // OB-C3: the live cell's lock, named by the scripts registry only.
+        // OB-C3: the live cell's lock, named by the scripts registry only, by
+        // its pair (code hash, hash type).
         object.insert(
             "lockCodeHash".into(),
             json!(format!("0x{}", hex::encode(current.cell.lock_code_hash))),
         );
         object.insert(
+            "lockHashType".into(),
+            json!(super::assets::lock_hash_type_label(
+                &current.cell.lock_code_hash,
+                current.cell.lock_hash_type
+            )?),
+        );
+        object.insert(
             "lockKind".into(),
             json!(super::assets::lock_kind(
                 &state.store,
-                &current.cell.lock_code_hash
+                &current.cell.lock_code_hash,
+                current.cell.lock_hash_type
             )?),
         );
         object.insert(
