@@ -36,7 +36,6 @@ import {
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { cellOwnerLock, LockWordsView } from '@/components/ui/lock-kind';
-import { Dotted } from '@/components/ui/phone-row';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -299,18 +298,18 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 evidenceState
               ),
               // the owner's lock by the one decision (B4): nothing for the default lock
-              note: current ? (
-                <Dotted
-                  parts={[
+              // the note's parts, which the metric's separated list draws (a list inside another
+              // is refused): the lock left out where none is named
+              note: current
+                ? [
                     cellOwnerLock(current) && (
                       <LockWordsView words={cellOwnerLock(current)!} size="row" />
                     ),
                     <>
                       since <Utc8Date timestamp={current.timestamp} />
                     </>,
-                  ]}
-                />
-              ) : undefined,
+                  ]
+                : undefined,
             },
             {
               label: 'Class',
