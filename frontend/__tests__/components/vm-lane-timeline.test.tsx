@@ -84,11 +84,18 @@ describe('VmLaneTimeline', () => {
     const svg = screen.getByRole('img');
     expect(svg).toHaveAttribute('width', '358');
     // Lane names over full-width bars, epoch-only edition labels, numbers in each lane's header.
+    // Re-pinned (readability plan P4: a lane is named in plain words, its hash type second): the
+    // words are the lane's first line, its hash type and count its second (was "type · the newest
+    // VM" beside the count).
     for (const label of [
-      'type · the newest VM',
-      'data1 · pinned to VM1',
-      'data2 · pinned to VM2',
-      'data · pinned to VM0',
+      'follows the newest VM',
+      'hash_type type',
+      'pinned to VM1',
+      'hash_type data1',
+      'pinned to VM2',
+      'hash_type data2',
+      'pinned to VM0',
+      'hash_type data',
       'epoch 5,414',
       'epoch 12,293',
       '1,830,780 · 59\u00a0versions',
@@ -156,8 +163,9 @@ describe('VmLaneTimeline', () => {
     expect(meepoEpoch.y).toBeGreaterThan(meepo.y);
     // A clear gap separates Mirana's block from Meepo's: name baselines 18 px below the epoch.
     expect(meepo.y - miranaEpoch.y).toBeGreaterThanOrEqual(18);
-    // The lanes start under the last label row.
-    expect(Number(node('type · the newest VM').getAttribute('y'))).toBeGreaterThan(
+    // The lanes start under the last label row (re-pinned, P4: the first lane's first line is its
+    // plain words, "follows the newest VM"; it was "type · the newest VM").
+    expect(Number(node('follows the newest VM').getAttribute('y'))).toBeGreaterThan(
       meepoEpoch.y + 12
     );
   });

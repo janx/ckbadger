@@ -220,9 +220,11 @@ describe('HardforksPage', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('table')).toBeNull();
     const text = [...timeline.querySelectorAll('text')].map((node) => node.textContent);
+    // re-pinned (readability plan P4: a lane is named in plain words, its hash type second): the
+    // type lane's words are "follows the newest VM" (were "the newest VM", under "hash_type type")
     for (const label of [
       'hash_type type',
-      'the newest VM',
+      'follows the newest VM',
       'hash_type data1',
       'pinned to VM1',
       'hash_type data2',

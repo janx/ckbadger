@@ -38,8 +38,13 @@ interface Props {
 /** The lanes in VM order, as the API sends them (R11). */
 export const LANE_ORDER = ['type', 'data1', 'data2', 'data'] as const;
 type Lane = (typeof LANE_ORDER)[number];
+/**
+ * What a lane is, in plain words (readability plan P4: the lanes are named in plain words, their
+ * hash type second): the protocol's rule for each hash type (RFC 0032 and 0051): `type` runs on
+ * the newest VM the chain runs, each data hash type pins one VM.
+ */
 const LANE_TEXT: Record<Lane, string> = {
-  type: 'the newest VM',
+  type: 'follows the newest VM',
   data1: 'pinned to VM1',
   data2: 'pinned to VM2',
   data: 'pinned to VM0',
@@ -108,8 +113,15 @@ const PHONE_AIR = 24.5;
 const LANE_PAD = 4;
 const HEAD_Y = LANE_PAD + lineAscentPx(SVG_TEXT.head);
 const NOTE_Y = LANE_PAD + tightLinePx(SVG_TEXT.head) + lineAscentPx(SVG_TEXT.note);
-/** A phone lane's header line, at the lane's top. */
+/**
+ * A phone lane's two header lines, from the lane's top: its words alone on the first, its hash
+ * type and its count on the second (a tight label line under it). The words stand alone so the
+ * longest of them and the widest count never share a line (at a 360 phone's 326 px, "follows the
+ * newest VM" is 151.2 px and "1,830,780 · 59 versions" 165.6, 9.2 px apart; on the second line
+ * "hash_type data1" is 108 px beside it, 52.4 px apart).
+ */
 const HEADER_Y = lineAscentPx(SVG_TEXT.label);
+const HEADER2_Y = tightLinePx(SVG_TEXT.label) + lineAscentPx(SVG_TEXT.label);
 /** The years under the lanes, 5 px under them, and "now" a label line under the years. */
 const YEAR_GAP = 5;
 
@@ -217,16 +229,18 @@ export function VmLaneTimeline({
     EDITION_LINES +
     (labelRows - 1) * BLOCK_ROW +
     (narrow ? PHONE_AIR : LIVE_HEAD.gap + tightLinePx(SVG_TEXT.note) + LIVE_HEAD.over);
-  const laneH = narrow ? 64 : 46;
   /**
    * Where a lane's bar and its dot rows sit, from the lane's top: a bar holds its VM's note line
    * and half a pixel over and under it (16 px; a phone's was 14, under the 15 px line), on a
-   * phone 3 px under the header line.
+   * phone 3 px under its two header lines, the dot rows 8 and 16 px under the bar, and 11 px under
+   * the lower row's dots to the next lane: 79 px (64 with one header line).
    */
   const barH = tightLinePx(SVG_TEXT.note) + 1;
+  const phoneBarY = 2 * tightLinePx(SVG_TEXT.label) + 3;
   const bar = narrow
-    ? { y: tightLinePx(SVG_TEXT.label) + 3, h: barH, dots: [42, 50] }
+    ? { y: phoneBarY, h: barH, dots: [phoneBarY + barH + 8, phoneBarY + barH + 16] }
     : { y: 6, h: barH, dots: [30, 38] };
+  const laneH = narrow ? bar.dots[1] + 14 : 46;
   /** A word in a bar stands on the line centred in it. */
   const barLabelY = (barH - tightLinePx(SVG_TEXT.note)) / 2 + lineAscentPx(SVG_TEXT.note);
   const bottom = top + laneH * LANE_ORDER.length;
@@ -401,11 +415,22 @@ export function VmLaneTimeline({
                       strokeWidth="3"
                       paintOrder="stroke"
                     >
-                      {`${hashType} · ${LANE_TEXT[hashType]}`}
+                      {LANE_TEXT[hashType]}
+                    </text>
+                    <text
+                      x="0"
+                      y={y + HEADER2_Y}
+                      fontSize={SVG_TEXT.note}
+                      fill="var(--c-text-dim)"
+                      stroke="var(--c-base-bg)"
+                      strokeWidth="3"
+                      paintOrder="stroke"
+                    >
+                      {`hash_type ${hashType}`}
                     </text>
                     <text
                       x={width}
-                      y={y + HEADER_Y}
+                      y={y + HEADER2_Y}
                       textAnchor="end"
                       fontSize={SVG_TEXT.note}
                       fill="var(--c-text)"
@@ -423,10 +448,10 @@ export function VmLaneTimeline({
                 ) : (
                   <>
                     <text x="0" y={y + HEAD_Y} fontSize={SVG_TEXT.head} fill="var(--c-text-bright)">
-                      {`hash_type ${hashType}`}
+                      {LANE_TEXT[hashType]}
                     </text>
                     <text x="0" y={y + NOTE_Y} fontSize={SVG_TEXT.note} fill="var(--c-text-dim)">
-                      {LANE_TEXT[hashType]}
+                      {`hash_type ${hashType}`}
                     </text>
                     <text
                       x={width}
