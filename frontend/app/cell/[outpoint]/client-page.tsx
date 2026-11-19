@@ -1,7 +1,7 @@
 'use client';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useCopy } from '@/hooks/useCopy';
+import { CopyButton } from '@/components/ui/copy-button';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -326,22 +326,6 @@ function CellFacts({
   );
 }
 
-function CopyOutpoint({ value }: { value: string }) {
-  // the one copy path (hooks/useCopy): "copied" for a moment after a copy that worked, nothing
-  // after one that cannot (no clipboard over plain HTTP on a LAN address)
-  const { copied, copy } = useCopy(value);
-  return (
-    <button
-      type="button"
-      aria-label="Copy out point"
-      onClick={copy}
-      className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] border px-2"
-    >
-      {copied ? 'copied' : 'copy'}
-    </button>
-  );
-}
-
 /** "code cell of JoyID, v5": the scripts this cell is code for, and its Type ID version. */
 function CodeCellOf({ cell }: { cell: Cell }) {
   if (!cell.codeCellOf?.length) return null;
@@ -458,7 +442,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         identity={
           <div className="flex flex-wrap items-center gap-2.5">
             <span className="min-w-0">{outpoint}</span>
-            <CopyOutpoint value={outpoint} />
+            <CopyButton value={outpoint} label="copy out point" />
           </div>
         }
         // Under the stone and the plate, from the page's left edge (C10), in the identity lines'

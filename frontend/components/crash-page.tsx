@@ -1,8 +1,9 @@
 'use client';
 
-import { useContext, useState } from 'react';
+import { useContext } from 'react';
 import { UNSAFE_LocationContext } from 'react-router-dom';
 import Link from '@/components/ui/link';
+import { CopyButton } from '@/components/ui/copy-button';
 import { ErrorPageShell } from '@/components/error-page-shell';
 import { usePathname } from '@/src/navigation';
 import { resolveBuildVersion } from '@/lib/runtime-config';
@@ -38,7 +39,6 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
   const networkSegment = fullRoute.replace(/^\/+/, '').split('/')[0];
   const network = isKnownNetwork(networkSegment) ? networkSegment : 'not resolved';
   const build = resolveBuildVersion();
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   useDocumentTitle(ERROR_TITLE);
   const recovery = pathname.startsWith('/fiber/')
     ? { href: '/fiber/channels', label: 'Fiber channels' }
@@ -48,21 +48,15 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
         ? { href: '/blocks', label: 'blocks' }
         : { href: '/', label: 'back to the explorer' };
 
-  async function copyDetails() {
-    const report = [
-      `Error: ${message}`,
-      `Page: ${fullRoute}`,
-      `Network: ${network}`,
-      `Build: CKBadger ${build}`,
-      'Chain tip: not checked in this error view',
-    ].join('\n');
-    try {
-      await navigator.clipboard.writeText(report);
-      setCopyState('copied');
-    } catch {
-      setCopyState('failed');
-    }
-  }
+  // What a bug report needs, exact: the error, the page, the network and the build, and that this
+  // view read no chain tip.
+  const report = [
+    `Error: ${message}`,
+    `Page: ${fullRoute}`,
+    `Network: ${network}`,
+    `Build: CKBadger ${build}`,
+    'Chain tip: not checked in this error view',
+  ].join('\n');
 
   return (
     <ErrorPageShell
@@ -79,10 +73,13 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
       >
         ✗ {message}
       </span>
-      {/* words wrap between words; only the route, one long token, may break anywhere */}
+      {/* words wrap between words; only the route, one long token, may break anywhere. The
+          facts end with the one copy of the controls board, which copies them for a bug report
+          and answers in words beside it. */}
       <span className="min-w-0 [overflow-wrap:anywhere]">
         page <span className="break-all">{fullRoute}</span> · network {network} · CKBadger {build} ·{' '}
-        <span>the chain was not checked in this view — this says nothing about what it holds</span>
+        <span>the chain was not checked in this view — this says nothing about what it holds</span>{' '}
+        <CopyButton value={report} label="copy details for a bug report" className="align-middle" />
       </span>
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         <button
@@ -92,13 +89,6 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
         >
           <span className="whitespace-nowrap">↻ </span>try again
         </button>
-        <button
-          type="button"
-          className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
-          onClick={copyDetails}
-        >
-          <span className="whitespace-nowrap">→ </span>copy details for a bug report
-        </button>
         <Link
           href={recovery.href}
           className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
@@ -107,11 +97,6 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
           {recovery.label}
         </Link>
       </div>
-      {copyState !== 'idle' && (
-        <span role="status">
-          {copyState === 'copied' ? 'error details copied.' : 'could not copy details.'}
-        </span>
-      )}
     </ErrorPageShell>
   );
 }

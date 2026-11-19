@@ -8,6 +8,7 @@ import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { HeadId } from '@/components/ui/head-id';
+import { CopyButton } from '@/components/ui/copy-button';
 import { SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
@@ -35,7 +36,6 @@ import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
 import { useCyclesCalculation } from '@/hooks/useCyclesCalculation';
-import { useCopy } from '@/hooks/useCopy';
 import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
 import {
   api,
@@ -139,34 +139,6 @@ function daoCompensation(activity: GlobalActivity): bigint | null {
   );
   if (completes.length === 0) return null;
   return completes.reduce((sum, pa) => sum + protocolActionMeta(pa).compensation!, BigInt(0));
-}
-
-function CopyHash({ hash }: { hash: string }) {
-  // the one copy path (hooks/useCopy): "Copied" for a moment after a copy that worked, nothing
-  // after one that cannot (no clipboard over plain HTTP on a LAN address)
-  const { copied, copy } = useCopy(hash);
-  return (
-    <button
-      type="button"
-      aria-label="Copy transaction hash"
-      title={copied ? 'Copied' : 'Copy transaction hash'}
-      onClick={copy}
-      className="text-text-dim hover:text-jade -my-3 flex h-11 w-11 shrink-0 items-center justify-center"
-    >
-      <svg
-        aria-hidden="true"
-        width="14"
-        height="14"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.3"
-      >
-        <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
-        <path d="M3.5 10.5h-1v-8h8v1" />
-      </svg>
-    </button>
-  );
 }
 
 /**
@@ -1274,12 +1246,12 @@ export default function TransactionDetailPage() {
             id={seal.id}
             state={seal.state}
             kind="Transaction"
-            // the id line, in the plate's quiet voice (the plate sets it); the copy button keeps
-            // its own classes
+            // the id line, in the plate's quiet voice (the plate sets it); the copy is the
+            // library's CopyButton, its icon after the hash and its answer in words beside it
             identity={
               <div className="flex min-w-0 items-center gap-0.5">
                 <HeadId value={tx.hash} kind="hash" />
-                <CopyHash hash={tx.hash} />
+                <CopyButton value={tx.hash} label="copy transaction hash" className="shrink-0" />
               </div>
             }
             below={

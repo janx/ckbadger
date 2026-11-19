@@ -79,31 +79,6 @@ const CONTROL_FILES = [
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
   // ---- c2-chain: block, transaction, cell, address, script pages ----
-  'app/address/[addr]/client-page.tsx': {
-    lane: 'c2-chain',
-    sites: { tab: 1 },
-    reason: 'the activities / transactions / live cells tabs (buttons, aria-pressed)',
-  },
-  'app/blocks/[id]/client-page.tsx': {
-    lane: 'c2-chain',
-    sites: { tab: 1, pager: 2 },
-    reason: 'the transactions / activities tabs and their two pagers',
-  },
-  'app/scripts/[name]/client-page.tsx': {
-    lane: 'c2-chain',
-    sites: { pager: 1 },
-    reason: 'the script version’s cells pager',
-  },
-  'components/address/address-holdings.tsx': {
-    lane: 'c2-chain',
-    sites: { pager: 2 },
-    reason: 'the holdings lists’ pager and the objects list’s',
-  },
-  'components/scripts/script-family-page.tsx': {
-    lane: 'c2-chain',
-    sites: { pager: 1 },
-    reason: 'a script family’s cells pager',
-  },
   'components/scripts/script-newest-cells.tsx': {
     lane: 'c2-chain',
     sites: { pager: 1 },
@@ -157,7 +132,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 23;
+const TOLERATED_TOTAL = 15;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

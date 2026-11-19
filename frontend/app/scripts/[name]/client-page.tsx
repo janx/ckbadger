@@ -4,11 +4,11 @@ import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
 import { NotFoundPage } from '@/components/not-found-page';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { CellBar } from '@/components/ui/cell-bar';
-import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
+import { RangeSelect } from '@/components/ui/range-select';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { CELL_GAP_PX, ListTable } from '@/components/ui/list-table';
@@ -31,8 +31,12 @@ import { api, isNotFoundApiError } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { isAwaited } from '@/lib/query-state';
-import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import {
+  CAPACITY_RANGE_OPTIONS,
+  getCapacityRangeParams,
+  CapacityRangeKey,
+} from '@/lib/capacity-range';
+import { ENTITY_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import {
   encodeCellsByScriptCursor,
@@ -1038,11 +1042,12 @@ export default function ScriptDetailPage({
 
     return {
       data: pageEntries.map((entry) => entry.cell),
+      // the page the references' pages are merged into: this many rows
+      limit: cellsPageSize,
       total: selectedVersionLiveCellsCount,
       hasMore,
       nextCursor:
         hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
-      currentCount: pageEntries.length,
     };
   }, [
     cellsKind,
@@ -1054,6 +1059,12 @@ export default function ScriptDetailPage({
   ]);
   // The page waits while its reads are awaited: fetching, or paused (offline, or a hidden tab
   // between retries). A disabled read (the code cells of an ambiguous reference) is not awaited.
+  // The version's cells, oldest first, counted of the usage's live cells where the API states
+  // them: the pager's pages mode, null for one page (a list with no count is a list in time).
+  const versionCellsAt =
+    selectedVersionCellsData.total === undefined
+      ? null
+      : rankedPageAt('cells', cellsPagination.page, selectedVersionCellsData);
   const isAwaiting = isCodeHashMode
     ? isAwaited(codeHashLookupRead) || isAwaited(codeHashCodeCellsRead)
     : isAwaited(namedScriptDetailRead) || isAwaited(usageRead);
@@ -1311,8 +1322,6 @@ export default function ScriptDetailPage({
           loading: isVersionCellsLoading,
           page: cellsPagination.page,
           hasMore: selectedVersionCellsData.hasMore,
-          hasPrevious: cellsPagination.hasPrevious,
-          currentCount: selectedVersionCellsData.currentCount,
           onNext: () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor),
           onPrevious: cellsPagination.goToPrevious,
         }}
@@ -1716,19 +1725,37 @@ export default function ScriptDetailPage({
                       empty="No live cells currently use this version."
                     />
                   )}
-                  {selectedVersionCellsData.data.length > 0 && (
-                    <CursorPagination
-                      total={selectedVersionCellsData.total}
-                      totalLabel="cells"
-                      pageSize={cellsPageSize}
-                      page={cellsPagination.page}
-                      currentCount={selectedVersionCellsData.currentCount}
-                      hasMore={selectedVersionCellsData.hasMore}
-                      hasPrevious={cellsPagination.hasPrevious}
-                      onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
-                      onPrevious={cellsPagination.goToPrevious}
-                    />
-                  )}
+                  {/* The cells oldest first: counted of the usage's live cells where the API
+                      states them, else a list in time whose newer end is the next page. */}
+                  {selectedVersionCellsData.data.length > 0 &&
+                    (selectedVersionCellsData.total === undefined ? (
+                      <Pager
+                        mode="time"
+                        label="cells"
+                        order="oldest first"
+                        page={cellsPagination.page}
+                        onNewer={
+                          selectedVersionCellsData.hasMore
+                            ? () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)
+                            : undefined
+                        }
+                        onOlder={
+                          cellsPagination.hasPrevious ? cellsPagination.goToPrevious : undefined
+                        }
+                      />
+                    ) : (
+                      versionCellsAt && (
+                        <Pager
+                          mode="pages"
+                          label="cells"
+                          {...versionCellsAt}
+                          onPrevious={cellsPagination.goToPrevious}
+                          onNext={() =>
+                            cellsPagination.goToNext(selectedVersionCellsData.nextCursor)
+                          }
+                        />
+                      )
+                    ))}
                 </DetailSection>
               )}
             </>
@@ -1739,7 +1766,12 @@ export default function ScriptDetailPage({
               Live capacity and common knowledge across{' '}
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
-            <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
+            <RangeSelect
+              label="range"
+              options={CAPACITY_RANGE_OPTIONS}
+              value={capacityRange}
+              onChange={setCapacityRange}
+            />
             {isAwaited(isCodeHashMode ? selectedCapacityChartRead : familyCapacityChartRead) ? (
               <p className="text-text-dim text-small py-6">Loading capacity history…</p>
             ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (

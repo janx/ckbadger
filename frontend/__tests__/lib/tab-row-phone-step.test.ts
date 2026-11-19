@@ -42,14 +42,13 @@ describe('section-size tab rows take one type step down below md (PA-17)', () =>
     if (tabs.length) found.set(relative(ROOT, file), tabs);
   }
 
-  // The scripts list's role row and the transactions list's views (controls lane C2, c2-lists)
-  // and the asset feed's tab row (lane c2-assets) left on purpose: they are the controls
-  // library's Tabs, which takes its phone step itself (five rows -> two).
-  it('finds the two tab rows of the site', () => {
-    expect([...found.keys()].sort()).toEqual([
-      'app/address/[addr]/client-page.tsx',
-      'app/blocks/[id]/client-page.tsx',
-    ]);
+  // Lanes C2: as a row moved onto the library's Tabs (components/ui/tabs.tsx, which sets its own
+  // phone step by measurement) its file left this list, on purpose: the asset feed's row (lane
+  // c2-assets), the scripts list's roles and the transactions list's views (lane c2-lists), the
+  // block page's and the address page's rows (lane c2-chain). Five rows to none: no page draws a
+  // section-size tab row by hand any more, and the two tests below hold one that comes back.
+  it('finds no hand-built tab row: every one is the library’s Tabs', () => {
+    expect([...found.keys()].sort()).toEqual([]);
   });
 
   it('sets every section-size tab 13 px below md', () => {

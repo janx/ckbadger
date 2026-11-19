@@ -235,9 +235,14 @@ export const addressTransactionsFixture: AddressTransaction[] = [
     scriptLabels: ['Spore'],
   },
 ];
+/**
+ * A page of an address list as the API sends it. Re-pinned (lane c2-chain): its `limit` is the
+ * twenty the address page asks for, which the API states back, since the pager reads its page size
+ * from the response (lib/pagination.ts); it said 50, a size the page never asks.
+ */
 export const pageFixture = <T>(data: T[], total?: number) => ({
   data,
-  limit: 50,
+  limit: 20,
   hasMore: false,
   nextCursor: null,
   ...(total === undefined ? {} : { total }),

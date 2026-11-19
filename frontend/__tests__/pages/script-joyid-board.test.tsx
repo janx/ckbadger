@@ -13,6 +13,7 @@ import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/y-ticks';
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
+import { getCapacityRangeParams } from '@/lib/capacity-range';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -300,6 +301,25 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
   });
 
+  // Lane c2-chain, written before the cells' pager became the library's Pager: what it does,
+  // whatever draws it — the next page asks for the family's cells after the last one shown, five
+  // a page, and the previous one comes back to the first; the page is counted of the family's
+  // live cells (161,049 at five a page: 32,210 pages).
+  it('pages its cells forward from a cursor and back to the first page', async () => {
+    await renderJoyid();
+    const cells = document.getElementById('its-cells')!;
+    expect(within(cells).getByText(/^page 1 of 32,210$/i)).toBeInTheDocument();
+    fireEvent.click(within(cells).getByRole('button', { name: /^next( →)?$/i }));
+    await waitFor(() =>
+      expect(api.getCellsByScriptRef).toHaveBeenLastCalledWith(
+        expect.objectContaining({ scriptKind: 'lock', limit: 5, cursor: expect.any(String) })
+      )
+    );
+    expect(await within(cells).findByText(/^page 2 of 32,210$/i)).toBeInTheDocument();
+    fireEvent.click(within(cells).getByRole('button', { name: /^(previous|← prev)$/i }));
+    expect(await within(cells).findByText(/^page 1 of 32,210$/i)).toBeInTheDocument();
+  });
+
   // Table-rows L1-5: the registered references are "The script" facts, one list per reference.
   it('keeps registered references in the developer tier (SC-S9, L1-5)', async () => {
     await renderJoyid();
@@ -484,12 +504,20 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const row = h1.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();
-    const range = within(row).getByRole('group', { name: 'Range' });
-    const all = within(range).getByRole('button', { name: 'ALL' });
-    expect(all).toHaveAttribute('aria-pressed', 'true');
-    // A pressed range stays neutral (R11; D3 call 8): no jade text in tier 1.
-    expect(all).toHaveClass('text-text-bright');
-    expect(all.className).not.toMatch(/jade/);
+    // Re-pinned on purpose (lane c2-chain, the controls board): the range is the library's
+    // RangeSelect, a radio group whose spans are written `30 d · 90 d · 1 y · all` (it was a group
+    // of pressed buttons, "30D 90D 1Y ALL"); the chosen span is the board's one selected state, the
+    // celadon line around the bright ink, so still no jade text in tier 1 (R11; D3 call 8).
+    const range = within(row).getByRole('radiogroup', { name: 'range' });
+    expect(
+      within(range)
+        .getAllByRole('radio')
+        .map((r) => r.textContent)
+    ).toEqual(['30 d', '90 d', '1 y', 'all']);
+    const all = within(range).getByRole('radio', { name: 'all' });
+    expect(all).toHaveAttribute('aria-checked', 'true');
+    expect(all).toHaveClass('text-text-bright', 'border-jade');
+    expect(all.className).not.toMatch(/text-jade/);
     const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
     expect(lede).toHaveTextContent(
       /^An universal Account Protocol for Web3 Mass-adoption · joy\.id ↗$/
@@ -511,7 +539,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   it('puts the range buttons in the chart’s caption row below md, not in the title row (PA-18)', async () => {
     stubViewportFromMd(false);
     await renderJoyid();
-    const groups = within(hero()).getAllByRole('group', { name: 'Range' });
+    // re-pinned (lane c2-chain): the range is the library's radio group
+    const groups = within(hero()).getAllByRole('radiogroup', { name: 'range' });
     expect(groups).toHaveLength(1);
     const [range] = groups;
     const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
@@ -523,9 +552,9 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(caption.children).toHaveLength(1);
     expect(follows(hero().querySelector('[data-role="figure"]')!, caption)).toBe(true);
     // still the page's range: it draws the picture again
-    fireEvent.click(within(range).getByRole('button', { name: '90D' }));
-    expect(within(range).getByRole('button', { name: '90D' })).toHaveAttribute(
-      'aria-pressed',
+    fireEvent.click(within(range).getByRole('radio', { name: '90 d' }));
+    expect(within(range).getByRole('radio', { name: '90 d' })).toHaveAttribute(
+      'aria-checked',
       'true'
     );
   });
@@ -617,7 +646,7 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     fireEvent.keyDown(main, { key: 'ArrowLeft' });
     expect(reading).not.toHaveTextContent('last full day');
     expect(reading).not.toHaveTextContent('2026-10-29');
-    fireEvent.click(within(hero()).getByRole('button', { name: '90D' }));
+    fireEvent.click(within(hero()).getByRole('radio', { name: '90 d' }));
     // The picture and its reading are drawn again for the new range.
     await waitFor(() =>
       expect(factsOf(screen.getByTestId('script-history-reading'))[0]).toEqual([
@@ -625,6 +654,24 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
         '2026-10-29 · last full day',
       ])
     );
+  });
+
+  // Lane c2-chain, written before the range became the library's RangeSelect: what the range does,
+  // whatever draws it — the page opens on every day, and a span asks the API for its days.
+  it('opens on every day and asks the API for the chosen span’s days', async () => {
+    await renderJoyid();
+    expect(api.getScriptCapacityChart).toHaveBeenLastCalledWith('JoyID', undefined);
+    for (const [span, key] of [
+      [/^90 ?d$/i, '90d'],
+      [/^30 ?d$/i, '30d'],
+    ] as const) {
+      const days = getCapacityRangeParams(key);
+      expect(days).toBeDefined();
+      fireEvent.click(within(hero()).getByText(span));
+      await waitFor(() =>
+        expect(api.getScriptCapacityChart).toHaveBeenLastCalledWith('JoyID', days)
+      );
+    }
   });
 
   it('moves the summary sentence, the chart notes and the peak to tier 2 (C2)', async () => {
@@ -722,9 +769,15 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
     const accents = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="accent"]')];
     expect(accents.map((el) => el.textContent)).toEqual(['live · current']);
+    // re-pinned on purpose (lane c2-chain): the cells' pager is the library's, whose way to go is
+    // celadon on every page (the controls board; ui-color-guidelines' pager row), a control's
+    // part and not coloured text; it was a boxed button in the reading ink
+    const pager = screen.getByRole('navigation', { name: 'cells' });
+    expect(within(pager).getByRole('button', { name: 'next →' })).toHaveClass('text-jade');
     const coloured = [...tier1().querySelectorAll('[class]')].filter(
       (el) =>
         !el.matches('[data-row-tag="accent"]') &&
+        !pager.contains(el) &&
         el
           .getAttribute('class')!
           .split(/\s+/)

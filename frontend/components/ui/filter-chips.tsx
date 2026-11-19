@@ -14,6 +14,11 @@ export interface FilterValue<K extends string> extends ChipRowItem {
   key: K;
   /** The palette colour of the square before its words (a kind's, a class's). */
   mark?: PaletteKey;
+  /**
+   * What its chip says on hover where its count is not exact and so drawn as no number (the
+   * address page's activity kinds: a filtered page tells 0, 1 or more than one).
+   */
+  title?: string;
 }
 
 interface FilterChipsProps<K extends string> {
@@ -109,6 +114,7 @@ export function FilterChips<K extends string>({
             aria-checked={checked}
             tabIndex={checked ? 0 : -1}
             onClick={() => onChange(v.key)}
+            title={v.title}
             className={chipClass(checked, v.count === 0)}
           >
             {v.mark && (
