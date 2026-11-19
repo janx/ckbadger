@@ -37,9 +37,12 @@ describe('the rules in globals.css', () => {
     );
   });
 
+  // Re-pinned on purpose (lane c2-links, the ruling on a link inside a line's underline): the rule
+  // carries `text-decoration-color: currentColor` between the colour and the glow, so a muted
+  // underline follows its words into the celadon; the colour and the glow are as they were.
   it('move 1c: a hovered link turns jade and glows; SVG links keep their own hover', () => {
     expect(css).toMatch(
-      /\na:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
+      /\na:hover\s*\{\s*color: var\(--c-jade\);\s*text-decoration-color: currentColor;\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
     );
     expect(css).toMatch(/svg a:hover\s*\{\s*color: inherit;\s*text-shadow: none;/);
     expect(css).toMatch(/\.hover-lit:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px/);
