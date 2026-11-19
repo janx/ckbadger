@@ -2,6 +2,7 @@
 // F2 group `objects` (round 2): the pieces of the Object / m-NFT board heroes — one "Live" style
 // for both pages (OB-15), the composition badge with its one plain sentence (OB-6, OB-M4), the
 // readable traits linked to their genes (OB-5/6), and the life summary sentence (OB-6, OB-M5).
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import type { ItemCellVersion } from '@/lib/api';
 import { cellLockSentence, cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { PartReadError, readPart } from '@/components/read-failure';
@@ -79,6 +80,12 @@ export function ObjectTraits({
 }) {
   const shown = traits.filter((t) => isReadableTrait(t.name, t.value));
   if (!shown.length) return null;
+  // Lane P2's third round (item 4): a value follows its label at one gap (12 px), left-aligned,
+  // the label column as wide as the grid's longest label at the line's 14 px, with the swatch's
+  // 8 px and its 8 px margin (it stood at the row's right edge, 600 px from its label at 1280)
+  const labelColumn = columnPx(
+    textPx(Math.max(...shown.map((t) => t.name.length)), fontPx('body')) + 16
+  );
   return (
     <div className="space-y-2">
       <dl aria-label="Traits" className="grid gap-x-7 sm:grid-cols-2">
@@ -97,9 +104,10 @@ export function ObjectTraits({
               onFocus={() => onActive(t.name)}
               onBlur={() => onActive(null)}
               className={cn(
-                'border-row-rule flex min-w-0 justify-between gap-3 border-b py-2 transition-colors',
+                'border-row-rule grid min-w-0 items-baseline gap-x-3 border-b py-2 transition-colors',
                 lit && 'bg-base-surface'
               )}
+              style={{ gridTemplateColumns: `${labelColumn}px minmax(0, 1fr)` }}
             >
               <dt className="text-text-dim flex items-center">
                 <span
@@ -111,7 +119,7 @@ export function ObjectTraits({
               </dt>
               <dd
                 className={cn(
-                  'min-w-0 text-right [overflow-wrap:anywhere]',
+                  'min-w-0 [overflow-wrap:anywhere]',
                   value === 'empty' ? 'text-text-dim' : 'text-text-bright'
                 )}
                 style={lit && value !== 'empty' ? { color } : undefined}

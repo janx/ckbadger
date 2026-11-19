@@ -1,5 +1,6 @@
 'use client';
 
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { useQuery } from '@tanstack/react-query';
 import { api, isNotFoundApiError, type ItemCellVersion } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
@@ -245,9 +246,9 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             {/* Lane P2's third round (item 8): plain words a reader who does not know the m-NFT
                 script can read; the script's own terms (its state byte, claimed, locked) stand
                 once, in the evidence tier's permissions */}
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
+            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
               <dt className="text-text-dim">Number</dt>
-              <dd className="text-text-bright text-right">
+              <dd className="text-text-bright">
                 #<AssetCount value={item.tokenIndex} />{' '}
                 <span className="text-text-dim">
                   of <AssetCount value={item.class.issued} /> issued ·{' '}
@@ -255,22 +256,22 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               </dd>
             </div>
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
+            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
               <dt className="text-text-dim">Transfer</dt>
-              <dd className="text-text-bright text-right">{transferWords(item)}</dd>
+              <dd className="text-text-bright">{transferWords(item)}</dd>
             </div>
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
+            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
               <dt className="text-text-dim">Issuer</dt>
-              <dd className="text-text-bright text-right">
+              <dd className="text-text-bright">
                 {item.issuer.name ?? 'Unnamed issuer'}{' '}
                 <span className="text-text-dim">
                   · <AssetCount value={item.issuer.classCount} /> classes
                 </span>
               </dd>
             </div>
-            <div className="border-row-rule flex justify-between gap-3 border-b py-2">
+            <div className={PROPERTY_ROW} style={PROPERTY_COLUMNS}>
               <dt className="text-text-dim">Characteristic</dt>
-              <dd className="text-text-bright min-w-0 text-right [overflow-wrap:anywhere]">
+              <dd className="text-text-bright min-w-0 [overflow-wrap:anywhere]">
                 {characteristic.every((b) => b === '00') ? (
                   <>
                     none, all zero ·{' '}
@@ -599,3 +600,13 @@ function transferWords(item: {
       : 'not allowed by its class';
   return `${transfer} · ${item.claimed ? 'claimed by its holder' : 'not claimed yet'}`;
 }
+
+/**
+ * A property row (lane P2's third round, item 4): its value at one gap (12 px) after its label,
+ * left-aligned, the label column as wide as the longest label, "Characteristic", 14 characters at
+ * the line's 14 px, 117.6 px, 118 (the value stood at the row's right edge).
+ */
+const PROPERTY_ROW = 'border-row-rule grid min-w-0 items-baseline gap-x-3 border-b py-2';
+const PROPERTY_COLUMNS = {
+  gridTemplateColumns: `${columnPx(textPx('Characteristic'.length, fontPx('body')))}px minmax(0, 1fr)`,
+};

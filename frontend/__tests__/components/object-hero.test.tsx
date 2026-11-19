@@ -283,3 +283,28 @@ it('lists a DOB/1 object’s stored outputs with bytes and sha256, its drawn pic
     expect.stringMatching(new RegExp(`/spore/objects/${DOB1_SVG_ID}/render$`))
   );
 });
+
+// Lane P2's third round (item 4): a label and its value are read together. A trait's value
+// stood at its row's right edge, "relief" at the left of a 780 px cell and "NERVAPE 3X" 600 px
+// away at 1280; it follows its label at one gap (12 px), left-aligned, the label column as wide as
+// the grid's longest label: Nervape 3x's readable traits are relief, Color, Serial and Note, the
+// longest six characters at the page's 14 px (8.4 px a glyph), 50.4 px, and the swatch's 8 and its
+// 8 px margin, 66.4: 67 px.
+it('sets each trait’s value at one gap after its label, the label column the longest label', () => {
+  render(
+    <ObjectTraits
+      traits={nervape3xGenetics.cachedVmTraits.traits}
+      colors={new Map()}
+      active={null}
+      onActive={() => {}}
+    />
+  );
+  const rows = [...document.querySelectorAll<HTMLElement>('[data-trait]')];
+  expect(rows.map((r) => r.dataset.trait)).toEqual(['relief', 'Color', 'Serial', 'Note']);
+  for (const row of rows) {
+    expect(row).not.toHaveClass('justify-between');
+    expect(row.style.gridTemplateColumns).toBe('67px minmax(0, 1fr)');
+    expect(row).toHaveClass('gap-x-3');
+    expect(row.querySelector('dd')).not.toHaveClass('text-right');
+  }
+});

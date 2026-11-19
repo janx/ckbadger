@@ -51,4 +51,11 @@ it('uses official configure permissions and keeps locked state independent', () 
   expect(panel).toHaveTextContent('Destroy before claimForbidden');
   expect(panel).toHaveTextContent('Transfer after claimAllowed');
   expect(panel).toHaveTextContent('locked state prevents transfer');
+  // lane P2's third round (item 4): each permission's word at one gap after its name, left-aligned,
+  // the name column the longest name's, "Update characteristic", 21 characters at the meta step's
+  // 12 px (7.2 px a glyph): 151.2, 152 px
+  for (const row of panel.querySelectorAll<HTMLElement>('dl > div')) {
+    expect(row).not.toHaveClass('justify-between');
+    expect(row.style.gridTemplateColumns).toBe('152px minmax(0, 1fr)');
+  }
 });

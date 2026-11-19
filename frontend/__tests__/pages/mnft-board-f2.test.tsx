@@ -192,6 +192,14 @@ describe('Mnft board (F2 objects)', () => {
     ]);
     expect(props).toHaveTextContent('#99 of 200 issued · 1,500 planned');
     expect(props).toHaveTextContent('not allowed, the token is locked · claimed by its holder');
+    // lane P2's third round (item 4): each value at one gap (12 px) after its label, left-aligned,
+    // the label column the longest label's, "Characteristic", 14 characters at the page's 14 px
+    // (8.4 px a glyph): 117.6, 118 px
+    for (const row of props.querySelectorAll<HTMLElement>(':scope > div')) {
+      expect(row).not.toHaveClass('justify-between');
+      expect(row.style.gridTemplateColumns).toBe('118px minmax(0, 1fr)');
+      expect(row.querySelector('dd')).not.toHaveClass('text-right');
+    }
     expect(props).not.toHaveTextContent(/0x0\d|unclaimed|unlocked/);
     expect(screen.getByRole('region', { name: 'mNFT permissions' })).toHaveTextContent(
       /State 0x\d\d · claimed · locked/
