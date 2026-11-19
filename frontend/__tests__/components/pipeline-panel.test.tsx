@@ -2943,6 +2943,15 @@ describe('PipelinePanel interactions', () => {
     tap(svg, { clientX: (q?.x as number) + 3, clientY: (q?.y as number) + 3 });
     expect(screen.getByTestId('pipeline-selection')).toHaveTextContent('Selected');
     expect(screen.queryByTestId('pipeline-legend')).toBeNull();
+    // BRIEF-ink-size-roles item 2: the readout's link and the pinned item's facts are a link's
+    // words and values, 13 px (the line was 12 px); its eyebrow and its tag are labels, 12 px
+    const line = screen.getByTestId('pipeline-selection');
+    expect(line).toHaveClass('text-small');
+    expect(line).not.toHaveClass('text-meta');
+    expect(within(line).getByRole('link', { name: 'open tx ↗' }).className).not.toMatch(
+      /text-meta/
+    );
+    expect(within(line).getByText('Selected')).toHaveClass('text-meta');
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
     expect(usePipelineHoverStore.getState().pinned).toBeNull();

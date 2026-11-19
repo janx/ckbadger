@@ -342,13 +342,15 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   chain: 3,
   assets: 13,
   // lists 6 → 5 (the inventory's totals line at 13 px)
-  lists: 5,
+  // lists 5 → 4 (the pipeline's pinned readout at 13 px)
+  lists: 4,
   topics: 2,
   charts: 1,
   shared: 3,
 };
 // 18 → 17 (the inventory's totals line at 13 px)
-const TOLERATED_FILES = 17;
+// 17 → 16 (the pipeline's pinned readout at 13 px)
+const TOLERATED_FILES = 16;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -412,11 +414,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: `the blocks list's miner and reward links at 12 px and a 12 px cell; ${WORK}`,
   },
   // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles item 2, 588cd09a:\n  // link 1 → 0): the totals line is a sentence at 13 px, its block link with it
-  'components/pipeline/pipeline-panel.tsx': {
-    family: 'lists',
-    sites: { link: 1 },
-    reason: `the pipeline's pinned readout link in a 12 px line; ${WORK}`,
-  },
+  // 'components/pipeline/pipeline-panel.tsx' left the list (BRIEF-ink-size-roles item 2: link 1 →\n  // 0): the pinned readout's link and values read at 13 px; its eyebrow and tag stay 12 px, labels
   // ---- topics ----
   'components/dao/dao-board.tsx': {
     family: 'topics',

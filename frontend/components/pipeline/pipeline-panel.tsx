@@ -932,7 +932,10 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
     <div
       data-testid="pipeline-selection"
       aria-live="polite"
-      className={`${FOOTER_ROW} text-text text-meta gap-x-3`}
+      // the pinned item's id and facts are values and "open tx ↗" a link's words: 13 px; the
+      // eyebrow "Selected" and the kind's tag are labels and stay 12 px (BRIEF-ink-size-roles
+      // item 2: the line was 12 px). The line's 24 px floor holds a 13 px line (19.5).
+      className={`${FOOTER_ROW} text-text text-small gap-x-3`}
     >
       <span className="eyebrow text-text-dim text-meta">Selected</span>
       <span className="text-text-bright">
