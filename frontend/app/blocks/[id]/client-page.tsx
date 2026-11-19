@@ -66,24 +66,26 @@ export default function BlockDetailPage() {
   const { data: block, error } = read;
   const transactions = useQuery({
     queryKey: ['block-transactions', id, block?.number, pagination.cursor, pageSize],
-    queryFn: () =>
+    queryFn: pagination.ask((cursor) =>
       api.getTransactions({
         blockNumber: block!.number,
         limit: pageSize,
-        ...(pagination.cursor ? { cursor: pagination.cursor } : {}),
-      }),
+        ...(cursor ? { cursor } : {}),
+      })
+    ),
     enabled: !!block,
   });
   const activities = useQuery({
     queryKey: ['block-activities', block?.number, activityPagination.cursor, pageSize],
-    queryFn: () =>
+    queryFn: activityPagination.ask((cursor) =>
       api.getGlobalActivities({
         blockNumber: block!.number,
         limit: pageSize,
-        cursor: activityPagination.cursor,
+        cursor,
         // R2b-a 3 (BA-14): the block in tx order, cellbase first, paged forward by the API.
         order: 'asc',
-      }),
+      })
+    ),
     enabled: !!block,
   });
   const { data: proposals, error: proposalsError } = useQuery({
@@ -228,9 +230,9 @@ export default function BlockDetailPage() {
   // a page's own response counts its rows (lane c2-finish, 1c: the block's transaction count is
   // another read, at its own tip; the tab heading states it).
   const activitiesAt =
-    activities.data && rankedPageAt('activities', activityPagination.page, activities.data);
+    activities.data && rankedPageAt('activities', activities.data, activityPagination);
   const transactionsAt =
-    transactions.data && rankedPageAt('transactions', pagination.page, transactions.data);
+    transactions.data && rankedPageAt('transactions', transactions.data, pagination);
   const parentElapsedMs =
     block.parentTimestamp === null
       ? null
@@ -759,13 +761,7 @@ export default function BlockDetailPage() {
                           <p className="text-text-dim text-small">No activities in this block.</p>
                         )}
                         {activitiesAt && (
-                          <Pager
-                            mode="pages"
-                            label="activities"
-                            {...activitiesAt}
-                            onPrevious={activityPagination.goToPrevious}
-                            onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
-                          />
+                          <Pager mode="pages" label="activities" {...activitiesAt} />
                         )}
                       </>
                     )}
@@ -785,13 +781,7 @@ export default function BlockDetailPage() {
                           blockNumber={block.number}
                         />
                         {transactionsAt && (
-                          <Pager
-                            mode="pages"
-                            label="transactions"
-                            {...transactionsAt}
-                            onPrevious={pagination.goToPrevious}
-                            onNext={() => pagination.goToNext(transactions.data.nextCursor)}
-                          />
+                          <Pager mode="pages" label="transactions" {...transactionsAt} />
                         )}
                       </>
                     )}

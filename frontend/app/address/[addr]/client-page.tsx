@@ -147,8 +147,16 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     staleTime: 60000,
     refetchInterval: 60000,
   });
+  // the list's page is asked by its walk (lane cd-fixes-controls, item 1: the page a response was
+  // asked for travels with it), so it keeps a cache entry of its own beside the count's
   const activities = useQuery({
-    ...activityPageQuery(lockHash, activityPage.cursor, filter, pageSize),
+    queryKey: [
+      ...activityPageQuery(lockHash, activityPage.cursor, filter, pageSize).queryKey,
+      'page',
+    ],
+    queryFn: activityPage.ask((cursor) =>
+      api.getAddressActivities(lockHash!, { limit: pageSize, cursor, filter })
+    ),
     enabled: !!lockHash && tab === 'activities',
     placeholderData: keepPreviousData,
     refetchInterval: poolRefetchInterval({
@@ -174,8 +182,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   });
   const transactions = useQuery({
     queryKey: ['address-transactions', lockHash, txPage.cursor, pageSize],
-    queryFn: () =>
-      api.getAddressTransactions(lockHash!, { limit: pageSize, cursor: txPage.cursor }),
+    queryFn: txPage.ask((cursor) =>
+      api.getAddressTransactions(lockHash!, { limit: pageSize, cursor })
+    ),
     enabled: !!lockHash && tab === 'transactions',
     placeholderData: keepPreviousData,
     refetchInterval: poolRefetchInterval({
@@ -185,12 +194,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   });
   const cells = useQuery({
     queryKey: ['address-cells', lockHash, cellPage.cursor, cellClass, pageSize],
-    queryFn: () =>
+    queryFn: cellPage.ask((cursor) =>
       api.getAddressCells(lockHash!, {
         limit: pageSize,
-        cursor: cellPage.cursor,
+        cursor,
         class: cellClass,
-      }),
+      })
+    ),
     enabled: !!lockHash && tab === 'cells',
     placeholderData: keepPreviousData,
   });
@@ -474,6 +484,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       setFilter(value);
                       activityPage.reset();
                     }}
+                    counted
                     className="mt-3.5"
                   />
                 )}
@@ -496,6 +507,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       setCellClass(value === 'all' ? undefined : value);
                       cellPage.reset();
                     }}
+                    counted
                     className="mt-3.5"
                   />
                 )}
