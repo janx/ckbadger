@@ -223,7 +223,7 @@ export function ScriptGroupMatrix({
                   key={c.id}
                   data-column={c.id}
                   data-dimmed={dim(lit?.cells.has(c.id) ?? false)}
-                  tabIndex={0}
+                  tabIndex={onHover ? 0 : undefined}
                   onMouseEnter={() => onHover?.({ t: 'cell', id: c.id })}
                   onMouseLeave={() => onHover?.(null)}
                   onFocus={() => onHover?.({ t: 'cell', id: c.id })}
@@ -266,7 +266,7 @@ export function ScriptGroupMatrix({
             <div
               key={g.id}
               role="row"
-              tabIndex={0}
+              tabIndex={onHover ? 0 : undefined}
               data-group-row={g.id}
               data-lit={on}
               data-dimmed={dim(on)}
@@ -406,7 +406,7 @@ function GroupList({
         return (
           <li
             key={g.id}
-            tabIndex={0}
+            tabIndex={onHover ? 0 : undefined}
             data-group-row={g.id}
             data-ran={g.ran}
             data-lit={on}
