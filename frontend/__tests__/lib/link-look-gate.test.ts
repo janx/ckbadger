@@ -62,9 +62,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/blocks/[id]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 22, ink: 7, raw: 1 },
+    // look 22 → 20 (lane D2): the facts aside's two links went with it; the strip's state a look
+    sites: { look: 20, ink: 7, raw: 1 },
     reason:
-      '22 without a look; inks by hand (text-text-dim, text-text-bright, text-interactive); 1 raw <a>',
+      '20 without a look; inks by hand (text-text-dim, text-text-bright, text-interactive); 1 raw <a>',
   },
   'app/blocks/[id]/uncles/[index]/client-page.tsx': {
     lane: 'p-chain',
@@ -521,8 +522,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-// 610 → 609 (lane D2): the transaction page's facts rail and its block link went
-const TOLERATED_TOTAL = 609;
+// 610 → 607 (lane D2): the transaction page's facts rail and its block link went (1), the block
+// page's facts aside and its two links (2)
+const TOLERATED_TOTAL = 607;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

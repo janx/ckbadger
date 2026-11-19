@@ -622,16 +622,20 @@ describe('BlockDetailPage', () => {
         timestamp: new Date(T0 - 20_000).toISOString(),
       });
       const { unmount } = render(<BlockDetailPage />);
-      const facts = () => screen.queryByRole('complementary', { name: 'Block facts' });
+      // re-pinned on purpose (lane D2): the time is the status strip's fact, its age one unit of
+      // its own (Utc8Age), the interval to the parent another note after it (the aside wrote the
+      // age and the interval as one line, "20s ago · 10 s after its parent")
+      const facts = () => screen.queryByRole('group', { name: 'Block status' });
       await loadUnderStillClock(() => facts() !== null);
-      const age = () => within(facts()!).getByText(/ ago/).textContent;
-      expect(age()).toMatch(/^20s ago · /);
+      const age = () => within(facts()!).getByText(/ ago$/).textContent;
+      expect(age()).toBe('20s ago');
       tick(1000);
-      expect(age()).toMatch(/^21s ago · /);
+      expect(age()).toBe('21s ago');
       tick(38_000);
-      expect(age()).toMatch(/^59s ago · /);
+      expect(age()).toBe('59s ago');
       tick(1000);
-      expect(age()).toMatch(/^1m ago · /);
+      expect(age()).toBe('1m ago');
+      expect(facts()).toHaveTextContent(/1m ago · [\d,.]+ s after its parent/);
       unmount();
       expect(vi.getTimerCount()).toBe(0);
     } finally {

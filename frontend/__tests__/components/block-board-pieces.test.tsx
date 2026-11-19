@@ -19,7 +19,7 @@ import { scriptLabel } from '@/components/address/address-history';
 import type { Transaction } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { cellFaults } from '@/__tests__/utils/list-table-cells';
-import { containerContentPx, gapPx, SCREENS } from '@/__tests__/utils/tailwind-box';
+import { containerContentPx, SCREENS } from '@/__tests__/utils/tailwind-box';
 
 const rewardBlock = {
   number: 20_827_932,
@@ -43,28 +43,23 @@ const wrap = (ui: React.ReactElement) => render(<MemoryRouter>{ui}</MemoryRouter
 
 /**
  * The block page's main column at a window (review fb-tests NOTE-3: read from the page, not a
- * literal): app/blocks/[id]/client-page.tsx sets the transactions in the first track of
- * `grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]`, in `main.container`, with no inset
- * between (DetailLayout's tier-1 wrapper and the track's `min-w-0` div add none): from lg the
- * container's content width less the 240 px aside and the grid's gap.
+ * literal). Re-pinned on purpose (lane D2, PA-13): the facts aside that stood beside the block's
+ * contents became the head's status strip, so app/blocks/[id]/client-page.tsx sets the
+ * transactions in tier 1's one column, in `main.container`, with no grid track, no aside and no
+ * inset between (DetailLayout's tier-1 wrapper and the contents' `min-w-0` div add none): the
+ * container's content width. (It read the first track of `grid min-w-0 gap-10
+ * lg:grid-cols-[minmax(0,1fr)_240px]`: the content width less the 240 px aside and the 40 px gap.)
  */
 function blockPageColumn(window: number): number {
   const page = readFileSync(resolve(__dirname, '../../app/blocks/[id]/client-page.tsx'), 'utf8');
-  const grid = 'grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]';
-  const at = page.indexOf(`<div className="${grid}">`);
-  expect(at, 'the block page’s grid').toBeGreaterThan(-1);
-  expect(page.indexOf(`<div className="${grid}">`, at + 1)).toBe(-1);
-  // its first track: a `min-w-0` div, which holds the transactions table
-  expect(
-    page.slice(at).match(/^<div className="[^"]+">\s*<div className="min-w-0">/)
-  ).not.toBeNull();
-  expect(page.indexOf('<BlockTransactionsTable', at)).toBeGreaterThan(at);
-  expect(page.indexOf('<aside', at)).toBeGreaterThan(page.indexOf('<BlockTransactionsTable', at));
+  expect(page, 'no grid track beside the block’s contents').not.toMatch(
+    /lg:grid-cols-\[[^\]]*px\]/
+  );
+  expect(page.indexOf('<aside'), 'no aside beside the block’s contents').toBe(-1);
+  const table = page.indexOf('<BlockTransactionsTable');
+  expect(table, 'the transactions table').toBeGreaterThan(-1);
   expect(SCREENS.find(([name]) => name === 'lg')![1]).toBeLessThanOrEqual(window);
-  const el = document.createElement('div');
-  el.className = grid;
-  const aside = Number(/_(\d+)px\]$/.exec(grid)![1]);
-  return containerContentPx(window) - aside - gapPx(el, window);
+  return containerContentPx(window);
 }
 
 describe('RewardBreakdown', () => {
@@ -196,7 +191,10 @@ describe('BlockTransactionsTable', () => {
   // Re-pinned on purpose (review fb-tests NOTE-3, the lead's ruling tN3): the main column is read
   // from the page's classes (`blockPageColumn`), 952 px; the literal 968 was 1,248 − 240 − 40, the
   // container before its gutter became 24 px from lg (renamed: "its rows at the 968 px column").
-  it('budgets every column from what it holds: 1,094 px, its rows at the page’s main column', () => {
+  // Re-pinned on purpose (lane D2; renamed, it was "…, its rows at the page’s main column"): the
+  // facts aside went to the head's status strip, so the main column is the page's 1,232 px at
+  // 1280 and the table is a table there.
+  it('budgets every column from what it holds: 1,094 px, a table in the page’s main column', () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5; // 0.6 em, as textPx
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
@@ -249,7 +247,7 @@ describe('BlockTransactionsTable', () => {
       [1232, 'table'],
       [1094, 'table'],
       [1093, 'rows'],
-      [blockPageColumn(1280), 'rows'],
+      [blockPageColumn(1280), 'table'],
     ] as const) {
       atContainerWidth(width);
       const { container, unmount: drop } = wrap(
@@ -275,22 +273,23 @@ describe('BlockTransactionsTable', () => {
   // Re-pinned on purpose (review fb-tests NOTE-3, the lead's ruling tN3): the column was a literal,
   // 968, so a fix on the page's side could not fail the entry; it is read from the page's classes
   // now, 952 px (1,232 − 240 − 40), and the shortfall is 142 (it was 126 against the literal).
+  // Lane D2: the known fault is fixed and its entry removed (the list only shrinks: 1 → 0). The
+  // facts aside became the head's status strip (PA-13), so the page gives the table its full
+  // 1,232 px at 1440 and 1280, 138 px more than its 1,094.
   const BLOCK_PAGE_COLUMN = [1440, 1280].map((window) => ({
     window,
     column: blockPageColumn(window),
   }));
-  const KNOWN_FAULTS = [
-    {
-      case: 'the block page’s transactions table in its 952 px main column, at 1440 and 1280',
-      column: 952,
-      shortfall: 142,
-      lane: 'P1 (the chain pages)',
-      why: 'every column holds what it holds (1,094 px: the bar heads in the tick form on 48 px tracks, no spare, the hash alone at the row size, 13,568 inputs); the page gives the table its main column, the 1,232 px container less the 240 px facts aside and the 40 px gap between (1,094 − 952 = 142), and whether it gives it the full 1,232 is the page’s layout, the chain page lane’s; the lead ruled the table is not re-budgeted to fit',
-    },
-  ] as const;
+  const KNOWN_FAULTS: readonly {
+    case: string;
+    column: number;
+    shortfall: number;
+    lane: string;
+    why: string;
+  }[] = [];
   it('fits the block page’s main column at 1440 and 1280, but for its pinned known fault', () => {
-    expect(KNOWN_FAULTS).toHaveLength(1);
-    expect(BLOCK_PAGE_COLUMN.map((c) => c.column)).toEqual([952, 952]);
+    expect(KNOWN_FAULTS).toHaveLength(0);
+    expect(BLOCK_PAGE_COLUMN.map((c) => c.column)).toEqual([1232, 1232]);
     for (const { column } of BLOCK_PAGE_COLUMN) {
       atContainerWidth(column);
       const { container, unmount } = wrap(
