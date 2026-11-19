@@ -144,7 +144,9 @@ describe('DAO depositors page (DAO-12)', () => {
     const depositor = within(table).getByRole('link', { name: 'ckb1…gssd2hqn' });
     expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const [rank, , deposits, capacity, share] = Array.from(table.querySelectorAll('tbody td'));
-    expect(rank.firstElementChild).toHaveClass('text-text-dim');
+    // re-pinned on purpose (the P3 follow-up's 2d, the ink-role gate): a rank is a value, the
+    // reading ink (it was the quiet ink)
+    expect(rank.firstElementChild).toHaveClass('text-text');
     // R7: the share is a bar on the page's scale with its number beside it, the number dim.
     expect(share.querySelector('[data-aligned-bar]')).not.toBeNull();
     expect(within(share as HTMLElement).getByText('1.00%')).toHaveClass('text-text-dim');

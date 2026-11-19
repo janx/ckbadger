@@ -87,9 +87,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'chain',
     // td 5 → 4 (readability F3-e): the 608 px table's age is the first line of its "Age · txs" cell
     // link 3 → 1 (lane P3): the hardfork links read in their line's ink, the inline look's
-    sites: { link: 1, td: 4, prose: 2 },
+    // link 1 → 0, td 4 → 1, prose 2 → 1 (the P3 follow-up's 2d, each decided): a block's age, its
+    // reward's finality line with its block link, and the compact table's size and cycles are
+    // values, and the error line a statement, all in the reading ink
+    sites: { td: 1, prose: 1 },
     reason:
-      'ages, reward-finality heights, cycles states and HF links quiet in table cells and rows; the loading and error lines',
+      'decided (the P3 follow-up): the wide table’s cycles state for a block not run yet or a failed replay, an empty value; the loading line',
   },
   'app/cell/[outpoint]/client-page.tsx': {
     family: 'chain',
@@ -168,8 +171,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'components/home/ckbytes-section.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason:
-      'the CKBytes formula under the figure (a note under a figure, or a reading: P1 decides)',
+    reason: 'decided (the P3 follow-up): the CKBytes formula, a note under the figure',
   },
   // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
   // link is its key, the key look's ink)
@@ -320,15 +322,16 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- lists ----
   'app/activities/page.tsx': {
     family: 'lists',
-    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink
-    sites: { prose: 2 },
-    reason: 'the statistics error and empty sentences in the quiet ink',
+    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink; prose 2 → 1
+    // (the P3 follow-up's 2d): the statistics error is a statement, the reading ink
+    sites: { prose: 1 },
+    reason: 'decided (the P3 follow-up): the empty line, no complete statistics for yesterday',
   },
   'app/inventory/inventory-page-client.tsx': {
     family: 'lists',
     // link 1 → 0 (controls lane C2): the class links are the controls board's tab row
     sites: { prose: 1 },
-    reason: 'the loading line in the quiet ink',
+    reason: 'decided (the P3 follow-up): the loading line',
   },
   'app/scripts/[name]/client-page.tsx': {
     family: 'lists',
@@ -344,14 +347,19 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
     // reading ink, one of them new; the yesterday line is the lede, in the reading ink; prose 9 → 8
     // (the P3 follow-up's 2b): "No complete transaction count for …" went with the page's
-    // subtraction (the day's user transactions are its activity row's, the route's count)
-    sites: { td: 2, prose: 8 },
-    reason: 'interpretation states in table cells; the statistics, pool and list notes and states',
+    // subtraction (the day's user transactions are its activity row's, the route's count); prose
+    // 8 → 4 (the P3 follow-up's 2d): the three error lines and the truncated pool's line are
+    // statements, the reading ink
+    sites: { td: 2, prose: 4 },
+    reason:
+      'decided (the P3 follow-up): the pool’s two interpretation states (unavailable, partial) for an empty value in table cells; the empty line (no complete statistics), the note under the kind chips and the two loading lines',
   },
   'components/activities-stream-explorer.tsx': {
     family: 'lists',
-    sites: { prose: 5 },
-    reason: 'the period note, the reading, error and empty lines in the quiet ink',
+    // prose 5 → 4 (the P3 follow-up's 2d): the error's message is a statement, the reading ink
+    sites: { prose: 4 },
+    reason:
+      'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
   },
   'components/asset/inventory-summary.tsx': {
     family: 'lists',
@@ -397,11 +405,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // cellbase reward left with the cellbases' own list, the cycles state with the cycles column, the
   // cells count reads in the reading ink)
   // ---- topics ----
-  'app/dao/depositors/page.tsx': {
-    family: 'topics',
-    sites: { link: 2, td: 1, prose: 1 },
-    reason: "a depositor's rank in a table cell; the ranking-moved sentence and its block links",
-  },
+  // 'app/dao/depositors/page.tsx' left the list (the P3 follow-up's 2d: link 2, td 1, prose 1 → 0):
+  // a depositor's rank is a value and the ranking-moved sentence a statement, its block links in its
+  // line, all in the reading ink
   'app/fiber/channels/[id]/client-page.tsx': {
     family: 'topics',
     // link 1 → 0, prose 2 → 1 (lane P4): the breadcrumb's link and the channel id line read

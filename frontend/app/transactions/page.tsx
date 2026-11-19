@@ -571,7 +571,7 @@ export default function TransactionsPage() {
               )}
             </p>
             {dailyError && (
-              <p role="alert" className="text-text-dim text-small max-w-measure">
+              <p role="alert" className="text-text text-small max-w-measure">
                 Could not read yesterday’s statistics: {dailyError.message}
               </p>
             )}
@@ -616,7 +616,7 @@ export default function TransactionsPage() {
               </div>
             )}
             {poolHead.error ? (
-              <p role="alert" className="text-text-dim text-small max-w-measure">
+              <p role="alert" className="text-text text-small max-w-measure">
                 Could not read the pool: {poolHead.error.message}
               </p>
             ) : poolHead.data ? (
@@ -705,7 +705,7 @@ export default function TransactionsPage() {
                 </p>
               )}
               {active.error && (
-                <p role="alert" className="text-text-dim max-w-measure">
+                <p role="alert" className="text-text max-w-measure">
                   Unable to read transactions: {active.error.message}
                 </p>
               )}
@@ -789,7 +789,7 @@ export default function TransactionsPage() {
                     after its proposal.
                   </p>
                   {pool.data.truncated && (
-                    <p className="text-text-dim text-small">
+                    <p className="text-text text-small">
                       This node's tracked pool is truncated; more transactions may be present.
                     </p>
                   )}

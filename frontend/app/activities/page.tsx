@@ -49,7 +49,7 @@ export default function ActivitiesPage() {
               .
             </p>
           ) : error ? (
-            <p role="alert" className="text-text-dim text-small max-w-measure">
+            <p role="alert" className="text-text text-small max-w-measure">
               Could not load yesterday’s activity: {error.message}
             </p>
           ) : data ? (

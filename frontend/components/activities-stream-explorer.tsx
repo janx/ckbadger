@@ -586,7 +586,7 @@ export function ActivitiesStreamExplorer({
         ) : initialError ? (
           <div role="alert" className="text-small flex flex-col gap-1 py-4">
             <p className="text-text">Could not read activities</p>
-            <p className="text-text-dim max-w-measure break-words">
+            <p className="text-text max-w-measure break-words">
               {error instanceof Error ? error.message : String(error)}
             </p>
           </div>

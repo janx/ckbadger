@@ -104,7 +104,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
     label: '#',
     // A rank under a million, "999,999" (7 characters at 13 px, 54.6), and the gap. It was 56.
     minWidth: columnPx(textPx(WIDEST_RANK.length, fontPx('small')) + CELL_GAP_PX),
-    render: (d) => <span className="text-text-dim">{d.rank.toLocaleString('en-US')}</span>,
+    render: (d) => <span className="text-text">{d.rank.toLocaleString('en-US')}</span>,
   },
   {
     key: 'depositor',
@@ -230,10 +230,7 @@ export default function DaoDepositorsPage() {
           ) : (
             <>
               {moved && (
-                <p
-                  data-testid="ranking-moved"
-                  className="text-text-dim text-small max-w-measure mb-3"
-                >
+                <p data-testid="ranking-moved" className="text-text text-small max-w-measure mb-3">
                   The chain tip moved since the first page (ranked at block{' '}
                   <BlockLink look="inline" number={moved.from} />
                   ): this page continues the ranking at block{' '}
