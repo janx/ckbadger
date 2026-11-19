@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
-import { api, LabelCount } from '@/lib/api';
+import { api, LabelCount, type NetworkDistributions as Distributions } from '@/lib/api';
 import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
 import { color, fade, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
@@ -42,19 +42,29 @@ function useDistributions() {
   });
 }
 
-/** A client version's release: its label before the build in brackets, `0.210.0 (2592ddf …)`. */
-const releaseOf = (label: string) => label.split(' ')[0];
+/**
+ * A grouping the distributions route states for this page (lane exactness, part A, A5 iii); an API older than the
+ * page sends none, and the part says so in place.
+ */
+function grouping<K extends 'hosting' | 'releases'>(
+  data: Distributions,
+  field: K
+): Distributions[K] | string {
+  const value = (data as Partial<Distributions>)[field];
+  return value === undefined
+    ? `Network distributions send no ${field}: the API is older than this page.`
+    : (value as Distributions[K]);
+}
 
 /**
- * The shown rows with one group's rows together (P4 topics: one release's builds stood apart, by
- * count): the groups in the order of their largest row, each group's rows by count. A row's count
- * is the API's; no group is totalled (a release's total would be a sum made in the page).
+ * The shown rows with one release's builds together (P4 topics: one release's builds stood apart,
+ * by count), in the route's releases' order, the largest release first, each release's builds by
+ * count (lane exactness, part A, A5 iii: the release of a build is the route's, read from its `releases`). A
+ * row's count is the API's; the page totals nothing.
  */
-function grouped(rows: readonly LabelCount[], group: (label: string) => string): LabelCount[] {
-  const groups = new Map<string, LabelCount[]>();
-  for (const row of rows)
-    groups.set(group(row.label), [...(groups.get(group(row.label)) ?? []), row]);
-  return [...groups.values()].flat();
+function grouped(rows: readonly LabelCount[], releases: Distributions['releases']): LabelCount[] {
+  const shown = new Set(rows.map((row) => row.label));
+  return releases.flatMap((release) => release.builds.filter((build) => shown.has(build.label)));
 }
 
 /**
@@ -74,8 +84,8 @@ function Bars({
   attr: string;
   /** The list's name, for a screen reader. */
   label: string;
-  /** Rows of one group stand together (a release's builds). */
-  group?: (label: string) => string;
+  /** Rows of one release stand together (a release's builds): the route's releases. */
+  group?: Distributions['releases'];
 }) {
   const top = [...items].sort((a, b) => b.count - a.count).slice(0, TOP_N);
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
@@ -128,6 +138,13 @@ export function NetworkDistributions() {
         Failed to load distributions.
       </p>
     );
+  const releases = grouping(data, 'releases');
+  if (typeof releases === 'string')
+    return (
+      <p role="alert" className="text-negative text-small max-w-measure">
+        {releases}
+      </p>
+    );
   // Its scope ("reachable now or verified before") is said in tier 2 (R14: no note beside the h2).
   return (
     <TopicSection title="Which software they run" args={formatCount(data.verifiedRetained, 'node')}>
@@ -135,7 +152,7 @@ export function NetworkDistributions() {
         items={data.versions}
         attr="data-version-bar"
         label="Client versions"
-        group={releaseOf}
+        group={releases}
       />
     </TopicSection>
   );
@@ -155,14 +172,6 @@ export function NetworkProtocols() {
   return <Bars items={data.protocols} attr="data-protocol-bar" label="Protocols" />;
 }
 
-/** The organisation part of an ASN label "AS16509 Amazon.com" (the API's one label form). */
-function asnOrganisation(label: string): string {
-  if (label === 'Unknown') return label;
-  const match = /^AS\d+ (.+)$/.exec(label);
-  if (!match) throw new Error(`unexpected ASN label ${label}`);
-  return match[1];
-}
-
 /**
  * "Where they run": verified nodes by hosting organisation, so one provider's several ASNs read
  * as one (Amazon's AS16509 and AS14618) — the real centralisation risk (CH-52). Hierarchy v3: a
@@ -180,22 +189,19 @@ export function HostingBar() {
       </p>
     );
   if (data.verifiedRetained === 0) return null;
-  const byOrg = new Map<string, number>();
-  for (const asn of data.asns)
-    byOrg.set(asnOrganisation(asn.label), (byOrg.get(asnOrganisation(asn.label)) ?? 0) + asn.count);
-  const total = [...byOrg.values()].reduce((sum, count) => sum + count, 0);
-  if (total !== data.verifiedRetained)
+  // the organisations and their rest, the route's (lane exactness, part A, A5 iii: the page summed the ASNs by
+  // organisation and the rest); they make the verified nodes, which the route checks
+  const hosting = grouping(data, 'hosting');
+  if (typeof hosting === 'string')
     return (
       <p role="alert" className="text-negative text-small max-w-measure">
-        Hosting networks cover {unitNode(formatCount(total, 'peer'))}, not the{' '}
-        {data.verifiedRetained} verified.
+        {hosting}
       </p>
     );
-  const ranked = [...byOrg.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  const shown = ranked.slice(0, 5);
-  const rest = ranked.slice(5).reduce((sum, [, count]) => sum + count, 0);
-  const segments = rest > 0 ? [...shown, ['other networks', rest] as const] : shown;
-  const leader = ranked.find(([org]) => org !== 'Unknown');
+  const total = data.verifiedRetained;
+  const shown = hosting.organisations.map((org) => [org.label, org.count] as const);
+  const segments = hosting.rest > 0 ? [...shown, ['other networks', hosting.rest] as const] : shown;
+  const leader = shown.find(([org]) => org !== 'Unknown');
   const countries = data.countries.filter((country) => country.label !== 'Unknown').length;
   return (
     <HostingSection

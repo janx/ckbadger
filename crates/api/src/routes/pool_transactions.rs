@@ -53,6 +53,9 @@ pub struct PoolTotals {
     pub pending: usize,
     pub proposed: usize,
     pub awaiting_index: usize,
+    /// The transactions waiting in the pool, pending and proposed (lane exactness, part A, A4): the "in the pool"
+    /// tab's count (the page summed the two).
+    pub waiting: usize,
 }
 
 #[derive(Serialize)]
@@ -169,6 +172,7 @@ fn pool_transactions_page(
         pending: 0,
         proposed: 0,
         awaiting_index: 0,
+        waiting: 0,
     };
     let mut records = Vec::new();
     for record in snapshot.records.values() {
@@ -181,8 +185,14 @@ fn pool_transactions_page(
             continue;
         }
         match record.pool_status {
-            PoolStatus::Pending => totals.pending += 1,
-            PoolStatus::Proposed => totals.proposed += 1,
+            PoolStatus::Pending => {
+                totals.pending += 1;
+                totals.waiting += 1;
+            }
+            PoolStatus::Proposed => {
+                totals.proposed += 1;
+                totals.waiting += 1;
+            }
             PoolStatus::CommittedAwaitingIndex { .. } => totals.awaiting_index += 1,
         }
         if filter != "all" && filter != record.pool_status.as_str() {

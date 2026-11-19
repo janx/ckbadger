@@ -96,20 +96,23 @@ describe('orphanFateWords', () => {
 });
 
 describe('uncleRateFigure', () => {
-  it('reads the window’s exact uncle rate from the per-day counts against the 2.5% target', () => {
-    expect(
-      uncleRateFigure({
-        days: [{ date: '2026-10-20', canonicalBlocks: 279_561, uncles: 7_178, nodeSwitches: 0 }],
-        unclesInWindow: 7_178,
-      })
-    ).toEqual({ rate: '2.57%', percent: '2.57', uncles: 7_178, blocks: 279_561 });
-    expect(() =>
-      uncleRateFigure({
-        days: [{ date: '2026-10-20', canonicalBlocks: 10, uncles: 1, nodeSwitches: 0 }],
-        unclesInWindow: 2,
-      })
-    ).toThrow('days hold 1 uncles but the window says 2');
-    expect(uncleRateFigure({ days: [], unclesInWindow: 0 })).toBeNull();
+  // Re-pinned for lane exactness, part A (A5 i): the window's uncles and canonical blocks are the route's
+  // (unclesInWindow, canonicalBlocksInWindow); the page summed the days' blocks, and checked the
+  // days' uncles against the window's
+  it('reads the window’s exact uncle rate from the route’s window figures', () => {
+    expect(uncleRateFigure({ unclesInWindow: 7_178, canonicalBlocksInWindow: 279_561 })).toEqual({
+      rate: '2.57%',
+      percent: '2.57',
+      uncles: 7_178,
+      blocks: 279_561,
+    });
+    expect(() => uncleRateFigure({ unclesInWindow: 2, canonicalBlocksInWindow: 0 })).toThrow(
+      '2 uncles in a window with no blocks'
+    );
+    expect(uncleRateFigure({ unclesInWindow: 0, canonicalBlocksInWindow: 0 })).toBeNull();
+    expect(() => uncleRateFigure({ unclesInWindow: 0 } as never)).toThrow(
+      'Fork overview: the API sends no canonicalBlocksInWindow: it is older than this page'
+    );
   });
 });
 

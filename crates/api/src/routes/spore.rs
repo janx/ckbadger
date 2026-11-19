@@ -862,7 +862,7 @@ async fn get_cluster_holders(
     State(state): State<Arc<AppState>>,
     Path(cluster_id): Path<String>,
     Query(params): Query<ClusterHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<ClusterHolderResponse>> {
+) -> ApiResult<crate::response::RankedPage<ClusterHolderResponse>> {
     let id = parse_cluster_id_param(&cluster_id)?;
     let limit = params.limit.clamp(1, 100) as usize;
     let cursor = params
@@ -926,12 +926,11 @@ async fn get_cluster_holders(
         })
         .collect::<Result<_, crate::response::ApiRouteError>>()?;
 
-    ok(CursorPaginatedResponse::new(
-        response_rows,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(crate::response::RankedPage {
+        page: CursorPaginatedResponse::new(response_rows, total, limit as i64, next_cursor),
+        // the cursor's position in the ranking this request read, plus one (lane exactness, part A, A3)
+        first_rank: start_idx as u64 + 1,
+    })
 }
 
 async fn get_cluster_activities(

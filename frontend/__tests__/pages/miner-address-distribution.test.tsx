@@ -21,6 +21,7 @@ describe('MinerAddressDistributionPage', () => {
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
       title: 'Miner Distribution (Last 7 Complete Days, UTC+8)',
       totalBlocks: 10,
+      restBlocks: 0,
       windowDays: 7,
       fromDate: '2026-07-23',
       toDate: '2026-07-29',

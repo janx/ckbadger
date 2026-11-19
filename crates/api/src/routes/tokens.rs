@@ -215,6 +215,9 @@ pub struct TokenHolderResponse {
 pub struct TokenHoldersResponse {
     #[serde(flatten)]
     pub page: CursorPaginatedResponse<TokenHolderResponse>,
+    /// The rank of the page's first row, in the request's view (lane exactness, part A, A3): the holders that sort
+    /// before the cursor, counted in `CF_TOKEN_HOLDERS_BY_BALANCE`, plus one.
+    pub first_rank: u64,
     pub total_supply: String,
     pub anchor: Option<TokenAnchor>,
 }
@@ -669,14 +672,21 @@ async fn get_token_holders(
 
     let store = state.store.clone();
     let hash_c = hash.clone();
-    let (_token, holders_count, total_supply, mut page) =
+    let (_token, holders_count, total_supply, mut page, first_rank) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let token = store
                 .get_token(&hash_c)?
                 .ok_or_else(|| anyhow::anyhow!("not_found"))?;
             let (holders_count, total_supply) = store.aggregate_token_holder_stats(&hash_c)?;
+            // the rank where the page starts, read in the same view as its rows and its total
+            let before = match &cursor {
+                Some((balance, lock_hash)) => {
+                    store.count_token_holders_through(&hash_c, balance, lock_hash)?
+                }
+                None => 0,
+            };
             let page = store.list_token_holders_by_balance(&hash_c, limit + 1, cursor)?;
-            Ok((token, holders_count, total_supply, page))
+            Ok((token, holders_count, total_supply, page, before + 1))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
@@ -745,6 +755,7 @@ async fn get_token_holders(
         total_supply: total_supply.to_string(),
         anchor,
         page: CursorPaginatedResponse::new(holders, holders_count, limit as i64, next_cursor),
+        first_rank,
     })
 }
 

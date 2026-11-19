@@ -75,6 +75,8 @@ const miners = {
   title: 'Miners',
   windowDays: 7,
   totalBlocks: 100,
+  // the route's: the blocks past the five largest (lane exactness, part A, A1)
+  restBlocks: 50,
   fromDate: '2024-01-01',
   toDate: '2024-01-07',
   data: [
@@ -210,8 +212,13 @@ function payloadFor(definition: ChartDefinition): ChartPayload {
     };
   if (definition.slug === 'epoch-time-distribution')
     return { ...single, data: single.data.map((p, i) => ({ ...p, date: ['4.00', '4.02'][i] })) };
+  // each day's operands, the route's (lane exactness, part A, A2)
   if (definition.slug === 'uncle-rate')
-    return { ...single, orphanRateTarget: { numerator: 1, denominator: 40 } };
+    return {
+      ...single,
+      orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: single.data.map((point) => ({ date: point.date, uncles: 1, blocks: 10 })),
+    };
   return definition.secondary || definition.seriesNames ? simple : single;
 }
 
@@ -338,6 +345,7 @@ describe('29 chart variants', () => {
     const single = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       ...miners,
       totalBlocks: 50,
+      restBlocks: 0,
     });
     expect(single.rankedPreview?.rows.map((row) => row.label)).toEqual(['Pool']);
   });
@@ -354,6 +362,8 @@ describe('29 chart variants', () => {
     const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       ...miners,
       totalBlocks: 66477,
+      // the sixth miner's 1,123 blocks, the route's
+      restBlocks: 1123,
       data: rows,
     });
     const preview = model.rankedPreview!;
@@ -599,6 +609,8 @@ describe('29 chart variants', () => {
       ...simple,
       data: simple.data.map(({ date, value }) => ({ date, value })),
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      // each day's operands, the route's (lane exactness, part A, A2)
+      counts: simple.data.map(({ date }) => ({ date, uncles: 1, blocks: 10 })),
     });
     expect(uncle.facts).toEqual([{ label: 'Consensus target', value: '1 / 40 blocks' }]);
   });
@@ -683,6 +695,7 @@ describe('29 chart variants', () => {
       chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
         title: 'Miners',
         totalBlocks: 1_000_000,
+        restBlocks: 0,
         windowDays: 7,
         fromDate: '2026-07-23',
         toDate: '2026-07-29',
@@ -717,6 +730,7 @@ describe('29 chart variants', () => {
     const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       title: 'Miners',
       totalBlocks: 2,
+      restBlocks: 0,
       windowDays: 7,
       fromDate: '2026-07-23',
       toDate: '2026-07-29',
@@ -738,6 +752,7 @@ describe('29 chart variants', () => {
     const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
       title: 'Miners',
       totalBlocks: 10,
+      restBlocks: 0,
       windowDays: 7,
       fromDate: '2026-07-23',
       toDate: '2026-07-29',
