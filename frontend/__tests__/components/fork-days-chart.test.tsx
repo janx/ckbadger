@@ -187,6 +187,63 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     expect(readout()).toHaveTextContent(/^2026-10-23 · 210 uncles on chain/);
   });
 
+  // Readability plan 2026-11-18, P4: "the forks chart draws the rate against its target". The
+  // review (forks): the hero's figure is the uncle rate against a 2.50 % target, but the chart drew
+  // each day's uncles with no target, and this node's branch switches, keyed as a whole series,
+  // were a 2–10 px sliver at the foot of five bars on the uncles' scale.
+  describe('the rate against its target, the node’s switches on their own scale (P4)', () => {
+    it('draws each day’s uncle rate, uncles ÷ blocks, against a dashed line at the 2.50 % target', () => {
+      const { container } = render(<Chart days={days} />);
+      const svg = container.querySelector('svg')!;
+      const bars = [...svg.querySelectorAll('[data-rate]')];
+      expect(bars).toHaveLength(3);
+      const height = (b: Element) => Number(b.getAttribute('height'));
+      // 230 / 9,000, 263 / 9,100 and 199 / 9,050: the tallest is the second day's
+      const rates = days.map((d) => d.uncles / d.canonicalBlocks);
+      for (let i = 0; i < 3; i++)
+        expect(height(bars[i]) / height(bars[1])).toBeCloseTo(rates[i] / rates[1], 6);
+      const target = svg.querySelector('[data-role="target"]')!;
+      expect(target).toHaveAttribute('stroke-dasharray');
+      const y = Number(target.getAttribute('y1'));
+      const foot = (b: Element) => Number(b.getAttribute('y')) + height(b);
+      // the target stands at 2.5 / 2.89… of the second bar's height over the baseline
+      expect((foot(bars[1]) - y) / height(bars[1])).toBeCloseTo(0.025 / rates[1], 6);
+      expect(screen.getByText('target 2.50%')).toBeInTheDocument();
+      // the scale is in percent
+      expect([...svg.querySelectorAll('[data-role="y-tick"]')].map((t) => t.textContent)).toContain(
+        '2%'
+      );
+    });
+
+    it('draws this node’s branch switches in a panel of their own, under the rates, on their own scale', () => {
+      const { container } = render(<Chart days={days} />);
+      const svg = container.querySelector('svg')!;
+      const rates = [...svg.querySelectorAll('[data-rate]')];
+      const switches = [...svg.querySelectorAll('[data-switches]')];
+      expect(switches).toHaveLength(2);
+      const foot = (b: Element) => Number(b.getAttribute('y')) + Number(b.getAttribute('height'));
+      // the panel stands under the rates' baseline
+      for (const s of switches)
+        expect(Number(s.getAttribute('y'))).toBeGreaterThan(Math.max(...rates.map(foot)));
+      // its own scale: 12 and 3 switches, the 12 at least 40 px tall, the 3 a quarter of it
+      const [twelve, three] = switches.map((s) => Number(s.getAttribute('height')));
+      expect(twelve).toBeGreaterThanOrEqual(40);
+      expect(three / twelve).toBeCloseTo(3 / 12, 6);
+      expect(svg.querySelector('[data-role="switches-name"]')).toHaveTextContent(
+        'this node’s branch switches, per day'
+      );
+    });
+
+    it('reads a day’s rate with the counts it is computed from', () => {
+      const { container } = render(<Chart days={days} />);
+      fireEvent.mouseEnter(container.querySelectorAll('[data-day]')[1]);
+      // 263 / 9,100 = 2.8901…%, cut to two places
+      expect(screen.getByTestId('fork-day-reading')).toHaveTextContent(
+        '2026-10-21 · uncle rate 2.89% · 263 uncles in 9,100 blocks · this node switched branches 12 times'
+      );
+    });
+  });
+
   describe('at phone width (visual pass, 390)', () => {
     it('draws 1:1 in its box so the axis text stays 12 px, the key on two lines', () => {
       stubChartWidth(358);
