@@ -23,13 +23,15 @@ export interface CursorPageRead {
 
 /**
  * Where a response was asked for in its walk (lane cd-fixes-controls, item 1): the page, the
- * cursor and the page size it was asked at (none where the list asks for none of its own); `kept`
- * marks a page merged from reads asked at different places (`mergeAsked`).
+ * cursor and the page size it was asked at (none where the list asks for none of its own), and the
+ * list it was asked of (the second read's SHOULD 1: its filter, its class, its sort, written out
+ * by the walk); `kept` marks a page merged from reads asked at different places (`mergeAsked`).
  */
 export interface AskedAt {
   readonly page: number;
   readonly cursor: string | undefined;
   readonly size: number | undefined;
+  readonly list: string;
   readonly kept?: true;
 }
 
@@ -62,7 +64,12 @@ export function mergeAsked<R extends object>(
   if (at.length === 0) return null;
   const [first] = at;
   const one = at.every(
-    (a) => a.page === first.page && a.cursor === first.cursor && a.size === first.size && !a.kept
+    (a) =>
+      a.page === first.page &&
+      a.cursor === first.cursor &&
+      a.size === first.size &&
+      a.list === first.list &&
+      !a.kept
   );
   return stampAsked(merged, one ? first : { ...first, kept: true });
 }
@@ -76,11 +83,12 @@ export interface CursorWalk {
   readonly page: number;
   /** The page size the walk asks at (none where the list asks for none of its own). */
   readonly size: number | undefined;
+  /** The list it pages, written out: a change of it starts the walk again. */
+  readonly list: string;
   readonly hasPrevious: boolean;
   /** To the page after the one this response was asked for, where the walk still stands on it. */
   goToNext(read: Asked<{ nextCursor: string | null }>): void;
   goToPrevious(): void;
-  reset(): void;
   ask<R extends object>(fetch: (cursor: string | undefined) => Promise<R>): () => Promise<Asked<R>>;
 }
 
@@ -125,8 +133,9 @@ function pageCount(list: string, total: number, limit: number): number {
  * rows (its committed rows no more than a page; the pool's rows of page one apart, `poolRowsOf`,
  * and only on a page asked with no cursor), its count (a whole number), and its next cursor (one where more
  * follows, never the cursor it was asked with: an API fault, L1 NOTE 8). And whether it is kept
- * data: a response asked at another page, cursor or page size than the walk stands on, shown while
- * the walk's page loads; it states its own page and offers no next.
+ * data: a response asked at another page, cursor, page size or list than the walk stands on, shown
+ * while the walk's page loads; it states its own page and offers no next, and a way back only
+ * where its own page has one (the second read's NOTE 1: page 1's kept response offered `← prev`).
  */
 function readOf(list: string, read: Asked<CursorPageRead>, walk: CursorWalk) {
   const at = read?.asked;
@@ -153,14 +162,18 @@ function readOf(list: string, read: Asked<CursorPageRead>, walk: CursorWalk) {
       `${list}: the next cursor repeats the cursor page ${at.page} was asked with (${at.cursor})`
     );
   const kept =
-    Boolean(at.kept) || at.page !== walk.page || at.cursor !== walk.cursor || at.size !== walk.size;
+    Boolean(at.kept) ||
+    at.page !== walk.page ||
+    at.cursor !== walk.cursor ||
+    at.size !== walk.size ||
+    at.list !== walk.list;
   return {
     page: at.page,
     /** The page's committed rows: the pool's rows of page one are not rows of the page. */
     rows,
     total,
     pages,
-    onPrevious: walk.hasPrevious ? walk.goToPrevious : undefined,
+    onPrevious: walk.hasPrevious && (!kept || at.page > 1) ? walk.goToPrevious : undefined,
     onNext: read.hasMore && !kept ? () => walk.goToNext(read) : undefined,
   };
 }

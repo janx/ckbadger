@@ -41,10 +41,11 @@ describe('page sizes', () => {
 });
 
 /** Where a page of 20 rows a page was asked: `page`, cursor c{page-1} (none for the first). */
-const asked = (page: number, size: number | undefined = 20): AskedAt => ({
+const asked = (page: number, size: number | undefined = 20, list = '[]'): AskedAt => ({
   page,
   cursor: page === 1 ? undefined : `c${page - 1}`,
   size,
+  list,
 });
 
 /** A response of `rows` rows at a page size of 20, with or without a count, asked at `page`. */
@@ -69,16 +70,17 @@ const read = (
 function walk(
   page: number,
   cursor = page === 1 ? undefined : `c${page - 1}`,
-  size: number | undefined = 20
+  size: number | undefined = 20,
+  list = '[]'
 ): CursorWalk {
   return {
     cursor,
     page,
     size,
+    list,
     hasPrevious: page > 1,
     goToNext: vi.fn(),
     goToPrevious: vi.fn(),
-    reset: vi.fn(),
     ask: vi.fn(),
   };
 }
@@ -133,7 +135,7 @@ describe('where a page of a cursor-paged list stands', () => {
   it('reads the page size the response served', () => {
     const small = stampAsked(
       { data: [0], limit: 2, hasMore: false, nextCursor: null, total: 3 },
-      { page: 2, cursor: 'c1', size: 2 }
+      { page: 2, cursor: 'c1', size: 2, list: '[]' }
     );
     expect(figures(rankedPageAt('events', small, walk(2)))).toMatchObject({
       rows: { from: 3, to: 3 },
@@ -187,6 +189,8 @@ describe('where a page of a cursor-paged list stands', () => {
 // page a response was asked for travels with it; while the shown read is another page's, the
 // pager states that page and offers no next.
 describe('a response kept while the next page loads', () => {
+  // Re-pinned on purpose (lane cd-fixes-controls, the second read's NOTE 1): kept data offers the
+  // ways its own page has, so page 1's kept response offers no `← prev` (it offered the walk's)
   it('states the page whose rows are drawn, and offers no next while the walk is ahead', () => {
     const page1 = read(20, true, 25, 1);
     expect(figures(rankedPageAt('live cells', page1, walk(2)))).toEqual({
@@ -194,6 +198,12 @@ describe('a response kept while the next page loads', () => {
       pageSize: 20,
       rows: { from: 1, to: 20 },
       count: { total: 25, pages: 2 },
+      previous: false,
+      next: false,
+    });
+    // page 2's kept response while page 3 loads: page 2 has a way back
+    expect(figures(rankedPageAt('live cells', read(20, true, 60, 2), walk(3)))).toMatchObject({
+      page: 2,
       previous: true,
       next: false,
     });
@@ -219,6 +229,26 @@ describe('a response kept while the next page loads', () => {
     expect(
       figures(rankedPageAt('objects', read(20, true, 40, 1), walk(1, undefined, 50)))
     ).toMatchObject({ page: 1, next: false });
+  });
+
+  // Lane cd-fixes-controls, the second read's SHOULD 1: the address's activities on "all", the
+  // reader picks "dao"; the walk starts again on "dao", and "all"'s page one, still shown, is kept
+  // data of another list: drawn as its own, no way on (it handed over "all"'s next cursor)
+  it('takes a response of another list as kept data: drawn as its own, with no next', () => {
+    const all = stampAsked(
+      {
+        data: Array.from({ length: 20 }, (_, i) => i),
+        limit: 20,
+        hasMore: true,
+        nextCursor: 'a20',
+      },
+      asked(1, 20, '["all"]')
+    );
+    const at = timePageAt('activities', all, walk(1, undefined, 20, '["dao"]'))!;
+    expect(at.page).toBe(1);
+    expect(at.onOlder).toBeUndefined();
+    expect(at.onNewer).toBeUndefined();
+    expect(timePageAt('activities', all, walk(1, undefined, 20, '["all"]'))!.onOlder).toBeDefined();
   });
 
   it('takes a response asked at another cursor of the same page as kept data', () => {
