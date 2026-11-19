@@ -119,6 +119,36 @@ describe('ScriptGroupMatrix (TX-13, TX-21)', () => {
     expect(onHover).toHaveBeenLastCalledWith(null);
   });
 
+  // Review of phases C and D, NOTE 10 (lane P1): where the page has no inspector (the cell page's
+  // developer tier, no `onHover`) nothing in the matrix answers a focus, so nothing in it is a tab
+  // stop of its own: a column head and a row took one each and did nothing. The links in it stay.
+  it('makes no tab stop of a column head or a row where the page has no inspector', () => {
+    const { container } = render(
+      <ScriptGroupMatrix
+        txHash="0xtx"
+        inputs={inputs}
+        outputs={outputs}
+        groups={groups}
+        lit={null}
+      />
+    );
+    expect(container.querySelectorAll('[tabindex]')).toHaveLength(0);
+    // with an inspector, each head and each row is one
+    const inspected = render(
+      <ScriptGroupMatrix
+        txHash="0xtx"
+        inputs={inputs}
+        outputs={outputs}
+        groups={groups}
+        lit={null}
+        onHover={() => {}}
+      />
+    );
+    expect(inspected.container.querySelectorAll('[tabindex="0"]')).toHaveLength(
+      inputs.length + outputs.length + groups.length
+    );
+  });
+
   it('refuses a group that names a cell the transaction does not have', () => {
     expect(() =>
       render(
