@@ -3,8 +3,10 @@ use crate::response::ChartResponse;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::{
     build_address_cohort_response, build_block_time_distribution_response,
-    build_cell_size_response, CellSizeDistributionChartResponse, CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
-    CACHE_KEY_CELL_SIZE_DISTRIBUTION, CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
+    build_cell_size_response, BlockTimeDistributionChartResponse,
+    CellSizeDistributionChartResponse, CACHE_KEY_ADDRESS_COHORT_RETENTION,
+    CACHE_KEY_BLOCK_TIME_DISTRIBUTION, CACHE_KEY_CELL_SIZE_DISTRIBUTION,
+    CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
 };
 use crate::utils::{
     accumulate_owned_capacity, hash_type_to_string, resolve_dob_collection_name,
@@ -1181,7 +1183,7 @@ fn warmup_cell_charts_from_store(state: &AppState) -> Result<(), String> {
     {
         let response = build_address_cohort_response(&cohort);
         state.mem_cache.set(
-            "chart:address-cohort-retention:v1",
+            CACHE_KEY_ADDRESS_COHORT_RETENTION,
             &response,
             CacheTtl::CHART,
         );
@@ -1221,15 +1223,11 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
             }
             if let Some(cohort) = state
                 .mem_cache
-                .get::<ChartResponse>("chart:address-cohort-retention:v1")
+                .get::<ChartResponse>(CACHE_KEY_ADDRESS_COHORT_RETENTION)
             {
                 state
                     .cache
-                    .set(
-                        "chart:address-cohort-retention:v1",
-                        &cohort,
-                        CacheTtl::CHART,
-                    )
+                    .set(CACHE_KEY_ADDRESS_COHORT_RETENTION, &cohort, CacheTtl::CHART)
                     .await;
             }
             info!("Warmed up materialized chart caches (cell-size + address-cohort)");
@@ -1346,13 +1344,9 @@ async fn warmup_uncle_rate(state: &AppState) -> Result<(), String> {
 async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> {
     let response = build_block_time_distribution_response(state.store.as_ref())?;
 
-    // Only cache if the distribution has actual data (non-zero ratios).
-    // Secondary store may not have caught up at startup, producing all-zero data.
-    let has_data = response
-        .data
-        .iter()
-        .any(|p| p.value.parse::<f64>().is_ok_and(|v| v > 0.0));
-    if has_data {
+    // Only cache a window with intervals: the secondary store may not have caught up at startup.
+    let response: BlockTimeDistributionChartResponse = response;
+    if response.intervals > 0 {
         state
             .cache
             .set(

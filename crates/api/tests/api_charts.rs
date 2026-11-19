@@ -451,11 +451,10 @@ async fn supply_and_secondary_issuance_state_their_wholes() {
             .iter()
             .map(|key| ckb_shannons(values[*key].as_str().unwrap()))
             .sum::<i128>();
-        assert_eq!(
-            point["componentsTotalShannons"],
-            parts.to_string(),
-            "{point}"
-        );
+        // re-pinned for lane D1's third round (S1): one whole, the protocol total, which the
+        // three destinations make (it read componentsTotalShannons, a second total)
+        assert_eq!(point["protocolTotalShannons"], parts.to_string(), "{point}");
+        assert!(point.get("componentsTotalShannons").is_none(), "{point}");
     }
 }
 

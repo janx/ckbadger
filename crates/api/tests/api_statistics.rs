@@ -2391,8 +2391,27 @@ async fn test_hodl_wave_chart_draws_five_bands_merged_from_exact_capacities() {
     assert_eq!(values["1m6m"], "25.00");
     assert_eq!(values["lt1m"], "16.66");
     assert_eq!(values["24h"], "2.77");
-    // the eight bands stay, for the table under the chart
-    assert_eq!(json["series"].as_array().unwrap().len(), 8);
+    // the eight bands stay, for the table under the chart, named in the drawn bands' words (lane
+    // D1's third round, N5: one band, one spelling on the page)
+    let labels: Vec<&str> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "3 years or more",
+            "1 to 3 years",
+            "6 to 12 months",
+            "3 to 6 months",
+            "1 to 3 months",
+            "1 week to 1 month",
+            "1 day to 1 week",
+            "under 1 day",
+        ]
+    );
 }
 
 /// A chart page states a percentage as the exact value cut, never rounded (the D1 hand-back,

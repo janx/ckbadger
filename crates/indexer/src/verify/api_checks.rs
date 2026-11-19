@@ -2338,8 +2338,19 @@ impl Check for ChartTotalSupplyMonotonic {
     }
 }
 
-/// S7: GET /charts/block-time-distribution → buckets/ratios sane and sum ≈ 100%.
+/// S7: GET /charts/block-time-distribution → buckets/ratios sane and, with the intervals beyond the
+/// drawn range, sum ≈ 100%.
 pub struct ChartBlockTimeDistributionSane;
+
+/// The block-intervals chart: its buckets and the window's whole, of which the intervals beyond
+/// the drawn range are in no bucket (lane D1's third round).
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockTimeDistributionWrapper {
+    data: Vec<ChartDataPoint>,
+    intervals: u64,
+    beyond_range: u64,
+}
 
 impl Check for ChartBlockTimeDistributionSane {
     fn name(&self) -> &'static str {
@@ -2352,10 +2363,15 @@ impl Check for ChartBlockTimeDistributionSane {
         CheckTier::Sampling
     }
     fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
-        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/block-time-distribution")?;
+        let chart: BlockTimeDistributionWrapper = api_get(ctx, "charts/block-time-distribution")?;
         let mut findings = vec![];
         let mut prev_bucket: Option<f64> = None;
-        let mut ratio_sum = 0.0;
+        // the intervals beyond the drawn range are in the whole, in no bucket
+        let mut ratio_sum = if chart.intervals > 0 {
+            chart.beyond_range as f64 * 100.0 / chart.intervals as f64
+        } else {
+            0.0
+        };
         let mut has_non_zero = false;
 
         if chart.data.is_empty() {
@@ -2522,7 +2538,7 @@ impl Check for ChartEpochTimeLengthSane {
         "chart_epoch_time_length_sane"
     }
     fn description(&self) -> &'static str {
-        "Epoch time length chart: epoch numbers ordered, hours/blocks positive"
+        "Epoch time length chart: epoch numbers ordered, durations (ms) and blocks positive"
     }
     fn tier(&self) -> CheckTier {
         CheckTier::Sampling
@@ -2561,11 +2577,11 @@ impl Check for ChartEpochTimeLengthSane {
                 }),
             }
 
-            match point.value.parse::<f64>() {
-                Ok(hours) if hours > 0.0 => {}
-                Ok(hours) => findings.push(Finding {
+            match point.value.parse::<i64>() {
+                Ok(ms) if ms > 0 => {}
+                Ok(ms) => findings.push(Finding {
                     entity: point.date.clone(),
-                    details: vec![format!("epoch duration hours must be > 0, got {}", hours)],
+                    details: vec![format!("epoch duration must be > 0 ms, got {}", ms)],
                 }),
                 Err(_) => findings.push(Finding {
                     entity: point.date.clone(),
@@ -2607,6 +2623,8 @@ impl Check for ChartEpochTimeLengthSane {
 /// the regression the bound exists for — a milliseconds value reported as
 /// seconds, which lands three orders of magnitude too high.
 const MAX_AVERAGE_BLOCK_TIME_SECONDS: f64 = 1800.0;
+/// The same bound in the whole ms the route sends (lane D1's third round).
+const MAX_AVERAGE_BLOCK_TIME_MS: i64 = (MAX_AVERAGE_BLOCK_TIME_SECONDS as i64) * 1000;
 
 /// S10: GET /charts/average-block-time → positive values within a sane bound.
 pub struct ChartAverageBlockTimeSane;
@@ -2645,16 +2663,13 @@ impl Check for ChartAverageBlockTimeSane {
             }
             prev_date = point.date.clone();
 
-            match point.value.parse::<f64>() {
-                Ok(seconds)
-                    if seconds.is_finite()
-                        && seconds > 0.0
-                        && seconds <= MAX_AVERAGE_BLOCK_TIME_SECONDS => {}
-                Ok(seconds) => findings.push(Finding {
+            match point.value.parse::<i64>() {
+                Ok(ms) if ms > 0 && ms <= MAX_AVERAGE_BLOCK_TIME_MS => {}
+                Ok(ms) => findings.push(Finding {
                     entity: point.date.clone(),
                     details: vec![format!(
-                        "average block time must be finite and in (0, {}]s: {}s",
-                        MAX_AVERAGE_BLOCK_TIME_SECONDS, seconds
+                        "average block time must be in (0, {}] ms: {} ms",
+                        MAX_AVERAGE_BLOCK_TIME_MS, ms
                     )],
                 }),
                 Err(_) => findings.push(Finding {
@@ -7329,7 +7344,8 @@ mod tests {
             Mock::given(method("GET"))
                 .and(path("/api/v1/charts/average-block-time"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "data": [{ "date": "20200522", "value": "311.43" }]
+                    // whole ms since lane D1's third round (was "311.43" s)
+                    "data": [{ "date": "20200522", "value": "311430" }]
                 })))
                 .mount(&server)
                 .await;
@@ -7673,29 +7689,30 @@ mod tests {
         );
     }
 
-    /// The upper bound exists to catch unit regressions (milliseconds reported
-    /// as seconds). Without it the check accepted any finite positive number.
+    /// The upper bound exists to catch unit regressions. Without it the check
+    /// accepted any finite positive number. Re-pinned for lane D1's third round:
+    /// the route sends whole ms, so 8,000 s is "8000000", and a rounded second
+    /// ("8.00") is no whole ms at all.
     #[test]
-    fn average_block_time_rejects_milliseconds_as_seconds() {
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        let server = runtime.block_on(MockServer::start());
-        runtime.block_on(async {
-            Mock::given(method("GET"))
-                .and(path("/api/v1/charts/average-block-time"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                    "data": [{ "date": "20260720", "value": "8000" }]
-                })))
-                .mount(&server)
-                .await;
-        });
+    fn average_block_time_rejects_a_value_off_its_unit() {
+        for value in ["8000000", "8.00"] {
+            let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+            let server = runtime.block_on(MockServer::start());
+            runtime.block_on(async {
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/charts/average-block-time"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                        "data": [{ "date": "20260720", "value": value }]
+                    })))
+                    .mount(&server)
+                    .await;
+            });
 
-        let result = ChartAverageBlockTimeSane
-            .run(&mock_ctx(&server), &ProgressReporter::new(None))
-            .unwrap();
-        assert!(
-            !result.passed(),
-            "8000s per block must fail the sanity bound"
-        );
+            let result = ChartAverageBlockTimeSane
+                .run(&mock_ctx(&server), &ProgressReporter::new(None))
+                .unwrap();
+            assert!(!result.passed(), "{value} must fail the sanity bound");
+        }
     }
 
     #[test]
