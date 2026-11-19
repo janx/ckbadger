@@ -216,9 +216,9 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
       companion={[
         <>
           in{' '}
-          <a href="#its-cells" className="hover:text-text-bright hover:underline">
+          <Link href="#its-cells" look="inline">
             {unitNode(formatCount(family.liveCellsCount, 'live cell'))}
-          </a>
+          </Link>
         </>,
         share && `${share} occupied`,
       ]}
@@ -290,10 +290,7 @@ export function ScriptHeroMetrics({
           label="Code cell held by"
           note={last.custody.witnessState === 'never_signed' ? 'has never signed' : undefined}
         >
-          <Link
-            href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
-            className="hover:text-jade"
-          >
+          <Link look="key" href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}>
             {/* a hero tile: tight below sm, the row size from it (R9) */}
             <HolderName custody={last.custody} size={size} />
           </Link>
@@ -306,9 +303,9 @@ export function ScriptHeroMetrics({
             <>
               deployed in{' '}
               <Link
+                look="inline"
                 href={`/tx/${deployment.codeCellTxHash}`}
                 title={deployment.codeCellTxHash}
-                className="hover:text-jade"
               >
                 <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
               </Link>
@@ -945,7 +942,7 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
 
 export function blockLink(block: number): ReactNode {
   return (
-    <Link href={`/blocks/${block}`} className="text-text hover:text-jade">
+    <Link look="inline" href={`/blocks/${block}`}>
       {formatBlockNumber(block)}
     </Link>
   );

@@ -373,7 +373,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               cluster.data.createdAtBlock === null ? (
                 'Not recorded'
               ) : (
-                <AppLink href={`/blocks/${cluster.data.createdAtBlock}`}>
+                <AppLink look="key" href={`/blocks/${cluster.data.createdAtBlock}`}>
                   {formatBlockNumber(cluster.data.createdAtBlock)}
                 </AppLink>
               ),
@@ -384,6 +384,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             value: protocol.data ? (
               protocol.data.current ? (
                 <Address
+                  look="key"
                   address={protocol.data.current.cell.ownerAddress}
                   size="row"
                   className="text-body"

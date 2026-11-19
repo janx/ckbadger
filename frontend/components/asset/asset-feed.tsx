@@ -293,7 +293,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       // the hash at the row size (17 characters, 132.6); it was 178
       minWidth: columnPx(cell(shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
       render: (r) => (
-        <AppLink href={`/tx/${r.hash}`}>
+        <AppLink look="key" href={`/tx/${r.hash}`}>
           <Hash hash={r.hash} size="row" className="text-small" />
         </AppLink>
       ),
@@ -312,7 +312,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       ),
       render: (r) => (
         <>
-          <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
+          <AppLink look="inline" href={`/blocks/${r.blockNumber}`}>
+            {formatBlockNumber(r.blockNumber)}
+          </AppLink>
           <span className="text-text-dim">
             {' '}
             ·{' '}

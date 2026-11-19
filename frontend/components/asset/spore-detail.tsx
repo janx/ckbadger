@@ -137,6 +137,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       size: 'body',
       value: object.ownerLockHash ? (
         <Address
+          look="key"
           address={object.ownerAddress ?? object.ownerLockHash}
           size="row"
           className="text-body"
@@ -167,7 +168,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             label: 'Collection',
             size: 'body' as const,
             value: (
-              <AppLink href={collectionHref!}>{collectionName ?? 'Unnamed collection'}</AppLink>
+              <AppLink look="key" href={collectionHref!}>
+                {collectionName ?? 'Unnamed collection'}
+              </AppLink>
             ),
             note: collection.data ? formatCount(collection.data.liveCount, 'object') : undefined,
           },
@@ -181,16 +184,16 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: first ? (
         formatUtc8Date(first.timestamp)
       ) : (
-        <AppLink href={`/blocks/${object.createdAtBlock}`}>
+        <AppLink look="key" href={`/blocks/${object.createdAtBlock}`}>
           {formatBlockNumber(object.createdAtBlock)}
         </AppLink>
       ),
       note: first ? (
         <>
-          <AppLink href={`/blocks/${first.blockNumber}`}>
+          <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
             {formatBlockNumber(first.blockNumber)}
           </AppLink>{' '}
-          · by <Address address={first.ownerAddress} size="row" className="inline" />
+          · by <Address look="inline" address={first.ownerAddress} size="row" className="inline" />
         </>
       ) : undefined,
     },
@@ -213,7 +216,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             'since minting'
           ) : (
             <>
-              <AppLink href={`/blocks/${last.blockNumber}`}>
+              <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
                 {formatBlockNumber(last.blockNumber)}
               </AppLink>{' '}
               · <span>{`${moves} ${countNoun(moves, 'transfer')} since minting`}</span>
@@ -460,7 +463,11 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           <PromptHeading
             command="Collection"
             args={collectionName ?? 'this collection'}
-            note={<AppLink href={collectionHref!}>Open the collection →</AppLink>}
+            note={
+              <AppLink look="onward" href={collectionHref!}>
+                Open the collection
+              </AppLink>
+            }
           />
           {coll ? (
             <>
@@ -522,6 +529,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   Its cluster cell is held by{' '}
                   {cluster.data.ownerAddress || cluster.data.ownerLockHash ? (
                     <Address
+                      look="inline"
                       address={cluster.data.ownerAddress ?? cluster.data.ownerLockHash!}
                       size="row"
                       className="inline"
@@ -532,7 +540,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   {cluster.data.createdAtBlock !== null && (
                     <>
                       {' '}
-                      · created at <BlockLink number={cluster.data.createdAtBlock} />
+                      · created at <BlockLink look="inline" number={cluster.data.createdAtBlock} />
                     </>
                   )}
                 </p>

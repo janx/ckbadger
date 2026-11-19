@@ -373,8 +373,10 @@ export function AssetHistory({
       ),
       render: (e) => (
         <>
-          <AppLink href={`/blocks/${e.blockNumber}`}>{formatBlockNumber(e.blockNumber)}</AppLink>
-          <AppLink className="text-text-dim text-meta block" href={`/tx/${e.txHash}`}>
+          <AppLink look="inline" href={`/blocks/${e.blockNumber}`}>
+            {formatBlockNumber(e.blockNumber)}
+          </AppLink>
+          <AppLink look="inline" className="text-meta block" href={`/tx/${e.txHash}`}>
             tx {e.txIndex} · sequence {e.transferSequence}
           </AppLink>
         </>
@@ -419,7 +421,7 @@ export function AssetHistory({
       ),
       render: (e) => (
         <>
-          <AppLink href={`/address/${e.address ?? e.lockHash}`}>
+          <AppLink look="inline" href={`/address/${e.address ?? e.lockHash}`}>
             <Hash
               hash={e.address ?? e.lockHash}
               kind={e.address ? 'address' : 'hash'}
@@ -702,10 +704,15 @@ export function AssetHistory({
                     </span>
                   );
                   const where = [
-                    <AppLink key="b" href={`/blocks/${e.blockNumber}`}>
+                    <AppLink look="inline" key="b" href={`/blocks/${e.blockNumber}`}>
                       {formatBlockNumber(e.blockNumber)}
                     </AppLink>,
-                    <AppLink key="t" href={`/tx/${e.txHash}`} className="whitespace-nowrap">
+                    <AppLink
+                      look="inline"
+                      key="t"
+                      href={`/tx/${e.txHash}`}
+                      className="whitespace-nowrap"
+                    >
                       tx {e.txIndex} · sequence {e.transferSequence}
                     </AppLink>,
                   ];
@@ -715,7 +722,7 @@ export function AssetHistory({
                   const party = (
                     <span>
                       {e.kind === 'mint' ? 'to ' : 'from '}
-                      <AppLink href={`/address/${e.address ?? e.lockHash}`}>
+                      <AppLink look="inline" href={`/address/${e.address ?? e.lockHash}`}>
                         <Hash
                           hash={e.address ?? e.lockHash}
                           kind={e.address ? 'address' : 'hash'}

@@ -50,7 +50,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
         Outpoint{' '}
         {/* the hash at its line's 11 px (A4 Chrome F4): 66 × 6.6 = 435.6 px and ":N", within a
             1024 column's 460 px; at 13 px it took 514.8 and scrolled */}
-        <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
+        <AppLink look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
           <Hash hash={cell.txHash} truncate={false} className="text-meta" />
           <OutpointIndex index={cell.outputIndex} />
         </AppLink>
@@ -139,13 +139,14 @@ export function ItemTransactionContext({
           {item.kind === 'object' && (
             <span className="text-text-dim block">
               to{' '}
-              <AppLink href={`/address/${context.createdCell.ownerAddress}`}>
+              <AppLink look="inline" href={`/address/${context.createdCell.ownerAddress}`}>
                 <ShortId value={context.createdCell.ownerAddress} kind="address" size="row" />
               </AppLink>{' '}
               (output {context.createdCell.outputIndex})
             </span>
           )}
           <AppLink
+            look="inline"
             className="block"
             href={`/cell/${context.createdCell.txHash}-${context.createdCell.outputIndex}`}
           >

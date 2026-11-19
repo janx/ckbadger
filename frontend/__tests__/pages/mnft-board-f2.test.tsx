@@ -257,7 +257,7 @@ describe('Mnft board (F2 objects)', () => {
     const heading = within(cls).getByRole('heading', { name: 'Class Class A' });
     expectPrompt(heading, 'Class', 'Class A');
     expect(promptNote(heading)).toContainElement(
-      within(cls).getByRole('link', { name: 'Open the class →' })
+      within(cls).getByRole('link', { name: 'Open the class' })
     );
     expect(cls).toHaveTextContent('150 holders');
     expect(cls).toHaveTextContent('0 of 198 fully on-chain');

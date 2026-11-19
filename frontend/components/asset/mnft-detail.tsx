@@ -298,7 +298,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               size: 'body',
               value: history ? (
                 current ? (
-                  <AppLink href={`/address/${current.ownerAddress}`}>
+                  <AppLink look="key" href={`/address/${current.ownerAddress}`}>
                     <Hash
                       hash={current.ownerAddress}
                       kind="address"
@@ -327,7 +327,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             {
               label: 'Class',
               size: 'body',
-              value: <AppLink href={classHref}>{className}</AppLink>,
+              value: (
+                <AppLink look="key" href={classHref}>
+                  {className}
+                </AppLink>
+              ),
               note: `by ${item.issuer.name ?? 'an unnamed issuer'}`,
             },
             {
@@ -336,7 +340,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               value: first ? formatUtc8Date(first.timestamp) : evidenceState,
               note: first ? (
                 <>
-                  <AppLink href={`/blocks/${first.blockNumber}`}>
+                  <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
                   </AppLink>{' '}
                   · to {lockPhrase(first.lockName)}
@@ -351,7 +355,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                   moves === 0 ? (
                     <span className="text-text-dim">never</span>
                   ) : (
-                    <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
+                    <AppLink look="key" href={`/cell/${last.txHash}-${last.outputIndex}`}>
                       <Utc8Date timestamp={last.timestamp} />
                     </AppLink>
                   )
@@ -364,7 +368,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                     'since issue'
                   ) : (
                     <>
-                      <AppLink href={`/blocks/${last.blockNumber}`}>
+                      <AppLink look="inline" href={`/blocks/${last.blockNumber}`}>
                         {formatBlockNumber(last.blockNumber)}
                       </AppLink>{' '}
                       · {moves} {countNoun(moves, 'transfer')} since issue
@@ -507,7 +511,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         <PromptHeading
           command="Class"
           args={className}
-          note={<AppLink href={classHref}>Open the class →</AppLink>}
+          note={
+            <AppLink look="onward" href={classHref}>
+              Open the class
+            </AppLink>
+          }
         />
         {collection.data ? (
           <>

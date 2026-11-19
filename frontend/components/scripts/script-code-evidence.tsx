@@ -308,10 +308,7 @@ function CodeCellLink({ outpoint }: { outpoint: string }) {
   if (at < 1 || at === outpoint.length - 1)
     throw new Error(`Code cell out point "${outpoint}" is not "0x<tx hash>:<output index>"`);
   return (
-    <AppLink
-      href={`/cell/${outpoint.slice(0, at)}-${outpoint.slice(at + 1)}`}
-      className="text-emphasis hover:underline"
-    >
+    <AppLink look="inline" href={`/cell/${outpoint.slice(0, at)}-${outpoint.slice(at + 1)}`}>
       {outpoint}
     </AppLink>
   );
@@ -364,15 +361,15 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </details>
       )}
       {signer && (
-        <div className="text-text-dim mt-1 [overflow-wrap:anywhere]">
+        <div className="text-text mt-1 [overflow-wrap:anywhere]">
           This holder signed to spend the code cell in{' '}
-          <AppLink href={`/tx/${signer}`} className="text-emphasis hover:underline">
+          <AppLink look="inline" href={`/tx/${signer}`}>
             <ShortId value={signer} kind="hash" size="row" />
           </AppLink>
         </div>
       )}
       {custody.owners.length > 1 && (
-        <ul className="text-text-dim mt-2 space-y-1">
+        <ul className="text-text mt-2 space-y-1">
           {custody.owners.map((owner) => (
             <li
               key={`${owner.lockCodeHash}:${owner.lockHashType}:${owner.lockArgs}`}
@@ -531,7 +528,7 @@ export function ScriptCapacityEvidenceChart({
             {markers.map((marker) => (
               <span
                 key={key(marker)}
-                className="border-base-border text-text-dim text-meta inline-flex shrink-0 items-center gap-1 border px-2 py-1"
+                className="border-base-border text-text text-meta inline-flex shrink-0 items-center gap-1 border px-2 py-1"
               >
                 <button
                   type="button"
@@ -543,8 +540,8 @@ export function ScriptCapacityEvidenceChart({
                 </button>
                 <span aria-hidden="true">·</span>
                 <AppLink
+                  look="inline"
                   href={`/cell/${marker.codeCellTxHash}-${marker.codeCellOutputIndex}`}
-                  className="hover:text-text-bright hover:underline"
                 >
                   <ShortId value={marker.codeCellTxHash} kind="hash" size="row" />
                   <OutpointIndex index={marker.codeCellOutputIndex} />

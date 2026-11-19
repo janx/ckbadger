@@ -374,10 +374,7 @@ function TokenName({ asset: a }: { asset: Asset }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
       <ClassMark kind="tokens" size={16} />
-      <AppLink
-        href={assetHref(a)}
-        className="text-body text-text-bright leading-row min-w-0 truncate"
-      >
+      <AppLink look="key" href={assetHref(a)} className="text-body leading-row min-w-0 truncate">
         {a.name ?? a.symbol ?? <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name && a.symbol && <RowTag>{a.symbol}</RowTag>}
@@ -508,10 +505,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
       >
         <ClassMark kind="objects" size={12} />
       </span>
-      <AppLink
-        href={assetHref(a)}
-        className="text-body text-text-bright leading-row min-w-0 truncate"
-      >
+      <AppLink look="key" href={assetHref(a)} className="text-body leading-row min-w-0 truncate">
         {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       <RowTag>{formatStandard(a.standard)}</RowTag>
@@ -618,10 +612,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
   return (
     <span className="flex min-w-0 items-center gap-2">
       <ClassMark kind="identities" size={16} />
-      <AppLink
-        href={assetHref(a)}
-        className="text-body text-text-bright leading-row min-w-0 truncate"
-      >
+      <AppLink look="key" href={assetHref(a)} className="text-body leading-row min-w-0 truncate">
         {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name !== standard && <RowTag>{standard}</RowTag>}

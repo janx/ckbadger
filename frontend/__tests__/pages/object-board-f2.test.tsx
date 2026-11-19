@@ -220,7 +220,7 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
     'Among Nervape 3x · its variant in each gene, and how common it is among the 90'
   );
   expect(container.querySelector('[data-overlay="me"]')!.textContent).toContain('this one');
-  expect(within(among).getByRole('link', { name: 'Open the collection →' })).toHaveAttribute(
+  expect(within(among).getByRole('link', { name: 'Open the collection' })).toHaveAttribute(
     'href',
     expect.stringContaining(`/clusters/${NERVAPE3X_CLUSTER}`)
   );
@@ -296,7 +296,7 @@ it('places it in its collection with the composition count and cluster cell (OB-
   const heading = within(coll).getByRole('heading', { name: 'Collection Nervape 3x' });
   expectPrompt(heading, 'Collection', 'Nervape 3x');
   expect(promptNote(heading)).toContainElement(
-    within(coll).getByRole('link', { name: 'Open the collection →' })
+    within(coll).getByRole('link', { name: 'Open the collection' })
   );
   expect(coll).toHaveTextContent('90 objects, all live');
   expect(coll).toHaveTextContent('90 holders');

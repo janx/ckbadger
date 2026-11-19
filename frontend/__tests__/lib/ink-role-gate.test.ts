@@ -188,8 +188,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // ---- assets ----
   'app/tokens/[typeHash]/client-page.tsx': {
+    // prose 4 → 3 (lane p-assets: each link states its look)
     family: 'assets',
-    sites: { prose: 4 },
+    sites: { prose: 3 },
     reason:
       "the token's description, label provenance and empty and unavailable sentences in the quiet ink",
   },
@@ -199,14 +200,16 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: "a row's cycles state in a table cell; the empty feed sentences",
   },
   'components/asset/asset-history.tsx': {
+    // link 1 → 0 (lane p-assets: each link states its look)
     family: 'assets',
-    sites: { link: 1, prose: 4 },
+    sites: { prose: 4 },
     reason:
       'a supply event tx link, the empty and peak lines and the history notes in the quiet ink',
   },
   'components/asset/cell-versions.tsx': {
+    // link 4 → 2 (lane p-assets: each link states its look)
     family: 'assets',
-    sites: { link: 4, prose: 1 },
+    sites: { link: 2, prose: 1 },
     reason:
       "a version's block, owner, lock and spending-tx links and the empty sentence in the quiet ink",
   },
@@ -235,8 +238,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       "an object's block link, the decoding state lines and the empty sentence in the quiet ink",
   },
   'components/asset/detail-shell.tsx': {
+    // link 1 → 0 (lane p-assets: each link states its look)
     family: 'assets',
-    sites: { link: 1, prose: 1 },
+    sites: { prose: 1 },
     reason: 'a breadcrumb link and the read-state sentence in the quiet ink',
   },
   'components/asset/dropped-genes-caption.tsx': {
@@ -360,8 +364,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'supply, H-multiplier, occupied and unavailable values quiet in table cells',
   },
   'components/scripts/script-code-evidence.tsx': {
+    // link 2 → 0 (lane p-assets: each link states its look)
     family: 'lists',
-    sites: { link: 2, prose: 1 },
+    sites: { prose: 1 },
     reason: "the unspendable note and the code-cell links (the code-class bar's words are F1's)",
   },
   'components/scripts/script-family-board.tsx': {
@@ -383,8 +388,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: "the script hero's companion line in the quiet ink",
   },
   'components/scripts/script-newest-cells.tsx': {
+    // link 1 → 0 (lane p-assets: each link states its look)
     family: 'lists',
-    sites: { link: 1, prose: 2 },
+    sites: { prose: 2 },
     reason: "a cell's tx link, the loading line and the caption in the quiet ink",
   },
   'components/transaction/transaction-list-table.tsx': {

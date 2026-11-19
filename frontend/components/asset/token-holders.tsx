@@ -386,8 +386,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
         ),
         render: (h) => (
           <AppLink
+            look="key"
             href={`/address/${h.address ?? h.lockScriptHash}`}
-            className="text-body text-text-bright leading-row"
+            className="text-body leading-row"
           >
             <Hash
               hash={h.address ?? h.lockScriptHash}
@@ -511,7 +512,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                     <HolderPhoneRow
                       rank={rank(h)}
                       party={
-                        <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
+                        <AppLink look="key" href={`/address/${h.address ?? h.lockScriptHash}`}>
                           {/* Below sm the tight size, 11 characters for an address, 4…6: rank,
                           address, lock and amount share a 358 px line (L5); from sm the row
                           size, the table's (R9). */}

@@ -108,7 +108,11 @@ function blockFact(label: string, timestamp: string | number, block: number): As
     label,
     title: `${label.toLowerCase()} ${formatUtc8DateTime(timestamp)}`,
     value: <NoBreak>{formatUtc8Date(timestamp)}</NoBreak>,
-    note: <AppLink href={`/blocks/${block}`}>{formatBlockNumber(block)}</AppLink>,
+    note: (
+      <AppLink look="inline" href={`/blocks/${block}`}>
+        {formatBlockNumber(block)}
+      </AppLink>
+    ),
   };
 }
 
@@ -170,7 +174,7 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
     value: party.address ? (
       <Address address={party.address} size="row" look="key" className="text-body" />
     ) : party.lockHash ? (
-      <AppLink href={`/address/${party.lockHash}`}>
+      <AppLink look="key" href={`/address/${party.lockHash}`}>
         <Hash hash={party.lockHash} kind="hash" size="row" className="text-body" />
       </AppLink>
     ) : (
@@ -189,7 +193,7 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
 export function PartyLine({ party, size }: { party: DotCellPartyRef; size: ShortSize }) {
   return party.lockHash ? (
     <>
-      <AppLink href={`/address/${party.address ?? party.lockHash}`}>
+      <AppLink look="inline" href={`/address/${party.address ?? party.lockHash}`}>
         <Hash
           hash={party.address ?? party.lockHash}
           kind={party.address ? 'address' : 'hash'}
@@ -234,7 +238,7 @@ function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
         <span className="flex flex-col gap-0.5">
           {bitCells.map((c) => (
             <span key={c.id}>
-              <AppLink href={`/identities/bit-cell/${c.id}`}>
+              <AppLink look="key" href={`/identities/bit-cell/${c.id}`}>
                 {c.name ?? <ShortId value={c.id} kind="hash" size="row" />}
               </AppLink>
               <span className="text-text-dim font-normal">
@@ -299,7 +303,7 @@ export function identityFacts({
           label: '.bit account',
           size: 'body',
           value: d.linkedAccount ? (
-            <AppLink href={`/identities/dotbit/${d.linkedAccount.id}`}>
+            <AppLink look="key" href={`/identities/dotbit/${d.linkedAccount.id}`}>
               {d.linkedAccount.name ?? d.linkedAccount.id}
             </AppLink>
           ) : (

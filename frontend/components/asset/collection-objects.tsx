@@ -571,8 +571,9 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                             <span role="cell" className="flex min-w-0 items-center gap-2">
                               <ClassMark kind="objects" size={12} />
                               <AppLink
+                                look="key"
                                 href={`/objects/${item.sporeId}`}
-                                className="text-body text-text-bright leading-row min-w-0 truncate"
+                                className="text-body leading-row min-w-0 truncate"
                               >
                                 {name}
                               </AppLink>
@@ -644,6 +645,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                               {item.ownerLockHash ? (
                                 <>
                                   <Address
+                                    look="inline"
                                     address={item.ownerAddress ?? item.ownerLockHash}
                                     size="row"
                                     className="text-small"
@@ -667,6 +669,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                             <span role="cell" className="text-text-dim tabular-nums md:text-right">
                               {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
                               <AppLink
+                                look="inline"
                                 href={`/blocks/${item.createdAtBlock}`}
                                 title={`${formatBlockNumber(item.createdAtBlock)} · ${formatUtc8DateTime(item.chainTime)}`}
                               >

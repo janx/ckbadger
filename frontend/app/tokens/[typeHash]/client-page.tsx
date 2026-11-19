@@ -19,6 +19,7 @@ import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
 import { LockWordsView, rowLock } from '@/components/ui/lock-kind';
 import { AppLink } from '@/components/ui/app-link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { formatCkbAmount } from '@/lib/utils';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
@@ -181,20 +182,16 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         <div className="text-small space-y-3">
           <AssetReadState error={token.error} label="token" retained />
           {t.description && (
-            <p className="text-text-dim max-w-measure">
+            // the token's description explains: the reading ink (R3)
+            <p className="text-text max-w-measure">
               {t.description}
               {t.operatorWebsite && (
                 <>
                   {' '}
                   ·{' '}
-                  <a
-                    href={t.operatorWebsite}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-jade break-all"
-                  >
-                    {t.operatorWebsite} ↗
-                  </a>
+                  <ExternalLink href={t.operatorWebsite} look="inline" className="break-all">
+                    {t.operatorWebsite}
+                  </ExternalLink>
                 </>
               )}
             </p>
@@ -208,7 +205,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                 <p className="max-w-measure">
                   {/* Lane P: the day it moved; how long ago is the date's hover. */}
                   It last moved on{' '}
-                  <AppLink href={`/tx/${latest.data.data[0].txHash}`}>
+                  <AppLink look="inline" href={`/tx/${latest.data.data[0].txHash}`}>
                     <Utc8Date timestamp={latest.data.data[0].timestamp} />
                   </AppLink>
                   : {activityHeadline(latest.data.data[0])}.
@@ -241,7 +238,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                 {t.sameSymbolTokens.map((other, i) => (
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
-                    <AppLink href={`/tokens/${other.typeScriptHash}`}>
+                    <AppLink look="inline" href={`/tokens/${other.typeScriptHash}`}>
                       <Hash hash={other.typeScriptHash} size="row" className="text-small" />
                     </AppLink>
                     , {unitNode(formatCount(other.holdersCount, 'holder'))}
@@ -284,7 +281,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               label: 'Issuer',
               size: 'body',
               value: t.issuer ? (
-                <AppLink href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
+                <AppLink look="key" href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
                   <ShortId
                     value={t.issuer.address ?? t.issuer.lockHash}
                     kind={t.issuer.address ? 'address' : 'hash'}
@@ -370,7 +367,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <>
                     the lock hash of the owner that can mint (
                     {t.issuer.address ? (
-                      <AppLink href={`/address/${t.issuer.address}`} className="hover:text-jade">
+                      <AppLink look="inline" href={`/address/${t.issuer.address}`}>
                         {t.issuer.address}
                       </AppLink>
                     ) : (
