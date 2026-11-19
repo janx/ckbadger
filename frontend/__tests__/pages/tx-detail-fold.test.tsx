@@ -208,7 +208,14 @@ describe('the witnesses fold their runs of empty ones (lane D3)', () => {
     expect(run.querySelector('[data-run-words]')).toHaveTextContent(
       /^#1 to #157 are empty: 157\switnesses of 0\sB$/
     );
-    fireEvent.click(within(run).getByRole('button', { name: /^all 158\switnesses ↓$/ }));
+    // re-pinned on purpose (lane P1, review of phases C and D, SHOULD 5): the way to every row is
+    // the fold's one control after the list, no longer a part of the run's line
+    expect(within(run).queryByRole('button')).toBeNull();
+    fireEvent.click(
+      within(screen.getByTestId('tx-witness-tab')).getByRole('button', {
+        name: /^all 158\switnesses ↓$/,
+      })
+    );
     expect(rows()).toEqual(
       Array.from({ length: LONG_TX_INPUTS }, (_, i) => `tx-witness-item-${i}`)
     );

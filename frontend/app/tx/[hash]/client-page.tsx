@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import {
@@ -17,7 +17,7 @@ import { HeadId } from '@/components/ui/head-id';
 import { SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
-import { Pager } from '@/components/ui/pager';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -36,7 +36,6 @@ import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import {
   FOLD_HEAD,
-  FoldBack,
   TxStructure,
   continuityColor,
   type TxSealId,
@@ -674,34 +673,21 @@ function witnessItems(
 
 /**
  * A run of empty witnesses on one line (the board's dashed line): which they are, by counting,
- * "#1 to #157 are empty: 157 witnesses of 0 B", and the way to every row, the Pager's short-list
- * form ("all 158 witnesses ↓").
+ * "#1 to #157 are empty: 157 witnesses of 0 B". The way to every row is the fold's one control
+ * after the list (`FoldToggle`; review of phases C and D, SHOULD 5), which stays where it is, and
+ * keeps its focus, as the runs open and fold.
  */
-function EmptyWitnesses({
-  run,
-  total,
-  onShow,
-}: {
-  run: Extract<WitnessItem, { kind: 'run' }>;
-  total: number;
-  onShow: () => void;
-}) {
+function EmptyWitnesses({ run }: { run: Extract<WitnessItem, { kind: 'run' }> }) {
   return (
     <div
       data-testid={`tx-witness-run-${run.from}`}
-      className="border-text-dim/60 text-small my-2 flex flex-wrap items-center gap-x-3 gap-y-1 border border-dashed px-3 py-1.5"
+      className="border-text-dim/60 text-small my-2 border border-dashed px-3 py-1.5"
     >
       <span data-run-words="" className="text-text min-w-0">
         {unitText(
           `#${run.from} to #${run.to} are empty: ${formatCount(run.count, 'witness', 'witnesses')} of ${formatCount(0, 'B', 'B')}`
         )}
       </span>
-      <div className="sm:ml-auto">
-        <Pager
-          mode="more"
-          all={{ count: total, singular: 'witness', plural: 'witnesses', onShow }}
-        />
-      </div>
     </div>
   );
 }
@@ -788,6 +774,7 @@ export default function TransactionDetailPage() {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(searchParams.get('wg'));
   // the developer tier's runs of empty witnesses, each one line until opened (lane D3)
   const [allWitnesses, setAllWitnesses] = useState(false);
+  const witnessListId = useId();
   useEffect(() => {
     setSelectedWitness(indexParam(searchParams.get('witness')));
     setSelectedGroup(searchParams.get('wg'));
@@ -969,6 +956,9 @@ export default function TransactionDetailPage() {
     ...new Set(groups.filter((g) => g.witnessIndex === index).map((g) => groupLabel(g, lookup))),
   ];
   const witnessScale = Math.max(1, ...witnesses.map((w) => w.size));
+  // a run folds the empty witnesses no group reads and the page did not select (lane D3)
+  const foldsWitness = (w: TransactionWitness) =>
+    readersOf(w.index).length === 0 && w.index !== selectedWitness;
   const ran = groups.filter((g) => g.ran).length;
 
   // ---- continuity (same Type ID / object / identity / file cell continues) ----
@@ -1501,58 +1491,53 @@ export default function TransactionDetailPage() {
                 <p className="text-text-dim py-3">Witness bytes are unavailable</p>
               ) : (
                 <>
-                  {witnessItems(
-                    witnesses,
-                    // a run folds the empty witnesses no group reads and the page did not select
-                    (w) =>
-                      !allWitnesses &&
-                      readersOf(w.index).length === 0 &&
-                      w.index !== selectedWitness
-                  ).map((item) =>
-                    item.kind === 'run' ? (
-                      <EmptyWitnesses
-                        key={`run-${item.from}`}
-                        run={item}
-                        total={witnesses.length}
-                        onShow={() => setAllWitnesses(true)}
-                      />
-                    ) : (
-                      <WitnessRow
-                        key={item.w.index}
-                        tx={tx}
-                        w={item.w}
-                        readers={readersOf(item.w.index)}
-                        scale={witnessScale}
-                        selected={selectedWitness === item.w.index}
-                        lit={lit}
-                        lookup={lookup}
-                        groupNameByHash={groupNameByHash}
-                        minerMessage={
-                          cellbaseBlock
-                            ? {
-                                raw: cellbaseBlock.minerMessage,
-                                text: cellbaseBlock.minerMessageText,
-                              }
-                            : undefined
-                        }
-                        onSelect={() =>
-                          selectedWitness === item.w.index
-                            ? select(null, null)
-                            : select(item.w.index, null)
-                        }
-                        onHover={setHover}
-                      />
-                    )
-                  )}
-                  {/* opened, the way back after the last witness, where a run had stood */}
-                  {allWitnesses &&
-                    witnessItems(witnesses, (w) => readersOf(w.index).length === 0).some(
-                      (item) => item.kind === 'run'
-                    ) && (
-                      <div className="mt-2">
-                        <FoldBack onFold={() => setAllWitnesses(false)} />
-                      </div>
+                  <div id={witnessListId}>
+                    {witnessItems(witnesses, (w) => !allWitnesses && foldsWitness(w)).map((item) =>
+                      item.kind === 'run' ? (
+                        <EmptyWitnesses key={`run-${item.from}`} run={item} />
+                      ) : (
+                        <WitnessRow
+                          key={item.w.index}
+                          tx={tx}
+                          w={item.w}
+                          readers={readersOf(item.w.index)}
+                          scale={witnessScale}
+                          selected={selectedWitness === item.w.index}
+                          lit={lit}
+                          lookup={lookup}
+                          groupNameByHash={groupNameByHash}
+                          minerMessage={
+                            cellbaseBlock
+                              ? {
+                                  raw: cellbaseBlock.minerMessage,
+                                  text: cellbaseBlock.minerMessageText,
+                                }
+                              : undefined
+                          }
+                          onSelect={() =>
+                            selectedWitness === item.w.index
+                              ? select(null, null)
+                              : select(item.w.index, null)
+                          }
+                          onHover={setHover}
+                        />
+                      )
                     )}
+                  </div>
+                  {/* the fold's one control, after the list in both states: it stays mounted,
+                      so its focus stays (review of phases C and D, SHOULD 5) */}
+                  {witnessItems(witnesses, foldsWitness).some((item) => item.kind === 'run') && (
+                    <div className="mt-2">
+                      <FoldToggle
+                        open={allWitnesses}
+                        count={witnesses.length}
+                        singular="witness"
+                        plural="witnesses"
+                        controls={witnessListId}
+                        onToggle={setAllWitnesses}
+                      />
+                    </div>
+                  )}
                   {chosenWitness ? (
                     <WitnessInspector tx={tx} witness={chosenWitness} />
                   ) : (
