@@ -8,3 +8,17 @@ export const DEFAULT_PAGE_SIZE = 50;
  * is a list by nature and keeps {@link DEFAULT_PAGE_SIZE}; a phone reads twenty on both.
  */
 export const ENTITY_PAGE_SIZE = 20;
+
+/**
+ * The pages a list of `total` rows takes at `pageSize` rows a page, both as a response sent them
+ * (its `total` and its `limit`): the pager's `pages` (components/ui/pager.tsx), the whole pages
+ * and one more for a remainder, by integer arithmetic. A list with no row takes none.
+ */
+export function pageCount(total: number, pageSize: number): number {
+  if (!Number.isSafeInteger(total) || total < 0)
+    throw new Error(`pageCount: ${total} is not a count of rows`);
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1)
+    throw new Error(`pageCount: ${pageSize} is not a page's size`);
+  const rest = total % pageSize;
+  return (total - rest) / pageSize + (rest > 0 ? 1 : 0);
+}

@@ -371,12 +371,18 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })).toHaveLength(1);
   });
 
-  it('pages as newest first: "2 newest of 20,828,902", Newer and Older (BA-06)', async () => {
+  // Re-pinned on purpose (controls lane C2): the list pages with the controls board's cursor in
+  // time — its order in words, the page of the pages the served total makes at the served page
+  // size (20,828,902 ÷ 50: 416,578 whole pages and one more), "← newer" quiet and no control at
+  // the newest end, "older →" a way to go. It wrote "2 newest of 20,828,902" beside a disabled
+  // "Newer" and an "Older →" button, with no page.
+  it('pages as newest first: page 1 of 416,579, ← newer at its end, older → (BA-06)', async () => {
     render(<BlocksPage />);
-    expect(await screen.findByText('2 newest of 20,828,902')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Newer' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
-    expect(screen.queryByText(/Page 1 of/)).not.toBeInTheDocument();
+    const pager = await screen.findByRole('navigation', { name: 'blocks' });
+    expect(pager.textContent).toBe('newest first← newerpage 1 of 416,579older →');
+    expect(within(pager).queryByRole('button', { name: '← newer' })).toBeNull();
+    expect(within(pager).getByRole('button', { name: 'older →' })).toBeInTheDocument();
+    expect(screen.queryByText(/newest of/)).not.toBeInTheDocument();
   });
 
   // The controls lane (C2, c2-lists), written before the pager became the controls board's: older
@@ -588,7 +594,8 @@ describe('BlocksPage · Blocks v3 board', () => {
     const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
     const table = screen.getByRole('table', { name: 'Latest blocks' });
     expect(note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    const pager = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    // the controls board's pager (controls lane C2; it was the old pager's controls row)
+    const pager = screen.getByRole('navigation', { name: 'blocks' });
     expect(table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 

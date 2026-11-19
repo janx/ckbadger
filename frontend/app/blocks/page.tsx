@@ -28,9 +28,9 @@ import {
   resourceScale,
 } from '@/components/blocks/block-visual';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, pageCount } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
@@ -277,16 +277,16 @@ export default function BlocksPage() {
                 mobileRow={(block) => <BlockPhoneRow block={block} />}
                 onForm={setForm}
               />
-              <CursorPagination
-                summary={
-                  <span className="text-small">{blocksRange(data.data, data.total, page)}</span>
-                }
-                hasMore={data.hasMore}
-                hasPrevious={hasPrevious}
-                onNext={() => goToNext(data.nextCursor)}
-                onPrevious={goToPrevious}
-                previousLabel="Newer"
-                nextLabel="Older →"
+              {/* The controls board's cursor in time: newest first, the page of the pages the
+                  served total makes at the served page size. */}
+              <Pager
+                mode="time"
+                label="blocks"
+                order="newest first"
+                page={page}
+                pages={pageCount(blocksTotal(data.total), data.limit)}
+                onNewer={hasPrevious ? goToPrevious : undefined}
+                onOlder={data.hasMore ? () => goToNext(data.nextCursor) : undefined}
               />
             </>
           )}
@@ -297,13 +297,10 @@ export default function BlocksPage() {
   );
 }
 
-/** Newest first: page one is "50 newest of N"; later pages name their first and last heights. */
-function blocksRange(blocks: readonly Block[], total: number | undefined, page: number): string {
+/** The blocks list's total: the API serves it on every page, and a page without it is refused. */
+function blocksTotal(total: number | undefined): number {
   if (total === undefined) throw new Error('Blocks list response has no total');
-  const of = total.toLocaleString('en-US');
-  if (!blocks.length) return `0 of ${of}`;
-  if (page === 1) return `${blocks.length.toLocaleString('en-US')} newest of ${of}`;
-  return `${formatBlockNumber(blocks[0].number)} to ${formatBlockNumber(blocks[blocks.length - 1].number)} of ${of}`;
+  return total;
 }
 
 /** The Blocks v3 legend: the glyph grammar and the two-part size bar. */

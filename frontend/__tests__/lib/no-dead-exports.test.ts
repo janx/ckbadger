@@ -110,10 +110,6 @@ const ALLOWLIST: Record<string, { why: string; anchor?: { file: string; text: st
       text: "'components/ui/range-select.tsx'",
     },
   },
-  'components/ui/pager.tsx#Pager': {
-    why: 'the controls library’s pager (lane C1): placed by the C2 lanes in the place of CursorPagination; mounted meanwhile by the dev proof page proof/controls.tsx',
-    anchor: { file: '__tests__/lib/controls-gate.test.ts', text: "'components/ui/pager.tsx'" },
-  },
   'components/ui/copy-button.tsx#CopyButton': {
     why: 'the controls library’s copy button (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
     anchor: {
