@@ -2,7 +2,13 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
-import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchAndHash,
+  useSearchParams,
+} from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
@@ -25,7 +31,12 @@ import {
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
+import {
+  FOLD_HEAD,
+  TxStructure,
+  continuityColor,
+  type TxSealId,
+} from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, registeredName } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
@@ -112,6 +123,42 @@ function indexParam(value: string | null): number | null {
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
     throw new Error(`Invalid witness index ${value}`);
   return Number(value);
+}
+/**
+ * The fold's open state in the URL (lane D3): one parameter, `cells`, naming the sheets drawn
+ * whole — `consumed`, `created` or `all` — and absent when both are folded. A value it does not
+ * know is refused with the transaction named.
+ */
+const CELLS_PARAM = 'cells';
+function cellsParam(value: string | null, hash: string): Record<'consumed' | 'created', boolean> {
+  switch (value) {
+    case null:
+      return { consumed: false, created: false };
+    case 'consumed':
+      return { consumed: true, created: false };
+    case 'created':
+      return { consumed: false, created: true };
+    case 'all':
+      return { consumed: true, created: true };
+    default:
+      throw new Error(
+        `Transaction ${hash}: ${CELLS_PARAM}=${value} is none of consumed, created, all`
+      );
+  }
+}
+function cellsValue(open: Record<'consumed' | 'created', boolean>): string | null {
+  return open.consumed && open.created
+    ? 'all'
+    : open.consumed
+      ? 'consumed'
+      : open.created
+        ? 'created'
+        : null;
+}
+/** A cell's out point as the URL's anchor names it (`#<tx hash>-<index>`), or null for another. */
+function outPointAnchor(fragment: string): string | null {
+  const name = decodeURIComponent(fragment).toLowerCase();
+  return /^0x[0-9a-f]{64}-(0|[1-9][0-9]*)$/.test(name) ? name : null;
 }
 function PendingValue() {
   return <span className="text-text-dim">pending…</span>;
@@ -608,6 +655,13 @@ export default function TransactionDetailPage() {
     setSelectedWitness(indexParam(searchParams.get('witness')));
     setSelectedGroup(searchParams.get('wg'));
   }, [hash, searchParams]);
+  // the URL's anchor, `#…`: a cell's out point keeps that cell drawn under the fold
+  const searchAndHash = useSearchAndHash();
+  const fragment = searchAndHash.includes('#')
+    ? searchAndHash.slice(searchAndHash.indexOf('#'))
+    : '';
+  /** This page's URL with `next` as its query, its anchor kept. */
+  const urlWith = (next: URLSearchParams) => `${pathname}${next.size ? `?${next}` : ''}${fragment}`;
   const select = (index: number | null, group: string | null) => {
     setSelectedWitness(index);
     setSelectedGroup(group);
@@ -616,7 +670,17 @@ export default function TransactionDetailPage() {
     else next.set('witness', String(index));
     if (group === null) next.delete('wg');
     else next.set('wg', group);
-    router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
+    router.replace(urlWith(next), { scroll: false });
+  };
+  // The fold (lane D3): which sheets are drawn whole, from the URL; opening or folding one is a
+  // step of the history, so back walks it.
+  const openSheets = cellsParam(searchParams.get(CELLS_PARAM), hash);
+  const toggleSheet = (side: 'consumed' | 'created', open: boolean) => {
+    const next = new URLSearchParams(searchParams.toString());
+    const value = cellsValue({ ...openSheets, [side]: open });
+    if (value === null) next.delete(CELLS_PARAM);
+    else next.set(CELLS_PARAM, value);
+    router.push(urlWith(next), { scroll: false });
   };
   const shell = (children: ReactNode) => (
     <div className="min-h-screen">
@@ -768,6 +832,17 @@ export default function TransactionDetailPage() {
     label,
     links: continuity.filter((l) => l.label === label),
   }));
+  // The cell the URL points at by its out point (the cell page's link to this transaction): drawn
+  // wherever it stands, its continuity partner with it (the fold keeps both). An anchor that names
+  // no cell of this transaction keeps none, as a browser goes nowhere for an unknown anchor.
+  const anchored = outPointAnchor(fragment.slice(1));
+  const kept = tiles
+    ? [...tiles.inputs, ...tiles.outputs].filter(
+        (t) =>
+          t.outPoint !== undefined &&
+          `${t.outPoint.txHash.toLowerCase()}-${t.outPoint.index}` === anchored
+      )
+    : [];
 
   // ---- script-group matrix ----
   const matrix = scriptGroupRows(tx, {
@@ -1233,6 +1308,14 @@ export default function TransactionDetailPage() {
                 onCellHover={(id) => setHover(id ? { t: 'cell', id } : null)}
                 continuity={continuity}
                 seamSeal={seal}
+                // the fold (lane D3): six cells a sheet, the URL's cell kept, the open sheets the
+                // URL's `cells`
+                fold={{
+                  head: FOLD_HEAD,
+                  keep: kept.map((t) => t.id),
+                  open: openSheets,
+                  onToggle: toggleSheet,
+                }}
                 // A lit tile clears the selection on click only while there is one: a tile lit
                 // by hover alone has no clearing click (review 2026-11-03 — the clearing replace
                 // used to cancel the out point link's navigation to the cell page).

@@ -12,9 +12,40 @@ import { cn } from '@/lib/utils';
 import { CELL_COLORS, CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
+import { Pager } from '@/components/ui/pager';
 
 /** A transaction's stone (the seals by kind): its hash and the cells it consumed and created. */
 export type TxSealId = Extract<SealId, { kind: 'tx' }>;
+
+/**
+ * The tiles a sheet draws before its fold row (lane D3; the transaction board the owner passed at
+ * gate D0′, R10): six, the first six in the transaction's own order, never re-ranked. The plans'
+ * older eight was superseded by the board.
+ */
+export const FOLD_HEAD = 6;
+
+/**
+ * The fold (lane D3): what a page shows of each sheet. A sheet draws its first `head` cells, the
+ * cells the page keeps and the continuity partner of every cell it draws, in the transaction's
+ * order, and one row for the rest that says what it folds by counting (the folded cells' one owner
+ * when they share one lock, else the count alone); it never sums. The page owns the open state (the
+ * transaction page keeps it in its URL).
+ */
+export interface TxFold {
+  /** The cells a sheet draws first: FOLD_HEAD on the transaction page, none in a cell's embed. */
+  head: number;
+  /** Cells drawn wherever they stand (the URL's out point, the cell page's own cell), by id. */
+  keep: readonly string[];
+  /** The sheets drawn whole. */
+  open: Readonly<Record<Side, boolean>>;
+  /**
+   * Opens or folds a sheet in place. Absent, the rows hold no control: the cell page's way to the
+   * rest is its one link to the transaction.
+   */
+  onToggle?: (side: Side, open: boolean) => void;
+  /** What a sheet that draws none of its cells is not ("this cell", on the cell page). */
+  subject?: string;
+}
 
 /**
  * The two sheets from lg up (seals by kind, C11): a transaction is two sheets of one contract,
@@ -138,6 +169,8 @@ export interface TxStructureProps {
    * up. Every other page leaves it out (a list's seal is whole).
    */
   seamSeal?: { id: TxSealId; state?: SealState };
+  /** The fold (`TxFold`); absent, every cell is drawn (the Fiber channel's steps). */
+  fold?: TxFold;
 }
 /** F2-tx (D4): a source that is not a consumed cell. */
 export interface TxInflow {
@@ -170,10 +203,14 @@ export function TxStructure({
   continuityList = true,
   afterOnward,
   seamSeal,
+  fold,
 }: TxStructureProps) {
   const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const [centers, setCenters] = useState<Record<string, number>>({});
+  const sheets = foldSheets(txHash, inputs, outputs, continuity, fold);
+  // the tiles drawn: a fold that opens or closes moves them, so the links are measured again
+  const drawnKey = [...sheets.consumed.shown, ...sheets.created.shown].map((c) => c.id).join(',');
   useLayoutEffect(() => {
     const root = canvas.current;
     if (!root) return;
@@ -197,8 +234,8 @@ export function TxStructure({
       observer?.disconnect();
       window.removeEventListener('resize', measure);
     };
-    // (the inflow source's row moves the consumed tiles)
-  }, [inputs, outputs, inflow]);
+    // (the inflow source's row moves the consumed tiles; a fold opened or closed moves them all)
+  }, [inputs, outputs, inflow, drawnKey]);
   const ids = new Set([...inputs, ...outputs].map((c) => c.id));
   if (ids.size !== inputs.length + outputs.length)
     throw new Error(`${txHash}: duplicate cell id in transaction structure`);
@@ -244,30 +281,43 @@ export function TxStructure({
       }}
     />
   );
-  const sheet = (side: Side, cells: readonly CellTileData[], total: string | undefined) => (
-    <TerminalPanel data-sheet={side} className="min-w-0">
-      {/* the sheet's lane on its seam side (SHEETS.lane: 35 px and the 1 px border); 12 px on
+  const sheet = (side: Side, cells: readonly CellTileData[], total: string | undefined) => {
+    const { shown, folded } = sheets[side];
+    return (
+      <TerminalPanel data-sheet={side} className="min-w-0">
+        {/* the sheet's lane on its seam side (SHEETS.lane: 35 px and the 1 px border); 12 px on
           the outer side, above and under its rows, which stay at the top (the fee directly under
           the last created tile) when the sheet stretches to its pair */}
-      <div
-        data-sheet-content=""
-        className={cn('p-3', side === 'consumed' ? 'lg:pr-[35px]' : 'lg:pl-[35px]')}
-      >
-        <SheetHead
-          txHash={txHash}
-          side={side}
-          count={cells.length}
-          total={total}
-          sealed={seamSeal !== undefined}
-        />
-        <div data-sheet-rows="" className="space-y-3">
-          {side === 'consumed' && inflow && <InflowSource txHash={txHash} inflow={inflow} />}
-          {cells.map(tile)}
-          {side === 'created' && <FeeRow txHash={txHash} fee={fee} />}
+        <div
+          data-sheet-content=""
+          className={cn('p-3', side === 'consumed' ? 'lg:pr-[35px]' : 'lg:pl-[35px]')}
+        >
+          <SheetHead
+            txHash={txHash}
+            side={side}
+            count={cells.length}
+            total={total}
+            sealed={seamSeal !== undefined}
+          />
+          <div data-sheet-rows="" className="space-y-3">
+            {side === 'consumed' && inflow && <InflowSource txHash={txHash} inflow={inflow} />}
+            {shown.map(tile)}
+            {fold && (folded.length > 0 || sheets[side].opened) && (
+              <FoldRow
+                side={side}
+                count={cells.length}
+                shown={shown.length}
+                folded={folded}
+                subject={fold.subject}
+                onToggle={fold.onToggle && ((open) => fold.onToggle!(side, open))}
+              />
+            )}
+            {side === 'created' && <FeeRow txHash={txHash} fee={fee} />}
+          </div>
         </div>
-      </div>
-    </TerminalPanel>
-  );
+      </TerminalPanel>
+    );
+  };
   // The overlay's x, px: the consumed tiles' edge and the created tiles' edge (lane, seam, lane).
   const [tilesIn, tilesOut] = [0, 2 * SHEETS.lane + SHEETS.seam];
   return (
@@ -300,17 +350,20 @@ export function TxStructure({
               className="pointer-events-none absolute inset-y-0 -left-9 z-20 h-full w-[76px] overflow-visible"
             >
               {ys.length > 0 &&
-                continuity.map((link) => (
-                  <path
-                    key={`${link.from}:${link.to}`}
-                    data-continuity-kind={link.kind}
-                    d={`M${tilesIn} ${centers[link.from]}C30 ${centers[link.from]} 46 ${centers[link.to]} ${tilesOut} ${centers[link.to]}`}
-                    fill="none"
-                    stroke={continuityColor(link.kind)}
-                    strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
-                    strokeDasharray="4 3"
-                  />
-                ))}
+                // a link between two drawn tiles; a folded cell has no tile to start or end at
+                continuity
+                  .filter((link) => sheets.drawn.has(link.from) && sheets.drawn.has(link.to))
+                  .map((link) => (
+                    <path
+                      key={`${link.from}:${link.to}`}
+                      data-continuity-kind={link.kind}
+                      d={`M${tilesIn} ${centers[link.from]}C30 ${centers[link.from]} 46 ${centers[link.to]} ${tilesOut} ${centers[link.to]}`}
+                      fill="none"
+                      stroke={continuityColor(link.kind)}
+                      strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
+                      strokeDasharray="4 3"
+                    />
+                  ))}
             </svg>
           )}
           {seamSeal && <SeamSeal id={seamSeal.id} state={seamSeal.state} />}
@@ -460,6 +513,144 @@ export function TxStructure({
 
 /** A sheet of the transaction: what it consumed, or what it created. */
 type Side = 'consumed' | 'created';
+
+/** One sheet under the fold: the cells it draws and the cells it folds, both in order. */
+interface FoldedSheet {
+  shown: readonly CellTileData[];
+  folded: readonly CellTileData[];
+  /** Drawn whole by the page, with cells a closed fold would hide: its row is the way back. */
+  opened: boolean;
+}
+
+/**
+ * What each sheet draws under the fold (`TxFold`): with no fold, every cell. Folded, a sheet draws
+ * its first `head` cells, the cells the page keeps, and the continuity partner of any of those
+ * (a drawn cell's link is never cut by the fold), in the transaction's order; opened, all of them.
+ * A kept cell the transaction does not have is refused, with the transaction named.
+ */
+function foldSheets(
+  txHash: string,
+  inputs: readonly CellTileData[],
+  outputs: readonly CellTileData[],
+  continuity: readonly TxContinuity[],
+  fold: TxFold | undefined
+): Record<Side, FoldedSheet> & { drawn: ReadonlySet<string> } {
+  const all = { consumed: inputs, created: outputs };
+  if (!fold) {
+    const whole = (cells: readonly CellTileData[]) => ({ shown: cells, folded: [], opened: false });
+    return {
+      consumed: whole(inputs),
+      created: whole(outputs),
+      drawn: new Set([...inputs, ...outputs].map((c) => c.id)),
+    };
+  }
+  const ids = new Set([...inputs, ...outputs].map((c) => c.id));
+  for (const id of fold.keep)
+    if (!ids.has(id))
+      throw new Error(`${txHash}: the fold keeps cell ${id}, which the transaction does not have`);
+  // the cells drawn on their own: each sheet's head, the kept ones, every cell of an open sheet;
+  // then the continuity partner of each of them
+  const own = (closedOnly: boolean) => {
+    const set = new Set<string>(fold.keep);
+    for (const side of ['consumed', 'created'] as const)
+      all[side]
+        .slice(0, !closedOnly && fold.open[side] ? undefined : fold.head)
+        .forEach((c) => set.add(c.id));
+    for (const l of continuity) {
+      if (set.has(l.from)) set.add(l.to);
+      else if (set.has(l.to)) set.add(l.from);
+    }
+    return set;
+  };
+  const drawn = own(false);
+  // what a closed sheet would draw: an open sheet with more than that has a way back
+  const closed = own(true);
+  const sheet = (side: Side): FoldedSheet => ({
+    shown: all[side].filter((c) => drawn.has(c.id)),
+    folded: all[side].filter((c) => !drawn.has(c.id)),
+    opened: fold.open[side] && all[side].some((c) => !closed.has(c.id)),
+  });
+  return { consumed: sheet('consumed'), created: sheet('created'), drawn };
+}
+
+/**
+ * The fold row (lane D3; the board's dashed row): what the sheet folds, by counting — "152 more
+ * cells from ckb1…sqylvfrs" when every folded cell has one lock (the same lock, not the same
+ * shortened address), else "152 more cells consumed"; where the sheet draws none of its cells and
+ * the page says what they are not, ", none of them this cell". It never sums: the sheet's total
+ * is the head's, the API's. The way to the rest is the short list's form, the Pager's
+ * "all 158 cells ↓"; opened, the row stands after the last cell and folds the sheet again with the
+ * rows' fold's words, "fewer ↑". Without a control (the cell page) the row is the count alone.
+ */
+function FoldRow({
+  side,
+  count,
+  shown,
+  folded,
+  subject,
+  onToggle,
+}: {
+  side: Side;
+  count: number;
+  shown: number;
+  folded: readonly CellTileData[];
+  subject?: string;
+  onToggle?: (open: boolean) => void;
+}) {
+  const words = () => {
+    // an owner shared by the folded cells: two or more with one lock (one folded cell is counted,
+    // "1 more cell created", as the board writes it)
+    const lock = folded[0].seal.id.lock;
+    const shared = folded.length > 1 && folded.every((c) => c.seal.id.lock === lock);
+    const not =
+      shown === 0 && subject !== undefined
+        ? folded.length === 1
+          ? `, not ${subject}`
+          : `, none of them ${subject}`
+        : '';
+    return (
+      <span data-fold-words="" className="min-w-0">
+        {unitNode(
+          shown > 0
+            ? formatCount(folded.length, 'more cell', 'more cells')
+            : formatCount(folded.length, 'cell')
+        )}{' '}
+        {shared ? (
+          <>
+            from <span className="whitespace-nowrap">{folded[0].owner}</span>
+          </>
+        ) : (
+          side
+        )}
+        {not}
+      </span>
+    );
+  };
+  return (
+    <div
+      data-fold={side}
+      className="text-small border-text-dim/60 text-text flex flex-wrap items-center gap-x-3 gap-y-1 border border-dashed px-3 py-1.5"
+    >
+      {folded.length > 0 && words()}
+      {onToggle && (
+        <div className="sm:ml-auto">
+          {folded.length > 0 ? (
+            <Pager mode="more" all={{ count, singular: 'cell', onShow: () => onToggle(true) }} />
+          ) : (
+            <button
+              type="button"
+              aria-expanded={true}
+              onClick={() => onToggle(false)}
+              className="text-jade text-small inline-flex h-8 items-center underline-offset-4 hover:underline sm:h-7"
+            >
+              fewer ↑
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * A sheet's head (C11; the board's label, value and sub-line): the eyebrow label, the count of

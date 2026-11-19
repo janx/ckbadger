@@ -71,6 +71,8 @@ vi.mock('@/src/navigation', () => ({
   useParams: () => ({ hash: TX_HASH }),
   usePathname: () => `/tx/${TX_HASH}`,
   useSearchParams: () => mockSearchParams,
+  // lane D3: the page reads the URL's anchor (a cell's out point); these tests give none
+  useSearchAndHash: () => (mockSearchParams.size ? `?${mockSearchParams}` : ''),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
 }));
 
