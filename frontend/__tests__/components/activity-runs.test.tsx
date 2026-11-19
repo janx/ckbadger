@@ -824,3 +824,45 @@ describe('a called lock on a registered code hash by another hash type (the lock
     }
   });
 });
+
+// The third read's T MUST-2: the page's half of the item-types ruling. A row whose item types the
+// route could not state ("must not be folded with rows it only resembles") stands alone; a row
+// with no reason, or with no field at all, is refused by name. Each case was checked by hand
+// against its mutation in components/activity/activity-runs.tsx `runSubject`.
+describe('runSubject: a row whose item types are not stated (the item-types ruling)', () => {
+  const unread = (n: number): GlobalActivity => ({
+    ...oracle(n, 'q3q7ue', '0x00', n * 49),
+    itemTypes: null,
+    itemTypesUnread: `token 0x${'5e'.repeat(32)}: no token row`,
+  });
+
+  // delete the `return null` branch (`if (!pending && activity.itemTypes === null) {…}`): the two
+  // fall through to `itemTypes: []`, one key, and fold into "all 2 transactions ↓": red
+  it('stands an unread row alone: two of one title and one code are two rows, no run', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page([unread(1), unread(2)]));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
+    expect(
+      [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual([unread(1).txHash, unread(2).txHash]);
+  });
+
+  // delete the refusal of a null without a reason: it returns null and stands alone, silently: red
+  it('refuses a committed row whose item types are null with no reason, by name', () => {
+    const row = { ...unread(1), itemTypesUnread: null };
+    expect(() => runSubject(row, 'Script call')).toThrow(
+      `transaction ${row.txHash}: a committed row with no item types says no why`
+    );
+  });
+
+  // delete the refusal of a row without the field: it folds on `itemTypes ?? []`: red
+  it('refuses a row with no itemTypes field at all, by name (not this API)', () => {
+    const { itemTypes: _gone, ...row } = unread(1);
+    expect(() => runSubject(row as GlobalActivity, 'Script call')).toThrow(
+      `transaction ${row.txHash}: the row states no itemTypes field`
+    );
+  });
+});
