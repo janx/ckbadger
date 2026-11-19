@@ -545,9 +545,14 @@ describe('Network board (F2 charts)', () => {
       )
     );
     render(wrap(<NetworkMapView neverVerified={0} />));
-    const list = await screen.findByLabelText('Countries with one verified node');
-    expect(list).toHaveTextContent('MO 1');
-    expect(list).toHaveTextContent('TW 1');
+    // Re-pinned on purpose (readability P4, the ranked country list): the countries a phone map
+    // leaves unlabelled were named in a quiet line under it ("One verified node each, not labelled
+    // on the map: MO 1 · TW 1"); every country is now a row of the ranked list beside the map, those
+    // too, and the line went (said once).
+    const list = await screen.findByRole('list', { name: 'Countries by verified nodes' });
+    expect(list.querySelector('[data-country-row="MO"]')).toHaveTextContent('MOMacao SAR China1');
+    expect(list.querySelector('[data-country-row="TW"]')).toHaveTextContent('TWTaiwan1');
+    expect(screen.queryByLabelText('Countries with one verified node')).toBeNull();
     expect(
       [...document.querySelectorAll('[data-country-label]')].map((n) => n.textContent)
     ).toEqual(['US 2']);

@@ -447,8 +447,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/network/network-map.tsx': {
     family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the loading line and the one-node countries line under the map',
+    // prose 2 → 1 (P4 topics): the one-node countries line under a phone map went; every country
+    // is a row of the ranked list beside the map
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note in the quiet ink',
   },
   'app/network/nodes-table.tsx': {
     family: 'topics',
