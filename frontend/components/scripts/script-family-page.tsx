@@ -1102,7 +1102,7 @@ export function ScriptFamilyPage({
             <div role="region" aria-label="History" className="mt-[72px] min-w-0">
               <DetailSection title="History" actions={range}>
                 {chartLoading ? (
-                  <p className="text-text-dim text-small py-6">Loading capacity history…</p>
+                  <p className="text-text text-small py-6">Loading capacity history…</p>
                 ) : chartError ? (
                   <p role="alert" className="text-negative text-small max-w-measure">
                     Capacity history unavailable: {chartError.message}
@@ -1206,7 +1206,7 @@ export function ScriptFamilyPage({
                 ))}
               </div>
               {cells.loading ? (
-                <p className="text-text-dim text-small py-6">Loading cells…</p>
+                <p className="text-text text-small py-6">Loading cells…</p>
               ) : (
                 <ListTable
                   label="Its cells"

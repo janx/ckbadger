@@ -1490,6 +1490,10 @@ describe('PipelinePanel static render', () => {
     server.use(http.get('/api/:network/v1/pipeline', () => new Promise<Response>(() => {})));
     render(<PipelinePanel />);
     expect(screen.getByTestId('pipeline-loading')).toBeInTheDocument();
+    // a loading line is a sentence, the reading ink, one rule site-wide (the lead's follow-up to lane
+    // P3; it was the quiet ink)
+    expect(screen.getByTestId('pipeline-loading')).toHaveClass('text-text');
+    expect(screen.getByTestId('pipeline-loading')).not.toHaveClass('text-text-dim');
     const tip = screen.getByTestId('pipeline-tip');
     expect(tip).toHaveTextContent(/^--tip —$/);
     expect(within(tip).queryByRole('link')).toBeNull();

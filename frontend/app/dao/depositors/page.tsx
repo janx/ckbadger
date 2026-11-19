@@ -228,7 +228,7 @@ export default function DaoDepositorsPage() {
               DAO depositors could not be loaded: {String(query.error)}
             </div>
           ) : !page ? (
-            <div className="text-text-dim text-small py-6">Ranking every depositor…</div>
+            <div className="text-text text-small py-6">Ranking every depositor…</div>
           ) : (
             <>
               {moved && (

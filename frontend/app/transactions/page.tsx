@@ -674,7 +674,7 @@ export default function TransactionsPage() {
                 </button>
               </div>
             ) : (
-              <p className="text-text-dim text-small">Reading the pool…</p>
+              <p className="text-text text-small">Reading the pool…</p>
             )}
           </section>
           {/* The list's command line (the controls board's tab row): the user transactions, the
@@ -700,7 +700,7 @@ export default function TransactionsPage() {
                     : 'not yet in a block · newest first'}
               </div>
               {isAwaited(active) && (
-                <p role="status" className="text-text-dim">
+                <p role="status" className="text-text">
                   Loading transactions…
                 </p>
               )}

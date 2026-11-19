@@ -1609,7 +1609,7 @@ export default function ScriptDetailPage({
                   }
                 >
                   {isVersionCellsLoading ? (
-                    <p className="text-text-dim text-small py-6">Loading cells…</p>
+                    <p className="text-text text-small py-6">Loading cells…</p>
                   ) : (
                     <ListTable
                       label="Its cells"
@@ -1758,7 +1758,7 @@ export default function ScriptDetailPage({
               onChange={setCapacityRange}
             />
             {isAwaited(isCodeHashMode ? selectedCapacityChartRead : familyCapacityChartRead) ? (
-              <p className="text-text-dim text-small py-6">Loading capacity history…</p>
+              <p className="text-text text-small py-6">Loading capacity history…</p>
             ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (
               <ScriptCapacityEvidenceChart
                 chart={(isCodeHashMode ? selectedCapacityChart : familyCapacityChart)!}

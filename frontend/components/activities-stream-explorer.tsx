@@ -319,7 +319,7 @@ function ActivityDayDivider({ label }: { label: string }) {
 function LoadingRows() {
   return (
     <>
-      <p role="status" className="text-text-dim text-small py-3">
+      <p role="status" className="text-text text-small py-3">
         Reading activities…
       </p>
       <SkeletonRows />
@@ -645,7 +645,7 @@ export function ActivitiesStreamExplorer({
             )}
 
             {isFetchingNextPage && (
-              <p role="status" className="text-text-dim text-small py-3 text-center">
+              <p role="status" className="text-text text-small py-3 text-center">
                 Reading older activities…
               </p>
             )}

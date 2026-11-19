@@ -1017,7 +1017,7 @@ export function PipelinePanel() {
       ) : data ? (
         <PipelineCanvas snapshot={data} />
       ) : (
-        <StatusRow testId="pipeline-loading" tone="text-text-dim">
+        <StatusRow testId="pipeline-loading" tone="text-text">
           Loading pipeline…
         </StatusRow>
       )}

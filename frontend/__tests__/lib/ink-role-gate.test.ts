@@ -562,35 +562,6 @@ function toleratedFailures(
  * named by kind with a count. They are no work left; the scan holds them as it holds TOLERATED.
  */
 const DECIDED: Readonly<Record<string, Tolerated>> = {
-  'app/blocks/page.tsx': {
-    family: 'chain',
-    // td 5 → 4 (readability F3-e): the 608 px table's age is the first line of its "Age · txs" cell
-    // link 3 → 1 (lane P3): the hardfork links read in their line's ink, the inline look's
-    // link 1 → 0, td 4 → 1, prose 2 → 1 (the P3 follow-up's 2d, each decided): a block's age, its
-    // reward's finality line with its block link, and the compact table's size and cycles are
-    // values, and the error line a statement, all in the reading ink
-    // td 1 → 0 (BRIEF-ink-size-roles item 1): the cycles' state, "Not yet run" or "Replay failed", is
-    // a cell's content, the reading ink; decided was "an empty value", which is no role of the brief's
-    sites: { prose: 1 },
-    reason:
-      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading blocks…”',
-  },
-  'app/inventory/inventory-page-client.tsx': {
-    family: 'lists',
-    // link 1 → 0 (controls lane C2): the class links are the controls board's tab row
-    sites: { prose: 1 },
-    reason:
-      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading inventory…”',
-  },
-  'app/transactions/page.tsx': {
-    family: 'lists',
-    // td 2, prose 4 → prose 2 (BRIEF-ink-size-roles items 1 and 3): the pool's two interpretation
-    // states are a cell's content, the empty line and the note under the kind chips sentences, the
-    // reading ink
-    sites: { prose: 2 },
-    reason:
-      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Reading the pool…”, “Loading transactions…”',
-  },
   // ---- shared (lane cd-fixes-controls, the ink and size round): each a role of the rule ----
   'components/ui/detail-layout.tsx': {
     family: 'shared',
@@ -615,32 +586,6 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 1 },
     reason:
       'decided (the shared lane): the byte map’s name, the label of the figure (“Script · 33 bytes, then the args each cell sets”)',
-  },
-  'components/activities-stream-explorer.tsx': {
-    family: 'lists',
-    // prose 4 → 2 (BRIEF-ink-size-roles item 3): the counts' period note and the empty line are
-    // sentences, the reading ink
-    sites: { prose: 2 },
-    reason:
-      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Reading activities…”, “Reading older activities…”',
-  },
-  'app/scripts/[name]/client-page.tsx': {
-    family: 'lists',
-    sites: { prose: 2 },
-    reason:
-      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading cells…”, “Loading capacity history…”',
-  },
-  'components/scripts/script-family-page.tsx': {
-    family: 'lists',
-    sites: { prose: 2 },
-    reason:
-      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading capacity history…”, “Loading cells…”',
-  },
-  'components/scripts/script-newest-cells.tsx': {
-    family: 'lists',
-    sites: { prose: 1 },
-    reason:
-      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading the newest cells…”',
   },
   'components/blocks/block-position.tsx': {
     family: 'chain',
@@ -669,10 +614,14 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
  * of the ink and size round's five lanes, 19 in 14: lane P1's 3 (an uncle row's label, the witness
  * list's hint, the structure's key), the shared lane's 5 (lane cd-fixes-controls: an eyebrow, two
  * gels' keys and a figure's name) and the lists family's loading lines (lane P3: 11 in 7 files, the
- * eight sites of the 15 that were no loading line read in the reading ink).
+ * eight sites of the 15 that were no loading line read in the reading ink). 19 → 8 in 7 files (the
+ * lead's follow-up to lane P3: a loading line is a sentence and reads in the reading ink, one rule
+ * site-wide, as the chain, assets, topics and shared lanes wrote theirs): the lists family's 11
+ * loading lines left; what stays is lane P1's 3 and the shared lane's 5, each a label, a hint, a
+ * key or an eyebrow.
  */
-const DECIDED_SITES = 19;
-const DECIDED_FILES = 14;
+const DECIDED_SITES = 8;
+const DECIDED_FILES = 7;
 
 /**
  * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
@@ -999,8 +948,11 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   // Re-pinned on purpose (the ink and size round, at the merge of its five lanes; renamed, it was
   // "15 in 6 files"): the chain family's three decided sites (lane P1: an uncle row's label, the
   // witness list's hint and the structure's key) and the shared lane's five (lane
-  // cd-fixes-controls) joined; the lists family's decided sites are its loading lines alone (lane P3)
-  it('holds the decided sites apart, 19 in 14 files, none of them also on the work list', () => {
+  // cd-fixes-controls) joined; the lists family's decided sites are its loading lines alone (lane P3).
+  // Re-pinned on purpose (the lead's follow-up to lane P3: a loading line is a sentence, the reading
+  // ink; renamed, it was "19 in 14 files"): the lists family's 11 loading lines left, none of the
+  // lists family's sites is decided
+  it('holds the decided sites apart, 8 in 7 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
       0

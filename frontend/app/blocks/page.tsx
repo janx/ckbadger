@@ -266,7 +266,7 @@ export default function BlocksPage() {
           actions={form === 'table' ? <BlocksLegend /> : undefined}
         >
           {isAwaited(read) && (
-            <p role="status" className="text-text-dim">
+            <p role="status" className="text-text">
               Loading blocks…
             </p>
           )}

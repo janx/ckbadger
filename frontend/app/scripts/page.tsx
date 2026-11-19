@@ -651,7 +651,7 @@ export default function ScriptsPage() {
               ) : summary.data ? (
                 <ScriptsSummary summary={summary.data} />
               ) : (
-                <div className="text-text-dim text-small mt-6">Loading the script summary…</div>
+                <div className="text-text text-small mt-6">Loading the script summary…</div>
               )}
             </section>
             {summary.data?.classSummary && (
@@ -707,7 +707,7 @@ export default function ScriptsPage() {
                   )}
                 </div>
                 {isAwaited(read) ? (
-                  <div className="text-text-dim text-small py-8">Loading scripts…</div>
+                  <div className="text-text text-small py-8">Loading scripts…</div>
                 ) : isError ? (
                   <div role="alert" className="text-negative text-small py-8">
                     <strong>Failed to load scripts</strong>:{' '}
