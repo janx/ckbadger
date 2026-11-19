@@ -82,9 +82,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       "the hardfork resources' raw <a>, inked by hand (text-interactive); a step arrow's mark inked inside its block link (text-text-dim, group-hover:text-jade)",
   },
   'components/participant-ref.tsx': {
-    lane: 'p-chain',
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (hover:text-jade, text-text, text-jade-dim)',
+    // look 3 → 0 (lane P1 follow-up): its three links hand their caller's look through (`look`,
+    // as an Address's), and the chain pages state theirs; the inks by hand stay for a caller that
+    // states none, the feeds' call sites, which are the lists lane's
+    lane: 'p-lists',
+    sites: { ink: 2 },
+    reason:
+      "inks by hand where a caller states no look (hover:text-jade, text-text, text-jade-dim): the feeds' call sites",
   },
   // lane P1 took this file's own inks off the list; the reader of an ink inside a link (lane
   // cd-fixes-controls) finds one left, on a token amount's "no readable amount of"
@@ -318,8 +322,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // transactions page's and the transaction list's Hash in the bright ink, the activity row's span
 // in the quiet ink, the status line's epoch link's five label, value and position spans, the
 // deep-fork alert's words on its filled button, a transaction cell's "no readable amount of", the
-// block page's step arrow mark; TabLinks' name span is NAMED)
-const TOLERATED_TOTAL = 121;
+// block page's step arrow mark; TabLinks' name span is NAMED) → 118 (lane P1 follow-up:
+// participant-ref.tsx's three links hand their caller's look through, 3)
+const TOLERATED_TOTAL = 118;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
