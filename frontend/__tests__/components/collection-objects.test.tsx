@@ -535,6 +535,8 @@ describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
           number: null,
           ownerLockHash: null,
           ownerAddress: null,
+          // no media profile: the grid's "not recorded"
+          mediaProfile: null,
         },
       ])
     );
@@ -546,21 +548,21 @@ describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
     expect(phoneLines(held).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['name', 'head', '#18,446,744,073,709,551,614', null],
       ['holder', 'body', `held by ${shortenAddress(joy, 'row')} JoyID`, 'Pure CKB'],
-      ['minted', 'quiet', 'face Blue · minted at #100 on 2023-11-15', null],
+      ['minted', 'quiet', 'Face Blue · minted at #100 on 2023-11-15', null],
     ]);
     // the chip holds the holder's line's right edge; the lock is words, never a tag cut to "…"
     expect(held.querySelector('[data-line="holder"]')).toHaveClass('flex-nowrap');
     expect(held.querySelector('[data-line="holder"] [data-row-tag]')).toBeNull();
     expect(dottedItems(held.querySelector('[data-line="minted"]')!)).toEqual([
-      'face Blue',
+      'Face Blue',
       'minted at #100 on 2023-11-15',
     ]);
     const labels = Array.from(held.querySelectorAll('[data-role="figure-label"]'));
-    expect(labels.map((l) => l.textContent)).toEqual(['held by', 'face', 'minted at', 'on']);
+    expect(labels.map((l) => l.textContent)).toEqual(['held by', 'Face', 'minted at', 'on']);
     expect(phoneLines(ownerless).map((l) => [l.key, l.left, l.right])).toEqual([
-      ['name', '0x0404…0404', null],
+      ['name', '0x04040404…040404', null],
       ['holder', 'No live owner', 'not recorded'],
-      ['minted', 'face Blue · minted at #100 on 2023-11-15', null],
+      ['minted', 'Face Blue · minted at #100 on 2023-11-15', null],
     ]);
     // line 1 is the name alone at its widest: the mark and its gap and a u64 object number
     expect(statedHeadPx(held)).toBe(246.8);
