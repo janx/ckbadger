@@ -479,7 +479,8 @@ describe('DaoBoard', () => {
       'epoch ranges rather than predicted calendar dates.',
       'the required input, headers, witnesses and script execution still apply.',
       'it is not the real occupied size of live cells.',
-      "the depositors' share accrues via AR and is paid out at withdrawals.",
+      // re-pinned for lane exactness, part A (A7): claimed / unclaimed (was "paid out")
+      "the depositors' share accrues via AR and is claimed at withdrawals.",
       'what is burnt stays burnt.',
       // lane P4: "“Compensation, last 365 days” is on free capacity, from the header's AR." is
       // said once, in the rates' keys in tier 1
@@ -950,7 +951,8 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
 });
 
 // PB-25 (UI review 2026-11-14): at 390 the icicle's blocks were blank and the legend's "paid out" /
-// "still owed" rows had no swatch, so the two sub-blocks could not be told apart.
+// "still owed" rows (claimed / unclaimed since lane exactness, part A) had no swatch, so the two
+// sub-blocks could not be told apart.
 describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -977,7 +979,7 @@ describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
       expect(swatch.getAttribute('fill'), key).toBe(block.getAttribute('fill'));
       expect(swatch.getAttribute('fill-opacity'), key).toBe(block.getAttribute('fill-opacity'));
     }
-    // paid out and still owed are told apart by their swatches
+    // claimed and unclaimed are told apart by their swatches
     const paint = (key: string) => {
       const rect = svg.querySelector(`[data-under-label="${key}"] rect`)!;
       return `${rect.getAttribute('fill')} ${rect.getAttribute('fill-opacity')}`;
@@ -1763,7 +1765,8 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent('The DAO field in every block header · #5');
     expect(t2).toHaveTextContent(
       // re-pinned (lane P4): exact (it was '5.00000000 CKB')
-      'At block #4 (0xb4b4b4b4…b4b4b4), S (5 CKB) equals the compensation still owed'
+      // re-pinned for lane exactness, part A (A7): unclaimed (was "the compensation still owed")
+      'At block #4 (0xb4b4b4b4…b4b4b4), S (5 CKB) equals the unclaimed compensation'
     );
     expect(t2).not.toHaveTextContent('not shown across two blocks');
   });
@@ -2095,8 +2098,11 @@ describe('DaoBoard: what the page says first (readability P4)', () => {
     const under = [...svg.querySelectorAll('[data-under-label]')];
     expect(under.map((g) => [g.getAttribute('data-under-label'), g.textContent])).toEqual([
       ['miners', 'miners 10.32%'],
-      ['paid', 'paid out 47.64%'],
-      ['owed', 'still owed 52.36%'],
+      // re-pinned for lane exactness, part A (A7): claimed / unclaimed (were "paid out", "still
+      // owed"); each a glyph shorter, still too wide for its box (at 12 px with 6 px of padding,
+      // "claimed 47.64%" needs 112.8 px and "unclaimed 52.36%" 127.2 px), so still named under it
+      ['paid', 'claimed 47.64%'],
+      ['owed', 'unclaimed 52.36%'],
     ]);
     for (const g of under) {
       const key = g.getAttribute('data-under-label')!;
@@ -2113,7 +2119,7 @@ describe('DaoBoard: what the page says first (readability P4)', () => {
     const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
     const line = within(issuance).getByText((_, el) => el?.getAttribute('data-role') === 'amounts');
     expect(line).toHaveTextContent(
-      'to miners 970,167,146 · for depositors 1,610,598,455 (paid out 767,289,103 · still owed 843,309,352 to 22,379 live cells) · burnt 6,818,467,127 CKB'
+      'to miners 970,167,146 · for depositors 1,610,598,455 (claimed 767,289,103 · unclaimed 843,309,352 in 22,379 live cells) · burnt 6,818,467,127 CKB'
     );
     expect(line.querySelector('[title="970,167,146.58847454 CKB"]')).not.toBeNull();
   });

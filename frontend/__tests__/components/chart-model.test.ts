@@ -609,6 +609,8 @@ describe('29 chart variants', () => {
       ...simple,
       data: simple.data.map(({ date, value }) => ({ date, value })),
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      // each day's operands, the route's (lane exactness, part A, A2)
+      counts: simple.data.map(({ date }) => ({ date, uncles: 1, blocks: 10 })),
     });
     expect(uncle.facts).toEqual([{ label: 'Consensus target', value: '1 / 40 blocks' }]);
   });
