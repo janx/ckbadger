@@ -36,10 +36,9 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * of a component other than `CursorPagination` (`{label}`), a pager drawn by an element other than
  * a button or a link (a `div` with `onClick`), a list that loads more on scroll with no control,
  * numbered page buttons with no word; a tab row drawn without a role and without the 2 px
- * underline; a `role` set in an object spread into an element (the source's object `role:` keys
- * are domain words: `'holdings-nav'`, `'Fiber funding'`); a tag passed through an `as` prop is
- * read as its default only (the prop's other values are its callers'); an `<input>` of another
- * text type (`email`, `number`, …) and a `<textarea>` (the site has none) are not counted.
+ * underline; a tag passed through an `as` prop is read as its default only (the prop's other
+ * values are its callers'); an `<input>` of another text type (`email`, `number`, …) and a
+ * `<textarea>` (the site has none) are not counted.
  *
  * Three more kinds it reads since lane c2-finish (item 5), so "one component per control" is held
  * here, not in a brief:
@@ -55,6 +54,28 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * action such as "Retry") is no choice to it, and a range whose words come from a variable
  * (`{label}`) is read as a choice only where it says it is pressed.
  *
+ * What it reads since lane cd-fixes-controls (T SHOULD-2, NOTE-3):
+ *
+ * - a spread into an element, followed to what it sets (`spreadRead`): an object literal's
+ *   `aria-pressed` and `role` (and its own spreads), a name of the file holding one, a call of a
+ *   function of the file (read as what it returns), and a call of a hook's binder, known by its
+ *   name among the binders the files of `hooks/` hand back (`hookBinders`: usePinnedReadout's
+ *   `bind`, a pressed button), through `?:`, `&&`, `||` and `??`;
+ * - `spread`: a spread it cannot follow (a prop, an import, a call of anything else) on a control,
+ *   an element that is one by its tag (`button`, `a`, `input`, `select`, `textarea`, `summary`), a
+ *   `Link` / `AppLink`, or an element with a click, a key handler, a role or a tab stop: it is a
+ *   site, named with its reason until the scan can follow it;
+ * - the role `menuitemradio`, and an `<input type="radio">` or `type="checkbox"`, as a choice;
+ * - the pager words `‹ prev`, `next ›`, `next page`, `show more`, `more ↓`, on a button or a link,
+ *   on any element that is a control by its attributes, or on a component with a click or a link
+ *   (`onClick`, `onGo`, `href`, `to`).
+ *
+ * Its limits: a binder is known by its name, so a hook's binder of a name another function of a
+ * file also bears is read as the binder; a spread it cannot follow on an element that is a control
+ * by the spread alone (an SVG mark with no click of its own) walks past; a pager whose words come
+ * from a prop (`<Go words="next →">`) or drawn by a component with no click and no link is not
+ * seen.
+ *
  * The sites tolerated today are listed per file with their count per kind, the lane that takes
  * them and a reason: the work list. A new site fails (its file's count is exceeded, or the file is
  * not listed), and so does a site that went (its count must be lowered), so the list only shrinks;
@@ -62,7 +83,7 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * pinned the same way: parts of a figure or a fold, not controls, and the shell's two comboboxes.
  */
 
-type Kind = 'select' | 'text-input' | 'tab' | 'pager' | 'choice' | 'clipboard' | 'range';
+type Kind = 'select' | 'text-input' | 'tab' | 'pager' | 'choice' | 'clipboard' | 'range' | 'spread';
 const KINDS: readonly Kind[] = [
   'select',
   'text-input',
@@ -71,6 +92,7 @@ const KINDS: readonly Kind[] = [
   'choice',
   'clipboard',
   'range',
+  'spread',
 ];
 
 /**
@@ -141,9 +163,65 @@ const NAMED: Readonly<Record<string, Tolerated>> = {
   },
   'components/layout/theme-switcher.tsx': {
     lane: 'shell',
+    sites: { choice: 3 },
+    reason:
+      'the theme menu: a preference of the reader, its radio items in the shell’s own menu (menuitemradio, read since lane cd-fixes-controls) and the radio group of its sheet, not a filter of a page',
+  },
+  // ---- what the reader sees since lane cd-fixes-controls (T SHOULD-2): a pressed toggle set
+  // through a spread, a menu's radio item, a spread it cannot follow on a control ----
+  'components/layout/network-switcher.tsx': {
+    lane: 'shell',
+    sites: { choice: 1 },
+    reason:
+      'the network menu: which network the reader reads, its radio items in the shell’s own menu, not a filter of a page',
+  },
+  'components/cell/cell-microscope.tsx': {
+    lane: 'c2-chain',
+    sites: { choice: 3 },
+    reason:
+      'the microscope’s map parts, ELF regions and field pills (its `handlers`): one pressed to pin its reading, a part of the figure (lane c2-finish, item 5, named it)',
+  },
+  'app/network/network-map.tsx': {
+    lane: 'c2-topics',
+    sites: { choice: 1 },
+    reason:
+      'the map’s peer marks (the readout’s binder): one pressed to pin its peer’s reading, a part of the figure',
+  },
+  'components/fiber/fiber-network-graph.tsx': {
+    lane: 'c2-topics',
     sites: { choice: 2 },
     reason:
-      'the theme menu: a preference of the reader, its radio items in the shell’s own menu, not a filter of a page',
+      'the channel graph’s edges and nodes (the readout’s binder, in its `handlers`): one pressed to pin its channels and partners in the reading, a part of the figure',
+  },
+  'components/hardforks/script-deployment-timeline.tsx': {
+    lane: 'c2-topics',
+    sites: { choice: 1 },
+    reason:
+      'the deployment timeline’s marks (the readout’s binder): one pressed to pin its version’s reading, a part of the figure',
+  },
+  'components/hardforks/vm-lane-timeline.tsx': {
+    lane: 'c2-topics',
+    sites: { choice: 1 },
+    reason:
+      'the VM lanes’ deployment marks (the readout’s binder): one pressed to pin its reading, a part of the figure',
+  },
+  'components/ui/sequencing-gel.tsx': {
+    lane: 'c2-assets',
+    sites: { choice: 2 },
+    reason:
+      'the sequencing gel’s genes, as bands and as rows (the readout’s binder): one pressed to pin its reading, a part of the figure',
+  },
+  'components/home/ckbytes-section.tsx': {
+    lane: 'c2-topics',
+    sites: { spread: 1 },
+    reason:
+      'the CKBytes legend item hands its caller’s hover, focus and tap handlers to its button: a highlight of the figure that says no state, no choice',
+  },
+  'components/ui/link.tsx': {
+    lane: 'shared',
+    sites: { spread: 1 },
+    reason:
+      'the link component hands its callers’ props to its anchor: they are read at each call site, where a pressed state or a role is an attribute of the Link',
   },
   'app/tx/[hash]/client-page.tsx': {
     lane: 'c2-chain',
@@ -175,8 +253,14 @@ const NAMED: Readonly<Record<string, Tolerated>> = {
   },
 };
 
-/** The pinned total of NAMED's sites. */
-const NAMED_TOTAL = 12;
+/**
+ * The pinned total of NAMED's sites: 12, and 14 more since lane cd-fixes-controls's reader learned
+ * a spread, a menu's radio item and a spread it cannot follow on a control (T SHOULD-2): the
+ * theme menu's radio item, the network menu's, eight pressed toggles of figures through the
+ * readout's binder or a function of their file, two of the sequencing gel's, and two spreads of
+ * props passed through.
+ */
+const NAMED_TOTAL = 26;
 
 interface Site {
   kind: Kind;
@@ -190,11 +274,17 @@ interface Scan {
   refused: string[];
 }
 
-/** A pager's words, on an element's text with its spaces collapsed (`…` for what an expression writes). */
+/**
+ * A pager's words, on an element's text with its spaces collapsed (`…` for what an expression
+ * writes). Lane cd-fixes-controls (T NOTE-3) taught it `‹ prev`, `next ›`, `next page`, `show
+ * more` and `more ↓`.
+ */
 const PAGER_WORDS: readonly RegExp[] = [
-  /^(← ?)?(prev|previous|newer)$/i,
-  /^(next|older)( ?→)?$/i,
-  /^load more$/i,
+  /^([←‹] ?)?(prev|previous|newer)$/i,
+  /^(next|older)( ?[→›])?$/i,
+  /^next page$/i,
+  /^(load|show) more$/i,
+  /^more ↓$/i,
   /^show all\b/i,
   /^all \S.* ↓$/i,
   /^next (\d[\d,]*|…)( ↓)?$/i,
@@ -203,6 +293,59 @@ const PAGER_WORDS: readonly RegExp[] = [
 /** The elements a pager's words make a hand-built pager: a button or a link. */
 const PAGER_TAGS = new Set(['button', 'a', 'Link', 'AppLink']);
 
+/** The roles of a choice of one of several: the filter chips' radio group and radio, a menu's radio item. */
+const CHOICE_ROLES = new Set(['radiogroup', 'radio', 'menuitemradio']);
+
+/** The elements that are controls by their tag: what a spread it cannot follow may make a choice of. */
+const INTERACTIVE_TAGS = new Set(['button', 'a', 'input', 'select', 'textarea', 'summary']);
+const INTERACTIVE_COMPONENTS = new Set(['Link', 'AppLink']);
+/** The attributes that make any element a control: a click, a key, a role, a tab stop. */
+const INTERACTIVE_ATTRS = ['onClick', 'onKeyDown', 'role', 'tabIndex'] as const;
+/** The props that make a component a pager where its words are a pager's: a click, a link. */
+const PAGER_COMPONENT_PROPS = ['onClick', 'onGo', 'href', 'to'] as const;
+
+/** What a spread sets that the scan reads: whether it says pressed, the roles it can set. */
+export interface SpreadRead {
+  pressed: boolean;
+  roles: string[];
+}
+
+/**
+ * The binders the hooks hand back (lane cd-fixes-controls, T SHOULD-2): a returned object's
+ * property that is a function returning an object literal (`usePinnedReadout`'s `bind`), read for
+ * its `aria-pressed` and its literal `role`. A spread of a call of that name (`readout.bind(id)`,
+ * `pin.bind(target)`) is read as that binder: the name of a hook's binder is how the scan knows it.
+ */
+function hookBinders(code: string): Map<string, SpreadRead> {
+  const source = ts.createSourceFile('hook.ts', code, ts.ScriptTarget.Latest, true);
+  const out = new Map<string, SpreadRead>();
+  const visit = (node: ts.Node) => {
+    if (ts.isReturnStatement(node) && node.expression) {
+      const returned = unwrap(node.expression);
+      if (ts.isObjectLiteralExpression(returned))
+        for (const p of returned.properties) {
+          if (!ts.isPropertyAssignment(p) || !ts.isIdentifier(p.name)) continue;
+          const f = unwrap(p.initializer);
+          if (!(ts.isArrowFunction(f) || ts.isFunctionExpression(f))) continue;
+          const body = ts.isBlock(f.body) ? null : unwrap(f.body as ts.Expression);
+          if (!body || !ts.isObjectLiteralExpression(body)) continue;
+          const read: SpreadRead = { pressed: false, roles: [] };
+          for (const q of body.properties) {
+            if (!ts.isPropertyAssignment(q)) continue;
+            const key = ts.isIdentifier(q.name) || ts.isStringLiteral(q.name) ? q.name.text : null;
+            if (key === 'aria-pressed') read.pressed = true;
+            if (key === 'role' && ts.isStringLiteralLike(q.initializer))
+              read.roles.push(q.initializer.text);
+          }
+          out.set(p.name.text, read);
+        }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return out;
+}
+
 /** A span of time as a range's choice writes it (`24 h`, `14 d`, `1y`, `90 days`): a button's words. */
 const SPAN_WORDS = /^\d+ ?(h|d|w|m|y|mo|hours?|days?|weeks?|months?|years?)$/i;
 
@@ -210,7 +353,11 @@ const SPAN_WORDS = /^\d+ ?(h|d|w|m|y|mo|hours?|days?|weeks?|months?|years?)$/i;
 const TEXT_READINGS = 32;
 
 /** The controls a source writes by hand, and what it could not read. */
-function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TSX): Scan {
+function scanControls(
+  code: string,
+  scriptKind: ts.ScriptKind = ts.ScriptKind.TSX,
+  binders: ReadonlyMap<string, SpreadRead> = new Map()
+): Scan {
   const source = ts.createSourceFile('scan.tsx', code, ts.ScriptTarget.Latest, true, scriptKind);
   const lineOf = (n: ts.Node) => source.getLineAndCharacterOfPosition(n.getStart(source)).line + 1;
   const sites: Site[] = [];
@@ -220,7 +367,33 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
   // the file's names: what each may hold
   const bindings = new Map<string, Binding[]>();
   const bind = (name: string, b: Binding) => bindings.set(name, [...(bindings.get(name) ?? []), b]);
+  // the file's functions: what each returns (a spread of a call of one is read as its returns)
+  const functions = new Map<string, ts.Expression[]>();
+  const returnsOf = (f: ts.FunctionLikeDeclaration): ts.Expression[] => {
+    if (!f.body) return [];
+    if (!ts.isBlock(f.body)) return [f.body as ts.Expression];
+    const out: ts.Expression[] = [];
+    const walk = (n: ts.Node) => {
+      if (ts.isFunctionLike(n)) return;
+      if (ts.isReturnStatement(n) && n.expression) out.push(n.expression);
+      ts.forEachChild(n, walk);
+    };
+    ts.forEachChild(f.body, walk);
+    return out;
+  };
   const collect = (node: ts.Node) => {
+    if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, returnsOf(node));
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      node.initializer &&
+      (ts.isArrowFunction(unwrap(node.initializer)) ||
+        ts.isFunctionExpression(unwrap(node.initializer)))
+    )
+      functions.set(
+        node.name.text,
+        returnsOf(unwrap(node.initializer) as ts.ArrowFunction | ts.FunctionExpression)
+      );
     if (ts.isImportClause(node) && node.name) bind(node.name.text, { kind: 'component' });
     if (ts.isImportSpecifier(node) || ts.isNamespaceImport(node))
       bind(node.name.text, { kind: 'component' });
@@ -337,6 +510,89 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
     return out;
   };
 
+  /**
+   * What a spread sets, where the scan can follow it (lane cd-fixes-controls, T SHOULD-2): an
+   * object literal's `aria-pressed` and `role` (and its own spreads), a name holding one, a call of
+   * a function of the file (read as what it returns), a call of a hook's binder by its name
+   * (`hookBinders`), through `?:`, `&&`, `||` and `??`. Null where it cannot: a prop, an import, a
+   * call of anything else, a computed key.
+   */
+  const spreadRead = (e: ts.Expression, seen: ReadonlySet<string>): SpreadRead | null => {
+    const x = unwrap(e);
+    const merge = (reads: (SpreadRead | null)[]): SpreadRead | null =>
+      reads.some((r) => r === null)
+        ? null
+        : {
+            pressed: reads.some((r) => r!.pressed),
+            roles: reads.flatMap((r) => r!.roles),
+          };
+    if (
+      x.kind === ts.SyntaxKind.NullKeyword ||
+      x.kind === ts.SyntaxKind.FalseKeyword ||
+      (ts.isIdentifier(x) && x.text === 'undefined')
+    )
+      return { pressed: false, roles: [] };
+    if (ts.isObjectLiteralExpression(x)) {
+      const parts: (SpreadRead | null)[] = [{ pressed: false, roles: [] }];
+      for (const p of x.properties) {
+        if (ts.isSpreadAssignment(p)) {
+          parts.push(spreadRead(p.expression, seen));
+          continue;
+        }
+        if (p.name && ts.isComputedPropertyName(p.name)) {
+          parts.push(null);
+          continue;
+        }
+        const key =
+          p.name && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : null;
+        if (key === 'aria-pressed') parts.push({ pressed: true, roles: [] });
+        if (key === 'role') {
+          const roles = ts.isPropertyAssignment(p)
+            ? strings(p.initializer)
+            : ts.isShorthandPropertyAssignment(p)
+              ? strings(p.name)
+              : null;
+          parts.push(roles ? { pressed: false, roles } : null);
+        }
+      }
+      return merge(parts);
+    }
+    if (ts.isConditionalExpression(x))
+      return merge([spreadRead(x.whenTrue, seen), spreadRead(x.whenFalse, seen)]);
+    if (ts.isBinaryExpression(x)) {
+      const op = x.operatorToken.kind;
+      if (op === ts.SyntaxKind.AmpersandAmpersandToken) return spreadRead(x.right, seen);
+      if (op === ts.SyntaxKind.BarBarToken || op === ts.SyntaxKind.QuestionQuestionToken)
+        return merge([spreadRead(x.left, seen), spreadRead(x.right, seen)]);
+      return null;
+    }
+    if (ts.isIdentifier(x)) {
+      if (seen.has(x.text)) return null;
+      const found = bindings.get(x.text) ?? [];
+      if (found.length === 0 || found.some((b) => b.kind !== 'value')) return null;
+      return merge(
+        found.flatMap((b) =>
+          b.kind === 'value' ? b.values.map((v) => spreadRead(v, new Set([...seen, x.text]))) : []
+        )
+      );
+    }
+    if (ts.isCallExpression(x)) {
+      const callee = unwrap(x.expression);
+      if (ts.isIdentifier(callee) && functions.has(callee.text) && !seen.has(callee.text))
+        return merge(
+          functions.get(callee.text)!.map((r) => spreadRead(r, new Set([...seen, callee.text])))
+        );
+      const name = ts.isIdentifier(callee)
+        ? callee.text
+        : ts.isPropertyAccessExpression(callee)
+          ? callee.name.text
+          : null;
+      const binder = name === null ? undefined : binders.get(name);
+      return binder ?? null;
+    }
+    return null;
+  };
+
   /** The intrinsic tags a JSX tag can be: [] for a component, null where it cannot be read. */
   const tagsOf = (tag: ts.JsxTagNameExpression): string[] | null => {
     if (!ts.isIdentifier(tag)) return [];
@@ -406,6 +662,43 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
     if (attr('aria-pressed'))
       sites.push({ kind: 'choice', line: lineOf(node), what: `<${shown} aria-pressed>` });
 
+    // a control by its tag, its component or its attributes
+    const handled = INTERACTIVE_ATTRS.some((key) => attr(key));
+    const interactive =
+      tags.some((t) => INTERACTIVE_TAGS.has(t)) || INTERACTIVE_COMPONENTS.has(name) || handled;
+
+    // what a spread sets (lane cd-fixes-controls, T SHOULD-2): its aria-pressed and its role where
+    // the scan can follow it; a spread it cannot follow on a control is a site to name
+    let tab = false;
+    for (const a of attrs) {
+      if (!ts.isJsxSpreadAttribute(a)) continue;
+      const read = spreadRead(a.expression, new Set());
+      if (read === null) {
+        // an <input>'s spread with no literal type after it is refused below
+        if (interactive && !tags.includes('input'))
+          sites.push({
+            kind: 'spread',
+            line: lineOf(node),
+            what: `<${shown} {...${a.expression.getText(source).slice(0, 60)}}>`,
+          });
+        continue;
+      }
+      if (read.pressed)
+        sites.push({ kind: 'choice', line: lineOf(node), what: `<${shown} {…} aria-pressed>` });
+      const tabRole = read.roles.find((r) => r === 'tab' || r === 'tablist');
+      if (tabRole) {
+        tab = true;
+        sites.push({ kind: 'tab', line: lineOf(node), what: `<${shown} {…} role="${tabRole}">` });
+      }
+      const choiceRole = read.roles.find((r) => CHOICE_ROLES.has(r));
+      if (choiceRole)
+        sites.push({
+          kind: 'choice',
+          line: lineOf(node),
+          what: `<${shown} {…} role="${choiceRole}">`,
+        });
+    }
+
     if (tags.includes('input')) {
       const type = attr('type');
       const lastSpread = attrs.reduce((at, a, i) => (ts.isJsxSpreadAttribute(a) ? i : at), -1);
@@ -424,10 +717,16 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
           });
         else if (types.includes('range'))
           sites.push({ kind: 'range', line: lineOf(node), what: `<${shown} type="range">` });
+        // a choice by hand (lane cd-fixes-controls, T SHOULD-2): a radio or a checkbox
+        if (types?.some((t) => t === 'radio' || t === 'checkbox'))
+          sites.push({
+            kind: 'choice',
+            line: lineOf(node),
+            what: `<${shown} type="${types.join('|')}">`,
+          });
       }
     }
 
-    let tab = false;
     const role = attr('role');
     if (role) {
       const v = valueOf(role);
@@ -439,7 +738,7 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
           tab = true;
           sites.push({ kind: 'tab', line: lineOf(node), what: `<${shown} role="${named}">` });
         }
-        const radio = roles.find((r) => r === 'radiogroup' || r === 'radio');
+        const radio = roles.find((r) => CHOICE_ROLES.has(r));
         if (radio)
           sites.push({ kind: 'choice', line: lineOf(node), what: `<${shown} role="${radio}">` });
       }
@@ -460,9 +759,16 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
         sites.push({ kind: 'range', line: lineOf(node), what: `<${shown}>${span}</${shown}>` });
     }
 
+    // a pager by hand: its words on a button or a link, on any element that is a control by its
+    // attributes, or on a component with a click or a link (lane cd-fixes-controls, T NOTE-3)
+    const pagerDrawer =
+      tags.some((t) => PAGER_TAGS.has(t)) ||
+      PAGER_TAGS.has(name) ||
+      (tags.length > 0 && handled) ||
+      (tags.length === 0 && PAGER_COMPONENT_PROPS.some((key) => attr(key)));
     if (name === 'CursorPagination')
       sites.push({ kind: 'pager', line: lineOf(node), what: '<CursorPagination>' });
-    else if (children && (tags.some((t) => PAGER_TAGS.has(t)) || PAGER_TAGS.has(name))) {
+    else if (children && pagerDrawer) {
       const word = textsOf(children).find((t) => PAGER_WORDS.some((re) => re.test(t)));
       if (word !== undefined)
         sites.push({ kind: 'pager', line: lineOf(node), what: `<${shown}>${word}</${shown}>` });
@@ -593,8 +899,13 @@ describe('the controls scan finds what it must, and only that', () => {
           </div>
         );`)
       // re-pinned (lane c2-finish, item 5): a range input is a range choice by hand now (it passed
-      // as an input of another type); the checkbox, the hidden and the number still pass
-    ).toEqual(['range <input type="range">']);
+      // as an input of another type); the hidden and the number still pass. Re-pinned again (lane
+      // cd-fixes-controls, T SHOULD-2): a checkbox is a choice by hand (it passed)
+    ).toEqual([
+      'choice <input type="checkbox">',
+      'choice <input type="checkbox">',
+      'range <input type="range">',
+    ]);
     expect(
       kinds(`
         const KIND = 'search';
@@ -604,7 +915,12 @@ describe('the controls scan finds what it must, and only that', () => {
             <input type={plain ? 'text' : 'checkbox'} />
           </div>
         );`)
-    ).toEqual(['text-input <input type="search">', 'text-input <input type="text|checkbox">']);
+      // re-pinned (lane cd-fixes-controls, T SHOULD-2): a type that may be a checkbox is a choice too
+    ).toEqual([
+      'text-input <input type="search">',
+      'text-input <input type="text|checkbox">',
+      'choice <input type="text|checkbox">',
+    ]);
   });
 
   it('finds a role of tab or tablist, and the tab underline drawn by hand', () => {
@@ -758,6 +1074,145 @@ describe('the controls scan finds what it must, and only that', () => {
     ]);
   });
 
+  // Lane cd-fixes-controls (T SHOULD-2): a choice set through a spread, which the scan walked past
+  // (eight pressed toggles in six files at c2808282), and two more forms of a choice.
+  it('follows a spread to its aria-pressed: an object, a name, a function of the file, a hook’s binder', () => {
+    const binders = new Map([['bind', { pressed: true, roles: ['button'] }]]);
+    expect(
+      scanControls(
+        `
+        const PRESSED = { 'aria-pressed': true };
+        export function A({ on, pin }: { on: boolean; pin: Pin }) {
+          const handlers = (t: string) => ({ 'aria-pressed': on, onClick: () => t });
+          const wrapped = (t: string) => ({ ...pin.bind(t), className: 'x' });
+          return (
+            <div>
+              <button {...{ 'aria-pressed': on }}>a</button>
+              <button {...PRESSED}>b</button>
+              <button {...handlers('c')}>c</button>
+              <g {...pin.bind('d')} />
+              <circle {...wrapped('e')} />
+              <button {...(on ? handlers('f') : {})}>f</button>
+              <button {...{ onClick: () => {} }}>g</button>
+            </div>
+          );
+        }`,
+        ts.ScriptKind.TSX,
+        binders
+      ).sites.map((s) => `${s.kind} ${s.what}`)
+    ).toEqual([
+      'choice <button {…} aria-pressed>',
+      'choice <button {…} aria-pressed>',
+      'choice <button {…} aria-pressed>',
+      'choice <g {…} aria-pressed>',
+      'choice <circle {…} aria-pressed>',
+      'choice <button {…} aria-pressed>',
+    ]);
+  });
+
+  it('reads a hook’s binder from the object it returns: its aria-pressed, its literal role', () => {
+    expect(
+      hookBinders(`
+        export function useReadout() {
+          const isPinned = (t: string) => t === 'a';
+          return {
+            active: null,
+            toggle: () => {},
+            bind: (t: string) => ({ role: 'button', 'aria-pressed': isPinned(t), onClick: () => t }),
+            hoverOnly: (t: string) => ({ onMouseEnter: () => t }),
+          };
+        }`)
+    ).toEqual(
+      new Map([
+        ['bind', { pressed: true, roles: ['button'] }],
+        ['hoverOnly', { pressed: false, roles: [] }],
+      ])
+    );
+  });
+
+  it('reads a role set in a spread: a tab, a radio', () => {
+    expect(
+      kinds(`
+        export const A = () => (
+          <div>
+            <button {...{ role: 'tab' }}>a</button>
+            <span {...{ role: 'radio', 'aria-checked': true }}>b</span>
+            <span {...{ role: 'status' }}>c</span>
+          </div>
+        );`)
+    ).toEqual(['tab <button {…} role="tab">', 'choice <span {…} role="radio">']);
+  });
+
+  it('counts a menu’s radio item and an input of type radio or checkbox as a choice', () => {
+    expect(
+      kinds(`
+        export const A = ({ on }: { on: boolean }) => (
+          <div role="menu">
+            <button role="menuitemradio" aria-checked={on}>a</button>
+            <input type="radio" name="x" />
+            <input type={on ? 'checkbox' : 'radio'} />
+            <input type="hidden" />
+          </div>
+        );`)
+    ).toEqual([
+      'choice <button role="menuitemradio">',
+      'choice <input type="radio">',
+      'choice <input type="checkbox|radio">',
+    ]);
+  });
+
+  it('refuses a spread it cannot follow on an interactive element, until the site is named', () => {
+    expect(
+      kinds(`
+        export function A(props: { rest: object }) {
+          return (
+            <div {...props.rest}>
+              <button {...props.rest}>a</button>
+              <a href="#" {...props.rest}>b</a>
+              <Link href="/x" {...props.rest}>c</Link>
+              <span onClick={() => {}} {...props.rest}>d</span>
+              <svg {...props.rest} />
+              <Card {...props.rest} />
+            </div>
+          );
+        }`)
+    ).toEqual([
+      'spread <button {...props.rest}>',
+      'spread <a {...props.rest}>',
+      'spread <Link {...props.rest}>',
+      'spread <span {...props.rest}>',
+    ]);
+  });
+
+  // Lane cd-fixes-controls (T NOTE-3): the pager words it did not know, and a pager drawn by an
+  // element other than a button or a link
+  it('finds a pager by the words it did not know, and drawn by another element', () => {
+    expect(
+      kinds(`
+        export const A = ({ go }: { go: () => void }) => (
+          <div>
+            <button>show more</button>
+            <button>Next page</button>
+            <button>‹ prev</button>
+            <button>next ›</button>
+            <button>more ↓</button>
+            <span role="button" onClick={go}>older →</span>
+            <TextButton onClick={go}>← newer</TextButton>
+            <div>next</div>
+            <Mono>newer</Mono>
+          </div>
+        );`)
+    ).toEqual([
+      'pager <button>show more</button>',
+      'pager <button>Next page</button>',
+      'pager <button>‹ prev</button>',
+      'pager <button>next ›</button>',
+      'pager <button>more ↓</button>',
+      'pager <span>older →</span>',
+      'pager <TextButton>← newer</TextButton>',
+    ]);
+  });
+
   it('counts createElement of a select or a typed input', () => {
     expect(
       kinds(`
@@ -837,6 +1292,19 @@ describe('no raw control outside the control components (lane C1)', () => {
   const root = join(__dirname, '..', '..');
   const rel = (file: string) => relative(root, file).split(sep).join('/');
   const files = sourceFiles(root);
+  // the binders the hooks hand back (lane cd-fixes-controls, T SHOULD-2): usePinnedReadout's `bind`
+  const binders = new Map<string, SpreadRead>();
+  for (const file of files)
+    if (rel(file).startsWith('hooks/'))
+      for (const [name, read] of hookBinders(readFileSync(file, 'utf8'))) {
+        const known = binders.get(name);
+        binders.set(
+          name,
+          known
+            ? { pressed: known.pressed || read.pressed, roles: [...known.roles, ...read.roles] }
+            : read
+        );
+      }
   const found = new Map<string, Site[]>();
   const refused: string[] = [];
   for (const file of files) {
@@ -844,7 +1312,8 @@ describe('no raw control outside the control components (lane C1)', () => {
     if ((LIBRARY_FILES as readonly string[]).includes(path)) continue;
     const scan = scanControls(
       readFileSync(file, 'utf8'),
-      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+      file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+      binders
     );
     if (scan.sites.length) found.set(path, scan.sites);
     refused.push(...scan.refused.map((r) => `${path}:${r}`));
@@ -852,6 +1321,8 @@ describe('no raw control outside the control components (lane C1)', () => {
 
   it('scans the source, and every control file is there', () => {
     expect(files.length).toBeGreaterThan(300);
+    // the readout hook's binder, read from its source: a button that says it is pressed
+    expect(binders.get('bind')).toEqual({ pressed: true, roles: ['button'] });
     for (const path of CONTROL_FILES) expect(existsSync(join(root, path)), path).toBe(true);
   });
 
