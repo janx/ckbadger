@@ -5,6 +5,9 @@ import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-re
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { fullText } from '@/__tests__/utils/full-text';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 afterEach(() => vi.restoreAllMocks());
@@ -41,8 +44,8 @@ it('shows current name state, exact protocol, physical cell history and both fee
   expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
     'Name cell data · layout v3 · 103 bytes'
   );
-  expect(screen.getByRole('tab', { name: 'Activities' })).toBeInTheDocument();
-  expect(screen.getByRole('tab', { name: 'Transactions' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'activities' })).toBeInTheDocument();
+  expect(screen.getByRole('tab', { name: 'transactions' })).toBeInTheDocument();
   // The API's name state is the status beside the title (ID-C10).
   expect(screen.getByText('Active')).toHaveAttribute('data-identity-state', 'active');
 });
@@ -256,7 +259,7 @@ it('resets item paging on name navigation and reports an unknown name', async ()
     nextCursor: '90:0',
   });
   const { rerender, unmount } = render(<Page identityId="alice" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotcell', evidence.itemId, {
       limit: 20,

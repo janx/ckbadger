@@ -14,6 +14,9 @@ import {
   type GlobalActivity,
 } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
@@ -258,7 +261,7 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByRole('table', { name: 'Top 10 holders' })).toHaveTextContent(
       '100.00%'
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     expect(await screen.findByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
       'Not computed'
     );
@@ -301,14 +304,19 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByText(/^It last moved/)).toBeInTheDocument();
+    // re-pinned (lane c2-assets): the scope line stands under the tab row, in the section, no
+    // longer inside the tablist (a tablist holds its tabs alone)
     expect(
-      screen.getByRole('tablist', { name: 'What happened' }).textContent?.match(/newest first/g)
+      screen.getByRole('region', { name: 'What happened' }).textContent?.match(/newest first/g)
     ).toHaveLength(1);
+    expect(screen.getByRole('tablist', { name: 'What happened' })).not.toHaveTextContent(
+      'newest first'
+    );
   });
   it('defaults to full participant activities and retains the separate transaction layer', async () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByRole('tab', { name: 'Activities' })).toHaveAttribute(
+    expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
       'aria-selected',
       'true'
     );
@@ -321,7 +329,7 @@ describe('TokenDetailPage', () => {
       'href',
       '/mainnet/blocks/12345'
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     await waitFor(() =>
       expect(api.getTokenTransactions).toHaveBeenCalledWith(hash, { limit: 20, cursor: undefined })
     );

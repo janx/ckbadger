@@ -141,11 +141,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'the newest cells’ “All N cells ↓”: the short list’s form, or a way onward',
   },
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
-  'components/asset/asset-feed.tsx': {
-    lane: 'c2-assets',
-    sites: { tab: 2, pager: 1 },
-    reason: 'the feed’s tablist and its tabs, the feed’s pager',
-  },
   'components/asset/collection-gallery.tsx': {
     lane: 'c2-assets',
     sites: { select: 1, 'text-input': 1, pager: 1 },
@@ -197,7 +192,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 45;
+const TOLERATED_TOTAL = 42;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

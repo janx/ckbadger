@@ -25,6 +25,9 @@ import {
   itemActivityFeedProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 
 vi.mock('@/lib/api', async (load) => {
   const actual = await load<typeof import('@/lib/api')>();
@@ -226,7 +229,7 @@ describe('MnftItemDetailPage', () => {
     expect(within(permissions).getByText('Transfer after claim').parentElement).toHaveTextContent(
       'Allowed'
     );
-    fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
     expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
     expect(api.getItemTransactions).toHaveBeenCalledWith('mnft', id, {
       limit: 20,
@@ -259,7 +262,7 @@ describe('MnftItemDetailPage', () => {
       nextCursor: '100:2',
     });
     const { rerender } = render(<MnftItemDetailPage objectId={id} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
     await waitFor(() =>
       expect(api.getItemActivityFeed).toHaveBeenCalledWith('mnft', id, {
         limit: 20,
@@ -287,7 +290,9 @@ describe('MnftItemDetailPage', () => {
       nextId,
       expect.objectContaining({ cursor: expect.any(String) })
     );
-    expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled();
+    // the newest end cannot be taken: quiet words, no control (was a disabled Previous)
+    expect(screen.getByRole('navigation', { name: 'activities' })).toHaveTextContent('← newer');
+    expect(screen.queryByRole('button', { name: '← newer' })).toBeNull();
   });
 
   it('shows an absent item only for a real 404 response', async () => {

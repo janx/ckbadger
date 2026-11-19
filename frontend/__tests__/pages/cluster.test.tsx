@@ -22,6 +22,9 @@ import {
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 const id = clusterDetailProducer.clusterId;
 beforeEach(() => {
@@ -74,7 +77,7 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
   // Main.dc.html: "Recent activity" — its link to the transactions opens the full feed there.
   const recent = screen.getByRole('region', { name: 'Recent activity' });
   fireEvent.click(within(recent).getByRole('button', { name: /transactions →$/ }));
-  expect(screen.getByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+  expect(screen.getByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
   );

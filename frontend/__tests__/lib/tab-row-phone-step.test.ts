@@ -42,13 +42,14 @@ describe('section-size tab rows take one type step down below md (PA-17)', () =>
     if (tabs.length) found.set(relative(ROOT, file), tabs);
   }
 
-  it('finds the five tab rows of the site', () => {
+  // re-pinned (lane c2-assets): the asset feed's tab row is the controls library's Tabs, which
+  // takes its phone step itself, so its file leaves the list (five rows -> four)
+  it('finds the four tab rows of the site', () => {
     expect([...found.keys()].sort()).toEqual([
       'app/address/[addr]/client-page.tsx',
       'app/blocks/[id]/client-page.tsx',
       'app/scripts/page.tsx',
       'app/transactions/page.tsx',
-      'components/asset/asset-feed.tsx',
     ]);
   });
 
