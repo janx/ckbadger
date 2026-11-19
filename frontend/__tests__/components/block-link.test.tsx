@@ -47,3 +47,34 @@ describe('sentence parts', () => {
     expect(sentenceText(heightListParts([1]))).toBe('#1');
   });
 });
+
+// Lane c2-links: a height's look is where it stands, which its caller says; in a sentence it is a
+// name inside a line, in the line's ink.
+describe('BlockLink’s look', () => {
+  const inks = (el: Element) =>
+    [...el.classList].filter((c) => /^(hover:)?text-|underline/.test(c));
+
+  it('draws a row’s key bright, and a height inside a line in the line’s ink', () => {
+    render(
+      <>
+        <BlockLink number={7} look="key" />
+        <BlockLink number={8} look="inline" />
+        <BlockLink number={9} />
+      </>
+    );
+    const [key, inline, none] = screen.getAllByRole('link');
+    expect(inks(key)).toEqual(['text-text-bright']);
+    expect(inks(inline)).toEqual([]);
+    // no ink of its own where the caller states none, as before (hover is the one rule)
+    expect(inks(none)).toEqual([]);
+  });
+
+  it('writes a sentence’s heights as links inside the line', () => {
+    const { container } = render(
+      <p className="text-text">
+        <SentenceNodes parts={heightListParts([7, 8])} />
+      </p>
+    );
+    for (const link of container.querySelectorAll('a')) expect(inks(link)).toEqual([]);
+  });
+});

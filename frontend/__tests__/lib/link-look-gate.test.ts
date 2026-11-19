@@ -318,8 +318,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/ui/address.tsx': {
     lane: 'p-assets',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, decoration-aqua/35, underline)',
+    sites: { ink: 1 },
+    reason:
+      'the look an Address had before (bright, a faint indigo underline), drawn while a caller states none: it goes with the last such call site (most are p-assets)',
   },
   // ---- p-lists ----
   'app/activities/page.tsx': {
@@ -520,35 +521,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 2 },
     reason: '2 without a look',
   },
-  'components/ui/block-link.tsx': {
-    lane: 'shell',
-    sites: { look: 2, ink: 1 },
-    reason: '2 without a look; inks by hand (hover:text-jade)',
-  },
-  'components/ui/cell-tile.tsx': {
-    lane: 'shell',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (text-text, hover:text-jade)',
-  },
-  'components/ui/chart.tsx': {
-    lane: 'shell',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (hover:text-jade)',
-  },
-  'components/ui/lock-kind.tsx': {
-    lane: 'shell',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (hover:text-jade)',
-  },
-  'components/ui/script-byte-map.tsx': {
-    lane: 'shell',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-const TOLERATED_TOTAL = 625;
+const TOLERATED_TOTAL = 612;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
