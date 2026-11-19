@@ -10,7 +10,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { isReadableTrait, traitDisplay, type DnaTrait } from '@/lib/dob-genes';
 import { GENE_COLORS } from '@/lib/design-tokens';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date } from '@/lib/utils';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { ageSeconds, CLOCK_BEHIND } from '@/lib/format-age';
@@ -326,8 +326,7 @@ export function lockFootnote(
   versions: readonly ItemCellVersion[],
   noun: 'object' | 'token'
 ): string | null {
-  const first = versions[0],
-    last = versions.at(-1)!;
+  const first = versions[0];
   if (versions.length < 2) return null;
   const args = (v: ItemCellVersion) => v.anatomy.lockBytes - 33;
   const sameType = versions.every(
@@ -335,9 +334,31 @@ export function lockFootnote(
   );
   // the decision's words in a sentence, without an article (lane P2's follow-up, item 6)
   const words = (v: ItemCellVersion) => lockWordsText(cellLockWords(v), 'row');
+  // a lock is its code hash, hash type and args (lane P2's third round, item 15: "throughout"
+  // compared the first and the last version's code hash and args, so A → B → A read "throughout")
+  const sameLock = (a: ItemCellVersion, b: ItemCellVersion) =>
+    a.lock.codeHash === b.lock.codeHash &&
+    a.lock.hashType === b.lock.hashType &&
+    a.lock.args === b.lock.args;
+  // the versions where the cell went under another lock, the first among them
+  const runs = versions.filter((v, i) => i === 0 || !sameLock(v, versions[i - 1]));
+  const last = versions.at(-1)!;
   const lock =
-    first.lock.codeHash === last.lock.codeHash && first.lock.args === last.lock.args
+    runs.length === 1
       ? `Lock: ${words(first)} throughout.`
-      : `Lock: ${words(first)} with ${args(first)}-byte args ${noun === 'token' ? 'at issue' : 'at minting'} → ${words(last)} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
+      : `Lock: ${runs
+          .map((v, i) => {
+            const named = `${words(v)} with ${
+              // the same words over other args: another holder under the same kind of lock
+              i > 0 && words(v) === words(runs[i - 1]) && v.lock.args !== runs[i - 1].lock.args
+                ? 'other '
+                : ''
+            }${args(v)}-byte args`;
+            if (i === 0) return `${named} ${noun === 'token' ? 'at issue' : 'at minting'}`;
+            const day = formatUtc8Date(v.timestamp);
+            if (i < runs.length - 1) return `${named} from ${day}`;
+            return last.isLive ? `${named} since ${day}` : `${named} from ${day}, last`;
+          })
+          .join(' → ')}.`;
   return `${lock}${sameType ? ' Type and data never changed.' : ''}`;
 }

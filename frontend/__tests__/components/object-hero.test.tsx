@@ -11,7 +11,7 @@ import {
   spelledDuration,
 } from '@/components/asset/object-hero';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
-import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { sporeCellVersionsProducer } from '@/__tests__/msw/fixtures/item-producer';
 import type { ItemCellVersion } from '@/lib/api';
 
@@ -307,4 +307,82 @@ it('sets each trait’s value at one gap after its label, the label column the l
     expect(row).toHaveClass('gap-x-3');
     expect(row.querySelector('dd')).not.toHaveClass('text-right');
   }
+});
+
+// Lane P2's third round (item 15; review-p-logic-pages NOTE-2): "throughout" only where every
+// version's lock is the first's (code hash, hash type and args); it compared the first and the
+// last, so a cell that went A → B → A read "Lock: … throughout." Else the footnote says where the
+// lock changed: each lock the cell sat under, in order, from the day it went under it.
+describe('the lock footnote says where the lock changed', () => {
+  const DAY = 86_400_000;
+  const JOY_ARGS = `0x${'0a'.repeat(22)}`;
+  const DEFAULT_ARGS = `0x${'01'.repeat(20)}`;
+  const under = (
+    lock: { codeHash: string; hashType: 'type' | 'data'; args: string },
+    lockName: string,
+    day: number,
+    isLive: boolean
+  ) =>
+    v({
+      timestamp: String(Date.parse('2026-01-01T00:00:00+08:00') + day * DAY),
+      isLive,
+      lock,
+      lockName,
+      ownerAddress: ckbAddress(lock),
+      anatomy: {
+        capacityBytes: 8,
+        lockBytes: 33 + (lock.args.length - 2) / 2,
+        typeBytes: 0,
+        dataBytes: 0,
+      },
+    });
+  const DEFAULT = {
+    codeHash: DEFAULT_LOCK_CODE_HASH,
+    hashType: 'type' as const,
+    args: DEFAULT_ARGS,
+  };
+  const JOY = { codeHash: JOYID_CODE_HASH, hashType: 'type' as const, args: JOY_ARGS };
+
+  it('says the lock it went back to, never "throughout"', () => {
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      under(JOY, 'JoyID', 3, false),
+      under(DEFAULT, 'Default Lock', 9, true),
+    ];
+    expect(lockFootnote(versions, 'object')).toBe(
+      'Lock: Default Lock with 20-byte args at minting → JoyID with 22-byte args from 2026-01-04 → Default Lock with 20-byte args since 2026-01-10. Type and data never changed.'
+    );
+  });
+
+  it('says another holder under the same lock as other args', () => {
+    const other = { ...DEFAULT, args: `0x${'02'.repeat(20)}` };
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      under(other, 'Default Lock', 2, false),
+    ];
+    expect(lockFootnote(versions, 'token')).toBe(
+      'Lock: Default Lock with 20-byte args at issue → Default Lock with other 20-byte args from 2026-01-03, last. Type and data never changed.'
+    );
+  });
+
+  it('reads a hash type that changed under the same code hash and args', () => {
+    const byData = { ...DEFAULT, hashType: 'data' as const };
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      under(byData, 'Default Lock', 1, true),
+    ];
+    expect(lockFootnote(versions, 'object')).toBe(
+      'Lock: Default Lock with 20-byte args at minting → lock 0x9bd7e06f…a3cce8 by data with 20-byte args since 2026-01-02. Type and data never changed.'
+    );
+  });
+
+  it('says "throughout" where every version is under the first’s lock', () => {
+    const versions = [
+      under(DEFAULT, 'Default Lock', 0, false),
+      under(DEFAULT, 'Default Lock', 5, true),
+    ];
+    expect(lockFootnote(versions, 'object')).toBe(
+      'Lock: Default Lock throughout. Type and data never changed.'
+    );
+  });
 });
