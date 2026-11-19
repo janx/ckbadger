@@ -378,7 +378,7 @@ export default function ForksPage() {
       `Fork overview: days hold ${switches} switches but the window says ${data.nodeSwitchesInWindow}`
     );
   const competing = data ? competingLine(data.nodeRecord) : null;
-  // Collapsed to the first rows until "Show all" (R15); a later page is always shown whole.
+  // Collapsed to the first rows until "all … ↓" (R15); a later page is always shown whole.
   const collapsed =
     !expanded &&
     !hasPrevious &&

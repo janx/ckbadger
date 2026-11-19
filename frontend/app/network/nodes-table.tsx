@@ -553,7 +553,7 @@ function PeerRow({
 
 /**
  * Five peers first (hierarchy R5, a list on a topic page), then fifty more a page: every peer stays
- * one "Load more" away, and the cursor is a peer id, so the page sizes may differ.
+ * one "next 50 ↓" away, and the cursor is a peer id, so the page sizes may differ.
  */
 const FIRST_PEERS = 5;
 const MORE_PEERS = 50;
