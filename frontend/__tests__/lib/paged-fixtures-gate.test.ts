@@ -11,15 +11,24 @@ import { describe, expect, it } from 'vitest';
  * test serves is checked as it is made: `pagedRead` (__tests__/utils/paged-read.ts) refuses a page
  * the API cannot send.
  *
- * The reader: an object literal in `__tests__/**` whose keys include `hasMore` and `nextCursor`
- * (a page of a cursor-paged list, as the API sends one) is a paged fixture. It passes where it is
- * written inside the argument of a call of `pagedRead(…)`, through the expressions it may sit in
- * (parentheses, `as`, `satisfies`, a spread into the page, a `?:` branch, an array of rows).
+ * The reader: an object literal in `__tests__/**` is a paged fixture where it says whether more
+ * rows follow or where they start: a `hasMore` key, or a `nextCursor` key beside the page's rows
+ * (`data`) or beside a spread (a page's key written over a page: lane cd-fixes-controls,
+ * review-fix-tests SHOULD-3; the reader read only a literal holding both keys, so a checked page
+ * spread with one key overridden passed, and three such fixtures contradicted themselves). It
+ * passes where it is written inside the argument of a call of `pagedRead(…)` or of its pool form
+ * `poolPagedRead(…)` (the tx pool's list states no `hasMore`: its "more" is its next cursor),
+ * through the expressions it may sit in (parentheses, `as`, `satisfies`, a spread into the page, a
+ * `?:` branch, an array of rows). So a key overridden goes into the checker with the page:
+ * `pagedRead({ ...page, hasMore: true, … })`, and nothing else may write one.
  *
- * Its limits, what it cannot see: a page built with no literal holding both keys (its keys spread
- * from a variable, or computed), a page written in a JSON fixture (`*.json` is not read: the
- * script pages' family fixtures hold their cells' page there, and their tests serve it through
- * `pagedRead` where they page it), and a page a helper outside `__tests__/` builds.
+ * Its limits, what it cannot see: a page whose rows alone are written over a spread
+ * (`{ ...page, data: rows }`: a cell's `data` is spelled as a page's rows, so the reader cannot
+ * tell the two), a page with no literal of its own (built from a variable, or its keys computed),
+ * a page written in a JSON fixture (`*.json` is not read: the script pages' family fixtures hold
+ * their cells' page there, and their tests serve it through `pagedRead` where they page it), a
+ * page a helper outside `__tests__/` builds, and the crawler's peers (`items` beside `nextCursor`),
+ * a list that states no page size or "more", so nothing in its page can contradict itself.
  *
  * EXEMPT: the files whose paged literals are inputs a test hands to the helper or to the checker
  * on purpose, to see them refused or drawn as the states live data reaches.
@@ -47,6 +56,9 @@ function testSources(): string[] {
   return out;
 }
 
+/** The checker's calls that hold a page: the one checker and its pool form. */
+const CHECKERS = new Set(['pagedRead', 'poolPagedRead']);
+
 /** The paged literals of a source that no `pagedRead(…)` holds, as `line: first key`. */
 export function uncheckedPages(code: string, fileName = 'x.tsx'): string[] {
   const source = ts.createSourceFile(
@@ -66,7 +78,7 @@ export function uncheckedPages(code: string, fileName = 'x.tsx'): string[] {
       if (
         ts.isCallExpression(parent) &&
         ts.isIdentifier(parent.expression) &&
-        parent.expression.text === 'pagedRead'
+        CHECKERS.has(parent.expression.text)
       )
         return parent.arguments[0] === node;
       const passes =
@@ -84,7 +96,11 @@ export function uncheckedPages(code: string, fileName = 'x.tsx'): string[] {
   const visit = (node: ts.Node) => {
     if (ts.isObjectLiteralExpression(node)) {
       const keys = node.properties.map(keyOf);
-      if (keys.includes('hasMore') && keys.includes('nextCursor') && !checked(node)) {
+      const spread = node.properties.some(ts.isSpreadAssignment);
+      const paged =
+        keys.includes('hasMore') ||
+        (keys.includes('nextCursor') && (keys.includes('data') || spread));
+      if (paged && !checked(node)) {
         const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
         out.push(`${line + 1}: ${keys.filter(Boolean)[0]}`);
       }
@@ -115,6 +131,38 @@ describe('the paged-fixture reader finds a page no checker holds, and passes one
     expect(
       uncheckedPages(`pagedRead(build({ data: [], limit: 20, hasMore: false, nextCursor: null }));`)
     ).toEqual(['1: data']);
+  });
+
+  // Lane cd-fixes-controls (review-fix-tests SHOULD-3): a page key written over a spread is the
+  // page's override, a paged fixture of its own. The reader counted a literal only when it held
+  // both keys, so a checked page spread with one key overridden passed, and three such fixtures
+  // contradicted themselves. A page's rows alone written over a spread (`rows`) it cannot tell
+  // from any other object's `data` (a cell's is spelled the same): a limit it says.
+  it('finds a page key written over a spread, over a checked page too', () => {
+    expect(
+      uncheckedPages(`
+        const a = { ...pageFixture([row]), hasMore: true };
+        const b = { ...page, data: page.data.slice(0, 1), hasMore: true };
+        const c = { ...pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null }), hasMore: true };
+        const d = { ...page, nextCursor: 'c' };
+        const held = pagedRead({ ...page, data: page.data.slice(0, 1), limit: 1, hasMore: true, nextCursor: 'c' });
+        const rows = { ...page, data: rows };
+      `)
+    ).toEqual(['2: hasMore', '3: data', '4: hasMore', '5: nextCursor']);
+  });
+
+  // The tx pool's list states no `hasMore`: its "more" is its next cursor, as its page reads it
+  // (app/transactions/page.tsx); its pages go through the checker's pool form. The crawler's peers
+  // (`items`, `nextCursor`) state no page size: nothing in them can contradict itself.
+  it('finds a page of the pool’s list, which states no hasMore; passes poolPagedRead’s and the peers’', () => {
+    expect(
+      uncheckedPages(`
+        const bare = { data: [], limit: 50, total: 0, nextCursor: null };
+        const over = { ...emptyPool, data: [row], nextCursor: 'p2' };
+        const held = poolPagedRead({ ...emptyPool, data: [row], limit: 1, total: 2, nextCursor: 'p2' });
+        const peers = { items: [peer], nextCursor: null };
+      `)
+    ).toEqual(['2: data', '3: data']);
   });
 });
 

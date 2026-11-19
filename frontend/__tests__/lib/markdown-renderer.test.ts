@@ -638,7 +638,9 @@ describe('renderMarkdownPage', () => {
       averageDepositDays: null,
       estimatedApc: '2.10',
     } as never);
-    vi.mocked(api.getDaoDeposits).mockResolvedValue({ data: [], nextCursor: null } as never);
+    vi.mocked(api.getDaoDeposits).mockResolvedValue(
+      pagedRead({ data: [], limit: 20, hasMore: false, nextCursor: null }) as never
+    );
     const result = await renderMarkdownPage({
       page: parseMarkdownSourcePath('/dao'),
       searchParams: new URLSearchParams(),
