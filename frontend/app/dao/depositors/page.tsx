@@ -7,7 +7,7 @@ import Link from '@/components/ui/link';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Pager } from '@/components/ui/pager';
 import { usePageSize } from '@/hooks/usePageSize';
-import { pageCount } from '@/lib/pagination';
+import { rankedPageAt } from '@/lib/pagination';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { SHARE_TRACK_PX, formatShareTick, percentHundredths } from '@/components/ui/share-bar';
 import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader } from '@/components/ui/aligned-bar';
@@ -174,6 +174,9 @@ export default function DaoDepositorsPage() {
     retry: retryTransientOnly,
   });
   const page = query.data;
+  // a page past the end of the ranking holds no row to count from: no pager
+  const depositorsAt =
+    page && page.data.length > 0 ? rankedPageAt('depositors', cursors.length, page) : null;
   const client = useQueryClient();
   const first = client.getQueryData<RankedPage>(['dao-depositors', undefined, pageSize]);
   const moved =
@@ -253,20 +256,15 @@ export default function DaoDepositorsPage() {
                   />
                 )}
               />
-              {/* The controls board's pager for a ranked list (B5: nothing for one page): the
-                  first and the last rank shown are the API's own, the page's size its limit (R2:
+              {/* The controls board's pager for a ranked list (B5: nothing for one page): its
+                  figures from the response (lib/pagination.ts), the page's size its limit (R2:
                   twenty on a phone), the page the reader's step through the cursors. */}
-              {page.data.length > 0 && (
+              {depositorsAt && (
                 <div className="pt-4">
                   <Pager
                     mode="pages"
                     label="depositors"
-                    from={page.data[0].rank}
-                    to={page.data[page.data.length - 1].rank}
-                    total={page.total}
-                    pageSize={page.limit}
-                    page={cursors.length}
-                    pages={pageCount(page.total, page.limit)}
+                    {...depositorsAt}
                     onNext={() => {
                       if (page.nextCursor === null)
                         throw new Error(

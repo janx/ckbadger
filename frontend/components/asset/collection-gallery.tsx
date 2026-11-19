@@ -5,6 +5,8 @@ import { api, type CollectionItem, type ItemStatusFilter } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
+import { TextField } from '@/components/ui/text-field';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { AppLink } from '@/components/ui/app-link';
@@ -65,12 +67,16 @@ function mnftRowTitle(item: CollectionItem): ReactNode {
   return item.name === null ? `#${item.tokenIndex}` : `${item.name} #${item.tokenIndex}`;
 }
 
-/** The status select's choices, as the heading's args say them (the options' own words). */
+/** The status filter's values, as the heading's args say them (the chips' own words). */
 const STATUS_WORDS: Record<ItemStatusFilter, string> = {
   all: 'all',
   live: 'live',
   recycled: 'inactive',
 };
+/** The status filter's chips: all, live, inactive. */
+const STATUS_VALUES: readonly FilterValue<ItemStatusFilter>[] = (
+  ['all', 'live', 'recycled'] as const
+).map((key) => ({ key, label: STATUS_WORDS[key] }));
 
 export function CollectionItems({ id, kind }: CollectionItemsProps) {
   const [search, setSearch] = useState(''),
@@ -116,30 +122,29 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
               : `${query.data.total.toLocaleString('en-US')} ${STATUS_WORDS[status]}`
           }
         />
-        <div className="flex max-w-full flex-wrap gap-3">
-          <input
-            aria-label="Search collection"
+        {/* the controls board's field and filter chips: a search and one status of three (a
+            filter of three values is chips at every width: 195 px in a 328 px line) */}
+        <div className="flex max-w-full flex-wrap items-center gap-3">
+          <TextField
+            label="Search collection"
+            search
             value={search}
-            onChange={(e) => {
+            onChange={(value) => {
               pages.reset();
-              setSearch(e.target.value);
+              setSearch(value);
             }}
-            className="bg-base-bg border-base-border max-w-full border-b py-2"
             placeholder="search names or ids"
+            className="w-[200px] max-w-full"
           />
-          <select
-            aria-label="Item status"
+          <FilterChips
+            label="status"
+            values={STATUS_VALUES}
             value={status}
-            onChange={(e) => {
+            onChange={(value) => {
               pages.reset();
-              setStatus(e.target.value as ItemStatusFilter);
+              setStatus(value);
             }}
-            className="bg-base-bg border-base-border border-b py-2"
-          >
-            <option value="all">All</option>
-            <option value="live">Live</option>
-            <option value="recycled">Inactive</option>
-          </select>
+          />
         </div>
       </div>
       {query.data ? (

@@ -11,6 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useInRouterContext } from 'react-router-dom';
 import { api, type CollectionInsights } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { timePageAt } from '@/lib/pagination';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AlleleGel, NotGenesNote } from '@/components/ui/allele-gel';
@@ -19,7 +20,7 @@ import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Address } from '@/components/ui/address';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { rowTagClass } from '@/components/ui/row-tag';
 import {
   alleleLanes,
@@ -203,6 +204,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   const shown = gallery.data?.total;
   if (gallery.data && shown === undefined)
     throw new Error(`${title}: the gallery page states no total`);
+  const objectsAt = gallery.data ? timePageAt('objects', pages.page, gallery.data) : null;
   const overlays = lanes
     ? items.map((item) => ({
         key: item.sporeId,
@@ -489,17 +491,23 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                 )}
               />
               {items.length === 0 && <p className="text-text-dim">No objects.</p>}
-              <CursorPagination
-                total={gallery.data.total}
-                totalLabel="objects"
-                pageSize={NEWEST}
-                page={pages.page}
-                currentCount={items.length}
-                hasMore={gallery.data.hasMore}
-                hasPrevious={pages.hasPrevious}
-                onNext={() => pages.goToNext(gallery.data!.nextCursor)}
-                onPrevious={pages.goToPrevious}
-              />
+              {objectsAt && (
+                // the controls board's pager: a list in time, newest first
+                <div className="pt-2">
+                  <Pager
+                    mode="time"
+                    label="objects"
+                    order="newest first"
+                    {...objectsAt}
+                    onNewer={pages.hasPrevious ? pages.goToPrevious : undefined}
+                    onOlder={
+                      gallery.data.hasMore
+                        ? () => pages.goToNext(gallery.data!.nextCursor)
+                        : undefined
+                    }
+                  />
+                </div>
+              )}
             </>
           ) : (
             <AssetReadState label="newest objects" error={gallery.error} read={gallery} />

@@ -30,7 +30,7 @@ import {
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { DEFAULT_PAGE_SIZE, pageCount } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { Utc8Age } from '@/components/ui/utc8-date';
@@ -79,6 +79,9 @@ export default function BlocksPage() {
       query.state.data?.data.some((block) => block.cyclesStatus === 'pending') ? 3000 : false,
   });
   const { data, error } = read;
+  // where the list stands in time (lib/pagination.ts): its page and the pages its served total
+  // makes at the served page size; nothing for a list on one page, an empty one too
+  const blocksAt = data ? timePageAt('blocks', page, data) : null;
   const sizeScale = resourceScale(data ? data.data.map((block) => block.size) : []);
   const cyclesScale = resourceScale(
     data ? data.data.flatMap((block) => (block.cycles === null ? [] : [Number(block.cycles)])) : []
@@ -280,13 +283,12 @@ export default function BlocksPage() {
               {/* The controls board's cursor in time: newest first, the page of the pages the
                   served total makes at the served page size. A list with no row has no page to
                   be on, and draws none. */}
-              {data.data.length > 0 && (
+              {blocksAt && (
                 <Pager
                   mode="time"
                   label="blocks"
                   order="newest first"
-                  page={page}
-                  pages={pageCount(blocksTotal(data.total), data.limit)}
+                  {...blocksAt}
                   onNewer={hasPrevious ? goToPrevious : undefined}
                   onOlder={data.hasMore ? () => goToNext(data.nextCursor) : undefined}
                 />
@@ -298,12 +300,6 @@ export default function BlocksPage() {
       </main>
     </div>
   );
-}
-
-/** The blocks list's total: the API serves it on every page, and a page without it is refused. */
-function blocksTotal(total: number | undefined): number {
-  if (total === undefined) throw new Error('Blocks list response has no total');
-  return total;
 }
 
 /** The Blocks v3 legend: the glyph grammar and the two-part size bar. */

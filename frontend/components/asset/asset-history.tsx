@@ -23,11 +23,19 @@ import { SHORT_FORMS } from '@/lib/shorten';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { WIDEST_BLOCK_NUMBER, WIDEST_COUNT_DIGITS, shortChars } from '@/lib/list-bounds';
 import { PartReadBoundary } from '@/components/read-failure';
+import { RangeSelect, type RangeOption } from '@/components/ui/range-select';
 
 /** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
 const cell = (chars: number) => textPx(chars, fontPx('small'));
 
 const DAY = 86400000;
+/** The spans of the history, in the one spelling of a span (the controls board): key and words. */
+const HISTORY_RANGES: readonly RangeOption<'1W' | '1M' | '1Y' | 'All'>[] = [
+  { key: '1W', label: '1 w' },
+  { key: '1M', label: '1 m' },
+  { key: '1Y', label: '1 y' },
+  { key: 'All', label: 'all' },
+];
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
 /** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
@@ -447,21 +455,17 @@ export function AssetHistory({
     <DetailSection
       title="History"
       actions={
-        <div role="group" aria-label="History time range" className="flex gap-1">
-          {(['1W', '1M', '1Y', 'All'] as const).map((r) => (
-            <button
-              key={r}
-              aria-pressed={range === r}
-              className={`border-base-border text-small border px-2 py-1 ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
-              onClick={() => {
-                setRange(r);
-                setSelectedDate(null);
-              }}
-            >
-              {r}
-            </button>
-          ))}
-        </div>
+        // the controls board's range (gate D0′): the chips joined, one spelling of a span; another
+        // span drops the day the reader chose
+        <RangeSelect
+          label="History time range"
+          options={HISTORY_RANGES}
+          value={range}
+          onChange={(r) => {
+            setRange(r);
+            setSelectedDate(null);
+          }}
+        />
       }
     >
       {point ? (

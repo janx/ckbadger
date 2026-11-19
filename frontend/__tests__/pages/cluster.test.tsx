@@ -22,6 +22,9 @@ import {
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
+// re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
+// whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
+// its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 const id = clusterDetailProducer.clusterId;
 beforeEach(() => {
@@ -69,11 +72,12 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
   const objects = await screen.findByRole('region', { name: 'Objects' });
   expect(within(objects).getByRole('img', { name: /allele gel/ })).toBeInTheDocument();
   expect(await within(objects).findByRole('table', { name: 'Newest objects' })).toBeInTheDocument();
-  expect(screen.getByRole('group', { name: 'History time range' })).toBeInTheDocument();
+  // re-pinned (lane c2-assets): the range is RangeSelect, a radio group (was a group of buttons)
+  expect(screen.getByRole('radiogroup', { name: 'History time range' })).toBeInTheDocument();
   // Main.dc.html: "Recent activity" — its link to the transactions opens the full feed there.
   const recent = screen.getByRole('region', { name: 'Recent activity' });
   fireEvent.click(within(recent).getByRole('button', { name: /transactions →$/ }));
-  expect(screen.getByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+  expect(screen.getByRole('tab', { name: 'transactions' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
@@ -112,7 +116,10 @@ it('applies exact whole-collection trait filtering before pagination and resets 
   });
   const { container } = render(<ClusterPage clusterId={id} />);
   const objects = await screen.findByRole('region', { name: 'Objects' });
-  fireEvent.click(await within(objects).findByRole('button', { name: 'Next' }));
+  // re-pinned (lane c2-assets): the objects are newest first, so the controls board's pager goes
+  // "older →" and an end it cannot take is quiet words, no control (was "Next" and a disabled
+  // "Previous")
+  fireEvent.click(await within(objects).findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith(
       id,
@@ -128,7 +135,10 @@ it('applies exact whole-collection trait filtering before pagination and resets 
       traits: { Face: 'Blue' },
     })
   );
-  expect(within(objects).getByRole('button', { name: 'Previous' })).toBeDisabled();
+  expect(within(objects).queryByRole('button', { name: '← newer' })).toBeNull();
+  expect(within(objects).getByRole('navigation', { name: 'objects' })).toHaveTextContent(
+    'page 1 of 4'
+  );
   fireEvent.click(within(objects).getByRole('button', { name: 'Clear Face = Blue' }));
   await waitFor(() =>
     expect(container.querySelector('[data-allele="Blue"]')).not.toHaveAttribute('stroke')

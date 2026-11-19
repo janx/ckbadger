@@ -242,7 +242,12 @@ describe('Token board (F2 objects)', () => {
     fireEvent.click(await within(history).findByText('Every change to the supply (3)'));
     const table = within(history).getByRole('table', { name: 'Mints and burns' });
     expect(within(table).getAllByText('Mint')).toHaveLength(2);
-    fireEvent.click(within(history).getByRole('button', { name: 'Next' }));
+    // re-pinned (lane c2-assets): the supply events are newest first, so the controls board's
+    // pager says where the list is and goes "older →" (was a "Next" button)
+    expect(within(history).getByRole('navigation', { name: 'supply changes' })).toHaveTextContent(
+      'page 1 of 2'
+    );
+    fireEvent.click(within(history).getByRole('button', { name: 'older →' }));
     await waitFor(() =>
       expect(api.getTokenSupplyEvents).toHaveBeenLastCalledWith(hash, {
         limit: 20,

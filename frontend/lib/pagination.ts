@@ -9,55 +9,69 @@ export const DEFAULT_PAGE_SIZE = 50;
  */
 export const ENTITY_PAGE_SIZE = 20;
 
-/**
- * The pages a list of `total` rows takes at `pageSize` rows a page, both as a response sent them
- * (its `total` and its `limit`): the pager's `pages` (components/ui/pager.tsx), the whole pages
- * and one more for a remainder, by integer arithmetic. A list with no row takes none.
- */
-export function pageCount(total: number, pageSize: number): number {
-  if (!Number.isSafeInteger(total) || total < 0)
-    throw new Error(`pageCount: ${total} is not a count of rows`);
-  if (!Number.isSafeInteger(pageSize) || pageSize < 1)
-    throw new Error(`pageCount: ${pageSize} is not a page's size`);
-  const rest = total % pageSize;
-  return (total - rest) / pageSize + (rest > 0 ? 1 : 0);
+/** One page of a cursor-paged list as the API sent it: what a pager reads of it. */
+export interface CursorPageRead {
+  data: readonly unknown[];
+  /** The page size the API served. */
+  limit: number;
+  hasMore: boolean;
+  /** The rows in all, where the API counts them (absent, or null while not derived). */
+  total?: number | null;
 }
 
-/** A ranked list's page in the figures its pager writes (`Pager` in `pages` mode). */
-interface RankedPage {
+/** The pages a count of rows fills at the page size the response states. */
+function pageCount(list: string, total: number, limit: number): number {
+  if (!Number.isSafeInteger(limit) || limit < 1)
+    throw new Error(`${list}: a page size of ${limit} rows`);
+  if (!Number.isSafeInteger(total) || total < 0) throw new Error(`${list}: ${total} rows in all`);
+  return Math.ceil(total / limit);
+}
+
+/**
+ * Where a page of a ranked cursor-paged list stands, for the pager's `pages` mode
+ * (components/ui/pager.tsx), from its response and the cursor's page (hooks/useCursorPagination):
+ * the rows before it are the full pages before it, each the page size the response states, so it
+ * shows rows `from`–`to` of the response's `total`, which fills ⌈total ÷ limit⌉ pages. Null where
+ * the list is one page (the first, with nothing after it): no pager is drawn. A ranked list's
+ * response that counts no rows is refused, as `pages` mode writes "of N".
+ */
+export function rankedPageAt(
+  list: string,
+  page: number,
+  read: CursorPageRead
+): {
   from: number;
   to: number;
   total: number;
   pageSize: number;
   page: number;
   pages: number;
+} | null {
+  if (page === 1 && !read.hasMore) return null;
+  if (read.total === undefined || read.total === null)
+    throw new Error(`${list}: page ${page} of a ranked list states no total`);
+  const from = (page - 1) * read.limit + 1;
+  return {
+    from,
+    to: from + read.data.length - 1,
+    total: read.total,
+    pageSize: read.limit,
+    page,
+    pages: pageCount(list, read.total, read.limit),
+  };
 }
 
 /**
- * A ranked list's page in the pager's figures, all from the response the page draws: `page` is
- * the page it was asked as (the reader's cursor history when it was asked), the rows a page holds
- * are its `limit`, the rows shown its `data`, the rows in all its `total`. Nothing is guessed: a
- * ranked list's response carries its total, and one without is refused, naming the list; an empty
- * page has no rows to count from and is refused too (a list draws no pager for it).
+ * Where a page of a cursor-paged list in time stands, for the pager's `time` mode: the cursor's
+ * page and, where the response counts the rows, the ⌈total ÷ limit⌉ pages they fill. Null where
+ * the list is one page (the first, with nothing after it): no pager is drawn.
  */
-export function rankedPage(
+export function timePageAt(
   list: string,
   page: number,
-  response: { data: readonly unknown[]; limit: number; total?: number | null }
-): RankedPage {
-  const { data, limit, total } = response;
-  if (total === undefined || total === null)
-    throw new Error(`${list}: a ranked list's page came without its total`);
-  if (!Number.isSafeInteger(page) || page < 1)
-    throw new Error(`${list}: ${page} is not a page of the list`);
-  if (data.length === 0) throw new Error(`${list}: page ${page} holds no row to count from`);
-  const from = (page - 1) * limit + 1;
-  return {
-    from,
-    to: from + data.length - 1,
-    total,
-    pageSize: limit,
-    page,
-    pages: pageCount(total, limit),
-  };
+  read: CursorPageRead
+): { page: number; pages?: number } | null {
+  if (page === 1 && !read.hasMore) return null;
+  if (read.total === undefined || read.total === null) return { page };
+  return { page, pages: pageCount(list, read.total, read.limit) };
 }

@@ -36,9 +36,11 @@ it('preserves single shannons, complete-day cutoff and shared capacity/transfer 
   expect(readout).toHaveTextContent('39.00000013');
   // Lane P: the complete-day scope is the hover of the reading's day.
   expect(readout.querySelector('[title^="complete UTC+8 days through 2023-11-14"]')).not.toBeNull();
-  const range = screen.getByRole('group', { name: 'History time range' });
-  fireEvent.click(within(range).getByRole('button', { name: '1W' }));
-  expect(within(range).getByRole('button', { name: '1W' })).toHaveAttribute('aria-pressed', 'true');
+  // re-pinned (lane c2-assets): the range is the controls board's RangeSelect, a radio group whose
+  // spans are spelled "1 w" (was a group of pressed buttons, "1W")
+  const range = screen.getByRole('radiogroup', { name: 'History time range' });
+  fireEvent.click(within(range).getByRole('radio', { name: '1 w' }));
+  expect(within(range).getByRole('radio', { name: '1 w' })).toHaveAttribute('aria-checked', 'true');
   expect(screen.getByText('No data in this range.')).toBeInTheDocument();
   expect(readout).toHaveTextContent('100.00000013');
 });

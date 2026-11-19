@@ -38,16 +38,7 @@ const ENTRIES: Record<string, { owner: string; named: string }> = {
 const CONFIG_IMPORTERS = ['tailwind.config.ts', 'vite.config.ts'];
 
 /** Unreachable modules the gate tolerates, as path → why the module stays without an importer. */
-const ALLOWLIST: Record<string, string> = {
-  // The controls library (UI review 2026-11-14, phase C, lane C1): built before any page uses it,
-  // placed by the four C2 lanes, whose work list is __tests__/lib/controls-gate.test.ts; the dev
-  // proof page (proof/controls.tsx, outside the build) mounts it meanwhile. An entry goes when its
-  // module is first imported by a page (this test then fails until it does).
-  'components/ui/range-select.tsx':
-    'the controls library’s range (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
-  'components/ui/copy-button.tsx':
-    'the controls library’s copy button (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
-};
+const ALLOWLIST: Record<string, string> = {};
 
 const isModule = (path: string) => /\.tsx?$/.test(path) && !path.endsWith('.d.ts');
 const inScope = (path: string) => isModule(path) && SOURCE_DIRS.includes(path.split('/')[0]);

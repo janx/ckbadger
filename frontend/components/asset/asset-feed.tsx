@@ -26,10 +26,11 @@ import { NoBreak } from '@/components/ui/no-break';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
+import { Tabs, type Tab } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE, timePageAt } from '@/lib/pagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { formatUtc8Date } from '@/lib/utils';
 import { Utc8Age } from '@/components/ui/utc8-date';
@@ -665,6 +666,13 @@ function feedActivityRow(
   };
 }
 
+/** The feed's two layers, as the tab row names them (a command line's names: lowercase). */
+type FeedLayer = 'activities' | 'transactions';
+const FEED_TABS: readonly Tab<FeedLayer>[] = [
+  { key: 'activities', label: 'activities' },
+  { key: 'transactions', label: 'transactions' },
+];
+
 function FullAssetFeed({
   queryKey,
   scope,
@@ -681,8 +689,8 @@ function FullAssetFeed({
   focusItemId,
   mark,
   initialTab = 'activities',
-}: AssetFeedProps & { initialTab?: 'activities' | 'transactions' }) {
-  const [tab, setTab] = useState<'activities' | 'transactions'>(initialTab);
+}: AssetFeedProps & { initialTab?: FeedLayer }) {
+  const [tab, setTab] = useState<FeedLayer>(initialTab);
   const actsPages = useCursorPagination(),
     txPages = useCursorPagination();
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
@@ -702,71 +710,71 @@ function FullAssetFeed({
   });
   const current = tab === 'activities' ? acts : txs,
     pages = tab === 'activities' ? actsPages : txPages;
+  const at = current.data ? timePageAt(tab, pages.page, current.data) : null;
+  // A page counts from where its cursor started: an activity page opened at a cursor from the
+  // URL (an identity page's link) is not counted from the newest end, so it names no page.
+  const fromNewest = tab === 'transactions' || initialActivityCursor === undefined;
   return (
     <section aria-label="What happened" className="min-w-0">
-      <div
-        role="tablist"
-        aria-label="What happened"
-        className="border-base-border mb-3 flex flex-wrap items-center gap-6 border-b max-md:gap-x-4"
-      >
-        {(['activities', 'transactions'] as const).map((t) => (
-          <button
-            key={t}
-            role="tab"
-            aria-selected={tab === t}
-            onClick={() => setTab(t)}
-            className={`text-section max-md:text-body border-b-2 py-3 ${tab === t ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
-          >
-            {t === 'activities' ? 'Activities' : 'Transactions'}
-          </button>
-        ))}
-        <span className="text-text-dim text-meta pb-2 sm:ml-auto">{scope} · newest first</span>
-      </div>
-      {current.data ? (
-        <>
-          <AssetReadState error={current.error} label={tab} retained />
-          {tab === 'activities' ? (
-            acts.data!.data.length ? (
-              // B4: a run folds within this page; one that goes on is a second run on the next
-              <ActivityRuns
-                showScriptDetails={!plain}
-                rows={acts.data!.data.map((a) =>
-                  feedActivityRow(a, {
-                    item,
-                    collection,
-                    plain,
-                    focusItemId,
-                    mark,
-                    focusTokenTypeHash: token?.typeHash,
-                  })
-                )}
-              />
+      {/* the tab row is the section's command line (the controls board); the outline keeps the
+          section's name */}
+      <h2 className="sr-only">What happened</h2>
+      <Tabs label="What happened" command tabs={FEED_TABS} value={tab} onChange={setTab}>
+        {/* the feed's scope, a note (it stood at the row's right end): not a paragraph */}
+        <div className="text-text-dim text-meta pb-1 pt-3">{scope} · newest first</div>
+        {current.data ? (
+          <>
+            <AssetReadState error={current.error} label={tab} retained />
+            {tab === 'activities' ? (
+              acts.data!.data.length ? (
+                // B4: a run folds within this page; one that goes on is a second run on the next
+                <ActivityRuns
+                  showScriptDetails={!plain}
+                  rows={acts.data!.data.map((a) =>
+                    feedActivityRow(a, {
+                      item,
+                      collection,
+                      plain,
+                      focusItemId,
+                      mark,
+                      focusTokenTypeHash: token?.typeHash,
+                    })
+                  )}
+                />
+              ) : (
+                <p className="text-text-dim text-small py-6">No activities.</p>
+              )
             ) : (
-              <p className="text-text-dim text-small py-6">No activities.</p>
-            )
-          ) : (
-            <AssetTransactions
-              rows={txs.data!.data}
-              token={token}
-              context={context}
-              identity={identity}
-            />
-          )}
-          <CursorPagination
-            total={current.data.total}
-            totalLabel="transactions"
-            pageSize={pageSize}
-            page={pages.page}
-            currentCount={current.data.data.length}
-            hasMore={current.data.hasMore}
-            hasPrevious={pages.hasPrevious}
-            onNext={() => pages.goToNext(current.data!.nextCursor)}
-            onPrevious={pages.goToPrevious}
-          />
-        </>
-      ) : (
-        <AssetReadState label={tab} error={current.error} read={current} />
-      )}
+              <AssetTransactions
+                rows={txs.data!.data}
+                token={token}
+                context={context}
+                identity={identity}
+              />
+            )}
+            {at && (
+              // the controls board's pager: a list in time, newest first
+              <div className="mt-3">
+                <Pager
+                  mode="time"
+                  label={tab}
+                  order="newest first"
+                  page={fromNewest ? at.page : undefined}
+                  pages={fromNewest ? at.pages : undefined}
+                  onNewer={pages.hasPrevious ? pages.goToPrevious : undefined}
+                  onOlder={
+                    current.data.hasMore
+                      ? () => pages.goToNext(current.data!.nextCursor)
+                      : undefined
+                  }
+                />
+              </div>
+            )}
+          </>
+        ) : (
+          <AssetReadState label={tab} error={current.error} read={current} />
+        )}
+      </Tabs>
     </section>
   );
 }

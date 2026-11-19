@@ -7,13 +7,13 @@ import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
-import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DotCellParty } from '@/components/identity/dotcell-party';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
   AlignedBar,
@@ -178,6 +178,9 @@ function ScopedCollectionHolders({
       `${holder.itemCount.toLocaleString('en-US')} ${countNoun(holder.itemCount, 'item', 'items')}`,
     ].join(' · ');
   const listed = holders.data?.data ?? [];
+  // "All holders" pages through the list; the top ten are one page
+  const holdersAt =
+    all && holders.data ? rankedPageAt('holders', pagination.page, holders.data) : null;
   // the holders' columns, built while their table is drawn (inside its part)
   const columnsOf = (): ListColumn<CollectionHolder>[] => [
     {
@@ -338,19 +341,17 @@ function ScopedCollectionHolders({
                   );
                 }}
               />
-              {all && (
-                <CursorPagination
-                  page={pagination.page}
-                  pageSize={limit}
-                  total={holders.data.total ?? undefined}
-                  totalLabel="holders"
-                  currentCount={holders.data.data.length}
-                  hasMore={holders.data.hasMore}
-                  hasPrevious={pagination.hasPrevious}
-                  onNext={() => pagination.goToNext(holders.data.nextCursor)}
-                  onPrevious={pagination.goToPrevious}
-                  className="[&>div>span]:text-meta [&>span]:text-meta [&_button]:text-meta flex-wrap gap-3 [&>div]:flex-wrap [&>div]:gap-2 [&_button]:px-3"
-                />
+              {holdersAt && (
+                // the controls board's pager: a ranked list in pages, every figure the response's
+                <div className="mt-3">
+                  <Pager
+                    mode="pages"
+                    label="holders"
+                    {...holdersAt}
+                    onPrevious={pagination.goToPrevious}
+                    onNext={() => pagination.goToNext(holders.data.nextCursor)}
+                  />
+                </div>
               )}
             </>
           ) : (

@@ -26,7 +26,7 @@ import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { DEFAULT_PAGE_SIZE, pageCount } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
 import { KIND_FILTER_LABEL, kindColor, kindFilterValues, kindWords } from '@/lib/kind-filter';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
@@ -515,6 +515,11 @@ export default function TransactionsPage() {
     }
   };
   const active = tab === 'committed' ? committed : pool;
+  // where the committed list stands in time (lib/pagination.ts): its page, and the pages its
+  // served total makes where it states one (a kind's list states none); nothing for one page
+  const committedAt = committed.data
+    ? timePageAt('committed transactions', committedPage.page, committed.data)
+    : null;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 py-8">
@@ -700,20 +705,13 @@ export default function TransactionsPage() {
                     transactions={committed.data.data}
                     formWidth={TRANSACTIONS_FORM_PX}
                   />
-                  {/* The controls board's cursor in time; the pages the served total makes where the
-                      list states one (a kind's list states none). A list with no row has no page
-                      to be on, and draws none. */}
-                  {committed.data.data.length > 0 && (
+                  {/* The controls board's cursor in time. */}
+                  {committedAt && (
                     <Pager
                       mode="time"
                       label="committed transactions"
                       order="newest first"
-                      page={committedPage.page}
-                      pages={
-                        committed.data.total === undefined
-                          ? undefined
-                          : pageCount(committed.data.total, committed.data.limit)
-                      }
+                      {...committedAt}
                       onNewer={committedPage.hasPrevious ? committedPage.goToPrevious : undefined}
                       onOlder={
                         committed.data.hasMore

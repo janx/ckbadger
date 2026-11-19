@@ -31,7 +31,7 @@ import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript, type ScriptsListApi } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
-import { DEFAULT_PAGE_SIZE, rankedPage } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
@@ -453,6 +453,8 @@ export default function ScriptsPage() {
   }
 
   const rows = data?.data ?? [];
+  // the shown page's figures (lib/pagination.ts), at the page it was asked as; nothing for one page
+  const scriptsAt = data && data.data.length > 0 ? rankedPageAt('scripts', data.page, data) : null;
   const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
@@ -691,13 +693,15 @@ export default function ScriptsPage() {
                 )}
                 {data && data.data.length > 0 && (
                   <div className="border-base-border mt-4 border-t pt-4">
-                    <Pager
-                      mode="pages"
-                      label="scripts"
-                      {...rankedPage('scripts', data.page, data)}
-                      onPrevious={pagination.goToPrevious}
-                      onNext={() => pagination.goToNext(data.nextCursor)}
-                    />
+                    {scriptsAt && (
+                      <Pager
+                        mode="pages"
+                        label="scripts"
+                        {...scriptsAt}
+                        onPrevious={pagination.goToPrevious}
+                        onNext={() => pagination.goToNext(data.nextCursor)}
+                      />
+                    )}
                   </div>
                 )}
               </Tabs>

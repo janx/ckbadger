@@ -17,7 +17,7 @@ import { formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type Asset, type InventorySummary } from '@/lib/api';
 import type { CompositionTier } from '@/lib/asset-utils';
-import { DEFAULT_PAGE_SIZE, rankedPage } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 
 export type AssetType = Asset['assetType'];
@@ -155,6 +155,12 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
         sortDirection,
       }),
   });
+  const classLabel = INVENTORY_CLASSES.find((c) => c.key === assetType)!.label;
+  // the shown page's figures (lib/pagination.ts); nothing for one page, nor for an empty one
+  const assetsAt =
+    assets.data && assets.data.data.length > 0
+      ? rankedPageAt(classLabel, pagination.page, assets.data)
+      : null;
   const filter = (key: 'standard' | 'compositionTier', value: string) => {
     const next = value || undefined;
     if (key === 'standard') setStandard(next);
@@ -256,11 +262,11 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                 <>
                   <AddressStaleNotice error={assets.error} label="inventory" />
                   <InventoryRows rows={assets.data.data} assetType={assetType} />
-                  {assets.data.data.length > 0 && (
+                  {assetsAt && (
                     <Pager
                       mode="pages"
-                      label={INVENTORY_CLASSES.find((c) => c.key === assetType)!.label}
-                      {...rankedPage('inventory', pagination.page, assets.data)}
+                      label={classLabel}
+                      {...assetsAt}
                       onPrevious={pagination.goToPrevious}
                       onNext={() => pagination.goToNext(assets.data.nextCursor)}
                     />

@@ -339,16 +339,20 @@ describe('protocol byte evidence', () => {
     expect(value.originalInteger.$integer).toBe('100000000000000000001');
   });
 
+  // Re-pinned (lane c2-assets): the copy is the controls board's CopyButton — an icon named
+  // "copy raw bytes" that answers "copied" (was the words "Copy raw bytes" answering "Raw bytes
+  // copied."), and "not copied" where the clipboard refuses (was an alert "Could not copy raw
+  // bytes: <the browser's message>").
   it('copies the complete original bytes, including bytes outside the visible page', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     const value = '0x' + 'AB'.repeat(300);
     const { rerender } = render(<ProtocolEvidence title="Copy" dataHex={value} fields={[]} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Copy raw bytes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'copy raw bytes' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(value));
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Raw bytes copied.'));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^copied$/));
     rerender(<ProtocolEvidence title="Copy" dataHex="0xcd" fields={[]} />);
-    expect(screen.queryByText('Raw bytes copied.')).not.toBeInTheDocument();
+    expect(screen.queryByText('copied')).not.toBeInTheDocument();
   });
 
   it('exposes a clipboard failure and retains raw hex for inspection', async () => {
@@ -357,10 +361,8 @@ describe('protocol byte evidence', () => {
       value: { writeText: vi.fn().mockRejectedValue(new Error('clipboard denied')) },
     });
     render(<ProtocolEvidence title="Copy failure" dataHex="0x0102" fields={[]} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Copy raw bytes' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Could not copy raw bytes: clipboard denied'
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'copy raw bytes' }));
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(/^not copied$/));
     expect(
       within(screen.getByText('All 2 bytes as hex').closest('details')!).getByText('0x0102')
     ).toBeInTheDocument();
