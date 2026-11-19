@@ -208,11 +208,15 @@ export function CompositionBadge({
       </span>
     );
   }
+  // Readability P2: an off-chain tier's words read in the reading ink, as the composition legend,
+  // the inventory's filter, writes them (composition-set.tsx); they were the quiet ink, so a row's
+  // chip and the filter beside the list differed. (The legend fades its off-chain marks; a mark is
+  // no word, and the chip keeps its own.)
   return (
     <span
       data-composition={tier}
       className={cn(
-        'text-text-dim inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap',
+        'text-text inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap',
         size === 'sm' ? 'text-meta' : 'text-small',
         className
       )}
