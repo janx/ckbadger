@@ -384,7 +384,9 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(pool).toHaveAttribute('href', `/mainnet/address/${miner}`);
     expect(pool).toHaveAttribute('title', miner);
     // T5: the block number is the row's one bright thing; a named pool reads in body ink.
-    expect(pool).toHaveClass('text-text');
+    // re-pinned on purpose (lists lane P3, the link-look gate): a link inside the cell's line, the
+    // inline look, its ink the cell's (it wrote text-text on itself)
+    expect(pool).toHaveClass('underline');
     expect(pool).not.toHaveClass('text-text-bright');
     // The unnamed miner keeps its address tail; nothing is guessed for it.
     expect(within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })).toHaveLength(1);
@@ -1017,15 +1019,18 @@ describe('BlocksPage · Blocks v3 board', () => {
       // footprint (re-pinned on purpose, readability R6: 304 and 334 px, were 294 and 324)
       const [at360, at390] = [360, 390].map((w) => w - 32 - ROW_SEAL.block.footprint);
       expect([at360, at390]).toEqual([304, 334]);
-      // the worst realistic head: 85.8 + 12 + 17 × 7.2 = 220.2 px, inside 304 (and 334)
+      // the worst realistic head at the row's real steps (re-pinned on purpose, lists lane P3, B6's
+      // note: it counted the height at 13 px and the right part at 12, the steps before R4): the
+      // height at the key's 14 px, 92.4, the 12 px gap and "999 txs · 59m ago" at 13 px, 17 × 7.8 =
+      // 132.6: 237 px, inside 304 (and 334)
       const headWidth = (left: string, right: string) =>
-        chars(left.length, 13) + 12 + chars(right.length, 12);
-      expect(headWidth(head.left, head.right!)).toBeCloseTo(220.2, 6);
+        chars(left.length, 14) + 12 + chars(right.length, 13);
+      expect(headWidth(head.left, head.right!)).toBeCloseTo(237, 6);
       expect(headWidth(head.left, head.right!)).toBeLessThanOrEqual(at360);
-      // the right part holds 28 characters at 360 and 32 at 390 (re-pinned, R6: 27 and 31); the
-      // old head of this block was 42
-      expect(Math.floor((at360 - chars(11, 13) - 12) / chars(1, 12))).toBe(28);
-      expect(Math.floor((at390 - chars(11, 13) - 12) / chars(1, 12))).toBe(32);
+      // the right part holds 25 characters at 360 and 29 at 390 (re-pinned, the real steps: were 28
+      // and 32 at 12 px); the old head of this block was 42
+      expect(Math.floor((at360 - chars(11, 14) - 12) / chars(1, 13))).toBe(25);
+      expect(Math.floor((at390 - chars(11, 14) - 12) / chars(1, 13))).toBe(29);
       expect(
         headWidth(head.left, '999\u00a0txs · 12\u00a0proposals · 1\u00a0uncle · 59m ago')
       ).toBeGreaterThan(at390);
@@ -1062,9 +1067,11 @@ describe('BlocksPage · Blocks v3 board', () => {
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       const [unnamed, pooled, testnet] = cards.map((card) => phoneLines(card)[1]);
+      // at the row's real steps (re-pinned on purpose, lists lane P3, B6's note: it counted the line
+      // at 12 px and the unit at 11): the line at 13 px, the unit at 12, the 12 px gap
       const width = (text: string) =>
-        chars(text.length - ' CKB'.length, 12) + (text.endsWith(' CKB') ? chars(4, 11) : 0);
-      const lineWidth = (left: string, right: string) => chars(left.length, 12) + 12 + width(right);
+        chars(text.length - ' CKB'.length, 13) + (text.endsWith(' CKB') ? chars(4, 12) : 0);
+      const lineWidth = (left: string, right: string) => chars(left.length, 13) + 12 + width(right);
       // the text column beside the stone at 360 and 390 (re-pinned, R6: were 294 and 324)
       const [at360, at390] = [360, 390].map((w) => w - 32 - ROW_SEAL.block.footprint);
       expect([at360, at390]).toEqual([304, 334]);
@@ -1093,20 +1100,19 @@ describe('BlocksPage · Blocks v3 board', () => {
         expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);
       }
       // Readability R5 (re-pinned on purpose): a phone row's fee is the summary form, so a fee of
-      // 9.99999999 CKB is "fees 9.99 CKB": 122.4 + 12 + 91.2 = 225.6 px (it was 268.8 px, every
-      // decimal). The widest fee is now one under 1 CKB, which keeps its exact value — "fees
-      // 0.99999999 CKB" is 268.8 px, as the 8-decimal form was, 35.2 to spare at 360 and 65.2 at
-      // 390 (25.2 and 55.2 beside the 26 px stone) — and from 1 CKB up the summary is shorter:
-      // 999.99 CKB is 240 px, 1,000,000 CKB 261.6.
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(225.6, 6);
+      // 9.99999999 CKB is "fees 9.99 CKB". At the real steps (re-pinned on purpose, lists lane P3):
+      // 132.6 + 12 + 99 = 243.6 px. The widest fee is one under 1 CKB, which keeps its exact value —
+      // "fees 0.99999999 CKB" is 290.4 px, 13.6 to spare at 360 and 43.6 at 390 — and from 1 CKB up
+      // the summary is shorter: 999.99 CKB is 259.2 px, 1,000,000 CKB 282.6.
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(243.6, 6);
       expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(at360);
-      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeCloseTo(268.8, 6);
+      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeCloseTo(290.4, 6);
       expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeLessThanOrEqual(at360);
-      expect(lineWidth(unnamed.left, 'fees 999.99 CKB')).toBeCloseTo(240, 6);
-      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeCloseTo(261.6, 6);
+      expect(lineWidth(unnamed.left, 'fees 999.99 CKB')).toBeCloseTo(259.2, 6);
+      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeCloseTo(282.6, 6);
       expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeLessThanOrEqual(at360);
-      // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
-      expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
+      // "miner Example Pool" with the fee: 140.4 + 12 + 145.8 = 298.2 px
+      expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(298.2, 6);
       expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(at360);
     });
 

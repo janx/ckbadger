@@ -86,7 +86,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'app/blocks/page.tsx': {
     family: 'chain',
     // td 5 → 4 (readability F3-e): the 608 px table's age is the first line of its "Age · txs" cell
-    sites: { link: 3, td: 4, prose: 2 },
+    // link 3 → 1 (lane P3): the hardfork links read in their line's ink, the inline look's
+    sites: { link: 1, td: 4, prose: 2 },
     reason:
       'ages, reward-finality heights, cycles states and HF links quiet in table cells and rows; the loading and error lines',
   },

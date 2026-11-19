@@ -156,11 +156,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- p-lists ----
   // 'app/activities/page.tsx' left the list (lane P3: look 1, ink 1 → 0; the transactions link a way
   // onward)
-  'app/blocks/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 9, ink: 5 },
-    reason: '9 without a look; inks by hand (text-text-bright, hover:text-jade, text-text-dim)',
-  },
+  // 'app/blocks/page.tsx' left the list (lane P3: look 9, ink 5 → 0; a block number its row's key,
+  // the miner, the paid block and the hardfork inline)
   'app/dao/depositors/page.tsx': {
     lane: 'p-lists',
     sites: { look: 5, ink: 2 },
@@ -274,8 +271,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // block page's step arrow mark; TabLinks' name span is NAMED) → 111 (lane P3: the transactions
 // page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
 // → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
-// (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14)
-const TOLERATED_TOTAL = 77;
+// (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14) → 63
+// (lane P3: the blocks list, 14)
+const TOLERATED_TOTAL = 63;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
