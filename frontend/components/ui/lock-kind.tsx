@@ -283,8 +283,28 @@ export function lockPhrase(words: LockWords, size: ShortSize): string {
   // a lock without a name is "lock 0x…", its hash type after it where it has one
   if (words.name === null) return `a ${lockWordsText(words, size)}`;
   // a named lock never carries a hash type: the decision drops a name it does not cover
-  const article = /^[aeio]/i.test(words.name) ? 'an' : 'a';
+  const article = articleBySound(words.name);
   return /lock$/i.test(words.name) ? `${article} ${words.name}` : `${article} ${words.name} lock`;
+}
+
+/** Letters whose spoken names start with a vowel sound: "ay", "ee", "ef", "aitch", "eye", "el", … */
+const VOWEL_SOUNDING_LETTERS = /^[aefhilmnorsx]$/i;
+
+/**
+ * A name's article by its first SOUND, not its first letter (lane P2's third round, item 14): a
+ * name led by letters spoken one by one (a capital not followed by a small letter, "RGB++", "M-NFT",
+ * "UTXOSwap"; a small letter before a capital, "xUDT", "iCKB") goes by the first letter's spoken
+ * name ("an RGB++", "an xUDT", "a UTXOSwap"); a word by its first vowel sound, a "u" read "you"
+ * before a consonant and a vowel ("a UniPass", "a Unique"); a name led by a mark (".bit", "dot")
+ * takes "a". Read over every name the registry holds in lock-kind.test.
+ */
+function articleBySound(name: string): 'a' | 'an' {
+  const lead = /^[A-Za-z]+/.exec(name)?.[0];
+  if (lead === undefined) return 'a';
+  if (/^[A-Z](?![a-z])/.test(lead) || /^[a-z][A-Z]/.test(lead))
+    return VOWEL_SOUNDING_LETTERS.test(lead[0]) ? 'an' : 'a';
+  if (/^u[^aeiou][aeiou]/i.test(lead)) return 'a';
+  return /^[aeiou]/i.test(lead) ? 'an' : 'a';
 }
 
 /**
