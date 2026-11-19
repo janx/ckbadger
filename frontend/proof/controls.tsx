@@ -21,7 +21,7 @@ import Link from '@/components/ui/link';
 import { Pager } from '@/components/ui/pager';
 import { RangeSelect } from '@/components/ui/range-select';
 import { Select } from '@/components/ui/select';
-import { Tabs, type Tab } from '@/components/ui/tabs';
+import { TabLinks, Tabs, type Tab } from '@/components/ui/tabs';
 import { TextField } from '@/components/ui/text-field';
 import { color, themeDeclarations } from '@/lib/palette';
 import '@/app/globals.css';
@@ -72,6 +72,16 @@ function TabRows() {
       >
         <Note>the {inventory} panel · 324 px with its counts: they stay at 360</Note>
       </Tabs>
+      <TabLinks
+        label="inventory classes"
+        command
+        tabs={INVENTORY_TABS.map((tab) => ({ ...tab, href: `/inventory/${tab.label}` }))}
+        current="tokens"
+      />
+      <Note>
+        the same row when each class is its own address: a nav of links, the current one the page
+        (it opens the inventory: open one in a new tab)
+      </Note>
       <Tabs
         label="a tab row that is not a command line, with a zero"
         tabs={[ADDRESS_TABS[0], { ...ADDRESS_TABS[1], count: 0 }, ADDRESS_TABS[2]]}
