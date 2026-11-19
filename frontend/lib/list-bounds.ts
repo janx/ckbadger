@@ -107,16 +107,18 @@ export const LARGEST_TX_BYTES = Math.max(MAX_BLOCK_BYTES, GENESIS_BLOCK_BYTES);
 
 /**
  * Of record: a party's change in occupied bytes in one transaction (or the transaction's net),
- * with its unit, `−16,773,724,928 B`. A cell's occupied bytes (its capacity field, its scripts,
- * its data) are fewer than its output's serialized bytes in the transaction that made it, so no
- * more than LARGEST_TX_BYTES (genesis's cellbase made cells the block limit does not hold; the
- * cell tile budgets its figure there, `1,236,271 B`). A change grows by no more than what the
- * transaction makes, at most its bytes, and shrinks by no more than what it consumes, MAX_TX_INPUTS
- * such cells: 13,568 × 1,236,271 = 16,773,724,928, the wider. Source: LARGEST_TX_BYTES and
- * MAX_TX_INPUTS.
+ * with its unit, `−8,101,332,271 B`. A cell's occupied bytes (its capacity field, its scripts, its
+ * data) are fewer than its output's serialized bytes in the transaction that made it. A change
+ * grows by no more than what the transaction makes, at most its bytes (LARGEST_TX_BYTES), and
+ * shrinks by no more than what it consumes, the wider: genesis's cells, the only ones past the
+ * block limit, together no more than genesis's block (GENESIS_BLOCK_BYTES, of record), and
+ * MAX_TX_INPUTS other cells of no more than a block each (MAX_TX_INPUTS × MAX_BLOCK_BYTES,
+ * consensus): 1,236,271 + 13,568 × 597,000 = 8,101,332,271. (The cell tile budgets one cell's
+ * figure at LARGEST_TX_BYTES, `1,236,271 B`.) Source: GENESIS_BLOCK_BYTES, with MAX_TX_INPUTS and
+ * MAX_BLOCK_BYTES.
  */
 export const WIDEST_OCCUPIED_CHANGE = occupiedBytesDelta(
-  -BigInt(MAX_TX_INPUTS) * BigInt(LARGEST_TX_BYTES)
+  -(BigInt(GENESIS_BLOCK_BYTES) + BigInt(MAX_TX_INPUTS) * BigInt(MAX_BLOCK_BYTES))
 );
 
 /**

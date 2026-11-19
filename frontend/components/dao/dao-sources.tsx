@@ -66,7 +66,7 @@ export function DaoSources() {
             subject: runSubject(row, activityTitleText(row)),
             activity: row,
             title: <ActivityTitle activity={row} />,
-            row: <ActivityRow activity={row} lockColumn age className="py-2.5" />,
+            row: <ActivityRow activity={row} age className="py-2.5" />,
           }))}
         />
       )}

@@ -10,8 +10,7 @@ import {
   transactionScriptHashes,
 } from '@/lib/cell-seal';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { lockWords, lockWordsText } from '@/components/ui/lock-kind';
-import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
+import { cellLockFacts, lockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { ShortId } from '@/components/ui/short-id';
 function required<T>(value: T | null | undefined, hash: string, field: string): T {
   if (value === null || value === undefined)
@@ -52,12 +51,17 @@ export function kindOf(cell: {
       return cell.type ? 'other' : 'ckb';
   }
 }
-/** A cell's lock's hash type as the chain writes it; any other word is a contract break, named. */
-function hashTypeOf(value: string): ScriptRefHashType {
-  const hashType = normalizeScriptRefHashType(value);
-  if (hashType === null)
-    throw new Error(`lock hash type ${JSON.stringify(value)} is not a CKB hash type`);
-  return hashType;
+
+/**
+ * A code hash's name in the script registry, the one rule for every writer of one: the lookup's
+ * name, unless the registry has none ('unknown' is its word for none).
+ */
+export function registeredName(
+  lookup: ScriptLookupResponse | undefined,
+  codeHash: string
+): string | null {
+  const name = lookup?.[codeHash]?.name;
+  return name && name.toLowerCase() !== 'unknown' ? name : null;
 }
 
 export function cellTiles(
@@ -72,40 +76,60 @@ export function cellTiles(
     tx.hash,
     required(tx.scriptGroups, tx.hash, 'scriptGroups')
   );
-  // A tile is drawn for a cell: an input that is one (never the cellbase's null out point, whose
-  // address and lock the API serves as null and which gets no tile), so a missing address is an
-  // error with the input named, as before.
-  const owner = (address: string | null | undefined, context: string) => {
-    const a = required(address ?? undefined, tx.hash, `${context}.address`);
-    return (
-      // the row size, as the summary, the balances and What moved write the same party (R9): a
-      // tile's text column is 215 px at its narrowest (1024; 343 at 1280, 246 at 360), where the
-      // address, 13 characters at 12 px (93.6 px), stands whole, its lock wrapping under it
-      <Link href={`/address/${a}`} className="text-text hover:text-jade">
-        <ShortId value={a} kind="address" size="row" />
-      </Link>
-    );
-  };
-  // A cell's lock beside its owner, as every row writes one (the one decision, B4): its script
-  // (code hash and hash type) decides the default lock, which is not named; the registry's name,
-  // else "lock <code hash>". A cell with no lock (none here: every tile is a cell) names none.
-  const lockKind = (lock: { codeHash: string; hashType: string } | null | undefined) => {
-    if (!lock) return null;
-    const registered = lookup?.[lock.codeHash]?.name;
+  // A tile is drawn for a cell (an input that is one: never the cellbase's null out point, whose
+  // address and lock the API serves as null and which gets no tile), and its owner and its lock
+  // are that one cell's (lane B4 second fix round). One path: the lock is the cell's script, and
+  // its words are the one decision's (`lockWords`: the default lock is not named; the registry's
+  // name, else "lock <code hash>"); the address, where the lock has one, is that lock spelled, so
+  // a cell with no lock, or an address that spells another lock, is refused with the transaction
+  // and the cell named. A lock with no address form (args over 599 bytes: the API sends no
+  // address) is owned by its lock hash, as a row writes a party with no address.
+  const ownerOf = (
+    cell: {
+      lock?: { codeHash: string; hashType: string; args: string } | null;
+      address?: string | null;
+    },
+    side: 'input' | 'output',
+    i: number
+  ) => {
+    const context = `${side} ${i}`;
+    const lock = required(cell.lock ?? undefined, tx.hash, `${context}.lock`);
+    const address = cell.address ?? null;
     const words = lockWords(
-      {
-        name: registered && registered.toLowerCase() !== 'unknown' ? registered : null,
-        codeHash: lock.codeHash,
-        hashType: hashTypeOf(lock.hashType),
-      },
+      cellLockFacts(
+        { lock, name: registeredName(lookup, lock.codeHash), address },
+        `Transaction ${tx.hash} ${context}`
+      ),
       'inline'
     );
-    return words && lockWordsText(words, 'row');
+    const lockHash =
+      address === null
+        ? required(scripts[side].get(i)?.lock, tx.hash, `${context}'s lock script group`)
+        : null;
+    return {
+      owner: (
+        // the row size, as the summary, the balances and What moved write the same party (R9): a
+        // tile's text column is 215 px at its narrowest (1024; 343 at 1280, 246 at 360), where
+        // the address, 13 characters at 12 px (93.6 px), stands whole, its lock wrapping under it
+        <Link
+          href={`/address/${address ?? lockHash}`}
+          className="text-text hover:text-jade"
+          title={lockHash ?? undefined}
+        >
+          {address !== null ? (
+            <ShortId value={address} kind="address" size="row" />
+          ) : (
+            <ShortId value={lockHash!} kind="hash" size="row" />
+          )}
+        </Link>
+      ),
+      lockKind: words && lockWordsText(words, 'row'),
+    };
   };
   const content = (cell: { type?: { codeHash: string } | null; cellType?: string | null }) => {
     const kind = kindOf(cell);
-    const name = cell.type ? lookup?.[cell.type.codeHash]?.name : undefined;
-    return name && name.toLowerCase() !== 'unknown'
+    const name = cell.type ? registeredName(lookup, cell.type.codeHash) : null;
+    return name !== null
       ? name
       : kind === 'ckb'
         ? 'CKB'
@@ -126,14 +150,15 @@ export function cellTiles(
           const out = required(cell.previousOutput, tx.hash, `input ${i} outpoint`);
           const kind = kindOf(cell);
           const capacity = required(cell.capacity, tx.hash, `input ${i} capacity`);
+          const { owner, lockKind } = ownerOf(cell, 'input', i);
           return {
             id: `in:${i}`,
             testId: `tx-io-input-${i}`,
             href: `/cell/${out.txHash}-${out.index}`,
             outPoint: { txHash: out.txHash, index: out.index },
             label: `input ${i}`,
-            owner: owner(cell.address, `input ${i}`),
-            lockKind: lockKind(cell.lock),
+            owner,
+            lockKind,
             kind,
             seal: {
               id: transactionCellSealId(scripts, 'input', i, {
@@ -153,11 +178,9 @@ export function cellTiles(
               content(cell)
             ),
             capacity,
-            occupied: (
-              exactUnsignedInteger(
-                required(cell.commonKnowledgeSize, tx.hash, `input ${i} occupied`),
-                `${tx.hash}: input ${i} occupied bytes`
-              ) * BigInt(100000000)
+            occupiedBytes: exactUnsignedInteger(
+              required(cell.commonKnowledgeSize, tx.hash, `input ${i} occupied`),
+              `${tx.hash}: input ${i} occupied bytes`
             ).toString(),
             state: 'consumed',
           };
@@ -166,15 +189,16 @@ export function cellTiles(
       const outPoint = { txHash: tx.hash, index: i };
       const kind = kindOf(cell);
       const status = required(cell.status, tx.hash, `output ${i} status`);
+      const { owner, lockKind } = ownerOf(cell, 'output', i);
       return {
         id: `out:${i}`,
         testId: `tx-io-output-${i}`,
         href: `/cell/${tx.hash}-${i}`,
         outPoint,
         label: `output ${i}`,
-        owner: owner(cell.address, `output ${i}`),
+        owner,
         // F2-tx (R2b-a 40, TX-22): the API marks change outputs; the tile says so beside the lock.
-        lockKind: changeMarked(lockKind(cell.lock), cell.isChange),
+        lockKind: changeMarked(lockKind, cell.isChange),
         kind,
         seal: {
           id: transactionCellSealId(scripts, 'output', i, {
@@ -196,9 +220,9 @@ export function cellTiles(
           content(cell)
         ),
         capacity: cell.capacity,
-        occupied: (
-          exactUnsignedInteger(cell.commonKnowledgeSize, `${tx.hash}: output ${i} occupied bytes`) *
-          BigInt(100000000)
+        occupiedBytes: exactUnsignedInteger(
+          cell.commonKnowledgeSize,
+          `${tx.hash}: output ${i} occupied bytes`
         ).toString(),
         state: status,
       };
@@ -245,7 +269,8 @@ function CodeCellContent({
   );
 }
 
-// F2-tx (TX-22): "Default Lock · change" (Main.dc.html out #2).
+// F2-tx (TX-22): a change output says so beside its lock, "JoyID · change", and alone where its
+// lock is not named (the default lock): "change".
 function changeMarked(lockKind: string | null, isChange: boolean): string | null {
   if (!isChange) return lockKind;
   return lockKind ? `${lockKind} · change` : 'change';

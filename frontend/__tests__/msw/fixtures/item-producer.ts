@@ -1,5 +1,5 @@
 // Captured unchanged from native CKB fixture + real API handlers; not live mainnet data.
-import { seededAddress } from '@/__tests__/utils/ckb-address';
+import { ckbAddress, seededAddress } from '@/__tests__/utils/ckb-address';
 import type {
   ObjectGenetics,
   CollectionInsights,
@@ -16,12 +16,28 @@ import type {
   ClusterProtocol,
   AssetCapacityHistory,
 } from '@/lib/api';
-// B4 fix round: the producer's owner addresses were synthetic (a code hash of 0x41… and a hash
-// type byte the chain does not have); a row reads its lock off its address, so each is a real
-// address, on the default lock the rows name (lockCodeHash 0x9bd7e06f…, SECP256K1/blake160).
-const PRODUCER_OWNER_1 = seededAddress('owner1');
-const PRODUCER_OWNER_2 = seededAddress('owner2');
-const PRODUCER_OWNER_3 = seededAddress('owner3');
+/**
+ * The producer's owners, each the real address of the lock its rows carry (B4 second fix round,
+ * review-rules-fixes-tests SHOULD-4; `__tests__/lib/producer-owners.test.ts` holds them to it).
+ * The captured cells are held by the lock code hash 0x41… by type, over args 0x01 × 20, a .bit
+ * account's long args and 0x02 × 20, whose lock hashes the rows give (0x5e917826…, 0x4c1b4df2…,
+ * 0xb3acb1c3…). The gallery's rows name the default lock (0x9bd7e06f… by type,
+ * SECP256K1/blake160), so their owners are default-lock addresses of their own, with those locks'
+ * hashes (blake2b of the molecule Script, CKB's personalisation).
+ */
+const CAPTURED_LOCK = '0x4141414141414141414141414141414141414141414141414141414141414141';
+const PRODUCER_OWNER_1 = ckbAddress({ codeHash: CAPTURED_LOCK, args: `0x${'01'.repeat(20)}` });
+const PRODUCER_OWNER_2 = ckbAddress({
+  codeHash: CAPTURED_LOCK,
+  args: '0x036666666666666666666666666666666666666666067777777777777777777777777777777777777777777777777777777777777777',
+});
+const PRODUCER_OWNER_3 = ckbAddress({ codeHash: CAPTURED_LOCK, args: `0x${'02'.repeat(20)}` });
+const GALLERY_OWNER_1 = seededAddress('owner1');
+const GALLERY_OWNER_1_LOCK_HASH =
+  '0xc5d5a70f6d46a31ea7493aaf8c9b0d393ae009e710df7cf4419031dd65a27ae6';
+const GALLERY_OWNER_3 = seededAddress('owner3');
+const GALLERY_OWNER_3_LOCK_HASH =
+  '0x6cadcdc3658e4c21302c4850efcf16346fd796b3ded143cec458f83602fad0ef';
 
 export const objectGeneticsProducer = {
   cachedVmTraits: {
@@ -286,8 +302,8 @@ export const collectionGalleryFilteredProducer = {
       },
       number: '18446744073709551614',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_1,
-      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      ownerAddress: GALLERY_OWNER_1,
+      ownerLockHash: GALLERY_OWNER_1_LOCK_HASH,
       sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
       traits: [
         {
@@ -772,8 +788,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551615',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_1,
-      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      ownerAddress: GALLERY_OWNER_1,
+      ownerLockHash: GALLERY_OWNER_1_LOCK_HASH,
       sporeId: '0x0101010101010101010101010101010101010101010101010101010101010101',
       traits: [
         {
@@ -802,8 +818,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551614',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_1,
-      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      ownerAddress: GALLERY_OWNER_1,
+      ownerLockHash: GALLERY_OWNER_1_LOCK_HASH,
       sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
       traits: [
         {
@@ -832,8 +848,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551613',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_1,
-      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      ownerAddress: GALLERY_OWNER_1,
+      ownerLockHash: GALLERY_OWNER_1_LOCK_HASH,
       sporeId: '0x0303030303030303030303030303030303030303030303030303030303030303',
       traits: [
         {
@@ -862,8 +878,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551612',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_1,
-      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      ownerAddress: GALLERY_OWNER_1,
+      ownerLockHash: GALLERY_OWNER_1_LOCK_HASH,
       sporeId: '0x0404040404040404040404040404040404040404040404040404040404040404',
       traits: [
         {
@@ -892,8 +908,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551611',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_1,
-      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      ownerAddress: GALLERY_OWNER_1,
+      ownerLockHash: GALLERY_OWNER_1_LOCK_HASH,
       sporeId: '0x0505050505050505050505050505050505050505050505050505050505050505',
       traits: [
         {
@@ -922,8 +938,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551610',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_1,
-      ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
+      ownerAddress: GALLERY_OWNER_1,
+      ownerLockHash: GALLERY_OWNER_1_LOCK_HASH,
       sporeId: '0x0606060606060606060606060606060606060606060606060606060606060606',
       traits: [
         {
@@ -952,8 +968,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551609',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_3,
-      ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
+      ownerAddress: GALLERY_OWNER_3,
+      ownerLockHash: GALLERY_OWNER_3_LOCK_HASH,
       sporeId: '0x0707070707070707070707070707070707070707070707070707070707070707',
       traits: [
         {
@@ -982,8 +998,8 @@ export const collectionGalleryProducer = {
       },
       number: '18446744073709551608',
       outputIndex: 0,
-      ownerAddress: PRODUCER_OWNER_3,
-      ownerLockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
+      ownerAddress: GALLERY_OWNER_3,
+      ownerLockHash: GALLERY_OWNER_3_LOCK_HASH,
       sporeId: '0x0808080808080808080808080808080808080808080808080808080808080808',
       traits: [
         {

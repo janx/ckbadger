@@ -354,6 +354,63 @@ describe('ActivitiesStreamExplorer', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // Lane B4 second fix round (review-rules-fixes-logic MUST 1, the coordinator's item 1): the
+  // turn of the day re-labels every divider ("Today" becomes "Yesterday") and must remount
+  // nothing: a group is keyed by the UTC+8 date of its rows, not by its label. Open a run, open a
+  // row's hidden parties, focus the run's toggle, and let the clock pass midnight.
+  it('keeps what the reader opened, and the focus, when the day turns (B4 fix round)', async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ now: Date.parse('2026-11-14T15:59:59Z') });
+    const late = (n: number) =>
+      makeActivity({
+        txHash: `0xlate${n}`,
+        timestamp: String(Date.parse(`2026-11-14T15:59:${50 - n}Z`)),
+        participants: [makeParticipant({ address: seededAddress('late'), ckbDelta: '-1' })],
+      });
+    const crowd = makeActivity({
+      txHash: '0xcrowd',
+      timestamp: String(Date.parse('2026-11-14T15:00:00Z')),
+      participants: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((c, i) =>
+        makeParticipant({ address: seededAddress(`crowd${c}`), ckbDelta: String(i + 1) })
+      ),
+    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [
+        late(1),
+        late(2),
+        crowd,
+        makeActivity({
+          txHash: '0xeve',
+          timestamp: String(Date.parse('2026-11-13T15:00:00Z')),
+          participants: [makeParticipant({ address: seededAddress('eve'), ckbDelta: '-1' })],
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+    const { unmount } = render(<ActivitiesStreamExplorer />);
+    const dividers = () =>
+      Array.from(document.querySelectorAll('[data-testid^="activity-day-divider"]')).map(
+        (d) => d.textContent
+      );
+    await loadUnderStillClock(() => dividers().length === 2);
+    const toggle = screen.getByRole('button', { name: '2 transactions ↓' });
+    fireEvent.click(toggle);
+    const more = screen.getByRole('button', { name: '+2 participants' });
+    fireEvent.click(more);
+    toggle.focus();
+    expect(document.activeElement).toBe(toggle);
+    tick(1000);
+    expect(dividers()).toEqual(['Yesterday', 'Nov 13']);
+    expect(toggle.isConnected).toBe(true);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(document.activeElement).toBe(toggle);
+    expect(more.isConnected).toBe(true);
+    expect(more).toHaveAttribute('aria-expanded', 'true');
+    unmount();
+  });
+
   it('renders each activity row with tx hash, event rows, and participant lines', async () => {
     const timestamp = String(Date.now() - 23_000);
     vi.mocked(api.getGlobalActivities).mockResolvedValue({

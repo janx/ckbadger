@@ -1,3 +1,6 @@
+import { SHEETS } from '@/components/transaction/tx-structure';
+import { containerContentPx } from '@/__tests__/utils/tailwind-box';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
 import { occupiedBytesText } from '@/lib/occupied';
 import { describe, it, expect, vi } from 'vitest';
@@ -46,7 +49,7 @@ describe('CellTile occupied wording (TX-19)', () => {
           kind: 'other',
           content: 'CKBFS file',
           capacity: '19500000000',
-          occupied: '19500000000',
+          occupiedBytes: '195',
           state: 'consumed',
         })}
       />
@@ -56,6 +59,18 @@ describe('CellTile occupied wording (TX-19)', () => {
     expect(tile).not.toHaveTextContent('occupied 195.00000000');
   });
 
+  // B4 second fix round (review-rules-fixes-logic NOTE 4, the coordinator's item 10): a cell's
+  // occupied bytes reach the tile as the API gives them (commonKnowledgeSize), with no shannons
+  // between (the tiles multiplied by 10^8 and the tile divided again)
+  it('takes the cell’s occupied bytes as the API gives them, no shannons between', () => {
+    const { outputs } = cellTiles(transfer('committed'), undefined);
+    expect(outputs[0]).toMatchObject({ occupiedBytes: '61' });
+    expect(outputs[0]).not.toHaveProperty('occupied');
+  });
+
+  // B4 second fix round (re-pinned on purpose): the tile takes bytes, so a figure that is not a
+  // whole number of bytes is refused as one (it took shannons and refused one not a multiple of
+  // 10^8); the change that is not whole bytes is refused where shannons are read, lib/occupied
   it('refuses an occupied amount that is not whole bytes', () => {
     expect(() =>
       render(
@@ -69,19 +84,19 @@ describe('CellTile occupied wording (TX-19)', () => {
             kind: 'ckb',
             content: 'CKB',
             capacity: '19500000000',
-            occupied: '6100000001',
+            occupiedBytes: '61.00000001',
             state: 'consumed',
           })}
         />
       )
-    ).toThrow('in:0: occupied 6100000001 shannons is not whole bytes');
+    ).toThrow(
+      'in:0: occupied bytes: expected a non-negative decimal integer, received "61.00000001"'
+    );
   });
 });
 
 /* ---------- the seals by kind (C3) ---------- */
 
-const ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwyt2p74pg74c';
-const OWNER_ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq2fh0zmj';
 const HASH = sealHash('c3 tile transaction');
 const PREV = sealHash('c3 tile previous transaction');
 /** The real script hash of { code_hash 0x9b × 32, hash_type type, args 0x } (blake2b, CKB). */
@@ -89,6 +104,12 @@ const LOCK = '0x82cbea9785c59f24117b45294cff296e8ab0ac2f29bbfa78af6b01e4d5325644
 const NEW_OWNER = sealHash('c3 tile new owner');
 const TOKEN = sealHash('c3 tile token type');
 const lock = { codeHash: `0x${'9b'.repeat(32)}`, hashType: 'type', args: '0x' };
+// B4 second fix round (tests MUST-1): an owner's address is the real address of the cell's own
+// lock (a tile refuses one that spells another); these failed the bech32m checksum
+const ADDRESS = ckbAddress(lock as { codeHash: string; hashType: 'type'; args: string });
+const OWNER_ADDRESS = ckbAddress(
+  scriptHashToScript(NEW_OWNER) as { codeHash: string; hashType: 'type'; args: string }
+);
 const token = { codeHash: sealHash('c3 xudt code'), hashType: 'type', args: '0x' };
 const tokenDisplay = {
   kind: 'token' as const,
@@ -522,23 +543,48 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(within(tile).getAllByText('live')).toHaveLength(1);
     // The line's budget at a stated bound (B4 fix round, tests NOTE-4; it was the sample
     // 'occupied 231'): a cell's occupied bytes are no more than the transaction that made it, and
-    // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record: it
-    // was MAX_BLOCK_BYTES here, which a genesis cell is not held by), so the widest figure is
-    // "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px. With the 56 px
-    // bar, 'consumed' and the 6 px gaps the line is 269.6 px. The text column is 215 px at its
-    // narrowest (1024: the recorded 203 px column, the 30 px mark column and the 10 px gap, less
-    // the 18 px column and its gap) and 343 at 1280: past its room (at 1024 from "occupied 9 B"
-    // on) the state, the line's right end, drops under the bar on a line of its own, at the right
-    // (TileText's end: ml-auto).
-    const narrowest = 203 + 30 + 10 - Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16) - 10;
-    expect(narrowest).toBe(215);
-    const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES))}`;
-    expect(widest).toBe('occupied 1,236,271 B');
-    const line = 56 + 6 + textPx(widest.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
-    expect(line).toBeCloseTo(269.6, 10);
-    expect(line).toBeGreaterThan(narrowest);
-    expect(line).toBeLessThanOrEqual(343);
-    expect(occupied.text.lastElementChild).toHaveClass('ml-auto');
+    // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record), so the
+    // widest figure is "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px.
+    // With the 56 px bar, 'consumed' and the 6 px gaps the line is 269.6 px.
+    //
+    // The tile's text column, derived (second fix round, tests NOTE-2: 343 was typed, 215 came
+    // from a recorded 203): the transaction page's main column (the container less the 280 px rail
+    // and the 56 px gap, its lg grid), half of it less the 4 px seam (the two sheets), less the
+    // sheet's lane on the seam side (SHEETS.lane) and its outer side (12 px and the 1 px border),
+    // the tile's sides (12 px and 1 px each), its mark column and the 10 px gap: 215 px at 1024,
+    // 343 at 1280.
+    const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    const textColumn = (viewport: number) =>
+      (containerContentPx(viewport) - 280 - 56 - SHEETS.seam) / 2 -
+      SHEETS.lane -
+      (12 + 1) -
+      2 * (12 + 1) -
+      mark -
+      10;
+    expect([textColumn(1024), textColumn(1280)]).toEqual([215, 343]);
+    const lineOf = (words: string) =>
+      56 + 6 + textPx(words.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
+    const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES), 'a cell')}`;
+    expect(widest).toBe('occupied 1,236,271\u00a0B');
+    expect(lineOf(widest)).toBeCloseTo(269.6, 10);
+    // it holds at 1280; at 1024 the line holds up to "occupied 9 B" (212 px) and not from
+    // "occupied 10 B" (219.2) on: every real cell, which occupies at least 41 bytes (its capacity
+    // field, 8, and its lock's code hash and hash type, 33), stands its state under the bar there,
+    // as it did before the unit was written (the type build, measured in Chrome)
+    expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1280));
+    expect(lineOf(`occupied ${occupiedBytesText(BigInt(9), 'a cell')}`)).toBeLessThanOrEqual(
+      textColumn(1024)
+    );
+    expect(lineOf(`occupied ${occupiedBytesText(BigInt(10), 'a cell')}`)).toBeGreaterThan(
+      textColumn(1024)
+    );
+    expect(lineOf(`occupied ${occupiedBytesText(BigInt(41), 'a cell')}`)).toBeGreaterThan(
+      textColumn(1024)
+    );
+    // where it does not fit, the line wraps and its end (the state) drops under the bar: the row
+    // is a wrapping flex row, the state its own last item
+    expect(occupied.text).toHaveClass('flex', 'flex-wrap');
+    expect(occupied.text.lastElementChild).toHaveAttribute('data-tile-end');
     // with the cell's anatomy, its byte bar takes the line's free width, the bytes after it
     cleanup();
     render(
@@ -553,7 +599,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
           kind: 'ckb',
           content: 'CKB',
           capacity: '6100000000',
-          occupied: '6100000000',
+          occupiedBytes: '61',
           state: 'consumed',
           anatomy: { lock: '53', type: '0', data: '0' },
         })}
@@ -579,7 +625,10 @@ describe('a transaction of 300 cells draws each tile’s seals once (seal kinds,
       commonKnowledgeSize: '61',
       display: null,
       lock: { ...lock, args: `0x${i.toString(16).padStart(40, '0')}` },
-      address: ADDRESS,
+      address: ckbAddress({
+        codeHash: lock.codeHash,
+        args: `0x${i.toString(16).padStart(40, '0')}`,
+      }),
     });
     const lockOf = (side: 'in' | 'out', i: number) => sealHash(`c3 300 ${side} lock ${i}`);
     const tx = {

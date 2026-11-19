@@ -189,6 +189,48 @@ it('counts genes from the pattern and says a decoder output is not drawn as one 
 // rest in its title. Consistency round C11 (Main.dc.html): the row is object · the genes that
 // vary · made of · owner · minted; the object is its number (else its short id), never the
 // collection's name again; its id and DNA are in the title.
+// B4 second fix round (review-rules-fixes-logic SHOULD 3, the coordinator's item 5): a row's title
+// writes its owner's lock as the row's tag does, from the one decision: nothing for the default
+// lock, its code hash and hash type for a lock on the default code hash by data.
+it('titles a Newest row with its owner’s lock as its tag writes it', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const byData =
+    'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl';
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([
+      { ...base, ownerAddress: byData },
+      { ...base, sporeId: `0x${'03'.repeat(32)}` },
+    ])
+  );
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  const [, byDataRow, defaultRow] = within(table).getAllByRole('row');
+  expect(byDataRow.getAttribute('title')).toContain(
+    `owner ${byData} · lock 0x9bd7e06f…a3cce8 by data · minted`
+  );
+  expect(defaultRow.getAttribute('title')).toContain(`owner ${base.ownerAddress} · minted`);
+});
+
+// B4 second fix round (review-rules-fixes-logic NOTE 8, the coordinator's item 14, ruling D7): a
+// row whose owner address spells another lock than it says is refused by the lock decision, and
+// the refusal fails the Newest list in its place, never the page.
+it('says in its place that it cannot read the newest objects when an owner’s lock is refused', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const joy = seededAddress('joyown', JOYID_CODE_HASH);
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([{ ...base, ownerAddress: joy }])
+  );
+  render(
+    <main>
+      <h1>The collection page</h1>
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    </main>
+  );
+  const alert = await screen.findByText(/^Could not read the newest objects: /);
+  expect(alert).toHaveTextContent(`address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`);
+  expect(screen.getByRole('heading', { name: 'The collection page' })).toBeInTheDocument();
+});
+
 it('writes each Newest row on one line with the name bright and the rest in its title (L2-4, C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
@@ -214,7 +256,9 @@ it('writes each Newest row on one line with the name bright and the rest in its 
   const own = base.traits.find((t) => t.name === 'Face')!;
   expect(numbered).toHaveAttribute(
     'title',
-    `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · SECP256K1/blake160 · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
+    // B4 second fix round (re-pinned on purpose): the owner's lock as its tag writes it, nothing
+    // for the default lock (it wrote the API's name, 'SECP256K1/blake160')
+    `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
   );
   expect(plain.getAttribute('title')).toContain(`owner ${base.ownerLockHash}`);
 });
@@ -377,5 +421,68 @@ describe('gene cells keep their share whole (lane A follow-up)', () => {
       'grid-cols-[minmax(0,1fr)_auto]',
       'md:grid-cols-[var(--object-cols)]'
     );
+  });
+});
+
+// Readability B7, the third round (review of the second fixes): the dropped-genes caption stands
+// in a 400 px box on the collection page, and the box is drawn exactly when the caption is: an
+// empty box in the gel's `space-y-3` column added a 12 px gap below xl where no gene is dropped.
+describe('the dropped-genes caption’s box', () => {
+  const gelColumn = (container: HTMLElement) =>
+    container.querySelector('[data-role="objects-columns"] > div') as HTMLElement;
+
+  it('draws no box when no gene is dropped, nor any empty element in the gel’s column', async () => {
+    const { container } = render(
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    const column = gelColumn(container);
+    expect(column).toHaveClass('space-y-3');
+    expect(container.querySelector('.max-w-\\[400px\\]')).toBeNull();
+    for (const child of Array.from(column.children))
+      expect(child.childNodes.length).toBeGreaterThan(0);
+  });
+
+  it('draws the caption inside its 400 px box, on the measure, when a gene is dropped', async () => {
+    // a second gene the pattern declares, one value on every object: it gets no lane (C9)
+    const pattern = collectionInsightsProducer.currentPattern;
+    const step = pattern.steps[0];
+    const face = step.description.genes[0];
+    const insights = {
+      ...collectionInsightsProducer,
+      currentPattern: {
+        ...pattern,
+        steps: [
+          {
+            ...step,
+            description: {
+              ...step.description,
+              genes: [
+                face,
+                { ...face, index: 1, name: 'Hat', byteOffset: '1', ruleArguments: ['Cap'] },
+              ],
+            },
+          },
+        ],
+      },
+      genetics: {
+        ...collectionInsightsProducer.genetics,
+        traits: [
+          ...collectionInsightsProducer.genetics.traits,
+          { name: 'Hat', values: [{ value: 'Cap', count: 8 }] },
+        ],
+      },
+    } as CollectionInsights;
+    const { container } = render(
+      <CollectionObjects id="collection" title="Genes" insights={insights} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    const boxes = gelColumn(container).querySelectorAll('.max-w-\\[400px\\]');
+    expect(boxes).toHaveLength(1);
+    expect(boxes[0].children).toHaveLength(1);
+    const caption = boxes[0].firstElementChild!;
+    expect(caption).toHaveAttribute('data-role', 'caption');
+    expect(caption).toHaveClass('max-w-measure');
+    expect(caption).toHaveTextContent(/Hat/);
   });
 });

@@ -133,14 +133,16 @@ export function mockItemReads() {
   vi.spyOn(api, 'getSporeClusterCapacityChart').mockResolvedValue(chart);
   vi.spyOn(api, 'getObjectCollectionCapacityChart').mockResolvedValue(chart);
   vi.spyOn(api, 'getIdentityCollectionCapacityChart').mockResolvedValue(chart);
-  const holder = producer.sporeCellVersionsProducer.data[0];
+  // B4 second fix round: a holder whose address, lock hash and lock are one lock's, a gallery
+  // row's default-lock owner (the cell's owner beside the default lock's name was not one)
+  const holder = producer.collectionGalleryProducer.data[0];
   const holders = emptyPage([
     {
       lockScriptHash: holder.ownerLockHash,
       address: holder.ownerAddress,
       itemCount: 6,
-      lockCodeHash: SECP_CODE_HASH,
-      lockKind: 'SECP256K1/blake160',
+      lockCodeHash: holder.lockCodeHash,
+      lockKind: holder.lockKind,
     },
     // Round 3 (contracts R-A · R-2): an unindexed lock has neither address nor code hash.
     {

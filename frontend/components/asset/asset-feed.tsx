@@ -656,7 +656,6 @@ function feedActivityRow(
         className={setBack}
         mark={rowMark}
         showScriptDetails={!plain}
-        lockColumn={plain}
         foldObjects={plain}
         focusItemId={focusItemId}
         focusTokenTypeHash={focusTokenTypeHash}

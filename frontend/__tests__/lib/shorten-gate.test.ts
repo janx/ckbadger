@@ -440,7 +440,8 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
   // the compact card of the depositors (DAO-22)
   'components/dao/dao-board.tsx': [
     phoneRow("ownerLink(o, 'tight')"),
-    phoneRow("lockLink(o, 'tight')"),
+    // the depositor's lock, by the one decision now (B4 second fix round; it was lockLink)
+    phoneRow(`words={ownerLock(o, 'inline')!} size="tight"`),
   ],
   // an unnamed miner under a compact tile of the fork tree, where the row form (93.6 px at 12 px)
   // does not fit the 88 px column of a 72 px tile (review F-B, logic finding 4)

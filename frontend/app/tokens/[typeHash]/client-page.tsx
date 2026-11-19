@@ -7,7 +7,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
-import { ReadFailure } from '@/components/read-failure';
+import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetHistory } from '@/components/asset/asset-history';
@@ -110,8 +110,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       </AssetDetailShell>
     );
   }
-  // the issuer's lock beside its address, or null where none is written (the one decision, B4)
-  const issuerLock = t.issuer && rowLock(t.issuer, 'inline');
+  // the issuer's lock beside its address, or null where none is written (the one decision, B4);
+  // a lock the decision refuses fails the note's part in its place, not the page (D7)
+  const issuerLock = t.issuer ? readPart(() => rowLock(t.issuer!, 'inline')) : null;
   const held =
     t.totalCapacity === null ? null : exactUnsignedInteger(t.totalCapacity, 'token held capacity');
   const occupied =
@@ -297,12 +298,16 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               // note: the note is the proof alone, one separator (B4)
               note: t.issuer
                 ? [
-                    issuerLock && (
-                      <LockWordsView
-                        words={issuerLock}
-                        size="row"
-                        className="text-text-dim text-small"
-                      />
+                    issuerLock?.error !== undefined ? (
+                      <PartReadError what="the issuer’s lock" error={issuerLock.error} />
+                    ) : (
+                      issuerLock?.value && (
+                        <LockWordsView
+                          words={issuerLock.value}
+                          size="row"
+                          className="text-text-dim text-small"
+                        />
+                      )
                     ),
                     'owner lock proven by token script',
                   ]

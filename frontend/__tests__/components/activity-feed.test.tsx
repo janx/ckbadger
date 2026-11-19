@@ -222,8 +222,9 @@ describe('ActivityFeed', () => {
     // Occupied only where it changed: two of three, in bytes with their unit (B4 item 2,
     // re-pinned on purpose: was "occupied −61" with no unit).
     expect([...row.querySelectorAll('[data-role="occupied"]')].map((e) => e.textContent)).toEqual([
-      `occupied ${MINUS}61 B`,
-      'occupied +61 B',
+      // B4 second fix round (re-pinned on purpose): figure and unit joined by a no-break space
+      `occupied ${MINUS}61\u00a0B`,
+      'occupied +61\u00a0B',
     ]);
     expect(row).not.toHaveTextContent('+1 more');
   });
@@ -564,8 +565,10 @@ describe('ActivityFeed', () => {
 // __tests__/components/occupied-unit.test.tsx holds the rest.
 describe('formatOccupiedDelta', () => {
   it('prints occupied capacity in whole bytes with their unit, and refuses what is not whole', () => {
-    expect(formatOccupiedDelta('-6100000000')).toBe(`${MINUS}61 B`);
-    expect(formatOccupiedDelta('32000000000')).toBe('+320 B');
-    expect(() => formatOccupiedDelta('150000001')).toThrow('not a whole number of bytes');
+    expect(formatOccupiedDelta('-6100000000', 'tx 0xab')).toBe(`${MINUS}61\u00a0B`);
+    expect(formatOccupiedDelta('32000000000', 'tx 0xab')).toBe('+320\u00a0B');
+    expect(() => formatOccupiedDelta('150000001', 'tx 0xab')).toThrow(
+      'not a whole number of bytes'
+    );
   });
 });
