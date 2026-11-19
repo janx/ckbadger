@@ -448,7 +448,7 @@ describe('ActivitiesStreamExplorer', () => {
         (d) => d.textContent
       );
     await loadUnderStillClock(() => dividers().length === 2);
-    const toggle = screen.getByRole('button', { name: '2 transactions ↓' });
+    const toggle = screen.getByRole('button', { name: /^all 2\stransactions ↓$/ });
     fireEvent.click(toggle);
     const more = screen.getByRole('button', { name: '+2 participants' });
     fireEvent.click(more);

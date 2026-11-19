@@ -132,13 +132,13 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     // how many transactions and how many participants, counted; no party named, no amount and no
     // total: nothing is summed
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^3 transactions ↓ · 1 participant$/
+      /^all 3 transactions ↓ · 1 participant$/
     );
     expect(folded).not.toHaveTextContent('ckb1');
     expect(folded.querySelector('[data-ckb-amount]')).toBeNull();
     expect(folded).not.toHaveTextContent('CKB');
     // the control that opens it, a real button, saying how many rows it holds
-    const toggle = within(folded).getByRole('button', { name: '3 transactions ↓' });
+    const toggle = within(folded).getByRole('button', { name: /^all 3\stransactions ↓$/ });
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     // the transfer after it is an ordinary row; the run's rows are not drawn while it is folded
     const rows = document.querySelectorAll('article[data-feed-row]');
@@ -150,7 +150,7 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page(run));
     render(<ActivitiesStreamExplorer />);
     await screen.findAllByRole('article');
-    const toggle = screen.getByRole('button', { name: '3 transactions ↓' });
+    const toggle = screen.getByRole('button', { name: /^all 3\stransactions ↓$/ });
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(toggle).toHaveTextContent('fewer ↑');
@@ -190,7 +190,7 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '4');
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^4 transactions ↓ · 3 participants$/
+      /^all 4 transactions ↓ · 3 participants$/
     );
     expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });
@@ -233,18 +233,18 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     ];
     const said = (el: Element) =>
       el.getAttribute('data-role') === 'activity-run'
-        ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent}`
+        ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
         : el.querySelector('[data-role="headline"]')!.textContent;
     expect(drawn.map(said)).toEqual([
-      'Script call · .bit Time Index State · .bit Time Info | 7 transactions ↓ · 3 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 7 transactions ↓ · 3 participants',
       'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | 2 transactions ↓ · 2 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
       'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | 9 transactions ↓ · 3 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 9 transactions ↓ · 3 participants',
       '.bit · recycle expired account',
-      'Script call · .bit Time Index State · .bit Time Info | 21 transactions ↓ · 3 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 21 transactions ↓ · 3 participants',
       'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | 7 transactions ↓ · 3 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 7 transactions ↓ · 3 participants',
     ]);
   });
 
@@ -352,7 +352,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     const user = userEvent.setup({ advanceTimers: () => {} });
     const head = stream(run);
     render(<ActivitiesStreamExplorer />);
-    const toggle = await screen.findByRole('button', { name: '3 transactions ↓' });
+    const toggle = await screen.findByRole('button', { name: /^all 3\stransactions ↓$/ });
     await user.click(toggle);
     toggle.focus();
     expect(document.activeElement).toBe(toggle);
@@ -375,7 +375,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     const yesterday = [oracle(1, 'q3q7ue', '0x00', 72_000), oracle(2, 'q3q7ue', '0x00', 72_100)];
     const head = stream([today, ...yesterday]);
     render(<ActivitiesStreamExplorer />);
-    const toggle = await screen.findByRole('button', { name: '2 transactions ↓' });
+    const toggle = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
     await user.click(toggle);
     toggle.focus();
     // a newer block whose time is Nov 17, above the Nov 18 row
@@ -417,7 +417,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     const user = userEvent.setup({ advanceTimers: () => {} });
     const head = stream(run);
     render(<ActivitiesStreamExplorer />);
-    const toggle = await screen.findByRole('button', { name: '3 transactions ↓' });
+    const toggle = await screen.findByRole('button', { name: /^all 3\stransactions ↓$/ });
     await user.click(toggle);
     toggle.focus();
     const same = oracle(0, 'q3q7ue', '0x00', 5);
@@ -510,9 +510,9 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     const first = [transfer, oracle(4, 'q3q7ue', '0x00', 200), oracle(5, 'q3q7ue', '0x00', 250)];
     pages(first, [oracle(6, 'q3q7ue', '0x00', 300)]);
     render(<ActivitiesStreamExplorer />);
-    const toggle = await screen.findByRole('button', { name: '2 transactions ↓' });
+    const toggle = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
     await user.click(screen.getByRole('button', { name: 'next 50 ↓' }));
-    await waitFor(() => expect(toggle).toHaveTextContent('3 transactions ↓'));
+    await waitFor(() => expect(toggle).toHaveTextContent(/^all 3\stransactions ↓$/));
     expect(toggle.isConnected).toBe(true);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     expect(feedRows()).toEqual([transfer.txHash]);
@@ -547,10 +547,10 @@ describe('a folded run counts its parties and names none (Gate B)', () => {
     );
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^2 transactions ↓ · 12 participants$/
+      /^all 2 transactions ↓ · 12 participants$/
     );
     expect(folded.querySelectorAll('[data-role="party"]')).toHaveLength(0);
-    await user.click(within(folded).getByRole('button', { name: '2 transactions ↓' }));
+    await user.click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
     // opened, each row draws its own parties by the rows' rule (over six, five and the count)
     const row = document.querySelector(`article[data-feed-row="${rows[1].txHash}"]`)!;
     expect(row).toHaveTextContent('+2 participants');
@@ -564,13 +564,16 @@ describe('a folded run counts its parties and names none (Gate B)', () => {
 // The toggle stands at least 24 px tall at every width; it stood on its 20 px row line.
 describe('the run’s toggle on a phone (B4 fix round)', () => {
   const theme = resolveConfig(tailwindConfig).theme as unknown as {
+    height: Record<string, string>;
     minHeight: Record<string, string>;
     lineHeight: Record<string, string>;
   };
   const px = (v: string) => (v.endsWith('rem') ? parseFloat(v) * 16 : parseFloat(v));
   /**
-   * The height of a button that sets its line and its minimum height in classes and nothing else
-   * vertical (refused otherwise), at a viewport: the larger of its line and its minimum.
+   * The height of a button that sets its line, its minimum height or its height in classes and
+   * nothing else vertical (refused otherwise), at a viewport: the largest of them. Re-pinned on
+   * purpose (lists lane P3): the toggle is the site's one fold control, `FoldToggle`, which sets its
+   * height (32 px below 640, 28 from it) and no line.
    */
   function targetPx(el: Element, viewport: number): number {
     const at = (prefix: string) => {
@@ -593,12 +596,18 @@ describe('the run’s toggle on a phone (B4 fix round)', () => {
       return value;
     };
     for (const cls of el.classList)
-      if (/^(\w+:)?(h|py|pt|pb|my|border-y|border-t|border-b)-/.test(cls))
+      if (/^(\w+:)?(py|pt|pb|my|border-y|border-t|border-b|max-h)-/.test(cls))
         throw new Error(`targetPx: ${cls} sets a height this does not read`);
     const line = at('leading-');
-    if (line === undefined) throw new Error('targetPx: the button sets no line');
     const min = at('min-h-');
-    return Math.max(px(theme.lineHeight[line]), min === undefined ? 0 : px(theme.minHeight[min]));
+    const height = at('h-');
+    if (line === undefined && height === undefined)
+      throw new Error('targetPx: the button sets no line and no height');
+    return Math.max(
+      line === undefined ? 0 : px(theme.lineHeight[line]),
+      min === undefined ? 0 : px(theme.minHeight[min]),
+      height === undefined ? 0 : px(theme.height[height])
+    );
   }
 
   // B4 second fix round (review-rules-fixes-logic NOTE 7, the coordinator's item 13): at every
@@ -617,7 +626,7 @@ describe('the run’s toggle on a phone (B4 fix round)', () => {
         }))}
       />
     );
-    const toggle = screen.getByRole('button', { name: '2 transactions ↓' });
+    const toggle = screen.getByRole('button', { name: /^all 2\stransactions ↓$/ });
     expect(targetPx(toggle, viewport)).toBeGreaterThanOrEqual(24);
     // above its row's line
     expect(ROW_LINE_PX).toBeLessThan(24);
@@ -643,7 +652,7 @@ describe('a token page’s feed folds within the page it shows (B4 item 5)', () 
         })}
       />
     );
-    const folded = await screen.findByRole('button', { name: '2 transactions ↓' });
+    const folded = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
     expect(folded.closest('[data-role="activity-run"]')).toHaveAttribute('data-run-count', '2');
   });
 });

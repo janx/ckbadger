@@ -48,6 +48,7 @@ import type { AssetClass } from '@/lib/design-tokens';
 import { cn, formatCkbAmount, formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
+import { FoldToggle } from '@/components/ui/fold-toggle';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
 import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
@@ -1371,9 +1372,9 @@ export function activityTitleText(
  * the title, the scripts by the code they share (no row's args: those differ from row to row) —
  * how many transactions it holds and how many participants they name, and the newest time (the
  * first row's: a feed is newest first). It counts and sums nothing: no amount of any row is drawn,
- * and no total; it names no party, since its rows' parties differ. Its button opens the ordinary
- * rows in place, under it, and folds them again; it is a real button, reached by a tap, a click
- * and the keyboard, and it stays where it is in both states, so it keeps the focus.
+ * and no total; it names no party, since its rows' parties differ. Its toggle is the site's one
+ * fold control (`FoldToggle`: "all N transactions ↓", "fewer ↑"): it opens the ordinary rows in
+ * place, under it, and folds them again, stays where it is in both states and keeps the focus.
  */
 export function FoldedActivityRow({
   rows,
@@ -1384,6 +1385,7 @@ export function FoldedActivityRow({
   className,
   fresh = false,
   open,
+  controls,
   onToggle,
 }: {
   /** The run, newest first: at least two committed rows. */
@@ -1402,6 +1404,12 @@ export function FoldedActivityRow({
   className?: string;
   fresh?: boolean;
   open: boolean;
+  /**
+   * The id of the list its rows are drawn in (`ActivityRuns`'s): opened, the run's rows stand in
+   * it under this row, siblings of the feed's other rows, so a row never remounts as it joins or
+   * leaves a run.
+   */
+  controls: string;
   onToggle: () => void;
 }) {
   const first = rows[0];
@@ -1422,17 +1430,13 @@ export function FoldedActivityRow({
   );
   const transactions = formatCount(rows.length, 'transaction');
   const toggle = (
-    <button
-      type="button"
-      data-role="run-toggle"
-      aria-expanded={open}
-      onClick={onToggle}
-      // a finger's target at every width: WCAG 2.2's minimum, 24 px tall (2.5.8, no breakpoint;
-      // the row line is 20), its words centred in it (lane B4 fix rounds)
-      className="text-interactive hover:text-jade text-small leading-row min-h-6 bg-transparent transition-colors"
-    >
-      {open ? 'fewer ↑' : unitNode(`${transactions} ↓`)}
-    </button>
+    <FoldToggle
+      open={open}
+      count={rows.length}
+      singular="transaction"
+      controls={controls}
+      onToggle={onToggle}
+    />
   );
   return (
     <article

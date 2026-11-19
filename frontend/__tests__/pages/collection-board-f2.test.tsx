@@ -247,7 +247,9 @@ it('opens Recent activity with five rows and two links that open the full feed i
   // so they are one run, folded, its count the five rows it holds (was five articles)
   await waitFor(() => expect(within(recent).getAllByRole('article')).toHaveLength(1));
   expect(within(recent).getByRole('article')).toHaveAttribute('data-run-count', '5');
-  expect(within(recent).getByRole('button', { name: '5 transactions ↓' })).toBeInTheDocument();
+  expect(
+    within(recent).getByRole('button', { name: /^all 5\stransactions ↓$/ })
+  ).toBeInTheDocument();
   expect(api.getCollectionActivityFeed).toHaveBeenCalledWith('spore', NERVAPE3X_CLUSTER, {
     limit: 5,
   });

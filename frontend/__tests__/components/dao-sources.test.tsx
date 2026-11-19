@@ -137,7 +137,7 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     );
     // three depositors, and the two parties every request shares
     expect(section.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^3 transactions ↓ · 5 participants$/
+      /^all 3 transactions ↓ · 5 participants$/
     );
     expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });

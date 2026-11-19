@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import {
   FoldedActivityRow,
   rowReadFails,
@@ -94,6 +94,8 @@ export function ActivityRuns({
   age?: boolean;
   showScriptDetails?: boolean;
 }) {
+  // the list the rows stand in, which each run's toggle names (aria-controls)
+  const listId = useId();
   // the rows of the runs the reader opened, by their keys
   const [opened, setOpened] = useState<ReadonlySet<string>>(() => new Set());
   // the rows drawn alone, whole, as the last render committed them
@@ -130,7 +132,8 @@ export function ActivityRuns({
     });
   };
   return (
-    <>
+    // one element in every state, so no row remounts as runs open and fold (a block, as the rows)
+    <div id={listId} data-role="feed-rows">
       {runs.flatMap(({ run, head, isOpen }) => {
         const [lead] = run;
         // each row, and each run's head, fails in its place (ruling D7): what a row cannot read
@@ -151,6 +154,7 @@ export function ActivityRuns({
             className={lead.className}
             fresh={run.some((r) => r.fresh)}
             open={isOpen}
+            controls={listId}
             onToggle={() => toggle(run, isOpen)}
           />
         );
@@ -164,6 +168,6 @@ export function ActivityRuns({
             ]
           : [headed];
       })}
-    </>
+    </div>
   );
 }

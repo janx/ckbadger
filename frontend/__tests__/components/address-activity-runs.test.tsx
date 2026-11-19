@@ -38,7 +38,7 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '3');
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^3 transactions ↓ · 1 participant$/
+      /^all 3 transactions ↓ · 1 participant$/
     );
     expect(within(folded).queryByTitle(addressFixture.address!)).toBeNull();
     expect(folded.querySelector('[data-ckb-amount]')).toBeNull();
@@ -68,7 +68,7 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     expect(folded).toHaveAttribute('data-run-count', '2');
     // this address, and the two others
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^2 transactions ↓ · 3 participants$/
+      /^all 2 transactions ↓ · 3 participants$/
     );
   });
 });
