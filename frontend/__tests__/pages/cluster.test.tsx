@@ -261,4 +261,19 @@ it('says nothing of an activity count the indexer has not derived (L2)', async (
   expect(facts).not.toHaveTextContent('Transactions');
   expect(screen.queryByText('Activities', { selector: 'dt' })).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
+  // Lane P2's third round (item 9): the newest rows still fold into the whole feed, by name with
+  // no number ("all activity ↓"), on its activities, and fold back by the same button
+  const recent = screen.getByRole('region', { name: 'Recent activity' });
+  expect(within(recent).queryByRole('button', { name: /→$/ })).toBeNull();
+  const fold = screen.getByRole('button', { name: 'all activity ↓' });
+  fold.focus();
+  fireEvent.click(fold);
+  expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  expect(fold).toHaveAccessibleName('fewer ↑');
+  expect(document.activeElement).toBe(fold);
+  fireEvent.click(fold);
+  expect(await screen.findByRole('region', { name: 'Recent activity' })).toBeInTheDocument();
 });
