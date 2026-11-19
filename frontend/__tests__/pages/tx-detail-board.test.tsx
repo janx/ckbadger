@@ -1086,6 +1086,78 @@ describe('Transaction variants (D4)', () => {
     expect(api.getTransactionLifecycle).not.toHaveBeenCalled();
   });
 
+  // Lane P1 follow-up (the lock-words gate's known writer 12, the cellbase witness's lock): the
+  // miner lock is named by the one decision. A lock on the default lock's code hash by data is not
+  // the default lock, and the registry's name for that code hash ("Default Lock") is not its name.
+  it('writes a cellbase’s miner lock on the default lock’s code hash by data by its code hash', async () => {
+    const message = `0x${Buffer.from('0.210.0 (860c9bb 2026-09-21) ').toString('hex')}0011223344556677`;
+    const cellbase = {
+      ...committed(),
+      isCellbase: true,
+      fee: '0',
+      feeRate: null,
+      inputs: [
+        {
+          previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+          since: '0x14023e7',
+          capacity: null,
+          commonKnowledgeSize: null,
+          lock: null,
+          type: null,
+          address: null,
+          cellType: null,
+          display: null,
+        } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+      ],
+      inputsCapacity: '0',
+      inputsCommonKnowledgeSize: '0',
+      outputsCapacity: '55961739927',
+      outputsCommonKnowledgeSize: '61',
+      outputs: [
+        {
+          ...committed().outputs![0],
+          type: undefined,
+          cellType: 'plain',
+          capacity: '55961739927',
+          commonKnowledgeSize: '61',
+        },
+      ],
+      scriptGroups: [committed().scriptGroups![2]],
+      witnessDetails: [
+        {
+          index: 0,
+          size: 127,
+          kind: 'cellbase',
+          fields: [
+            { name: 'table header', start: 0, end: 12, hex: '0x' },
+            { name: 'lock', start: 12, end: 85, hex: '0x' },
+            { name: 'message', start: 85, end: 127, hex: '0x' },
+          ],
+        },
+      ],
+      witnesses: ['0x00'],
+      cellbaseWitness: {
+        lock: { codeHash: LOCK_CODE_HASH, hashType: 'data', args: `0x${'ab'.repeat(20)}` },
+        message,
+      },
+      feePaidBy: [],
+      pays: { number: 89, hash: '0x' + '89'.repeat(32) },
+    } as TransactionDetail;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase);
+    vi.mocked(api.getBlock).mockResolvedValue({
+      number: 101,
+      minerMessage: message,
+      minerMessageText: '0.210.0 (860c9bb 2026-09-21)',
+    } as Awaited<ReturnType<typeof api.getBlock>>);
+    render(<TransactionDetailPage />);
+    await waitFor(() =>
+      expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
+        'miner lock 0x9bd7e06f…a3cce8 by data(0xabababab…ababab) · message “0.210.0 (860c9bb 2026-09-21)”'
+      )
+    );
+    expect(screen.getByTestId('tx-witness-item-0')).not.toHaveTextContent('Default Lock');
+  });
+
   it('says a pending transaction will run when committed, and still lists its witnesses (TX-37)', async () => {
     const tx = { ...committed(), status: 'pending', pendingSince: '2026-10-30T08:14:17Z' };
     for (const key of ['blockNumber', 'blockHash', 'index', 'timestamp', 'confirmations'] as const)

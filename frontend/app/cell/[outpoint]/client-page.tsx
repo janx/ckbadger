@@ -380,6 +380,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         'column'
       )
     : null;
+  if (cell.lock && lock === null)
+    throw new Error(`cell ${outpoint}: a column's lock words are never empty`);
   const lockLabel = lock && lock.form !== 'not-indexed' ? lock.name : null;
   // The seals by kind (C3): the cell's own stone, classed by the transaction page's one
   // classifier from the class fields the API serves for it; spent, in the dead ink.

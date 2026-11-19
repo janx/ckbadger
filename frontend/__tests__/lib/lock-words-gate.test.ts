@@ -242,8 +242,13 @@ const FEEDS: Reads = {
   // the one rule for a registry name (`registeredName`), and a tile's lock name handed to
   // `cellLockFacts`
   'components/transaction/transaction-cell-tiles.tsx': { 'registry name': 2 },
-  // "Lock of output i": the output's name handed to `cellLockFacts`
-  'app/tx/[hash]/client-page.tsx': { 'registry name': 1 },
+  // "Lock of output i": the output's name handed to `cellLockFacts`; and the cellbase witness's
+  // miner lock (lane P1 follow-up; it was known writer 12's second part), its name handed to
+  // `cellLockFacts` with the lock
+  'app/tx/[hash]/client-page.tsx': { 'registry name': 2 },
+  // a group's registry name, handed to `cellLockFacts` with a lock group's script (lane P1
+  // follow-up; it was known writer 12): a type group keeps the name, the decision being a lock's
+  'components/transaction/script-group-rows.tsx': { 'registry name': 1 },
   // the cell's lock: the registry's name for its code hash handed to `cellLockFacts` with the
   // lock and its address (lane P1 follow-up; it was known writer 8, with the fact's `lockName`)
   'app/cell/[outpoint]/client-page.tsx': { 'registry name': 1 },
@@ -286,12 +291,10 @@ const KNOWN: Reads = {
   // 4 → 2 (lane D2): the kind line's lock link and name went to the status strip, whose lock is
   // address-holdings.tsx's one read
   'app/address/[addr]/client-page.tsx': { 'script info name': 2 },
-  // 3 → 1 (lane D3): the cellbase witness's lock stays; the script groups' name and link (12)
-  // moved with the rows to script-group-rows.tsx, where one read gives both
-  'app/tx/[hash]/client-page.tsx': { 'registry name': 1 },
-  // known writer 12 moved, not a new writer (lane D3): the transaction page's script groups, the
-  // rows the cell page now draws too, their two reads (a group's name, its link) made one
-  'components/transaction/script-group-rows.tsx': { 'registry name': 1 },
+  // app/tx/[hash]/client-page.tsx (3 → 1 in lane D3: the script groups' name and link moved to
+  // script-group-rows.tsx, where one read gives both) and script-group-rows.tsx left (lane P1
+  // follow-up; known writer 12): the cellbase witness's miner lock and a lock group are named by
+  // the decision, their reads feed it
   // 13, found when the gate learned `lockScriptName` (lane cd-fixes-controls), for the topic page
   // lane (p-topics): the Fiber graph's party row writes the registry's name of its lock before
   // "lock hash", outside lockWords
@@ -403,11 +406,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // and 23 reads"): the cell page decides its lock once, its registry read feeds the decision and
   // the three `lockName`s are the decision's name; 23 → 18 known reads in 10 files, 36 → 32 in all
   // in 19
-  it('pins the totals: 32 reads in 19 files, the known writers 10 files and 18 reads', () => {
+  // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 32 reads in 19 files, … 10 files
+  // and 18 reads"): known writer 12, the cellbase witness's lock and the script groups, feeds the
+  // decision; its two reads move to the feeds, 18 → 16 known reads in 8 files, all still 32 in 19
+  it('pins the totals: 32 reads in 19 files, the known writers 8 files and 16 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
     expect(Object.keys(all)).toHaveLength(19);
     expect(total(all)).toBe(32);
-    expect(Object.keys(KNOWN)).toHaveLength(10);
-    expect(total(KNOWN)).toBe(18);
+    expect(Object.keys(KNOWN)).toHaveLength(8);
+    expect(total(KNOWN)).toBe(16);
   });
 });

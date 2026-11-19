@@ -427,8 +427,23 @@ function WitnessRow({
     }
     if (w.kind === 'cellbase') {
       const witness = required(tx.cellbaseWitness, tx.hash, 'cellbaseWitness');
-      const lock =
-        registeredName(lookup, witness.lock.codeHash) ?? shortenHash(witness.lock.codeHash, 'row');
+      // the miner lock by the one decision (lane P1 follow-up): its name, or "lock 0x…" and its
+      // hash type where the name does not cover it (a lock on the default lock's code hash by data)
+      const words = lockWords(
+        cellLockFacts(
+          {
+            lock: witness.lock,
+            name: registeredName(lookup, witness.lock.codeHash),
+            address: null,
+          },
+          `Transaction ${tx.hash} cellbase witness`
+        ),
+        'column'
+      );
+      if (words === null)
+        throw new Error(`${tx.hash}: a column's lock words are never empty (its cellbase witness)`);
+      const named = words.form !== 'not-indexed' && words.name !== null;
+      const lock = `${named ? 'lock ' : ''}${lockWordsText(words, 'row')}`;
       if (minerMessage && minerMessage.raw !== witness.message)
         throw new Error(
           `${tx.hash}: the block's miner message ${minerMessage.raw} is not its cellbase witness message ${witness.message}`
@@ -439,7 +454,7 @@ function WitnessRow({
           : minerMessage.text === null
             ? `${formatCount((witness.message.length - 2) / 2, 'byte')}, not text`
             : `“${minerMessage.text}”`;
-      return `miner lock ${lock}(${shortenHash(witness.lock.args, 'row')}) · message ${message}`;
+      return `miner ${lock}(${shortenHash(witness.lock.args, 'row')}) · message ${message}`;
     }
     return fields.map((f) => `${f.name} ${formatCount(f.end - f.start, 'B', 'B')}`).join(' · ');
   };
