@@ -117,11 +117,13 @@ describe('ScriptsPage', () => {
       roleCounts: { all: 2, locks: 1, types: 1 },
     });
     render(<ScriptsPage />);
-    expect(await screen.findByRole('button', { name: 'Types 1' })).toBeInTheDocument();
+    // Re-pinned on purpose (controls lane C2): the role row is the controls board's tab row, a
+    // tablist whose names are lowercase (it was the aria-pressed button "Types 1").
+    expect(await screen.findByRole('tab', { name: 'types 1' })).toBeInTheDocument();
     expect(
       screen.getByRole('img', { name: 'CKB under lock scripts by who can change their code' })
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Types 1' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'types 1' }));
     await waitFor(() =>
       expect(api.getScripts).toHaveBeenLastCalledWith(
         expect.objectContaining({ role: 'type', cursor: undefined })
@@ -148,8 +150,11 @@ describe('ScriptsPage', () => {
       (await screen.findAllByRole('link', { name: 'SECP256K1_BLAKE160' }))[0]
     ).toBeInTheDocument();
     expect(screen.getAllByText('lock')[0]).toBeInTheDocument();
-    const sort = screen.getByRole('combobox', { name: 'Sort scripts' });
-    for (const option of ['CKB in their cells', 'Occupied CKB', 'Live cells', 'Cells ever', 'Name'])
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by "sorted by"
+    // (was the aria-label "Sort scripts"), its choices in the page's words, lowercase (they were
+    // "CKB in their cells", "Occupied CKB", "Live cells", "Cells ever", "Name").
+    const sort = screen.getByRole('combobox', { name: 'sorted by' });
+    for (const option of ['ckb in their cells', 'occupied ckb', 'live cells', 'cells ever', 'name'])
       expect(within(sort).getByRole('option', { name: option })).toBeInTheDocument();
     expect(screen.queryByText('Deployed')).toBeNull();
     expect(screen.queryByRole('link', { name: '#0' })).toBeNull();
@@ -185,7 +190,9 @@ describe('ScriptsPage', () => {
 
     render(<ScriptsPage />);
 
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Sort scripts' }), {
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label
+    // it stands after, "sorted by" (it was the aria-label "Sort scripts").
+    fireEvent.change(await screen.findByRole('combobox', { name: 'sorted by' }), {
       target: { value: 'used' },
     });
 
@@ -269,7 +276,9 @@ describe('ScriptsPage', () => {
   it('supports sorting by live cells', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
     render(<ScriptsPage />);
-    fireEvent.change(await screen.findByRole('combobox', { name: 'Sort scripts' }), {
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label
+    // it stands after, "sorted by" (it was the aria-label "Sort scripts").
+    fireEvent.change(await screen.findByRole('combobox', { name: 'sorted by' }), {
       target: { value: 'liveCells' },
     });
     await waitFor(() => {

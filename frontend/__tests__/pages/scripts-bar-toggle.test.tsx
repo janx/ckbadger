@@ -133,6 +133,8 @@ describe('Scripts bar: the occupied share alone (readability B5; was the D2 swit
     renderAt('/mainnet/scripts?bar=occupied');
     await screen.findByRole('table', { name: 'Scripts' });
     expect(vi.mocked(api.getScripts).mock.calls.every(([q]) => !('bar' in (q ?? {})))).toBe(true);
-    expect(screen.getByRole('combobox', { name: 'Sort scripts' })).toHaveValue('capacity');
+    // Re-pinned on purpose (controls lane C2): the controls board's select, named by the label
+    // it stands after, "sorted by" (it was the aria-label "Sort scripts").
+    expect(screen.getByRole('combobox', { name: 'sorted by' })).toHaveValue('capacity');
   });
 });

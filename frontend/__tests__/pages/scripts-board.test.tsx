@@ -184,17 +184,22 @@ describe('Scripts list against the Scripts board', () => {
     expect(mark).toHaveAttribute('title', DEPRECATED_TITLE);
   });
 
+  // Re-pinned on purpose (controls lane C2): the role row is the controls board's tab row (a
+  // tablist, the current tab on its 2 px celadon line, lowercase names), the sort its select
+  // named by "sorted by", its choices lowercase. It was a group of aria-pressed buttons, the
+  // select named "Sort scripts" and "CKB in their cells".
   it('uses underline role tabs and one "sorted by" control in board words (SC-L8)', async () => {
     render(<ScriptsPage />);
-    const tabs = await screen.findByRole('group', { name: 'Role' });
-    const all = within(tabs).getByRole('button', { name: /All/ });
-    expect(all).toHaveAttribute('aria-pressed', 'true');
+    const tabs = await screen.findByRole('tablist', { name: 'Role' });
+    const all = within(tabs).getByRole('tab', { name: /^all/ });
+    expect(all).toHaveAttribute('aria-selected', 'true');
     expect(all.className).toContain('border-b-2');
+    expect(all).toHaveClass('border-jade');
     expect(screen.queryByText('Used (CKB)')).toBeNull();
     expect(screen.queryByText('Capacity (CKB)')).toBeNull();
-    const sort = screen.getByRole('combobox', { name: 'Sort scripts' });
+    const sort = screen.getByRole('combobox', { name: 'sorted by' });
     expect(sort).toHaveValue('capacity');
-    expect(within(sort).getByRole('option', { name: 'CKB in their cells' })).toBeInTheDocument();
+    expect(within(sort).getByRole('option', { name: 'ckb in their cells' })).toBeInTheDocument();
     fireEvent.change(sort, { target: { value: 'liveCells' } });
     await waitFor(() =>
       expect(api.getScripts).toHaveBeenLastCalledWith(
@@ -227,9 +232,11 @@ describe('Scripts list · visual pass (R2b-b)', () => {
     expect(code('Godwoken Custodian Lock')).toHaveTextContent('code evidence unavailable');
   });
 
+  // Re-pinned on purpose (controls lane C2): the controls board's search field, a searchbox (it
+  // was a plain text input).
   it('searches by code hash through the API (SC-L5)', async () => {
     render(<ScriptsPage />);
-    fireEvent.change(screen.getByRole('textbox', { name: 'Search scripts' }), {
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search scripts' }), {
       target: { value: ' 0xd00c84f0 ' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
@@ -316,13 +323,15 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // The search sits on the h1's row.
     const row = h1.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
-    const input = within(row).getByRole('textbox', { name: 'Search scripts' });
+    // Re-pinned on purpose (controls lane C2): the controls board's search field, a searchbox in
+    // the field's well, 28 px from sm (it was a plain text input, 28 px at every width).
+    const input = within(row).getByRole('searchbox', { name: 'Search scripts' });
     // One inline group of controls, as the DAO page's range buttons: one line on the title row.
     const form = input.closest('form')!;
     expect(form).toHaveClass('whitespace-nowrap');
     expect(form).not.toHaveClass('flex');
     expect(within(form).getByRole('button', { name: 'Search' })).toHaveClass('inline-flex', 'h-7');
-    expect(input).toHaveClass('h-7');
+    expect(input.closest('label')).toHaveClass('sm:h-7');
     const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
     // ≤ 90 (R13), and one line: 71 characters of 13 px mono (7.8 px each) fill the 560 px measure.
     expect(lede.textContent!.length).toBeLessThanOrEqual(71);
@@ -437,11 +446,13 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     render(<ScriptsPage />);
     const list = await screen.findByRole('region', { name: 'Script list' });
     expect(list).toHaveClass('mt-16');
-    const tabs = within(list).getByRole('group', { name: 'Role' });
+    // Re-pinned on purpose (controls lane C2): the controls board's tab row, a tablist at the
+    // section step from sm (it was a group of buttons at the section step at every width).
+    const tabs = within(list).getByRole('tablist', { name: 'Role' });
     expect(hero()).not.toContainElement(tabs);
     const table = await within(list).findByRole('table', { name: 'Scripts' });
     expect(tabs.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(within(tabs).getByRole('button', { name: 'Types 34' })).toHaveClass('text-section');
+    expect(within(tabs).getByRole('tab', { name: 'types 34' })).toHaveClass('sm:text-section');
   });
 
   it('keeps the figure on every script when a tab filters the table', async () => {
@@ -453,7 +464,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
       ...withSummary,
       classSummary: [classSummary[2]],
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Types 34' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'types 34' }));
     await waitFor(() =>
       expect(api.getScripts).toHaveBeenLastCalledWith(expect.objectContaining({ role: 'type' }))
     );

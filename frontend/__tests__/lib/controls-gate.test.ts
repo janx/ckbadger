@@ -84,11 +84,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the standard filter’s phone select and the sort select, the name search, the class tabs (links), the pager',
   },
-  'app/scripts/page.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 1, 'text-input': 1, tab: 1, pager: 1 },
-    reason: 'the sort select, the name search, the role tabs, the pager',
-  },
   'app/transactions/page.tsx': {
     lane: 'c2-lists',
     sites: { select: 1, tab: 1, pager: 2 },
@@ -207,7 +202,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 47;
+const TOLERATED_TOTAL = 43;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

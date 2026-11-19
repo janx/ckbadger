@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
-import { DEFAULT_PAGE_SIZE, ENTITY_PAGE_SIZE, pageCount } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, ENTITY_PAGE_SIZE, pageCount, rankedPage } from '@/lib/pagination';
 import { PHONE_PAGE_SIZE, usePageSize } from '@/hooks/usePageSize';
 
 function stubViewport(matches: boolean) {
@@ -43,5 +43,46 @@ describe('the figures a pager is handed', () => {
     expect(() => pageCount(-1, 50)).toThrow('-1 is not a count of rows');
     expect(() => pageCount(10, 0)).toThrow("0 is not a page's size");
     expect(() => pageCount(1.5, 50)).toThrow('1.5 is not a count of rows');
+  });
+
+  it('writes a ranked list’s page from its response: the rows shown, a page’s size, the total', () => {
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => i);
+    expect(rankedPage('tokens', 1, { data: rows(50), limit: 50, total: 727 })).toEqual({
+      from: 1,
+      to: 50,
+      total: 727,
+      pageSize: 50,
+      page: 1,
+      pages: 15,
+    });
+    expect(rankedPage('tokens', 15, { data: rows(27), limit: 50, total: 727 })).toEqual({
+      from: 701,
+      to: 727,
+      total: 727,
+      pageSize: 50,
+      page: 15,
+      pages: 15,
+    });
+    // a page's size is the response's limit: a phone's twenty
+    expect(rankedPage('tokens', 3, { data: rows(20), limit: 20, total: 727 })).toMatchObject({
+      from: 41,
+      to: 60,
+      pages: 37,
+    });
+  });
+
+  it('refuses a page without its total, an empty page and a page that is none', () => {
+    expect(() => rankedPage('scripts', 1, { data: [1], limit: 50 })).toThrow(
+      "scripts: a ranked list's page came without its total"
+    );
+    expect(() => rankedPage('scripts', 1, { data: [1], limit: 50, total: null })).toThrow(
+      'without its total'
+    );
+    expect(() => rankedPage('scripts', 2, { data: [], limit: 50, total: 60 })).toThrow(
+      'scripts: page 2 holds no row to count from'
+    );
+    expect(() => rankedPage('scripts', 0, { data: [1], limit: 50, total: 60 })).toThrow(
+      'scripts: 0 is not a page of the list'
+    );
   });
 });
