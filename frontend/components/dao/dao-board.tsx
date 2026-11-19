@@ -701,7 +701,12 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
           );
         })}
       </div>
-      <div className="text-text-dim text-meta mt-1.5 flex flex-wrap gap-x-6 gap-y-1">
+      {/* The bar's key: each part's name and its share read in the reading ink at 13 px, the swatch
+          as it was (the ink and size round's follow-up, the lead's ruling, as for a chart card's
+          key; it was quiet at 12). The widest part, the depositors', is 70 glyphs (546 px and the
+          swatch's 15): one line from a 561 px column, its words wrapping inside it below that, as
+          they did at 12 px (504 px and 15) */}
+      <div className="text-text text-small mt-1.5 flex flex-wrap gap-x-6 gap-y-1">
         <span>
           <Swatch color={DAO_ISSUANCE_COLORS.miners} />
           occupied by cells <span className="text-text">{percentOf(occupied, issued)}</span> →
@@ -775,7 +780,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
       <span className={onFill ? undefined : 'text-text-bright'}>
         <Amount form="exact" value={ready.capacity} /> CKB
       </span>{' '}
-      <span className={onFill ? undefined : 'text-text-dim'}>· {plural(ready.count, 'cell')}</span>
+      <span>· {plural(ready.count, 'cell')}</span>
     </>
   );
   // R12: the claimable words sit inside their segment where they fit (text-small, 12 px padding),
@@ -897,7 +902,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               />
             </div>
             <div
-              className={`text-text-dim text-meta mt-1 flex flex-wrap gap-x-6 gap-y-0.5 ${claimableInside ? 'justify-end text-right' : 'justify-between'}`}
+              className={`text-text text-small mt-1 flex flex-wrap gap-x-6 gap-y-0.5 ${claimableInside ? 'justify-end text-right' : 'justify-between'}`}
             >
               {!claimableInside && <span>{claimable(false)}</span>}
               <span>
@@ -1253,7 +1258,11 @@ function RawEvidence({
           </div>
         ))}
       </div>
-      <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
+      {/* The field's 32 bytes, a value: the reading ink at 13 px (the ink and size round's
+          follow-up; it was quiet at 12). 66 glyphs are 514.8 px, wider than the column at every
+          width the page has, so they break anywhere inside the box: 60 + 6 glyphs in the 470.4 px
+          column at 1280 (65 + 1 at 12 px), 45 + 21 at 390, 42 + 24 at 360, 36 + 30 at 320 */}
+      <div className="text-text text-small mt-3 break-all font-mono">{header.daoHex}</div>
       {/* Board v3: the explanation reads at the body step, as tier 2's other prose: in the reading
           ink, on the measure (readability R3, R4). */}
       <p className="text-text text-body max-w-measure mt-3">
