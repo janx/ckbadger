@@ -440,7 +440,9 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     const user = userEvent.setup({ advanceTimers: () => {} });
     const head = stream([crowd]);
     render(<ActivitiesStreamExplorer />);
-    const more = await screen.findByRole('button', { name: '+2 participants' });
+    // re-pinned on purpose (the lead's final round, item 3): the participants' fold is
+    // FoldToggle's box under their lines, "all 7 participants ↓" / "fewer ↑"
+    const more = await screen.findByRole('button', { name: /^all 7\sparticipants ↓$/ });
     await user.click(more);
     expect(more).toHaveAttribute('aria-expanded', 'true');
     const article = document.querySelector(`article[data-feed-row="${crowd.txHash}"]`)!;
@@ -449,7 +451,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     expect(article.isConnected).toBe(true);
     expect(more.isConnected).toBe(true);
     expect(more).toHaveAttribute('aria-expanded', 'true');
-    expect(screen.getByRole('button', { name: 'Show fewer participants' })).toBe(more);
+    expect(within(article as HTMLElement).getByRole('button', { name: 'fewer ↑' })).toBe(more);
   });
 
   it('a new row that says the same as an open run joins it, open, its head and focus kept', async () => {
@@ -595,7 +597,7 @@ describe('a folded run counts its parties and names none (Gate B)', () => {
     await user.click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
     // opened, each row draws its own parties by the rows' rule (over six, five and the count)
     const row = document.querySelector(`article[data-feed-row="${rows[1].txHash}"]`)!;
-    expect(row).toHaveTextContent('+2 participants');
+    expect(row).toHaveTextContent(/all 7\sparticipants ↓/);
   });
 });
 

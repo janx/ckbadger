@@ -156,7 +156,8 @@ describe('focusLockHash: the participant the page is about', () => {
     const { container } = render(<ActivityRow activity={big} focusLockHash={focus.lockHash!} />);
     expect(lines(container)[0]).toHaveTextContent(tail(focus));
     expect(lines(container)).toHaveLength(6);
-    fireEvent.click(within(container).getByRole('button', { name: '+2 participants' }));
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's box, the whole count
+    fireEvent.click(within(container).getByRole('button', { name: /^all 8\sparticipants ↓$/ }));
     expect(lines(container)).toHaveLength(8);
     expect(lines(container)[0]).toHaveTextContent(tail(focus));
   });
@@ -223,11 +224,20 @@ describe('composition badges: once per participant line when all its items share
     ]);
     const { container } = render(<ActivityRow activity={batch} foldObjects />);
     const [line] = lines(container);
-    const more = within(line).getByRole('button', { name: '+4 more objects' });
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's inline form, one button
+    // that stays and folds back ("fewer"); it was a chip that went once pressed
+    const more = within(line).getByRole('button', { name: /^\+4\smore\sobjects$/ });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(document.getElementById(more.getAttribute('aria-controls')!)).toBe(line);
     expect(badges(line)).toHaveLength(1);
+    more.focus();
     fireEvent.click(more);
     expect(line.querySelectorAll('a[href*="/objects/"]')).toHaveLength(5);
     expect(badges(line)).toHaveLength(1);
+    expect(within(line).getByRole('button', { name: 'fewer' })).toBe(more);
+    expect(document.activeElement).toBe(more);
+    fireEvent.click(more);
+    expect(line.querySelectorAll('a[href*="/objects/"]')).toHaveLength(1);
   });
 
   it('keeps the badge on the object when the line also moves a token or an identity, which carry no tier', () => {

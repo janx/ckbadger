@@ -480,7 +480,8 @@ describe('ActivitiesStreamExplorer', () => {
     await loadUnderStillClock(() => dividers().length === 2);
     const toggle = screen.getByRole('button', { name: /^all 2\stransactions ↓$/ });
     fireEvent.click(toggle);
-    const more = screen.getByRole('button', { name: '+2 participants' });
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's box, the whole count
+    const more = screen.getByRole('button', { name: /^all 7\sparticipants ↓$/ });
     fireEvent.click(more);
     toggle.focus();
     expect(document.activeElement).toBe(toggle);

@@ -341,11 +341,15 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(box).toHaveClass('flex', 'flex-col');
   });
 
-  it('keeps the over-six fold: the five largest and "+N participants" that opens the rest', () => {
+  // re-pinned on purpose (the lead's final round, item 3): the fold is FoldToggle's box under the
+  // lines, "all 8 participants ↓" and "fewer ↑" on one button (it read "+3 participants")
+  it('keeps the over-six fold: the five largest and "all N participants ↓" that opens the rest', () => {
     const { container } = render(<ActivityRow activity={feedSamples.eightParties} />);
     expect(lines(container)).toHaveLength(5);
-    fireEvent.click(within(container).getByRole('button', { name: '+3 participants' }));
+    const more = within(container).getByRole('button', { name: /^all 8\sparticipants ↓$/ });
+    fireEvent.click(more);
     expect(lines(container)).toHaveLength(8);
+    expect(within(container).getByRole('button', { name: 'fewer ↑' })).toBe(more);
   });
 
   it('pads the row 8 px and keeps the fresh tint', () => {

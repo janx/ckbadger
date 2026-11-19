@@ -166,15 +166,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // is a way onward to a place on its page, the onward look's link
   // ---- the disclosures by hand the reader sees since lane cd-fixes-controls (review-p-tests
   // SHOULD-6), for the page lanes working in these files: FoldToggle is the library's one ----
-  'components/activity/activity-row.tsx': {
-    lane: 'p-lists',
-    // fold 5 → 4 (the P3 follow-up, the tests review: a protocol list's lines open and fold by
-    // FoldToggle, e03f828f) → 3 (the lead's final round, items 2 and 3: the head's names fold by
-    // FoldToggle's inline form, one rule for a row's head and a run's)
-    sites: { fold: 3 },
-    reason:
-      'a participant’s objects’ “+N more” and its phone object count, the participants’ “+N” and its way back: FoldToggle’s inline and box forms (the lead’s final round, item 3)',
-  },
+  // 'components/activity/activity-row.tsx' left the list (the lead's final round, items 2 and 3:
+  // fold 5 → 0): a protocol list's lines and the participants fold by FoldToggle's box under their
+  // lines, the head's names and a participant's objects (and its phone object count) by its inline
+  // form inside the line
   'components/address/address-holdings.tsx': {
     lane: 'p-chain',
     sites: { fold: 1 },
@@ -221,8 +216,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // and twelve came to light for the page lanes: the activity row 5, the nodes table 4, the address
 // holdings 1, what-moved 1, the advertisement graph 1) → 12 (the merge with the P3 follow-up: the
 // activity row's protocol list folds by FoldToggle, e03f828f) → 11 (the lead's final round: the
-// head's names fold by FoldToggle's inline form)
-const TOLERATED_TOTAL = 11;
+// head's names fold by FoldToggle's inline form) → 8 (the activity row's objects, phone object
+// count and participants: FoldToggle's inline and box forms)
+const TOLERATED_TOTAL = 8;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

@@ -53,7 +53,6 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { FoldToggle } from '@/components/ui/fold-toggle';
 import { ShortId } from '@/components/ui/short-id';
-import { unitNode } from '@/components/ui/units';
 import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { WIDEST_AGE, WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 import { useFromSm } from '@/hooks/useFromMd';
@@ -810,10 +809,6 @@ function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
 }
 
-/** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
-const LINE_BUTTON =
-  'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap border bg-transparent px-[5px] leading-4';
-
 /** One Layer-2 fact as one item of the participant line: it wraps whole, never inside. */
 function ItemOnLine({
   item,
@@ -860,6 +855,7 @@ function ItemsOnLine({
   itemTone,
   showComposition,
   className,
+  controls,
 }: {
   items: ItemDelta[];
   foldObjects: boolean;
@@ -867,10 +863,13 @@ function ItemsOnLine({
   itemTone: 'plain' | 'sign';
   showComposition: boolean;
   className?: string;
+  /** The id of the participant's line, which the objects' fold opens and folds. */
+  controls: string;
 }) {
   const [open, setOpen] = useState(false);
   const objects = items.filter((i) => i.kind === 'object');
-  const folded = foldObjects && !open && objects.length >= 2;
+  const foldable = foldObjects && objects.length >= 2;
+  const folded = foldable && !open;
   const lead = folded
     ? (objects.find((o) => o.kind === 'object' && o.objectId === focusItemId) ?? objects[0])
     : null;
@@ -886,16 +885,19 @@ function ItemsOnLine({
           className={className}
         />
       ))}
-      {folded && (
-        <button
-          type="button"
-          data-role="more-objects"
-          aria-expanded={false}
-          onClick={() => setOpen(true)}
-          className={cn(LINE_BUTTON, className)}
-        >
-          +{objects.length - 1} more {countNoun(objects.length - 1, 'object')}
-        </button>
+      {/* the rest of the batch inside the line: FoldToggle's inline form, which stays and folds
+          back (the lead's final round, item 3) */}
+      {foldable && (
+        <span data-role="more-objects" className={cn('inline-flex', className)}>
+          <FoldToggle
+            form="inline"
+            open={open}
+            count={objects.length - 1}
+            singular="object"
+            controls={controls}
+            onToggle={setOpen}
+          />
+        </span>
       )}
     </>
   );
@@ -952,6 +954,7 @@ function ParticipantLine({
   notes?: ReadonlyMap<string, string>;
 }) {
   const [objectsOpen, setObjectsOpen] = useState(false);
+  const lineId = useId();
   const leads = (i: ItemDelta) =>
     focusTokenTypeHash !== undefined &&
     i.kind === 'token' &&
@@ -1030,15 +1033,19 @@ function ParticipantLine({
           {otherItems.map((item, i) => (
             <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
           ))}
-          <button
-            type="button"
-            data-role="object-count"
-            aria-expanded={objectsOpen}
-            onClick={() => setObjectsOpen((open) => !open)}
-            className={LINE_BUTTON}
-          >
-            {objectCountLabel(p.itemDeltas)}
-          </button>
+          {/* the objects as one signed count, the figure that stands for them folded: FoldToggle's
+              inline form in its words (the lead's final round, item 3) */}
+          <span data-role="object-count">
+            <FoldToggle
+              form="inline"
+              open={objectsOpen}
+              count={p.itemDeltas.filter((i) => i.kind === 'object').length}
+              singular="object"
+              words={objectCountLabel(p.itemDeltas)}
+              controls={lineId}
+              onToggle={setObjectsOpen}
+            />
+          </span>
         </span>
       )}
       <ItemsOnLine
@@ -1048,6 +1055,7 @@ function ParticipantLine({
         itemTone={itemTone}
         showComposition={showComposition}
         className={phoneObjects ? 'hidden md:inline-flex' : undefined}
+        controls={lineId}
       />
       {lineTier !== null && (
         <span data-role="composition" className="inline-flex">
@@ -1074,7 +1082,7 @@ function ParticipantLine({
   if (!fromSm) {
     const moved = lead.length > 0 || rest.length > 0 || lineTier !== null;
     return (
-      <div data-role="participant" className="text-small leading-row pl-[18px]">
+      <div id={lineId} data-role="participant" className="text-small leading-row pl-[18px]">
         <div data-role="party-line" className="flex flex-nowrap items-baseline gap-x-3">
           <span className="min-w-0 flex-1 basis-0 [overflow-wrap:anywhere]">
             {party}
@@ -1099,6 +1107,7 @@ function ParticipantLine({
   }
   return (
     <div
+      id={lineId}
       data-role="participant"
       // The address sits 18 px in; a line that wraps (phone widths) continues 30 px in, a hanging
       // indent, so the continuation never reads as the next participant.
@@ -1181,11 +1190,12 @@ function Participants({
   notes?: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const listId = useId();
   const { focus, shown, hidden } = partiesShown(participants, focusLockHash, txHash, expanded);
   const foldable = expanded || hidden > 0;
   if (participants.length === 0) return null;
   return (
-    <div data-role="participants" className="flex min-w-0 flex-col">
+    <div id={listId} data-role="participants" className="flex min-w-0 flex-col">
       {shown.map((p) => (
         <ParticipantLine
           key={p.key}
@@ -1200,17 +1210,18 @@ function Participants({
           notes={notes}
         />
       ))}
+      {/* the participants' way to go under their lines: FoldToggle's box, "all 8 participants ↓"
+          and "fewer ↑" on one button (the lead's final round, item 3) */}
       {foldable && (
-        <button
-          type="button"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
-        >
-          {unitNode(
-            expanded ? 'Show fewer participants' : `+${formatCount(hidden, 'participant')}`
-          )}
-        </button>
+        <div className="self-start pl-[18px]">
+          <FoldToggle
+            open={expanded}
+            count={participants.length}
+            singular="participant"
+            controls={listId}
+            onToggle={setExpanded}
+          />
+        </div>
       )}
     </div>
   );

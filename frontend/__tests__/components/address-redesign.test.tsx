@@ -721,7 +721,8 @@ describe('Address activity is the shared activity row (C3)', () => {
     );
     const [line] = lines(container) as HTMLElement[];
     expect(line.querySelectorAll('a[href*="/objects/"]')).toHaveLength(1);
-    const more = within(line).getByRole('button', { name: '+8 more objects' });
+    // re-pinned on purpose (the lead's final round, item 3): FoldToggle's inline words
+    const more = within(line).getByRole('button', { name: /^\+8\smore\sobjects$/ });
     expect(line.querySelectorAll('[data-composition="btc_ckb"]')).toHaveLength(1);
     fireEvent.click(more);
     expect(line.querySelectorAll('a[href*="/objects/"]')).toHaveLength(9);
