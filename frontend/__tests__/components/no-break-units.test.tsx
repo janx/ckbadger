@@ -49,7 +49,7 @@ describe('a shortened id is one unit', () => {
   });
 
   it('Address keeps a shortened address whole', () => {
-    render(<Address address={ADDRESS} size="head" />);
+    render(<Address look="key" address={ADDRESS} size="head" />);
     // R9 (re-pinned): `ckb1…` and the last 8 at the head size
     expect(nowrapOf(screen.getByText('ckb1…4k6kmfrz'))).not.toBeNull();
   });

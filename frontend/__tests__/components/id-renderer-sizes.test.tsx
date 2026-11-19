@@ -54,9 +54,9 @@ describe('Address writes an address at a size', () => {
   it('at head, row and tight, the full address in its title', () => {
     render(
       <>
-        <Address address={ADDRESS} size="head" />
-        <Address address={ADDRESS} size="row" />
-        <Address address={ADDRESS} size="tight" />
+        <Address look="key" address={ADDRESS} size="head" />
+        <Address look="key" address={ADDRESS} size="row" />
+        <Address look="key" address={ADDRESS} size="tight" />
       </>
     );
     const links = screen.getAllByRole('link');
@@ -71,8 +71,8 @@ describe('Address writes an address at a size', () => {
 
   it('takes no length', () => {
     // @ts-expect-error a length is not a prop of Address
-    render(<Address address={ADDRESS} size="row" startChars={8} endChars={6} />);
-    render(<Address address={ADDRESS} size="row" {...LENGTHS} />);
+    render(<Address look="key" address={ADDRESS} size="row" startChars={8} endChars={6} />);
+    render(<Address look="key" address={ADDRESS} size="row" {...LENGTHS} />);
     for (const link of screen.getAllByRole('link')) expect(link.textContent).toBe('ckb1…4c0cgwga');
   });
 });
