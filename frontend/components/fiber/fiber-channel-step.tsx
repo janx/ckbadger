@@ -9,7 +9,7 @@ import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cel
 import { api, type TransactionDetail } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
-import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
+import { BOARD_INKS } from '@/lib/design-tokens';
 import { stageEpoch } from '@/lib/fiber-format';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
@@ -78,17 +78,15 @@ export function FiberChannelStep({
       <span className="text-text-bright text-body">
         {n} · {title}
       </span>
-      <span className="text-text-dim text-small">
-        <Link
-          href={`/tx/${txHash}`}
-          className="text-[color:var(--ink)] hover:underline"
-          style={inkStyle(BOARD_INKS.link)}
-          title={txHash}
-        >
+      {/* The step's transaction is its key (the bright ink of the look); its block, time and
+          epoch are values, in the reading ink (R3: they were the quiet ink), the block a link
+          inside the line. */}
+      <span className="text-text text-small">
+        <Link href={`/tx/${txHash}`} look="key" title={txHash}>
           <ShortId value={txHash} kind="hash" size="row" />
         </Link>
         {' · '}
-        <Link href={`/blocks/${blockNumber}`} className="hover:text-jade">
+        <Link href={`/blocks/${blockNumber}`} look="inline">
           {formatBlockNumber(blockNumber)}
         </Link>
         {unitNode(` · ${formatUtc8DateTime(timestamp)}`)}

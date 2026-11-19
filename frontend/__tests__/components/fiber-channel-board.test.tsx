@@ -171,7 +171,7 @@ describe('FiberChannelBoard', () => {
     // Re-pinned on purpose (lane P4, readability R5: a sentence takes the summary form, its exact
     // value in its title; it was "1,000.00000569" and "62.00000351", the column form in prose)
     expect(summary).toHaveTextContent(
-      'ckb1…7sppedrr put 1,000 CKB net into the opening transaction and ckb1…rc5eyy6y 62.00 CKB.'
+      'ckb1…7sppedrr put 1,000 CKB net into the opening transaction and ckb1…rc5eyy6y 62 CKB.'
     );
     expect(
       Array.from(summary.querySelectorAll('[data-ckb-amount]')).map((el) =>
@@ -447,7 +447,7 @@ describe('FiberChannelBoard', () => {
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     const moved = within(tier1).getByTestId('what-moved');
     expect(moved).toHaveTextContent(
-      'ckb1…7sppedrr put in 1,000 CKB and got back 899.99 CKB; ckb1…rc5eyy6y put in 62.00 CKB and got back 161.99 CKB.'
+      'ckb1…7sppedrr put in 1,000 CKB and got back 899.99 CKB; ckb1…rc5eyy6y put in 62 CKB and got back 161.99 CKB.'
     );
     expect(
       Array.from(moved.querySelectorAll('[data-ckb-amount]')).map((el) => el.getAttribute('title'))
@@ -474,7 +474,7 @@ describe('FiberChannelBoard', () => {
       />
     );
     expect(screen.getByTestId('what-moved')).toHaveTextContent(
-      'ckb1…7sppedrr put in 1,000 CKB and ckb1…rc5eyy6y 62.00 CKB; nothing has been paid out yet.'
+      'ckb1…7sppedrr put in 1,000 CKB and ckb1…rc5eyy6y 62 CKB; nothing has been paid out yet.'
     );
   });
 

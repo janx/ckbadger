@@ -400,8 +400,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/fiber/channels/[id]/client-page.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 2 },
-    reason: 'the breadcrumb link, the channel id line and the loading line in the quiet ink',
+    // link 1 → 0, prose 2 → 1 (lane P4): the breadcrumb's link and the channel id line read
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note in the quiet ink',
   },
   'app/fiber/channels/client-page.tsx': {
     family: 'topics',
@@ -480,16 +481,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 1 },
     reason: 'the not-enough-days sentence',
   },
-  'components/fiber/fiber-channel-board.tsx': {
-    family: 'topics',
-    // prose 5 → 2 (B7): the lede and the lock and output notes explain, in the reading ink
-    sites: { link: 1, prose: 2 },
-    reason: 'the channel id, the empty commitment sentence, a party link',
-  },
   'components/fiber/fiber-channel-step.tsx': {
     family: 'topics',
-    sites: { link: 1, prose: 1 },
-    reason: "a step's block link and its loading line",
+    // link 1 → 0 (lane P4): the step's header reads in the reading ink, its block link with it
+    sites: { prose: 1 },
+    reason: "the step's loading line, a transient note in the quiet ink",
   },
   'components/fiber/fiber-network-graph.tsx': {
     family: 'topics',
