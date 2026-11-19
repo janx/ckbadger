@@ -477,7 +477,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
             {/* F-9: the API sends every DAO cell's exact compensation (shannons) with its state
                 and block; an answer without them is a broken read and fails here, by name. */}
-            <p className="text-text-dim text-small max-w-measure">
+            {/* its deposit block and compensation: values, the reading ink (R3; P1 follow-up) */}
+            <p className="text-text text-small max-w-measure">
               deposit block <BlockLink look="inline" number={cell.daoInfo.depositBlockNumber} /> ·{' '}
               {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
               <CkbAmount

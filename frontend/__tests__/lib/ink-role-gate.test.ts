@@ -96,12 +96,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'ages, reward-finality heights, cycles states and HF links quiet in table cells and rows; the loading and error lines',
   },
-  'app/cell/[outpoint]/client-page.tsx': {
-    family: 'chain',
-    // link 4 → 1, prose 2 → 1 (B7): the out-point sentence reads in the reading ink
-    sites: { link: 1, prose: 1 },
-    reason: 'the DAO line and its deposit block link in the quiet ink',
-  },
+  // 'app/cell/[outpoint]/client-page.tsx' left the list (lane P1 follow-up): the DAO line, its
+  // deposit block and its compensation, is values in the reading ink (link 4 → 1, prose 2 → 1 in
+  // B7: the out-point sentence reads)
   'app/tx/[hash]/client-page.tsx': {
     family: 'chain',
     // link 6 → 3 (lane D3): the script groups' code links moved to
@@ -152,28 +149,30 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'components/cell-graph-renderer.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason:
-      "the graph's empty state (an empty state reads; a placeholder is the rule's open point)",
+    reason: "empty 1: the graph's 'No graph data.' (lane P1 follow-up)",
   },
   'components/cell-graph.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: "the graph's loading placeholder (the rule's open point: loading lines)",
+    reason: "loading 1: the graph's 'Loading graph…' (lane P1 follow-up)",
   },
   'components/cell/cell-microscope.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: 'the empty-data sentence',
+    reason: "empty 1: the data box's 'No data: the cell carries 0 bytes.' (lane P1 follow-up)",
   },
   'components/cell/cell-transactions.tsx': {
     family: 'chain',
-    sites: { link: 1, prose: 2 },
-    reason: 'the loading line, the as-of block link and the code-cell note in the quiet ink',
+    // link 1 → 0 (lane P1 follow-up): a live cell's age and the block it is as of are values, in
+    // the reading ink
+    sites: { prose: 2 },
+    reason:
+      "loading 1: a transaction being read; note 1: the code cells' 'the spender picks its own cell deps'",
   },
   'components/cell/code-cell-board.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: 'the empty version-history sentence',
+    reason: "empty 1: 'No registered Type ID version history for this binary.' (lane P1 follow-up)",
   },
   'components/home/ckbytes-section.tsx': {
     family: 'chain',

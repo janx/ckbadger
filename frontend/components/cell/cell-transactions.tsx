@@ -269,7 +269,8 @@ function NotSpentYet({
       <div className="flex flex-wrap justify-between gap-2">
         <span className="text-text-bright">{replaced ? 'Not replaced yet' : 'Not spent yet'}</span>
         {cell.liveAgeMs != null && (
-          <span className="text-text-dim">
+          // its age and the block it is as of: values, the reading ink (R3; P1 follow-up)
+          <span className="text-text">
             {formatDurationMs(cell.liveAgeMs)}
             {cell.liveAgeAtBlock != null && (
               <>
