@@ -8,28 +8,30 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { addressActivitiesFixture, addressFixture } from '@/__tests__/msw/fixtures/address';
 import { AddressActivities } from '@/components/address/address-history';
 import type { Activity } from '@/lib/api';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 const NOW = Date.now();
 
 describe('an address page folds its own runs (B4 item 5)', () => {
-  const update = (n: number): Activity => ({
-    ...addressActivitiesFixture[0],
-    txHash: `0x${String(n).padStart(2, '0').repeat(32)}`,
-    blockNumber: 21047791 - n,
-    timestamp: String(NOW - n * 49_000),
-    ckbDelta: '-30000',
-    usedDelta: '0',
-    typeCalls: [
-      {
-        typeCodeHash: `0x${'3a'.repeat(32)}`,
-        typeHashType: 'type',
-        typeArgs: '0x00',
-        scriptHash: `0x${'3a'.repeat(31)}00`,
-        scriptName: '.bit Time Index State',
-      },
-    ],
-    participants: [],
-  });
+  const update = (n: number): Activity =>
+    activityRead({
+      ...addressActivitiesFixture[0],
+      txHash: `0x${String(n).padStart(2, '0').repeat(32)}`,
+      blockNumber: 21047791 - n,
+      timestamp: String(NOW - n * 49_000),
+      ckbDelta: '-30000',
+      usedDelta: '0',
+      typeCalls: [
+        {
+          typeCodeHash: `0x${'3a'.repeat(32)}`,
+          typeHashType: 'type',
+          typeArgs: '0x00',
+          scriptHash: `0x${'3a'.repeat(31)}00`,
+          scriptName: '.bit Time Index State',
+        },
+      ],
+      participants: [],
+    });
 
   // The lead's finding (the exactness lane's B9): on a page with a next page, the page's last run
   // may go on in rows not read; its counts say so
@@ -158,17 +160,18 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   // re-pinned on purpose (Gate B's rule, lane P3): "not the parties": rows whose other parties
   // differ fold, and the run counts them (it did not fold them by the old rule)
   it('folds rows whose other parties differ, and counts every party once', () => {
-    const withOther = (n: number, seed: string): Activity => ({
-      ...update(n),
-      participants: [
-        {
-          address: seededAddress(seed),
-          lockHash: `0x${seed.padStart(64, '0')}`,
-          lockHashPrefix: null,
-          roles: [],
-        },
-      ],
-    });
+    const withOther = (n: number, seed: string): Activity =>
+      activityRead({
+        ...update(n),
+        participants: [
+          {
+            address: seededAddress(seed),
+            lockHash: `0x${seed.padStart(64, '0')}`,
+            lockHashPrefix: null,
+            roles: [],
+          },
+        ],
+      });
     render(
       <AddressActivities
         more={false}

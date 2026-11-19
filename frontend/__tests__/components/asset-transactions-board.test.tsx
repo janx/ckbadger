@@ -13,6 +13,7 @@ import {
 } from '@/__tests__/utils/phone-row';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { PHONE_LINE_PX } from '@/lib/type-metrics';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const tx = (n: number, size: number, cycles: number | null): Transaction => ({
   hash: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
@@ -299,7 +300,7 @@ describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
   const USDC = `0x${'5d'.repeat(32)}`;
   const moved = (n: number): Transaction => ({
     ...tx(n, 1930, 1_923_713),
-    activity: {
+    activity: activityRead({
       txHash: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
       blockNumber: 1000 + n,
       txIndex: 1,
@@ -308,7 +309,7 @@ describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
       protocolActions: [],
       typeCalls: [],
       lockCalls: [],
-      itemTypes: [],
+      itemTypes: [ITEM_TYPE.xudt],
       itemTypesUnread: null,
       participants: [
         {
@@ -330,7 +331,7 @@ describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
           ],
         },
       ],
-    },
+    }),
   });
 
   it('is the address row at 358 px: hash and block · age, then cells · amount moved · fee', () => {

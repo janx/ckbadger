@@ -17,6 +17,7 @@ import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines'
 import type { SealState } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -686,16 +687,19 @@ describe('TransactionDetailPage', () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const [first, ...rest] = feedSamples.objectTransfer.participants;
-      vi.mocked(api.getTransactionActivity).mockResolvedValue({
-        ...feedSamples.objectTransfer,
-        txHash: TX_HASH,
-        typeCalls: [],
-        participants: [first, ...rest].map((p, i) => ({
-          ...p,
-          itemDeltas: [],
-          ...(i === 0 ? { ckbDelta: 'abc' } : {}),
-        })),
-      });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(
+        activityRead({
+          ...feedSamples.objectTransfer,
+          itemTypes: [],
+          txHash: TX_HASH,
+          typeCalls: [],
+          participants: [first, ...rest].map((p, i) => ({
+            ...p,
+            itemDeltas: [],
+            ...(i === 0 ? { ckbDelta: 'abc' } : {}),
+          })),
+        })
+      );
       render(
         <ErrorBoundary fallback={<p>page-level boundary</p>}>
           <TransactionDetailPage />

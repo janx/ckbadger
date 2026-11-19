@@ -29,6 +29,7 @@ import {
   nervape3xOtherTraits,
 } from '@/__tests__/fixtures/objects/nervape3x';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 
 const template = collectionGalleryFilteredProducer.data[0];
@@ -443,12 +444,12 @@ it('marks every collection activity row as an object row, as the board does', as
   vi.spyOn(api, 'getCollectionActivityFeed').mockResolvedValue({
     ...collectionActivityFeedProducer,
     data: [
-      {
+      activityRead({
         ...row,
         protocolActions: [
           { protocol: 'rgbpp', protocolName: 'RGB++', action: 'transfer', metadata: {} },
         ],
-      },
+      }),
     ],
   });
   await page();

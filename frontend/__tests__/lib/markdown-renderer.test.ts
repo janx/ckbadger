@@ -7,6 +7,7 @@ import { MarkdownRenderError, renderMarkdownPage } from '@/lib/ai/markdown-rende
 import { api } from '@/lib/api';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 // the module's own constants (its tags, which an activity's classification reads) beside the
 // mocked reads (the lead's final round, item 7: a called lock's activity reaches the tags)
@@ -334,7 +335,7 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
         data: [
-          {
+          activityRead({
             txHash: `0x${'a'.repeat(64)}`,
             blockNumber: 123,
             txIndex: 1,
@@ -346,7 +347,7 @@ describe('renderMarkdownPage', () => {
             participants: [],
             itemTypes: [],
             itemTypesUnread: null,
-          },
+          }),
         ],
         limit: 1,
         hasMore: false,

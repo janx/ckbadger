@@ -17,6 +17,7 @@ import type {
   AssetCapacityHistory,
 } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 /**
  * The producer's owners, each the real address of the lock its rows carry (B4 second fix round,
  * review-rules-fixes-tests SHOULD-4; `__tests__/lib/producer-owners.test.ts` holds them to it).
@@ -404,7 +405,7 @@ export const didPdsProducer = {
 } satisfies DidPdsDistribution;
 export const itemActivityFeedProducer = pagedRead({
   data: [
-    {
+    activityRead({
       blockNumber: 100,
       isCellbase: false,
       itemContext: {
@@ -502,7 +503,7 @@ export const itemActivityFeedProducer = pagedRead({
       txHash: '0x5252525252525252525252525252525252525252525252525252525252525252',
       txIndex: 2,
       typeCalls: [],
-    },
+    }),
   ],
   hasMore: true,
   limit: 1,
@@ -512,7 +513,7 @@ export const itemActivityFeedProducer = pagedRead({
 export const itemTransactionsProducer = pagedRead({
   data: [
     {
-      activity: {
+      activity: activityRead({
         blockNumber: 100,
         isCellbase: false,
         lockCalls: [],
@@ -536,7 +537,7 @@ export const itemTransactionsProducer = pagedRead({
         txHash: '0x5151515151515151515151515151515151515151515151515151515151515151',
         txIndex: 1,
         typeCalls: [],
-      },
+      }),
       blockHash: '0x6464646464646464646464646464646464646464646464646464646464646464',
       blockNumber: 100,
       cycles: null,

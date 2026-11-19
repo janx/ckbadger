@@ -15,6 +15,7 @@ import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { numberStrings } from '@/__tests__/utils/lede-rule';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /** A block's seal: its hash and its transaction count, as the API serves them. */
 const sealOf = (b: { hash: string; transactionsCount: number }): SealId => ({
@@ -132,19 +133,20 @@ const neighbours = pagedRead({
   hasMore: true,
   nextCursor: String(N - 2),
 });
-const activity = (txIndex: number): GlobalActivity => ({
-  txHash: `0x${txIndex}fbf9fbc${'0'.repeat(48)}f9199a`.slice(0, 66),
-  blockNumber: N,
-  txIndex,
-  timestamp: block.timestamp,
-  isCellbase: txIndex === 0,
-  protocolActions: [],
-  typeCalls: [],
-  lockCalls: [],
-  itemTypes: [],
-  itemTypesUnread: null,
-  participants: [],
-});
+const activity = (txIndex: number): GlobalActivity =>
+  activityRead({
+    txHash: `0x${txIndex}fbf9fbc${'0'.repeat(48)}f9199a`.slice(0, 66),
+    blockNumber: N,
+    txIndex,
+    timestamp: block.timestamp,
+    isCellbase: txIndex === 0,
+    protocolActions: [],
+    typeCalls: [],
+    lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
+    participants: [],
+  });
 const tx = (index: number): Transaction =>
   ({
     hash: h(`${index}a`),
@@ -808,7 +810,7 @@ describe('Block board · R2b-a fields', () => {
       pagedRead({
         data: [0, 1, 2, 3].map((i) =>
           i === 0
-            ? {
+            ? activityRead({
                 ...activity(0),
                 participants: [
                   {
@@ -822,7 +824,7 @@ describe('Block board · R2b-a fields', () => {
                     tags: 0,
                   },
                 ],
-              }
+              })
             : activity(i)
         ),
         limit: 100,

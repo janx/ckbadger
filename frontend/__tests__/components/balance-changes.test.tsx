@@ -14,6 +14,7 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type { GlobalActivity } from '@/lib/api';
 import { WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
 import { fontPx, textPx } from '@/lib/type-metrics';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}895d`;
 /** A lock the registry names (made up: the fixture names it "Nervape Shadow Lock"). */
@@ -30,7 +31,7 @@ function activity(): GlobalActivity {
     composition: 'btc_ckb' as const,
   });
   const [from, to, third] = feedSamples.objectTransfer.participants;
-  return {
+  return activityRead({
     ...feedSamples.objectTransfer,
     participants: [
       // B4 fix round (re-pinned on purpose): each party's lock is read off its address, so each
@@ -44,7 +45,7 @@ function activity(): GlobalActivity {
       },
       { ...third, address: seededAddress('204m4g', UNNAMED_LOCK), lockKind: null },
     ],
-  };
+  });
 }
 
 /** A sample party's address at the tight size's tail: its last 6 characters (R9). */
@@ -249,7 +250,7 @@ describe('BalanceChanges, the order a reader needs', () => {
       stubChartWidth(width);
       const a = activity();
       const [from, to, third] = a.participants;
-      const shuffled = { ...a, participants: [third, from, to] };
+      const shuffled = activityRead({ ...a, participants: [third, from, to] });
       const { unmount } = render(
         <BalanceChanges activity={shuffled} fee="64119" compensation={null} />
       );
@@ -280,7 +281,7 @@ describe('BalanceChanges, the order a reader needs', () => {
     const receiver = { ...to, ckbDelta: '0' };
     render(
       <BalanceChanges
-        activity={{ ...a, participants: [receiver, payer, giver] }}
+        activity={activityRead({ ...a, participants: [receiver, payer, giver] })}
         fee="64119"
         compensation={null}
       />

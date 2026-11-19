@@ -22,10 +22,11 @@ import type {
   CursorPaginatedResponse,
 } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 export const tokenProducer = {
   activityFeed: pagedRead({
     data: [
-      {
+      activityRead({
         blockNumber: 2,
         isCellbase: false,
         lockCalls: [],
@@ -75,8 +76,8 @@ export const tokenProducer = {
         txHash: '0x8383838383838383838383838383838383838383838383838383838383838383',
         txIndex: 2,
         typeCalls: [],
-      },
-      {
+      }),
+      activityRead({
         blockNumber: 1,
         isCellbase: false,
         lockCalls: [],
@@ -126,8 +127,8 @@ export const tokenProducer = {
         txHash: '0x8282828282828282828282828282828282828282828282828282828282828282',
         txIndex: 2,
         typeCalls: [],
-      },
-      {
+      }),
+      activityRead({
         blockNumber: 0,
         isCellbase: false,
         lockCalls: [],
@@ -177,7 +178,7 @@ export const tokenProducer = {
         txHash: '0x8181818181818181818181818181818181818181818181818181818181818181',
         txIndex: 2,
         typeCalls: [],
-      },
+      }),
     ],
     hasMore: false,
     limit: 50,
@@ -443,7 +444,7 @@ export const tokenProducer = {
   transactions: pagedRead({
     data: [
       {
-        activity: {
+        activity: activityRead({
           blockNumber: 2,
           isCellbase: false,
           lockCalls: [],
@@ -493,7 +494,7 @@ export const tokenProducer = {
           txHash: '0x8383838383838383838383838383838383838383838383838383838383838383',
           txIndex: 2,
           typeCalls: [],
-        },
+        }),
         blockHash: '0x0202020202020202020202020202020202020202020202020202020202020202',
         blockNumber: 2,
         cycles: null,
@@ -511,7 +512,7 @@ export const tokenProducer = {
         value: '90',
       },
       {
-        activity: {
+        activity: activityRead({
           blockNumber: 1,
           isCellbase: false,
           lockCalls: [],
@@ -561,7 +562,7 @@ export const tokenProducer = {
           txHash: '0x8282828282828282828282828282828282828282828282828282828282828282',
           txIndex: 2,
           typeCalls: [],
-        },
+        }),
         blockHash: '0x0101010101010101010101010101010101010101010101010101010101010101',
         blockNumber: 1,
         cycles: null,
@@ -579,7 +580,7 @@ export const tokenProducer = {
         value: '90',
       },
       {
-        activity: {
+        activity: activityRead({
           blockNumber: 0,
           isCellbase: false,
           lockCalls: [],
@@ -629,7 +630,7 @@ export const tokenProducer = {
           txHash: '0x8181818181818181818181818181818181818181818181818181818181818181',
           txIndex: 2,
           typeCalls: [],
-        },
+        }),
         blockHash: '0x0000000000000000000000000000000000000000000000000000000000000000',
         blockNumber: 0,
         cycles: 0,

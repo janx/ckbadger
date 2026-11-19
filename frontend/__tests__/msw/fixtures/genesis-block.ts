@@ -1,5 +1,6 @@
 import type { Block, BlockProposalFees, GlobalActivity, Transaction } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 // Mainnet's genesis block as the API serves it (GET /blocks/0 and the page's other reads, captured
 // 2026-11-12 from a synced mainnet node), verbatim but for one cut: the cellbase activity keeps the
@@ -80,7 +81,7 @@ export const genesisTransactions: Transaction[] = [
   {
     value: '23400000000',
     outputCapacity: '23400000000',
-    activity: {
+    activity: activityRead({
       txHash: '0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c',
       blockNumber: 0,
       txIndex: 1,
@@ -126,7 +127,7 @@ export const genesisTransactions: Transaction[] = [
           tags: 0,
         },
       ],
-    },
+    }),
     hash: '0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c',
     blockNumber: 0,
     blockHash: '0x92b197aa1fba0f63633922c61c92375c9c074a93e85963554f5499fe1450d0e5',
@@ -145,7 +146,7 @@ export const genesisTransactions: Transaction[] = [
 
 /** GET /activities?limit=20&blockNumber=0&order=asc (the cellbase's participants cut to 3). */
 export const genesisActivities: GlobalActivity[] = [
-  {
+  activityRead({
     txHash: '0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c',
     blockNumber: 0,
     txIndex: 0,
@@ -216,8 +217,8 @@ export const genesisActivities: GlobalActivity[] = [
         tags: 32,
       },
     ],
-  },
-  {
+  }),
+  activityRead({
     txHash: '0x71a7ba8fc96349fea0ed3a5c47992e3b4084b031a42264a018e0072e8172e46c',
     blockNumber: 0,
     txIndex: 1,
@@ -263,7 +264,7 @@ export const genesisActivities: GlobalActivity[] = [
         tags: 0,
       },
     ],
-  },
+  }),
 ];
 
 /** GET /blocks/0/proposal-fees */

@@ -19,6 +19,7 @@ import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/sc
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CrashPage } from '@/components/crash-page';
 import { CELL_COLORS, CLASS_COLORS } from '@/lib/design-tokens';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/components/error-vessels', () => ({
   ErrorVessels: () => <div data-testid="error-vessels" />,
@@ -446,17 +447,21 @@ describe('transaction and activity foundations', () => {
     const activity = latestActivities[0];
     const { container } = render(
       <ActivityRow
-        activity={{
+        // a pool row states no item types, null and null, as the route sends it (the third read's
+        // T SHOULD-1: it inherited the committed row's [])
+        activity={activityRead({
           ...activity,
           blockNumber: null,
           timestamp: null,
+          itemTypes: null,
+          itemTypesUnread: null,
           poolStatus: 'proposed',
           timeAddedToPool: new Date().toISOString(),
           interpretation: {
             status: 'partial',
             reasons: [{ code: 'unresolved_input', detail: '0xabc:1' }],
           },
-        }}
+        })}
         mode="participant"
         participant={activity.participants[0]}
       />

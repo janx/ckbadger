@@ -11,9 +11,10 @@ import {
 import { MINUS } from '@/lib/chart-ticks';
 import type { GlobalActivity } from '@/lib/api';
 import { Dotted } from '@/components/ui/phone-row';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 function makeGlobal(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
-  return {
+  return activityRead({
     txHash: '0x54522856aa00000000000000000000000000000000000000000000000000007b60c3',
     blockNumber: 20_819_142,
     txIndex: 1,
@@ -26,7 +27,7 @@ function makeGlobal(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     itemTypesUnread: null,
     participants: [],
     ...overrides,
-  };
+  });
 }
 
 const bitTypeCalls = [
@@ -80,6 +81,7 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
     expect(
       activityHeadline(
         makeGlobal({
+          itemTypes: [ITEM_TYPE.dao],
           protocolActions: [
             {
               protocol: 'dao',
@@ -113,7 +115,9 @@ describe('activityHeadline — the Layer-3 narrative from the classifier', () =>
       itemDeltas: [{ kind: 'object' as const, objectId: '0x51', delta: 1 }],
       tags: 2,
     };
-    expect(activityHeadline(makeGlobal({ participants: [party] }))).toBe('Object mint');
+    expect(
+      activityHeadline(makeGlobal({ itemTypes: [ITEM_TYPE.spore], participants: [party] }))
+    ).toBe('Object mint');
     expect(activityHeadline(makeGlobal({ typeCalls: bitTypeCalls }))).toBe('Script call');
     expect(activityHeadline(makeGlobal({}))).toBe('CKB Transfer');
     expect(activityHeadline(makeGlobal({ isCellbase: true }))).toBe('Cellbase');

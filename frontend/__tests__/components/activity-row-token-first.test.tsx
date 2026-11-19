@@ -9,6 +9,7 @@ import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const PAGE_TOKEN = `0x${'77'.repeat(32)}`;
 const OTHER_TOKEN = `0x${'88'.repeat(32)}`;
@@ -34,7 +35,7 @@ function party(seed: string, ckbDelta: string, itemDeltas: ItemDelta[]): Partici
   };
 }
 
-const swap: GlobalActivity = {
+const swap: GlobalActivity = activityRead({
   txHash: `0x${'5a'.repeat(32)}`,
   blockNumber: 20724160,
   txIndex: 2,
@@ -43,7 +44,7 @@ const swap: GlobalActivity = {
   protocolActions: [],
   typeCalls: [],
   lockCalls: [],
-  itemTypes: [],
+  itemTypes: [ITEM_TYPE.xudt],
   itemTypesUnread: null,
   participants: [
     // pays the page's token and another, and the CKB
@@ -55,7 +56,7 @@ const swap: GlobalActivity = {
     // moves no token: its CKB stays first
     party('feepay', '-9030', []),
   ],
-};
+});
 
 function feed(tokenPage: boolean) {
   return render(

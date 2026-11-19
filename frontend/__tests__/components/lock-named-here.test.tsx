@@ -30,6 +30,7 @@ import { api, type CollectionHolder, type GlobalActivity, type TransactionDetail
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 /** RFC 0021's example args on the default lock by type, and the same code hash by data. */
 const DEFAULT_ADDRESS =
@@ -59,7 +60,7 @@ function party(address: string | null, lockKind: string | null, n: string, ckbDe
 
 describe('an activity row names a lock on the default code hash by data as another lock', () => {
   it('writes its code hash and hash type, never the default lock’s name, never silence', () => {
-    const row: ActivityRowData = {
+    const row: ActivityRowData = activityRead({
       txHash: `0x${'ab'.repeat(32)}`,
       blockNumber: 21000000,
       timestamp: String(Date.now() - 60_000),
@@ -70,7 +71,7 @@ describe('an activity row names a lock on the default code hash by data as anoth
       itemTypes: [],
       itemTypesUnread: null,
       participants: [party(BY_DATA_ADDRESS, 'Default Lock', '01', '-100000000')],
-    };
+    });
     const { container } = render(<ActivityRow activity={row} />);
     const kind = container.querySelector('[data-role="participant"] [data-role="lock-kind"]');
     expect(kind).toHaveTextContent(new RegExp(`^${BY_DATA_WORDS}$`));
@@ -242,7 +243,7 @@ describe('a place that may name no lock leaves the part out', () => {
 
   it('What moved: no empty lock span (and no gap) beside a default-lock party', () => {
     stubChartWidth(876);
-    const a: GlobalActivity = {
+    const a: GlobalActivity = activityRead({
       txHash: `0x${'54'.repeat(32)}`,
       blockNumber: 20_835_685,
       txIndex: 1,
@@ -257,7 +258,7 @@ describe('a place that may name no lock leaves the part out', () => {
         party(DEFAULT_ADDRESS, 'Default Lock', '01', '-100008888'),
         party(seededAddress('recvr1', JOYID_CODE_HASH), 'JoyID', '02', '100000000'),
       ],
-    };
+    });
     const { container } = render(
       <WhatMoved hash={a.txHash} activity={a} fee="8888" compensation={null} />
     );
@@ -278,7 +279,10 @@ describe('a place that may name no lock leaves the part out', () => {
     stubChartWidth(912);
     const base = feedSamples.objectTransfer;
     const named = party(DEFAULT_ADDRESS, 'Default Lock', '0c');
-    const a: GlobalActivity = { ...base, participants: [...base.participants, named] };
+    const a: GlobalActivity = activityRead({
+      ...base,
+      participants: [...base.participants, named],
+    });
     render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     expect(document.body).not.toHaveTextContent('Default Lock');
     // B4 second fix round (tests NOTE-8): and the party is drawn, in its row of the table
@@ -297,10 +301,10 @@ describe('the by-data words fit the columns that write them', () => {
   it('in Balance changes’ participant track', () => {
     stubChartWidth(912);
     const base = feedSamples.objectTransfer;
-    const a: GlobalActivity = {
+    const a: GlobalActivity = activityRead({
       ...base,
       participants: [...base.participants, party(BY_DATA_ADDRESS, 'Default Lock', '0d')],
-    };
+    });
     render(<BalanceChanges activity={a} fee="64119" compensation={null} />);
     const table = screen.getByRole('table', { name: 'Balance changes by participant' });
     const rows = within(table).getAllByRole('row');

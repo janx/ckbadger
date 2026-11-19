@@ -8,6 +8,7 @@ import type {
   AddressTransaction,
 } from '@/lib/api';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead } from '@/__tests__/utils/activity-read';
 
 export const addressHash = `0x${'3e'.repeat(32)}`;
 export const addressText =
@@ -209,7 +210,7 @@ export const addressIdentitiesFixture: AddressCell[] = [
   },
 ];
 export const addressActivitiesFixture: Activity[] = [
-  {
+  activityRead({
     txHash: fixtureHash(800),
     blockNumber: 18672923,
     txIndex: 1,
@@ -226,7 +227,7 @@ export const addressActivitiesFixture: Activity[] = [
     participants: [],
     roles: [],
     tags: 0,
-  },
+  }),
 ];
 export const addressTransactionsFixture: AddressTransaction[] = [
   {

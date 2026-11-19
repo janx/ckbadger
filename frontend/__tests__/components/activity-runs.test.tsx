@@ -21,6 +21,7 @@ import { SCREENS } from '@/__tests__/utils/tailwind-box';
 import resolveConfig from 'tailwindcss/resolveConfig';
 import tailwindConfig from '@/tailwind.config';
 import { pagedRead } from '@/__tests__/utils/paged-read';
+import { activityRead, ITEM_TYPE, unsentRow } from '@/__tests__/utils/activity-read';
 
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -62,7 +63,7 @@ function oracle(n: number, seed: string, args: string, secondsAgo: number): Glob
     scriptHash: `0x${code.repeat(31)}${args.slice(2)}`,
     scriptName: name,
   });
-  return {
+  return activityRead({
     txHash: `0x${String(n).padStart(2, '0').repeat(32)}`,
     blockNumber: 21047791 - n,
     txIndex: 1,
@@ -74,10 +75,10 @@ function oracle(n: number, seed: string, args: string, secondsAgo: number): Glob
     itemTypes: [],
     itemTypesUnread: null,
     participants: [oracleParty(seed)],
-  };
+  });
 }
 
-const transfer: GlobalActivity = {
+const transfer: GlobalActivity = activityRead({
   txHash: `0x${'99'.repeat(32)}`,
   blockNumber: 21047700,
   txIndex: 2,
@@ -92,7 +93,7 @@ const transfer: GlobalActivity = {
     { ...oracleParty('sendr1'), ckbDelta: '-100000000' },
     { ...oracleParty('recvr1'), ckbDelta: '99970000' },
   ],
-};
+});
 
 const page = (data: GlobalActivity[]) =>
   pagedRead({ data, limit: 50, hasMore: false, nextCursor: null });
@@ -294,13 +295,15 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   // error showed only when the run was opened. Three deposits by one party, the middle one's
   // metadata unreadable: it stands alone, so no two of them are consecutive and nothing folds.
   it('never folds a row whose protocol action cannot be read: its error stands in its place', async () => {
-    const deposit = (n: number, metadata: Record<string, string>): GlobalActivity => ({
-      ...oracle(n, 'q3q7ue', '0x00', n * 49),
-      typeCalls: [],
-      protocolActions: [
-        { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata },
-      ],
-    });
+    const deposit = (n: number, metadata: Record<string, string>): GlobalActivity =>
+      activityRead({
+        ...oracle(n, 'q3q7ue', '0x00', n * 49),
+        itemTypes: [ITEM_TYPE.dao],
+        typeCalls: [],
+        protocolActions: [
+          { protocol: 'dao', protocolName: 'Nervos DAO', action: 'deposit', metadata },
+        ],
+      });
     const rows = [
       deposit(1, { capacity: '10200000000' }),
       deposit(2, {}),
@@ -350,7 +353,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
     transfer,
   ];
   /** A transfer between seven parties: its row folds two of them under "+2 participants". */
-  const crowd: GlobalActivity = {
+  const crowd: GlobalActivity = activityRead({
     ...transfer,
     txHash: `0x${'77'.repeat(32)}`,
     blockNumber: 21047699,
@@ -359,7 +362,7 @@ describe('a live feed keeps what the reader opened and where their focus is (B4 
       ...oracleParty(`crowd${c}`),
       ckbDelta: String((i + 1) * 100_000_000),
     })),
-  };
+  });
   /** A row newer than all of them, saying something else. */
   const fresh: GlobalActivity = {
     ...transfer,
@@ -578,10 +581,11 @@ describe('an older page that continues the last run (B4 fix round)', () => {
 describe('a folded run counts its parties and names none (Gate B)', () => {
   it('counts every party its rows name, once, and draws no party line', async () => {
     const user = userEvent.setup();
-    const crowded = (n: number, seeds: string[]): GlobalActivity => ({
-      ...oracle(n, 'q3q7ue', '0x00', n * 49),
-      participants: seeds.map((seed, i) => ({ ...oracleParty(seed), ckbDelta: String(i - 3) })),
-    });
+    const crowded = (n: number, seeds: string[]): GlobalActivity =>
+      activityRead({
+        ...oracle(n, 'q3q7ue', '0x00', n * 49),
+        participants: seeds.map((seed, i) => ({ ...oracleParty(seed), ckbDelta: String(i - 3) })),
+      });
     const rows = [
       crowded(1, ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6']),
       crowded(2, ['c0', 'c1', 'd2', 'd3', 'd4', 'd5', 'd6']),
@@ -841,11 +845,23 @@ describe('a called lock on a registered code hash by another hash type (the lock
 // with no reason, or with no field at all, is refused by name. Each case was checked by hand
 // against its mutation in components/activity/activity-runs.tsx `runSubject`.
 describe('runSubject: a row whose item types are not stated (the item-types ruling)', () => {
-  const unread = (n: number): GlobalActivity => ({
-    ...oracle(n, 'q3q7ue', '0x00', n * 49),
-    itemTypes: null,
-    itemTypesUnread: `token 0x${'5e'.repeat(32)}: no token row`,
-  });
+  // only an item's type can be unread (the third read's T SHOULD-1: the oracle's row moved no item,
+  // a row the route cannot send): its party moves the token the reason names
+  const unread = (n: number): GlobalActivity => {
+    const row = oracle(n, 'q3q7ue', '0x00', n * 49);
+    const token = `0x${'5e'.repeat(32)}`;
+    return activityRead({
+      ...row,
+      participants: [
+        {
+          ...row.participants[0],
+          itemDeltas: [{ kind: 'token', typeScriptHash: token, delta: '1' }],
+        },
+      ],
+      itemTypes: null,
+      itemTypesUnread: `token ${token}: no token row`,
+    });
+  };
 
   // delete the `return null` branch (`if (!pending && activity.itemTypes === null) {…}`): the two
   // fall through to `itemTypes: []`, one key, and fold into "all 2 transactions ↓": red
@@ -863,7 +879,8 @@ describe('runSubject: a row whose item types are not stated (the item-types ruli
 
   // delete the refusal of a null without a reason: it returns null and stands alone, silently: red
   it('refuses a committed row whose item types are null with no reason, by name', () => {
-    const row = { ...unread(1), itemTypesUnread: null };
+    // a row the route cannot send, on purpose: the page refuses it
+    const row = unsentRow({ ...unread(1), itemTypesUnread: null });
     expect(() => runSubject(row, 'Script call')).toThrow(
       `transaction ${row.txHash}: a committed row with no item types says no why`
     );

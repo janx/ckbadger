@@ -12,6 +12,7 @@ import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
 
 const HASH = `0x${'54'.repeat(32)}`;
 /** JoyID's code hash, the lock these parties' addresses spell (`ckb1qrgqep…`). */
@@ -64,8 +65,12 @@ const rgbpp = (delta: string): ItemDelta => ({
   symbol: 'RGB++',
   decimals: 8,
 });
-function activity(participants: ParticipantInfo[]): GlobalActivity {
-  return {
+function activity(
+  participants: ParticipantInfo[],
+  // the row's item types as its caller states them, as the route would (the third read's T SHOULD-1)
+  over: Pick<GlobalActivity, 'itemTypes'> = { itemTypes: [] }
+): GlobalActivity {
+  return activityRead({
     txHash: HASH,
     blockNumber: 20_835_685,
     txIndex: 1,
@@ -74,18 +79,22 @@ function activity(participants: ParticipantInfo[]): GlobalActivity {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
-    itemTypes: [],
+
     itemTypesUnread: null,
     participants,
-  };
+    ...over,
+  });
 }
 /** 0x5451be2b…: the suit from the market lock to ay02wn; 1,070 CKB to ct4hxv from both. */
 const sale = () =>
-  activity([
-    party('ct4hxv', '107000000000'),
-    party('ay02wn', '-63800008888', [suit(1)]),
-    party('sp7v9m', '-43200000000', [suit(-1)], null),
-  ]);
+  activity(
+    [
+      party('ct4hxv', '107000000000'),
+      party('ay02wn', '-63800008888', [suit(1)]),
+      party('sp7v9m', '-43200000000', [suit(-1)], null),
+    ],
+    { itemTypes: [ITEM_TYPE.spore] }
+  );
 
 function renderAt(width: number, a = sale(), onHover?: (h: WhatMovedHover | null) => void) {
   stubChartWidth(width);
@@ -192,11 +201,14 @@ describe('WhatMoved, the ribbon form', () => {
   });
 
   it('lets DAO compensation in first, in gold, and a token swap read as two opposite flows', () => {
-    const a = activity([
-      party('aaaaaa', '-3070091791503', [rgbpp('2544240236569')]),
-      // the receiver gets the giver's CKB plus the compensation, less the fee
-      party('bbbbbb', '3087622394970', [rgbpp('-2544240236569')]),
-    ]);
+    const a = activity(
+      [
+        party('aaaaaa', '-3070091791503', [rgbpp('2544240236569')]),
+        // the receiver gets the giver's CKB plus the compensation, less the fee
+        party('bbbbbb', '3087622394970', [rgbpp('-2544240236569')]),
+      ],
+      { itemTypes: [ITEM_TYPE.xudt] }
+    );
     stubChartWidth(876);
     render(<WhatMoved hash={HASH} activity={a} fee="30698" compensation={BigInt('17530634165')} />);
     const [token, ckb] = screen.getAllByRole('group');
@@ -224,7 +236,7 @@ describe('WhatMoved, the ribbon form', () => {
       String(givers.reduce((s, p) => s - Number(p.ckbDelta), 0) - 8888),
       [rgbpp(String(givers.reduce((s, p) => s + 100 - Number(p.itemDeltas[0].delta) - 100, 0)))]
     );
-    const a = activity([...givers, taker]);
+    const a = activity([...givers, taker], { itemTypes: [ITEM_TYPE.xudt] });
     renderAt(876, a);
     const [token] = screen.getAllByRole('group');
     const from = token.querySelector('[data-flow-side="from"]')!;
@@ -302,20 +314,22 @@ describe('WhatMoved, the list form', () => {
 // the end of that party says it, so the ribbon to it does not read as a payment.
 describe('WhatMoved, a Nervos DAO step', () => {
   const TAG_DAO_BIT = 8;
-  const deposit = (): GlobalActivity => ({
-    ...activity([
-      party('ylvfrs', '-12200000088888'),
-      { ...party('vwd5rt', '12200000000000'), tags: TAG_DAO_BIT },
-    ]),
-    protocolActions: [
-      {
-        protocol: 'dao',
-        protocolName: 'Nervos DAO',
-        action: 'deposit',
-        metadata: { capacity: '12200000000000' },
-      },
-    ],
-  });
+  const deposit = (): GlobalActivity =>
+    activityRead({
+      ...activity([
+        party('ylvfrs', '-12200000088888'),
+        { ...party('vwd5rt', '12200000000000'), tags: TAG_DAO_BIT },
+      ]),
+      itemTypes: [ITEM_TYPE.dao],
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '12200000000000' },
+        },
+      ],
+    });
 
   it('says the end of the party that holds the deposit is a Nervos DAO deposit', () => {
     for (const width of [1000, 358]) {
@@ -348,8 +362,9 @@ describe('WhatMoved, a Nervos DAO step', () => {
   // The step stands on a line of its own with its own amount, apart from what flowed to the miner.
   it('says a self-deposit’s own amount apart from the fee that flowed', () => {
     stubChartWidth(1000);
-    const selfDeposit: GlobalActivity = {
+    const selfDeposit: GlobalActivity = activityRead({
       ...activity([{ ...party('vwd5rt', '-1124'), tags: TAG_DAO_BIT }]),
+      itemTypes: [ITEM_TYPE.dao],
       protocolActions: [
         {
           protocol: 'dao',
@@ -358,7 +373,7 @@ describe('WhatMoved, a Nervos DAO step', () => {
           metadata: { capacity: '5000000000000' },
         },
       ],
-    };
+    });
     render(<WhatMoved hash={HASH} activity={selfDeposit} fee="1124" compensation={null} />);
     const frame = screen.getByTestId('tx-what-moved');
     const owner = frame.querySelector('[data-flow-side="from"] [data-flow-end="party"]')!;
