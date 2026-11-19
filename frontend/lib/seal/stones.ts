@@ -67,8 +67,12 @@ import { isAssetClass, windowOf } from '@/lib/seal/window';
 export type CellClass = Exclude<AssetClass, 'ckb'>;
 
 export type SealId =
-  /** `txs`: how many transactions the block holds. */
-  | { readonly kind: 'block'; readonly hash: string; readonly txs: number }
+  /**
+   * `txs`: how many transactions the block holds; `'not kept'` for a block the chain keeps no
+   * transactions for (an uncle: its header and proposals), stated, never left out. Such a stone
+   * draws no rods (the owner's ruling of 2026-11-19, lane D2b).
+   */
+  | { readonly kind: 'block'; readonly hash: string; readonly txs: number | 'not kept' }
   /** `consumed` / `created`: its cells (a cellbase consumes 0); null where it is not known. */
   | {
       readonly kind: 'tx';
@@ -218,6 +222,7 @@ function assertId(id: SealId, form: SealForm): void {
   switch (id.kind) {
     case 'block':
       assertHash(of, 'the block hash', id.hash);
+      if (id.txs === 'not kept') return;
       assertCount(of, 'the transaction count', id.txs);
       if (form === 'page') assertPageDigits(of, 'the transaction count', id.txs, PAGE_DIGITS);
       return;
@@ -456,6 +461,8 @@ function blockStone(id: Extract<SealId, { kind: 'block' }>, st: Style): Drawn {
       : `<rect width="${f1(side)}" height="${f1(side)}" rx="0.6" fill="${col}"/>`;
     body += pen.glyph(g, (side - s) / 2, 0.5, s, fc, 1.15, p * 0.9);
     body += `<path d="M0.9 6.15L${f1(side - 0.9)} 6.15" stroke="${fc}" stroke-width="0.32"/>`;
+    // a count not kept draws no rods: the zone under the line stays the stone's ground
+    if (id.txs === 'not kept') return { W: side, H: side, body, chosen };
     const r = rodCount(
       id.txs,
       { x: 0.9, y: 6.55, w: side - 1.8, h: 1.75 },
@@ -490,24 +497,28 @@ function blockStone(id: Extract<SealId, { kind: 'block' }>, st: Style): Drawn {
   const gx = right ? FW - gw : 0;
   const gy = top ? 0 : FH - GB;
   let field = pen.glyph(g, ox + (gx + 0.1) * p, oy + gy * p, GB * p, col, 1.3, p * 1.25);
-  /* beside the glyph, in its own column: how many transactions, digit under digit */
+  /* beside the glyph, in its own column: how many transactions, digit under digit; a count not
+     kept draws none, the column left as the stone's ground */
   const cz = { x: gx, y: top ? GB + gap : 0, w: gw, h: FH - GB - gap };
-  const nd = decimalDigits(id.txs).length;
-  const r = rodCount(
-    id.txs,
-    { x: ox + cz.x * p, y: oy + (cz.y + 0.35) * p, w: cz.w * p, h: (cz.h - 0.7) * p },
-    { pitch: 0.66 * p, maxDigits: PAGE_DIGITS, digitH: [4.4, 2.9, 1.95, 1.4][nd - 1] * p }
-  );
-  if (r.full) throw new Error(`seal: ${named(id)}: ${id.txs} transactions do not fit four digits`);
-  field += pen.draw(
-    r.strokes,
-    ROD,
-    (xx) => xx,
-    (yy) => yy,
-    1.05,
-    col,
-    p
-  );
+  if (id.txs !== 'not kept') {
+    const nd = decimalDigits(id.txs).length;
+    const r = rodCount(
+      id.txs,
+      { x: ox + cz.x * p, y: oy + (cz.y + 0.35) * p, w: cz.w * p, h: (cz.h - 0.7) * p },
+      { pitch: 0.66 * p, maxDigits: PAGE_DIGITS, digitH: [4.4, 2.9, 1.95, 1.4][nd - 1] * p }
+    );
+    if (r.full)
+      throw new Error(`seal: ${named(id)}: ${id.txs} transactions do not fit four digits`);
+    field += pen.draw(
+      r.strokes,
+      ROD,
+      (xx) => xx,
+      (yy) => yy,
+      1.05,
+      col,
+      p
+    );
+  }
   const nb = 2 + valueOf(rd.read(1));
   const heightBits: number[] = [];
   for (let i = 0; i < nb; i++) heightBits.push(valueOf(rd.read(1)));
@@ -948,7 +959,9 @@ const counted = (n: number | null, what: string) =>
 export function sealLabel(id: SealId): string {
   switch (id.kind) {
     case 'block':
-      return `Block seal ${id.hash.slice(0, 10)}, ${id.txs} transaction${id.txs === 1 ? '' : 's'}`;
+      return id.txs === 'not kept'
+        ? `Block seal ${id.hash.slice(0, 10)}, the chain keeps no transaction count for an uncle`
+        : `Block seal ${id.hash.slice(0, 10)}, ${id.txs} transaction${id.txs === 1 ? '' : 's'}`;
     case 'tx':
       return `Transaction seal ${id.hash.slice(0, 10)}, ${counted(id.consumed, 'consumed')}, ${counted(id.created, 'created')}`;
     case 'cell':
