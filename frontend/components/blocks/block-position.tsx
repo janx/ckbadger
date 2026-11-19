@@ -253,19 +253,21 @@ export function BlockPosition({
   }, [currentX, block.number]);
   return (
     <div className="min-w-0 space-y-3">
-      <p data-testid="block-position-sentence" className="text-text-dim text-small max-w-measure">
+      {/* statements in the reading ink: the position, and a read that failed; the line being read
+          is quiet, a transient line (R3; lane P1 follow-up) */}
+      <p data-testid="block-position-sentence" className="text-text text-small max-w-measure">
         <SentenceNodes parts={positionParts(block, links)} />
         {(page > 1 || hasMore) && `. Incoming relationships cover transaction page ${page} only.`}
       </p>
       {transactionsError ? (
-        <p role="alert" className="text-text-dim text-small max-w-measure">
+        <p role="alert" className="text-text text-small max-w-measure">
           Proposal origins unavailable: {transactionsError}
         </p>
       ) : transactions === undefined ? (
         <p className="text-text-dim text-small">Reading transaction proposal origins…</p>
       ) : null}
       {proposalsError && (
-        <p role="alert" className="text-text-dim text-small max-w-measure">
+        <p role="alert" className="text-text text-small max-w-measure">
           Outgoing commitments unavailable: {proposalsError}
         </p>
       )}
@@ -316,7 +318,7 @@ export function BlockPosition({
               </Link>
             </p>
             {arc.uncles.size > 0 && (
-              <p className="text-text-dim max-w-measure">
+              <p className="text-text max-w-measure">
                 Includes proposals carried by {unitNode(formatCount(arc.uncles.size, 'uncle'))}.
               </p>
             )}
@@ -340,7 +342,7 @@ export function BlockPosition({
                 ]}
               />
             </Link>
-            <p className="text-text-dim max-w-measure">
+            <p className="text-text max-w-measure">
               Included by{' '}
               <Link look="inline" href={`/blocks/${block.hash}`}>
                 {formatBlockNumber(block.number)}

@@ -70,8 +70,9 @@ export function RewardBreakdown({
 }) {
   const context = `Block ${block.number} reward`;
   if (!block.rewardBreakdown || block.miningReward === null) {
+    // statements: genesis has no reward, or which block's cellbase pays it (R3; lane P1 follow-up)
     return (
-      <p className="text-text-dim text-small max-w-measure">
+      <p className="text-text text-small max-w-measure">
         {block.number === 0 ? (
           'Genesis has no mining reward.'
         ) : (
@@ -196,7 +197,7 @@ export function RewardBreakdown({
 export function RewardPaidBy({ block }: { block: RewardBlock }) {
   if (block.rewardPaidAtBlock === null) return null;
   return (
-    <span className="text-text-dim text-small">
+    <span className="text-text text-small">
       paid by the cellbase of{' '}
       <Link look="inline" href={`/blocks/${block.rewardPaidAtBlock}`}>
         {formatBlockNumber(block.rewardPaidAtBlock)}

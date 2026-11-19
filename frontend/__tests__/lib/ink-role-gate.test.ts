@@ -77,14 +77,17 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // link 11 → 10 (lane P1): the cellbase row's "reward for #N, to …" is its statement, the
     // reading ink; link 10 → 7 (lane P1): the activity rows' transaction link and the hardfork
     // link state their looks, and the uncle row's links read in the line's ink
-    sites: { link: 7, prose: 7 },
+    // link 7 → 0, prose 7 → 4 (lane P1 follow-up): the genesis epoch's note, a proposal's
+    // commitment (or that it has none in its window), the proposals' failure and an uncle's
+    // sibling line are statements, in the reading ink, their links with them
+    sites: { prose: 4 },
     reason:
-      'block heights, hashes and the hardfork link in quiet facts and proposal rows; empty and loading lines; the proposal notes',
+      'empty 3: no uncles, no proposals, no activities in this block; loading 1: the proposals',
   },
   'app/blocks/[id]/uncles/[index]/client-page.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: 'the empty proposals sentence',
+    reason: "empty 1: 'This uncle proposed nothing.'",
   },
   'app/blocks/page.tsx': {
     family: 'chain',
@@ -111,7 +114,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'chain',
     // link 1 → 0 (lane P1): the script link states its look, the line's reading ink
     sites: { td: 1 },
-    reason: "a cell's cycles state in a table cell",
+    reason: "empty 1: a transaction's cycles cell with no figure ('Not computed', 'Failed')",
   },
   'components/address/address-holdings.tsx': {
     family: 'chain',
@@ -126,26 +129,23 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/blocks/block-position.tsx': {
     family: 'chain',
-    sites: { link: 1, prose: 7 },
+    // link 1 → 0, prose 7 → 2 (lane P1 follow-up): the position sentence, the two failures, a
+    // proposal arc's uncle line and an uncle's "Included by #N" are statements, in the reading ink
+    sites: { prose: 2 },
     reason:
-      'the position sentence with its block links, the proposal-origin lines and the uncle notes in the quiet ink',
+      "loading 1: the proposal origins being read; label 1: an uncle row's 'Uncle parent → included uncle'",
   },
   'components/blocks/block-transactions-table.tsx': {
     family: 'chain',
-    sites: { td: 2 },
-    reason: "a transaction's index and its cycles state quiet in table cells",
+    // td 2 → 1 (lane P1 follow-up): a transaction's index in its block is a value, the reading ink
+    sites: { td: 1 },
+    reason: "empty 1: a transaction's cycles cell with no figure ('Not yet run', 'Replay failed')",
   },
-  'components/blocks/block-visual.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason:
-      'the size-and-cycles sentence under the blocks figure (a note under a figure, or a reading: P1 decides)',
-  },
-  'components/blocks/reward-breakdown.tsx': {
-    family: 'chain',
-    sites: { link: 3, prose: 1 },
-    reason: 'the reward sentence and its finality, payment and cellbase links in the quiet ink',
-  },
+  // 'components/blocks/block-visual.tsx' left the list (lane P1 follow-up): the size-and-cycles
+  // line under the blocks figure is a reading of it, its figures values, in the reading ink
+  // 'components/blocks/reward-breakdown.tsx' left the list (lane P1 follow-up): the reward's
+  // sentences (genesis has none; paid by a block's cellbase, not indexed yet) and "paid by the
+  // cellbase of #N · 0x…" are statements, in the reading ink, their links with them
   'components/cell-graph-renderer.tsx': {
     family: 'chain',
     sites: { prose: 1 },

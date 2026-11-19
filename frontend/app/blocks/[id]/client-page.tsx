@@ -430,10 +430,7 @@ export default function BlockDetailPage() {
                   </dd>
                   {genesisEpoch && (
                     // What the header says, and why it reads 0 / 0: no length is invented for it.
-                    <dd
-                      data-testid="block-epoch-genesis"
-                      className="text-text-dim max-w-measure mt-1"
-                    >
+                    <dd data-testid="block-epoch-genesis" className="text-text max-w-measure mt-1">
                       the genesis header’s epoch field is {block.rawHeader.epoch}, so it states no
                       epoch length;{' '}
                       <Link look="inline" href="/blocks/1">
@@ -583,7 +580,7 @@ export default function BlockDetailPage() {
                     <p
                       role="alert"
                       data-testid="block-proposals-error"
-                      className="text-text-dim text-small max-w-measure"
+                      className="text-text text-small max-w-measure"
                     >
                       Failed to load proposals: {proposalsError.message}
                     </p>
@@ -614,8 +611,10 @@ export default function BlockDetailPage() {
                               </span>
                             ))}
                         </p>
+                        {/* a proposal's commitment, or that it has none in its window: a
+                            statement, the reading ink (R3; lane P1 follow-up) */}
                         {proposal.committedTxHash ? (
-                          <p className="text-text-dim max-w-measure">
+                          <p className="text-text max-w-measure">
                             →{' '}
                             <Link look="inline" href={`/tx/${proposal.committedTxHash}`}>
                               <Hash
@@ -635,9 +634,7 @@ export default function BlockDetailPage() {
                             </Link>
                           </p>
                         ) : (
-                          <p className="text-text-dim">
-                            No indexed commitment in its proposal window.
-                          </p>
+                          <p className="text-text">No indexed commitment in its proposal window.</p>
                         )}
                       </article>
                     ))
@@ -996,35 +993,39 @@ function UncleRow({
             <Hash hash={uncle.hash} size="row" className="text-small" />
           </Link>
         </span>
-        <span className="text-text-dim">
-          {error ? (
-            `sibling facts unavailable: ${error.message}`
-          ) : !detail ? (
-            'reading its sibling…'
-          ) : detail.sameParentAs === null ? (
-            <>
-              the canonical{' '}
-              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-                {formatBlockNumber(detail.canonicalAtHeight.number)}
-              </Link>{' '}
-              has another parent
-            </>
-          ) : (
-            <>
-              sibling of{' '}
-              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-                {formatBlockNumber(detail.sameParentAs)}
-              </Link>{' '}
-              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-                <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
-              </Link>
-              , same parent{' '}
-              <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
-                {formatBlockNumber(uncle.number - 1)}
-              </Link>
-            </>
-          )}
-        </span>
+        {/* its sibling line: a statement in the reading ink, or its failure; the line being read
+            is quiet, a transient line (R3; lane P1 follow-up) */}
+        {error ? (
+          <span className="text-text">sibling facts unavailable: {error.message}</span>
+        ) : !detail ? (
+          <span className="text-text-dim">reading its sibling…</span>
+        ) : (
+          <span className="text-text">
+            {detail.sameParentAs === null ? (
+              <>
+                the canonical{' '}
+                <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                  {formatBlockNumber(detail.canonicalAtHeight.number)}
+                </Link>{' '}
+                has another parent
+              </>
+            ) : (
+              <>
+                sibling of{' '}
+                <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                  {formatBlockNumber(detail.sameParentAs)}
+                </Link>{' '}
+                <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                  <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
+                </Link>
+                , same parent{' '}
+                <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
+                  {formatBlockNumber(uncle.number - 1)}
+                </Link>
+              </>
+            )}
+          </span>
+        )}
         <span className="text-text-dim">
           {unitNode(formatUtc8Time(uncle.timestamp))}
           {detail?.msAfterSibling != null &&

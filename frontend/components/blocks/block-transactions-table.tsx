@@ -152,7 +152,8 @@ export function BlockTransactionsTable({
       // A transaction's index in its block, four digits as written ("9999"), and the gap. It was
       // 32, which held two digits.
       minWidth: columnPx(cell(WIDEST_COUNT_DIGITS) + CELL_GAP_PX),
-      render: (tx) => <span className="text-text-dim">{tx.index}</span>,
+      // a value, the reading ink (R3; lane P1 follow-up)
+      render: (tx) => <span className="text-text">{tx.index}</span>,
     },
     {
       key: 'transaction',
