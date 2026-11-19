@@ -3090,7 +3090,11 @@ export interface ScriptCodeClassTotalApi {
 
 export interface ScriptsListApi extends CursorPaginatedResponse<KnownScript> {
   classSummary?: ScriptCodeClassTotalApi[];
-  roleCounts?: { all: number; locks: number; types: number };
+  /**
+   * The families by role, the route's: `locks` and `types` each count a family used as both
+   * (`both`); `neither` counts the families with no role (the P3 follow-up, SHOULD 3).
+   */
+  roleCounts?: { all: number; locks: number; types: number; both: number; neither: number };
 }
 
 export interface ScriptCustodyApi {

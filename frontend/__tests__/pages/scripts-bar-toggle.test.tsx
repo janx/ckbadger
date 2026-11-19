@@ -57,7 +57,7 @@ const response = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
-  roleCounts: { all: 3, locks: 3, types: 0 },
+  roleCounts: { all: 3, locks: 3, types: 0, both: 0, neither: 0 },
 };
 
 function renderAt(url: string) {

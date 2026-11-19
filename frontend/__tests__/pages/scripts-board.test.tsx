@@ -110,7 +110,7 @@ const response = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
-  roleCounts: { all: 3, locks: 3, types: 0 },
+  roleCounts: { all: 3, locks: 3, types: 0, both: 0, neither: 0 },
 };
 
 describe('Scripts list against the Scripts board', () => {
@@ -311,7 +311,8 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
   const withSummary = {
     ...response,
     classSummary,
-    roleCounts: { all: 70, locks: 41, types: 34 },
+    // the route's counts: 41 + 34 - 5 both + 0 neither = 70 (the P3 follow-up, SHOULD 3)
+    roleCounts: { all: 70, locks: 41, types: 34, both: 5, neither: 0 },
   };
   const LEAD =
     'Every cell runs one lock script, which decides who can spend it, and may run one type script, which decides what the cell is and how it may change.';
@@ -368,13 +369,30 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
   // of 12 px", so rows stand in the first screen): no display figure; the counts the API states,
   // in one sentence in the reading ink, and no CKB total, which summed the classes in the page
   // (renamed: "leads with the CKB under these scripts as the one figure …")
-  it('says what all the scripts are in one sentence: the API’s counts, no total summed in the page', async () => {
+  it('says the scripts with neither role where the route counts some', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue({
+      ...withSummary,
+      roleCounts: { all: 72, locks: 41, types: 34, both: 5, neither: 2 },
+    });
     render(<ScriptsPage />);
     const sentence = await within(hero()).findByText(
       (_, el) => el?.getAttribute('data-role') === 'summary'
     );
     expect(sentence).toHaveTextContent(
-      /^70\sscripts: 41\slocks and 34\stypes\. Who can change the locks’ code, by the CKB under them:$/
+      /^72\sscripts; 41 used as locks, 34 as types, 5 as both, 2 as neither\./
+    );
+  });
+
+  it('says what all the scripts are in one sentence: the API’s counts, no total summed in the page', async () => {
+    render(<ScriptsPage />);
+    const sentence = await within(hero()).findByText(
+      (_, el) => el?.getAttribute('data-role') === 'summary'
+    );
+    // re-pinned on purpose (the page-phase review's SHOULD 3): "70 scripts: 41 locks and 34 types"
+    // read as a partition (75 parts of 70); the sentence says what each count is, the overlap the
+    // route's
+    expect(sentence).toHaveTextContent(
+      /^70\sscripts; 41 used as locks, 34 as types, 5 as both\. Who can change the locks’ code, by the CKB under them:$/
     );
     expect(sentence).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(figure()).toBeNull();
@@ -484,7 +502,7 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // The hero's request never carries the role: the tab is the table's.
     for (const [params] of vi.mocked(api.getScripts).mock.calls)
       if (params?.limit === 1) expect(params.role).toBeUndefined();
-    expect(sentence).toHaveTextContent(/^70\sscripts: 41\slocks and 34\stypes\./);
+    expect(sentence).toHaveTextContent(/^70\sscripts; 41 used as locks, 34 as types, 5 as both\./);
   });
 
   it('writes no coloured text in tier 1: the figure is bright and the bar keeps its colours (R11)', async () => {

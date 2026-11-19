@@ -733,6 +733,10 @@ network store too), no re-sync:
   pool, pending and proposed (not `awaitingIndex`).
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
+- `GET /scripts` — `roleCounts: { all, locks, types, both, neither }`: the
+  script families by role; `locks` and `types` each count a family used as both
+  (`both`), `neither` the families with no role, so `locks + types - both +
+neither = all` (checked in the route; the list's first sentence says each).
 - `GET /dao/statistics` — `liveCellsCount`: the live DAO cells, deposits and
   withdrawal requests; `secondaryIssuance` (shannons): the miners' share, the
   depositors' compensation and the burnt share, which make it.
