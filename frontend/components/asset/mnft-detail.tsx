@@ -497,12 +497,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               )
             }
           />
-          <LockFootnote
-            versions={history.data}
-            noun="token"
-            // a statement of the token's lock: the reading ink (R3)
-            className="text-text text-small max-w-measure"
-          />
+          <LockFootnote versions={history.data} noun="token" small />
         </div>
       )}
       <section aria-label={`In ${className}`} className="space-y-3">

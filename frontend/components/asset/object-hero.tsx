@@ -296,16 +296,22 @@ export function cellLifeSentence(
 export function LockFootnote({
   versions,
   noun,
-  className,
+  small = false,
 }: {
   versions: readonly ItemCellVersion[];
   noun: 'object' | 'token';
-  className?: string;
+  /** At the small step (an m-NFT's history), else at its prose's size. */
+  small?: boolean;
 }) {
   const read = readPart(() => lockFootnote(versions, noun));
   if (read.error !== undefined)
     return <PartReadError what="the lock footnote" where="its cell versions" error={read.error} />;
-  return read.value === null ? null : <p className={className}>{read.value}</p>;
+  // a statement of the lock (the reading ink, R3), running text inside the measure (R4)
+  return read.value === null ? null : (
+    <p className={small ? 'text-text text-small max-w-measure' : 'text-text max-w-measure'}>
+      {read.value}
+    </p>
+  );
 }
 
 export function lockFootnote(
