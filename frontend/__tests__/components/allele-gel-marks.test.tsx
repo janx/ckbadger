@@ -278,3 +278,35 @@ describe('a band says its share, a lane its variants', () => {
     expect(words).not.toContain('44.44%');
   });
 });
+
+// Lane P2's fifth round (NOTE 6): the lanes' counts took two forms in one gel, "3 variants" where
+// the words fit the lane and a bare "12" where they did not ("3 variants · 12"). One form a gel:
+// the noun where every lane's count holds it, else every count bare (the legend reads them). Two
+// lanes in a 202 px gel are 90 px each, 76 px between the insets: "3 variants" (10 glyphs, 72 px)
+// fits it and "12 variants" (11 glyphs, 79.2 px) does not.
+describe('one form of the lanes’ counts in one gel', () => {
+  const mixed = [
+    lane('A', [
+      ['x', 3],
+      ['y', 2],
+      ['z', 1],
+    ]),
+    lane(
+      'B',
+      Array.from({ length: 12 }, (_, k): [string, number] => [`v${k}`, 12 - k])
+    ),
+  ];
+  it('writes every count bare where one lane cannot hold the noun', () => {
+    stubChartWidth(202);
+    const { container } = render(<AlleleGel lanes={mixed} total={78} subject="Gel" />);
+    const counts = [...container.querySelectorAll('[data-variants]')].map((t) => t.textContent);
+    expect(counts).toEqual(['3', '12']);
+  });
+
+  it('writes every count with its noun where every lane holds it', () => {
+    stubChartWidth(1248);
+    const { container } = render(<AlleleGel lanes={mixed} total={78} subject="Gel" />);
+    const counts = [...container.querySelectorAll('[data-variants]')].map((t) => t.textContent);
+    expect(counts).toEqual(['3\u00a0variants', '12\u00a0variants']);
+  });
+});

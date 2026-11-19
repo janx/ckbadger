@@ -275,3 +275,33 @@ it('never folds a document edited to the same length', async () => {
   expect(within(list).getAllByRole('article')).toHaveLength(4);
   expect(list.querySelector('[data-versions-fold]')).toBeNull();
 });
+
+// Lane P2's fifth round (NOTE 8): an activity feed opened at a URL cursor on its oldest page (no
+// more after it) drew no pager, so it had no way back to the newest page; "← newer" stands there,
+// taking the feed to its newest page, and "older →" is an end that cannot be taken.
+it('keeps the way to the newest page on a feed opened at a URL cursor on its oldest page', async () => {
+  query = 'activity_cursor=10:0';
+  vi.mocked(api.getItemActivityFeed).mockResolvedValue(
+    pagedRead({
+      ...itemActivityFeedProducer,
+      total: 100,
+      hasMore: false,
+      nextCursor: null,
+    })
+  );
+  render(<Page identityId={evidence.itemId} />);
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
+      limit: 20,
+      cursor: '10:0',
+    })
+  );
+  fireEvent.click(await screen.findByRole('button', { name: '← newer' }));
+  expect(screen.queryByRole('button', { name: 'older →' })).toBeNull();
+  await waitFor(() =>
+    expect(api.getItemActivityFeed).toHaveBeenCalledWith('did', evidence.itemId, {
+      limit: 20,
+      cursor: undefined,
+    })
+  );
+});

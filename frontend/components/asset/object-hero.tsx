@@ -2,7 +2,7 @@
 // F2 group `objects` (round 2): the pieces of the Object / m-NFT board heroes — one "Live" style
 // for both pages (OB-15), the composition badge with its one plain sentence (OB-6, OB-M4), the
 // readable traits linked to their genes (OB-5/6), and the life summary sentence (OB-6, OB-M5).
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { columnPx, fontPx, foreignTextPx } from '@/lib/type-metrics';
 import type { ItemCellVersion } from '@/lib/api';
 import { cellLockSentence, cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
 import { PartReadError, readPart } from '@/components/read-failure';
@@ -63,6 +63,9 @@ export function CompositionLine({
   );
 }
 
+/** The trait label column's most: half of a 320 px window's 288 px row, less the 12 px gap. */
+const TRAIT_LABEL_CAP = (288 - 12) / 2;
+
 /**
  * The readable traits (OB-6): `prev.*` render hints and media values stay on the gel (OB-16).
  * Each row shares the hover state with its gene and its allele-gel lane (OB-5).
@@ -82,9 +85,14 @@ export function ObjectTraits({
   if (!shown.length) return null;
   // Lane P2's third round (item 4): a value follows its label at one gap (12 px), left-aligned,
   // the label column as wide as the grid's longest label at the line's 14 px, with the swatch's
-  // 8 px and its 8 px margin (it stood at the row's right edge, 600 px from its label at 1280)
-  const labelColumn = columnPx(
-    textPx(Math.max(...shown.map((t) => t.name.length)), fontPx('body')) + 16
+  // 8 px and its 8 px margin (it stood at the row's right edge, 600 px from its label at 1280).
+  // Lane P2's fifth round (NOTE 5): a trait's name is the creator's text, measured by its bound
+  // (`foreignTextPx`: a CJK grapheme 1.25 em, not the Latin 0.6), and the column is capped at half
+  // of the narrowest row a window gives the traits (288 px at 320, less the 12 px gap: 138), where
+  // a longer name breaks and its value keeps the rest
+  const labelColumn = Math.min(
+    TRAIT_LABEL_CAP,
+    columnPx(Math.max(...shown.map((t) => foreignTextPx(t.name, fontPx('body')))) + 16)
   );
   return (
     <div className="space-y-2">
@@ -109,7 +117,7 @@ export function ObjectTraits({
               )}
               style={{ gridTemplateColumns: `${labelColumn}px minmax(0, 1fr)` }}
             >
-              <dt className="text-text-dim flex items-center">
+              <dt className="text-text-dim flex min-w-0 items-center [overflow-wrap:anywhere]">
                 <span
                   aria-hidden
                   className="mr-2 inline-block h-2 w-2 shrink-0"

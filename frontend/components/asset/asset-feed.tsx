@@ -799,17 +799,19 @@ function FullAssetFeed({
                 identity={identity}
               />
             )}
-            {at && (
-              // the controls board's pager: a list in time, newest first
+            {(at || newer) && (
+              // the controls board's pager: a list in time, newest first. A feed opened at a URL
+              // cursor on its oldest page is one page of the walk, but it keeps its way to the
+              // newest end (lane P2's fifth round, NOTE 8: no pager was drawn, and no way newer)
               <div className="mt-3">
                 <Pager
                   mode="time"
                   label={tab}
                   order="newest first"
-                  page={fromNewest ? at.page : undefined}
-                  pages={fromNewest ? at.pages : undefined}
+                  page={fromNewest && at ? at.page : undefined}
+                  pages={fromNewest && at ? at.pages : undefined}
                   onNewer={newer}
-                  onOlder={at.onOlder}
+                  onOlder={at?.onOlder}
                 />
               </div>
             )}

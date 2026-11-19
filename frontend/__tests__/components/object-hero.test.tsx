@@ -370,6 +370,41 @@ it('sets each trait’s value at one gap after its label, the label column the l
   }
 });
 
+// Lane P2's fifth round (NOTE 5): a trait's name is the collection creator's text, measured by the
+// bound for it (a Latin glyph 0.6 em, any other grapheme 1.25 em), not the Latin advance, and the
+// label column is capped at half of the narrowest row a window gives the traits, 288 px at 320
+// less the 12 px gap, 138 px: a longer name breaks within its column and its value keeps the rest.
+describe('the trait label column holds a creator’s name', () => {
+  const traitsOf = (names: string[]) => names.map((name) => ({ name, value: 'Red' }));
+  const column = () =>
+    document.querySelector<HTMLElement>('[data-trait]')!.style.gridTemplateColumns;
+  it('measures a CJK name at its bound: 4 × 1.25 × 14 = 70 px and the swatch’s 16', () => {
+    render(
+      <ObjectTraits
+        traits={traitsOf(['背景颜色', 'Color'])}
+        colors={new Map()}
+        active={null}
+        onActive={() => {}}
+      />
+    );
+    expect(column()).toBe('86px minmax(0, 1fr)');
+  });
+
+  it('caps a long name’s column at 138 px, where its words break', () => {
+    render(
+      <ObjectTraits
+        traits={traitsOf(['The background colour of this particular ape', 'Color'])}
+        colors={new Map()}
+        active={null}
+        onActive={() => {}}
+      />
+    );
+    expect(column()).toBe('138px minmax(0, 1fr)');
+    const label = document.querySelector('[data-trait] dt')!;
+    expect(label).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
+  });
+});
+
 // Lane P2's third round (item 15; review-p-logic-pages NOTE-2): "throughout" only where every
 // version's lock is the first's (code hash, hash type and args); it compared the first and the
 // last, so a cell that went A → B → A read "Lock: … throughout." Else the footnote says where the
