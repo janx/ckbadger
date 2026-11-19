@@ -74,6 +74,8 @@ function activity(participants: ParticipantInfo[]): GlobalActivity {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants,
   };
 }

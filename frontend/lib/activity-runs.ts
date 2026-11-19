@@ -15,9 +15,17 @@
  * 2. **what was done, as the API names it**: the protocol actions, each by its protocol and its
  *    action (`dao:deposit`), as a multiset (each with its count); an action's own figures, such as
  *    a deposit's capacity, are not compared;
- * 3. **the script code called**: the type scripts and the lock scripts called, each by its code
- *    (its code hash and its hash type: a script is the pair), as a multiset. Not the args: the
- *    same code called with other args is the same call (the three oracles' 0x00, 0x01, 0x02);
+ * 3. **the script code**: each by its code (its code hash and its hash type: a script is the
+ *    pair), as a multiset. Not the args: the same code with other args is the same (the three
+ *    oracles' 0x00, 0x01, 0x02; two tokens of one standard). Three lists, as the API states them:
+ *    - `itemTypes`, the type script of every token, object and identity the row moved and the
+ *      Nervos DAO's, as the indexer classified each item (the page-phase review's MUST-1: an
+ *      item's type is never a call, so without them an sUDT and an xUDT transfer were one run);
+ *    - `typeCalls`, the type scripts the indexer does not recognise;
+ *    - `lockCalls`, the non-standard locks ATTACHED to the row's outputs. An output's lock does
+ *      not run: these are not the locks the transaction ran. The locks that ran, its inputs', are
+ *      not stated per activity yet; they wait for the indexer's per-participant input flag (a
+ *      re-sync), which also turns a run's "participants" into "senders" (`FoldedActivityRow`);
  * 4. **the state**: both committed. A row still in the node's pool never folds (it is its own run):
  *    its status can change before the next read.
  *
@@ -51,6 +59,8 @@ export interface RunSubject {
   protocolActions: readonly { protocol: string; action: string }[];
   typeCalls: readonly { typeCodeHash: string; typeHashType: string }[];
   lockCalls: readonly { lockCodeHash: string; lockHashType: string }[];
+  /** Its items' and its DAO step's type scripts, each code once (the API's `itemTypes`). */
+  itemTypes: readonly { typeCodeHash: string; typeHashType: string }[];
   /** The row's parties (the feed's: a feed may know more of them than the row draws), counted. */
   parties: readonly RunParty[];
 }
@@ -71,6 +81,7 @@ export function runKey(s: RunSubject): string {
     'committed',
     s.title,
     multiset(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
+    multiset(s.itemTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     multiset(s.typeCalls.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
     multiset(s.lockCalls.map((c) => `${c.lockCodeHash}|${c.lockHashType}`)),
   ]);

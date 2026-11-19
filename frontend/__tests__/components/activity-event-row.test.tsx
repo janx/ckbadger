@@ -22,6 +22,8 @@ function makeGlobal(overrides: Partial<GlobalActivity> = {}): GlobalActivity {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants: [],
     ...overrides,
   };

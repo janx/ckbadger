@@ -8,7 +8,6 @@ import {
   getIdentityItemDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { cn } from '@/lib/utils';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { classifyActivity, type ActivityBody } from '@/lib/activity-classify';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';

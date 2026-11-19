@@ -51,6 +51,8 @@ function row(
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants,
     ...over,
   };
@@ -196,7 +198,10 @@ describe('option A: the headline line', () => {
       (e) => e.textContent
     );
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
-    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
+    // re-pinned on purpose (the tests review, MUST-1's lines: a lock's words are the one
+    // decision's, lockNoun): each name says it is a lock, so the run's "lock " label went (it read
+    // "lock Nervape Shadow Lock"; a lock the registry does not name reads "lock 0x…")
+    expect(details).toEqual([' · CKBFS', ' · Nervape Shadow Lock']);
     expect(
       within(head(container)).getByRole('link', { name: 'Nervape Shadow Lock' })
     ).toHaveAttribute('title', `Nervape Shadow Lock(0x0131da${'00'.repeat(28)}5d74)`);
@@ -223,7 +228,8 @@ describe('option A: the headline line', () => {
     );
     const detail = head(container).querySelector('[data-role="detail"]') as HTMLElement;
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
-    expect(detail).toHaveTextContent(/^· lock \.bit Lock ×2$/);
+    // re-pinned on purpose: the lock decision's words, no "lock " label (it read "lock .bit Lock")
+    expect(detail).toHaveTextContent(/^· \.bit Lock ×2$/);
     expect(within(detail).getAllByRole('link')).toHaveLength(1);
     expect(within(detail).getByRole('link', { name: '.bit Lock' })).toHaveAttribute(
       'title',
@@ -379,8 +385,11 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
   const listRows = (c: HTMLElement) => [
     ...c.querySelectorAll<HTMLElement>('[data-role="protocol-line"]'),
   ];
+  // re-pinned on purpose (the tests review's SHOULD 6): the list's fold is the one fold control,
+  // FoldToggle ("all 51 deposits ↓", "fewer ↑", aria-controls naming the list); it was a button
+  // written by hand here ("51 deposits ↓")
   const toggle = (c: HTMLElement) =>
-    c.querySelector('[data-role="protocol-list-toggle"]') as HTMLElement | null;
+    c.querySelector('[data-role="protocol-list-toggle"] [data-fold-toggle]') as HTMLElement | null;
 
   it('heads 51 deposits as the action once, its count and exact total; nothing of the list inline', () => {
     const { container } = render(<ActivityRow activity={batch} />);
@@ -399,7 +408,11 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     const { container } = render(<ActivityRow activity={batch} />);
     expect(listRows(container)).toHaveLength(0);
     const control = toggle(container)!;
-    expect(control).toHaveTextContent('51 deposits ↓');
+    expect(control).toHaveTextContent('all 51 deposits ↓');
+    expect(control).toHaveAttribute(
+      'aria-controls',
+      container.querySelector('[data-role="protocol-list-lines"]')!.id
+    );
     expect(control).toHaveAttribute('aria-expanded', 'false');
     // The list sits under the head, with the participants, never inside the head line.
     expect(head(container).contains(control)).toBe(false);
@@ -427,7 +440,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     for (const a of amounts) expect(a).toHaveClass('text-right', 'tabular-nums', 'inline-block');
     fireEvent.click(toggle(container)!);
     expect(listRows(container)).toHaveLength(0);
-    expect(toggle(container)).toHaveTextContent('51 deposits ↓');
+    expect(toggle(container)).toHaveTextContent('all 51 deposits ↓');
   });
 
   it('names each action on its line when the run is mixed, and heads the count without a total', () => {
@@ -531,7 +544,7 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     expect(headMain(container)).toHaveTextContent(
       /^DAO Deposit · 2 deposits · 3,000\.00000000 CKB$/
     );
-    expect(toggle(container)).toHaveTextContent('2 deposits ↓');
+    expect(toggle(container)).toHaveTextContent('all 2 deposits ↓');
     vi.restoreAllMocks();
   });
 

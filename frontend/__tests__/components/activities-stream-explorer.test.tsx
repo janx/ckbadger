@@ -67,6 +67,8 @@ function makeActivity(
     isCellbase: overrides.isCellbase ?? false,
     typeCalls: overrides.typeCalls ?? [],
     lockCalls: overrides.lockCalls ?? [],
+    itemTypes: [],
+    itemTypesUnread: null,
     protocolActions: overrides.protocolActions ?? [],
     participants: overrides.participants,
   };

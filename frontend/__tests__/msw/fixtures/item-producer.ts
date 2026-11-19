@@ -481,6 +481,8 @@ export const itemActivityFeedProducer = {
         itemId: '0x4444444444444444444444444444444444444444',
       },
       lockCalls: [],
+      itemTypes: [],
+      itemTypesUnread: null,
       participants: [
         {
           address: null,
@@ -513,6 +515,8 @@ export const itemTransactionsProducer = {
         blockNumber: 100,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,

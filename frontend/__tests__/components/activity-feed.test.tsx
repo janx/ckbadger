@@ -338,7 +338,9 @@ describe('ActivityFeed', () => {
     const details = [...row.querySelectorAll('[data-role="detail"]')].map((e) => e.textContent);
     // T7: the calls by name, inline after the headline; the args are each name's hover.
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
-    expect(details).toEqual([' · CKBFS', ' · lock Nervape Shadow Lock']);
+    // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
+    // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
+    expect(details).toEqual([' · CKBFS', ' · Nervape Shadow Lock']);
     expect(within(row).getByRole('link', { name: 'CKBFS' })).toHaveAttribute(
       'title',
       `CKBFS(0xcd6ecb${'00'.repeat(14)}2500)`
@@ -358,10 +360,12 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Token transfer')).toBeInTheDocument();
     // TX-31: an unnamed lock is named by its code hash (what kind of lock), not its script hash.
+    // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
+    // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede00…00e09f');
-    expect(within(row).getByRole('link', { name: '0xab0ede00…00e09f' })).toHaveAttribute(
+    expect(within(row).getByRole('link', { name: 'lock 0xab0ede00…00e09f' })).toHaveAttribute(
       'title',
-      `0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
+      `lock 0xab0ede00…00e09f(0x4b0000${'00'.repeat(14)}838e)`
     );
     // the summary form of a feed line (R5, re-pinned on purpose: was every decimal)
     expect(within(row).getByRole('link', { name: `${MINUS}36,583 Seal` })).toBeInTheDocument();

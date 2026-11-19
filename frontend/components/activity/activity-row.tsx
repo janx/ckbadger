@@ -1,5 +1,6 @@
 'use client';
 import {
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -21,7 +22,8 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
+import { LockWordsView, lockNoun, namedLockWords, partyLock } from '@/components/ui/lock-kind';
+import { normalizeScriptRefHashType } from '@/lib/script-ref';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -30,6 +32,7 @@ import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { lockArgsLine } from '@/lib/lock-args';
 import type {
+  ActivityItemType,
   ActivityLockCall,
   ActivityProtocolAction,
   ActivityTypeCall,
@@ -339,7 +342,18 @@ function typeCallRef(sc: ActivityTypeCall): CallRef {
 }
 
 function lockCallRef(lc: ActivityLockCall): CallRef {
-  const name = formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName }, 'row');
+  // a lock's words are the one decision's (components/ui/lock-kind.tsx), as a list names locks
+  const name = lockNoun(
+    namedLockWords(
+      {
+        name: lc.scriptName ?? null,
+        codeHash: lc.lockCodeHash,
+        hashType: normalizeScriptRefHashType(lc.lockHashType),
+      },
+      'column'
+    ),
+    'row'
+  );
   const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
   const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError, 'row') : null;
@@ -351,6 +365,27 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
       codeHash: lc.lockCodeHash,
       hashType: lc.lockHashType,
       scriptKind: 'lock',
+    }),
+  };
+}
+
+/**
+ * The code a run's items and its DAO step carry (`itemTypes`), as its folded row names it: each code
+ * once, by the registry's name (else its short code hash), a link to its page.
+ */
+function itemTypeRef(t: ActivityItemType): CallRef {
+  const name = formatScriptRef(
+    { codeHash: t.typeCodeHash, scriptName: t.scriptName ?? undefined },
+    'row'
+  );
+  return {
+    name,
+    call: name,
+    href: getScriptDetailHref({
+      name: t.scriptName ?? undefined,
+      codeHash: t.typeCodeHash,
+      hashType: t.typeHashType,
+      scriptKind: 'type',
     }),
   };
 }
@@ -584,27 +619,31 @@ function ProtocolActionList({
   );
   const amountWidth = widths.length ? Math.max(...widths) : 0;
   const labelChars = Math.max(...actions.map((a) => a.label.length));
+  const linesId = useId();
   return (
     <div data-role="protocol-list" className="flex min-w-0 flex-col">
-      <button
-        type="button"
-        data-role="protocol-list-toggle"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-        className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
-      >
-        {open ? 'fewer ↑' : `${runCount(actions)} ↓`}
-      </button>
-      {open &&
-        groups.map((g) => (
-          <ProtocolActionLine
-            key={g.key}
-            group={g}
-            named={!one}
-            labelChars={labelChars}
-            amountWidth={amountWidth}
-          />
-        ))}
+      {/* the one fold control (FoldToggle): "all 51 deposits ↓", "fewer ↑" */}
+      <div data-role="protocol-list-toggle" className="self-start pl-[18px]">
+        <FoldToggle
+          open={open}
+          count={actions.length}
+          singular={one ? actionNoun(actions[0].action) : 'action'}
+          controls={linesId}
+          onToggle={setOpen}
+        />
+      </div>
+      <div id={linesId} data-role="protocol-list-lines" className="flex min-w-0 flex-col">
+        {open &&
+          groups.map((g) => (
+            <ProtocolActionLine
+              key={g.key}
+              group={g}
+              named={!one}
+              labelChars={labelChars}
+              amountWidth={amountWidth}
+            />
+          ))}
+      </div>
     </div>
   );
 }
@@ -699,24 +738,15 @@ function activityDetails(
         )
       )
     );
-  if (showScriptDetails && locks.length > 0) {
-    // "lock" names the run once, before its first name
-    const [first, ...rest] = foldedCalls(
-      callNames(locks.map(lockCallRef), args),
-      'locks',
-      folds.locks,
-      () => folds.open('locks')
-    );
+  if (showScriptDetails && locks.length > 0)
+    // each name says it is a lock (`lockNoun`): "JoyID lock", "lock 0x9b9b…9b9b"
     calls.push(
-      detailRun([
-        <>
-          {'lock '}
-          {first}
-        </>,
-        ...rest,
-      ])
+      detailRun(
+        foldedCalls(callNames(locks.map(lockCallRef), args), 'locks', folds.locks, () =>
+          folds.open('locks')
+        )
+      )
     );
-  }
   return {
     actions,
     primaryAction: primary ? `${primary.protocol}:${primary.action}` : null,
@@ -1409,15 +1439,21 @@ export function FoldedActivityRow({
     throw new Error(`transaction ${first.txHash}: a folded run's rows are committed`);
   if (participants < 1)
     throw new Error(`transaction ${first.txHash}: a folded run names no participant`);
+  if (first.itemTypes === null)
+    throw new Error(`transaction ${first.txHash}: a folded run's rows state their item types`);
   const [openCalls, setOpenCalls] = useState({ types: false, locks: false });
-  // the script code is the same on every row of a run: the first row's calls, by name, are the
-  // run's (with no row's args in their hover)
+  // the script code is the same on every row of a run: the first row's item types and calls, by
+  // name, are the run's (with no row's args in their hover): "Token transfer · Simple UDT"
   const { calls } = activityDetails(
     first,
     showScriptDetails,
     { ...openCalls, open: (run) => setOpenCalls((runs) => ({ ...runs, [run]: true })) },
     false
   );
+  const details =
+    first.itemTypes.length > 0
+      ? [detailRun(callNames(first.itemTypes.map(itemTypeRef), false)), ...calls]
+      : calls;
   const transactions = formatCount(rows.length, 'transaction');
   const toggle = (
     <FoldToggle
@@ -1437,7 +1473,7 @@ export function FoldedActivityRow({
       <ActivityRowHead
         layout="line"
         title={title}
-        details={calls}
+        details={details}
         hash={first.txHash}
         blockNumber={first.blockNumber}
         timestamp={first.timestamp}
@@ -1449,6 +1485,11 @@ export function FoldedActivityRow({
       />
       {/* what the run holds, counted: the toggle first, so it stands in one place open or not */}
       <div data-role="run-count" className="text-small leading-row text-text pl-[18px]">
+        {/* "participants": every party its rows name, the count the stores can state today. The
+            owner's word is "senders" (a party one of whose cells the transaction consumed): it
+            becomes that count here once the indexer records, per participant, that its lock holds
+            an input (the per-participant input flag, a re-sync; the route then states it and
+            `runParties` counts the parties that sent). This is the one place that writes it. */}
         <Dotted parts={[toggle, open && transactions, formatCount(participants, 'participant')]} />
       </div>
     </article>

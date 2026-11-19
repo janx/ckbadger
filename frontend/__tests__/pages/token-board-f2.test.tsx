@@ -112,6 +112,8 @@ const activity: GlobalActivity = {
   ],
   typeCalls: [],
   lockCalls: [],
+  itemTypes: [],
+  itemTypesUnread: null,
   protocolActions: [],
 };
 

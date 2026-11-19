@@ -22,6 +22,8 @@ export const tokenProducer = {
         blockNumber: 2,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -65,6 +67,8 @@ export const tokenProducer = {
         blockNumber: 1,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -108,6 +112,8 @@ export const tokenProducer = {
         blockNumber: 0,
         isCellbase: false,
         lockCalls: [],
+        itemTypes: [],
+        itemTypesUnread: null,
         participants: [
           {
             address: null,
@@ -404,6 +410,8 @@ export const tokenProducer = {
           blockNumber: 2,
           isCellbase: false,
           lockCalls: [],
+          itemTypes: [],
+          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -463,6 +471,8 @@ export const tokenProducer = {
           blockNumber: 1,
           isCellbase: false,
           lockCalls: [],
+          itemTypes: [],
+          itemTypesUnread: null,
           participants: [
             {
               address: null,
@@ -522,6 +532,8 @@ export const tokenProducer = {
           blockNumber: 0,
           isCellbase: false,
           lockCalls: [],
+          itemTypes: [],
+          itemTypesUnread: null,
           participants: [
             {
               address: null,

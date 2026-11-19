@@ -1325,6 +1325,17 @@ interface ActivityTypeCall {
   scriptName?: string;
 }
 
+/**
+ * A type script a committed activity's items or its Nervos DAO step carry, by its code
+ * (`itemTypes`, the P3 follow-up): the code hash and hash type the indexer classified the item by,
+ * and the registry's name.
+ */
+interface ActivityItemType {
+  typeCodeHash: string;
+  typeHashType: string;
+  scriptName: string | null;
+}
+
 interface ActivityLockCall {
   lockCodeHash: string;
   lockHashType: string;
@@ -1386,7 +1397,14 @@ interface Activity {
   isCellbase: boolean;
   itemDeltas: ItemDelta[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   protocolActions: ActivityProtocolAction[];
   /** The OTHER parties of this transaction. */
   participants: ParticipantRef[];
@@ -1429,7 +1447,14 @@ interface GlobalActivity {
   isCellbase: boolean;
   protocolActions: ActivityProtocolAction[];
   typeCalls: ActivityTypeCall[];
+  /** The non-standard locks attached to the transaction's outputs, which did not run (docs/API.md). */
   lockCalls: ActivityLockCall[];
+  /**
+   * The type scripts its items and its Nervos DAO step carry, each code once; null on a pool row
+   * and on a committed row whose item's script the stores cannot say (`itemTypesUnread`).
+   */
+  itemTypes: ActivityItemType[] | null;
+  itemTypesUnread: string | null;
   participants: ParticipantInfo[];
 }
 
@@ -3958,6 +3983,7 @@ export type {
   ItemDelta,
   ActivityTypeCall,
   ActivityLockCall,
+  ActivityItemType,
   ActivityProtocolAction,
   ParticipantInfo,
   ParticipantRef,

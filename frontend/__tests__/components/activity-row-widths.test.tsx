@@ -40,6 +40,8 @@ function activity(participants: ParticipantInfo[]): ActivityRowData {
     protocolActions: [],
     typeCalls: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     participants,
   };
 }
@@ -229,10 +231,12 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
     // the row names the lock once with its count; each call stays whole in the hover.
     const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
     // PA-25 (re-pinned): a run carries the separator before it, hidden when the run starts a line
+    // re-pinned on purpose (the tests review, MUST-1's lines): a called lock's words are the one
+    // lock decision's (lockNoun): each name says it is a lock and the run's "lock " label went
     const lockLine = [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
-      l.textContent?.startsWith(' · lock')
+      l.textContent?.includes('.bit Lock')
     ) as HTMLElement;
-    expect(lockLine).toHaveTextContent(/^· lock \.bit Lock ×29$/);
+    expect(lockLine).toHaveTextContent(/^· \.bit Lock ×29$/);
     const link = within(lockLine).getByRole('link', { name: '.bit Lock' });
     const calls = link.getAttribute('title')!.split('\n');
     expect(calls).toHaveLength(29);
@@ -251,9 +255,11 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
       })),
     } as ActivityRowData;
     const { container } = render(<ActivityRow activity={distinct} />);
+    // re-pinned on purpose: found by its locks' names, the decision's words ("Lock 0 lock"), no
+    // longer by the run's "lock " label
     const lockLine = () =>
       [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
-        l.textContent?.startsWith(' · lock')
+        l.textContent?.includes('Lock 0 lock')
       ) as HTMLElement;
     expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
     const more = within(lockLine()).getByRole('button', { name: '+24 more locks' });

@@ -66,6 +66,8 @@ const scriptCall: Transaction = {
     isCellbase: false,
     protocolActions: [],
     lockCalls: [],
+    itemTypes: [],
+    itemTypesUnread: null,
     typeCalls: [
       {
         typeCodeHash: '0xtime',
