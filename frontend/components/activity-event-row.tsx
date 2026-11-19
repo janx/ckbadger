@@ -151,7 +151,8 @@ export function readable(
 ): ReactElement {
   return (
     <ErrorBoundary
-      key={version}
+      key={txHash}
+      resetKey={version}
       fallbackRender={(error) => <ActivityReadError txHash={txHash} error={error} />}
     >
       <RenderedInBoundary render={render} />

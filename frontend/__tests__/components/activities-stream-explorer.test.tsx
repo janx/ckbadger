@@ -15,7 +15,9 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
-vi.mock('@/lib/api', () => ({
+vi.mock('@/lib/api', async (importOriginal) => ({
+  // a row's error is said in its own words (readErrorText knows the API's own error class)
+  ApiRequestError: (await importOriginal<typeof import('@/lib/api')>()).ApiRequestError,
   api: {
     getGlobalActivities: vi.fn(),
   },

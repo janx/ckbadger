@@ -73,7 +73,7 @@ export function PartReadBoundary({
 }) {
   return (
     <ErrorBoundary
-      key={where}
+      resetKey={where}
       fallbackRender={(error) => <PartReadError what={what} where={where} error={error} />}
     >
       <Rendered render={render} />
