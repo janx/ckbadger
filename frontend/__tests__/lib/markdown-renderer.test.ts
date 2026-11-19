@@ -229,8 +229,10 @@ describe('renderMarkdownPage', () => {
       coinbaseCount: 1,
       uniqueAddressCount: 9,
       totalCkbMoved: '123000000000',
-      scriptCounts: [],
-      scriptCalls: 0,
+      // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
+      // said 5 transactions with a call beside no call)
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, name: null, count: 5 }],
+      scriptCalls: 5,
       scriptRest: null,
       hoursCovered: 24,
       kindOccurrences: 29,
@@ -311,8 +313,10 @@ describe('renderMarkdownPage', () => {
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
-      scriptCounts: [],
-      scriptCalls: 0,
+      // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
+      // said 1 transactions with a call beside no call)
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, name: null, count: 1 }],
+      scriptCalls: 1,
       scriptRest: null,
       hoursCovered: 24,
       kindOccurrences: 1,
@@ -456,8 +460,10 @@ describe('renderMarkdownPage', () => {
       coinbaseCount: 0,
       uniqueAddressCount: 0,
       totalCkbMoved: '0',
-      scriptCounts: [],
-      scriptCalls: 0,
+      // the route lists the calls of the transactions it counts (the third read's T NOTE-4: it
+      // said 1 transactions with a call beside no call)
+      scriptCounts: [{ codeHash: `0x${'3a'.repeat(32)}`, name: null, count: 1 }],
+      scriptCalls: 1,
       scriptRest: null,
       hoursCovered: 24,
       kindOccurrences: 1,
