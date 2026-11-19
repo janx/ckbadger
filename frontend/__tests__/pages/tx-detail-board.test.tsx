@@ -1112,6 +1112,50 @@ describe('Transaction variants (D4)', () => {
     });
   });
 
+  // Lane P1, third round (review p-logic-chain SHOULD 2): a batch in which one party deposits and
+  // another withdraws. The activity tags both DAO and its actions name no party, so the lede says
+  // each step without its party and names the parties whose cells took the steps once; the figure
+  // says "a Nervos DAO step" on each, never both kinds on both.
+  it('says the DAO steps of a batch without giving a party a step it did not take', async () => {
+    const tx = committed();
+    tx.inputsCapacity = '2605000000000';
+    tx.inputs![0].capacity = '2605000000000';
+    tx.outputsCapacity = '2622530633229';
+    tx.outputs![0].capacity = '2622530633229';
+    tx.fee = '936';
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.daoWithdrawRequest,
+      txHash: TX_HASH,
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '12200000000000' },
+        },
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'withdraw_complete',
+          metadata: { capacity: '2605000000000', compensation: '17530634165' },
+        },
+      ],
+      participants: [
+        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-12182469366771', tags: 8 },
+        { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '12200000000000', tags: 8 },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit. 26,050 CKB came out of the Nervos DAO, with 175.3 CKB of compensation. The parties whose cells took these steps: ${row('r4p74p')} and ${row('hxw6h7')}.`
+    );
+    const moved = await screen.findByTestId('tx-what-moved');
+    expect(moved).toHaveTextContent('a Nervos DAO step');
+    expect(moved).not.toHaveTextContent('Nervos DAO deposit');
+  });
+
   // Lane P1, third round (review p-logic-chain SHOULD 4): a cellbase that pays no block's reward
   // said "no block before it is final yet", which is false for block 0 (it created the chain's
   // first cells) and for the first blocks after it (the block whose reward they would pay is the

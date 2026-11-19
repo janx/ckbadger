@@ -387,9 +387,12 @@ describe('ribbonWeight', () => {
 
 // Lane P1 follow-up (review chain-b tx-dao-deposit): a party's Nervos DAO step, from the activity's
 // own kind: its DAO tag and the transaction's DAO actions, each named once.
+// Re-pinned on purpose (lane P1, third round; review p-logic-chain SHOULD 2): the activity's
+// parties ride along, since whose step a step is depends on how many the activity tags DAO.
 describe('daoStepOf', () => {
   const dao = (...actions: string[]) => ({
     txHash: '0xdao',
+    participants: [{ tags: 8 }],
     protocolActions: actions.map((action) => ({
       protocol: 'dao',
       protocolName: 'Nervos DAO',
@@ -407,6 +410,19 @@ describe('daoStepOf', () => {
     expect(daoStepOf(dao('withdraw_complete', 'deposit'), { tags: 8 })).toBe(
       'Nervos DAO withdrawal, Nervos DAO deposit'
     );
+  });
+  // Lane P1, third round (review p-logic-chain SHOULD 2): a protocol action names no party, and the
+  // DAO tag says only that a party's cells took one of the steps. Where several parties are tagged
+  // and the steps are of more than one kind (A deposits, B withdraws), whose step is which is not
+  // in the activity: each tagged party is said to take "a Nervos DAO step", never both kinds. Where
+  // the steps are all of one kind, every tagged party took that kind of step.
+  it('names no step a party did not take where the activity does not say whose each is', () => {
+    const batch = (...actions: string[]) => ({
+      ...dao(...actions),
+      participants: [{ tags: 8 }, { tags: 8 }],
+    });
+    expect(daoStepOf(batch('deposit', 'withdraw_complete'), { tags: 8 })).toBe('a Nervos DAO step');
+    expect(daoStepOf(batch('deposit', 'deposit'), { tags: 8 })).toBe('Nervos DAO deposit');
   });
   it('refuses a DAO step it has no words for', () => {
     expect(() => daoStepOf(dao('merge'), { tags: 8 })).toThrow('0xdao: a Nervos DAO step "merge"');

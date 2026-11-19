@@ -30,7 +30,7 @@ import {
   readable,
 } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
-import { flowKey, onlyFeeMoved, txFlows } from '@/lib/tx-flows';
+import { daoStepsAttributed, flowKey, onlyFeeMoved, txFlows } from '@/lib/tx-flows';
 import { anchoredOutPoint } from '@/lib/tx-cell-link';
 import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
@@ -296,6 +296,10 @@ function DaoSentences({ activity }: { activity: GlobalActivity }) {
   const holders = activity.participants.filter((p) => (p.tags & TAG_DAO) !== 0);
   if (holders.length === 0)
     throw new Error(`${activity.txHash}: a Nervos DAO step and no party the activity tags DAO`);
+  // whose each step is, where the activity says it (lane P1, third round; review p-logic-chain
+  // SHOULD 2): one party tagged DAO, or steps of one kind. Otherwise each step is said without a
+  // party, and the parties whose cells took them are named once after them.
+  const attributed = daoStepsAttributed(activity);
   const who = <Parties parties={holders} />;
   const amount = (shannons: bigint) => (
     <CkbAmount form="summary" shannons={shannons} signed={false} tone="plain" />
@@ -311,14 +315,27 @@ function DaoSentences({ activity }: { activity: GlobalActivity }) {
           case 'deposit':
             return one ? (
               <Fragment key={kind}>
-                {amount(one.capacity!)} went into a Nervos DAO deposit held by {who}.{' '}
+                {amount(one.capacity!)} went into a Nervos DAO deposit
+                {attributed && <> held by {who}</>}.{' '}
               </Fragment>
             ) : (
               <Fragment key={kind}>
-                {count} Nervos DAO deposits were made, held by {who}.{' '}
+                {count} Nervos DAO deposits were made{attributed && <>, held by {who}</>}.{' '}
               </Fragment>
             );
           case 'withdraw_request':
+            if (!attributed)
+              return one ? (
+                <Fragment key={kind}>
+                  A Nervos DAO deposit of {amount(one.capacity!)}, made at{' '}
+                  <BlockLink look="inline" number={one.depositBlock!} />, was asked to be
+                  withdrawn.{' '}
+                </Fragment>
+              ) : (
+                <Fragment key={kind}>
+                  {count} Nervos DAO deposits were asked to be withdrawn.{' '}
+                </Fragment>
+              );
             return one ? (
               <Fragment key={kind}>
                 {who} asked to withdraw a Nervos DAO deposit of {amount(one.capacity!)}, made at{' '}
@@ -330,6 +347,17 @@ function DaoSentences({ activity }: { activity: GlobalActivity }) {
               </Fragment>
             );
           case 'withdraw_complete':
+            if (!attributed)
+              return one ? (
+                <Fragment key={kind}>
+                  {amount(one.capacity!)} came out of the Nervos DAO, with{' '}
+                  {amount(one.compensation!)} of compensation.{' '}
+                </Fragment>
+              ) : (
+                <Fragment key={kind}>
+                  {count} Nervos DAO deposits were withdrawn, each with its compensation.{' '}
+                </Fragment>
+              );
             return one ? (
               <Fragment key={kind}>
                 {who} withdrew {amount(one.capacity!)} from the Nervos DAO, with{' '}
@@ -344,6 +372,7 @@ function DaoSentences({ activity }: { activity: GlobalActivity }) {
             throw new Error(`${activity.txHash}: a Nervos DAO step "${kind}" has no sentence`);
         }
       })}
+      {!attributed && <>The parties whose cells took these steps: {who}. </>}
     </>
   );
 }

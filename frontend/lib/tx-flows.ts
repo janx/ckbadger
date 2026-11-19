@@ -62,14 +62,39 @@ const DAO_STEP: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Whether the activity says whose each Nervos DAO step is (lane P1, third round; review
+ * p-logic-chain SHOULD 2). A DAO action names no party; the DAO tag says only that a party's cells
+ * took one of the steps. So a step is a party's where one party is tagged, or where every step is
+ * of one kind (each tagged party took that kind of step); where several parties are tagged and the
+ * steps are of more than one kind, the activity does not say which is whose. (What the route would
+ * have to send for it: each DAO action's owner, the lock hash of the cell that took the step.)
+ */
+export function daoStepsAttributed(activity: {
+  protocolActions: GlobalActivity['protocolActions'];
+  participants: readonly Pick<ParticipantInfo, 'tags'>[];
+}): boolean {
+  const kinds = new Set(
+    activity.protocolActions.filter((a) => a.protocol === 'dao').map((a) => a.action)
+  );
+  const tagged = activity.participants.filter((p) => (p.tags & TAG_DAO) !== 0);
+  return kinds.size <= 1 || tagged.length <= 1;
+}
+
+/**
  * What a party's Nervos DAO step is, in words, from the activity's own kind (lane P1 follow-up;
  * review chain-b tx-dao-deposit: What moved drew a deposit to its holder as a payment): the
  * transaction's DAO actions, each named once, for a party the activity tags DAO (`TAG_DAO`: its
- * cells hold the step); null for any other party, or where the transaction takes no DAO step. A
- * DAO action this page has no words for fails, by the transaction and the action.
+ * cells hold the step); "a Nervos DAO step" where the activity does not say whose each step is
+ * (`daoStepsAttributed`), never a step the party did not take; null for any other party, or where
+ * the transaction takes no DAO step. A DAO action this page has no words for fails, by the
+ * transaction and the action.
  */
 export function daoStepOf(
-  activity: Pick<GlobalActivity, 'txHash' | 'protocolActions'>,
+  activity: {
+    txHash: string;
+    protocolActions: GlobalActivity['protocolActions'];
+    participants: readonly Pick<ParticipantInfo, 'tags'>[];
+  },
   party: Pick<ParticipantInfo, 'tags'>
 ): string | null {
   if ((party.tags & TAG_DAO) === 0) return null;
@@ -77,13 +102,12 @@ export function daoStepOf(
     ...new Set(activity.protocolActions.filter((a) => a.protocol === 'dao').map((a) => a.action)),
   ];
   if (steps.length === 0) return null;
-  return steps
-    .map((step) => {
-      const words = DAO_STEP[step];
-      if (!words) throw new Error(`${activity.txHash}: a Nervos DAO step "${step}" has no words`);
-      return words;
-    })
-    .join(', ');
+  const words = steps.map((step) => {
+    const said = DAO_STEP[step];
+    if (!said) throw new Error(`${activity.txHash}: a Nervos DAO step "${step}" has no words`);
+    return said;
+  });
+  return daoStepsAttributed(activity) ? words.join(', ') : 'a Nervos DAO step';
 }
 
 function exact(value: string | number, what: string, hash: string): bigint {
