@@ -1513,16 +1513,16 @@ const CLASSED_SERIES: Readonly<
     nftSpore: { label: 'Objects', color: CLASS_COLORS.objects },
     otherContracts: { label: 'Other scripts', color: CLASS_COLORS.other },
   },
-  // C in four bands that partition it (lane D1, second follow-up): the CKB that circulates and is
-  // not deposited in the data's celadon, the DAO's deposits gold, its compensation not yet claimed
-  // the gold a step down (its neighbour, not a class of its own), the burnt the neutral slate. Each
-  // band is named, and keyed, for what it holds (lane exactness, part A2, M1): the DAO band is the deposits (status 0),
-  // the amount the DAO page calls deposited; a withdrawal request's principal circulates, in the
-  // first band (it was "Outside the DAO", outsideDao, beside "In the Nervos DAO", while a request
-  // inside the DAO was drawn outside it)
+  // C in five bands that make it (lane exactness, part B1; four in lane D1's second follow-up), each named and keyed
+  // for what it holds: the CKB outside every DAO cell in the data's celadon; then the DAO's cells,
+  // in its gold family: the deposits (status 0) the DAO's gold, the amount the DAO page calls
+  // deposited; the withdrawal requests' principal, still in a DAO cell, the gold mixed to the
+  // middle; the compensation not yet claimed the gold a step from the ground (its neighbour, not a
+  // class of its own); the burnt the neutral slate
   'total-supply': {
-    circulatingNotDeposited: { label: 'Circulating, not deposited', color: DATA_COLOR },
+    outsideDao: { label: 'Outside the Nervos DAO', color: DATA_COLOR },
     daoDeposited: { label: 'Deposited in the Nervos DAO', color: CLASS_COLORS.dao },
+    daoWithdrawing: { label: 'Withdrawing from the Nervos DAO', color: color('gold-mid') },
     unclaimedCompensation: { label: 'Unclaimed DAO compensation', color: color('gold-ramp') },
     burnt: { label: 'Burnt', color: CLASS_COLORS.ckb },
   },
@@ -1543,12 +1543,20 @@ const CLASSED_SERIES: Readonly<
 };
 
 /**
- * The bands an API older than this page sends, by chart: named as older, not as unknown (lane exactness, part A2, N2).
- * Supply's were `nervosdao` and `circulating` before its four bands, `outsideDao` before M1.
+ * The bands an API older than this page sends, by chart: named as older, not as unknown (lane
+ * exactness, part A2, N2). Supply's were `nervosdao` and `circulating` before its four bands, and
+ * `circulatingNotDeposited` in part A2's four (lane exactness, part B1).
  */
 const OLDER_SERIES: Readonly<Record<string, readonly string[]>> = {
-  'total-supply': ['outsideDao', 'nervosdao', 'circulating'],
+  'total-supply': ['circulatingNotDeposited', 'nervosdao', 'circulating'],
 };
+
+/**
+ * The charts whose every band is due: Supply's five make C, so one missing is an API older than
+ * this page (lane exactness, part B1: lane D1's four bands sent `outsideDao`, which held the withdrawal requests' CKB
+ * then, and no `daoWithdrawing`).
+ */
+const EVERY_BAND_DUE: readonly string[] = ['total-supply'];
 
 /** The returned series of a classed chart, every key known, in board order (CH-06). */
 function classedSeries(
@@ -1561,6 +1569,10 @@ function classedSeries(
       throw new Error(`${slug}: the API sends the band ${entry.key}: it is older than this page`);
     if (!classes[entry.key]) throw new Error(`${slug}: unknown series ${entry.key}`);
   }
+  if (EVERY_BAND_DUE.includes(slug))
+    for (const key of Object.keys(classes))
+      if (!payload.series.some((entry) => entry.key === key))
+        throw new Error(`${slug}: the API sends no band ${key}: it is older than this page`);
   const order = Object.keys(classes).filter((key) =>
     payload.series.some((entry) => entry.key === key)
   );

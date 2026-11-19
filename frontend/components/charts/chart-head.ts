@@ -475,7 +475,7 @@ const HEADS: Record<string, HeadOf> = {
     const circulating = m.latest.raw;
     return {
       ...head,
-      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(circulating, whole, 'supply')} circulates, ${cutShare(last.values.daoDeposited, circulating, 'supply')} of it deposited in the Nervos DAO; ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
+      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(circulating, whole, 'supply')} circulates, ${cutShare(last.values.daoDeposited, circulating, 'supply')} of it deposited in the Nervos DAO and ${cutShare(last.values.daoWithdrawing, circulating, 'supply')} withdrawing from it; ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
     };
   },
   'total-deposit': (_, m) => dated(m, 'deposited in the Nervos DAO', peakSentence),

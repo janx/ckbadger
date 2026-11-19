@@ -623,19 +623,23 @@ bands it draws and the wholes it divides by, read-only on the store:
 - `GET /charts/common-knowledge-composition` — each point's
   `values.knowledgeSize` (CKB): the day's knowledge size, which the five kinds
   partition.
-- `GET /charts/total-supply` — four bands that partition C, each point's
+- `GET /charts/total-supply` — five bands that make C, each point's
   `values.totalIssuance` (CKB), the total issuance in the day's DAO field:
-  `circulatingNotDeposited` ("Circulating, not deposited": the protocol
-  circulation less the deposits, the CKB in withdrawal requests included),
-  `daoDeposited` ("Deposited in the Nervos DAO": the status-0 deposits, the
-  amount the DAO page calls deposited), `unclaimedCompensation` (DAO
-  compensation accrued and not yet
-  claimed, inside S) and `burnt` (genesis burnt and the treasury part of S).
-  They sum to C to the shannon; the route checks it per row and fails with the
-  date and the four operands where it does not. `values.circulating` is the
-  protocol circulation, `C − genesis burnt − S`
-  (`circulatingNotDeposited + daoDeposited`),
-  the amount the site calls circulating everywhere; it is not a band.
+  `outsideDao` ("Outside the Nervos DAO": the protocol circulation less every
+  live DAO cell, `circulating − protocol_deposited`), `daoDeposited`
+  ("Deposited in the Nervos DAO": the status-0 deposits, the amount the DAO page
+  calls deposited), `daoWithdrawing` ("Withdrawing from the Nervos DAO": the
+  principal of the withdrawal requests, `protocol_deposited − total_deposited`),
+  `unclaimedCompensation` (DAO compensation accrued and not yet claimed, inside
+  S) and `burnt` (genesis burnt and the treasury part of S). They sum to C to
+  the shannon and none is negative; the route checks both per row and fails
+  with the date and every operand where either does not hold, and refuses a day
+  whose snapshot has no `protocol_deposited` ("delete RocksDB and re-sync from
+  genesis"). `values.circulating` is the protocol circulation,
+  `C − genesis burnt − S` (`outsideDao + daoDeposited + daoWithdrawing`), the
+  amount the site calls circulating everywhere; it is not a band. (Part A2's
+  four bands keyed the first `circulatingNotDeposited`, the withdrawal requests
+  in it; lane D1's keyed it `outsideDao` with the same meaning.)
 - `GET /charts/secondary-issuance` — one whole, each point's
   `protocolTotalShannons`: the secondary issuance since genesis,
   `miner + S + claimed`, in shannons. Its three destinations make it: `compensation` (DAO
