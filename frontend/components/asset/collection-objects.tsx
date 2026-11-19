@@ -360,7 +360,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                         <ClassMark kind="objects" size={12} />
                         <AppLink
                           href={`/objects/${item.sporeId}`}
-                          className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+                          className="text-body text-text-bright leading-row min-w-0 truncate"
                         >
                           {name}
                         </AppLink>

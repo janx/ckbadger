@@ -122,19 +122,21 @@ describe('FiberChannelBoard', () => {
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
-    // the display figure: the channel's capacity, exact, bright (R4, R11)
+    // the display figure: the channel's capacity, bright (R4, R11), in the summary form, one run
+    // (readability R5, re-pinned on purpose: was "1,062.00000000", its decimals a hero-sized dim
+    // run)
     const capacity = within(hero).getByText(
       (_, el) => el?.getAttribute('data-role') === 'capacity'
     );
-    expect(capacity).toHaveTextContent(/^1,062\.00000000 CKB$/);
+    expect(capacity).toHaveTextContent(/^1,062 CKB$/);
     expect(capacity).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
-    expect(capacity.querySelector('.text-hero')).toHaveTextContent('.00000000');
-    // the pair on the figure's baseline row
+    expect(capacity.querySelector('.text-hero')).toBeNull();
+    // the pair on the figure's baseline row, each party at the row size (R9, re-pinned: 4…8)
     const pair = screen.getByTestId('channel-pair');
     expect(pair.parentElement).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(pair.parentElement!.contains(capacity)).toBe(true);
-    expect(within(pair).getByRole('link', { name: 'ckb1qzda0c…ppedrr' })).toBeInTheDocument();
-    expect(within(pair).getByRole('link', { name: 'ckb1qzda0c…5eyy6y' })).toBeInTheDocument();
+    expect(within(pair).getByRole('link', { name: 'ckb1…7sppedrr' })).toBeInTheDocument();
+    expect(within(pair).getByRole('link', { name: 'ckb1…rc5eyy6y' })).toBeInTheDocument();
     // no raw four-cell developer strip in tier 1 and no "0 d" durations
     expect(screen.queryByText('Funding cell capacity')).toBeNull();
     expect(screen.queryByText(/\b0 d\b/)).toBeNull();
@@ -151,7 +153,7 @@ describe('FiberChannelBoard', () => {
     expect(summary.closest('[data-prose]')).toHaveClass('prose-tier2');
     expect(summary).not.toHaveClass('text-body', 'text-text-dim');
     expect(summary).toHaveTextContent(
-      'ckb1qzda0c…ppedrr put 1,000.00000569 CKB net into the opening transaction and ckb1qzda0c…5eyy6y 62.00000351 CKB.'
+      'ckb1…7sppedrr put 1,000.00000569 CKB net into the opening transaction and ckb1…rc5eyy6y 62.00000351 CKB.'
     );
     expect(summary).toHaveTextContent(
       '8d 3h later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of 6 epochs the settlement paid it out.'
@@ -283,7 +285,7 @@ describe('FiberChannelBoard', () => {
     // final outputs name the party by address, not a lock hash (FF-C6)
     const outputs = screen.getByRole('heading', { name: 'Final transaction outputs' })
       .parentElement!.parentElement!;
-    expect(within(outputs).getAllByRole('link', { name: 'ckb1qzda0c…ppedrr' })).toHaveLength(2);
+    expect(within(outputs).getAllByRole('link', { name: 'ckb1…7sppedrr' })).toHaveLength(2);
     // every block height is written with separators (FF-C6)
     expect(container.textContent).not.toMatch(/#1563/);
   });
@@ -410,6 +412,8 @@ describe('FiberChannelBoard', () => {
         token={{ symbol: 'USDI', decimals: 6 }}
       />
     );
-    expect(screen.getByTestId('channel-pair')).toHaveTextContent('holds 123.450000 USDI');
+    // the token beside the figure in its summary form (readability R5, re-pinned on purpose: was
+    // "123.450000")
+    expect(screen.getByTestId('channel-pair')).toHaveTextContent('holds 123.45 USDI');
   });
 });

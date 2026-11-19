@@ -13,7 +13,8 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { RowSeal } from '@/components/ui/row-seal';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
-import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
+import { activityHeadline } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
 import type { PoolStatus } from '@/lib/api';
@@ -35,6 +36,8 @@ import {
 } from '@/lib/activity-stats';
 import { formatCount } from '@/lib/format-count';
 import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
+import { ROW_SEAL } from '@/components/ui/row-seal';
+import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 type TransactionKind =
   | 'all'
@@ -120,7 +123,8 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
     tx.value === null ? (
       <span className="text-text-dim">Interpretation partial</span>
     ) : (
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
         signed={false}
         tone="plain"
@@ -129,7 +133,8 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
   const fee = (
     <span className="whitespace-nowrap">
       fee{' '}
-      <ExactCkb
+      <CkbAmount
+        form="summary"
         shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
         signed={false}
         tone="plain"
@@ -286,8 +291,8 @@ export default function TransactionsPage() {
       // The transaction's row stone (ROW_SEAL.tx.footprint, 56.5 px), the hash at the row size, 17
       // characters at 13 px (132.6 px; it was 21 with three dots, 163.8 px), and the 16 px gap:
       // 205.1 of its 237 px. The table is 1,230 px, the committed table's width, and both of the
-      // page's lists change form at the same width, so the column keeps its 237.
-      minWidth: 237,
+      // page's lists change form at the same width, so the column keeps its 237: 31 px spare.
+      minWidth: columnPx(ROW_SEAL.tx.footprint + textPx(17, fontPx('body')) + 16, 31),
       render: (tx) => (
         <div className="flex items-start">
           <RowSeal id={poolSealId(tx)} state="unpressed" overhang />
@@ -298,7 +303,7 @@ export default function TransactionsPage() {
                 hash={tx.hash}
                 size="row"
                 copyable={false}
-                className="text-body text-text-bright leading-[18px]"
+                className="text-body text-text-bright leading-row"
               />
             </Link>
             <PoolInterpretationNotice interpretation={tx.interpretation} />
@@ -327,7 +332,7 @@ export default function TransactionsPage() {
       // on the container's spread slack and "● Pending · 26s ago" (150.2) broke when that went to
       // the hash (old issue C). A wait of 100 days or more, or "this device's clock is behind",
       // wraps inside the cell.
-      minWidth: 172,
+      minWidth: columnPx(7 + 6 + textPx(10, fontPx('small')) + 6 + textPx(9, fontPx('small')) + 16),
       render: (tx) => (
         <span className="text-small flex items-center gap-1.5">
           <PoolDot status={tx.status} />
@@ -356,7 +361,8 @@ export default function TransactionsPage() {
         tx.value === null ? (
           <span className="text-text-dim whitespace-normal">Interpretation partial</span>
         ) : (
-          <ExactCkb
+          <CkbAmount
+            form="column"
             shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
             signed={false}
             tone="plain"
@@ -370,7 +376,8 @@ export default function TransactionsPage() {
       minWidth: 128,
       numeric: true,
       render: (tx) => (
-        <ExactCkb
+        <CkbAmount
+          form="column"
           shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
           signed={false}
           tone="plain"
@@ -382,8 +389,12 @@ export default function TransactionsPage() {
       key: 'feeRate',
       label: 'Fee rate, shannon/KB',
       // The head on its two lines ("shannon/KB", 10 characters at 11 px, 66 px) or a rate of
-      // 1,000,000,000 (13 at 12 px, 93.6 px), and the 16 px gap; 7 px went to the row seal.
-      minWidth: 123,
+      // 1,000,000,000 (13 at 12 px, 93.6 px), and the 16 px gap; 7 px went to the row seal, and 13
+      // are spare.
+      minWidth: columnPx(
+        Math.max(textPx(10, fontPx('meta')), textPx(13, fontPx('small'))) + 16,
+        13
+      ),
       numeric: true,
       render: (tx) => BigInt(tx.feeRate).toLocaleString('en-US'),
     },
@@ -394,7 +405,7 @@ export default function TransactionsPage() {
       // the 16 px gap, with 1.6 px to spare. Its head takes two lines ("Size," / "bytes"), as
       // "Fee rate, shannon/KB" beside it already does, so the head row keeps its height; the 22 px
       // its one-line head held went to Status (old issue C).
-      minWidth: 68,
+      minWidth: columnPx(textPx(7, fontPx('small')) + 16, 1),
       numeric: true,
       render: (tx) => tx.txSize.toLocaleString('en-US'),
     },
@@ -403,7 +414,7 @@ export default function TransactionsPage() {
       label: 'Cycles',
       // The most a transaction may take, "3,500,000,000" (13 characters at 12 px, 93.6 px), and no
       // gap (the last column); 16 px went to the row seal.
-      minWidth: 94,
+      minWidth: columnPx(textPx(13, fontPx('small'))),
       numeric: true,
       render: (tx) => BigInt(tx.cycles).toLocaleString('en-US'),
     },
@@ -668,11 +679,12 @@ export default function TransactionsPage() {
           )}
           {tab === 'committed' && committed.data && (
             <>
-              <TransactionListTable transactions={committed.data.data} />
+              {/* B5: how to read the Value column, above the table, not after its last row. */}
               <p className="text-text-dim text-small">
                 Value is what the participants received. A cellbase row shows, grey, the reward it
                 pays; no total counts it.
               </p>
+              <TransactionListTable transactions={committed.data.data} />
               <CursorPagination
                 className="flex-col items-start gap-3 sm:flex-row sm:items-center"
                 total={committed.data.total ?? undefined}
@@ -720,14 +732,7 @@ export default function TransactionsPage() {
                   </dd>
                 </div>
               </dl>
-              <ListTable
-                label="Transactions in the pool"
-                columns={poolColumns}
-                rows={pool.data.data}
-                rowKey={(tx) => tx.hash}
-                empty="The node's pool is empty."
-                mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
-              />
+              {/* B5: how to read the list, above it, not after its last row. */}
               <p className="text-text-dim text-small">
                 Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
                 after its proposal.
@@ -737,6 +742,14 @@ export default function TransactionsPage() {
                   This node's tracked pool is truncated; more transactions may be present.
                 </p>
               )}
+              <ListTable
+                label="Transactions in the pool"
+                columns={poolColumns}
+                rows={pool.data.data}
+                rowKey={(tx) => tx.hash}
+                empty="The node's pool is empty."
+                mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
+              />
               <CursorPagination
                 className="flex-col items-start gap-3 sm:flex-row sm:items-center"
                 total={pool.data.total}

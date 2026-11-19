@@ -25,6 +25,7 @@ import {
   chartModel,
   chartSpan,
   formatChartExact,
+  formatChartHead,
   formatChartHover,
   formatEpochLabel,
   type ChartModel,
@@ -117,7 +118,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                 </span>
               </div>
               <div className="bg-bar-track mt-1 h-1">
-                <div className="bg-jade h-1" style={{ width: `${width}%` }} />
+                <div className="bg-jade scan-fill h-1" style={{ width: `${width}%` }} />
               </div>
             </li>
           );
@@ -132,7 +133,10 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
   );
 }
 
-/** One big reading of the chart head: a small label over a rounded value, exact on hover. */
+/**
+ * One big reading of the chart head: a small label over its figure in the head's form
+ * (`formatChartHead`: a CKB amount cut to the summary form, a rate at two decimals), exact on hover.
+ */
 function Reading({
   label,
   raw,
@@ -151,7 +155,7 @@ function Reading({
         <span
           className={`text-hero font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
         >
-          {formatChartHover(raw, unit)}
+          {formatChartHead(raw, unit)}
         </span>
         {/* One form per quantity (CH-14): 2.55%, 10.43 s — the unit never wraps away. */}
         <span className="text-text-dim text-meta whitespace-pre">{unitAfter(unit, '\u00a0')}</span>
@@ -460,7 +464,7 @@ function DetailBody({
               reading={model.reading ?? model.today}
               formatValue={(value) => formatChartHover(value, model.unit)}
               // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
-              xTicks={axisTicks(points, style, 8, xUnit)}
+              xTicks={axisTicks(points, style, 8, xUnit, model.bucketRun)}
               formatAxis={chartAxisFormat(model.unit)}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}

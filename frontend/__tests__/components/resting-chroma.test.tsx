@@ -87,7 +87,8 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     const table = screen.getByRole('table', { name: 'Blocks' });
     const [, row] = within(table).getAllByRole('row');
     expectNoAquaLink(row);
-    expectRestingLink(within(row).getByRole('link', { name: 'ckb1qzda0c…ratvu9' }));
+    // R9 (re-pinned): the row size is `ckb1…` and the last 8 characters
+    expectRestingLink(within(row).getByRole('link', { name: 'ckb1…dcratvu9' }));
   });
 
   it('a .cell records table row: its decoded address link rests as ink', () => {
@@ -125,7 +126,8 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       rerender(<ParticipantRefView participant={party} size="row" compact={compact} />);
       const link = screen.getByRole('link');
       expectNoAquaLink(container);
-      expect(link).toHaveClass('text-text-dim', 'hover:text-jade');
+      // re-pinned with readability ruling R3: a link reads in the reading ink (it was dim)
+      expect(link).toHaveClass('text-text', 'hover:text-jade');
     }
   });
 

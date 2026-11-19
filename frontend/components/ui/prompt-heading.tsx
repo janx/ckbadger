@@ -48,6 +48,7 @@ export function PromptHeading({
     >
       {Tag !== 'h2' && (mark ?? <span aria-hidden="true" className="section-mark mr-2.5" />)}
       <span className="lowercase">{command}</span>
+      {/* the args name what the command runs on, a label: quiet by rule (R3) */}
       {args !== undefined && (
         <span className="text-text-dim ml-2.5 font-normal normal-case">{unitNode(args)}</span>
       )}
@@ -57,6 +58,7 @@ export function PromptHeading({
   return (
     <div className="flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
       {heading}
+      {/* the heading's note: quiet by rule (R3) */}
       <span data-prompt-note="" className="text-text-dim text-meta ml-auto">
         {unitNode(note)}
       </span>

@@ -66,7 +66,7 @@ export function ShareBar({
     >
       <span
         data-share-bar={width}
-        className="block h-full"
+        className="scan-fill block h-full"
         style={{ width, minWidth: value > 0 ? 2 : 0, backgroundColor: color }}
       />
     </span>

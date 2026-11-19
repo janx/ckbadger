@@ -53,6 +53,8 @@ function makeActivity(
   };
 }
 
+// A participant's CKB change, by its text. Readability R5 (re-pinned on purpose): a feed line is
+// the summary form, so +1 CKB, was the column's "+1.00000000 CKB".
 function exactAmount(value: string) {
   return (_text: string, element: Element | null) =>
     element?.hasAttribute('data-ckb-amount') === true && element.textContent === value;
@@ -258,7 +260,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1 CKB'))).toBeInTheDocument();
     await waitFor(() => {
       expect(intersectionCallback).not.toBeNull();
     });
@@ -274,7 +276,7 @@ describe('ActivitiesStreamExplorer', () => {
         })
       );
     });
-    expect(await screen.findByText(exactAmount('+2.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+2 CKB'))).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
 
@@ -463,7 +465,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText(exactAmount('+3.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+3 CKB'))).toBeInTheDocument();
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenNthCalledWith(2, {
         filter: 'all',
@@ -586,10 +588,10 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1 CKB'))).toBeInTheDocument();
 
     const banner = await screen.findByRole('button', { name: '1 new activity' });
-    expect(screen.queryByText(exactAmount('+4.00000000 CKB'))).not.toBeInTheDocument();
+    expect(screen.queryByText(exactAmount('+4 CKB'))).not.toBeInTheDocument();
     // Visual finish V11: the bar and its hover are named inks (STREAM_COLORS), both read by classes
     // through CSS variables, so the hover still wins over the bar; no bracket hex
     expect(banner).toHaveClass('bg-[color:var(--bar)]', 'hover:bg-[color:var(--bar-hover)]');
@@ -599,7 +601,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     fireEvent.click(banner);
 
-    expect(screen.getByText(exactAmount('+4.00000000 CKB'))).toBeInTheDocument();
+    expect(screen.getByText(exactAmount('+4 CKB'))).toBeInTheDocument();
   });
 
   it('drains more than one head page before buffering new activities', async () => {
@@ -676,7 +678,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1 CKB'))).toBeInTheDocument();
     const banner = await screen.findByRole('button', {
       name: `${DEFAULT_PAGE_SIZE + 1} new activities`,
     });
@@ -756,7 +758,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     const { unmount } = render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1 CKB'))).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: '1 new activity' }));
 
     const highlightTimerIndex = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 2_000);
@@ -793,7 +795,7 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
+    expect(await screen.findByText(exactAmount('+1 CKB'))).toBeInTheDocument();
     expect(await screen.findByText('Could not refresh: refresh failed')).toBeInTheDocument();
   });
 

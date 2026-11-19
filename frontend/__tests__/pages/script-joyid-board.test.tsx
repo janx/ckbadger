@@ -104,13 +104,15 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     const metrics = within(hero.parentElement!).getByLabelText('Script figures');
     expect(metrics).toHaveTextContent('2,707,778 cells');
     expect(metrics).toHaveTextContent('Upgradable · 5 versions · last replaced 2025-11-21');
-    expect(metrics).toHaveTextContent('multisig 0x6598…d696 · has never signed');
+    // R9 (re-pinned): from sm the hero tile writes the holder at the row size
+    expect(metrics).toHaveTextContent('multisig 0x65983f1d…eed696 · has never signed');
     expect(metrics).toHaveTextContent('In use since2023-10-07');
     // Lane L: the first deployment's transaction is named, and links to its page.
     const DEPLOY = '0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5';
-    // U-09 (re-pinned): a hero tile's note at the tight size (it was 8…6)
-    expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0…33f5');
-    const deployer = within(metrics).getByRole('link', { name: '0xbac0…33f5' });
+    // U-09 (re-pinned): a hero tile's note at the tight size (it was 8…6); R9 (re-pinned): the
+    // tile is under 200 px only on a phone, and from sm the note takes the row size
+    expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0f6f0…f433f5');
+    const deployer = within(metrics).getByRole('link', { name: '0xbac0f6f0…f433f5' });
     expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}`);
     expect(deployer).toHaveAttribute('title', DEPLOY);
   });
@@ -126,14 +128,15 @@ describe('JoyID script page against the ScriptJoyid board', () => {
       expect(el.closest('[data-nobreak], .whitespace-nowrap')).not.toBeNull();
     // the deployment's shortened hash, the first day, the replacement day, the holder's name
     whole(
-      within(metrics).getByRole('link', { name: '0xbac0…33f5' }).firstElementChild ??
-        within(metrics).getByRole('link', { name: '0xbac0…33f5' })
+      within(metrics).getByRole('link', { name: '0xbac0f6f0…f433f5' }).firstElementChild ??
+        within(metrics).getByRole('link', { name: '0xbac0f6f0…f433f5' })
     );
     whole(within(metrics).getByText('2023-10-07'));
     whole(within(metrics).getByText('2025-11-21'));
     // re-pinned (A4 Chrome F2): the holder's id is the unit, its kind a word before it
-    // ("multisig 0x6598…d696" whole is 204 px at 17 px, wider than the tile's 163 px at 390)
-    whole(within(metrics).getByText('0x6598…d696'));
+    // ("multisig 0x6598…d696" whole is 204 px at 17 px, wider than the tile's 163 px at 390);
+    // R9 (re-pinned): from sm the row size, 0x65983f1d…eed696
+    whole(within(metrics).getByText('0x65983f1d…eed696'));
     // the count and its noun, one unit; "Upgradable" and its versions, two items of one list
     // re-pinned (A4 round 2): one unit each, number and noun joined by a plain space inside it,
     // so a tile narrower than the count breaks between them, never inside a word
@@ -525,7 +528,13 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const figure = hero().querySelector('[data-role="figure"]') as HTMLElement;
     expect(figure).toHaveTextContent(/^CKB in its cells/);
     const amount = figure.querySelector('[data-role="figure-amount"]') as HTMLElement;
-    expect(amount).toHaveTextContent(/^456,002,179\.570* CKB$/);
+    // the display figure in the summary form, exact in its title (readability R5, re-pinned on
+    // purpose: was "456,002,179.57")
+    expect(amount).toHaveTextContent(/^456,002,179 CKB$/);
+    expect(amount.querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '456,002,179.57 CKB'
+    );
     expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
     const row = amount.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');

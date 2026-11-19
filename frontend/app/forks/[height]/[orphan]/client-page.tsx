@@ -22,7 +22,7 @@ import {
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ReadFailure } from '@/components/read-failure';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -44,6 +44,7 @@ import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { DocumentTitle } from '@/lib/use-document-title';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 
 type MinerBlock = {
   number: number;
@@ -209,13 +210,13 @@ function ForkHeading({ event }: { event: ReorgEvent }) {
  * stored event alone and there is no branch evidence. Say so, and tell what the event records.
  */
 function StoredFork({ event }: { event: ReorgEvent }) {
-  // U-16: each shortened hash is one unit; the story is the page's lede (U-09: head)
+  // U-16: each shortened hash is one unit; the story is the page's lede: prose, the row size (R9)
   const story = (
     <>
       This node switched from {formatBlockNumber(event.oldTipNumber)}{' '}
-      <ShortId value={event.oldTipHash} kind="hash" size="head" /> to{' '}
+      <ShortId value={event.oldTipHash} kind="hash" size="row" /> to{' '}
       {formatBlockNumber(event.newTipNumber)}{' '}
-      <ShortId value={event.newTipHash} kind="hash" size="head" />
+      <ShortId value={event.newTipHash} kind="hash" size="row" />
       {unitNode(
         ` and rolled back ${formatCount(event.orphanedBlocksCount, 'block')} and ${formatCount(event.orphanedTxsCount, 'transaction')}, starting with ${formatBlockNumber(event.forkPointNumber + 1)}′.`
       )}
@@ -259,7 +260,7 @@ function narrative(data: ReorgDetail): SentencePart[][] {
         block.minerLockHash !== null && block.competingBlock!.minerLockHash === block.minerLockHash;
       const miner = same
         ? i === 0
-          ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool, 'head')})`
+          ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool, 'row')})`
           : ', again both by it'
         : '';
       push(
@@ -497,6 +498,9 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
     ),
   ];
   const nonCellbase = orphanedTransactions.filter((tx) => tx.txIndex > 0);
+  // The blocks fall to their phone rows under the table's 820 px (at 640 and 768 too), beside the
+  // narrative and the tree, which write the same miner at the row size: tight only below sm (R9).
+  const phoneSize = useTightBelowSm();
   return (
     <div className="min-w-0">
       <ForkHeading event={event} />
@@ -639,7 +643,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                           style={inkStyle(BOARD_INKS.link)}
                           title={row.hash}
                         >
-                          <ShortId value={row.hash} kind="hash" size="tight" />
+                          <ShortId value={row.hash} kind="hash" size={phoneSize} />
                         </span>
                       </>
                     ),
@@ -651,7 +655,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     left: (
                       <>
                         <span className="text-text-dim">miner </span>
-                        <Miner block={row} size="tight" />
+                        <Miner block={row} size={phoneSize} />
                       </>
                     ),
                     right: formatCount(row.transactionsCount, 'tx'),
@@ -721,7 +725,12 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     tx.totalCapacity == null ? (
                       'Unavailable'
                     ) : (
-                      <ExactCkb shannons={BigInt(tx.totalCapacity)} signed={false} tone="plain" />
+                      <CkbAmount
+                        form="column"
+                        shannons={BigInt(tx.totalCapacity)}
+                        signed={false}
+                        tone="plain"
+                      />
                     ),
                 },
               ]}
@@ -762,7 +771,8 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                         tx.totalCapacity == null ? (
                           'output capacity unavailable'
                         ) : (
-                          <ExactCkb
+                          <CkbAmount
+                            form="summary"
                             shannons={BigInt(tx.totalCapacity)}
                             signed={false}
                             tone="plain"

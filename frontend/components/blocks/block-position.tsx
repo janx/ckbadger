@@ -14,6 +14,7 @@ import { HexCode } from '@/components/ui/hex-code';
 import { Dotted } from '@/components/ui/phone-row';
 import { shortenHash } from '@/lib/shorten';
 import { unitNode } from '@/components/ui/units';
+import { SVG_TEXT } from '@/lib/chart-type';
 
 /** A canonical block beside this one, as the blocks list reports it (F2 blocks, BA-15). */
 export type BlockNeighbour = Pick<
@@ -289,7 +290,7 @@ export function BlockPosition({
                   y={tileTop + 38}
                   textAnchor="middle"
                   fill="var(--c-text-dim)"
-                  fontSize="11"
+                  fontSize={SVG_TEXT.label}
                 >
                   …
                 </text>
@@ -325,7 +326,7 @@ export function BlockPosition({
                   y={top - 4}
                   textAnchor="middle"
                   fill="var(--c-text)"
-                  fontSize="11"
+                  fontSize={SVG_TEXT.label}
                 >
                   {arc.hashes.size} proposed → committed +{arc.to - arc.from}
                 </text>
@@ -360,12 +361,18 @@ export function BlockPosition({
                     x="10"
                     y="20"
                     fill={current ? 'var(--c-text-bright)' : 'var(--c-text)'}
-                    fontSize="12"
+                    fontSize={SVG_TEXT.head}
                   >
                     {formatBlockNumber(number)}
                   </text>
                   {timestamp && (
-                    <text data-tile-time x="10" y="39" fill="var(--c-text-dim)" fontSize="11">
+                    <text
+                      data-tile-time
+                      x="10"
+                      y="39"
+                      fill="var(--c-text-dim)"
+                      fontSize={SVG_TEXT.label}
+                    >
                       {formatUtc8Time(timestamp)}
                     </text>
                   )}
@@ -416,10 +423,20 @@ export function BlockPosition({
                       stroke="var(--c-ink-quiet)"
                       strokeDasharray="3 3"
                     />
-                    <text x={uncleX + 10} y={top + 20} fill="var(--c-text)" fontSize="11">
+                    <text
+                      x={uncleX + 10}
+                      y={top + 20}
+                      fill="var(--c-text)"
+                      fontSize={SVG_TEXT.label}
+                    >
                       uncle {formatBlockNumber(uncle.number)}
                     </text>
-                    <text x={uncleX + 10} y={top + 39} fill="var(--c-text-dim)" fontSize="11">
+                    <text
+                      x={uncleX + 10}
+                      y={top + 39}
+                      fill="var(--c-text-dim)"
+                      fontSize={SVG_TEXT.label}
+                    >
                       {shortenHash(uncle.hash, 'tight')}
                     </text>
                     <text
@@ -427,7 +444,7 @@ export function BlockPosition({
                       x={uncleX + 10}
                       y={top + 58}
                       fill="var(--c-text-dim)"
-                      fontSize="11"
+                      fontSize={SVG_TEXT.label}
                     >
                       {formatUtc8Time(uncle.timestamp)}
                     </text>
@@ -455,10 +472,20 @@ export function BlockPosition({
                   aria-label={`Parent of uncle ${formatBlockNumber(uncle.number)}`}
                 >
                   <rect x={parentX} y={top} width="178" height="58" fill="var(--c-base-surface)" />
-                  <text x={parentX + 10} y={top + 21} fill="var(--c-text-dim)" fontSize="11">
+                  <text
+                    x={parentX + 10}
+                    y={top + 21}
+                    fill="var(--c-text-dim)"
+                    fontSize={SVG_TEXT.label}
+                  >
                     Parent {formatBlockNumber(uncle.number - 1)}
                   </text>
-                  <text x={parentX + 10} y={top + 41} fill="var(--c-text)" fontSize="11">
+                  <text
+                    x={parentX + 10}
+                    y={top + 41}
+                    fill="var(--c-text)"
+                    fontSize={SVG_TEXT.label}
+                  >
                     {/* SVG labels in 178 px tiles: the tight size (U-09) */}
                     {shortenHash(uncle.parentHash, 'tight')}
                   </text>
@@ -476,10 +503,15 @@ export function BlockPosition({
                     stroke="var(--c-ink-quiet)"
                     strokeDasharray="3 3"
                   />
-                  <text x={uncleX + 10} y={top + 21} fill="var(--c-text)" fontSize="11">
+                  <text x={uncleX + 10} y={top + 21} fill="var(--c-text)" fontSize={SVG_TEXT.label}>
                     Uncle {formatBlockNumber(uncle.number)}
                   </text>
-                  <text x={uncleX + 10} y={top + 41} fill="var(--c-text-dim)" fontSize="11">
+                  <text
+                    x={uncleX + 10}
+                    y={top + 41}
+                    fill="var(--c-text-dim)"
+                    fontSize={SVG_TEXT.label}
+                  >
                     {shortenHash(uncle.hash, 'tight')}
                   </text>
                 </Link>

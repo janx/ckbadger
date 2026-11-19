@@ -67,7 +67,7 @@ export function RankedBars({
               <span className="bg-bar-track flex h-1.5">
                 <span
                   data-role="share-fill"
-                  className="bg-jade h-1.5 min-w-[2px]"
+                  className="bg-jade scan-fill h-1.5 min-w-[2px]"
                   style={{
                     width: `${formatPercent(BigInt(row.count), BigInt(row.total), 2)}%`,
                   }}

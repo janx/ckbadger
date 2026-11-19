@@ -33,7 +33,8 @@ import { HeadId } from '@/components/ui/head-id';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { Address } from '@/components/ui/address';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { formatStandard } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
@@ -170,7 +171,7 @@ function CollectionFigure({
       <div className="text-section text-text-bright tabular-nums">
         {held !== null ? (
           <>
-            <ExactCkb shannons={held} signed={false} tone="plain" wrap />{' '}
+            <CkbAmount form="summary" shannons={held} signed={false} tone="plain" wrap />{' '}
             <span className="text-small text-text-dim">held in their cells</span>
           </>
         ) : (
@@ -389,7 +390,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       label: 'CKB held',
       value:
         held !== null ? (
-          <ExactCkb shannons={held} signed={false} tone="plain" wrap />
+          <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />
         ) : (
           'Not recorded'
         ),

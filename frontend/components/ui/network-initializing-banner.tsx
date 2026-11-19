@@ -20,7 +20,8 @@ export function NetworkInitializingBanner() {
     <div className="border-emphasis-dim/60 bg-base-surface/95 text-text-bright border-b py-2">
       <div className="text-small container mx-auto flex items-center gap-3 font-mono">
         <span className="eyebrow text-emphasis text-meta">Waiting to sync</span>
-        <span className="text-text-dim truncate">{detail}</span>
+        {/* the API's own sentence: it explains, the reading ink (R3) */}
+        <span className="text-text truncate">{detail}</span>
       </div>
     </div>
   );

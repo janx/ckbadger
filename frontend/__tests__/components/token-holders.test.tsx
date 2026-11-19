@@ -2,6 +2,7 @@ import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { TokenDistributionView, TokenHolders } from '@/components/asset/token-holders';
 import { api } from '@/lib/api';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import type { TokenDistribution } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
@@ -84,7 +85,7 @@ describe('Token distribution', () => {
     expect(within(table).getByText('Under 1')).toHaveClass(
       'text-body',
       'text-text-bright',
-      'leading-[18px]'
+      'leading-row'
     );
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
@@ -117,6 +118,43 @@ describe('Token distribution', () => {
       /^Balance, THolders.*0 and above/
     );
   });
+  // Readability 2026-11-18, lane B5: from xl the holder list and the balance bands stood side by
+  // side 24 px apart on one row grid, so a holder's row read on into a band's ("…tllakf 562,997.00
+  // 2.32%" into "Under 1 · 36 · <0.01%"). Between them now: a gutter twice the old one with a rule
+  // in the row-rule ink down its middle (32 px, 1 px, 32 px; a column gap in a table is 16 px).
+  it('keeps the holders and the balance bands apart: a gutter with a rule between them (B5)', () => {
+    render(
+      <TokenDistributionView
+        distribution={distribution}
+        symbol="T"
+        holders={<div data-testid="holders" />}
+      />
+    );
+    const grid = screen.getByTestId('holders').parentElement!;
+    expect(grid).toHaveClass('xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]', 'xl:gap-x-8');
+    const bands = screen.getByRole('table', { name: 'Holders by balance' });
+    const column = Array.from(grid.children).find((c) => c.contains(bands)) as HTMLElement;
+    // a column of its own around the list (the list measures its own box, without the gutter)
+    expect(column).not.toHaveAttribute('data-list-form');
+    expect(column).toHaveClass('xl:border-l', 'xl:border-row-rule', 'xl:pl-8');
+  });
+
+  // Readability B5: a head stands over what it names; in a column of a bar and its figure, the
+  // figure (the name ends where the figure ends, the ticks stay over the track).
+  it('stands each bar column’s name over its figure (B5)', async () => {
+    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    const table = screen.getByRole('table', { name: 'Holders by balance' });
+    const head = within(table).getAllByRole('columnheader')[1];
+    const name = within(head).getByText('Holders');
+    expect(name).toHaveClass('justify-end');
+    const cell = within(table).getAllByRole('row')[1].children[1] as HTMLElement;
+    const track = cell.querySelector<HTMLElement>('[data-track]')!;
+    const figure = cell.querySelector<HTMLElement>('[data-aligned-bar] > :last-child')!;
+    expect(Number.parseFloat(name.style.width)).toBe(
+      Number.parseFloat(track.style.width) + 10 + Number.parseFloat(figure.style.width)
+    );
+  });
+
   it('rejects missing holders and mismatched aggregate supply', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>
@@ -200,6 +238,22 @@ describe('Token holders (board L5)', () => {
     });
   });
 
+  // Readability B5: the Share head stands over the share, not over its bar.
+  it('stands the Share head over the share, the ticks over the track (B5)', async () => {
+    atContainerWidth(1248);
+    mount();
+    const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    const name = within(within(table).getAllByRole('columnheader')[4]).getByText('Share');
+    expect(name).toHaveClass('justify-end');
+    const cell = within(table).getAllByRole('row')[1].children[4] as HTMLElement;
+    const track = cell.querySelector<HTMLElement>('[data-track]')!;
+    const figure = cell.querySelector<HTMLElement>('[data-aligned-bar] > :last-child')!;
+    expect(figure).toHaveTextContent('2.32%');
+    expect(Number.parseFloat(name.style.width)).toBe(
+      Number.parseFloat(track.style.width) + 10 + Number.parseFloat(figure.style.width)
+    );
+  });
+
   it('writes each holder on one row-density line: rank and address bright, 2-dp amount, the rest in the title (L2-4)', async () => {
     atContainerWidth(1248);
     mount();
@@ -219,8 +273,10 @@ describe('Token holders (board L5)', () => {
     expect(within(first).getByText('JoyID')).toHaveClass('truncate');
     expect(within(first).getByText('JoyID')).toHaveAttribute('title', `0x${'9b'.repeat(32)}`);
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
-    expect(first).toHaveTextContent('562,997.00');
-    expect(first).not.toHaveTextContent('562,997.00000000');
+    // the list's summary form: whole from 1,000 up (readability R5, re-pinned on purpose: was
+    // "562,997.00", two places)
+    expect(first).toHaveTextContent('JoyID562,9972.32%');
+    expect(first).not.toHaveTextContent('562,997.00');
     expect(first).toHaveAttribute(
       'title',
       `#1 · ckb1qrgqep8s${'q'.repeat(40)}tllakf · JoyID · 562,997 RGB++ · 2.32% of supply`
@@ -233,6 +289,7 @@ describe('Token holders (board L5)', () => {
 
   it('gives each holder two lines at 358 px: rank inline with address, lock and amount · the bar', async () => {
     atContainerWidth(358);
+    atViewportWidth(390);
     mount();
     const [first] = await screen.findAllByTestId('holder-row-mobile');
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
@@ -242,7 +299,8 @@ describe('Token holders (board L5)', () => {
         tone: 'head',
         // U-09 (re-pinned): the phone row's address at the tight size
         left: '1ckb1…tllakf JoyID',
-        right: '562,997.00000000',
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "562,997.00000000")
+        right: '562,997',
       },
       // Re-pinned with ruling R7 (UI review 2026-11-14): the first row carries the page's axis
       // mark (41.23 % at most: 60 %, the table's), and the share's number sits right after its
@@ -328,6 +386,7 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
 
   it('writes the phone row’s lock "lock <code hash>" beside the holder', async () => {
     atContainerWidth(358);
+    atViewportWidth(390);
     mount();
     const [named, unnamed, notIndexed] = await screen.findAllByTestId('holder-row-mobile');
     expect(phoneLines(named)[0].left).toMatch(/ JoyID$/);
@@ -472,8 +531,11 @@ describe('Token holders where the table does not fit (L5)', () => {
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
     // Re-pinned with ruling R7: 10.00 % is drawn on the page's rounded maximum (10 %), the axis
     // mark over the bar, the number beside it — no longer full because 10 % was the clamp.
+    // R9 (re-pinned): a container just under the table is a desktop column (the holders beside the
+    // balance bands from 1280, 545 px), so at jsdom's 1024 px viewport the holder takes the row
+    // size, 10…6 for a lock hash (it was the tight 6…4)
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '10x1111…1111 JoyID', right: '100' },
+      { key: 'holder', tone: 'head', left: '10x11111111…111111 JoyID', right: '100' },
       { key: 'axis', tone: 'quiet', left: '010%', right: null },
       { key: 'share', tone: 'quiet', left: '10.00%', right: null },
     ]);

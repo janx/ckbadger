@@ -126,7 +126,7 @@ describe('TransactionsPage', () => {
     // Table-rows T5: the hash is the row's key, 13 px bright on an 18 px line (it read in neutral
     // 12 px ink); still no colour of its own.
     for (const hashDisplay of screen.getAllByTitle(hash)) {
-      expect(hashDisplay).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
+      expect(hashDisplay).toHaveClass('text-text-bright', 'text-body', 'leading-row');
       expect(hashDisplay).not.toHaveClass('text-small');
       expect(hashDisplay.children).toHaveLength(0);
       expect(hashDisplay.closest('a')).toHaveAttribute('href', `/mainnet/tx/${hash}`);
@@ -137,7 +137,9 @@ describe('TransactionsPage', () => {
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     expect(table).toHaveTextContent('What it did');
     expect(screen.getByText('newest first · cellbase rows set back')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Older →' })).toBeDisabled();
+    // Re-pinned on purpose (readability B5): this fixture is one page (no older, no newer), and
+    // one page draws no pager (it drew a disabled "Older →").
+    expect(screen.queryByRole('button', { name: 'Older →' })).toBeNull();
   });
 });
 
@@ -554,7 +556,7 @@ describe('Transactions pool view', () => {
     // Table-rows T5: the hash is the pool row's key, at body and bright on an 18 px line (it read
     // in neutral 12 px ink); still no status colour on it.
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
-      expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
+      expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-row');
       expect(hash).not.toHaveClass('text-small');
       // the table's 17 characters, the row size (U-09: see the width budget above)
       expect(hash).toHaveTextContent(/^0xabababab…ababab$/);
@@ -752,6 +754,84 @@ it('draws awaiting-index pool squares hollow, apart from pending (cyan) and prop
 
 // L4 (responsive plan, board L2): below sm the chrome is one control line, and a phone reads
 // twenty transactions a page.
+// Readability 2026-11-18, lane B5: what a reader needs to read a column stood after the fiftieth
+// row ("Value is what the participants received…"; the pool's proposal window): it stands above
+// its table.
+describe('Transactions notes a reader needs, above the table (readability B5)', () => {
+  const precedes = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it('says how to read the Value column before the committed table', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [
+        {
+          hash: `0x${'cd'.repeat(32)}`,
+          blockNumber: 123456,
+          blockHash: `0x${'ef'.repeat(32)}`,
+          index: 1,
+          inputsCount: 2,
+          outputsCount: 3,
+          fee: '100000000',
+          value: '123456789',
+          txSize: 226,
+          cycles: 1000000,
+          cyclesStatus: 'complete',
+          activity: feedSamples.eightParties,
+          isCellbase: false,
+          timestamp: '2026-02-20T00:00:00Z',
+        },
+      ],
+      total: 1,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    render(<TransactionsPage />);
+    const table = await screen.findByRole('table', { name: 'Committed transactions' });
+    const note = screen.getByText(/^Value is what the participants received\./);
+    expect(precedes(note, table)).toBe(true);
+  });
+
+  it('says how to read the pool before its table', async () => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      truncated: true,
+      total: 1,
+      totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
+      data: [
+        {
+          hash: `0x${'ab'.repeat(32)}`,
+          status: 'proposed',
+          value: null,
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '1709221',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
+          activity: null,
+        },
+      ],
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    for (const note of [
+      screen.getByText(/^Newest first, 50 a page\. A proposed transaction enters a block/),
+      screen.getByText(/^This node's tracked pool is truncated/),
+    ])
+      expect(precedes(note, table)).toBe(true);
+  });
+});
+
 describe('Transactions chrome on a phone (board L2, R2)', () => {
   afterEach(() => vi.unstubAllGlobals());
 

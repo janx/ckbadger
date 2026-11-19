@@ -9,8 +9,7 @@ import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { LockKind } from '@/components/ui/lock-kind';
-import { ExactCkb } from '@/components/activity-event-row';
-import { AssetAmount } from '@/components/asset/inventory-table';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
@@ -18,6 +17,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 const DAY = 86400000;
 /** The weekly noun for one (the one plural rule, U-15). */
 const WEEKLY_ONE = { transfers: 'transfer', transactions: 'transaction' } as const;
@@ -85,6 +85,8 @@ export function AssetHistory({
     throw new Error(`A token's history is drawn in the token class, not ${assetClass}`);
   const [range, setRange] = useState<'1W' | '1M' | '1Y' | 'All'>('All');
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  // the supply events' phone rows are drawn at 1024 too, beside the holders' table (R9)
+  const phoneSize = useTightBelowSm();
   const end = time(completeThrough),
     from = range === 'All' ? null : end - { '1W': 6, '1M': 29, '1Y': 364 }[range] * DAY;
   let previous = -Infinity;
@@ -237,7 +239,7 @@ export function AssetHistory({
       render: (e) => (
         <>
           {e.kind === 'mint' ? '+' : '−'}
-          <AssetAmount amount={e.amount} decimals={token!.decimals} />
+          <TokenAmount form="column" amount={e.amount} decimals={token!.decimals} />
         </>
       ),
     },
@@ -247,7 +249,9 @@ export function AssetHistory({
       minWidth: 160,
       numeric: true,
       className: '!whitespace-normal',
-      render: (e) => <AssetAmount amount={e.supplyAfter} decimals={token!.decimals} />,
+      render: (e) => (
+        <TokenAmount form="column" amount={e.supplyAfter} decimals={token!.decimals} />
+      ),
     },
     {
       key: 'party',
@@ -277,8 +281,9 @@ export function AssetHistory({
   ];
   const peakItem = peak && (
     <span title="the most CKB its cells held on any complete day">
-      peak <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
-      {unitNode(peak.date)}
+      peak{' '}
+      <CkbAmount form="column" shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap />{' '}
+      on {unitNode(peak.date)}
     </span>
   );
   const weekText =
@@ -301,12 +306,25 @@ export function AssetHistory({
           {unitNode(point.date)}
         </span>,
         <>
-          held <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />
+          held{' '}
+          <CkbAmount
+            form="column"
+            shannons={BigInt(point.capacity)}
+            signed={false}
+            tone="plain"
+            wrap
+          />
         </>,
         <>
           <Swatch color={DATA_COLOR} />
           <span title="Occupied pays for the state kept on CKB.">occupied</span>{' '}
-          <ExactCkb shannons={BigInt(point.occupiedCapacity)} signed={false} tone="plain" wrap />
+          <CkbAmount
+            form="column"
+            shannons={BigInt(point.occupiedCapacity)}
+            signed={false}
+            tone="plain"
+            wrap
+          />
           {BigInt(point.capacity) > BigInt(0) && (
             <span className="text-text-dim">
               {' '}
@@ -317,7 +335,8 @@ export function AssetHistory({
         <>
           <Swatch color={CLASS_COLORS.ckb} />
           <span title="Free is CKB held in the same cells beyond that byte cost.">free</span>{' '}
-          <ExactCkb
+          <CkbAmount
+            form="column"
             shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
             signed={false}
             tone="plain"
@@ -328,7 +347,8 @@ export function AssetHistory({
           ? [
               <>
                 <Swatch color={CLASS_COLORS.tokens} />
-                Supply <AssetAmount amount={point.supply!} decimals={token.decimals} />{' '}
+                Supply{' '}
+                <TokenAmount form="column" amount={point.supply!} decimals={token.decimals} />{' '}
                 {token.symbol}
               </>,
             ]
@@ -456,12 +476,14 @@ export function AssetHistory({
             mobileRow={(e, wide) => {
               const change = (
                 <span className="whitespace-nowrap">
-                  {eventColumns[1].render(e)} {eventColumns[3].render(e)}
+                  {eventColumns[1].render(e)} {e.kind === 'mint' ? '+' : '−'}
+                  <TokenAmount form="summary" amount={e.amount} decimals={token.decimals} />
                 </span>
               );
               const after = (
                 <span>
-                  supply after <AssetAmount amount={e.supplyAfter} decimals={token.decimals} />
+                  supply after{' '}
+                  <TokenAmount form="summary" amount={e.supplyAfter} decimals={token.decimals} />
                 </span>
               );
               const where = [
@@ -472,7 +494,9 @@ export function AssetHistory({
                   tx {e.txIndex} · sequence {e.transferSequence}
                 </AppLink>,
               ];
-              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome sweep)
+              // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
+              // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
+              // below sm (R9).
               const party = (
                 <span>
                   {e.kind === 'mint' ? 'to ' : 'from '}
@@ -480,7 +504,7 @@ export function AssetHistory({
                     <Hash
                       hash={e.address ?? e.lockHash}
                       kind={e.address ? 'address' : 'hash'}
-                      size="tight"
+                      size={phoneSize}
                       copyable={false}
                       className="text-meta"
                     />
@@ -488,7 +512,7 @@ export function AssetHistory({
                   <LockKind
                     lockKind={e.lockKind}
                     lockCodeHash={e.lockCodeHash}
-                    size="tight"
+                    size={phoneSize}
                     className="text-text-dim text-meta"
                   />
                 </span>

@@ -9,7 +9,7 @@ import {
   overGround,
   type PaletteKey,
 } from '@/lib/palette';
-import { CLASS_KEYS, DATA_KEY } from '@/lib/design-tokens';
+import { CLASS_KEYS, CODE_CLASS_KEYS, DATA_KEY } from '@/lib/design-tokens';
 import { CONCENTRATION_STEPS } from '@/components/ui/concentration-bar';
 import { PROVIDER_OPACITY } from '@/app/network/distributions';
 
@@ -20,14 +20,23 @@ const BARS: { name: string; key: PaletteKey; steps: readonly number[] }[] = [
   { name: 'network "where they run"', key: DATA_KEY, steps: PROVIDER_OPACITY },
   // dao-board.tsx CLAIMABLE_FILL: the claimable part of the requested withdrawals
   { name: 'DAO claimable', key: CLASS_KEYS.dao, steps: [0.45] },
+  // script-code-evidence.tsx ScriptCodeClassBar (/scripts, "Who can change the code"): every class's
+  // opaque fill writes its name and share inside it where they fit (readability F1 follow-up: the bar
+  // was missing here, and its words had a hand-picked ink)
+  ...Object.entries(CODE_CLASS_KEYS).map(([cls, { fill }]) => ({
+    name: `scripts "who can change the code" ${cls}`,
+    key: fill,
+    steps: [1],
+  })),
 ];
 
 describe('overGround', () => {
   it('lays a palette colour over a ground as the eye sees it', () => {
     expect(overGround('dark', 'gold', 1)).toBe(PALETTE.dark.gold);
     expect(overGround('dark', 'gold', 0)).toBe(PALETTE.dark['base-bg']);
-    // #c9a45c at 70 % over #15120f
-    expect(overGround('dark', 'gold', 0.7)).toBe('#937845');
+    // #e4bf76 at 70 % over #15120f (re-pinned on purpose with the night gold of readability ruling
+    // R2; with #c9a45c it was #937845)
+    expect(overGround('dark', 'gold', 0.7)).toBe('#a68b57');
     // #80600f at 70 % over the paper #f3eee4
     expect(overGround('light', 'gold', 0.7)).toBe('#a38b4f');
     expect(overGround('light', 'gold', 0.7, 'base-surface')).toBe('#a58d53');

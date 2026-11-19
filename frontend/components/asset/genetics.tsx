@@ -324,7 +324,10 @@ export function ObjectGeneticsEvidence({
 }: {
   evidence: ObjectGenetics;
   subject: string;
-  /** F2 objects (OB-14): the decoder's own output files, from `/spore/objects/{id}/decode`. */
+  /**
+   * F2 objects (OB-14): the decoder's own output files and the picture drawn from the traits, if
+   * any, from `/spore/objects/{id}/decode`.
+   */
   decoded?: SporeDobDecoded;
   /** Lane E follow-up: the cluster's description, for a pattern it declares (`sequencingGenes`). */
   description?: string | null;
@@ -363,15 +366,13 @@ export function ObjectGeneticsEvidence({
           </pre>
         </details>
       )}
-      {decoded && decoded.media.length > 0 && (
+      {decoded && (decoded.media.length > 0 || decoded.render !== null) && (
         <ul aria-label="Decoder output" className="text-meta space-y-1">
           {decoded.media.map((m) => (
             // words break between them; a media type anyone can mint breaks anywhere if it must
-            <li key={`${m.hash}:${m.step ?? 'x'}`} className="[overflow-wrap:anywhere]">
+            <li key={m.step} className="[overflow-wrap:anywhere]">
               <span className="text-text">
-                {m.mediaType} · {unitText(formatCount(m.size, 'byte'))}
-                {m.step !== null ? ` · step ${m.step + 1}` : ''}
-                {m.role ? ` · ${m.role}` : ''}
+                {m.mediaType} · {unitText(formatCount(m.size, 'byte'))} · step {m.step + 1}
               </span>{' '}
               <span className="text-text-dim">
                 sha256 <ShortId value={m.hash} kind="hash" size="row" />
@@ -386,6 +387,22 @@ export function ObjectGeneticsEvidence({
               </a>
             </li>
           ))}
+          {/* The picture /render draws holds no stored byte: it has no byte count and no sha256. */}
+          {decoded.render !== null && (
+            <li className="[overflow-wrap:anywhere]">
+              <span className="text-text">
+                {decoded.render.mediaType} · drawn from the traits on request, not a stored file
+              </span>{' '}
+              <a
+                href={`${apiBaseFor(resolveActiveNetwork())}${decoded.render.url}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-aqua"
+              >
+                Open the picture ↗
+              </a>
+            </li>
+          )}
         </ul>
       )}
       {cached.traits.length > 0 && (
@@ -480,7 +497,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               header: <span className="text-meta">gene</span>,
               render: (g) => (
                 <span
-                  className="block truncate leading-[18px]"
+                  className="leading-row block truncate"
                   style={{ color: g.owns ? g.color : undefined }}
                 >
                   {g.name}
@@ -493,7 +510,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: 110,
               header: <span className="text-meta">bytes</span>,
               render: (g) => (
-                <span className="text-text-dim block truncate tabular-nums leading-[18px]">
+                <span className="text-text-dim leading-row block truncate tabular-nums">
                   {span(g.offset, g.length)}
                   {g.truncated ? ' · clipped' : ''}
                 </span>
@@ -505,7 +522,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: 100,
               header: <span className="text-meta">rule</span>,
               render: (g) => (
-                <span className="text-text-dim block truncate leading-[18px]">{g.rule}</span>
+                <span className="text-text-dim leading-row block truncate">{g.rule}</span>
               ),
             },
             {
@@ -516,7 +533,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               render: (g) => (
                 // a cut value carries the whole of it in its title (the lead's finding)
                 <span
-                  className="text-text block truncate leading-[18px]"
+                  className="text-text leading-row block truncate"
                   title={g.value ?? `0x${g.raw}`}
                 >
                   {g.value ?? `0x${g.raw}`}
@@ -675,7 +692,7 @@ function PatternReading({
       .join(' · ');
   const steps = pattern.steps;
   const foundHead = genetics?.complete ? `found across ${count(genetics.eligibleItems)}` : 'found';
-  const cell = 'block truncate leading-[18px]';
+  const cell = 'block truncate leading-row';
   // Responsive R1: a table while its columns fit the measured column, else one phone row a gene.
   const geneTable = (shown: readonly GeneRow[], label: string) => (
     <ListTable

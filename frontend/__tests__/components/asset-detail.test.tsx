@@ -187,6 +187,11 @@ describe('Asset domain layout', () => {
     expect(owner.querySelector('dd')).toHaveClass('text-body');
     // One row from lg up: every metric in its own column of one grid row.
     expect(metrics.querySelector('dl')).toHaveClass('lg:grid-flow-col');
+    // Readability 2026-11-18 (lane A): a column never falls under its content's min-content
+    // width. Equal columns (minmax(0, 1fr)) gave a .cell identity's "CKB held in its cell" 148.6
+    // px of the 148.8 its one-line value needs at 1280, and the figure broke over two lines.
+    expect(metrics.querySelector('dl')).toHaveClass('lg:auto-cols-[minmax(min-content,1fr)]');
+    expect(metrics.querySelector('dl')!.className).not.toMatch(/auto-cols-\[minmax\(0,1fr\)\]/);
     expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
     const grid = container.querySelector('[data-tier="1"]')!;
     expect(grid.className).not.toMatch(/grid-cols-\[minmax\(0,1fr\)_260px\]/);

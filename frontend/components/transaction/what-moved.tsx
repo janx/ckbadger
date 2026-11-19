@@ -6,7 +6,8 @@ import { CompositionBadge } from '@/components/ui/composition-mark';
 import { LockKind } from '@/components/ui/lock-kind';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { TerminalPanel } from '@/components/ui/terminal-panel';
-import { ExactCkb, formatStandard } from '@/components/activity-event-row';
+import { formatStandard } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
@@ -29,6 +30,8 @@ import {
 import { cn } from '@/lib/utils';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
 
 /** What the page lights in the cells diagram when a flow's party or asset is hovered. */
 export type WhatMovedHover =
@@ -37,9 +40,9 @@ export type WhatMovedHover =
 
 /** The ribbon form needs this much width; narrower, each flow is a list (RESPONSIVE_LAYOUT rule 4). */
 export const RIBBON_FORM_MIN_W = 700;
-/** A party end: two 18 px lines; the pitch leaves 10 px between neighbours. */
-const NODE_H = 40;
-const PITCH = 50;
+/** A party end: two row lines (lib/type-metrics.ts, 18 px) and 4 px; the pitch leaves 10 px between neighbours. */
+export const NODE_H = 2 * ROW_LINE_PX + 4;
+const PITCH = NODE_H + 10;
 /** The ribbons stack on the name plate 3 px apart. */
 const STACK_GAP = 3;
 
@@ -85,7 +88,7 @@ function endStroke(end: FlowEnd): { opacity: number | null; dashed: boolean } {
 
 /**
  * The asset's name, for the plate and for a reader; an id in it at the size of the strip's form
- * (U-09): `row` in the ribbon, `tight` in the narrow list.
+ * (U-09): `row` in the ribbon and in the narrow list from sm, `tight` in the list below sm (R9).
  */
 function assetName(asset: FlowAsset, size: ShortSize): string {
   switch (asset.kind) {
@@ -115,7 +118,8 @@ function assetHref(asset: FlowAsset): string | null {
 
 /** An end's exact amount in the asset's unit; an object or identity moves whole, so none. */
 function Amount({ asset, amount, size }: { asset: FlowAsset; amount: bigint; size: ShortSize }) {
-  if (asset.kind === 'ckb') return <ExactCkb shannons={amount} signed={false} tone="plain" />;
+  if (asset.kind === 'ckb')
+    return <CkbAmount form="column" shannons={amount} signed={false} tone="plain" />;
   if (asset.kind !== 'token') return null;
   const decimals = asset.item.decimals ?? null;
   // A token without known decimals is written in raw units and marked so; its name stays on the
@@ -175,7 +179,7 @@ function EndText({
     const address = end.party.address;
     const codeHash = address === null ? null : (lockCodeHashes.get(address) ?? null);
     return (
-      <div className={cn('min-w-0 leading-[18px]', alignClass)}>
+      <div className={cn('leading-row min-w-0', alignClass)}>
         {/* One line, never two: the address whole, the lock kind truncated if the column is
             narrow (its hover carries the code hash). */}
         <div
@@ -221,12 +225,12 @@ function EndText({
         type="button"
         onClick={onExpand}
         aria-expanded={false}
-        className={cn('hover:text-jade block min-w-0 leading-[18px]', alignClass)}
+        className={cn('hover:text-jade leading-row block min-w-0', alignClass)}
       >
         {body}
       </button>
     );
-  return <div className={cn('min-w-0 leading-[18px]', alignClass)}>{body}</div>;
+  return <div className={cn('leading-row min-w-0', alignClass)}>{body}</div>;
 }
 
 /** The asset's name plate: its mark and name (a link to its page), an object's composition and id. */
@@ -453,6 +457,9 @@ function ListStrip({
     from: false,
     to: false,
   });
+  // the list is drawn at 1024 too (the transaction's 640 px column), beside the summary, the
+  // balances and the tiles, which write the same parties at the row size: tight only below sm (R9)
+  const size = useTightBelowSm();
   const list = (ends: FlowEnd[], which: 'from' | 'to') => (
     <ul data-flow-side={which} className="flex flex-col gap-1.5">
       {ends.map((end, i) => (
@@ -469,7 +476,7 @@ function ListStrip({
             end={end}
             lockCodeHashes={lockCodeHashes}
             align="left"
-            size="tight"
+            size={size}
             onExpand={() => setExpanded((e) => ({ ...e, [which]: true }))}
           />
         </li>
@@ -481,7 +488,7 @@ function ListStrip({
   return (
     <div
       role="group"
-      aria-label={`${assetName(flow.asset, 'tight')} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
+      aria-label={`${assetName(flow.asset, size)} from ${formatCount(from.length, 'party', 'parties')} to ${formatCount(to.length, 'party', 'parties')}`}
       data-flow={flow.key}
       data-form="list"
       className="flex flex-col gap-2"
@@ -497,7 +504,7 @@ function ListStrip({
           onMouseEnter={() => onHover?.({ t: 'asset', asset: flow.asset })}
           onMouseLeave={() => onHover?.(null)}
         >
-          <Plate asset={flow.asset} flow={flow} size="tight" />
+          <Plate asset={flow.asset} flow={flow} size={size} />
         </div>
       </div>
       <span className="eyebrow text-text-dim text-meta">to</span>

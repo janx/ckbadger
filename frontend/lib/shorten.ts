@@ -1,26 +1,38 @@
 /**
- * The one shortening rule for ids (UI review 2026-11-14, U-09, PB-19; `docs/RESPONSIVE_LAYOUT.md`,
- * "Formats"). An id is a hash or an address; any other hex id (script args, a peer id, a record
- * value, a channel id) takes the hash column. It is written at one of three sizes:
+ * The one shortening rule for ids (UI review 2026-11-14, U-09, PB-19; readability 2026-11-18, R9;
+ * `docs/RESPONSIVE_LAYOUT.md`, "Formats"). An id is a hash or an address; any other hex id (script
+ * args, a peer id, a record value, a channel id) takes the hash column. It is written at one of
+ * three sizes:
  *
- * | size    | hash | address | where                                              |
- * | ------- | ---- | ------- | -------------------------------------------------- |
- * | `head`  | 12…8 | 12…8    | an h1, a lede                                      |
- * | `row`   | 10…6 | 10…6    | tables, feeds, tiles                               |
- * | `tight` | 6…4  | 4…6     | a phone row, a chart label, a tile under 200 px    |
+ * | size    | hash | address | where                                                          |
+ * | ------- | ---- | ------- | -------------------------------------------------------------- |
+ * | `head`  | 12…8 | 4…8     | an h1 and a title line only                                    |
+ * | `row`   | 10…6 | 4…8     | tables, feeds, tiles, and prose: a lede, a sentence, a note    |
+ * | `tight` | 6…4  | 4…6     | below `sm` (a phone row), an SVG or tile label under 200 px,   |
+ * |         |      |         | a browser tab's title                                          |
  *
- * A tight address keeps the network in its head (`ckb1`, `ckt1`) and its identity in the tail; the
- * characters after `ckb1` start the lock's code hash, the same for every address of a lock. At 11
- * characters it is a tight hash's width.
+ * An address keeps its network and its identity: `ckb1` (or `ckt1`) and its tail, never more of
+ * its head. The characters after `ckb1` are the address format and the lock's code hash, the same
+ * for every address of a lock: two default-lock addresses share their first 58 characters, so a
+ * head of `ckb1qzda0c` spends six characters on what every row of a list has in common and the
+ * tail is all that tells the rows apart. A lock is named beside the address (the row's lock
+ * label), never by the head of it. An address is 13 characters at the head and row sizes, 11 at
+ * tight (a tight hash's width).
+ *
+ * A page writes one id in one form: prose takes the row form, for a hash too, so a party named in
+ * a lede is the same string as in the table under it; `head` is for the page's own name. A phone
+ * row that is also drawn in a desktop column, or a tile under 200 px only on a phone, takes its
+ * size from `useTightBelowSm` (tight below `sm`, the row size from it).
  *
  * Counts are characters of the value as written (`0x` and `ckb1` included). The ellipsis is the
  * one character `…`. A value no longer than its shortened form is written whole. An out point is
  * its hash at that size and `:N`.
  *
  * This module is the one place an id is cut and the ellipsis is written
- * (`__tests__/lib/shorten-gate.test.ts`). JSX writes a shortened id through its renderer
- * (`HexCode`, `Hash`, `Address`, `ShortId`, which keep it one unbroken unit); a string that is not
- * JSX (an SVG or canvas label, a chart model, a document title) calls the functions here.
+ * (`__tests__/lib/shorten-gate.test.ts`, which also holds where `head` and `tight` may be chosen).
+ * JSX writes a shortened id through its renderer (`HexCode`, `Hash`, `Address`, `ShortId`, which
+ * keep it one unbroken unit); a string that is not JSX (an SVG or canvas label, a chart model, a
+ * document title) calls the functions here.
  */
 
 export type ShortSize = 'head' | 'row' | 'tight';
@@ -38,8 +50,8 @@ export const ELLIPSIS = '…';
 
 /** The three sizes for the two kinds of id. */
 export const SHORT_FORMS: Readonly<Record<ShortSize, Readonly<Record<IdKind, ShortForm>>>> = {
-  head: { hash: { head: 12, tail: 8 }, address: { head: 12, tail: 8 } },
-  row: { hash: { head: 10, tail: 6 }, address: { head: 10, tail: 6 } },
+  head: { hash: { head: 12, tail: 8 }, address: { head: 4, tail: 8 } },
+  row: { hash: { head: 10, tail: 6 }, address: { head: 4, tail: 8 } },
   tight: { hash: { head: 6, tail: 4 }, address: { head: 4, tail: 6 } },
 };
 

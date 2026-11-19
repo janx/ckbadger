@@ -37,9 +37,10 @@ describe('ForksPage', () => {
     expect(within(hero).getByRole('heading', { level: 1, name: 'Forks' })).toHaveClass(
       'text-index'
     );
-    // R13: one short lede, dim, ≤ 90 characters, with the way down to tier 2
+    // R13: one short lede, ≤ 90 characters, with the way down to tier 2; in the reading ink, a
+    // sentence that explains (re-pinned with readability ruling R3; it was dim)
     const lede = within(hero).getByText(/^Two blocks, one height: one stays, one is an uncle\./);
-    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    expect(lede).toHaveClass('text-body', 'text-text', 'max-w-[560px]');
     // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
     expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
@@ -281,12 +282,15 @@ describe('ForksPage', () => {
     expect(more).toHaveClass('text-small');
     expect(more).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByText(fullText(/18 switches/))).toBeNull();
-    // expanding is the link: every row, every column, in place, then the pager
+    // expanding is the link: every row, every column, in place. Re-pinned on purpose (readability
+    // B5): the eighteen are one page, and one page draws no pager (it said "Showing 1–18 of 18
+    // switches"); the count stays in the heading.
     fireEvent.click(more);
     expect(bodyRows()).toHaveLength(18);
     expect(within(table()).getAllByRole('columnheader')).toHaveLength(6);
     expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
-    expect(screen.getByText(/18 switches/)).toBeInTheDocument();
+    expect(screen.queryByText(/18 switches/)).toBeNull();
+    expect(heading).toHaveAccessibleName('branch switches 18 · this node');
   });
 
   it('needs no expander for five switches or fewer', async () => {
@@ -298,7 +302,12 @@ describe('ForksPage', () => {
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(table().querySelectorAll('tbody tr')).toHaveLength(5);
     expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
-    expect(screen.getByText(/5 switches/)).toBeInTheDocument();
+    // Re-pinned on purpose (readability B5): five switches are one page, and one page draws no
+    // pager (it said "Showing 1–5 of 5 switches"); the count stays in the heading.
+    expect(screen.queryByText(/5 switches/)).toBeNull();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'branch switches 5 · this node' })
+    ).toBeInTheDocument();
   });
 
   it('names both miners by address tail and marks a fork one miner had against itself (FF-L3)', async () => {
@@ -324,8 +333,9 @@ describe('ForksPage', () => {
     render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
     expect(within(table()).getByText('same miner')).toBeInTheDocument();
-    // U-09 (re-pinned): the table's unnamed miners at the row size (it was the tail alone)
-    const miners = within(table()).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    // U-09 (re-pinned): the table's unnamed miners at the row size (it was the tail alone); R9
+    // (re-pinned): an address's row size is `ckb1…` and its last 8 characters
+    const miners = within(table()).getAllByRole('link', { name: 'ckb1…qw93hhsj' });
     expect(miners).toHaveLength(2);
     expect(miners[0]).toHaveAttribute('href', `/mainnet/address/${address}`);
   });
@@ -357,9 +367,9 @@ describe('ForksPage', () => {
       'href',
       `/mainnet/address/${address}`
     );
-    expect(within(table()).getByRole('link', { name: 'ckb1qzda0c…2cdyx8' })).toBeInTheDocument();
+    expect(within(table()).getByRole('link', { name: 'ckb1…qq2cdyx8' })).toBeInTheDocument();
     // T5: the fork point is the row's one bright thing; both miners read in body ink.
-    for (const name of ['Example Pool', 'ckb1qzda0c…2cdyx8'])
+    for (const name of ['Example Pool', 'ckb1…qq2cdyx8'])
       expect(within(table()).getByRole('link', { name })).not.toHaveClass('text-text-bright');
   });
 

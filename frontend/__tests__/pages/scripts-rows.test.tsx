@@ -9,6 +9,9 @@ vi.mock('@/lib/api', () => ({
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 
+/** The px between an AlignedBar's track and its figure (its `gap-2.5`). */
+const BAR_FIGURE_GAP = 10;
+
 // Table-rows plan L1-1 (board Scripts.dc.html, rules T1–T6, ruling D3): one 40 px line per script —
 // name + role tag, code status, live cells, CKB with the page's one bar, occupied share. The
 // description, the holder and date, "of N ever", the exact amount and the occupied CKB are the
@@ -163,8 +166,11 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
   it('heads its columns at 11 px (T5)', async () => {
     render(<ScriptsPage />);
     const t = await table();
+    // Re-pinned on purpose (B5): the one bar column is now Occupied (index 4, was CKB at 3); its
+    // name is the first line of its scale head.
     for (const [i, h] of within(t).getAllByRole('columnheader').entries())
-      if (i !== 3) expect(h.firstElementChild).toHaveClass('text-meta');
+      if (i !== 4) expect(h.firstElementChild).toHaveClass('text-meta');
+      else expect(h.firstElementChild?.firstElementChild).toHaveClass('text-meta');
   });
 
   it('is one 40 px line a row: row density, every cell centred (T1, T2)', async () => {
@@ -180,7 +186,7 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     render(<ScriptsPage />);
     const t = await table();
     const name = within(t).getByRole('link', { name: 'JoyID' });
-    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const [script] = cells(rowOf(t, 'JoyID'));
     expect(
       [...script.querySelectorAll<HTMLElement>('[data-row-tag]')].map((tag) => [
@@ -248,49 +254,38 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     );
   });
 
-  it('draws CKB in its cells as the page one 8 px bar on the page scale, the amount to 2 dp (T4)', async () => {
+  // Re-pinned on purpose (B5, plan §7.6): the CKB column's 8 px bar on the page scale (50B, "0 ·
+  // 25B · 50B") left the list, a 2 px stub on most rows. The amount is the list's summary form
+  // (readability R5, re-pinned on purpose: it was cut to 2 dp).
+  it('prints CKB in its cells as its summary amount, with no bar (T4, B5)', async () => {
     render(<ScriptsPage />);
     const t = await table();
-    // The page's largest, 46,743,236,111 CKB, rounded up to a round 1 / 1.5 / 2 / 2.5 / 3 / 4 / 5 /
-    // 6 / 8 × 10^k: 50B, its middle marked (board: "0 · 25B · 50B").
     const head = within(t).getAllByRole('columnheader')[3];
-    expect(
-      [...head.querySelectorAll('[data-scale-ticks] > span')].map((n) => n.textContent)
-    ).toEqual(['0', '25B', '50B']);
-    const bars = t.querySelectorAll('tbody [data-aligned-bar]');
-    expect(bars).toHaveLength(rows.length);
+    expect(head.querySelector('[data-scale-ticks]')).toBeNull();
+    for (const row of within(t).getAllByRole('row').slice(1))
+      expect(cells(row)[3].querySelector('[data-track]')).toBeNull();
     const ckb = cells(rowOf(t, 'JoyID'))[3];
-    const track = ckb.querySelector<HTMLElement>('[data-track]')!;
-    expect(track.style.height).toBe('8px');
-    const width = Number.parseFloat(track.style.width);
-    // 281,900,260 of 50,000,000,000 CKB is under 2 px of the track: the 2 px minimum mark.
-    const pw = cells(rowOf(t, 'PW Lock'))[3].querySelector<HTMLElement>('[data-segment]')!;
-    expect((281900260 / 50e9) * width).toBeLessThan(2);
-    expect(Number.parseFloat(pw.style.width)).toBe(2);
-    const dl = cells(rowOf(t, 'Default Lock'))[3].querySelector<HTMLElement>('[data-segment]')!;
-    expect(Number.parseFloat(dl.style.width)).toBeCloseTo((46743236111 / 50e9) * width, 1);
-    // Zero stays empty.
-    expect(
-      Number.parseFloat(
-        cells(rowOf(t, 'AlwaysSuccess'))[3].querySelector<HTMLElement>('[data-segment]')!.style
-          .width
-      )
-    ).toBe(0);
-    expect(ckb).toHaveTextContent(/^454,352,694\.86$/);
-    expect(cells(rowOf(t, 'AlwaysSuccess'))[3]).toHaveTextContent(/^0\.00$/);
-    // 2 dp by truncation: .23594289 is .23, never rounded up to .24.
-    expect(cells(rowOf(t, 'Default Lock'))[3].querySelector('[data-ckb-2dp]')!.textContent).toBe(
-      '46,743,236,111.96'
+    // Whole CKB from 1,000 up, cut, never rounded up; the exact value in the title; zero a dim 0.
+    expect(ckb).toHaveTextContent(/^454,352,694$/);
+    expect(ckb.querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '454,352,694.86181731 CKB'
+    );
+    expect(cells(rowOf(t, 'AlwaysSuccess'))[3]).toHaveTextContent(/^0$/);
+    expect(cells(rowOf(t, 'Default Lock'))[3].querySelector('[data-ckb-amount]')!.textContent).toBe(
+      '46,743,236,111'
     );
     expect(ckb.textContent).not.toMatch(/\d\.\d{8}/);
   });
 
+  // Re-pinned on purpose (B5): the share now stands right of its bar, so the dim share is the bar's
+  // figure, not the cell's first element.
   it('keeps the occupied share in the last column, dim', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const occupied = cells(rowOf(t, 'JoyID'))[4];
     expect(occupied).toHaveTextContent(/^4\.20%$/);
-    expect(occupied.firstElementChild).toHaveClass('text-text-dim');
+    expect(within(occupied).getByText('4.20%')).toHaveClass('text-text-dim');
   });
 
   it('puts every field that left the row in its title (D3: nothing deleted)', async () => {
@@ -309,6 +304,57 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
       'title',
       'AlwaysSuccess · lock + type · code evidence unavailable · 0 live of 0\u00a0cells ever · 0.00000000 CKB · 0.00000000 occupied (0.00%)'
     );
+  });
+
+  // Readability 2026-11-18, lane B5. §7.6 (approved): the linear CKB bar, scaled to 50B, was a 1 px
+  // stub on 46 of 50 rows; it leaves the list and the amount, right aligned under its own head,
+  // shows the magnitude. The occupied share's bar (0–100 %) stays, beside the share it pictures,
+  // and with one bar left the "bar:" switch has one state and goes. A head stands over what it
+  // names: the column's name over its figure, the ticks over the track.
+  it('prints CKB in its cells as its amount alone, right aligned under its head (B5)', async () => {
+    render(<ScriptsPage />);
+    const t = await table();
+    const head = within(t).getAllByRole('columnheader')[3];
+    expect(head).toHaveTextContent(/^CKB in its cells$/);
+    expect(head).toHaveClass('text-right');
+    expect(head.querySelector('[data-scale-ticks]')).toBeNull();
+    const ckb = cells(rowOf(t, 'JoyID'))[3];
+    expect(ckb).toHaveClass('text-right', 'tabular-nums');
+    expect(ckb.querySelector('[data-aligned-bar], [data-track]')).toBeNull();
+    // the list's summary form (lane B2, readability R5, re-pinned on purpose: "454,352,694.86")
+    expect(ckb).toHaveTextContent(/^454,352,694$/);
+  });
+
+  it('draws the occupied share on 0 · 50 · 100 %, its name over the figure (B5)', async () => {
+    render(<ScriptsPage />);
+    const t = await table();
+    const head = within(t).getAllByRole('columnheader')[4];
+    const ticks = head.querySelector<HTMLElement>('[data-scale-ticks]')!;
+    expect([...ticks.children].map((n) => n.textContent)).toEqual(['0', '50', '100%']);
+    const share = cells(rowOf(t, 'JoyID'))[4];
+    const track = share.querySelector<HTMLElement>('[data-track]')!;
+    const figure = share.querySelector<HTMLElement>('[data-aligned-bar] > :last-child')!;
+    expect(figure).toHaveTextContent(/^4\.20%$/);
+    // 4.20 % of the track (the bar rounds up to the next ppm, so a share is never drawn empty)
+    const fill = share.querySelector<HTMLElement>('[data-segment]')!;
+    expect(Number.parseFloat(fill.style.width) / Number.parseFloat(track.style.width)).toBeCloseTo(
+      0.042,
+      3
+    );
+    // The name spans the track, the bar's gap and the figure, and ends where the figure ends.
+    const name = within(head).getByText('Occupied');
+    expect(name).toHaveClass('justify-end');
+    expect(Number.parseFloat(name.style.width)).toBe(
+      Number.parseFloat(track.style.width) + BAR_FIGURE_GAP + Number.parseFloat(figure.style.width)
+    );
+    expect(ticks.style.width).toBe(track.style.width);
+  });
+
+  it('offers no bar switch: the one bar left has one state (B5)', async () => {
+    render(<ScriptsPage />);
+    await table();
+    expect(screen.queryByRole('group', { name: 'Bar shows' })).toBeNull();
+    expect(screen.queryByText(/^bar:$/)).toBeNull();
   });
 
   it('keeps each row within 90 visible characters (T6)', async () => {

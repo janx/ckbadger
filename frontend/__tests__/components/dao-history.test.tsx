@@ -122,7 +122,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     // The latest values at the multiples' ends: the share cut to 2 dp, the week in its sign colour.
     expect(share.querySelector('[data-role="end-label"]')).toHaveTextContent('11.54%');
     const weekEnd = weekly.querySelector('[data-role="end-label"]')!;
-    expect(weekEnd).toHaveTextContent('+10.00');
+    // the summary form (readability R5, re-pinned on purpose: was "+10.00", padded to two places)
+    expect(weekEnd).toHaveTextContent(/^\+10$/);
     expect(weekEnd).toHaveClass('fill-positive');
     // The two multiples sit side by side from sm up and stack below it.
     expect(share.parentElement!.parentElement).toHaveClass('grid-cols-1', 'sm:grid-cols-2');
@@ -170,13 +171,15 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     }
   });
 
-  it('reads the last complete day in one row under the picture: deposited, share, depositors, the week and the peak, exact', () => {
+  // Readability R5 (re-pinned and renamed on purpose: "..., the week and the peak, exact"): a
+  // reading is the summary form, each cut figure titled with its exact value.
+  it('reads the last complete day in one row under the picture: deposited, share, depositors, the week and the peak', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
     expect(reading).toHaveTextContent(
-      `${date(154)} · deposited 101,190.00000000 · share 11.5400% · depositors 254 · week from ${date(148)} +10.00000000 · peak 101,190.00000000 on ${date(154)}tap or hover`
+      `${date(154)} · deposited 101,190 · share 11.5400% · depositors 254 · week from ${date(148)} +10 · peak 101,190 on ${date(154)}tap or hover`
     );
     expect(reading).toHaveClass('border-t', 'text-small');
     // Evidence first: the reading follows every panel.
@@ -184,9 +187,11 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
       expect(svg.compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  // UI review 2026-11-14 (DY-06, ruling R4): the reading's fraction digits are the quieter ink of
-  // the amount's sign (AMOUNT_INK), never the amount's ink at 70 %; its padding zeros the ghost.
-  it('sets the reading’s fraction digits in the sign’s quieter ink, never at an opacity', () => {
+  // UI review 2026-11-14 (DY-06, ruling R4) set the reading's fraction digits in the quieter ink
+  // of the amount's sign, never the amount's ink at 70 %. Readability R5 (re-pinned and renamed on
+  // purpose: "sets the reading’s fraction digits in the sign’s quieter ink, ..."): one ink per
+  // amount, the summary form, a cut figure titled with its exact value; still no opacity.
+  it('sets each reading amount in one ink, cut and titled, never at an opacity', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const last = deposited.data.length - 1;
@@ -194,16 +199,21 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     deposited.peak = { date: date(last), value: '101190.25' };
     render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
-    expect(reading).toHaveTextContent('deposited 101,190.25000000');
-    expect(reading).toHaveTextContent('+10.25000000');
-    const fractions = [...reading.querySelectorAll('[data-fraction]')];
-    expect(fractions.map((f) => f.textContent)).toEqual(['.25', '.25', '.25']);
-    // deposited and the peak are plain, the week's net is signed and rising
-    expect(fractions.map((f) => f.className)).toEqual([
-      'text-text-dim',
-      'text-jade-dim',
-      'text-text-dim',
+    expect(reading).toHaveTextContent('deposited 101,190 ·');
+    expect(reading).toHaveTextContent('+10.25 ·');
+    const amounts = [...reading.querySelectorAll('[data-ckb-amount]')];
+    expect(amounts.map((a) => a.textContent)).toEqual(['101,190', '+10.25', '101,190']);
+    expect(amounts.map((a) => a.getAttribute('title'))).toEqual([
+      '101,190.25 CKB',
+      null,
+      '101,190.25 CKB',
     ]);
+    // deposited and the peak take the reading line's ink, the week's net its sign's
+    expect(amounts[1]).toHaveClass('text-positive');
+    for (const a of amounts) {
+      expect(a.querySelector('[data-fraction]')).toBeNull();
+      expect(a.querySelector('.text-text-dim, .text-jade-dim')).toBeNull();
+    }
     expect(reading.innerHTML).not.toMatch(/opacity-/);
   });
 
@@ -216,7 +226,8 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     const share = container.querySelector('svg[data-panel="share"]')!;
     const reading = screen.getByRole('status', { name: 'History reading' });
     fireEvent.pointerMove(share, { clientX: 0 });
-    expect(reading).toHaveTextContent(`${date(0)} · deposited 100,000.00000000`);
+    // the summary form (R5, re-pinned on purpose: was "100,000.00000000")
+    expect(reading).toHaveTextContent(`${date(0)} · deposited 100,000 ·`);
     // Before the first whole week there is no weekly figure to read.
     expect(reading).not.toHaveTextContent('week from');
     // One cursor in each of the three panels.
@@ -272,25 +283,31 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(container.querySelector('[data-role="largest-week"]')).toBeNull();
   });
 
-  it('shows the latest week at the weekly end cut to two decimals, never rounded, in its sign colour', () => {
+  // Readability R5 (re-pinned and renamed on purpose: "... cut to two decimals, never rounded"):
+  // the end label is the summary form, which cuts, never rounds, and titles its exact value.
+  it('shows the latest week at the weekly end in its summary form, never rounded, in its sign colour', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     // The last week (from day 148) starts at 101,180 CKB and ends at 101,167.65432109: −12.34567891.
     const data = deposited.data.map((p, i) => (i === 154 ? { ...p, value: '101167.65432109' } : p));
     const { container } = render(<Picture deposited={{ ...deposited, data }} ratio={ratio} />);
     const end = container.querySelector('[data-panel="weekly"] [data-role="end-label"]')!;
-    expect(end).toHaveTextContent('−12.34');
+    expect(end).toHaveTextContent(/^−12\.34$/);
     expect(end).toHaveClass('fill-negative');
+    expect(end.parentElement!.querySelector('title')).toHaveTextContent('−12.34567891 CKB');
+    // the reading's summary form too (R5, re-pinned on purpose: was "−12.34567891")
     expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
-      'week from 2024-05-28 −12.34567891'
+      'week from 2024-05-28 −12.34 ·'
     );
   });
 
-  // Lane E2 (ruling R4): the SVG twin of the HTML fractions. The end label's digits after the point
-  // are the sign's fraction ink as a fill at full strength (AMOUNT_INK), never the amount's ink at
-  // fill-opacity .7, which put the cinnabar at 2.91–3.16:1 by night and the celadon at 2.79–3.12:1
-  // by day.
-  it('draws the weekly end label’s fraction in its sign’s fraction ink, never at a fill opacity', () => {
+  // Lane E2 (ruling R4) drew the end label's digits after the point in the sign's fraction ink as a
+  // fill at full strength, never the amount's ink at fill-opacity .7 (the cinnabar at 2.91–3.16:1
+  // by night, the celadon at 2.79–3.12:1 by day). Readability R5 (re-pinned and renamed on purpose:
+  // "draws the weekly end label’s fraction in its sign’s fraction ink, ..."): one ink per amount,
+  // so the label is one text in its sign's fill, no tspan, still never at a fill opacity; a cut
+  // label carries its exact value in a <title>.
+  it('draws the weekly end label in its sign’s one fill, never at a fill opacity', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
     const endOf = (value: string) => {
@@ -299,21 +316,34 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
         <Picture deposited={{ ...deposited, data }} ratio={ratio} />
       );
       const end = container.querySelector('[data-panel="weekly"] [data-role="end-label"]')!;
-      const tspans = [...end.querySelectorAll('tspan')].map((t) => ({
-        text: t.textContent,
-        fill: t.getAttribute('fill'),
-        fillOpacity: t.getAttribute('fill-opacity'),
-      }));
+      const label = {
+        text: end.textContent,
+        fill: end
+          .getAttribute('class')!
+          .split(' ')
+          .find((c) => c.startsWith('fill-')),
+        fillOpacity: end.getAttribute('fill-opacity'),
+        tspans: end.querySelectorAll('tspan').length,
+        title: end.parentElement!.querySelector('title')?.textContent ?? null,
+      };
       unmount();
-      return tspans;
+      return label;
     };
     // the last week starts at 101,180 CKB: −12.34567891, then +10.25
-    expect(endOf('101167.65432109')).toEqual([
-      { text: '.34', fill: 'var(--c-rouge-dim)', fillOpacity: null },
-    ]);
-    expect(endOf('101190.25')).toEqual([
-      { text: '.25', fill: 'var(--c-jade-dim)', fillOpacity: null },
-    ]);
+    expect(endOf('101167.65432109')).toEqual({
+      text: '−12.34',
+      fill: 'fill-negative',
+      fillOpacity: null,
+      tspans: 0,
+      title: '−12.34567891 CKB',
+    });
+    expect(endOf('101190.25')).toEqual({
+      text: '+10.25',
+      fill: 'fill-positive',
+      fillOpacity: null,
+      tspans: 0,
+      title: null,
+    });
   });
 
   it('refuses a deposit history with a missing day', () => {
@@ -383,10 +413,16 @@ describe('DaoHistory at phone width (DAO-22)', () => {
   it('puts the weekly scale note and the deposited name on a second line inside the plot', () => {
     stubChartWidth(358);
     const { deposited, ratio } = series();
-    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    // Re-pinned on purpose (readability R5): the end label is the summary form, and "+10" (was
+    // "+10.00") leaves the name and its note room on one line at 358 px: 43 characters at 11 px ×
+    // 0.64 (302.7 px) + 3 at 13 px (25.0) + 24 = 351.7 ≤ 358. A week of −12.34567891 ends in
+    // "−12.34", 6 characters (49.9 px): 376.6 > 358, so the note takes its second line.
+    const data = deposited.data.map((p, i) => (i === 154 ? { ...p, value: '101167.65432109' } : p));
+    const { container } = render(<Picture deposited={{ ...deposited, data }} ratio={ratio} />);
     const note = container.querySelector('[data-panel="weekly"] [data-role="scale-note"]')!;
     expect(note.tagName.toLowerCase()).toBe('tspan');
-    expect(note).toHaveTextContent('±15 scale, 1 week cut');
+    // the week of −12.34567891 moves p95, so the scale is ±20 (the note keeps its 21 characters)
+    expect(note).toHaveTextContent('±20 scale, 1 week cut');
     expect(note).toHaveAttribute('x', '8');
     expect(note).toHaveAttribute('dy', '12');
     const name = container.querySelector('[data-panel="deposited"] [data-role="chart-name"]')!;
@@ -419,7 +455,8 @@ describe('DaoHistory reading units', () => {
     render(<Picture deposited={deposited} ratio={ratio} />);
     const reading = screen.getByRole('status', { name: 'History reading' });
     expect(within(reading).getByText(date(148))).toHaveClass('whitespace-nowrap');
-    const holders = within(reading).getAllByText((_, el) => el?.textContent === '+10.00000000');
+    // the summary form (R5, re-pinned on purpose: was "+10.00000000")
+    const holders = within(reading).getAllByText((_, el) => el?.textContent === '+10');
     expect(holders[holders.length - 1]).toHaveClass('whitespace-nowrap');
   });
 });

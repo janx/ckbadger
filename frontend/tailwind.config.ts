@@ -1,6 +1,7 @@
 import type { Config } from 'tailwindcss';
 import plugin from 'tailwindcss/plugin';
 import { TYPE_SCALE } from './lib/type-scale';
+import { LABEL_LINE_PX, ROW_LINE_PX } from './lib/type-metrics';
 import { glowAlpha, themeBaseStyles, twColor } from './lib/palette';
 
 /**
@@ -156,6 +157,13 @@ export default {
         'accent-10': twColor('gold-dim'),
         'accent-11': twColor('lavender-dim'),
         'accent-12': twColor('amber-dim'),
+      },
+      // The lines text is budgeted on (lib/type-metrics.ts, readability F3): `leading-row`, the one
+      // line a list row stands on, and `leading-label`, a label set tight at the meta step. Both
+      // are computed from the type scale, so they move with it.
+      lineHeight: {
+        row: `${ROW_LINE_PX}px`,
+        label: `${LABEL_LINE_PX}px`,
       },
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],

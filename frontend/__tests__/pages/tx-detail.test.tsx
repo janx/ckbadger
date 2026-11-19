@@ -491,6 +491,8 @@ describe('TransactionDetailPage', () => {
     const line = await screen.findByText(/position 1/);
     expect(line).toHaveTextContent(/committed 2 blocks later/);
     expect(line).toHaveTextContent(/window 2–10/);
+    // readability 2026-11-18: the range is one unit; the line broke after its dash ("2–" / "10")
+    expect(within(line).getByText('2–10')).toHaveAttribute('data-nobreak');
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
   });
 
@@ -618,7 +620,8 @@ describe('TransactionDetailPage', () => {
     const from = flows[0].querySelector('[data-flow-side="from"]')!;
     const to = flows[0].querySelector('[data-flow-side="to"]')!;
     expect([...from.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
-      expect.stringMatching(/^ckb1qpcf70…gh76tz.*234\.00000000 CKB$/),
+      // R9 (re-pinned): the party at the row size, `ckb1…` and its last 8 characters
+      expect.stringMatching(/^ckb1…cqgh76tz.*234\.00000000 CKB$/),
     ]);
     expect([...to.querySelectorAll('[data-flow-end]')].map((e) => e.textContent)).toEqual([
       expect.stringMatching(/4maw7d.*234\.00000000 CKB$/),
@@ -1345,8 +1348,9 @@ describe('TransactionDetailPage', () => {
         noAmountReason: null,
         compositionTier: 'btc_ckb',
       } satisfies TransactionCellDisplay,
-      // U-09 (re-pinned): a tile's id at the tight size
-      expected: ['Spore', 'Nervape 3x', '0x5555…5555', 'BTC+CKB'],
+      // U-09 (re-pinned): a tile's id at the tight size; R9 (re-pinned): the row size, the
+      // summary's and the balances' (a tile's text column is 203 px at its narrowest)
+      expected: ['Spore', 'Nervape 3x', '0x55555555…555555', 'BTC+CKB'],
       href: `/mainnet/objects/0x${'5'.repeat(64)}`,
     },
     {
@@ -1400,7 +1404,7 @@ describe('TransactionDetailPage', () => {
         noAmountReason: null,
         compositionTier: null,
       } satisfies TransactionCellDisplay,
-      expected: ['.bit', 'alice.bit', '0x9999…9999'],
+      expected: ['.bit', 'alice.bit', '0x99999999…999999'],
       href: `/mainnet/identities/dotbit/0x${'9'.repeat(40)}`,
     },
   ])('renders $label from the per-cell API descriptor', async ({ display, expected, href }) => {

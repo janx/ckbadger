@@ -18,7 +18,7 @@ import type { ShortSize } from '@/lib/shorten';
 interface TransactionCellContentProps {
   display: TransactionCellDisplay;
   cellHref: string;
-  /** The size of the place it stands in (U-09): `tight` in a tile, `row` in a table row. */
+  /** The size of the place it stands in (U-09, R9): `row` in a tile and a table, `tight` in a phone row. */
   size: ShortSize;
 }
 

@@ -469,9 +469,9 @@ export default function ForksPage() {
                       key: 'miners',
                       className: ROW,
                       label: 'Dropped block’s miner vs winner’s',
-                      // two unnamed miners at the row size: 17 + 4 + 17 characters at 13 px
-                      // (296 px) and the padding
-                      minWidth: 312,
+                      // two unnamed miners at the row size: 13 + 4 + 13 characters at 13 px
+                      // (234 px; R9, it was 17 + 4 + 17, 296 px, in 312) and the padding
+                      minWidth: 250,
                       render: (e) => <Miners event={e} size="row" />,
                     },
                     {

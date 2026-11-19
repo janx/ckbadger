@@ -6,6 +6,7 @@ import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
+import { TYPE_SCALE } from '@/lib/type-scale';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -76,12 +77,35 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     const table = screen.getByRole('table', { name: 'Its cells' });
     const [row] = within(table).getAllByRole('row').slice(1);
     const key = within(row).getByRole('link', { name: '0x44e5e96c…f8517f:1' });
-    expect(key).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(key).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     expect(row).toHaveClass('text-text');
     expect(row.querySelectorAll('.text-text-bright')).toHaveLength(1);
     // T5: column heads at 11 px.
     for (const h of within(table).getAllByRole('columnheader'))
       expect(h.firstElementChild).toHaveClass('text-meta');
+  });
+
+  // Readability review 2026-11-18 (lane A): the heads of "Registered references" ran together,
+  // "hash typecode hash" (script-family--n--04): the hash type column was budgeted for its values
+  // ("data1", 5 characters) and not for its head, so "hash type" overran it into "code hash". A
+  // head is one line at the meta step, its characters at the mono advance (0.6 em), and a cell's
+  // right padding (16 px, none on the last column) keeps it from the next; the table still stands
+  // in tier 2's right column at 1280, (1232 − 56) / 2 = 588 px, as a table.
+  it('budgets every column of Registered references for its head, in the 588 px it has at 1280', async () => {
+    await renderJoyid();
+    const table = within(tier2()).getByRole('table', { name: 'Registered references' });
+    const advance = 0.6 * parseFloat(TYPE_SCALE.meta[0]);
+    const heads = within(table).getAllByRole('columnheader');
+    const budgets = Array.from(table.querySelectorAll('col')).map((col) =>
+      parseFloat(col.style.minWidth)
+    );
+    expect(budgets).toHaveLength(heads.length);
+    const short = heads.flatMap((head, i) => {
+      const needs = head.textContent!.length * advance + (i < heads.length - 1 ? 16 : 0);
+      return budgets[i] >= needs ? [] : [`${head.textContent} needs ${needs}, has ${budgets[i]}`];
+    });
+    expect(short).toEqual([]);
+    expect(budgets.reduce((sum, w) => sum + w, 0)).toBeLessThanOrEqual((1232 - 56) / 2);
   });
 
   it('keeps tier 2 to the two board blocks: one paragraph and the script facts', async () => {

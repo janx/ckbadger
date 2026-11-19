@@ -6,7 +6,8 @@ import { api } from '@/lib/api';
 // UI review 2026-11-14, CH-03: each Miners row printed the full 97-character address, then a
 // literal "(Address)" that broke as "(Addr / ess)", then the value on another line; the summary
 // "Leading miner: ckb1qzda0c… / 93hhsj (67.8320%)" broke at the ellipsis; the window read
-// "2026-11-07-2026-11-13".
+// "2026-11-07-2026-11-13". R9 (re-pinned): the shortened address is `ckb1…` and its last 8
+// characters.
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -59,10 +60,10 @@ describe('Miners ranking (CH-03)', () => {
     render(<ChartDetail slug="miner-address-distribution" />);
     const ranking = await screen.findByRole('list', { name: 'Miners ranking' });
     const [first, second] = within(ranking).getAllByRole('listitem');
-    const link = within(first).getByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    const link = within(first).getByRole('link', { name: 'ckb1…4s93hhsj' });
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
     expect(link).toHaveAttribute('title', address);
-    expect(first).toHaveTextContent(/^1\. ckb1qzda0c…93hhsj41,870 blocks · 67\.83%$/);
+    expect(first).toHaveTextContent(/^1\. ckb1…4s93hhsj41,870 blocks · 67\.83%$/);
     expect(second).toHaveTextContent(/^2\. 0xbbbbbbbb…bbbbbb8,548 blocks · 13\.85%$/);
     expect(document.body).not.toHaveTextContent(/\((Address|Lock hash)\)/);
     // The full address is in the link's title only, never printed.
@@ -75,7 +76,7 @@ describe('Miners ranking (CH-03)', () => {
     render(<ChartDetail slug="miner-address-distribution" />);
     await screen.findByRole('list', { name: 'Miners ranking' });
     const leader = screen.getByText('Leading miner').nextElementSibling as HTMLElement;
-    const name = within(leader).getByText('ckb1qzda0c…93hhsj');
+    const name = within(leader).getByText('ckb1…4s93hhsj');
     expect(name).toHaveClass('whitespace-nowrap');
     expect(document.body).toHaveTextContent('2026-11-07 → 2026-11-13');
     expect(document.body).not.toHaveTextContent(/2026-11-07[-–]2026-11-13/);

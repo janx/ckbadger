@@ -10,9 +10,11 @@ import type {
   StackedAreaChartResponse,
 } from '@/lib/api';
 import { formatCkbAmount } from '@/lib/utils';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatCount, countNoun } from '@/lib/format-count';
-import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
+import { CODE_CLASS_COLORS, CODE_CLASS_KEYS } from '@/lib/design-tokens';
+import { color, inkOnFill } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { partitionSpans } from '@/lib/partition-geometry';
@@ -22,6 +24,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -128,15 +131,12 @@ export function codeClassTotals(classes: readonly ScriptCodeClassTotalApi[]): {
   return { ordered, held, total };
 }
 
-/** The in-segment words: 12 px with 10 px padding each side (the DAO concentration bar's). */
-const SEGMENT_LABEL_PX = 12;
+/**
+ * The in-segment words: the small step (`text-small`, 12 px) with 10 px padding each side (the DAO
+ * concentration bar's).
+ */
+const SEGMENT_LABEL_PX = fontPx('small');
 const SEGMENT_LABEL_PAD = 10;
-/** A monospace advance: whole pixels where the browser snaps them (Chromium), else 0.6 em. */
-const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
-/** Words inside a segment: dark on the light grey fill, light on the darker ones. */
-const SEGMENT_INK: Partial<Record<ScriptCodeClassTotalApi['class'], string>> = {
-  fixed: 'text-base-bg',
-};
 
 /**
  * "Who can change the code" as the Scripts index's picture (hierarchy v3, C1, R12, R15): a 28 px
@@ -145,6 +145,7 @@ const SEGMENT_INK: Partial<Record<ScriptCodeClassTotalApi['class'], string>> = {
  */
 export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeClassTotalApi[] }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  const { resolved: theme } = useTheme();
   const { held, total } = codeClassTotals(classes);
   if (total === BigInt(0)) return null;
   const spans = partitionSpans(
@@ -159,7 +160,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
   const fits = (text: string, i: number) =>
     width !== null &&
     (width * spans[i].width) / 100 >=
-      text.length * advance(SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
+      text.length * snappedAdvancePx(SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
   return (
     <div
       ref={ref}
@@ -176,13 +177,14 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
             title={`${scriptClassLabel(row.class)}: ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`}
             className={cn(
               'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap',
-              inside && 'px-2.5',
-              SEGMENT_INK[row.class] ?? 'text-text-bright'
+              inside && 'px-2.5'
             )}
             style={{
               width: `${spans[i].width}%`,
               backgroundColor: CODE_CLASS_COLORS[row.class].fill,
               boxShadow: `inset 0 0 0 1px ${CODE_CLASS_COLORS[row.class].edge}`,
+              // DY-03: the words take the ink the fill's own luminance calls for, in this theme.
+              color: color(inkOnFill(theme, CODE_CLASS_KEYS[row.class].fill, 1).ink),
             }}
           >
             {inside && <span>{inside}</span>}
@@ -260,8 +262,8 @@ export function ScriptCodeClassSummary({
       {total > BigInt(0) && (
         <Prose className="mb-3">
           <p data-testid="code-class-sentence">
-            Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
-            {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
+            Of the <CkbAmount form="column" shannons={total} signed={false} tone="plain" /> under
+            these {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
             {joinClauses(
               groups.map(
                 (group) =>
@@ -280,11 +282,13 @@ export function ScriptCodeClassSummary({
           <li key={row.class} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
             <CodeClassSwatch value={row.class} />
             <span>{scriptClassLabel(row.class)}</span>·
-            <ExactCkb
+            <CkbAmount
+              form="column"
               shannons={BigInt(row.lockOwnedCapacitySum)}
               signed={false}
               tone="plain"
-            />· {unitNode(formatCount(row.familyCount!, 'script'))}
+            />
+            · {unitNode(formatCount(row.familyCount!, 'script'))}
           </li>
         ))}
       </ul>

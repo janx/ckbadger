@@ -21,11 +21,12 @@ describe('Address', () => {
   });
 
   describe('truncation', () => {
-    // U-09 (re-pinned): a shortened address names its size; there is no default length
+    // U-09 (re-pinned): a shortened address names its size; there is no default length. R9
+    // (re-pinned): the head size keeps the network and the last 8 characters, as the row does
     it('shortens a long address at its size with the one ellipsis', () => {
       render(<Address address={testAddress} size="head" />);
       const link = screen.getByRole('link');
-      expect(link.textContent).toBe('ckb1qzda0cr0…d9wj5clj');
+      expect(link.textContent).toBe('ckb1…d9wj5clj');
       expect(link.textContent).not.toContain('...');
     });
 

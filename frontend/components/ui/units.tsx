@@ -11,7 +11,7 @@ import { ELLIPSIS, SHORT_FORMS, type IdKind } from '@/lib/shorten';
  *   from it (`2026-11`), `formatUtc8DateTime` / `formatUnixSecondsUtc8` (`2026-11-14 12:03:29
  *   UTC+8`), `formatUtc8Time` (`12:03:29 UTC+8`), and two of them joined by ` → `;
  * - a shortened id: `lib/shorten.ts`'s forms, a hex id or an address cut at the one ellipsis
- *   (`0x5cb3…b4fa`, `ckb1qzda0cr0…5svwd5rt`), an out point's `:index` with it;
+ *   (`0x5cb3…b4fa`, `ckb1…5svwd5rt`), an out point's `:index` with it;
  * - a count: `formatCount`'s number and its whole noun, joined by its no-break spaces
  *   (`78,675,029 cells`, `795,441 live cells`: formatCount joins a noun's words too, so the unit
  *   holds what formatCount was given, never a guess at where a noun ends). A size written the same
@@ -40,8 +40,8 @@ function spread(kind: IdKind, part: 'head' | 'tail', prefix = 0): string {
 }
 // a hash: heads 12, 10, 6 with `0x` counted (4–10 hex after it), tails 8, 6, 4
 const HASH_ID = String.raw`0x[0-9a-fA-F]${spread('hash', 'head', 2)}${ELLIPSIS}[0-9a-fA-F]${spread('hash', 'tail')}`;
-// an address: heads 12, 10, 4 with `ckb1` counted (0–8 after it: a tight one is `ckb1…` and its
-// tail), tails 8, 6, 6
+// an address: its network alone at every size, `ckb1` or `ckt1` and nothing after it (R9), so the
+// head's spread is {0,0}; tails 8, 8, 6
 const ADDRESS_ID = String.raw`ck[bt]1[0-9a-z]${spread('address', 'head', 4)}${ELLIPSIS}[0-9a-z]${spread('address', 'tail')}`;
 // an out point's index: shortenOutpoint takes a safe integer, 16 digits at most
 const INDEX_DIGITS = String(Number.MAX_SAFE_INTEGER).length;

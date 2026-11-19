@@ -326,8 +326,9 @@ describe('CellDetailPage', () => {
     expect(screen.queryByText(/2024-01-02T00:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
     // Lane U (U3): a spent cell's origin line names the block that spent it.
+    // R9 (re-pinned): the origin line is prose, at the row size (it was the head size)
     expect(screen.getByTestId('cell-origin')).toHaveTextContent(
-      /^output 0 of transaction 0xababababab…abababab · spent at #125$/
+      /^output 0 of transaction 0xabababab…ababab · spent at #125$/
     );
     // Lane L: the "only name" sentence links both blocks of the cell's life.
     const onlyName = screen.getByText(/The out point is the cell's only name/);
@@ -351,6 +352,9 @@ describe('CellDetailPage', () => {
         depositTimestamp: '2024-01-01T00:00:00Z',
         compensation: '1234523456789',
         compensationCkb: '12345.23456789',
+        // F-9: the API sends every DAO cell's figure with its state and the block it is read at.
+        compensationState: 'accruing',
+        compensationAtBlock: 21016902,
       },
     } as Cell);
     view();
@@ -364,6 +368,121 @@ describe('CellDetailPage', () => {
     // Exact CKB in the site's one amount form, thousands grouped (SC-C3, #16).
     expect(line).toHaveTextContent('compensation 12,345.23456789 CKB');
     expect(screen.queryByText(/shannons/)).not.toBeInTheDocument();
+    // F-9 (readability review 2026-11-18): a live deposit's compensation is unclaimed and still
+    // accruing; the line says so and names the block the figure was read at.
+    expect(line).toHaveTextContent(
+      /^deposit block #123 · unclaimed compensation 12,345\.23456789 CKB, at block #21,016,902$/
+    );
+    expect(within(line).getByRole('link', { name: '#21,016,902' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/21016902'
+    );
+  });
+  // F-9: a withdraw request fixes the figure at its own block; a completion claims it.
+  it('says a DAO compensation is fixed at the withdrawal request, or claimed, at its block', async () => {
+    const dao = {
+      isDaoCell: true,
+      depositBlockNumber: 123,
+      depositTimestamp: '2024-01-01T00:00:00Z',
+      withdrawRequestBlock: 150,
+      withdrawRequestTimestamp: '2024-01-01T00:25:00Z',
+      compensation: '898000001',
+      compensationCkb: '8.98000001',
+    };
+    getCell.mockResolvedValue({
+      ...base,
+      daoInfo: {
+        ...dao,
+        daoStatus: 'withdrawing',
+        compensationState: 'frozen',
+        compensationAtBlock: 150,
+      },
+    } as Cell);
+    const { unmount } = view();
+    const frozen = (await screen.findByText(/^deposit block/)).closest('p') as HTMLElement;
+    expect(frozen).toHaveTextContent(
+      /^deposit block #123 · compensation 8\.98000001 CKB, fixed at the withdrawal request #150$/
+    );
+    expect(within(frozen).getByRole('link', { name: '#150' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/150'
+    );
+    unmount();
+
+    getCell.mockResolvedValue({
+      ...base,
+      status: 'dead',
+      consumedAtBlock: 180,
+      daoInfo: {
+        ...dao,
+        daoStatus: 'withdrawn',
+        withdrawBlock: 180,
+        withdrawTimestamp: '2024-01-01T00:55:00Z',
+        compensationState: 'claimed',
+        compensationAtBlock: 180,
+      },
+    } as Cell);
+    view();
+    const claimed = (await screen.findByText(/^deposit block/)).closest('p') as HTMLElement;
+    expect(claimed).toHaveTextContent(
+      /^deposit block #123 · compensation 8\.98000001 CKB, claimed at block #180$/
+    );
+    expect(within(claimed).getByRole('link', { name: '#180' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/180'
+    );
+  });
+  // Review of main..fix/readability (2026-11-18, test finding 2 and logic finding 4): the API sends
+  // a DAO cell's compensation with its state and block (F-9); the page drew the DAO line with no
+  // compensation, and no error, when an answer came without it (an older API binary behind a
+  // preview). A DAO answer without its figure, or with a state the page does not know, is a broken
+  // read: it fails, naming the out point and the field, and never draws an empty line.
+  describe('a DAO cell read without its compensation', () => {
+    const dao = {
+      isDaoCell: true,
+      daoStatus: 'deposited',
+      depositBlockNumber: 123,
+      depositTimestamp: '2024-01-01T00:00:00Z',
+      compensation: '898000001',
+      compensationCkb: '8.98000001',
+      compensationState: 'accruing',
+      compensationAtBlock: 150,
+    };
+    /** The page under a boundary, and what it threw. */
+    async function failure(daoInfo: Record<string, unknown>): Promise<string> {
+      const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        getCell.mockResolvedValue({ ...base, daoInfo } as unknown as Cell);
+        const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+        render(
+          <QueryClientProvider client={client}>
+            <ErrorBoundary fallback={<p>page-level boundary</p>}>
+              <CellDetailPage />
+            </ErrorBoundary>
+          </QueryClientProvider>
+        );
+        expect(await screen.findByText('page-level boundary')).toBeInTheDocument();
+        expect(screen.queryByText(/^deposit block/)).toBeNull();
+        return quiet.mock.calls.flat().map(String).join(' ');
+      } finally {
+        quiet.mockRestore();
+      }
+    }
+
+    it('fails, naming the out point and the field, where the compensation is missing', async () => {
+      const { compensation: _c, compensationCkb: _ckb, ...without } = dao;
+      void _c;
+      void _ckb;
+      expect(await failure(without)).toContain(
+        `DAO cell ${hash}:0 compensation "undefined" is not an integer shannon amount`
+      );
+    });
+
+    it('fails on a compensation state it does not know', async () => {
+      expect(await failure({ ...dao, compensationState: 'pending' })).toContain(
+        `DAO cell ${hash}:0 has compensation state pending`
+      );
+    });
   });
   // Rubbing × Song print, phase 5 (D2): the dep group's command runs on its member count.
   it('counts a dep group’s members in its heading, one item or more', async () => {

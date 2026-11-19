@@ -9,7 +9,6 @@ import {
   formatSignedCount,
   parseCkbDecimal,
   parseShannons,
-  splitCkbAmount,
 } from '@/lib/ckb-decimal';
 
 describe('parseCkbDecimal', () => {
@@ -106,55 +105,14 @@ describe('formatDecimalBytes', () => {
   });
 });
 
-describe('splitCkbAmount', () => {
-  it('splits exact CKB into sign, integer, significant decimals and ghosted trailing zeros', () => {
-    expect(splitCkbAmount(BigInt(-30000))).toEqual({
-      sign: MINUS,
-      integer: '0',
-      fraction: '.0003',
-      ghost: '0000',
-    });
-    expect(splitCkbAmount(BigInt('41232486750'))).toEqual({
-      sign: '+',
-      integer: '412',
-      fraction: '.3248675',
-      ghost: '0',
-    });
-    expect(splitCkbAmount(BigInt('-75000000000'))).toEqual({
-      sign: MINUS,
-      integer: '750',
-      fraction: '',
-      ghost: '.00000000',
-    });
-    expect(splitCkbAmount(BigInt('193912572831'))).toEqual({
-      sign: '+',
-      integer: '1,939',
-      fraction: '.12572831',
-      ghost: '',
-    });
-  });
-
-  it('gives zero no sign, all eight decimals ghosted', () => {
-    expect(splitCkbAmount(BigInt(0))).toEqual({
-      sign: '',
-      integer: '0',
-      fraction: '',
-      ghost: '.00000000',
-    });
-  });
-
-  it('always keeps 8 decimals in total, so right-aligned amounts line up', () => {
-    for (const s of ['1', '-123456789', '100000000', '-1234567890123456']) {
-      const p = splitCkbAmount(BigInt(s));
-      expect((p.fraction + p.ghost).length).toBe(9);
-    }
-  });
-});
-
 describe('exactCkbText', () => {
-  it('writes the digits ExactCkb prints: every decimal, the sign only when signed, zero as 0', () => {
+  it('writes the digits CkbAmount prints in its column form: every decimal, the sign only when signed, zero as 0', () => {
     expect(exactCkbText(BigInt(1647), false)).toBe('0.00001647');
-    expect(exactCkbText(BigInt(-30000), false)).toBe('0.00030000');
+    // a negative where no sign is written is refused, as CkbAmount refuses it (re-pinned, review
+    // of the fixes M2: this wrote its magnitude, '0.00030000')
+    expect(() => exactCkbText(BigInt(-30000), false)).toThrow(
+      'CKB amount -30000 shannons is negative where a sign is not written'
+    );
     expect(exactCkbText(BigInt(-30000), true)).toBe(`${MINUS}0.00030000`);
     expect(exactCkbText(BigInt('75000000000'), true)).toBe('+750.00000000');
     expect(exactCkbText(BigInt('193912572831'), false)).toBe('1,939.12572831');

@@ -7,6 +7,15 @@
  */
 
 import { clipLabel } from '@/lib/shorten';
+import { SVG_TEXT } from '@/lib/chart-type';
+import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
+
+/** A gene caption's glyph (set at the tick size) at the advance Chromium was observed at: 6.4 px. */
+const CHAR_WIDTH = SVG_TEXT.tick * OBSERVED_ADVANCE_EM;
+/** Gene names longer than this are shortened on the gel. */
+const CAPTION_CHARS = 14;
+/** The margin a turned caption keeps inside its head. */
+const ROTATED_MARGIN = 8;
 
 export const ALLELE_GEL = {
   /** The narrowest lane that still holds a band (R3). */
@@ -23,14 +32,14 @@ export const ALLELE_GEL = {
    */
   gutter: 62,
   right: 22,
-  /** One character of 10 px JetBrains Mono. */
-  charWidth: 6.4,
+  /** One character of a caption, a tag or a band's label, all set at the tick size. */
+  charWidth: CHAR_WIDTH,
   /** Gene names longer than this are shortened on the gel (the full name is in the lane title). */
-  captionChars: 14,
+  captionChars: CAPTION_CHARS,
   /** Head of a row whose gene names are written across their lanes. */
   headAcross: 22,
-  /** Head of a row whose gene names are turned on end (14 characters at 10 px, and margin). */
-  headRotated: 98,
+  /** Head of a row whose gene names are turned on end (14 characters at the tick size, and margin): 98. */
+  headRotated: Math.ceil(CAPTION_CHARS * CHAR_WIDTH) + ROTATED_MARGIN,
 } as const;
 
 export type AlleleGelLayout =

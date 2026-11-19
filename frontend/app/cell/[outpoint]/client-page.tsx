@@ -11,8 +11,8 @@ import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { kindOf } from '@/components/transaction/transaction-cell-tiles';
-import { ExactCkb } from '@/components/activity-event-row';
-import { parseCkbDecimal } from '@/lib/ckb-decimal';
+import { CkbAmount } from '@/components/ui/ckb-amount';
+import { parseShannons } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -77,6 +77,27 @@ function depGroupItems(cell: Cell): NonNullable<Cell['depGroupItems']> {
   if (!cell.depGroupItems)
     throw new Error(`Cell ${cell.txHash}:${cell.outputIndex} is a dep group without its members`);
   return cell.depGroupItems;
+}
+
+/**
+ * Where a DAO cell's compensation stands and the block the API read it at (F-9): still accruing
+ * (the tip), fixed at the withdrawal request's block, or claimed at the completion's. The API sends
+ * the state with every DAO cell, so any other value is a broken read.
+ */
+function DaoCompensationAt({ cell, dao }: { cell: Cell; dao: NonNullable<Cell['daoInfo']> }) {
+  const block = <BlockLink number={dao.compensationAtBlock} />;
+  switch (dao.compensationState) {
+    case 'accruing':
+      return <>, at block {block}</>;
+    case 'frozen':
+      return <>, fixed at the withdrawal request {block}</>;
+    case 'claimed':
+      return <>, claimed at block {block}</>;
+    default:
+      throw new Error(
+        `DAO cell ${cell.txHash}:${cell.outputIndex} has compensation state ${String(dao.compensationState)}`
+      );
+  }
 }
 
 const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
@@ -203,7 +224,7 @@ function CellFacts({
       className="border-base-border text-small flex flex-wrap gap-x-10 gap-y-3.5 border-y py-3.5"
     >
       <Fact label="Capacity">
-        <ExactCkb shannons={capacity} signed={false} tone="plain" />
+        <CkbAmount form="column" shannons={capacity} signed={false} tone="plain" />
       </Fact>
       <Fact label="Occupied">
         <span style={{ color: DATA_COLOR }}>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
@@ -212,7 +233,7 @@ function CellFacts({
           {capacity === occupied ? (
             '0'
           ) : (
-            <ExactCkb shannons={capacity - occupied} signed={false} tone="plain" />
+            <CkbAmount form="column" shannons={capacity - occupied} signed={false} tone="plain" />
           )}{' '}
           free
         </span>
@@ -344,16 +365,16 @@ function CodeCellOf({ cell }: { cell: Cell }) {
 
 /**
  * Lane U (U3): the transaction and the output index as one line under the full out point —
- * "output 0 of transaction 0x0361eb40ab…12b6518a · live since #14,965,803", the hash linking to
+ * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to
  * the transaction page and the block to its page; the line under the plate is the page's lede
- * (U-09: head).
+ * (prose: the row form, R9).
  */
 function CellOrigin({ cell }: { cell: Cell }) {
   return (
     <p data-testid="cell-origin">
       output {cell.outputIndex} of transaction{' '}
       <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
-        <ShortId value={cell.txHash} kind="hash" size="head" />
+        <ShortId value={cell.txHash} kind="hash" size="row" />
       </Link>{' '}
       ·{' '}
       {cell.status === 'dead' ? (
@@ -471,25 +492,21 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           // The command runs on the status the API gives (deposited, withdrawing, withdrawn); the
           // heading says it, so the line under it does not say it again.
           <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
+            {/* F-9: the API sends every DAO cell's exact compensation (shannons) with its state
+                and block; an answer without them is a broken read and fails here, by name. */}
             <p className="text-text-dim text-small">
-              deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} />
-              {cell.daoInfo.compensationCkb != null ? (
-                <>
-                  {' '}
-                  · compensation{' '}
-                  <ExactCkb
-                    shannons={parseCkbDecimal(cell.daoInfo.compensationCkb)}
-                    signed={false}
-                    tone="plain"
-                  />
-                </>
-              ) : cell.daoInfo.compensation != null ? (
-                (() => {
-                  throw new Error(
-                    `DAO cell ${cell.txHash}:${cell.outputIndex} has compensation shannons without compensationCkb`
-                  );
-                })()
-              ) : null}
+              deposit block <BlockLink number={cell.daoInfo.depositBlockNumber} /> ·{' '}
+              {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
+              <CkbAmount
+                form="column"
+                shannons={parseShannons(
+                  cell.daoInfo.compensation,
+                  `DAO cell ${cell.txHash}:${cell.outputIndex} compensation`
+                )}
+                signed={false}
+                tone="plain"
+              />
+              <DaoCompensationAt cell={cell} dao={cell.daoInfo} />
             </p>
           </DetailSection>
         )}

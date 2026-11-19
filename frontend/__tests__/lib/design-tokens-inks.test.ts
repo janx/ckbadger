@@ -18,6 +18,12 @@ import { PALETTE } from '@/lib/palette';
  * here to its theme key, and the night value of that key to its rubbing value (re-derived from the
  * design boards in the rubbing × Song print re-theme, frontend/docs/ui-color-guidelines.md), so a
  * drift fails here before it shows on a page.
+ *
+ * Re-pinned on purpose with the night values of the boards' ruling of 2026-11-18 (readability
+ * plan, ruling R2): the quiet slate (Lc 30), the board link and the lock blue (Lc 70) and the slate
+ * outline (1.60:1) moved, and the celadon mixes (the row tag's edge, the search tints, the current
+ * tile) were recomputed by their rules from the moved celadon and surface. Before: #60574d,
+ * #87afc1, #85a9d0; #42514b; #1a1b19, #131210; #313631; #342c25.
  */
 describe('inks with no theme token (V11)', () => {
   it('keeps the boards’ shared inks at their keys and rubbing values', () => {
@@ -26,9 +32,9 @@ describe('inks with no theme token (V11)', () => {
       link: 'var(--c-board-link)',
       cellLink: 'var(--c-cell-lock)',
     });
-    expect(PALETTE.dark['ink-quiet']).toBe('#60574d');
-    expect(PALETTE.dark['board-link']).toBe('#87afc1');
-    expect(PALETTE.dark['cell-lock']).toBe('#85a9d0');
+    expect(PALETTE.dark['ink-quiet']).toBe('#7f766b');
+    expect(PALETTE.dark['board-link']).toBe('#a1cadc');
+    expect(PALETTE.dark['cell-lock']).toBe('#a2c7f0');
     // the cell links are the lock blue, one value
     expect(BOARD_INKS.cellLink).toBe(CELL_COLORS.lock);
   });
@@ -47,15 +53,15 @@ describe('inks with no theme token (V11)', () => {
     expect(BLOCK_POSITION_COLORS).toEqual({ currentTile: 'var(--c-tile-current)' });
     expect(FIBER_COLORS.filterOn).toBe('var(--c-slate-other)');
     const { dark } = PALETTE;
-    expect(dark['row-tag-accent-edge']).toBe('#42514b');
+    expect(dark['row-tag-accent-edge']).toBe('#46554f');
     expect([dark['search-panel'], dark['search-selected'], dark['search-hover']]).toEqual([
       '#0c0a09',
-      '#1a1b19',
-      '#131210',
+      '#1a1c1a',
+      '#131310',
     ]);
     expect([dark['stream-pending'], dark['stream-pending-hover']]).toEqual(['#0b0908', '#0d0b0a']);
-    expect(dark['tile-current']).toBe('#313631');
-    expect(dark['slate-other']).toBe('#342c25');
+    expect(dark['tile-current']).toBe('#353a36');
+    expect(dark['slate-other']).toBe('#3f3730');
   });
 
   it('passes CSS variables to a style prop as they are', () => {

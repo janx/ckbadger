@@ -1,16 +1,19 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import type { ScriptFamilyDetail, ScriptHistoryMarkerApi } from '@/lib/api';
 import { ScriptHeroMetrics } from '@/components/scripts/script-family-board';
 import { typeLineage } from '@/lib/script-lineage';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 
 const family = fixture.family as unknown as ScriptFamilyDetail;
 const lineage = typeLineage(family.history as ScriptHistoryMarkerApi[])!;
 
 /** The hero's "Code cell held by" value: the link to the code cell. */
 const heldBy = () => within(screen.getByText('Code cell held by').parentElement!).getByRole('link');
+
+afterEach(() => vi.unstubAllGlobals());
 
 /**
  * A4 Chrome F2: the hero wrapped the holder's whole name in one NoBreak, so "an unspendable lock"
@@ -22,12 +25,25 @@ describe('the hero names the code cell holder (A4 Chrome F2)', () => {
   // re-pinned with the fix: the id alone is the unit — "multisig 0x6598…d696" whole is 204 px at
   // 17 px, wider than the hero tile's 163 px column at 390
   it('keeps the id whole, the kind a word before it', () => {
+    atViewportWidth(390);
     render(<ScriptHeroMetrics family={family} lineage={lineage} />);
     const link = heldBy();
     expect(link).toHaveTextContent(/^multisig 0x6598…d696$/);
     const unit = link.querySelector('[data-nobreak]');
     expect(unit).not.toBeNull();
     expect(unit!.textContent).toBe('0x6598…d696');
+  });
+
+  // R9: a tile is under 200 px only on a phone; from sm (220 px at 1024, 288 at 640) the holder
+  // takes the row size the lede and the tables write it in, its id 17 characters at 17 px.
+  it('names the holder at the row size from sm, its id one unit the 220 px tile holds', () => {
+    atViewportWidth(1024);
+    render(<ScriptHeroMetrics family={family} lineage={lineage} />);
+    const link = heldBy();
+    expect(link).toHaveTextContent(/^multisig 0x65983f1d…eed696$/);
+    const unit = link.querySelector('[data-nobreak]')!;
+    expect(unit.textContent).toBe('0x65983f1d…eed696');
+    expect(unit.textContent!.length * 10.2).toBeLessThanOrEqual(220);
   });
 
   it('lets a phrase break between its words', () => {
@@ -73,6 +89,7 @@ function unbreakablePieces(root: HTMLElement): string[] {
  */
 describe('the hero tiles break no word at a phone width (A4 round 2)', () => {
   it('sets every value and note in pieces the 143 px tile holds', () => {
+    atViewportWidth(360);
     render(<ScriptHeroMetrics family={{ ...family, cellsCount: 78_675_029 }} lineage={lineage} />);
     const metrics = screen.getByLabelText('Script figures');
     for (const dd of metrics.querySelectorAll<HTMLElement>('dd')) {

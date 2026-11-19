@@ -182,23 +182,26 @@ describe('the bands no fill ink can label at 4.5:1', () => {
   });
 });
 
+// Re-pinned on purpose with the night values of readability ruling R2 (2026-11-18): the object
+// class ink an "other" gel is drawn in moved to Lc 70 (#a58ad6 → #d0b8fe) and the bright ink a step
+// up (#e8e2d6 → #ede7db), so by night the three bands at 0.68 on an "other" gel now clear 4.5:1 and
+// its two at 0.51 do not, and a pure-CKB gel's two bands at 0.51 on the page take the bright ink as
+// their best; 21 bands stopped, 23 before. The copper and pure gel inks did not move.
 const STOPPED: string[] = [
-  'dark other on base-surface: "Blush Pink" at 0.68, best text-bright 3.94',
-  'dark other on base-surface: "Nature Green" at 0.68, best text-bright 3.94',
-  'dark other on base-surface: "Thai Special" at 0.68, best text-bright 3.94',
+  'dark other on base-surface: "Lucky Lavender" at 0.51, best base-void 3.97',
+  'dark other on base-surface: "Pure White" at 0.51, best base-void 3.97',
   'dark btc_ckb on badge-inner-btc: "Blush Pink" at 0.68, best base-void 4.17',
   'dark btc_ckb on badge-inner-btc: "Nature Green" at 0.68, best base-void 4.12',
   'dark btc_ckb on badge-inner-btc: "Thai Special" at 0.68, best base-void 4.12',
   'dark pure_ckb on badge-inner-pure: "Lucky Lavender" at 0.51, best base-void 4.07',
   'dark pure_ckb on badge-inner-pure: "Pure White" at 0.51, best base-void 4.13',
-  'dark other on base-bg: "Blush Pink" at 0.68, best text-bright 4.02',
-  'dark other on base-bg: "Nature Green" at 0.68, best text-bright 4.02',
-  'dark other on base-bg: "Thai Special" at 0.68, best text-bright 4.02',
+  'dark other on base-bg: "Lucky Lavender" at 0.51, best text-bright 4.22',
+  'dark other on base-bg: "Pure White" at 0.51, best text-bright 4.22',
   'dark btc_ckb on base-bg: "Blush Pink" at 0.68, best base-void 4.09',
   'dark btc_ckb on base-bg: "Nature Green" at 0.68, best base-void 4.05',
   'dark btc_ckb on base-bg: "Thai Special" at 0.68, best base-void 4.05',
-  'dark pure_ckb on base-bg: "Lucky Lavender" at 0.51, best base-void 3.87',
-  'dark pure_ckb on base-bg: "Pure White" at 0.51, best base-void 3.92',
+  'dark pure_ckb on base-bg: "Lucky Lavender" at 0.51, best text-bright 3.93',
+  'dark pure_ckb on base-bg: "Pure White" at 0.51, best text-bright 3.94',
   'light btc_ckb on badge-inner-btc: "Calm Blue" at 0.84, best base-void 4.32',
   'light btc_ckb on badge-inner-btc: "Fortune Gold" at 0.84, best base-void 4.32',
   'light pure_ckb on badge-inner-pure: "Fortune Gold" at 0.84, best base-void 4.46',

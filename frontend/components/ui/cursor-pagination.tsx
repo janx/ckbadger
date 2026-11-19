@@ -39,17 +39,18 @@ export function CursorPagination({
   previousLabel = 'Previous',
   nextLabel = 'Next',
 }: CursorPaginationProps) {
-  // An empty list has no pages: no pager, and never "Page 1 of 0" (FF-L5).
-  if (total === 0 && !hasMore && !hasPrevious) return null;
-  // Unknown (null) and not given (undefined) both show no count.
-  const known = total === null ? undefined : total;
-  const totalPages =
-    known !== undefined && known > 0 && pageSize ? Math.ceil(known / pageSize) : undefined;
   const canShowRange = page !== undefined && pageSize !== undefined && currentCount !== undefined;
   if (canShowRange && currentCount > pageSize)
     throw new Error(
       `${totalLabel} pager: ${currentCount} rows on a page of ${pageSize} (page ${page})`
     );
+  // A list on one page has nothing to page: no buttons, no "Page 1 of 1", no sentence
+  // (readability B5); an empty list is one too, never "Page 1 of 0" (FF-L5).
+  if (!hasMore && !hasPrevious) return null;
+  // Unknown (null) and not given (undefined) both show no count.
+  const known = total === null ? undefined : total;
+  const totalPages =
+    known !== undefined && known > 0 && pageSize ? Math.ceil(known / pageSize) : undefined;
   const rangeStart = canShowRange && currentCount > 0 ? (page - 1) * pageSize + 1 : 0;
   const rangeEnd = canShowRange && currentCount > 0 ? rangeStart + currentCount - 1 : 0;
   const perPage = pageSize !== undefined ? ` · ${pageSize.toLocaleString('en-US')} per page` : '';
@@ -73,7 +74,8 @@ export function CursorPagination({
         className
       )}
     >
-      <span className="text-text-dim text-body font-mono">
+      {/* the counts are numbers: the reading ink (R3) */}
+      <span className="text-text text-body font-mono">
         {summary !== undefined ? summary : (sentence ?? '\u00a0')}
       </span>
       <div
@@ -84,7 +86,7 @@ export function CursorPagination({
           {previousLabel}
         </button>
         {page !== undefined && (
-          <span className="text-text-dim text-body whitespace-nowrap font-mono">
+          <span className="text-text text-body whitespace-nowrap font-mono">
             Page {page.toLocaleString('en-US')}
             {totalPages !== undefined ? ` of ${totalPages.toLocaleString('en-US')}` : ''}
           </span>

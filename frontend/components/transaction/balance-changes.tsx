@@ -1,5 +1,6 @@
 'use client';
-import { ExactCkb, ItemDeltaFact, readable } from '@/components/activity-event-row';
+import { ItemDeltaFact, readable } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -178,7 +179,7 @@ export function BalanceChanges({
                     />
                   </span>
                   <span role="cell" className="text-right">
-                    <ExactCkb shannons={BigInt(p.ckbDelta)} />
+                    <CkbAmount form="column" shannons={BigInt(p.ckbDelta)} />
                   </span>
                   <span role="cell" className="text-right tabular-nums">
                     {formatOccupiedDelta(p.usedDelta)}
@@ -199,7 +200,7 @@ export function BalanceChanges({
                     <>
                       <span role="cell">Net</span>
                       <span role="cell" className="text-right">
-                        <ExactCkb shannons={n.ckb} tone="plain" />
+                        <CkbAmount form="column" shannons={n.ckb} tone="plain" />
                       </span>
                       <span role="cell" className="text-right tabular-nums">
                         {formatOccupiedDelta(n.occupied.toString())}
@@ -213,9 +214,12 @@ export function BalanceChanges({
           ) : (
             <ul aria-label="Balance changes by participant" data-form={form}>
               {activity.participants.map((p, i) => {
-                // the list forms are phone rows: tight (U-09)
-                const party = <ParticipantRefView participant={p} size="tight" compact quiet />;
-                const ckb = <ExactCkb shannons={BigInt(p.ckbDelta)} />;
+                // the three-line card is a phone's (under 480 px of container): tight; the
+                // two-line card is drawn at 1024 too (the 640 px column), beside the summary,
+                // the tiles and What moved, which write the same party at the row size (R9)
+                const size: ShortSize = form === 'three-line' ? 'tight' : 'row';
+                const party = <ParticipantRefView participant={p} size={size} compact quiet />;
+                const ckb = <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />;
                 const occupied = (
                   <>
                     occupied{' '}
@@ -234,7 +238,7 @@ export function BalanceChanges({
                       className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size="tight" />
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size={size} />
                     </div>
                     <div
                       data-line="amounts"
@@ -248,7 +252,7 @@ export function BalanceChanges({
                         data-line="items"
                         className="text-small flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                       >
-                        <Items participant={p} size="tight" />
+                        <Items participant={p} size={size} />
                       </div>
                     )}
                   </li>
@@ -265,7 +269,7 @@ export function BalanceChanges({
                       className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5"
                     >
                       {party}
-                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size="tight" />
+                      <LockLabel participant={p} lockCodeHashes={lockCodeHashes} size={size} />
                     </div>
                     <div data-role="ckb" className="text-body text-right">
                       {ckb}
@@ -274,7 +278,7 @@ export function BalanceChanges({
                       data-role="items"
                       className="text-small flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                     >
-                      <Items participant={p} size="tight" />
+                      <Items participant={p} size={size} />
                     </div>
                     <div
                       data-role="occupied"
@@ -294,7 +298,7 @@ export function BalanceChanges({
                   return (
                     <>
                       <span>
-                        Net <ExactCkb shannons={n.ckb} tone="plain" /> · occupied{' '}
+                        Net <CkbAmount form="summary" shannons={n.ckb} tone="plain" /> · occupied{' '}
                         <span className="text-text tabular-nums">
                           {formatOccupiedDelta(n.occupied.toString())}
                         </span>

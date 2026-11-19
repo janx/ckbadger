@@ -159,7 +159,8 @@ function Chain({ from, to, words }: { from: string; to: string; words: string })
               <span className="hidden sm:inline">→</span>
             </span>
           )}
-          <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5">
+          {/* a tile's words explain a step: the reading ink (R3); its title stays bright */}
+          <div className="text-small text-text border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5">
             <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
             {tile.body}
           </div>
@@ -212,7 +213,8 @@ export function ScriptNames({ lockHash, address }: { lockHash: string; address: 
           {row('address', address)}
         </div>
       )}
-      <p className="text-text-dim text-small mt-3.5">
+      {/* a sentence that explains: the reading ink (R3) */}
+      <p className="text-text text-small mt-3.5">
         {address !== null
           ? 'Change one byte of args and both names change; the address is not an account, it is this script spelled out.'
           : 'Change one byte of args and the lock hash changes.'}

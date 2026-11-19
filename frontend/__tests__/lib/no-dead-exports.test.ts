@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { virtualProgram } from '@/__tests__/utils/virtual-program';
 
 /**
  * Gate for dead exports (UI review 2026-11-14, lane E3): every symbol a module under the five
@@ -79,6 +80,10 @@ const ALLOWLIST: Record<string, { why: string; anchor?: { file: string; text: st
   'lib/pipeline/layout.ts#BLOCK_FIELD_CAPACITY': {
     why: "the frontend side of the pipeline truncation contract: a block card's field, the API serving one fewer (the cellbase)",
     anchor: { file: '../crates/api/src/routes/pipeline.rs', text: '`BLOCK_FIELD_CAPACITY`' },
+  },
+  'lib/palette.ts#apcaLc': {
+    why: 'an instrument (readability plan 2026-11-18, ruling R2): the perceptual grade palette.test.ts pins the night text by, kept beside contrastRatio so every check of a pairing reads one implementation; no page grades an ink at run time',
+    anchor: { file: 'lib/palette.ts', text: 'palette.test pins the floors' },
   },
   'lib/theme.ts#resetThemeForTests': {
     why: 'a test seam, by its name: the theme store keeps module state (the snapshot, its listeners, the window watchers) that each test must drop; the app never resets it',
@@ -175,35 +180,6 @@ function deadExports(
     }
   }
   return dead.sort();
-}
-
-/** A program over in-memory files under `/v` (`@/` is `/v`), for the gate's own tests. */
-function virtualProgram(files: Record<string, string>): ts.Program {
-  const options: ts.CompilerOptions = {
-    noLib: true,
-    types: [],
-    noEmit: true,
-    strict: true,
-    jsx: ts.JsxEmit.Preserve,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    target: ts.ScriptTarget.ES2020,
-    baseUrl: '/v',
-    paths: { '@/*': ['./*'] },
-  };
-  const at = (path: string) => (path.startsWith('/v/') ? path.slice(3) : null);
-  const host = ts.createCompilerHost(options);
-  host.getCurrentDirectory = () => '/v';
-  host.fileExists = (path) => at(path) !== null && at(path)! in files;
-  host.readFile = (path) => (at(path) !== null ? files[at(path)!] : undefined);
-  host.directoryExists = (path) =>
-    path === '/v' || Object.keys(files).some((f) => `/v/${f}`.startsWith(`${path}/`));
-  host.getDirectories = () => [];
-  host.getSourceFile = (path, language) => {
-    const text = at(path) !== null ? files[at(path)!] : undefined;
-    return text === undefined ? undefined : ts.createSourceFile(path, text, language, true);
-  };
-  return ts.createProgram({ rootNames: Object.keys(files).map((f) => `/v/${f}`), options, host });
 }
 
 function virtualDead(files: Record<string, string>, external: string[] = []): string[] {

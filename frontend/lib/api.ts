@@ -868,8 +868,16 @@ interface CellDaoInfo {
   withdrawRequestTimestamp?: string;
   withdrawBlock?: number;
   withdrawTimestamp?: string;
-  compensation?: string;
-  compensationCkb?: string;
+  /** The deposit's exact compensation (shannons), sent with every DAO cell. */
+  compensation: string;
+  compensationCkb: string;
+  /**
+   * Where the figure stands, one state per `daoStatus`: `accruing` (deposited, unclaimed, read at
+   * the tip `compensationAtBlock`), `frozen` (withdrawing, fixed at the request's block) or
+   * `claimed` (withdrawn, by the completion's block).
+   */
+  compensationState: 'accruing' | 'frozen' | 'claimed';
+  compensationAtBlock: number;
   estimatedApc?: string;
 }
 
@@ -2378,12 +2386,21 @@ interface DobTrait {
   value: string;
 }
 
+/** One decoder step's stored output: a blob named by its sha256, served at `url`. */
 export interface DecodedMediaItem {
   mediaType: string;
-  role: string | null;
   size: number;
   hash: string;
-  step: number | null;
+  step: number;
+  url: string;
+}
+
+/**
+ * The picture `/render` draws on request from the decoded traits (an SVG a trait holds, or the
+ * cluster's DOB/1 pattern filled with them). No byte of it is stored: it has no size and no hash.
+ */
+export interface DecodedRender {
+  mediaType: string;
   url: string;
 }
 
@@ -2393,7 +2410,10 @@ export interface SporeDobDecoded {
   contentType: string;
   dnaHex: string | null;
   traits: DobTrait[];
+  /** The decoder's stored outputs, one per step. */
   media: DecodedMediaItem[];
+  /** Null unless no stored output is an image and the traits give an SVG to draw. */
+  render: DecodedRender | null;
   issues: string[];
 }
 

@@ -44,8 +44,10 @@ describe('block evidence visuals', () => {
       screen.getByRole('img', { name: /^Size, bytes: 3,205, 883 overhead/ }).children
     ) as HTMLElement[];
     expect(overhead).toHaveStyle({ backgroundColor: 'var(--c-slate-ckb)' });
-    expect(overhead.getAttribute('class')).toBeNull();
-    expect(user).toHaveClass('bg-jade');
+    // no colour class beside the named ink; re-pinned for readability R1: the one class it
+    // carries is the scan of a fill (`.scan-fill`, a mask by night), which paints no colour
+    expect(overhead.getAttribute('class')).toBe('scan-fill');
+    expect(user).toHaveClass('bg-jade', 'scan-fill');
   });
   it('uses stacked resource bars without shortening an exact cycle count', () => {
     render(<ResourceBar label="Cycles" value={3500000000} scale={4000000000} stacked />);

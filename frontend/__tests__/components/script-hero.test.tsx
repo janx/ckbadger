@@ -13,18 +13,23 @@ describe('the scripts pages’ display figure (CkbFigure)', () => {
   // makes 341.4, still over 326; at 13 px (70.2) the pair takes 319.8 and fits at 360. So below
   // 640 the decimals are 13 px (from 640 22 px, as before), and the figure and its unit are one
   // unbreakable unit at every width.
-  it('keeps the figure and its unit one unit, the decimals 13 px below 640 (PA-19)', () => {
+  // Readability R5 (re-pinned and renamed on purpose: "..., the decimals 13 px below 640"): the
+  // figure is the summary form, one run, whole CKB from 1,000 up, its exact value in its title;
+  // the decimals and their own step below 640 went with it.
+  it('keeps the figure and its unit one unit, the figure in its summary form (PA-19)', () => {
     const { container } = render(<CkbFigure shannons={FIGURE} />);
     const amount = container.querySelector('[data-role="figure-amount"]') as HTMLElement;
     expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
-    expect(amount).toHaveTextContent(/^49,890,081,314\.93777532 CKB$/);
+    expect(amount).toHaveTextContent(/^49,890,081,314 CKB$/);
     expect(amount.children).toHaveLength(1);
     const whole = amount.firstElementChild as HTMLElement;
     expect(whole).toHaveClass('whitespace-nowrap');
-    expect(whole).toHaveTextContent(/^49,890,081,314\.93777532 CKB$/);
-    const decimals = within(whole).getByText('.93777532');
-    expect(decimals).toHaveClass('text-body', 'sm:text-hero', 'text-text');
-    expect(decimals).not.toHaveClass('text-hero');
+    expect(whole).toHaveTextContent(/^49,890,081,314 CKB$/);
+    expect(whole.querySelector('[data-ckb-amount]')).toHaveAttribute(
+      'title',
+      '49,890,081,314.93777532 CKB'
+    );
+    expect(whole.querySelector('.text-hero, .sm\\:text-hero')).toBeNull();
     expect(within(whole).getByText('CKB')).toHaveClass('text-body', 'text-text-dim');
   });
 
@@ -33,6 +38,7 @@ describe('the scripts pages’ display figure (CkbFigure)', () => {
       <HeroFigure label="CKB under these scripts" shannons={FIGURE} companion={['in 3 cells']} />
     );
     const unit = screen.getByText('CKB');
-    expect(unit.closest('.whitespace-nowrap')).toHaveTextContent(/^49,890,081,314\.93777532 CKB$/);
+    // the summary form (readability R5, re-pinned on purpose: was every decimal)
+    expect(unit.closest('.whitespace-nowrap')).toHaveTextContent(/^49,890,081,314 CKB$/);
   });
 });

@@ -76,8 +76,8 @@ export interface SealedHeadProps extends SealedHeadOf {
   children: ReactNode;
   /**
    * The id line: the full hash, out point or address, with its copy control. The plate sets its
-   * voice once, the kind line's (text-small in text-text-dim), so what the page gives carries no
-   * size or ink of its own (a copy control keeps its own).
+   * voice once (text-small in the reading ink: the id is a value, readability ruling R3), so what
+   * the page gives carries no size or ink of its own (a copy control keeps its own).
    */
   identity: ReactNode;
   /** The rest of the head: under the stone and the plate, from the page's left edge. */
@@ -90,10 +90,11 @@ export interface SealedHeadProps extends SealedHeadOf {
  * seals by kind, C10). Beside the stone stands only the plate, three short lines on one left edge:
  * the kind line (the kind word in the dim small voice, then the page's status chips), the name
  * (the h1) and the id line (the full hash, out point or address, with its copy control), the id
- * line in the kind line's voice too, set here once (C10 round 2: the four pages' id lines spoke in
- * three sizes and inks, the cell's full out point bright under its h1). Everything else of the
- * head is `below`: under the stone and the plate, from the page's left edge at every width, so the
- * head's prose starts where every section under the head starts.
+ * line in one voice, set here once (C10 round 2: the four pages' id lines spoke in three sizes and
+ * inks, the cell's full out point bright under its h1): the kind line's small size, in the reading
+ * ink, since the id is a value and the kind word a label (readability ruling R3). Everything else
+ * of the head is `below`: under the stone and the plate, from the page's left edge at every width,
+ * so the head's prose starts where every section under the head starts.
  *
  * From md up the plate is one column beside the stone, centred on it (`items-center`): its lines 8
  * px apart keep a plate with a one-line name no taller than the stone on every page (kind line 18
@@ -128,15 +129,14 @@ export function SealedHead({
       <PageSeal id={id} state={state} />
       <div data-sealed-plate="" className="contents md:flex md:min-w-0 md:flex-col md:gap-2">
         <div data-sealed-kind="" className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+          {/* the kind word is a label: quiet (R3) */}
           <span className="text-text-dim text-small">{kind}</span>
           {status}
         </div>
         <div data-sealed-name="" className="flex min-w-0 flex-col gap-2 max-md:col-span-2">
           {children}
-          <div
-            data-sealed-id=""
-            className="text-text-dim text-small min-w-0 [overflow-wrap:anywhere]"
-          >
+          {/* the full id is a value: the reading ink (R3) */}
+          <div data-sealed-id="" className="text-text text-small min-w-0 [overflow-wrap:anywhere]">
             {identity}
           </div>
         </div>

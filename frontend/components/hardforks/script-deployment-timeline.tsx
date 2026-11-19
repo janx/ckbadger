@@ -54,7 +54,9 @@ function headerMs(timestampMs: number): number {
 
 /**
  * A version's name is not unique (two "PW Lock" versions): the version hash tells them apart, at
- * the size of where the name stands (U-09): a mark's name on the chart, tight; the reading, row.
+ * the size of where the name stands (U-09): a mark's accessible name and the reading, both words
+ * with no width of their own to fit, at the row size, so a reader hears the hash the reading
+ * shows (R9; the mark's name was tight).
  */
 export function markName(mark: HardforkScriptDeployment, size: ShortSize): string {
   return `${mark.versionName} · ${mark.familyName} · version ${shortenHash(mark.versionHash, size)}`;
@@ -184,7 +186,7 @@ export function ScriptDeploymentTimeline({
                 <button
                   type="button"
                   title={`${mark.versionName} · deployed ${formatUtc8Date(mark.timestampMs)}`}
-                  aria-label={`${markName(mark, 'tight')}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
+                  aria-label={`${markName(mark, 'row')}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
                   {...readout.bind(mark.versionHash)}
                   className={`focus-visible:outline-jade block h-[7px] w-[7px] -translate-x-1/2 rounded-full border focus-visible:outline ${active ? 'bg-jade border-jade' : 'border-text-bright bg-base-bg hover:bg-jade'}`}
                 />

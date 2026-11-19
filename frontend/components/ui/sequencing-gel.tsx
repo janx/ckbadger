@@ -21,14 +21,22 @@ import { cn } from '@/lib/utils';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
+import { SVG_TEXT } from '@/lib/chart-type';
+import { advancePx, withAllowance } from '@/lib/type-metrics';
 
 /** The side-by-side map: lanes from LX, brackets at GX, the gene columns from TX. */
 const WIDE = { LX: 38, LANE: 15, TOP: 44, STEP: 3.3, LABEL_GAP: 15 } as const;
 const GX = WIDE.LX + 16 * WIDE.LANE + 10;
 const TX = GX + 16;
-/** One character of 12 px and of 11.5 px JetBrains Mono (0.636 em, measured). */
-const CHAR_12 = 7.64;
-const CHAR_115 = 7.32;
+/**
+ * The gene columns' allowances: their glyphs were measured at 0.636 em in Chromium, 0.44 px a glyph
+ * over the face's 0.6 em at the head size (12 px) and 0.42 px at the value size (11.5 px).
+ */
+const HEAD_MEASURED_ALLOWANCE = 0.44;
+const VALUE_MEASURED_ALLOWANCE = 0.42;
+/** One character of a gene's name, arrow and value (the head size) and of its bytes and raw (the value size). */
+export const CHAR_12 = withAllowance(advancePx(SVG_TEXT.head), HEAD_MEASURED_ALLOWANCE);
+export const CHAR_115 = withAllowance(advancePx(SVG_TEXT.value), VALUE_MEASURED_ALLOWANCE);
 // A value that is longer is a label cut to this budget. 27 is the most the wide gel holds at the
 // DNA plate at 1280 (896 px) for the flagship DNA (Nervape): its columns before the value end at
 // 684.28 px (the gene columns from 304; the longest name, "prev.type", 9 × 7.64 + 10; the longest
@@ -180,7 +188,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
               x={r(x + LANE / 2)}
               y="16"
               textAnchor="middle"
-              fontSize="10"
+              fontSize={SVG_TEXT.tick}
               fill={GEL_COLORS.label}
             >
               {d.toString(16)}
@@ -219,7 +227,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             x={LX - 12}
             y={r(yOf(b * 2) + 3.5)}
             textAnchor="end"
-            fontSize="10"
+            fontSize={SVG_TEXT.tick}
             fill={GEL_COLORS.rulerText}
           >
             {b}
@@ -231,7 +239,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
         x={LX - 12}
         y={r(yOf(n) + 4)}
         textAnchor="end"
-        fontSize="10"
+        fontSize={SVG_TEXT.tick}
         fill={GEL_COLORS.rulerText}
       >
         {bytes.length}
@@ -240,7 +248,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
         x={LX - 12}
         y={r(yOf(n) + 18)}
         textAnchor="end"
-        fontSize="10"
+        fontSize={SVG_TEXT.tick}
         fill={GEL_COLORS.rulerText}
       >
         byte
@@ -317,22 +325,22 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
               </>
             )}
             <rect x={TX - 2} y={r(ly - 13)} width={width - TX + 2} height="17" fill="transparent" />
-            <text x={col.name} y={r(ly)} fontSize="12" fill={g.color}>
+            <text x={col.name} y={r(ly)} fontSize={SVG_TEXT.head} fill={g.color}>
               {clipLabel(g.name, NAME_MAX)}
             </text>
-            <text x={col.bytes} y={r(ly)} fontSize="11.5" fill={GEL_COLORS.label}>
+            <text x={col.bytes} y={r(ly)} fontSize={SVG_TEXT.value} fill={GEL_COLORS.label}>
               {bytesOf(g)} · {g.rule}
             </text>
-            <text x={col.raw} y={r(ly)} fontSize="11.5" fill={g.color}>
+            <text x={col.raw} y={r(ly)} fontSize={SVG_TEXT.value} fill={g.color}>
               {shortenHash(g.raw, 'tight')}
             </text>
-            <text x={col.arrow} y={r(ly)} fontSize="12" fill={GEL_COLORS.arrow}>
+            <text x={col.arrow} y={r(ly)} fontSize={SVG_TEXT.head} fill={GEL_COLORS.arrow}>
               →
             </text>
             <text
               x={col.value}
               y={r(ly)}
-              fontSize="12"
+              fontSize={SVG_TEXT.head}
               fill={quiet(g) ? GEL_COLORS.rulerText : GEL_COLORS.well}
             >
               {clipLabel(valueOf(g), VALUE_MAX)}
@@ -397,7 +405,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
               x={RULER + d * lane + lane / 2}
               y="12"
               textAnchor="middle"
-              fontSize="10"
+              fontSize={SVG_TEXT.tick}
               fill={GEL_COLORS.label}
             >
               {d.toString(16)}
@@ -421,7 +429,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
             x={RULER - 8}
             y={r(yOf(b * 2) + 3.5)}
             textAnchor="end"
-            fontSize="10"
+            fontSize={SVG_TEXT.tick}
             fill={GEL_COLORS.rulerText}
           >
             {b}
@@ -432,7 +440,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           x={RULER - 8}
           y={r(bottom + 4)}
           textAnchor="end"
-          fontSize="10"
+          fontSize={SVG_TEXT.tick}
           fill={GEL_COLORS.rulerText}
         >
           {bytes.length}
@@ -441,7 +449,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
           x={RULER - 8}
           y={r(bottom + 18)}
           textAnchor="end"
-          fontSize="10"
+          fontSize={SVG_TEXT.tick}
           fill={GEL_COLORS.rulerText}
         >
           byte

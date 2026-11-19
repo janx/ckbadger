@@ -186,7 +186,7 @@ describe('AdvertisementGraph', () => {
     expect(who).toHaveClass('text-small', 'text-text');
     expect(named).toHaveClass('text-meta', 'text-text-dim');
     expect(whom).toHaveAttribute('title', edge(1).targetPeerId);
-    expect(whom).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(whom).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     expect(addr).toHaveClass('text-meta', 'text-text-dim', '[overflow-wrap:anywhere]');
     expect(row.querySelectorAll('.text-text-bright')).toHaveLength(1);
     expect(row.querySelector('.col-span-3')).toBeNull();

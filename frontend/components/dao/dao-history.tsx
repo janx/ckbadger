@@ -5,16 +5,18 @@ import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
-import { AMOUNT_INK, amountSign } from '@/components/activity-event-row';
-import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/ckb-decimal';
+import { CkbAmount } from '@/components/ui/ckb-amount';
+import { ckbAmountText, ckbShortenedTitle } from '@/lib/amount-form';
+import { formatSignedCkbInteger, parseCkbDecimal } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks, tickGutter } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { CLASS_COLORS } from '@/lib/design-tokens';
-import { color } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
 import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
+import { SVG_TEXT, centreShift } from '@/lib/chart-type';
+import { OBSERVED_ADVANCE_EM } from '@/lib/type-metrics';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -36,10 +38,12 @@ const AXIS_H = 18;
 export const MULTIPLE_H = 72;
 const MULTIPLE_NAME_BAND = 18;
 const TICK_GAP_PX = 56;
-/** JetBrains Mono advances ~0.64 em in this Chromium (lane D, observed 7): 11 px names, 13 px values. */
-const CHAR_EM = 0.64;
-const NAME_PX = 11;
-const END_PX = 13;
+/**
+ * The plots' names and time ticks at the label size, their end values at the reading size
+ * (lib/chart-type.ts), measured at the advance Chromium was observed to draw them at (0.64 em).
+ */
+const NAME_PX = SVG_TEXT.label;
+const END_PX = SVG_TEXT.reading;
 
 export type HistoryRange = '1M' | '1Y' | 'All';
 export const HISTORY_RANGES: readonly HistoryRange[] = ['1M', '1Y', 'All'];
@@ -124,30 +128,20 @@ export function cutShare(ratio: string): string {
   return m[2] === undefined ? m[1] : `${m[1]}.${m[2].slice(0, 2)}`;
 }
 
-/** Signed CKB cut (never rounded) to two decimals, for a label at a plot's end. */
-function cutCkb(shannons: bigint): { sign: string; integer: string; fraction: string } {
-  const parts = splitCkbAmount(shannons);
-  const digits = `${parts.fraction.slice(1)}${parts.ghost.replace('.', '')}`;
-  return { sign: parts.sign, integer: parts.integer, fraction: `.${digits.slice(0, 2)}` };
-}
-
-/** Exact CKB as text: the fraction in the sign's quieter ink (`AMOUNT_INK`), padding zeros ghost. */
-function ExactCkbText({ shannons, signed = false }: { shannons: bigint; signed?: boolean }) {
-  const parts = splitCkbAmount(shannons);
-  const ink = AMOUNT_INK[signed ? amountSign(parts.sign) : 'neutral'];
+/** A reading's CKB, in its summary form (R5): its line names the unit; a cut figure is titled. */
+function ReadingCkb({ shannons, signed = false }: { shannons: bigint; signed?: boolean }) {
   return (
-    <span className="whitespace-nowrap font-mono tabular-nums">
-      {signed ? parts.sign : null}
-      {parts.integer}
-      <span data-fraction className={ink.fraction}>
-        {parts.fraction}
-      </span>
-      <span className="text-text-ghost">{parts.ghost}</span>
-    </span>
+    <CkbAmount
+      form="summary"
+      shannons={shannons}
+      signed={signed}
+      tone={signed ? 'sign' : 'inherit'}
+      unit={false}
+    />
   );
 }
 
-const textWidth = (chars: number, px: number) => chars * px * CHAR_EM;
+const textWidth = (chars: number, px: number) => chars * px * OBSERVED_ADVANCE_EM;
 
 /** Ticks on the time axis, thinned so labels keep `TICK_GAP_PX` apart. */
 function timeTicks(days: readonly Day[], x: (i: number) => number) {
@@ -296,9 +290,9 @@ function DepositedPlot({
           <text
             data-role="y-tick"
             x={left - 8}
-            y={y(v) + 3}
+            y={y(v) + centreShift(SVG_TEXT.tick)}
             textAnchor="end"
-            fontSize="10"
+            fontSize={SVG_TEXT.tick}
             className="fill-text-dim"
           >
             {formatTick(v, ticks.step)}
@@ -375,17 +369,20 @@ function DepositedPlot({
 function EndLabel({
   width,
   className,
+  title,
   children,
 }: {
   width: number;
   className: string;
+  /** The exact value a shortened label stands for (R5), as the label's hover title. */
+  title?: string;
   children: ReactNode;
 }) {
-  return (
+  const label = (
     <text
       data-role="end-label"
       x={width}
-      y={13}
+      y={END_PX}
       textAnchor="end"
       fontSize={END_PX}
       className={cn('stroke-base-bg', className)}
@@ -394,6 +391,13 @@ function EndLabel({
     >
       {children}
     </text>
+  );
+  if (title === undefined) return label;
+  return (
+    <g>
+      <title>{title}</title>
+      {label}
+    </g>
   );
 }
 
@@ -467,7 +471,8 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
   const clipped = weeks.filter((w) => Math.abs(ckb(w.net)) > cap).length;
   const note = `±${formatTick(cap, cap)} scale${clipped === 0 ? '' : `, ${formatCount(clipped, 'week')} cut`}`;
   const latest = weeks.at(-1) ?? null;
-  const end = latest ? cutCkb(latest.net) : null;
+  // The label at the plot's end: the week's net in its summary form (R5), one ink with its sign.
+  const end = latest ? ckbAmountText(latest.net, 'summary', true) : null;
   const biggest = weeks.reduce<Week | null>(
     (best, w) =>
       !best || (w.net < 0 ? -w.net : w.net) > (best.net < 0 ? -best.net : best.net) ? w : best,
@@ -478,7 +483,7 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
       {width !== null &&
         (() => {
           const name = 'net change per week';
-          const endChars = end ? `${end.sign}${end.integer}${end.fraction}`.length : 0;
+          const endChars = end ? end.length : 0;
           // The scale note follows the name on its line when both fit beside the end label.
           const inline =
             textWidth(name.length + 3 + note.length, NAME_PX) + textWidth(endChars, END_PX) + 24 <=
@@ -555,12 +560,9 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
                         ? 'fill-negative'
                         : 'fill-text'
                   }
+                  title={ckbShortenedTitle(latest.net, 'summary', true)}
                 >
-                  {end.sign}
-                  {end.integer}
-                  <tspan fill={color(AMOUNT_INK[amountSign(end.sign)].fractionKey)}>
-                    {end.fraction}
-                  </tspan>
+                  {end}
                 </EndLabel>
               )}
               {active !== null && (
@@ -584,7 +586,8 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
 /**
  * The one reading of the picture (board v3): the hovered or tapped day — else the last complete
  * day — deposited, its share, its depositors, the whole week it falls in, and the all-time peak.
- * Values are exact; a line end's label above is the same value cut to two decimals.
+ * Its amounts are in the summary form (R5), a cut one titled with its exact value, as the
+ * line end's label is.
  */
 export function DaoHistoryReading({
   series,
@@ -614,7 +617,7 @@ export function DaoHistoryReading({
           {' '}
           · deposited{' '}
           <span className="text-text">
-            <ExactCkbText shannons={day.shannons} />
+            <ReadingCkb shannons={day.shannons} />
           </span>
         </span>
         <span>
@@ -639,7 +642,7 @@ export function DaoHistoryReading({
                     : 'text-text'
               }
             >
-              <ExactCkbText shannons={week.net} signed />
+              <ReadingCkb shannons={week.net} signed />
             </span>
           </span>
         )}
@@ -648,7 +651,7 @@ export function DaoHistoryReading({
             {' '}
             · peak{' '}
             <span className="text-text">
-              <ExactCkbText shannons={parseCkbDecimal(peak.value)} />
+              <ReadingCkb shannons={parseCkbDecimal(peak.value)} />
             </span>{' '}
             on <span className="whitespace-nowrap">{peak.date}</span>
           </span>

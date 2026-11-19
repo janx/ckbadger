@@ -6,6 +6,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { epochDelayWords, fiberDuration } from '@/lib/fiber-format';
 import { formatUtc8Date } from '@/lib/utils';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { SVG_TEXT } from '@/lib/chart-type';
 
 /** The board's drawing width, used until the box is measured. */
 const DESIGN_WIDTH = 1232;
@@ -65,7 +66,10 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
       t: ms(required(channel.closeTimestamp, 'a close time', id), 'close time'),
       block: required(channel.closeBlock, 'a close block', id),
       label: forced ? 'force-closed' : 'closed together',
-      place: channel.state === 'settled' ? 'below-end' : 'above-end',
+      // A force close starts the wait, and above the line at the wait's right end stands its own
+      // label ("settled", or "not settled · wait …" while it runs): the close goes under the line,
+      // settled or not (readability 2026-11-18: above it, "force-closed" met the wait's words).
+      place: forced ? 'below-end' : 'above-end',
     });
   }
   if (channel.state === 'settled')
@@ -112,7 +116,7 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
           x={(X(open.t) + X(second.t)) / 2}
           y="24"
           textAnchor="middle"
-          fontSize="11"
+          fontSize={SVG_TEXT.label}
           fill={FIBER_COLORS.open}
         >
           open {lifetime}
@@ -134,7 +138,7 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
               x={narrow ? X(second.t) + 10 : (X(second.t) + X(third.t)) / 2}
               y="48"
               textAnchor={narrow ? 'start' : 'middle'}
-              fontSize="10.5"
+              fontSize={SVG_TEXT.note}
               fill={FIBER_COLORS.history}
             >
               {delay}
@@ -153,7 +157,13 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
               strokeWidth="1.5"
               strokeDasharray="3 3"
             />
-            <text x={W - L} y="0" textAnchor="end" fontSize="11.5" fill={FIBER_COLORS.count}>
+            <text
+              x={W - L}
+              y="0"
+              textAnchor="end"
+              fontSize={SVG_TEXT.value}
+              fill={FIBER_COLORS.count}
+            >
               not settled · wait {delay}
             </text>
           </>
@@ -178,7 +188,13 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
                 strokeWidth="1.5"
                 strokeDasharray={point.hollow ? '2 2' : undefined}
               />
-              <text x={x + dx} y={y} textAnchor={anchor} fontSize="11.5" fill={FIBER_COLORS.count}>
+              <text
+                x={x + dx}
+                y={y}
+                textAnchor={anchor}
+                fontSize={SVG_TEXT.value}
+                fill={FIBER_COLORS.count}
+              >
                 {point.label}
               </text>
               {narrow ? (
@@ -187,7 +203,7 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
                     x={x + dx}
                     y={y + 15}
                     textAnchor={anchor}
-                    fontSize="11"
+                    fontSize={SVG_TEXT.label}
                     fill={FIBER_COLORS.note}
                   >
                     {formatBlockNumber(point.block)}
@@ -196,7 +212,7 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
                     x={x + dx}
                     y={y + 30}
                     textAnchor={anchor}
-                    fontSize="11"
+                    fontSize={SVG_TEXT.label}
                     fill={FIBER_COLORS.note}
                   >
                     {formatUtc8Date(point.t)}
@@ -207,7 +223,7 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
                   x={x + dx}
                   y={y + 15}
                   textAnchor={anchor}
-                  fontSize="11"
+                  fontSize={SVG_TEXT.label}
                   fill={FIBER_COLORS.note}
                 >
                   {`${formatBlockNumber(point.block)} · ${formatUtc8Date(point.t)}`}

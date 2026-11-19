@@ -23,96 +23,120 @@
 export const THEMES = ['dark', 'light'] as const;
 export type ThemeName = (typeof THEMES)[number];
 
+/**
+ * By night the text grade is perceptual (readability plan 2026-11-18, ruling R2; the boards'
+ * ruling of that day, Gate F0, replaces the rubbing's night values below): every ink that carries
+ * a word is graded by `apcaLc` on the ground it is read on, the reading ink at Lc 75 or more and
+ * every other word ink at 60 or more on the page, the surface and the well (72 and 58 on the
+ * elevated tint), the marks under 60; WCAG's 4.5:1 stays the second floor. The values are the
+ * prototype's ladder (OKLCH lightness moved, hue kept, chroma kept unless the colour left sRGB),
+ * moved further in lightness only where a pin asked for it; the derivations are tabled in
+ * frontend/docs/ui-color-guidelines.md and the floors pinned in palette.test.ts.
+ */
 const dark = {
-  // grounds (lib.js: well, bg, surface, elevated; line, hair)
+  // grounds (lib.js: well, bg; the surface, the elevated tint, the line and the hair at 1.08,
+  // 1.17, 1.40 and 1.25:1 to the page ground by the 2026-11-18 ruling)
   'base-void': '#0f0d0b',
   'base-bg': '#15120f',
-  'base-surface': '#1b1714',
-  'base-elevated': '#241f1a',
-  'base-border': '#2a231d',
-  'base-border-subtle': '#221c17',
+  'base-surface': '#1e1a17',
+  'base-elevated': '#26211c',
+  'base-border': '#362e28',
+  'base-border-subtle': '#2d2621',
   /**
-   * The 1 px rule between the rows of a list or a table (and under its head): the hair by night;
-   * by day the hair stepped down until it clears the paper and a ruled line by 1.25:1 (R5).
+   * The 1 px rule between the rows of a list or a table (and under its head): the hair by night
+   * (1.25:1 to the page ground); by day the hair stepped down until it clears the paper and a
+   * ruled line by 1.25:1 (R5).
    */
-  'row-rule': '#221c17',
-  /** A bar's empty track: the elevated tint by night; by day stepped down as the row rule (R5). */
-  'bar-track': '#241f1a',
+  'row-rule': '#2d2621',
+  /**
+   * A bar's empty track: a step of its own by night (1.30:1 to the page ground); by day stepped
+   * down as the row rule (R5).
+   */
+  'bar-track': '#2f2924',
   /**
    * The row rule and the bar track on the tier-2 ground (ruling 4b), where `.tier2-ground`
-   * re-points the two keys to these: the same by night (they clear that ground by 1.14 / 1.18);
+   * re-points the two keys to these: the same by night (they clear that ground by 1.29 / 1.34);
    * by day L −0.030 until they clear the tier-2 ground and a ruled line on it by 1.25:1.
    */
-  'row-rule-deep': '#221c17',
-  'bar-track-deep': '#241f1a',
-  // inks (lib.js: moon, text, dim — lightened from #8a8073 to 4.5:1 — ghost)
-  'text-bright': '#e8e2d6',
-  text: '#b9b0a2',
-  'text-dim': '#908679',
-  'text-ghost': '#4a4139',
+  'row-rule-deep': '#2d2621',
+  'bar-track-deep': '#2f2924',
+  // inks (lib.js moon, text, dim, ghost), by Lc on the page ground: bright 92, reading 76, quiet
+  // 61, then the marks: muted 45, quiet slate 30, ghost 20
+  'text-bright': '#ede7db',
+  text: '#d6cdbe',
+  'text-dim': '#bdb3a4',
+  'text-ghost': '#685f56',
   /** The quiet ink between ghost and dim: separators, byte offsets, rulers, a note's frame. */
-  'ink-quiet': '#60574d',
+  'ink-quiet': '#7f766b',
   /** The deeper dim of the pipeline and the loading marquee. */
-  'ink-muted': '#756c61',
+  'ink-muted': '#9e9589',
   /** The phosphor white a live figure flares to (moon lit by celadon); the text-selection ink. */
-  'neon-white': '#f2f8f6',
+  'neon-white': '#f3f9f8',
   // accents, by the key names the pages use: jade = celadon 青瓷, aqua = indigo 靛青, gold = old
-  // gold 古金, rouge = cinnabar text 朱砂, lavender = lotus 藕荷, amber = moss 苔绿
-  jade: '#93c1b6',
-  'jade-dim': '#6f9a90',
-  'jade-bright': '#b7d9d0',
-  aqua: '#7fa3c9',
-  'aqua-dim': '#6e8aa7',
-  'aqua-bright': '#97bce3',
-  gold: '#c9a45c',
-  'gold-dim': '#a38750',
-  'gold-bright': '#e3bd75',
-  rouge: '#d9634a',
+  // gold 古金, rouge = cinnabar text 朱砂, lavender = lotus 藕荷, amber = moss 苔绿. By night each
+  // reads at Lc 70 on the page ground, its quiet step at 60 to 61 and its bright step at 80; the
+  // cinnabar text, a signal, at 63 over its quiet step's 61 and under its bright step's 68
+  jade: '#9ecdc2',
+  'jade-dim': '#90bdb2',
+  'jade-bright': '#b9dcd2',
+  aqua: '#a2c8ef',
+  'aqua-dim': '#99b7d6',
+  'aqua-bright': '#b4d8fe',
+  gold: '#e4bf76',
+  'gold-dim': '#ceb077',
+  'gold-bright': '#f6cf87',
+  rouge: '#ff9e88',
   /**
    * The cinnabar text's quiet step at text grade, like every other `*-dim` (UI review 2026-11-14):
-   * the board's dim moved in lightness until it reads at 4.5:1. It is also the fraction digits of
-   * a negative amount (R4), as jade-dim is a positive one's and text-dim a neutral one's.
+   * the board's dim moved in lightness until it reads at the text grade (by night Lc 60 on every
+   * word ground, under the cinnabar text; by day 4.5:1). It was the fraction digits of a negative
+   * amount until ruling R5 gave an amount one ink.
    */
-  'rouge-dim': '#ca6c57',
-  'rouge-bright': '#f57c62',
-  lavender: '#a797c4',
-  'lavender-dim': '#8e82a5',
-  amber: '#a3bf7a',
-  'amber-dim': '#889d69',
+  'rouge-dim': '#fc9982',
+  'rouge-bright': '#feac99',
+  lavender: '#cdbceb',
+  'lavender-dim': '#baaed2',
+  amber: '#b1ce88',
+  'amber-dim': '#a4ba84',
   /** Cinnabar, the mark: prompt squares, seals, the search square (UI grade, not text). */
   mark: '#c2452d',
   // asset classes: token azurite 石青, object a lotus violet, identity the boards' rose, copper
-  // ochre 赭石 (bitcoin)
-  token: '#6f9ad6',
-  'token-bright': '#87b3f1',
-  object: '#a58ad6',
-  identity: '#c97f93',
-  copper: '#cc8a5e',
-  /** Plain CKB as a mark: the dim ink, a step above ghost. */
-  'slate-ckb': '#524941',
-  /** "Other" as a mark, and a tile's outline: the boards' second line (lib.js line2). */
-  'slate-other': '#342c25',
+  // ochre 赭石 (bitcoin); by night each at Lc 70 on the page ground, as the accents
+  token: '#9ec6fe',
+  'token-bright': '#bad7ff',
+  object: '#d0b8fe',
+  identity: '#fcaec2',
+  copper: '#fab487',
+  /**
+   * Plain CKB as a mark, a hair above the ghost; also the ground of words (an address balance
+   * bar's "free" part, the current code-cell holder), set by them by night: the neutral of the mix
+   * dim ghost 0.12 moved in OKLCH lightness until text-bright reads on it at Lc 70 (4.93:1). The
+   * mix drifted with the inks to #72695f, where neither ink held a word (4.37:1 and 3.5:1).
+   */
+  'slate-ckb': '#6a6157',
+  /** "Other" as a mark, and a tile's outline: the boards' second line (lib.js line2), at 1.60:1. */
+  'slate-other': '#3f3730',
   // the cell's four parts
-  'cell-capacity': '#e8e2d6',
-  'cell-lock': '#85a9d0',
-  'cell-type': '#aac583',
-  'cell-data': '#89b2c0',
+  'cell-capacity': '#ede7db',
+  'cell-lock': '#a2c7f0',
+  'cell-type': '#b1cd8a',
+  'cell-data': '#a1cad9',
   /** Framing inside the data (a length, an offset): structure, not content. */
-  'data-framing': '#7898a3',
+  'data-framing': '#97b9c4',
   // boards
-  'board-link': '#87afc1',
-  tile: '#181512',
-  'tile-current': '#313631',
-  'grid-faint': '#1c1713',
-  'flow-ckb': '#a09789',
-  'flow-fee': '#71675c',
+  'board-link': '#a1cadc',
+  tile: '#1a1613',
+  'tile-current': '#353a36',
+  'grid-faint': '#28231f',
+  'flow-ckb': '#bab1a2',
+  'flow-fee': '#978d81',
   // the jade ramp after jade itself (the first stop), strongest first: celadon mixed into the
   // page ground at 80 / 64 / 50 / 38 / 27 %
-  'ramp-1': '#7a9e95',
-  'ramp-2': '#66827a',
-  'ramp-3': '#546a63',
-  'ramp-4': '#45554e',
-  'ramp-5': '#37413c',
+  'ramp-1': '#83a89e',
+  'ramp-2': '#6d8a82',
+  'ramp-3': '#5a7068',
+  'ramp-4': '#495953',
+  'ramp-5': '#3a443f',
   // the transaction pipeline's stage fills (indigo / gold / celadon, hue and chroma kept, at OKLCH
   // L 0.66 by night; the drop neutral is the text ink at half chroma at the same L)
   'pipeline-pending': '#7296bb',
@@ -131,7 +155,7 @@ const dark = {
   /**
    * The proposal window (direction G): the strap through the heads of the plates is gilt across
    * every plate inside the window and the joints between them, a ground the head's words keep
-   * 4.5 : 1 on (text-bright 7.6, text 4.58 : 1; text-dim is not used on it), never faded.
+   * 4.5 : 1 on (by night text-bright 8.0, text 6.24 : 1; text-dim is not used on it), never faded.
    */
   'pipeline-gilt': '#564013',
   /**
@@ -149,22 +173,29 @@ const dark = {
   'pipeline-dot-expired': '#48413a',
   // chrome
   'search-panel': '#0c0a09',
-  'search-selected': '#1a1b19',
-  'search-hover': '#131210',
+  'search-selected': '#1a1c1a',
+  'search-hover': '#131310',
   'stream-pending': '#0b0908',
   'stream-pending-hover': '#0d0b0a',
-  'row-tag-accent-edge': '#42514b',
-  'reward-secondary': '#5e7870',
+  'row-tag-accent-edge': '#46554f',
+  'reward-secondary': '#647e77',
   // "who can change the code" swatches
-  'code-fixed-fill': '#9c9385',
-  'code-unspendable-fill': '#665d53',
+  'code-fixed-fill': '#c5bbac',
+  /**
+   * The darker of the two greys, set by what it carries: the bar on /scripts writes its class's
+   * name and share in it, and the fill-ink rule gives those words the bright ink, which reads on
+   * it at Lc 70 (4.94:1). By night it is the neutral of the mix it was (dim and ghost) moved in
+   * OKLCH lightness only to that grade; a mix of two inks drifts with them (#8a8175 held a word
+   * in neither ink: the bright one 3.11:1 and Lc 56, the dark one Lc 38).
+   */
+  'code-unspendable-fill': '#6a6155',
   // an ELF file's regions
-  'elf-header': '#7898a3',
-  'elf-program-headers': '#8daeb9',
+  'elf-header': '#97b9c4',
+  'elf-program-headers': '#abd0dc',
   'elf-rodata': '#9ac09b',
   'elf-eh-frame': '#aab9aa',
   'elf-data': '#d5b985',
-  'elf-meta': '#b8acd0',
+  'elf-meta': '#baaed2',
   // the sequencing gel
   'gel-overlay': '#f6f2ea',
   'gel-ink-btc-0': '#f1dece',
@@ -174,7 +205,7 @@ const dark = {
   'gel-ink-pure-1': '#b7d9d0',
   'gel-ink-pure-2': '#93c1b6',
   // storage tiers
-  'tier-pure-ink-lit': '#b7d9d0',
+  'tier-pure-ink-lit': '#b9dcd2',
   // composition badges
   'badge-inner-pure': '#181a17',
   'badge-inner-btc': '#1a1510',
@@ -185,10 +216,10 @@ const dark = {
   'bitcoin-light': '#edd6c3',
   'bitcoin-dark': '#945d36',
   // the Game of Life tile
-  'life-bg-ckb': '#141412',
-  'life-bg-dual': '#15120d',
+  'life-bg-ckb': '#151512',
+  'life-bg-dual': '#15120e',
   // the sky: the page ground is the boards' bg, a hair lighter at the top, a hair deeper at the foot
-  'sky-top': '#171411',
+  'sky-top': '#181512',
   'sky-mid': '#15120f',
   'sky-bottom': '#13100d',
   'well-bg': '#0f0d0b',
@@ -344,20 +375,45 @@ export const PALETTE: Readonly<Record<ThemeName, Palette>> = { dark, light };
  * and `glow`, the factor every halo's alpha is multiplied by (1 at night, 0 by day: nothing
  * glows on paper).
  *
- * The rubbing / Song print finish (the boards' `scan` and `inset`): CRT scanlines by night, 1 px
- * of black at 22 % in every 3; ruled paper by day, the same lines in the ink at 4.5 %. The vignette
- * and the grain sit at about half their midnight strength. A frame (`.glass`, the rule name kept)
- * is a flat tile: the surface, opaque, under its own 1 px border — no sheen, no lit edges, no
- * outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
+ * The rubbing / Song print finish (the boards' `scan` and `inset`): ruled paper by day, 1 px of
+ * the ink at 4.5 % in every 3 over the page (`scanline-ink`). By night no scan lies over the page
+ * (readability R1: on the night ground its lines showed only where they crossed the text, and cut
+ * its strokes): `scanline-ink` is transparent, and the layer, mounted in both themes, paints
+ * nothing; the night's scan is cut into a figure's fills instead (`fill-scan`, `FILL_SCAN`). The
+ * vignette and the grain sit at about half their midnight strength. A frame
+ * (`.glass`, the rule name kept) is a flat tile: the surface, opaque, under its own 1 px border —
+ * no sheen, no lit edges, no outer ring. A well is the boards' inset (`inset 0 1px 3px` at 60 % black by night, the ink at
  * 8 % by day) with no lip. The tints are the palette's own grounds and inks. `seal-press` is how
  * faint the newest block's seal is pressed behind the 404 verse: the cinnabar at 16 % on the night,
  * 8 % on paper (where the same red reads stronger): the most each allows with every ink of the
  * verse and its facts still text-grade across a stroke (palette.test).
  */
+
+/**
+ * The scan of a fill (readability R1, Gate F0): by night the scan is a property of a figure's
+ * fill — a bar, an area — and never lies over a word. Of every `period` CSS px, `row` px is hit:
+ * the ground behind the fill shows through it at `strength`, the strength the window-wide layer
+ * had on a fill. An HTML fill takes the class `.scan-fill` (app/globals.css), whose mask image is
+ * the material `fill-scan`; an SVG fill takes the mask components/ui/scan-fill.tsx draws from these
+ * numbers, drawn while the material is not `none`. By day there is none: the ruled paper is the
+ * window's (`scanline-ink`).
+ */
+export const FILL_SCAN = { period: 3, row: 1, strength: 0.22 } as const;
+
+/** `fill-scan` by night: an alpha mask from the fill's foot up, `period − row` px whole, `row` px hit. */
+function fillScanMask(): string {
+  const { period, row, strength } = FILL_SCAN;
+  const whole = 'rgba(0, 0, 0, 1)';
+  const hit = `rgba(0, 0, 0, ${1 - strength})`;
+  const at = period - row;
+  return `repeating-linear-gradient(0deg, ${whole} 0px, ${whole} ${at}px, ${hit} ${at}px, ${hit} ${period}px)`;
+}
+
 const darkMaterials = {
   glow: '1',
   vignette: 'rgba(0, 0, 0, 0.18)',
-  'scanline-ink': 'rgba(0, 0, 0, 0.22)',
+  'scanline-ink': 'transparent',
+  'fill-scan': fillScanMask(),
   'grain-blend': 'screen',
   'grain-opacity': '0.02',
   'inset-scan': 'rgba(0, 0, 0, 0.06)',
@@ -390,6 +446,7 @@ const lightMaterials: Materials = {
   glow: '0',
   vignette: hexAlpha(DAY_INK, 0.03),
   'scanline-ink': hexAlpha(DAY_INK, 0.045),
+  'fill-scan': 'none',
   'grain-blend': 'multiply',
   'grain-opacity': '0.03',
   'inset-scan': hexAlpha(DAY_INK, 0.025),
@@ -510,6 +567,38 @@ export function contrastRatio(a: string, b: string): number {
   const lb = relativeLuminance(b);
   const [hi, lo] = la >= lb ? [la, lb] : [lb, la];
   return (hi + 0.05) / (lo + 0.05);
+}
+
+// ---- perceptual contrast (APCA-W3 0.0.98G-4g): the night text grade (readability ruling R2) ----
+
+/** APCA's screen luminance: each sRGB channel to the 2.4 power (no linear toe), weighted. */
+function apcaLuminance(hex: string): number {
+  const { r, g, b } = hexToRgb(hex);
+  return 0.2126729 * (r / 255) ** 2.4 + 0.7151522 * (g / 255) ** 2.4 + 0.072175 * (b / 255) ** 2.4;
+}
+
+/** APCA's soft clamp of a near-black luminance (flare). */
+function apcaClampBlack(y: number): number {
+  return y > 0.022 ? y : y + (0.022 - y) ** 1.414;
+}
+
+/**
+ * The lightness contrast (APCA Lc) of `ink` read on `ground`, APCA-W3 0.0.98G-4g: positive for a
+ * dark ink on a light ground, negative for a light ink on a dark one; the grade is its absolute
+ * value. Unlike `contrastRatio` it is not symmetric, and it weighs a light ink on a dark ground as
+ * the eye does, weaker than the same ratio the other way round, which is why the night theme's
+ * text is graded by it (palette.test pins the floors) and WCAG's 4.5:1 stays the second floor.
+ */
+export function apcaLc(ink: string, ground: string): number {
+  const text = apcaClampBlack(apcaLuminance(ink));
+  const back = apcaClampBlack(apcaLuminance(ground));
+  if (Math.abs(back - text) < 0.0005) return 0;
+  if (back > text) {
+    const s = (back ** 0.56 - text ** 0.57) * 1.14;
+    return s < 0.1 ? 0 : (s - 0.027) * 100;
+  }
+  const s = (back ** 0.65 - text ** 0.62) * 1.14;
+  return s > -0.1 ? 0 : (s + 0.027) * 100;
 }
 
 // ---- the ink of words inside a filled segment (DY-03, UI review 2026-11-14) ----

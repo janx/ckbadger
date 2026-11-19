@@ -16,7 +16,7 @@ import { CellVersions } from '@/components/asset/cell-versions';
 import { MnftPermissions } from '@/components/asset/identity-document';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
@@ -355,7 +355,12 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               label: 'CKB held in its cell',
               value: history ? (
                 current ? (
-                  <ExactCkb shannons={BigInt(current.capacity)} signed={false} tone="plain" wrap />
+                  <CkbAmount
+                    form="summary"
+                    shannons={BigInt(current.capacity)}
+                    signed={false}
+                    tone="plain"
+                  />
                 ) : (
                   'No live cell'
                 )
@@ -506,7 +511,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               {collection.data.ownedCapacity !== null && (
                 <span>
                   <span className="text-text-bright text-body">
-                    <ExactCkb
+                    <CkbAmount
+                      form="summary"
                       shannons={BigInt(collection.data.ownedCapacity)}
                       signed={false}
                       tone="plain"

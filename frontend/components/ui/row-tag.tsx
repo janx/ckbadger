@@ -6,7 +6,8 @@ import { ROW_TAG_COLORS } from '@/lib/design-tokens';
  * `default`: a role, symbol, standard or lock kind. `ghost`: what is set back or said beside the
  * row's own party ("this address", the network table's "Not dialed by this crawler") — the dashed
  * border sets it apart, the ink is the readable dim (lane F follow-up: the faint #4b5266 could not
- * be read). `accent`: a class mark ("BTC+CKB", "Pure CKB", "live · current", "immutable").
+ * be read). `accent`: a class mark ("live · current", "immutable"); an object's composition is not
+ * one: it is `CompositionBadge`, in its own class's ink (one class, one hue; readability 2026-11-18).
  * `warn`: a status the reader must act on — "deprecated", a script no new cell should use. Red is
  * otherwise reserved for negative deltas (CKB and tokens leaving a party); this is the one status
  * that earns it, because a user must not pick this script (lane F follow-up 2: the dim tag read as
@@ -14,7 +15,10 @@ import { ROW_TAG_COLORS } from '@/lib/design-tokens';
  */
 export type RowTagVariant = 'default' | 'ghost' | 'accent' | 'warn';
 
-/** The boards' tag (table-rows T5): 11 px, 16 px line, 1 px border, square corners, 5 px sides. */
+/**
+ * The boards' tag (table-rows T5): 11 px, 16 px line, 1 px border, square corners, 5 px sides. A
+ * tag is a label, so its default ink is the quiet ink by rule (readability ruling R3).
+ */
 const BASE =
   'text-meta text-text-dim inline-block whitespace-nowrap border px-[5px] align-middle leading-4';
 /** Each variant's ink and edge; the accent's edge has no theme class and comes as a style. */

@@ -11,7 +11,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { AppLink } from '@/components/ui/app-link';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ShortId } from '@/components/ui/short-id';
 
 /**
@@ -119,7 +119,7 @@ function SporeLine({ item }: { item: Extract<CellInventoryItem, { kind: 'spore' 
       href={item.href}
       name={
         <>
-          {name ?? 'Spore object'} <ShortId value={item.id} kind="hash" size="head" />
+          {name ?? 'Spore object'} <ShortId value={item.id} kind="hash" size="row" />
         </>
       }
       tier={object.data?.mediaProfile?.tier}
@@ -143,7 +143,7 @@ function SporeClusterLine({
       mark="objects"
       lead="This cell defines the cluster"
       href={item.href}
-      name={cluster.data?.name ?? <ShortId value={item.id} kind="hash" size="head" />}
+      name={cluster.data?.name ?? <ShortId value={item.id} kind="hash" size="row" />}
       error={cluster.error}
       what="the cluster"
     />
@@ -168,7 +168,7 @@ function MnftLine({ item }: { item: Extract<CellInventoryItem, { kind: 'm-nft' }
           `${d.class.name} #${d.tokenIndex}`
         ) : (
           <>
-            m-NFT object <ShortId value={item.id} kind="hash" size="head" />
+            m-NFT object <ShortId value={item.id} kind="hash" size="row" />
           </>
         )
       }
@@ -189,7 +189,7 @@ function MnftClassLine({ item }: { item: Extract<CellInventoryItem, { kind: 'm-n
       mark="objects"
       lead="This cell defines the m-NFT class"
       href={item.href}
-      name={collection.data?.name ?? <ShortId value={item.id} kind="hash" size="head" />}
+      name={collection.data?.name ?? <ShortId value={item.id} kind="hash" size="row" />}
       error={collection.error}
       what="the class"
     />
@@ -224,7 +224,7 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
         name ?? (
           <>
             {IDENTITY_WORD[item.standard]} identity{' '}
-            <ShortId value={item.id} kind="hash" size="head" />
+            <ShortId value={item.id} kind="hash" size="row" />
           </>
         )
       }
@@ -245,7 +245,7 @@ function IdentityLine({ item }: { item: Extract<CellInventoryItem, { kind: 'iden
 export function CellInventoryLine({ cell }: { cell: Cell }) {
   let item: CellInventoryItem | null;
   try {
-    item = cellInventoryItem(cell, 'head');
+    item = cellInventoryItem(cell, 'row');
   } catch (error) {
     return (
       <p role="alert" data-testid="cell-inventory-error" className="text-rouge text-small">
@@ -299,7 +299,7 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
           tail={
             <>
               {item.stage === 'deposit' ? ' of ' : ' for '}
-              <ExactCkb shannons={item.capacity} signed={false} tone="plain" />
+              <CkbAmount form="column" shannons={item.capacity} signed={false} tone="plain" />
             </>
           }
         />

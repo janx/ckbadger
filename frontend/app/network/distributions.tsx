@@ -12,6 +12,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { TopicSection } from '@/app/network/topic-section';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
+import { charPx } from '@/lib/type-metrics';
 
 const TOP_N = 8;
 /**
@@ -20,8 +21,7 @@ const TOP_N = 8;
  * the mid-tone band where neither does by night: 4.24 and 4.36:1).
  */
 export const PROVIDER_OPACITY = [0.9, 0.66, 0.46, 0.38, 0.3, 0.2] as const;
-/** The in-segment words (hierarchy v3 R15): 12 px monospace, 10 px padding each side. */
-const LABEL_ADVANCE = 7.2;
+/** The in-segment words (hierarchy v3 R15): the small step (`text-small`), 10 px padding each side. */
 const LABEL_PAD = 10;
 
 /** The data hue at `alpha`, as a background, so a segment's words keep their full ink. */
@@ -66,6 +66,7 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
           <span aria-hidden="true" className="bg-bar-track flex h-1.5">
             <span
               {...{ [attr]: '' }}
+              className="scan-fill"
               style={{
                 width: `${(100 * it.count) / max}%`,
                 backgroundColor: DATA_COLOR,
@@ -191,7 +192,7 @@ function HostingSection({
   const inside = (org: string, count: number, i: number): string => {
     if (width === null) return '';
     const room = (width * spans[i].width) / 100;
-    const fits = (text: string) => text.length * LABEL_ADVANCE + 2 * LABEL_PAD <= room;
+    const fits = (text: string) => text.length * charPx('small') + 2 * LABEL_PAD <= room;
     const full = `${org} ${share(count)}`;
     return fits(full) ? full : fits(share(count)) ? share(count) : '';
   };

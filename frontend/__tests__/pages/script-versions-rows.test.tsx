@@ -98,7 +98,7 @@ describe('Code versions rows (table-rows L1-4)', () => {
     const { rows } = await versions();
     const [version, deployed, block, cell, held, status, live] = cells(rows[0]);
     const link = within(version).getByRole('link', { name: 'v5' });
-    expect(link).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(link).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     expect(link).toHaveAttribute(
       'href',
       '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'

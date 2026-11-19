@@ -9,7 +9,7 @@ import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { PromptHeading } from '@/components/ui/prompt-heading';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   ScriptCustodyEvidence,
   DEPRECATED_TITLE,
@@ -36,6 +36,7 @@ import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/a
 import type { CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { fontPx, textPx } from '@/lib/type-metrics';
 import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { cn } from '@/lib/utils';
@@ -268,6 +269,15 @@ function ReferenceFacts({
 }
 
 /**
+ * What a column of Registered references needs for its head (readability 2026-11-18: "hash type"
+ * overran its column, read "hash typecode hash"): the head on one line at the meta step, 0.6 em a
+ * character in the mono face, and the cell's 16 px right padding (`pr-4`) before the next column.
+ */
+function headBudget(label: string): number {
+  return Math.ceil(textPx(label.length, fontPx('meta'))) + 16;
+}
+
+/**
  * Tier 2's "The script" (consistency C6, board ScriptDetail): its cells in one line, the script's
  * shape drawn once (code_hash 32 · hash_type 1, then the args each cell sets), and one row per
  * registered reference — hash type, code hash, live cells, the cell dep that serves it, who holds
@@ -319,7 +329,8 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'hashType',
       label: 'hash type',
-      minWidth: 56,
+      // the head is wider than any value ("data1", 5 characters at 12 px)
+      minWidth: headBudget('hash type'),
       render: (r) => <span className="text-text-bright">{r.hashType}</span>,
     },
     {
@@ -332,7 +343,8 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'cells',
       label: 'live cells',
-      minWidth: 76,
+      // the head, and with it a count of up to 9 characters at 12 px ("1,234,567", 64.8 px)
+      minWidth: headBudget('live cells'),
       numeric: true,
       render: (r) => r.liveCellsCount.toLocaleString('en-US'),
     },
@@ -346,7 +358,11 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
     {
       key: 'holder',
       label: 'held by',
-      minWidth: 150,
+      // The table keeps the 576 px it had, so it stays a table in the 588 px of tier 2's right
+      // column at 1280: this column gives the two heads the 26 px they lacked (150 → 124; the
+      // others hold 76 + 140 + 82 + 154 at the meta step of 11 px). Its words end in an ellipsis
+      // and stand whole in the row's title and in "Each reference in full".
+      minWidth: 124,
       render: (r) => <span className="block truncate">{holder(r)}</span>,
     },
   ];
@@ -653,12 +669,12 @@ export function ScriptFamilyPage({
         return lead ? (
           <Link
             href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
-            className="text-body text-text-bright leading-[18px] hover:underline"
+            className="text-body text-text-bright leading-row hover:underline"
           >
             {label}
           </Link>
         ) : (
-          <span className="text-body text-text-bright leading-[18px]">{label}</span>
+          <span className="text-body text-text-bright leading-row">{label}</span>
         );
       },
     },
@@ -850,7 +866,8 @@ export function ScriptFamilyPage({
         d.createdAtBlock !== undefined ? blockLink(d.createdAtBlock) : null,
         binarySize(d),
         codeCells.get(outpointKey(d))?.cell ? (
-          <ExactCkb
+          <CkbAmount
+            form="summary"
             shannons={BigInt(codeCells.get(outpointKey(d))!.cell!.capacity)}
             signed={false}
             tone="plain"
@@ -1109,7 +1126,7 @@ export function ScriptFamilyPage({
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                          className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
+                          className="text-body text-text-bright hover:text-jade leading-row hover:underline"
                         >
                           <ShortId value={cell.txHash} kind="hash" size="row" />
                           <OutpointIndex index={cell.outputIndex} />
@@ -1148,7 +1165,12 @@ export function ScriptFamilyPage({
                       width: '17%',
                       numeric: true,
                       render: (cell) => (
-                        <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
+                        <CkbAmount
+                          form="column"
+                          shannons={BigInt(cell.capacity)}
+                          signed={false}
+                          tone="plain"
+                        />
                       ),
                     },
                     {
@@ -1192,7 +1214,12 @@ export function ScriptFamilyPage({
                       </div>
                       <CellAnatomy cell={cell} />
                       <div className="flex flex-wrap justify-between gap-2">
-                        <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
+                        <CkbAmount
+                          form="summary"
+                          shannons={BigInt(cell.capacity)}
+                          signed={false}
+                          tone="plain"
+                        />
                         <span>
                           <OccupiedBytes cell={cell} /> occupied
                         </span>

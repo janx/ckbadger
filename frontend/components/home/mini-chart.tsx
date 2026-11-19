@@ -11,6 +11,7 @@ import {
 } from 'react';
 import Link from '@/components/ui/link';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { useScanFill } from '@/components/ui/scan-fill';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import {
@@ -24,6 +25,8 @@ import { usePhosphor } from '@/hooks/usePhosphor';
 import { sparkline } from '@/lib/blocks-text';
 import { cn } from '@/lib/utils';
 import { CHART_GRID_COLOR } from '@/lib/chart-colors';
+import { MONO_ADVANCE_EM, textPx } from '@/lib/type-metrics';
+import { SVG_TEXT, centreShift } from '@/lib/chart-type';
 
 /**
  * The homepage small multiples: one figure frame (caption + headline + chart) and four SVG chart
@@ -354,7 +357,7 @@ function xLabels(labels: string[], midIndex: number, midX: number, right: number
 
 function XAxisLabels({ labels }: { labels: XLabel[] }) {
   return (
-    <g fill={C.tick} fontSize={10} data-axis="x">
+    <g fill={C.tick} fontSize={SVG_TEXT.tick} data-axis="x">
       {labels.map((l, i) => (
         <text key={i} x={f1(l.x)} y={X_LABEL_Y} textAnchor={l.anchor}>
           {l.text}
@@ -372,9 +375,14 @@ interface YTick {
 
 function YAxisLabels({ ticks }: { ticks: YTick[] }) {
   return (
-    <g fontSize={10} textAnchor="end" data-axis="y">
+    <g fontSize={SVG_TEXT.tick} textAnchor="end" data-axis="y">
       {ticks.map((t, i) => (
-        <text key={i} x={TICK_X} y={f1(t.y + 3)} fill={t.emphasis ? C.reference : C.tick}>
+        <text
+          key={i}
+          x={TICK_X}
+          y={f1(t.y + centreShift(SVG_TEXT.tick))}
+          fill={t.emphasis ? C.reference : C.tick}
+        >
           {t.text}
         </text>
       ))}
@@ -560,6 +568,8 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
   const domain: [number, number] = [0, ticks.values[ticks.values.length - 1]];
   const y = yScale(domain);
   const n = bars.length;
+  // Readability R1: by night the solid bars are cut by the scan; null by day.
+  const scan = useScanFill();
   return (
     <ChartCanvas
       ariaLabel={ariaLabel}
@@ -575,6 +585,7 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
         const mid = Math.floor(n / 2);
         return (
           <>
+            {scan?.defs}
             <path
               data-role="grid"
               d={ticks.values
@@ -619,6 +630,7 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
                       height={f1(BOTTOM - top)}
                       fill={C.data}
                       fillOpacity={on || b.state === 'highlight' ? 1 : 0.45}
+                      mask={scan?.mask}
                     />
                   )}
                 </g>
@@ -643,9 +655,10 @@ export function BarChart({ bars, ariaLabel, formatValue }: BarChartProps) {
 // A sparkline of eighth blocks
 // ---------------------------------------------------------------------------
 
-/** JetBrains Mono's advance: a glyph is 0.6 em wide. */
-const GLYPH_ADVANCE = 0.6;
-/** Its block elements stand on the descender, 0.3 em under the baseline, and are 1.32 em tall. */
+/**
+ * JetBrains Mono's block elements are a glyph wide (MONO_ADVANCE_EM), stand on the descender, 0.3 em
+ * under the baseline, and are 1.32 em tall.
+ */
 const GLYPH_DESCENT = 0.3;
 const GLYPH_HEIGHT = 1.32;
 
@@ -680,7 +693,7 @@ export function SparkChart({ bars, ariaLabel, formatValue }: BarChartProps) {
       {(width, hovered) => {
         const { right, bw, centre } = slots(width, n, 1);
         // one glyph a slot wide, never taller than the plot
-        const size = Math.min(bw / GLYPH_ADVANCE, PLOT_H / GLYPH_HEIGHT);
+        const size = Math.min(bw / MONO_ADVANCE_EM, PLOT_H / GLYPH_HEIGHT);
         const mid = Math.floor(n / 2);
         return (
           <>
@@ -757,6 +770,8 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
       ? ariaLabel
       : `${ariaLabel}; beyond the ±${formatTick(cap, capStep)} axis, drawn clipped: ${clipped.join(', ')}`;
   const n = points.length;
+  // Readability R1: by night the bars are cut by the scan (never a clip mark or its value).
+  const scan = useScanFill();
   return (
     <ChartCanvas
       ariaLabel={label}
@@ -772,6 +787,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
         const mid = Math.floor(n / 2);
         return (
           <>
+            {scan?.defs}
             <path
               data-role="grid"
               d={`M${LEFT} ${TOP}H${f1(right)}M${LEFT} ${BOTTOM}H${f1(right)}`}
@@ -807,6 +823,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
                     height={f1(Math.abs(end - zero))}
                     fill={color}
                     fillOpacity={on ? 1 : 0.75}
+                    mask={scan?.mask}
                   />
                   {b.clipped && (
                     <ClipMark
@@ -855,8 +872,8 @@ function ClipMark({
   const ys = up ? [TOP + 6.5, TOP + 9.5] : [BOTTOM - 6.5, BOTTOM - 3.5];
   const sx = x0 - 1;
   const len = bw + 2;
-  // 10 px JetBrains Mono is about 6 px a character.
-  const labelW = text.length * 6;
+  // set at the tick size: 0.6 em a character
+  const labelW = textPx(text.length, SVG_TEXT.tick);
   const after = x0 + bw + 3.5;
   const fits = after + labelW <= right;
   return (
@@ -873,7 +890,7 @@ function ClipMark({
         y={up ? TOP + 8 : BOTTOM - 1}
         textAnchor={fits ? 'start' : 'end'}
         fill={color}
-        fontSize={10}
+        fontSize={SVG_TEXT.tick}
       >
         {text}
       </text>

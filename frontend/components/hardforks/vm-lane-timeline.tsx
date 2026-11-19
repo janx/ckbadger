@@ -13,6 +13,8 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2, HardforkScriptDeployment } from '@/lib/api';
+import { SVG_TEXT } from '@/lib/chart-type';
+import { OBSERVED_ADVANCE_EM, advancePx, tightLinePx, withAllowance } from '@/lib/type-metrics';
 
 export interface EditionMark {
   shortName: string;
@@ -45,23 +47,29 @@ const VM_OPACITY = { VM0: 0.16, VM1: 0.32, VM2: 0.55 } as const;
 const UTC8_MS = 8 * 3_600_000;
 /** On a phone, the clear space kept above the first lane's header line for the rules. */
 const LANE_HEAD_CLEAR = 4;
-/** Average glyph width of the 10–11 px mono labels, for keeping labels apart. */
-const CHAR_PX = 6.5;
+/**
+ * The allowance of the edition blocks' sub-lines: their budget was set as an average glyph of the
+ * 10–11 px labels around them, 0.2 px over the note size's own advance.
+ */
+const SUB_LABEL_ALLOWANCE = 0.2;
+/** A glyph of an edition block's sub-line (the note size, 10.5 px), for keeping labels apart: 6.5 px. */
+export const CHAR_PX = withAllowance(advancePx(SVG_TEXT.note), SUB_LABEL_ALLOWANCE);
 /**
  * The plot's name, inside it at the top-left (hierarchy v3, R13): the page's former section title
  * and its hint line. It wraps after the title where one line does not fit (a phone).
  */
 const PLOT_TITLE = 'which VM runs a script, over time';
 const PLOT_HINT = 'dots: when each known script version was deployed';
-/** 11 px mono advances ~0.64 em in Chromium (lane D, observed). */
-const NAME_PX = 11;
-const NAME_CHAR_PX = NAME_PX * 0.64;
+/** The plot's name at the label size, measured at the advance Chromium was observed at (0.64 em). */
+const NAME_PX = SVG_TEXT.label;
+export const NAME_CHAR_PX = NAME_PX * OBSERVED_ADVANCE_EM;
 const PLOT_NAME_Y = 13;
-const PLOT_NAME_LINE = 14;
+/** The hint under the title, a tight label line below it (14 px). */
+const PLOT_NAME_LINE = tightLinePx(NAME_PX);
 /** Clear space between the name band and the edition labels under it. */
 const PLOT_NAME_GAP = 9;
-/** Glyph width of the 12.5 px edition names. */
-const EDITION_CHAR_PX = 7.5;
+/** Glyph width of the edition names, set at the title size (12.5 px): 7.5 px. */
+const EDITION_CHAR_PX = advancePx(SVG_TEXT.title);
 /** Baselines of an edition block's name and epoch on the first row, and the clear space kept
  * between two blocks side by side. */
 const NAME_Y = 18;
@@ -231,7 +239,13 @@ export function VmLaneTimeline({
                 {ruleSpans(top - 8).map(([y1, y2]) => (
                   <line key={y1} x1={at} x2={at} y1={y1} y2={y2} stroke="var(--c-tile)" />
                 ))}
-                <text data-year x={at + 3} y={bottom + 16} fontSize="11" fill="var(--c-text-dim)">
+                <text
+                  data-year
+                  x={at + 3}
+                  y={bottom + 16}
+                  fontSize={SVG_TEXT.label}
+                  fill="var(--c-text-dim)"
+                >
                   {year}
                 </text>
               </g>
@@ -241,7 +255,7 @@ export function VmLaneTimeline({
             data-role="chart-name"
             x="0"
             y={PLOT_NAME_Y}
-            fontSize={NAME_PX}
+            fontSize={SVG_TEXT.label}
             fill="var(--c-text-dim)"
           >
             {nameOneLine ? (
@@ -255,10 +269,10 @@ export function VmLaneTimeline({
               </>
             )}
           </text>
-          <text x={left} y={band + NAME_Y} fontSize="12.5" fill="var(--c-text-bright)">
+          <text x={left} y={band + NAME_Y} fontSize={SVG_TEXT.title} fill="var(--c-text-bright)">
             genesis
           </text>
-          <text x={left} y={band + SUB_Y} fontSize="10.5" fill="var(--c-text-dim)">
+          <text x={left} y={band + SUB_Y} fontSize={SVG_TEXT.note} fill="var(--c-text-dim)">
             {genesisDate}
           </text>
           {editionLabels.map(({ edition, at, sub, turn, row }) => {
@@ -280,7 +294,7 @@ export function VmLaneTimeline({
                   x={turn ? at - 6 : at + 6}
                   y={band + NAME_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
-                  fontSize="12.5"
+                  fontSize={SVG_TEXT.title}
                   fill="var(--c-text-bright)"
                 >
                   {edition.shortName}
@@ -289,7 +303,7 @@ export function VmLaneTimeline({
                   x={turn ? at - 6 : at + 6}
                   y={band + SUB_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
-                  fontSize="10.5"
+                  fontSize={SVG_TEXT.note}
                   fill="var(--c-text-dim)"
                 >
                   {sub}
@@ -299,7 +313,13 @@ export function VmLaneTimeline({
           })}
           {/* On a phone each lane's header carries its own count. */}
           {!narrow && (
-            <text x={width} y={top - 12} textAnchor="end" fontSize="10.5" fill="var(--c-text-dim)">
+            <text
+              x={width}
+              y={top - 12}
+              textAnchor="end"
+              fontSize={SVG_TEXT.note}
+              fill="var(--c-text-dim)"
+            >
               live references
             </text>
           )}
@@ -321,7 +341,7 @@ export function VmLaneTimeline({
                     <text
                       x="0"
                       y={y + 11}
-                      fontSize="11"
+                      fontSize={SVG_TEXT.label}
                       fill="var(--c-text-bright)"
                       stroke="var(--c-base-bg)"
                       strokeWidth="3"
@@ -333,7 +353,7 @@ export function VmLaneTimeline({
                       x={width}
                       y={y + 11}
                       textAnchor="end"
-                      fontSize="10.5"
+                      fontSize={SVG_TEXT.note}
                       fill="var(--c-text)"
                       stroke="var(--c-base-bg)"
                       strokeWidth="3"
@@ -348,17 +368,17 @@ export function VmLaneTimeline({
                   </>
                 ) : (
                   <>
-                    <text x="0" y={y + 17} fontSize="12" fill="var(--c-text-bright)">
+                    <text x="0" y={y + 17} fontSize={SVG_TEXT.head} fill="var(--c-text-bright)">
                       {`hash_type ${hashType}`}
                     </text>
-                    <text x="0" y={y + 31} fontSize="10.5" fill="var(--c-text-dim)">
+                    <text x="0" y={y + 31} fontSize={SVG_TEXT.note} fill="var(--c-text-dim)">
                       {LANE_TEXT[hashType]}
                     </text>
                     <text
                       x={width}
                       y={y + 17}
                       textAnchor="end"
-                      fontSize="12"
+                      fontSize={SVG_TEXT.head}
                       fill="var(--c-text-bright)"
                     >
                       {live}
@@ -367,7 +387,7 @@ export function VmLaneTimeline({
                       x={width}
                       y={y + 31}
                       textAnchor="end"
-                      fontSize="10.5"
+                      fontSize={SVG_TEXT.note}
                       fill="var(--c-text-dim)"
                     >
                       {versions}
@@ -389,7 +409,7 @@ export function VmLaneTimeline({
                         x={(x(noteFrom) + x(pinnedFrom)) / 2}
                         y={y + 30}
                         textAnchor="middle"
-                        fontSize="10"
+                        fontSize={SVG_TEXT.tick}
                         fill="var(--c-text-dim)"
                       >
                         not valid before {pinnedBy}
@@ -410,7 +430,7 @@ export function VmLaneTimeline({
                     <text
                       x={x(from) + 6}
                       y={y + bar.y + bar.h - 4}
-                      fontSize="10.5"
+                      fontSize={SVG_TEXT.note}
                       fill="var(--c-text-bright)"
                     >
                       {vm}
@@ -422,7 +442,7 @@ export function VmLaneTimeline({
                   <text
                     x={x(segments[hashType][0][0]) + 40}
                     y={y + bar.y + bar.h - 4}
-                    fontSize="10.5"
+                    fontSize={SVG_TEXT.note}
                     fill="var(--c-text-bright)"
                   >
                     no known script yet
@@ -435,7 +455,7 @@ export function VmLaneTimeline({
                       key={deployment.versionHash}
                       {...readout.bind(deployment.versionHash)}
                       data-lane-dot={hashType}
-                      aria-label={`${markName(deployment, 'tight')}, ${hashType}, deployed ${formatUtc8Date(deployment.timestampMs)}`}
+                      aria-label={`${markName(deployment, 'row')}, ${hashType}, deployed ${formatUtc8Date(deployment.timestampMs)}`}
                       className="cursor-pointer"
                     >
                       <title>
@@ -473,7 +493,7 @@ export function VmLaneTimeline({
             x={width}
             y={bottom + 32}
             textAnchor="end"
-            fontSize="11"
+            fontSize={SVG_TEXT.label}
             fill="var(--c-text-bright)"
           >
             now · epoch {formatExactDecimal(String(tipEpoch), 'tip epoch')}

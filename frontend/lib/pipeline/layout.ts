@@ -38,6 +38,7 @@ import {
   type SquareStyle,
   type TxLook,
 } from '@/lib/pipeline/encoding';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 /** A cell: the side of a 1×1 transaction. */
 export const CELL = 15;
@@ -51,20 +52,21 @@ export const U = CELL + GUT;
  * window's label) is drawn in the `text-meta` step of the type scale (components/pipeline/
  * svg-text.ts), 11 px of JetBrains Mono, whose every glyph advances 0.6 em. `labelWidth` reads it.
  */
-export const SMALL_TEXT_PX = 11;
+export const SMALL_TEXT_PX = fontPx('meta');
 
 /**
  * A block's number on its plate, in px: the `text-small` step (svg-text.ts T12C, T12G, T12D),
  * 12 px of JetBrains Mono at 500, every glyph advancing 0.6 em as at every weight.
  */
-export const NUMBER_TEXT_PX = 12;
+export const NUMBER_TEXT_PX = fontPx('small');
 
 /**
- * The width of `text` set at `px` in JetBrains Mono: every glyph advances 0.6 em (written as 3/5 so
- * a whole number of glyphs comes out as the nearest double: 49 at 11 px → 323.4).
+ * The width of `text` set at `px` in JetBrains Mono (lib/type-metrics.ts `textPx`: 0.6 em a glyph,
+ * one product over the em, so a whole number of glyphs comes out as the nearest double: 49 at
+ * 11 px → 323.4).
  */
 function monoWidth(text: string, px: number): number {
-  return (text.length * px * 3) / 5;
+  return textPx(text.length, px);
 }
 
 /**

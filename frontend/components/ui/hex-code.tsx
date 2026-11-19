@@ -23,11 +23,12 @@ type HexCodeProps = IdShortening & {
   className?: string;
   copyable?: boolean;
   /**
-   * The ink: the text ink by default, bright or dim; `inherit` writes no ink of its own, so the
+   * The ink: the reading ink by default, or bright; `inherit` writes no ink of its own, so the
    * value takes the ink (and the size) of the line it stands in — a name plate's id line, which
-   * sets its voice once (seals by kind, C10 round 2).
+   * sets its voice once (seals by kind, C10 round 2). An id is a value, so it has no quiet ink of
+   * its own (readability ruling R3): only a set-back row (the `quiet` class) draws it quiet.
    */
-  variant?: 'default' | 'bright' | 'dim' | 'inherit';
+  variant?: 'default' | 'bright' | 'inherit';
 };
 
 export function HexCode({
@@ -47,7 +48,6 @@ export function HexCode({
   const variantClasses: Record<NonNullable<HexCodeProps['variant']>, string | null> = {
     default: 'text-text',
     bright: 'text-text-bright',
-    dim: 'text-text-dim',
     inherit: null,
   };
 

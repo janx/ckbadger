@@ -9,6 +9,7 @@ import { normalizeHash32 } from '@/lib/search-intent';
 import { resolveSearchRoute } from '@/lib/search-routing';
 import { cn } from '@/lib/utils';
 import { cssVars, SEARCH_RESULT_COLORS } from '@/lib/design-tokens';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 interface SearchBarProps {
   className?: string;
@@ -19,10 +20,9 @@ interface SearchBarProps {
 const SEARCH_PLACEHOLDER = 'search block / tx / address / cell';
 /** The placeholder of a field whose text box cannot hold the long one: 6 characters, 46.8 px. */
 const SEARCH_PLACEHOLDER_SHORT = 'search';
-/** JetBrains Mono's advance, 0.6 em, at the field's 13 px (`text-body`). */
-const BODY_CHAR_PX = 7.8;
 /**
- * The long placeholder's width in the field's font: 34 characters, 265.2 px. The field draws it
+ * The long placeholder's width in the field's font, the body step (`text-body`): 34 characters,
+ * 265.2 px at 13 px (lib/type-metrics.ts). The field draws it
  * only when its measured text box holds all of it (PA-04 follow-up; RESPONSIVE_LAYOUT principle
  * 4, the measured width decides, not the breakpoint). In the header's field that box is the
  * input's width less 1 + 28 px on the left (the border, the prompt square's inset) and 36 + 1 px
@@ -31,7 +31,7 @@ const BODY_CHAR_PX = 7.8;
  * At 768–1023 the header leaves the field about 169 px, at 1024 368.6 px (36vw) with one network
  * and about 281 px beside the network switcher, at 1280 460.8 px.
  */
-const LONG_PLACEHOLDER_PX = SEARCH_PLACEHOLDER.length * BODY_CHAR_PX;
+const LONG_PLACEHOLDER_PX = textPx(SEARCH_PLACEHOLDER.length, fontPx('body'));
 
 /** The input's horizontal insets, read from its computed style: borders and paddings. */
 const INSETS = ['borderLeftWidth', 'paddingLeft', 'paddingRight', 'borderRightWidth'] as const;

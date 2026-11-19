@@ -44,9 +44,9 @@ describe('unitText: the units a composed string carries', () => {
   it('keeps a shortened id whole, an out point with its index', () => {
     expect(units('pubkey hash 0x4a33…d637').whole).toEqual(['0x4a33…d637']);
     expect(units('MEMES · 0x5cb3…b4fa').whole).toEqual(['0x5cb3…b4fa']);
-    expect(units('by the same miner (ckb1qzda0cr0…4s93hhsj).').whole).toEqual([
-      'ckb1qzda0cr0…4s93hhsj',
-    ]);
+    // R9 (re-pinned): an address is `ckb1…` and its tail at every size, 8 or 6 characters
+    expect(units('by the same miner (ckb1…4s93hhsj).').whole).toEqual(['ckb1…4s93hhsj']);
+    expect(units('miner ckb1…93hhsj').whole).toEqual(['ckb1…93hhsj']);
     expect(units('cell 0x673e18…55f9:0').whole).toEqual(['0x673e18…55f9:0']);
   });
 

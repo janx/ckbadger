@@ -6,7 +6,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart, alignedPlotLeft, type ChartValueAxisInput } from '@/components/ui/chart';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
   ScriptCustodyEvidence,
   immutableHow,
@@ -36,6 +36,8 @@ import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 import { percentOf } from '@/lib/format-unit';
 import { HELD_PLOT_NAME } from '@/components/asset/asset-history';
 import { unitNode, unitText } from '@/components/ui/units';
+import { useTightBelowSm } from '@/hooks/useTightBelowSm';
+import { fontPx, snappedAdvancePx } from '@/lib/type-metrics';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -88,15 +90,15 @@ export function ScriptHeading({ family }: { family: ScriptFamilyDetail }) {
   );
 }
 
-/** The holder as the hero's sentence names it, the page's lede (U-09: head). */
+/** The holder as the hero's sentence names it, the page's lede: prose, the row size (R9). */
 function holderSentence(custody: ScriptCustodyApi): string {
   if (custody.class === 'multisig')
     return custody.witnessState === 'never_signed'
       ? 'a multisig that has never signed'
-      : `${holderName(custody, 'head')}`;
+      : `${holderName(custody, 'row')}`;
   if (custody.class === 'one_key') return 'a single key';
   if (custody.class === 'unspendable') return 'a lock that can never be unlocked';
-  return holderName(custody, 'head');
+  return holderName(custody, 'row');
 }
 
 /** The board's summary sentence: what the script guards, since when, and who can change it. */
@@ -129,7 +131,12 @@ export function ScriptSummarySentence({
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
       <span className="text-text-bright">
-        <ExactCkb shannons={BigInt(family.ownedCapacitySum)} signed={false} tone="plain" />
+        <CkbAmount
+          form="column"
+          shannons={BigInt(family.ownedCapacitySum)}
+          signed={false}
+          tone="plain"
+        />
       </span>
       ; <span className="text-text-bright">{family.cellsCount.toLocaleString('en-US')}</span> cells
       have used it
@@ -202,8 +209,10 @@ export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
 /**
  * A code cell holder's name (A4 Chrome F2): its id is one unit, a line may break between the kind
  * and the id; a phrase ("an unspendable lock") is words a line may break between. In the hero
- * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 148 at 360): "multisig 0x6598…d696",
- * 204 px whole, is "multisig" over the 112.2 px id; it stands on one line from 640 (288 px).
+ * tile (17 px, a column of (358 − 32) / 2 = 163 px at 390, 148 at 360), below sm the tight size:
+ * "multisig 0x6598…d696", 204 px whole, is "multisig" over the 112.2 px id. From sm the row size
+ * (R9): "multisig 0x65980a1b…31d696", 265.2 px whole, stands on one line in the 288 px tile at
+ * 640 and 284 at 1280, and is "multisig" over the 173.4 px id in the 220 px tile at 1024.
  */
 function HolderName({ custody, size }: { custody: ScriptCustodyApi; size: ShortSize }) {
   const { label, id } = holderParts(custody, size);
@@ -226,6 +235,10 @@ export function ScriptHeroMetrics({
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
   const deployment = firstDeployment(family);
+  // A tile is under 200 px only on a phone (163 px at 390); from sm it is 220 px at its narrowest
+  // (1024), where a holder's id at the row size, 17 characters at 17 px (173.4 px), stands on its
+  // own line, the size the lede and the tables write it in (R9).
+  const size = useTightBelowSm();
   return (
     <dl
       aria-label="Script figures"
@@ -257,8 +270,8 @@ export function ScriptHeroMetrics({
             href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
             className="hover:text-jade"
           >
-            {/* a hero tile, tight (U-09) */}
-            <HolderName custody={last.custody} size="tight" />
+            {/* a hero tile: tight below sm, the row size from it (R9) */}
+            <HolderName custody={last.custody} size={size} />
           </Link>
         </HeroMetric>
       )}
@@ -273,7 +286,7 @@ export function ScriptHeroMetrics({
                 title={deployment.codeCellTxHash}
                 className="hover:text-jade"
               >
-                <ShortId value={deployment.codeCellTxHash} kind="hash" size="tight" />
+                <ShortId value={deployment.codeCellTxHash} kind="hash" size={size} />
               </Link>
             </>
           }
@@ -343,8 +356,8 @@ function UpgradeLines({
   );
 }
 
-/** A monospace advance at 11 px: whole pixels where Chromium snaps them. */
-const LABEL_ADVANCE = Math.max(Math.round(0.6 * 11), 0.6 * 11);
+/** A version label's advance at the meta step (`text-meta`): whole pixels where Chromium snaps them. */
+export const LABEL_ADVANCE = snappedAdvancePx(fontPx('meta'));
 /** px between a version label and its dashed line, and between two labels or a label and the name. */
 const LABEL_PAD = 4;
 const LABEL_GAP = 8;
@@ -399,7 +412,7 @@ function UpgradeLabels({
           <span
             key={day}
             data-upgrade-label={day}
-            className={`text-meta text-text-dim absolute top-[5px] whitespace-nowrap leading-[14px] ${right ? 'pr-1' : 'pl-1'}`}
+            className={`text-meta text-text-dim leading-label absolute top-[5px] whitespace-nowrap ${right ? 'pr-1' : 'pl-1'}`}
             style={right ? { right: `${100 - at}%` } : { left: `${at}%` }}
           >
             {text}
@@ -543,7 +556,8 @@ export function ScriptHistoryReading({
             {active === null && <span className="text-text-dim"> · last full day</span>}
           </span>
           <span className="flex items-baseline gap-1.5">
-            <span>CKB held</span> <ExactCkb shannons={used + unused} signed={false} tone="plain" />
+            <span>CKB held</span>{' '}
+            <CkbAmount form="column" shannons={used + unused} signed={false} tone="plain" />
           </span>
           <span className="flex items-baseline gap-1.5">
             <span
@@ -551,7 +565,8 @@ export function ScriptHistoryReading({
               className="inline-block h-2 w-2"
               style={{ backgroundColor: DATA_COLOR }}
             />
-            <span>occupied</span> <ExactCkb shannons={used} signed={false} tone="plain" />
+            <span>occupied</span>{' '}
+            <CkbAmount form="column" shannons={used} signed={false} tone="plain" />
           </span>
           <span className="flex items-baseline gap-1.5">
             <span
@@ -559,12 +574,15 @@ export function ScriptHistoryReading({
               className="inline-block h-2 w-2"
               style={{ backgroundColor: HELD_CAPACITY_COLOR }}
             />
-            <span>free</span> <ExactCkb shannons={unused} signed={false} tone="plain" />
+            <span>free</span>{' '}
+            <CkbAmount form="column" shannons={unused} signed={false} tone="plain" />
           </span>
           {deployment && (
             <span className="flex items-baseline gap-1.5">
               <span>code</span>{' '}
               <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
+              {/* tight: the readout is tier 1's, within its 160-character budget
+                  (__tests__/utils/hierarchy.ts), which the row size passes (162 for JoyID) */}
               <span>held by {holderName(deployment.custody, 'tight')}</span>
             </span>
           )}
@@ -610,16 +628,15 @@ export function ScriptHistoryNotes({
       {inline && peak && ' '}
       {peak && (
         <Sentence data-testid="script-history-peak" className={block}>
-          CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
-          on {unitNode(peak.date)}
+          CKB held peaked at{' '}
+          <CkbAmount form="column" shannons={BigInt(peak.value)} signed={false} tone="plain" /> on{' '}
+          {unitNode(peak.date)}
           {capacity > BigInt(0) && (
             <>
               {' '}
-              · occupied is now <ExactCkb
-                shannons={occupiedNow}
-                signed={false}
-                tone="plain"
-              />, {percentOf(occupiedNow, capacity)} of what the cells hold
+              · occupied is now{' '}
+              <CkbAmount form="column" shannons={occupiedNow} signed={false} tone="plain" />,{' '}
+              {percentOf(occupiedNow, capacity)} of what the cells hold
             </>
           )}
           {inline && '.'}
@@ -842,9 +859,20 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
   return (
     <span data-testid="script-cells-summary" className="text-text-dim text-small">
       {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
-      <ExactCkb shannons={BigInt(family.ownedCapacitySum)} signed={false} tone="plain" />,{' '}
-      <ExactCkb shannons={BigInt(family.ownedKnowledgeSum)} signed={false} tone="plain" /> of it
-      occupied
+      <CkbAmount
+        form="column"
+        shannons={BigInt(family.ownedCapacitySum)}
+        signed={false}
+        tone="plain"
+      />
+      ,{' '}
+      <CkbAmount
+        form="column"
+        shannons={BigInt(family.ownedKnowledgeSum)}
+        signed={false}
+        tone="plain"
+      />{' '}
+      of it occupied
     </span>
   );
 }

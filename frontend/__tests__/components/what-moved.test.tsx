@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
 import { lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
@@ -126,9 +127,9 @@ describe('WhatMoved, the ribbon form', () => {
     expect(plate.querySelector('[data-flow-total]')).toBeNull();
     const from = object.querySelector('[data-flow-side="from"]')!;
     const to = object.querySelector('[data-flow-side="to"]')!;
-    // U-09 (re-pinned): the ribbon's parties at the row size
-    expect(from).toHaveTextContent('ckb1qrgqep…sp7v9m');
-    expect(to).toHaveTextContent('ckb1qrgqep…ay02wn');
+    // U-09 (re-pinned): the ribbon's parties at the row size; R9 (re-pinned): 4…8
+    expect(from).toHaveTextContent('ckb1…qqsp7v9m');
+    expect(to).toHaveTextContent('ckb1…qqay02wn');
     expect(to).toHaveTextContent('JoyID');
     // a whole object is the ribbon's full weight on both sides
     expect(from.querySelector('[data-flow-end="party"]')).toHaveAttribute('data-weight', '22');
@@ -148,11 +149,11 @@ describe('WhatMoved, the ribbon form', () => {
       ]);
     // U-15 (re-pinned): a lock the registry does not name is 'lock <code hash>'
     expect(ends(from)).toEqual([
-      ['party', '14', 'ckb1qrgqep…ay02wnJoyID638.00008888 CKB'],
-      ['party', '10', 'ckb1qrgqep…sp7v9mlock 0x9bd7e06f…a3cce8432.00000000 CKB'],
+      ['party', '14', 'ckb1…qqay02wnJoyID638.00008888 CKB'],
+      ['party', '10', 'ckb1…qqsp7v9mlock 0x9bd7e06f…a3cce8432.00000000 CKB'],
     ]);
     expect(ends(to)).toEqual([
-      ['party', '22', 'ckb1qrgqep…ct4hxvJoyID1,070.00000000 CKB'],
+      ['party', '22', 'ckb1…qqct4hxvJoyID1,070.00000000 CKB'],
       ['miner', '2', 'the miner fee0.00008888 CKB'],
     ]);
     // the plate's total is what left the givers, so the fee is inside it
@@ -270,6 +271,7 @@ describe('WhatMoved, the list form', () => {
   });
 
   it('lists each flow as from, a step down through the plate, to — and nothing scrolls sideways', () => {
+    atViewportWidth(390);
     renderAt(358);
     const frame = screen.getByTestId('tx-what-moved');
     expect(frame).toHaveAttribute('data-form', 'list');
@@ -279,12 +281,22 @@ describe('WhatMoved, the list form', () => {
     expect(object.querySelector('svg[aria-hidden="true"] path[d="M6 0v15"]')).not.toBeNull();
     const eyebrows = Array.from(object.querySelectorAll('.eyebrow')).map((e) => e.textContent);
     expect(eyebrows).toEqual(['from', 'to']);
-    // U-09 (re-pinned): the list's parties at the tight size
+    // U-09 (re-pinned): the list's parties at the tight size, on a phone
     expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…sp7v9m');
     expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…ay02wn');
     expect(ckb.querySelectorAll('[data-flow-side="to"] [data-flow-end]')).toHaveLength(2);
     expect(ckb.querySelector('[data-flow-end="miner"]')).toHaveTextContent(
       'the miner fee0.00008888 CKB'
     );
+  });
+  // R9: the list is drawn at 1024 too (the transaction's 640 px column), beside the summary, the
+  // balances and the tiles, which write the same parties at the row size: tight only below sm.
+  it('writes the parties at the row size where the list is drawn from sm', () => {
+    renderAt(640);
+    const frame = screen.getByTestId('tx-what-moved');
+    expect(frame).toHaveAttribute('data-form', 'list');
+    const [object] = within(frame).getAllByRole('group');
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1…qqsp7v9m');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1…qqay02wn');
   });
 });

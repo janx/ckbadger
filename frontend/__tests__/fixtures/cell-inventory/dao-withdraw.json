@@ -46,6 +46,10 @@
     "depositBlockNumber": 20888889,
     "depositTimestamp": "2026-10-31T18:33:59.301+00:00",
     "withdrawRequestBlock": 20894903,
-    "withdrawRequestTimestamp": "2026-11-01T10:28:17.437+00:00"
+    "withdrawRequestTimestamp": "2026-11-01T10:28:17.437+00:00",
+    "compensation": "34144706",
+    "compensationCkb": "0.34144706",
+    "compensationState": "frozen",
+    "compensationAtBlock": 20894903
   }
 }

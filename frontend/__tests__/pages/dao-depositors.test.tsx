@@ -59,7 +59,9 @@ describe('DAO depositors page (DAO-12)', () => {
     );
     const next = await screen.findByRole('table', { name: 'DAO depositors' });
     await waitFor(() => expect(next.querySelector('tbody tr')).toHaveTextContent('997.00000000'));
-    expect(screen.queryByRole('button', { name: 'Next 50 →' })).toBeNull();
+    // Re-pinned on purpose (readability B5): the page pages with the site's one pager, whose
+    // last page keeps a disabled Next (it hid the button).
+    expect(screen.getByRole('button', { name: 'Next 50 →' })).toBeDisabled();
     // Back to the page already ranked at the same tip (kept, not re-ranked).
     fireEvent.click(screen.getByRole('button', { name: '← Previous' }));
     await waitFor(() =>
@@ -107,7 +109,8 @@ describe('DAO depositors page (DAO-12)', () => {
     // the bar is on the page's rounded maximum (1 % for two 1.00 % depositors), not 10 % = full.
     expect(phoneLines(row)).toEqual([
       // U-09 (re-pinned): the phone row's depositor at the tight size, 4…6 (the lead's ruling)
-      { key: 'holder', tone: 'head', left: '1ckb1…sd2hqn', right: '999.00000000 CKB' },
+      // a phone row's summary form (readability R5, re-pinned on purpose: was "999.00000000 CKB")
+      { key: 'holder', tone: 'head', left: '1ckb1…sd2hqn', right: '999 CKB' },
       { key: 'axis', tone: 'quiet', left: '01%', right: null },
       // re-pinned (A4 round 2): the count a unit, number and noun joined by a plain space
       { key: 'share', tone: 'quiet', left: '1.00%', right: '1 deposit' },
@@ -121,9 +124,10 @@ describe('DAO depositors page (DAO-12)', () => {
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1], null));
     render(<DaoDepositorsPage />);
     const table = await screen.findByRole('table', { name: 'DAO depositors' });
-    // U-09 (re-pinned): the table's depositor at the row size, 10…6 (it was 12…7)
-    const depositor = within(table).getByRole('link', { name: 'ckb1qzda0c…sd2hqn' });
-    expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    // U-09 (re-pinned): the table's depositor at the row size, 10…6 (it was 12…7); R9
+    // (re-pinned): an address's row size is 4…8
+    const depositor = within(table).getByRole('link', { name: 'ckb1…gssd2hqn' });
+    expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const [rank, , deposits, capacity, share] = Array.from(table.querySelectorAll('tbody td'));
     expect(rank.firstElementChild).toHaveClass('text-text-dim');
     // R7: the share is a bar on the page's scale with its number beside it, the number dim.
@@ -131,6 +135,41 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(within(share as HTMLElement).getByText('1.00%')).toHaveClass('text-text-dim');
     for (const cell of [rank, deposits, capacity, share])
       expect(cell.querySelector('.text-body')).toBeNull();
+  });
+
+  // Readability B5: the page drew its own Previous / Next, the same control as the site's pager
+  // without its count; it now pages with the one pager, which draws nothing for one page.
+  it('pages with the site’s one pager, and draws none for one page (B5)', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], '2'));
+    const { unmount } = render(<DaoDepositorsPage />);
+    await screen.findByRole('table', { name: 'DAO depositors' });
+    const controls = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    expect(controls).not.toBeNull();
+    expect(within(controls).getByRole('button', { name: '← Previous' })).toBeDisabled();
+    expect(within(controls).getByRole('button', { name: 'Next 50 →' })).toBeEnabled();
+    expect(screen.getByText('Showing 1–2 of 3 depositors · 50 per page')).toBeInTheDocument();
+    unmount();
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
+    render(<DaoDepositorsPage />);
+    await screen.findByRole('table', { name: 'DAO depositors' });
+    expect(document.querySelector('[data-role="pager-controls"]')).toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // Readability B5: a head stands over what it names; the Share head over the share, not its bar.
+  it('stands the Share head over the share, the ticks over the track (B5)', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1], null));
+    render(<DaoDepositorsPage />);
+    const table = await screen.findByRole('table', { name: 'DAO depositors' });
+    const name = within(within(table).getAllByRole('columnheader')[4]).getByText('Share');
+    expect(name).toHaveClass('justify-end');
+    const share = table.querySelectorAll('tbody td')[4] as HTMLElement;
+    const track = share.querySelector<HTMLElement>('[data-track]')!;
+    const figure = share.querySelector<HTMLElement>('[data-aligned-bar] > :last-child')!;
+    expect(figure).toHaveTextContent('1.00%');
+    expect(Number.parseFloat(name.style.width)).toBe(
+      Number.parseFloat(track.style.width) + 10 + Number.parseFloat(figure.style.width)
+    );
   });
 
   it('puts a depositor on one line in the 640 band, where the five-column table does not fit', async () => {
@@ -150,7 +189,8 @@ describe('DAO depositors page (DAO-12)', () => {
         key: 'holder',
         tone: 'head',
         left: '1ckb1…sd2hqn',
-        right: '1\u00a0deposit999.00000000 CKB1.00%',
+        // a phone row's summary form (readability R5, re-pinned on purpose: was "999.00000000 CKB")
+        right: '1\u00a0deposit999 CKB1.00%',
       },
     ]);
   });

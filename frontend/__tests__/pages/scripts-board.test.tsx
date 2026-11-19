@@ -152,13 +152,16 @@ describe('Scripts list against the Scripts board', () => {
     ).toBe('code evidence unavailable');
   });
 
-  it('shows "of N ever" and exact CKB in the title, 2 dp in the row, and a rounded occupied share (SC-L6, SC-L7, L1-1)', async () => {
+  // readability R5, re-pinned on purpose (and renamed: "..., 2 dp in the row, ..."): the row's CKB
+  // is the list's summary form.
+  it('shows "of N ever" and exact CKB in the title, the summary form in the row, and a rounded occupied share (SC-L6, SC-L7, L1-1)', async () => {
     render(<ScriptsPage />);
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const joyRow = within(table).getByRole('link', { name: 'JoyID' }).closest('tr') as HTMLElement;
     expect(joyRow.textContent).toContain('161,049');
     expect(joyRow.getAttribute('title')).toContain('161,049 live of 2,707,778\u00a0cells ever');
-    expect(joyRow.textContent).toContain('456,002,179.57');
+    expect(joyRow.textContent).toContain('456,002,179');
+    expect(joyRow.textContent).not.toContain('456,002,179.57');
     expect(joyRow.getAttribute('title')).toContain('456,002,179.57000000 CKB');
     expect(joyRow.textContent).not.toContain('456.00M');
     expect(joyRow.textContent).toContain('4.19%');
@@ -341,7 +344,9 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     );
     expect(figure()).toHaveTextContent(/^CKB under these scripts/);
     // 1,727,000,000 + 48,030,000,000 + 0 + 37,300,000 CKB: every class's lock-owned CKB.
-    expect(amount).toHaveTextContent(/^49,794,300,000\.0+ CKB$/);
+    // the display figure in the summary form (readability R5, re-pinned on purpose: was every
+    // decimal)
+    expect(amount).toHaveTextContent(/^49,794,300,000 CKB$/);
     expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
     const row = amount.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
@@ -451,7 +456,9 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // The hero's request never carries the role: the tab is the table's.
     for (const [params] of vi.mocked(api.getScripts).mock.calls)
       if (params?.limit === 1) expect(params.role).toBeUndefined();
-    expect(amount).toHaveTextContent(/^49,794,300,000\.0+ CKB$/);
+    // the display figure in the summary form (readability R5, re-pinned on purpose: was every
+    // decimal)
+    expect(amount).toHaveTextContent(/^49,794,300,000 CKB$/);
   });
 
   it('writes no coloured text in tier 1: the figure is bright and the bar keeps its colours (R11)', async () => {
@@ -501,7 +508,9 @@ describe('Scripts list phone row (board L6)', () => {
     const rows = await screen.findAllByTestId('script-row-mobile');
     expect(screen.queryByRole('table', { name: 'Scripts' })).toBeNull();
     expect(phoneLines(rows[0])).toEqual([
-      { key: 'identity', tone: 'head', left: 'JoyID', right: '456,002,179.57000000 CKB' },
+      // a phone row's summary form (readability R5, re-pinned on purpose: was "456,002,179.57000000
+      // CKB")
+      { key: 'identity', tone: 'head', left: 'JoyID', right: '456,002,179 CKB' },
       {
         key: 'code',
         tone: 'body',
@@ -529,12 +538,12 @@ describe('Scripts list phone row (board L6)', () => {
     expect(within(rows[2]).getByText('deprecated')).toHaveAttribute('data-row-tag', 'warn');
   });
 
-  // PA-03 (UI review 2026-11-14): "bar: CKB | occupied" switches what the table's bar column
-  // draws; the rows the list takes below the table's 1,034 px minimum (a phone, 640, and the 976
-  // px of a 1024 window) draw no bar, so the switch goes with the table, chosen by the list's
-  // measured width like the table itself.
-  it('shows the bar switch only with the table that draws the bar (PA-03)', async () => {
-    for (const width of [358, 608, 976]) {
+  // PA-03 (UI review 2026-11-14) drew the "bar: CKB | occupied" switch with the table only.
+  // Re-pinned on purpose (readability B5, plan §7.6): the CKB bar left the list, so the switch had
+  // one state and went; the table now needs 851 px (it needed 1,034: the CKB column lost its
+  // 240 px track), so the 976 px of a 1024 window takes the table, a phone and 640 the rows.
+  it('draws no bar switch at any width; a 1024 window now takes the table (PA-03, B5)', async () => {
+    for (const width of [358, 608]) {
       atContainerWidth(width);
       const view = render(<ScriptsPage />);
       await screen.findAllByTestId('script-row-mobile');
@@ -543,12 +552,15 @@ describe('Scripts list phone row (board L6)', () => {
       vi.restoreAllMocks();
       vi.mocked(api.getScripts).mockResolvedValue(response);
     }
-    atContainerWidth(1232);
-    render(<ScriptsPage />);
-    await screen.findByRole('table', { name: 'Scripts' });
-    expect(await screen.findByRole('group', { name: 'Bar shows' })).toHaveTextContent(
-      'bar:CKBoccupied'
-    );
+    for (const width of [976, 1232]) {
+      atContainerWidth(width);
+      const view = render(<ScriptsPage />);
+      await screen.findByRole('table', { name: 'Scripts' });
+      expect(screen.queryByRole('group', { name: 'Bar shows' }), `${width} px`).toBeNull();
+      view.unmount();
+      vi.restoreAllMocks();
+      vi.mocked(api.getScripts).mockResolvedValue(response);
+    }
   });
 
   it('is two lines at 608 px: role and code beside the name, counts beside the description', async () => {
@@ -559,7 +571,8 @@ describe('Scripts list phone row (board L6)', () => {
       [
         'identity',
         'JoyID · lock·Upgradable · 5\u00a0versions· by a multisig · since 2023-10-07',
-        '456,002,179.57000000 CKB',
+        // a phone row's summary form (readability R5, re-pinned on purpose)
+        '456,002,179 CKB',
       ],
       [
         'description',

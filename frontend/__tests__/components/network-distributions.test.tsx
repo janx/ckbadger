@@ -487,7 +487,7 @@ describe('NetworkTrends', () => {
     expect(within(first).getByText('2025-07-01')).toHaveClass(
       'text-body',
       'text-text-bright',
-      'leading-[18px]'
+      'leading-row'
     );
     expect(
       within(first).getByRole('img', {
@@ -512,6 +512,34 @@ describe('NetworkTrends', () => {
     expect(missing.querySelector('[data-aligned-bar]')).toBeNull();
     expect(empty).toHaveAttribute('title', '2025-07-04 · No retained labels');
     expect(empty).toHaveTextContent('No retained labels');
+  });
+
+  // Readability B5: a list's head stays in view; this one scrolls inside its own 320 px box, so
+  // its head sticks to the box's top, never the site header's height down inside it.
+  it('keeps the daily head at the top of its own scroll box', async () => {
+    const ts = 1751299200;
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) =>
+        HttpResponse.json({
+          metric: new URL(request.url).searchParams.get('metric') ?? '',
+          granularity: 'day',
+          dailyCoverage: [{ ts, hasRetainedObservation: true, roundsPerDay: null }],
+          coverageFrom: ts,
+          coverageTo: ts,
+          roundCountAvailability: 'notRecorded',
+          points: [{ ts, scalar: 0, buckets: [{ label: '0.210.0', count: 3 }] }],
+        })
+      )
+    );
+    render(<NetworkShareHistory />);
+    const table = await screen.findByRole('table', {
+      name: 'Client Version Share daily observations',
+    });
+    expect(table.closest('.overflow-y-auto')).not.toBeNull();
+    for (const head of within(table).getAllByRole('columnheader')) {
+      expect(head).toHaveClass('sticky', 'top-0');
+      expect(head.className).not.toContain('--sticky-header-h');
+    }
   });
 
   // A title is no hover on a touch screen: the phone row also says every label, quietly, last.

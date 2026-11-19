@@ -52,7 +52,10 @@ function RankedPreview({ model }: { model: ChartModel }) {
             <span className="shrink-0 tabular-nums">{row.share}</span>
           </div>
           <div className="bg-bar-track mt-1 h-1">
-            <div className="bg-jade h-1" style={{ width: `${shareWidth(row, model.title)}%` }} />
+            <div
+              className="bg-jade scan-fill h-1"
+              style={{ width: `${shareWidth(row, model.title)}%` }}
+            />
           </div>
         </li>
       ))}
@@ -81,12 +84,14 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   if (data) {
     try {
       model = chartModel(definition, data);
-      // The bucket unit once, on the axis' last label (CH-12).
+      // The bucket unit once, on the axis' last label (CH-12); a histogram's round values over the
+      // run its model filled, at the tile's own step.
       ticks = axisTicks(
         model.card?.points ?? model.points,
         style,
         style === 'bucket' ? 6 : 3,
-        bucketUnit(definition)
+        bucketUnit(definition),
+        model.bucketRun
       );
     } catch (cause) {
       model = null;

@@ -326,7 +326,8 @@ describe('Token board (F2 objects)', () => {
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByText(fullText(/xUDT · 8 decimals/))).toHaveClass('text-body');
     expect(await screen.findByText(/Another token also calls itself TEST/)).toHaveTextContent(
-      'Tell them apart by type hash; this one is 0x1212121212…12121212.'
+      // R9 (re-pinned): the note is prose, its type hash at the row size
+      'Tell them apart by type hash; this one is 0x12121212…121212.'
     );
   });
 

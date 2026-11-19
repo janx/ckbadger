@@ -30,7 +30,7 @@ import {
 } from '@/components/asset/object-hero';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { CompositionBadge } from '@/components/ui/composition-mark';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { AppLink } from '@/components/ui/app-link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { BlockLink } from '@/components/ui/block-link';
@@ -208,7 +208,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
     },
     {
       label: 'CKB held in its cell',
-      value: <ExactCkb shannons={held} signed={false} tone="plain" wrap />,
+      value: <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />,
       // R11: tier 1's words stay uncoloured; the bars keep the occupied colour.
       note: (
         <>
@@ -493,7 +493,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                     className="bg-bar-track h-2 overflow-hidden"
                   >
                     <span
-                      className="block h-full"
+                      className="scan-fill block h-full"
                       style={{
                         width: `${formatPercent(BigInt(onchain), BigInt(coll.liveCount))}%`,
                         backgroundImage: COMPOSITION_BADGES[coll.composition.tier].bar,

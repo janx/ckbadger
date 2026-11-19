@@ -3,6 +3,7 @@
  * strings, and everything shown as an exact amount is computed in BigInt shannons.
  */
 import { MINUS } from '@/lib/chart-ticks';
+import { ckbAmountText } from '@/lib/amount-form';
 
 export const SHANNONS_PER_CKB = BigInt(100_000_000);
 
@@ -89,42 +90,13 @@ export function formatDecimalBytes(bytes: bigint): string {
   return `${bytes} B`;
 }
 
-export interface CkbAmountParts {
-  /** `+`, `−` (U+2212) or `` for zero. */
-  sign: string;
-  /** Whole CKB with thousands separators. */
-  integer: string;
-  /** `.` and the decimals up to the last non-zero one, or `` when there are none. */
-  fraction: string;
-  /** The trailing zeros of the 8 decimals (with the `.` when no decimal is significant). */
-  ghost: string;
-}
-
 /**
- * Exact CKB split for display: every amount keeps all 8 decimals (so right-aligned amounts line
- * up on the decimal point), with the trailing zeros apart so they can be drawn ghosted.
- */
-export function splitCkbAmount(shannons: bigint): CkbAmountParts {
-  const zero = BigInt(0);
-  const abs = shannons < zero ? -shannons : shannons;
-  const decimals = (abs % SHANNONS_PER_CKB).toString().padStart(8, '0');
-  const significant = decimals.replace(/0+$/, '');
-  return {
-    sign: shannons > zero ? '+' : shannons < zero ? MINUS : '',
-    integer: groupThousands(abs / SHANNONS_PER_CKB),
-    fraction: significant === '' ? '' : `.${significant}`,
-    ghost: significant === '' ? `.${decimals}` : decimals.slice(significant.length),
-  };
-}
-
-/**
- * The digits `ExactCkb` prints for an amount, as plain text without the unit: every decimal from
- * `splitCkbAmount` (`0.00001647`, `750.00000000`), the sign only when `signed`, and zero as `0`
- * with no fraction (consistency plan C4). A sentence that names an amount the page also draws
- * takes it from here, so the two never disagree (pinned against `ExactCkb` in its test).
+ * The digits `CkbAmount` prints for an amount in its column form, as plain text without the unit
+ * (`0.00001647`, `750.00000000`): the column form of `lib/amount-form.ts`, the one formatter, with
+ * the sign only when `signed` and zero as `0` (consistency plan C4). A sentence that names an
+ * amount the page also draws (the transaction comment's fee, a cell seal's label) takes it from
+ * here, so the two never disagree (pinned against `CkbAmount` in its test).
  */
 export function exactCkbText(shannons: bigint, signed: boolean): string {
-  if (shannons === BigInt(0)) return '0';
-  const parts = splitCkbAmount(shannons);
-  return `${signed ? parts.sign : ''}${parts.integer}${parts.fraction}${parts.ghost}`;
+  return ckbAmountText(shannons, 'column', signed);
 }

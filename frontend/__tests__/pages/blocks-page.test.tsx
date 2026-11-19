@@ -333,11 +333,12 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(glyph.querySelectorAll('[data-proposal-dot]')).toHaveLength(4);
   });
 
-  // U-09 (re-pinned): the table's unnamed miner at the row size, the one ellipsis
-  it('writes the miner on one line, ckb1qzda0c…93hhsj (BA-05)', async () => {
+  // U-09 (re-pinned): the table's unnamed miner at the row size, the one ellipsis; R9 (re-pinned):
+  // the row size of an address is `ckb1…` and its last 8 characters
+  it('writes the miner on one line, ckb1…4s93hhsj (BA-05)', async () => {
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
-    const link = within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })[0];
+    const link = within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })[0];
     expect(link.closest('td')).toHaveClass('whitespace-nowrap');
   });
 
@@ -355,7 +356,7 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(pool).toHaveClass('text-text');
     expect(pool).not.toHaveClass('text-text-bright');
     // The unnamed miner keeps its address tail; nothing is guessed for it.
-    expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c…93hhsj' })).toHaveLength(1);
+    expect(within(table).getAllByRole('link', { name: 'ckb1…4s93hhsj' })).toHaveLength(1);
   });
 
   it('pages as newest first: "2 newest of 20,828,902", Newer and Older (BA-06)', async () => {
@@ -391,7 +392,7 @@ describe('BlocksPage · Blocks v3 board', () => {
     const [first] = Array.from(table.querySelectorAll('tbody tr'));
     const [blockCell, , contentsCell] = Array.from(first.querySelectorAll('td'));
     const number = within(blockCell).getByRole('link', { name: '#20,828,894' });
-    expect(number).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    expect(number).toHaveClass('text-body', 'text-text-bright', 'leading-row');
     const hash = within(blockCell).getByTitle(page.data[0].hash);
     expect(hash).toHaveClass('text-meta', 'text-text-dim');
     expect(hash).not.toHaveClass('text-body');
@@ -516,6 +517,18 @@ describe('BlocksPage · Blocks v3 board', () => {
     );
   });
 
+  // Readability 2026-11-18, lane B5: the limits that give the Size and Cycles bars their meaning
+  // ("Fullest of these 50: … of the 597,000-byte limit") stood after the fiftieth row; they stand
+  // above the table, and the pager stays under it.
+  it('states the block limits above the table, the pager under it (B5)', async () => {
+    render(<BlocksPage />);
+    const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
+    const table = screen.getByRole('table', { name: 'Latest blocks' });
+    expect(note.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const pager = document.querySelector('[data-role="pager-controls"]') as HTMLElement;
+    expect(table.compareDocumentPosition(pager) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('reads the footnote figures in bright ink', async () => {
     render(<BlocksPage />);
     const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
@@ -540,12 +553,14 @@ describe('BlocksPage · Blocks v3 board', () => {
         // the head line: what every reader comes for, the height, the transactions and the age
         ['identity', '#20,828,894', expect.stringMatching(/^5\stxs · \d+[smhd] ago$/)],
         // U-09 (re-pinned): the phone row's unnamed miner at the tight size, 4…6 (the lead's ruling)
-        ['miner', 'miner ckb1…93hhsj', 'fees 0.05060000 CKB'],
+        // A phone row's amounts are the summary form, each cut one titled with its exact value
+        // (readability R5, re-pinned on purpose: "fees 0.05060000 CKB", "reward 684.32120795 CKB")
+        ['miner', 'miner ckb1…93hhsj', 'fees 0.0506 CKB'],
         [
           'figures',
           // Every desktop column: hash, the proposals (consensus detail, after the hash that
           // starts every row's line), size with its overhead, cycles, the reward.
-          '0x0000…d2de · 4\u00a0proposals · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32120795 CKB',
+          '0x0000…d2de · 4\u00a0proposals · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32 CKB',
           null,
         ],
       ]);
@@ -647,7 +662,8 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect([unnamed.key, unnamed.left, unnamed.right]).toEqual([
         'miner',
         'miner ckb1…93hhsj',
-        'fees 9.99999999 CKB',
+        // the summary form (R5, re-pinned on purpose: was "fees 9.99999999 CKB")
+        'fees 9.99 CKB',
       ]);
       expect([pooled.left, pooled.right]).toEqual(['miner Example Pool', 'fees 0.00001935 CKB']);
       expect(testnet.left).toBe('miner ckt1…x3ze7p'); // testnet's prefix, same form
@@ -665,24 +681,24 @@ describe('BlocksPage · Blocks v3 board', () => {
         expect(link.closest('[data-part="left"]')!.parentElement).toBe(line);
         expect(line.querySelector(':scope > [data-part="right"]')).toHaveTextContent(/^fees /);
       }
-      // the widest fee below 10 CKB with "miner ckb1…93hhsj": 122.4 + 12 + 134.4 = 268.8 px,
-      // 25.2 to spare at 360 and 55.2 at 390 (with main's "ckb1...93hhsj" it was 283.2)
-      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(268.8, 6);
+      // Readability R5 (re-pinned on purpose): a phone row's fee is the summary form, so a fee of
+      // 9.99999999 CKB is "fees 9.99 CKB": 122.4 + 12 + 91.2 = 225.6 px (it was 268.8 px, every
+      // decimal). The widest fee is now one under 1 CKB, which keeps its exact value — "fees
+      // 0.99999999 CKB" is 268.8 px, as the 8-decimal form was, 25.2 to spare at 360 and 55.2 at
+      // 390 — and from 1 CKB up the summary is shorter: 999.99 CKB is 240 px, 1,000,000 CKB 261.6.
+      expect(lineWidth(unnamed.left, unnamed.right!)).toBeCloseTo(225.6, 6);
       expect(lineWidth(unnamed.left, unnamed.right!)).toBeLessThanOrEqual(294);
-      // a fee of 10–99 CKB adds a digit and still fits at 360; so does a fee of 100–999 CKB, two
-      // characters shorter than main's form (it dropped there on main); from 1,000 CKB the
-      // separator adds one more and it drops under the miner at 360 (PhoneRow's rule) and still
-      // fits at 390
-      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeCloseTo(276, 6);
-      expect(lineWidth(unnamed.left, 'fees 99.99999999 CKB')).toBeLessThanOrEqual(294);
-      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeCloseTo(283.2, 6);
-      expect(lineWidth(unnamed.left, 'fees 100.00000000 CKB')).toBeLessThanOrEqual(294);
-      expect(lineWidth(unnamed.left, 'fees 1,000.00000000 CKB')).toBeGreaterThan(294);
-      expect(lineWidth(unnamed.left, 'fees 1,000.00000000 CKB')).toBeLessThanOrEqual(324);
-      // lane B3's 8…6, "miner ckb1qzda…93hhsj" (151.2 px), made it 297.6 px, past 294
-      expect(lineWidth('miner ckb1qzda…93hhsj', unnamed.right!)).toBeGreaterThan(294);
-      // with the tables' 10-character head it was 180 + 12 + 134.4 = 326.4 px, past both columns
-      expect(lineWidth('miner ckb1qzda0c...93hhsj', unnamed.right!)).toBeGreaterThan(324);
+      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeCloseTo(268.8, 6);
+      expect(lineWidth(unnamed.left, 'fees 0.99999999 CKB')).toBeLessThanOrEqual(294);
+      expect(lineWidth(unnamed.left, 'fees 999.99 CKB')).toBeCloseTo(240, 6);
+      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeCloseTo(261.6, 6);
+      expect(lineWidth(unnamed.left, 'fees 1,000,000 CKB')).toBeLessThanOrEqual(294);
+      // lane B3's 8…6, "miner ckb1qzda…93hhsj" (151.2 px), made it 297.6 px with the widest fee,
+      // past 294
+      expect(lineWidth('miner ckb1qzda…93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(294);
+      // with the tables' 10-character head and the widest fee it was 180 + 12 + 134.4 = 326.4 px,
+      // past both columns
+      expect(lineWidth('miner ckb1qzda0c...93hhsj', 'fees 0.99999999 CKB')).toBeGreaterThan(324);
       // "miner Example Pool" with the fee: 129.6 + 12 + 134.4 = 276 px
       expect(lineWidth(pooled.left, pooled.right!)).toBeCloseTo(276, 6);
       expect(lineWidth(pooled.left, pooled.right!)).toBeLessThanOrEqual(294);
@@ -747,26 +763,27 @@ describe('BlocksPage · Blocks v3 board', () => {
         expect(seal.className).not.toMatch(/-my-/);
         expectBefore(seal, within(tr as HTMLElement).getAllByRole('link')[0]);
       });
-      expect(Number.parseFloat(table.style.minWidth)).toBe(608);
+      // R9 (re-pinned): Miner holds a 13-character address, 110 px (it was 154 for 17), so the
+      // table's minimum is 564 px (it was 608) and Size · cycles takes the rest
+      expect(Number.parseFloat(table.style.minWidth)).toBe(564);
       const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-      // Height takes the stone's 7 px more than the old hash seal's; Miner gives 2, Size · cycles 5
-      expect(cols.map((c) => c.width)).toEqual(['138px', '76px', '48px', '154px', '96px', 'auto']);
+      // Height takes the stone's 7 px more than the old hash seal's; Size · cycles gave 5
+      expect(cols.map((c) => c.width)).toEqual(['138px', '76px', '48px', '110px', '96px', 'auto']);
       expect(cols.map((c) => c.minWidth)).toEqual([
         '138px',
         '76px',
         '48px',
-        '154px',
+        '110px',
         '96px',
         '96px',
       ]);
       expect(cols[0].width).toBe(`${104 + ROW_SEAL.block.footprint}px`);
       // what each column holds at 0.6 em a character: Height, the stone, "#20,879,198" at 13 px
-      // and the gap, with 2 px of room; Miner, "ckb1qzda0c…93hhsj" (the row size) at 12 px and the
-      // gap; Size ·
-      // cycles, "3,500,000,000" at 12 px (the last column, no gap)
+      // and the gap, with 2 px of room; Miner, "ckb1…4s93hhsj" (the row size, 13 characters) at
+      // 12 px and the gap; Size · cycles, "3,500,000,000" at 12 px (the last column, no gap)
       const px = cols.map((c) => Number.parseFloat(c.minWidth));
       expect(ROW_SEAL.block.footprint + chars(11, 13) + 16 + 2).toBeLessThanOrEqual(px[0]);
-      expect(chars(17, 12) + 16).toBeLessThanOrEqual(px[3]);
+      expect(chars(13, 12) + 16).toBeLessThanOrEqual(px[3]);
       expect(chars(13, 12)).toBeLessThanOrEqual(px[5]);
     });
 
@@ -799,7 +816,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(within(first as HTMLElement).getByRole('link', { name: '#20,828,894' })).toHaveClass(
         'text-body',
         'text-text-bright',
-        'leading-[18px]'
+        'leading-row'
       );
       expect(first).toHaveTextContent('0.05060000');
       expect(first).toHaveTextContent('3,917 B6,831,940');

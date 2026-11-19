@@ -205,7 +205,8 @@ describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)'
     const windows = screen.getByRole('region', { name: 'When deposits can leave' });
     const bar = within(windows).getByRole('img', { name: /^Withdrawal requests/ });
     const segment = bar.firstElementChild as HTMLElement;
-    expect(segment).toHaveTextContent(/^claimable now 400\.00000000 CKB · 1 cell$/);
+    // the exact form on the fill (readability R5, re-pinned on purpose: was padded to 8 decimals)
+    expect(segment).toHaveTextContent(/^claimable now 400 CKB · 1 cell$/);
     const words = inks(segment, theme);
     expect(new Set(words.map((w) => w.ink)).size).toBe(1);
     expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);

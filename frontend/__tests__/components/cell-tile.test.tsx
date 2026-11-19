@@ -206,7 +206,8 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const [mark, text] = Array.from(holder.children);
     expect(mark.children).toHaveLength(1);
     expect(mark.firstElementChild).toBe(stone);
-    const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ });
+    // R9 (re-pinned): the owner at the row size, 4…8 (it was 4…6)
+    const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{8}$/ });
     expect(address).toHaveAttribute('href', `/mainnet/address/${OWNER_ADDRESS}`);
     expect(text).toContainElement(address);
     // one line: the stone at the line's height (20 px, 1 px over above and below)
@@ -444,7 +445,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expectOwnerSealOf(owner.mark, LOCK, IN_MARK_COLUMN);
     const name = owner.text.firstElementChild as HTMLElement;
     expect(name).toHaveClass('whitespace-nowrap');
-    expect(within(name).getByRole('link', { name: /^ckb1…[0-9a-z]{6}$/ })).toHaveAttribute(
+    expect(within(name).getByRole('link', { name: /^ckb1…[0-9a-z]{8}$/ })).toHaveAttribute(
       'href',
       `/mainnet/address/${ADDRESS}`
     );
@@ -488,7 +489,8 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(bytes).toHaveTextContent(/^occupied 61$/);
     expect(bytes).toHaveClass('text-meta', 'text-text-dim');
     const state = expectEnd(occupied.text, /^live$/);
-    expect(state.firstElementChild).toHaveClass('text-meta', 'text-text-dim');
+    // re-pinned with readability ruling R3: the state is a value, the reading ink (it was dim)
+    expect(state.firstElementChild).toHaveClass('text-meta', 'text-text');
     // the state once in the tile
     expect(within(tile).getAllByText('live')).toHaveLength(1);
     // the narrowest sheet's text column (1024: 203 px) holds the 56 px bar, 'occupied 231' and

@@ -1,16 +1,10 @@
 import { afterEach, vi } from 'vitest';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import {
-  InventoryRows,
-  AssetAmount,
-  CkbTwoPlaces,
-  TokenTwoPlaces,
-} from '@/components/asset/inventory-table';
+import { InventoryRows } from '@/components/asset/inventory-table';
+import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import type { Asset } from '@/lib/api';
-import { resourceScale } from '@/components/blocks/block-visual';
-import { formatTick } from '@/lib/chart-ticks';
-import { CLASS_COLORS } from '@/lib/design-tokens';
+import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 const asset: Asset = {
   id: '0x' + 'ab'.repeat(32),
   assetType: 'token',
@@ -48,7 +42,6 @@ function cellUnder(table: HTMLElement, row: number, head: string): HTMLElement {
   if (i < 0) throw new Error(`no column ${head}`);
   return within(table).getAllByRole('row')[row].children[i] as HTMLElement;
 }
-const TRACK = 120;
 
 /** Every column head is its words in an inline box, never a bare text node filling the cell. */
 function expectWordHeads(table: HTMLElement) {
@@ -57,8 +50,6 @@ function expectWordHeads(table: HTMLElement) {
     expect(th.firstElementChild?.tagName).toBe('SPAN');
   }
 }
-const barWidth = (value: number, scale: number) =>
-  `${Math.max(Math.round((value / scale) * TRACK * 100) / 100, value > 0 ? 2 : 0)}px`;
 
 describe('Inventory rows', () => {
   it('rounds a long H-multiplier to 2 dp on its one line and keeps it exact in the hover (L2-1)', () => {
@@ -74,17 +65,20 @@ describe('Inventory rows', () => {
     render(<InventoryRows assetType="token" rows={[asset]} />);
     const table = screen.getByRole('table', { name: 'Tokens' });
     const row = within(table).getAllByRole('row')[1];
-    // Table-rows L2-1: the row shows 2 dp; every digit and the standard are in its title.
+    // Table-rows L2-1: the row shows a shortened form; every digit and the standard are in its
+    // title. Re-pinned on purpose (readability R5): the supply is the summary form, cut ("1",
+    // was the two-place "1.00"), its exact value in its own title.
     expect(row).toHaveAttribute(
       'title',
       'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
     );
-    expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent('1.00');
+    expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent(/^1$/);
     expect(table).not.toHaveTextContent('xUDT');
   });
   it('breaks a long amount only after a thousands separator and ghosts trailing zeros (IV-28/IV-13/IV-05)', () => {
+    // Re-pinned on purpose (R5): AssetAmount's look is the token renderer's column form.
     const { container } = render(
-      <AssetAmount amount="100000000000000000000000000000" decimals={20} />
+      <TokenAmount form="column" amount="100000000000000000000000000000" decimals={20} />
     );
     const root = container.firstElementChild as HTMLElement;
     expect(root).toHaveTextContent('1,000,000,000.00000000000000000000');
@@ -92,23 +86,26 @@ describe('Inventory rows', () => {
     const breaks = Array.from(root.querySelectorAll('wbr'));
     expect(breaks.length).toBe(3);
     for (const wbr of breaks) expect(wbr.previousSibling?.textContent?.endsWith(',')).toBe(true);
-    // the point joins its zeros when no decimal is significant, as ExactCkb's ghost does (R4,
+    // the point joins its zeros when no decimal is significant, as CkbAmount's ghost does (R4,
     // re-pinned on purpose: the point stood alone in the amount's ink)
     expect(screen.getByText('.00000000000000000000')).toHaveClass('text-text-ghost');
     expect(container.querySelector('.text-text-muted')).toBeNull();
   });
-  // UI review 2026-11-14 (DY-06, ruling R4): a token amount's significant decimals are the neutral
-  // fraction ink (text-dim, 4.5:1), never the amount's ink at 80 %.
-  it('sets the significant decimals in the neutral fraction ink, with no opacity', () => {
-    const { container } = render(<AssetAmount amount="123450000" decimals={8} />);
-    const fraction = container.querySelector('[data-fraction]');
-    expect(fraction).toHaveTextContent(/^\.2345$/);
-    expect(fraction).toHaveClass('text-text-dim');
+  // UI review 2026-11-14 (DY-06, ruling R4) set a token amount's significant decimals in the
+  // neutral fraction ink, never the amount's ink at 80 %. Readability R5 (re-pinned on purpose):
+  // one ink per amount, the decimals in the integer's own ink, still with no opacity.
+  it('sets the significant decimals in the amount’s one ink, with no opacity', () => {
+    const { container } = render(<TokenAmount form="column" amount="123450000" decimals={8} />);
+    const amount = container.querySelector('[data-token-amount]')!;
+    expect(amount).toHaveTextContent(/^1\.23450000$/);
+    expect(amount.querySelector('[data-fraction]')).toBeNull();
+    expect(amount.querySelector('.text-text-dim')).toBeNull();
+    expect(amount.querySelector('[data-ghost]')).toHaveTextContent(/^0000$/);
     expect(container.innerHTML).not.toMatch(/opacity-/);
   });
 
   it('labels unknown decimals as raw instead of guessing the unit', () => {
-    render(<AssetAmount amount="12345678901234567890" decimals={null} />);
+    render(<TokenAmount form="column" amount="12345678901234567890" decimals={null} />);
     expect(screen.getByText('12,345,678,901,234,567,890 (raw)')).toBeInTheDocument();
   });
   it('separates live, minted, activity and pending composition', () => {
@@ -178,7 +175,7 @@ describe('Inventory rows', () => {
 
 // Table-rows round, lane L2-1 (board Lists.dc.html · tokens): one 40 px line of six fields — mark +
 // bright name + symbol tag (+ a set-back standard tag when not xUDT) · Holders · Transfers · Supply
-// (dim, 2 dp) · CKB held as an 8 px bar on the page's scale with its 2-dp amount · H-mult. "0 in
+// (dim, 2 dp) · CKB held, its 2-dp amount (its bar left with B5) · H-mult. "0 in
 // 24 h", Occupied, the standard and the exact digits are the row's title (and the token page's).
 describe('Tokens table on the row rules (table-rows L2-1)', () => {
   const seal: Asset = {
@@ -220,7 +217,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     const table = mount();
     const [, token, sealRow] = within(table).getAllByRole('row');
     const name = within(token).getByRole('link', { name: 'Token' });
-    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-row', 'truncate');
     expect(name).toHaveAttribute('href', `/mainnet/tokens/${asset.id}`);
     const tags = (row: HTMLElement) =>
       Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => t.textContent);
@@ -233,33 +230,28 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     expect(token.querySelector('svg[data-class="tokens"]')).not.toBeNull();
   });
 
-  it('prints supply dim to 2 dp, exact in its hover', () => {
+  // readability R5, re-pinned on purpose (and renamed: "prints supply dim to 2 dp, exact in its
+  // hover"): a list column is the
+  // summary form, whole from 1,000 up, cut, never rounded up (site precedent, lane D3).
+  it('prints supply dim in its summary form, exact in its hover', () => {
     const table = mount();
     const supply = cellUnder(table, 2, 'Supply');
     expect(supply).toHaveClass('text-text-dim');
-    // Cut at 2 dp, never rounded up (site precedent, lane D3): .56572848 shows as .56.
-    expect(supply).toHaveTextContent('16,063,603.56');
-    expect(supply).not.toHaveTextContent('16,063,603.57');
-    expect(within(supply).getByTitle('16,063,603.56572848')).toBeInTheDocument();
+    expect(supply).toHaveTextContent(/^16,063,603$/);
+    expect(within(supply).getByTitle('16,063,603.56572848')).toHaveTextContent(/^16,063,603$/);
   });
 
-  it('draws CKB held as an 8 px token-blue bar on the page’s scale with a 2-dp amount', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the 8 px token-blue bar on the page's scale
+  // left the list; CKB held is its amount alone, in the list's summary form (readability R5,
+  // re-pinned on purpose: it was the two-place "100.00").
+  it('prints CKB held as its summary amount', () => {
     const table = mount();
-    const scale = resourceScale([100, 400]);
-    const head = within(table).getByRole('columnheader', { name: 'CKB held in its cells' });
-    expect(
-      Array.from(head.querySelector('[data-scale-ticks]')!.children).map((t) => t.textContent)
-    ).toEqual(['0', formatTick(scale / 2, scale / 2), formatTick(scale, scale / 2)]);
     const first = cellUnder(table, 1, 'CKB held in its cells');
     const second = cellUnder(table, 2, 'CKB held in its cells');
-    expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px', width: '120px' });
-    expect(first.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(100, scale),
-      backgroundColor: CLASS_COLORS.tokens,
-    });
-    expect(second.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(400, scale) });
-    expect(first).toHaveTextContent('100.00');
-    expect(second).toHaveTextContent('400.00');
+    expect(first.querySelector('[data-track]')).toBeNull();
+    expect(first.querySelector('[data-ckb-amount]')).toHaveTextContent(/^100$/);
+    expect(first.querySelector('[data-ckb-amount]')).toHaveAttribute('title', '100.00000001 CKB');
+    expect(second.querySelector('[data-ckb-amount]')).toHaveTextContent(/^400$/);
     expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent('×2.18');
   });
 
@@ -274,7 +266,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
 
 // Table-rows round, lane L2-2 (board Lists.dc.html · objects): 24 px framed mark + bright name +
 // the standard and the composition as tags · Live items (a ghost "/ N" only when minted differs) ·
-// Holders · Activity · CKB held as a violet 8 px bar · H-mult. Occupied and the collection id go to
+// Holders · Activity · CKB held (its violet bar left with B5) · H-mult. Occupied and the collection id go to
 // the row's title (and the collection page).
 describe('Objects table on the row rules (table-rows L2-2)', () => {
   const spore: Asset = {
@@ -332,32 +324,59 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
     expect(thumb.querySelector('svg[data-class="objects"]')).not.toBeNull();
     expect(central.querySelector('[data-thumb-frame]')).toBeNull();
     const name = within(pure).getByRole('link', { name: 'Wyltek Founding Members' });
-    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-row', 'truncate');
     const tags = (row: HTMLElement) =>
       Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => [
         t.textContent,
         t.getAttribute('data-row-tag'),
       ]);
-    // Fully on-chain tiers are the accent tag; a centralized mix is a plain one.
-    expect(tags(pure)).toEqual([
-      ['Spore', 'default'],
-      ['Pure CKB', 'accent'],
-    ]);
+    // Re-pinned (readability 2026-11-18, one class one hue): a fully on-chain tier is the site's
+    // composition badge, 18 px as a tag is, in its class's frame and ink (was the accent tag, in
+    // jade for both on-chain tiers); a centralized mix is still a plain tag.
+    expect(tags(pure)).toEqual([['Spore', 'default']]);
+    const badge = pure.querySelector('[data-composition="pure_ckb"]')!;
+    expect(badge).toHaveTextContent('Pure CKB');
+    expect(badge).toHaveClass('h-[18px]', 'text-meta');
     expect(tags(central)).toEqual([
       ['m-NFT', 'default'],
       ['Centralized mix', 'default'],
     ]);
   });
 
-  it('shows "/ minted" only when it differs from live, and draws CKB held in violet', () => {
+  // Readability review 2026-11-18 (lane A): a "BTC+CKB" row chip was drawn in the "Pure CKB" hue
+  // (both an accent row tag, jade; sampled 149,194,183 on mainnet), while the filter chip of the
+  // same class above the list is in the copper ink. One class, one hue: the row draws the
+  // composition from the table that owns the classes' inks (COMPOSITION_BADGES), as the filter
+  // and every other page do.
+  it("draws each on-chain row's composition in its own class's ink, the filter's", () => {
+    const btc: Asset = {
+      ...spore,
+      id: '0x' + '7c'.repeat(32),
+      name: 'Nervape',
+      compositionTier: 'btc_ckb',
+    };
+    render(<InventoryRows assetType="object" rows={[spore, btc]} />);
+    const table = screen.getByRole('table', { name: 'Object collections' });
+    for (const [tier, label] of [
+      ['pure_ckb', 'Pure CKB'],
+      ['btc_ckb', 'BTC+CKB'],
+    ] as const) {
+      const words = within(table).getByText(label);
+      expect(words).toHaveStyle({ backgroundImage: COMPOSITION_BADGES[tier].ink });
+      expect(words).not.toHaveClass('text-jade');
+    }
+  });
+
+  // Re-pinned on purpose (readability B5, plan §7.6): the violet CKB held bar left the list.
+  it('shows "/ minted" only when it differs from live, and prints CKB held as its amount', () => {
     const table = mount();
     expect(cellUnder(table, 1, 'Live items')).toHaveTextContent(/^93$/);
     expect(cellUnder(table, 2, 'Live items')).toHaveTextContent('2,712 / 2,811');
-    const scale = resourceScale([100, 400]);
+    expect(cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
+    // the list's summary form (readability R5, re-pinned on purpose: was "400.00")
     expect(
-      cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')
-    ).toHaveStyle({ width: barWidth(100, scale), backgroundColor: CLASS_COLORS.objects });
-    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent('400.00');
+      cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-ckb-amount]')
+    ).toHaveTextContent(/^400$/);
     expect(cellUnder(table, 2, 'Activity')).toHaveTextContent('3,014');
     expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.64');
   });
@@ -372,8 +391,8 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
 });
 
 // Table-rows round, lane L2-3: the identity systems on the same rules — the name bright on one
-// line (the standard a tag when the name differs), counts, CKB held as a rose 8 px bar with its 2-dp
-// amount, occupied in whole CKB; every digit in the row title.
+// line (the standard a tag when the name differs), counts, CKB held as its 2-dp amount (its rose bar
+// left with B5), occupied in whole CKB; every digit in the row title.
 describe('Identity systems table on the row rules (table-rows L2-3)', () => {
   const dotbit: Asset = {
     ...asset,
@@ -419,7 +438,7 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     expect(within(first).getByRole('link', { name: '.bit' })).toHaveClass(
       'text-body',
       'text-text-bright',
-      'leading-[18px]',
+      'leading-row',
       'truncate'
     );
     expect(first.querySelector('[data-row-tag]')).toBeNull();
@@ -427,16 +446,19 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
     expect(first.querySelector('svg[data-class="identities"]')).not.toBeNull();
   });
 
-  it('draws CKB held as a rose bar with a 2-dp amount and keeps occupied on one line', () => {
+  // Re-pinned on purpose (readability B5, plan §7.6): the rose CKB held bar left the list. CKB
+  // held and occupied are the list's summary form (readability R5, re-pinned on purpose: "100.00",
+  // "133.0000005"), occupied cut to 133 and titled.
+  it('prints CKB held as its summary amount and keeps occupied on one line', () => {
     const table = mount();
-    const scale = resourceScale([100, 400]);
+    expect(cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')).toBeNull();
     expect(
-      cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')
-    ).toHaveStyle({ width: barWidth(400, scale), backgroundColor: CLASS_COLORS.identities });
-    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent('100.00');
+      cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-ckb-amount]')
+    ).toHaveTextContent(/^100$/);
     expect(cellUnder(table, 1, 'Occupied')).toHaveTextContent(/^61$/);
     const occupied = cellUnder(table, 2, 'Occupied');
-    expect(occupied).toHaveTextContent('133.0000005');
+    expect(occupied).toHaveTextContent(/^133$/);
+    expect(occupied.querySelector('[data-ckb-amount]')).toHaveAttribute('title', '133.0000005 CKB');
     expect(occupied.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
     expect(cellUnder(table, 2, 'Ever registered')).toHaveTextContent('656');
   });
@@ -450,26 +472,87 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
   });
 });
 
-// Table-rows L2 follow-up: a row's 2-dp amount is the exact amount CUT at 2 places, never rounded
-// (a rounded figure can show a digit that is not on chain); the exact value is in the title.
-describe('2-dp row amounts truncate, never round (table-rows L2)', () => {
-  it('cuts 1,234.56789 to 1,234.56 for CKB and token amounts, the exact value in the title', () => {
-    const { container, rerender } = render(<CkbTwoPlaces shannons={BigInt('123456789000')} />);
-    expect(container).toHaveTextContent(/^1,234\.56$/);
-    rerender(<TokenTwoPlaces amount="123456789" decimals={5} />);
-    expect(container).toHaveTextContent(/^1,234\.56$/);
+// Readability 2026-11-18, lane B5 (§7.6, approved): on a linear scale to the page's largest
+// holding, the "CKB held" bar was a 1–3 px stub from about the twelfth row on, and its head stood
+// over the bar while the sorted figure had none. The bar leaves the three lists; the figure, right
+// aligned under its own head, shows the magnitude.
+describe('CKB held is a right-aligned figure under its head, with no bar (readability B5)', () => {
+  const rich: Asset = {
+    ...asset,
+    id: '0x' + 'ef'.repeat(32),
+    ownedCapacity: '40000000000',
+    ownedKnowledge: '18300000000',
+  };
+  const cases = [
+    ['token', 'Tokens'],
+    ['object', 'Object collections'],
+    ['identity', 'Identity systems'],
+  ] as const;
+  it.each(cases)('draws the %s list’s CKB held as its figure alone', (assetType, label) => {
+    render(
+      <InventoryRows
+        assetType={assetType}
+        rows={[
+          { ...asset, assetType },
+          { ...rich, assetType },
+        ]}
+      />
+    );
+    const table = screen.getByRole('table', { name: label });
+    const head = within(table).getByRole('columnheader', { name: 'CKB held in its cells' });
+    expect(head).toHaveClass('text-right');
+    expect(head.querySelector('[data-scale-ticks]')).toBeNull();
+    for (const row of [1, 2]) {
+      const cell = cellUnder(table, row, 'CKB held in its cells');
+      expect(cell).toHaveClass('text-right', 'tabular-nums', 'whitespace-nowrap');
+      expect(cell.querySelector('[data-aligned-bar], [data-track], [data-segment]')).toBeNull();
+    }
+    // the figure in the list's summary form (lane B2, readability R5; it was cut to 2 dp)
+    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent(/^100$/);
+    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent(/^400$/);
+  });
+});
+
+// Table-rows L2 follow-up: a row's shortened amount is the exact amount CUT, never rounded (a
+// rounded figure can show a digit that is not on chain); the exact value is in the title.
+// Readability R5 (re-pinned on purpose): the row's form is the summary form, which keeps that rule
+// — whole from 1,000 up (was two places: "1,234.56"), two places at most from 1 to 1,000, below 1
+// the exact CKB or a token's four significant digits (was "0.99").
+describe('row amounts truncate, never round (table-rows L2, R5)', () => {
+  it('cuts 1,234.56789 to 1,234 for CKB and token amounts, the exact value in the title', () => {
+    const { container, rerender } = render(
+      <CkbAmount
+        form="summary"
+        shannons={BigInt('123456789000')}
+        signed={false}
+        tone="inherit"
+        unit={false}
+      />
+    );
+    expect(container).toHaveTextContent(/^1,234$/);
+    expect(container.firstElementChild).toHaveAttribute('title', '1,234.56789 CKB');
+    rerender(<TokenAmount form="summary" amount="123456789" decimals={5} />);
+    expect(container).toHaveTextContent(/^1,234$/);
     expect(container.firstElementChild).toHaveAttribute('title', '1,234.56789');
   });
   it('never carries .999 into the next whole unit', () => {
-    const { container, rerender } = render(<CkbTwoPlaces shannons={BigInt('123499900000')} />);
-    expect(container).toHaveTextContent(/^1,234\.99$/);
-    rerender(<TokenTwoPlaces amount="99999999" decimals={8} />);
-    expect(container).toHaveTextContent(/^0\.99$/);
-    rerender(<TokenTwoPlaces amount="1999" decimals={3} />);
+    const { container, rerender } = render(
+      <CkbAmount
+        form="summary"
+        shannons={BigInt('99999900000')}
+        signed={false}
+        tone="inherit"
+        unit={false}
+      />
+    );
+    expect(container).toHaveTextContent(/^999\.99$/);
+    rerender(<TokenAmount form="summary" amount="99999999" decimals={8} />);
+    expect(container).toHaveTextContent(/^0\.9999$/);
+    rerender(<TokenAmount form="summary" amount="1999" decimals={3} />);
     expect(container).toHaveTextContent(/^1\.99$/);
     // A unit with fewer than 2 decimals prints what it has.
-    rerender(<TokenTwoPlaces amount="12349" decimals={1} />);
-    expect(container).toHaveTextContent(/^1,234\.9$/);
+    rerender(<TokenAmount form="summary" amount="9999" decimals={1} />);
+    expect(container).toHaveTextContent(/^999\.9$/);
   });
 });
 
@@ -502,8 +585,10 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       [
         'figures',
         'quiet',
-        // Every digit of the supply, the CKB held and occupied with its exact share.
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
+        // The supply, the CKB held and occupied with its exact share, in a phone row's summary
+        // form (readability R5, re-pinned on purpose: was every digit; each cut figure has its
+        // exact value in its title).
+        'supply 1 T · 100 CKB held · 61 occupied (61.00%)',
         null,
       ],
     ]);
@@ -518,7 +603,8 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'T Token · xUDT', '2 holders'],
       [
         'figures',
-        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.00%)',
+        // a phone row's summary form (readability R5, re-pinned on purpose)
+        'supply 1 T · 100 CKB held · 61 occupied (61.00%)',
         '4 transfers · 0 in 24 h · ×1.6393442625',
       ],
     ]);
@@ -535,7 +621,8 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       [
         'figures',
         expect.stringMatching(
-          /^of 93 minted · 100\.00000001 CKB held · 61 occupied \(61\.00%\) · ×1\.6393442625 · 0xabab/
+          // a phone row's summary form (R5, re-pinned on purpose: was "100.00000001")
+          /^of 93 minted · 100 CKB held · 61 occupied \(61\.00%\) · ×1\.6393442625 · 0xabab/
         ),
         null,
       ],
@@ -564,7 +651,8 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '.bit', '5 live'],
       ['activity', '9 ever registered · 2 holders', null],
-      ['figures', '100.00000001 CKB held · 61 occupied (61.00%)', null],
+      // a phone row's summary form (readability R5, re-pinned on purpose: was "100.00000001")
+      ['figures', '100 CKB held · 61 occupied (61.00%)', null],
     ]);
   });
 });

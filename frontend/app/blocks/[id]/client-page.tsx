@@ -13,7 +13,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { ActivityRow } from '@/components/activity/activity-row';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { BlockPosition } from '@/components/blocks/block-position';
 import { BlockTransactionsTable } from '@/components/blocks/block-transactions-table';
@@ -182,7 +182,8 @@ export default function BlockDetailPage() {
   const client = minerClient(block);
   const epochStart = block.number - epoch.index;
   const amount = (value: string, field: string) => (
-    <ExactCkb
+    <CkbAmount
+      form="column"
       shannons={parseShannons(value, `block ${block.number} ${field}`)}
       signed={false}
       tone="plain"
@@ -282,8 +283,8 @@ export default function BlockDetailPage() {
                   <MinerLink
                     address={block.minerAddress}
                     pool={block.minerPool}
-                    size="head"
-                    unnamed={<Address address={block.minerAddress} size="head" />}
+                    size="row"
+                    unnamed={<Address address={block.minerAddress} size="row" />}
                   />
                 </>
               )}{' '}

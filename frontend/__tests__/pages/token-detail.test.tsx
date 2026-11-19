@@ -198,7 +198,9 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getTokenTransactions).mockResolvedValue(p.transactions);
     render(<TokenDetailPage typeHash={p.token.typeScriptHash} />);
     expect(await screen.findByRole('heading', { name: 'TOK' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('0.00001000');
+    // a stat tile's summary form: below 1 CKB, the exact value (readability R5, re-pinned on
+    // purpose: was "0.00001000")
+    expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('0.00001 CKB');
     expect(await screen.findByRole('table', { name: 'Top 10 holders' })).toHaveTextContent(
       '100.00%'
     );
@@ -220,7 +222,10 @@ describe('TokenDetailPage', () => {
       'title',
       'Not established. Nothing CKBadger can read in this token’s type script fixes a cap.'
     );
-    expect(facts).toHaveTextContent('500,000.00000001');
+    // a stat tile's summary form, exact in its title (readability R5, re-pinned on purpose: was
+    // "500,000.00000001")
+    expect(facts).toHaveTextContent('500,000 CKB');
+    expect(within(facts).getByTitle('500,000.00000001 CKB')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument();
     // F2 objects (IV-19 / IV-26): live cells and the metadata source live in tier 2.
     expect(screen.getByText(/from a curated label shipped with CKBadger/)).toBeInTheDocument();
@@ -283,9 +288,11 @@ describe('TokenDetailPage', () => {
     });
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
-      '123,456.789012345678901234567890'
-    );
+    // The supply is a stat tile's summary form; every one of its 24 decimals, scaled in BigInt,
+    // is in its title (readability R5, re-pinned on purpose: the tile printed them all).
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).toHaveTextContent('Supply123,456');
+    expect(within(metrics).getByTitle('123,456.78901234567890123456789')).toBeInTheDocument();
   });
   it('shows same-symbol collisions, proven issuer and exact supply changes without guessing provenance', async () => {
     vi.mocked(api.getToken).mockResolvedValue({
@@ -350,8 +357,9 @@ describe('TokenDetailPage', () => {
     });
     render(<TokenDetailPage typeHash={hash} />);
     const note = await screen.findByText(/Another token also calls itself/);
-    // U-09 (re-pinned): the head's note writes the type hash at the head size, 12…8
-    const self = within(note).getByText(`${hash.slice(0, 12)}…${hash.slice(-8)}`);
+    // U-09 (re-pinned): the head's note writes the type hash at the head size, 12…8; R9
+    // (re-pinned): a note is prose, the row size, 10…6
+    const self = within(note).getByText(`${hash.slice(0, 10)}…${hash.slice(-6)}`);
     expect(self.closest('[data-nobreak]')).not.toBeNull();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     // every dot of the metrics row belongs to the item after it: none is loose text

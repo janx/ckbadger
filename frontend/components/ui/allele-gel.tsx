@@ -37,6 +37,7 @@ import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
 import { clipLabel } from '@/lib/shorten';
 import { percentOf } from '@/lib/format-unit';
+import { SVG_TEXT } from '@/lib/chart-type';
 
 const GAP = 0.6;
 /** How far outside its band the "this one" outline is drawn (PB-04). */
@@ -280,7 +281,7 @@ function Gel({
                       : {
                           transform: `translate(${r(cx + 3)} ${rowTop(ri) + head - 6}) rotate(-90)`,
                         })}
-                    fontSize="10"
+                    fontSize={SVG_TEXT.tick}
                     fill={lane.gene === activeGene ? GEL_COLORS.well : GEL_COLORS.heading}
                   >
                     {geneCaption(labelOf(lane.gene))}
@@ -346,7 +347,7 @@ function Gel({
                                 x={r(cx)}
                                 y={r(p.y + p.h / 2 + 3.5)}
                                 textAnchor="middle"
-                                fontSize="10"
+                                fontSize={SVG_TEXT.tick}
                                 pointerEvents="none"
                                 fill={fill}
                               >
@@ -362,7 +363,7 @@ function Gel({
                     x={r(cx)}
                     y={r(top + h + 16)}
                     textAnchor="middle"
-                    fontSize="10"
+                    fontSize={SVG_TEXT.tick}
                     fill={GEL_COLORS.label}
                   >
                     {lane.variants.toLocaleString('en-US')}
@@ -431,7 +432,7 @@ function Gel({
                         x={LX - 4}
                         y={r(boxes[0].y + boxes[0].h / 2 + 3.5)}
                         textAnchor="end"
-                        fontSize="10"
+                        fontSize={SVG_TEXT.tick}
                         fill={GEL_COLORS.overlay}
                       >
                         {o.label}
@@ -588,7 +589,10 @@ function GeneList({
               </span>
               <span role="cell" className="flex items-center justify-end gap-2">
                 <span aria-hidden="true" className="bg-bar-track flex h-1 w-14">
-                  <span className="bg-jade" style={{ width: `${(top.count / total) * 100}%` }} />
+                  <span
+                    className="bg-jade scan-fill"
+                    style={{ width: `${(top.count / total) * 100}%` }}
+                  />
                 </span>
                 <span className="text-text whitespace-nowrap tabular-nums">{of(top.count)}</span>
               </span>

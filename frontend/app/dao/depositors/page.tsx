@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { formatShareTick, percentHundredths } from '@/components/ui/share-bar';
@@ -12,7 +13,9 @@ import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
-import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
+import { parseShannons } from '@/lib/ckb-decimal';
+import { CkbAmount } from '@/components/ui/ckb-amount';
+import type { AmountForm } from '@/lib/amount-form';
 import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
@@ -23,14 +26,16 @@ import type { ShortSize } from '@/lib/shorten';
 /** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
 
-function Ckb({ shannons }: { shannons: string }) {
-  const parts = splitCkbAmount(parseShannons(shannons, 'DAO depositor capacity'));
+/** A depositor's CKB in its line's ink: a column in the table, a summary on a phone row (R5). */
+function Ckb({ shannons, form }: { shannons: string; form: AmountForm }) {
   return (
-    <span className="whitespace-nowrap tabular-nums">
-      {parts.integer}
-      <span className="text-text-dim">{parts.fraction}</span>
-      <span className="text-text-ghost">{parts.ghost}</span>
-    </span>
+    <CkbAmount
+      form={form}
+      shannons={parseShannons(shannons, 'DAO depositor capacity')}
+      signed={false}
+      tone="inherit"
+      unit={false}
+    />
   );
 }
 
@@ -79,7 +84,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
     key: 'depositor',
     label: 'Depositor',
     minWidth: 260,
-    render: (d) => <Depositor row={d} size="row" className="text-body leading-[18px]" />,
+    render: (d) => <Depositor row={d} size="row" className="text-body leading-row" />,
   },
   {
     key: 'deposits',
@@ -93,7 +98,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
     label: 'CKB deposited',
     minWidth: 220,
     numeric: true,
-    render: (d) => <Ckb shannons={d.capacity} />,
+    render: (d) => <Ckb form="column" shannons={d.capacity} />,
   },
   {
     key: 'share',
@@ -105,6 +110,7 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
         scale={shareScale(rows)}
         trackWidth={SHARE_TRACK}
         format={formatShareTick}
+        figureWidth={SHARE_TEXT}
       />
     ),
     render: (d) => (
@@ -202,7 +208,8 @@ export default function DaoDepositorsPage() {
                     party={<Depositor row={d} size="tight" />}
                     amount={
                       <span className="whitespace-nowrap">
-                        <Ckb shannons={d.capacity} /> <span className="text-text-dim">CKB</span>
+                        <Ckb form="summary" shannons={d.capacity} />{' '}
+                        <span className="text-text-dim">CKB</span>
                       </span>
                     }
                     share={`${d.sharePercent}%`}
@@ -217,28 +224,26 @@ export default function DaoDepositorsPage() {
                   />
                 )}
               />
-              <div className="flex justify-between gap-3 pt-4">
-                {cursors.length > 1 ? (
-                  <button
-                    type="button"
-                    onClick={() => setCursors((c) => c.slice(0, -1))}
-                    className="border-base-border text-text hover:text-text-bright text-small h-9 border px-4"
-                  >
-                    ← Previous
-                  </button>
-                ) : (
-                  <span />
-                )}
-                {page.hasMore && page.nextCursor && (
-                  <button
-                    type="button"
-                    onClick={() => setCursors((c) => [...c, page.nextCursor ?? undefined])}
-                    className="border-base-border text-text hover:text-text-bright text-small h-9 border px-4"
-                  >
-                    Next {pageSize} →
-                  </button>
-                )}
-              </div>
+              {/* The site's one pager (B5): it draws nothing for one page. The buttons keep this
+                  page's words, the size of a page on Next (R2). */}
+              <CursorPagination
+                className="pt-4"
+                total={page.total}
+                totalLabel="depositors"
+                page={cursors.length}
+                pageSize={pageSize}
+                currentCount={page.data.length}
+                hasMore={page.hasMore}
+                hasPrevious={cursors.length > 1}
+                onNext={() => {
+                  if (page.nextCursor === null)
+                    throw new Error('DAO depositors: a page with more ranks has no next cursor');
+                  setCursors((c) => [...c, page.nextCursor!]);
+                }}
+                onPrevious={() => setCursors((c) => c.slice(0, -1))}
+                previousLabel="← Previous"
+                nextLabel={`Next ${pageSize} →`}
+              />
             </>
           )}
         </DetailLayout>

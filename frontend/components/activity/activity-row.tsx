@@ -10,7 +10,6 @@ import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   ActivityReadError,
-  ExactCkb,
   ItemDeltaFact,
   activityClassMark,
   formatScriptRef,
@@ -20,6 +19,7 @@ import {
   protocolActionNoteFacts,
   type ProtocolNoteFact,
 } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { Dotted, dottedGroup, type DottedGroup } from '@/components/ui/phone-row';
 import { formatCount, countNoun } from '@/lib/format-count';
@@ -49,6 +49,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
+import { ROW_LINE_PX } from '@/lib/type-metrics';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-row-rule py-2 transition-colors';
@@ -131,13 +132,13 @@ export function ActivityRowHead({
 }) {
   const line = layout === 'line';
   const linked = line && href !== undefined;
-  const titleClass = cn('text-text-bright text-body font-medium', line && 'leading-[18px]');
+  const titleClass = cn('text-text-bright text-body font-medium', line && 'leading-row');
   return (
     <div
       data-role="row-head"
       className={cn(
         'flex flex-wrap items-baseline justify-between gap-x-4',
-        line ? 'gap-y-0 leading-[18px]' : 'gap-y-0.5'
+        line ? 'leading-row gap-y-0' : 'gap-y-0.5'
       )}
     >
       {line ? (
@@ -169,7 +170,7 @@ export function ActivityRowHead({
       {showEvidence && evidence !== undefined && (
         <span
           data-role="evidence"
-          className={cn('text-text-dim text-meta shrink-0', line && 'ml-auto leading-[18px]')}
+          className={cn('text-text-dim text-meta shrink-0', line && 'leading-row ml-auto')}
         >
           {evidence}
         </span>
@@ -179,7 +180,7 @@ export function ActivityRowHead({
           data-role="evidence"
           className={cn(
             'text-text-dim text-meta shrink-0',
-            line && 'ml-auto whitespace-nowrap leading-[18px]'
+            line && 'leading-row ml-auto whitespace-nowrap'
           )}
         >
           {blockNumber !== null ? (
@@ -374,12 +375,10 @@ function runCount(actions: ProtocolActionView[]): string {
   return formatCount(actions.length, one ? actionNoun(actions[0].action) : 'action');
 }
 
-/** The head's one line (T7): 18 px. */
-const HEAD_LINE_PX = 18;
-
 /**
- * Whether the rendered head holds the inline run on its one line: the headline and its facts in
- * one line box, and the evidence beside them, not fallen to a line of its own. Read from layout,
+ * Whether the rendered head holds the inline run on its one line (T7: the row line, `leading-row`):
+ * the headline and its facts in one line box, and the evidence beside them, not fallen to a line
+ * of its own. Read from layout,
  * not a character count — a head mixes 13, 12 and 11 px text (a ~145-character head of two DAO
  * withdraw requests fits a 1440 line; a count of 130 had listed it).
  */
@@ -387,9 +386,9 @@ function headIsOneLine(article: HTMLElement, txHash: string): boolean {
   const main = article.querySelector('[data-role="head-main"]');
   if (!main) throw new Error(`transaction ${txHash}: the activity head has no main line`);
   const m = main.getBoundingClientRect();
-  if (m.height > HEAD_LINE_PX * 1.5) return false;
+  if (m.height > ROW_LINE_PX * 1.5) return false;
   const evidence = article.querySelector('[data-role="evidence"]');
-  return !evidence || evidence.getBoundingClientRect().top - m.top < HEAD_LINE_PX / 2;
+  return !evidence || evidence.getBoundingClientRect().top - m.top < ROW_LINE_PX / 2;
 }
 
 /**
@@ -449,7 +448,7 @@ function protocolRunSummary(
           data-role="protocol-total"
           title={`${formatCkbAmount(total).full} CKB, the sum of ${count}`}
         >
-          <ExactCkb shannons={total} signed={false} tone="plain" />
+          <CkbAmount form="column" shannons={total} signed={false} tone="plain" />
         </span>
       ),
     ]),
@@ -494,7 +493,7 @@ function ProtocolActionLine({
             className="inline-block text-right tabular-nums"
             style={{ minWidth: `${amountWidth}ch` }}
           >
-            <ExactCkb shannons={f.shannons} signed={false} tone="plain" />
+            <CkbAmount form="column" shannons={f.shannons} signed={false} tone="plain" />
           </span>
           {f.suffix}
         </>
@@ -504,7 +503,7 @@ function ProtocolActionLine({
   }
   if (parts.length === 0) parts.push(action.label);
   return (
-    <div data-role="protocol-line" className="text-text-dim text-small pl-[18px] leading-[18px]">
+    <div data-role="protocol-line" className="text-text-dim text-small leading-row pl-[18px]">
       <Dotted parts={withCount(parts, group.count)} />
     </div>
   );
@@ -536,7 +535,7 @@ function ProtocolActionList({
         data-role="protocol-list-toggle"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="text-interactive hover:text-jade text-small self-start bg-transparent pl-[18px] leading-[18px] transition-colors"
+        className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
       >
         {open ? 'fewer ↑' : `${runCount(actions)} ↓`}
       </button>
@@ -796,7 +795,7 @@ function ParticipantLine({
       data-role="participant"
       // The address sits 18 px in; a line that wraps (phone widths) continues 30 px in, a hanging
       // indent, so the continuation never reads as the next participant.
-      className="text-small flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px] leading-[18px]"
+      className="text-small leading-row flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px]"
     >
       <span
         data-role="party"
@@ -818,7 +817,8 @@ function ParticipantLine({
         </span>
       )}
       <span data-role="ckb">
-        <ExactCkb shannons={BigInt(p.ckbDelta)} />
+        {/* A feed line: the summary form (R5), the exact change in its title. */}
+        <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />
       </span>
       {phoneObjects && (
         <span
@@ -943,7 +943,7 @@ function Participants({
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade text-small self-start bg-transparent pl-[18px] leading-[18px] transition-colors"
+          className="text-interactive hover:text-jade text-small leading-row self-start bg-transparent pl-[18px] transition-colors"
         >
           {unitNode(
             expanded ? 'Show fewer participants' : `+${formatCount(hidden, 'participant')}`

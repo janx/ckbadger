@@ -1,6 +1,6 @@
 'use client';
 import { useState, type ReactNode } from 'react';
-import { ExactCkb } from '@/components/activity-event-row';
+import { CkbAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { percentOf } from '@/lib/format-unit';
@@ -62,8 +62,9 @@ export function CapacityPartition({
     <div className={className} aria-label={`${subject} capacity partition`}>
       {showTotal && (
         <div className="text-small mb-3 flex flex-wrap justify-between gap-2">
+          {/* a label: quiet (R3) */}
           <span className="text-text-dim">CKB held</span>
-          <ExactCkb shannons={sum} signed={false} tone="plain" />
+          <CkbAmount form="column" shannons={sum} signed={false} tone="plain" />
         </div>
       )}
       {sum > BigInt(0) && minSegmentWidth !== undefined && (
@@ -77,6 +78,7 @@ export function CapacityPartition({
               <div
                 key={p.label}
                 data-part={p.label}
+                className="scan-fill"
                 style={{
                   flexGrow: Number(p.value) / Number(sum),
                   flexBasis: 0,
@@ -94,6 +96,7 @@ export function CapacityPartition({
             <div
               key={p.label}
               data-part={p.label}
+              className="scan-fill"
               style={{
                 width: `${(Number(p.value) / Number(sum)) * 100}%`,
                 backgroundColor: p.color,
@@ -113,12 +116,11 @@ export function CapacityPartition({
             onFocus={() => setActive(p.label)}
             onBlur={() => setActive(null)}
           >
+            {/* R3: the part's name is a label and its note a note, quiet; its share a number */}
             <dt className="text-text-dim">{p.label}</dt>
             <dd>
-              <ExactCkb shannons={p.value} signed={false} tone="plain" />
-              {sum > BigInt(0) && (
-                <span className="text-text-dim ml-2">{percentOf(p.value, sum)}</span>
-              )}
+              <CkbAmount form="column" shannons={p.value} signed={false} tone="plain" />
+              {sum > BigInt(0) && <span className="text-text ml-2">{percentOf(p.value, sum)}</span>}
               {p.label === 'DAO free' && daoFreeNote && (
                 <span className="text-text-dim"> · {daoFreeNote}</span>
               )}

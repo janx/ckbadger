@@ -359,9 +359,11 @@ describe('Block board · first tier', () => {
     expect(nameBox.firstElementChild).toBe(title);
     const idLine = nameBox.lastElementChild as HTMLElement;
     expect(idLine).toHaveTextContent(new RegExp(`^${block.hash}$`));
-    // C10 round 2: the id line in the plate's one quiet voice, the hash taking it (it was text-body
+    // C10 round 2: the id line in the plate's one voice, the hash taking it (it was text-body
     // in the text ink); its click-to-copy, the block's copy control, stays as it was
-    expect(idLine.className).toBe('text-text-dim text-small min-w-0 [overflow-wrap:anywhere]');
+    // re-pinned with readability ruling R3: one voice still, in the reading ink (the id is a
+    // value; it was text-text-dim)
+    expect(idLine.className).toBe('text-text text-small min-w-0 [overflow-wrap:anywhere]');
     // The lead's ruling a (re-pinned): the plate's id line is never a scroller; the full hash is
     // the plate's PlateHash, one line where the line holds it, else two halves; click to copy as
     // before, the whole hash its title. Re-pinned (A4 Chrome F3): the piece is every head's HeadId.
@@ -538,7 +540,8 @@ describe('Block board · second tier', () => {
     )!;
     expect(section).toHaveTextContent('paid by the cellbase of #20,827,943');
     expect(within(section).getByTestId('reward-total')).toHaveTextContent(
-      /^684\.32120795 CKB to ckb1qzda0c/
+      // R9 (re-pinned): the payee at the row size, `ckb1…` and its last 8 characters
+      /^684\.32120795 CKB to ckb1…qgp909qk/
     );
     const bar = within(section).getByRole('img', { name: /^Reward shares:/ });
     expect(bar).toHaveAccessibleName(

@@ -11,7 +11,7 @@ import {
   type NotFoundEntity,
 } from '@/lib/not-found-evidence';
 import { useDocumentTitle } from '@/lib/use-document-title';
-import { shortenHash } from '@/lib/shorten';
+import { shortenId } from '@/lib/shorten';
 
 const NOT_FOUND_TITLE = ['Not found'] as const;
 
@@ -111,18 +111,21 @@ const RETURNS: Partial<Record<EntityKind, { href: string; label: string }>> = {
 function CheckedEndpoint({ path }: { path: string }) {
   return (
     <span data-endpoint="">
-      {path
-        .split(/([/?&=])/)
-        .map((part, i) =>
-          part.length > 0 && shortenHash(part, 'row') !== part ? (
-            <ShortId key={i} value={part} kind="hash" size="row" />
-          ) : (
-            part
-          )
-        )}
+      {path.split(/([/?&=])/).map((part, i) => {
+        // an address keeps its network and its identity, as it does on every page (R9)
+        const kind = ADDRESS_SEGMENT.test(part) ? 'address' : 'hash';
+        return part.length > 0 && shortenId(part, kind, 'row') !== part ? (
+          <ShortId key={i} value={part} kind={kind} size="row" />
+        ) : (
+          part
+        );
+      })}
     </span>
   );
 }
+
+/** A path segment that is a CKB address (mainnet or testnet). */
+const ADDRESS_SEGMENT = /^ck[bt]1/;
 
 type NotFoundPageProps = {
   /** Drawn in place of AppFrame (the frame route's error boundary): its own header and footer. */
