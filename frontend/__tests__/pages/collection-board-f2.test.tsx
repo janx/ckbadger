@@ -154,7 +154,13 @@ it('makes Objects the gel of the genes that vary beside the 20 newest (OB-C1, C9
     within(table)
       .getAllByRole('columnheader')
       .map((h) => h.textContent)
-  ).toEqual(['Object', 'Background', 'Color', 'Made of', 'Owner', 'Minted']);
+    // re-pinned on purpose (lane P2's follow-up, item 3): the eight newest objects of the captured
+    // page share one owner and one minting day (a batch mint), so neither is a column: both are said
+    // once over the list (it listed Owner and Minted, the same on every row)
+  ).toEqual(['Object', 'Background', 'Color', 'Made of']);
+  expect(objects.querySelector('[data-role="said-once"]')).toHaveTextContent(
+    /^every one of the 8\sobjects listed · held by \S+ · minted on \d{4}-\d{2}-\d{2}$/
+  );
   expect(within(table).getAllByRole('row')).toHaveLength(9);
   expect(within(table).getAllByText('BTC+CKB')).toHaveLength(8);
   // C10: one hint in the section — the readout row's.
