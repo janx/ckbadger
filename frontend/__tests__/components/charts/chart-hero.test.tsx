@@ -306,6 +306,21 @@ describe('the chart pages on the chart-hero board (lane D1)', () => {
     expect(within(table).getAllByRole('row')).toHaveLength(9);
   });
 
+  // The figure fits a 360 px phone (328 px of line): at 26 px a digit is 15.6 px and the unit, at
+  // 22 px, 13.2 px a glyph, so "16.37% of circulating CKB" is 5 × 15.6 + 20 × 13.2 = 342 px, over
+  // the line by 14 px when held on one line. The unit's words wrap between themselves; the figure
+  // and the unit's first word stay together (a no-break space, or the % sign against the digits).
+  it('lets a long unit wrap under its figure on a phone, never the figure from its unit', async () => {
+    render(<ChartDetail slug="circulation-ratio" />);
+    const value = await screen.findByTestId('figure-value');
+    expect(value).not.toHaveClass('whitespace-nowrap');
+    expect(value.textContent).toBe('16.37% of circulating CKB');
+    chartProps.length = 0;
+    render(<ChartDetail slug="hash-rate" />);
+    const rate = (await screen.findAllByTestId('figure-value')).at(-1)!;
+    expect(rate.textContent).toBe('81.05\u00a0PH/s');
+  });
+
   it('draws a ranked history as its five largest and the API’s rest (rule 5)', async () => {
     render(<ChartDetail slug="most-utilized-scripts" />);
     await screen.findByRole('heading', { level: 1, name: 'Scripts' });
