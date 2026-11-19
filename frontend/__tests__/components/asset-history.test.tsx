@@ -263,6 +263,7 @@ describe('Asset history', () => {
       fireEvent.click(screen.getByRole('button', { name: '1M' }));
       expect(day()).toHaveTextContent(/^2024-01-08$/);
     } finally {
+      vi.restoreAllMocks();
       vi.unstubAllGlobals();
     }
   });
