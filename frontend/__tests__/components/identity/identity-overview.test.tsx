@@ -393,7 +393,7 @@ describe('.cell rail parties (visual pass)', () => {
       hashPrefix: '0x69',
       lockHash: '0x' + '69'.repeat(32),
       address: 'ckb1qqcz6d',
-      scriptName: 'Quantum-Resistant Lock',
+      lockScriptName: 'Quantum-Resistant Lock',
     };
     const protocol = structuredClone(dotcellProtocolProducer) as IdentityProtocol;
     render(

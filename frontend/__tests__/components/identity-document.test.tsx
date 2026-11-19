@@ -13,7 +13,7 @@ it('links only a uniquely resolved named party', () => {
           hashPrefix: '0x11',
           lockHash: '0x22',
           address: 'ckb1manager',
-          scriptName: 'JoyID',
+          lockScriptName: 'JoyID',
         }}
       />
     </dl>
@@ -29,7 +29,7 @@ it('copies an unresolved party’s lock-hash prefix by the icon after it', () =>
     <dl>
       <NamedParty
         label="Manager"
-        party={{ hashPrefix: '0x1122', lockHash: null, address: null, scriptName: null }}
+        party={{ hashPrefix: '0x1122', lockHash: null, address: null, lockScriptName: null }}
       />
     </dl>
   );

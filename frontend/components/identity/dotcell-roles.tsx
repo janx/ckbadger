@@ -138,7 +138,7 @@ export function DotcellRoles({
                 )}
               </span>
               <span className="text-text-dim text-meta">
-                {party.scriptName ?? 'lock not named'}
+                {party.lockScriptName ?? 'lock not named'}
               </span>
             </li>
           );

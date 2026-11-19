@@ -39,7 +39,7 @@ it('draws its Owner fact as every identity page’s owner line: an Address at th
       hashPrefix: '0x' + 'ab'.repeat(20),
       lockHash: '0x' + 'cd'.repeat(32),
       address,
-      scriptName: 'Default Lock',
+      lockScriptName: 'Default Lock',
     },
   });
   render(<Page identityId={evidence.itemId} />);
@@ -95,7 +95,7 @@ it('links a uniquely resolved protocol owner and retains unresolved manager byte
     ...protocol.versions[0].decoded.owner,
     lockHash: '0x' + '22'.repeat(32),
     address: 'ckb1owner',
-    scriptName: 'JoyID',
+    lockScriptName: 'JoyID',
   };
   vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
   render(<Page identityId="alice" />);

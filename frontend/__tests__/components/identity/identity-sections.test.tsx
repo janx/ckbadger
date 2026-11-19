@@ -63,8 +63,8 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
           { ...rec('address.0', 'bc1q'), addressLockHash: null },
         ]}
         parties={{
-          owner: { lockHash: '0x69', scriptName: 'Quantum-Resistant Lock' },
-          manager: { lockHash: '0x1e', scriptName: 'JoyID' },
+          owner: { lockHash: '0x69', lockScriptName: 'Quantum-Resistant Lock' },
+          manager: { lockHash: '0x1e', lockScriptName: 'JoyID' },
         }}
       />
     );
@@ -87,11 +87,11 @@ describe('IdentityRecords (ID-DC1 / ID-DC5)', () => {
 function dotcellHistory(): Extract<ItemProtocol, { kind: 'dotcell' }> {
   const p = structuredClone(dotcellProtocolProducer) as Extract<ItemProtocol, { kind: 'dotcell' }>;
   const v0 = p.versions[0];
-  const party = (prefix: string, address: string | null, scriptName: string | null) => ({
+  const party = (prefix: string, address: string | null, lockScriptName: string | null) => ({
     hashPrefix: '0x' + prefix.repeat(20),
     lockHash: address ? '0x' + prefix.repeat(32) : null,
     address,
-    scriptName,
+    lockScriptName,
   });
   const at = (ts: string, owner: ReturnType<typeof party>, manager: ReturnType<typeof party>) => {
     const v = structuredClone(v0);
@@ -180,7 +180,7 @@ describe('DotcellRoles sub-lines (R-5)', () => {
     hashPrefix: '0x' + '1e'.repeat(20),
     lockHash: '0x' + '1e'.repeat(32),
     address: 'ckb1manager',
-    scriptName: 'JoyID',
+    lockScriptName: 'JoyID',
   };
   const withEdits = (last: unknown) => ({
     ...dotcellHistory(),

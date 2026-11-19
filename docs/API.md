@@ -214,6 +214,10 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
   network with no `.cell` ring root indexed
 - `DotCellItemResponse` — the name, its owner/manager/sale/records, `parent`, and the **first
   page** of its live sub-names: `children` (at most 50), `childrenHasMore`, `childrenNextCursor`
+- `PartyRef` (a `.cell` name's owner, manager and sale seller) — `hashPrefix`, `lockHash`,
+  `address`, and `lockScriptName`, the registry's name for the party's lock code hash, the one
+  name every route gives a lock's registry name (it was `scriptName`, the word a type call and a
+  code cell keep)
 - `CursorPaginatedResponse<DotCellNameRef>` — `…/children`: `identityId`, `label`, `name`
 
 **`.cell` sub-names**

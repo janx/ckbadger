@@ -189,7 +189,7 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
       <HeadId value={party.hashPrefix} kind="hash" />
     ),
     note: party.lockHash
-      ? (party.scriptName ?? 'lock not named')
+      ? (party.lockScriptName ?? 'lock not named')
       : 'prefix · no uniquely resolved lock',
   };
 }
@@ -209,7 +209,7 @@ export function PartyLine({ party, size }: { party: DotCellPartyRef; size: Short
           className="text-body"
         />
       </AppLink>
-      <Sub>{party.scriptName ?? 'lock not named'}</Sub>
+      <Sub>{party.lockScriptName ?? 'lock not named'}</Sub>
     </>
   ) : (
     <>
@@ -577,9 +577,9 @@ export function IdentitySummary({
             <>
               It changed hands {times(owners.changes)}; since{' '}
               <NoBreak>{formatUtc8Date(owners.since.cell.timestamp)}</NoBreak>{' '}
-              <B>{lockPhrase(d.owner.scriptName)}</B> owns it
+              <B>{lockPhrase(d.owner.lockScriptName)}</B> owns it
               {d.manager.hashPrefix !== d.owner.hashPrefix
-                ? ` while ${lockPhrase(d.manager.scriptName)} manages its records`
+                ? ` while ${lockPhrase(d.manager.lockScriptName)} manages its records`
                 : ''}
               .{' '}
             </>

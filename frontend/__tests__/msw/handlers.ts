@@ -668,13 +668,13 @@ export const handlers = [
         hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
         lockHash: null,
         address: null,
-        scriptName: null,
+        lockScriptName: null,
       },
       manager: {
         hashPrefix: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',
         lockHash: null,
         address: null,
-        scriptName: null,
+        lockScriptName: null,
       },
       // Round 3 (contracts R-A · R-5): live names this owner prefix holds, this one included.
       ownerNameCount: 1,

@@ -30,8 +30,8 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
             </span>
           </>
         )}
-        {party.scriptName && (
-          <span className="text-text-dim text-meta block">{party.scriptName}</span>
+        {party.lockScriptName && (
+          <span className="text-text-dim text-meta block">{party.lockScriptName}</span>
         )}
       </dd>
     </div>

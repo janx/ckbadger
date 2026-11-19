@@ -1554,11 +1554,11 @@ export async function renderMarkdownPage(
             ['ownerHashPrefix', item.owner.hashPrefix],
             ['ownerLockHash', item.owner.lockHash ?? '-'],
             ['ownerAddress', item.owner.address ?? '-'],
-            ['ownerScriptName', item.owner.scriptName ?? '-'],
+            ['ownerLockScriptName', item.owner.lockScriptName ?? '-'],
             ['managerHashPrefix', item.manager.hashPrefix],
             ['managerLockHash', item.manager.lockHash ?? '-'],
             ['managerAddress', item.manager.address ?? '-'],
-            ['managerScriptName', item.manager.scriptName ?? '-'],
+            ['managerLockScriptName', item.manager.lockScriptName ?? '-'],
           ]
         ),
         '',

@@ -32,6 +32,12 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '..', '..');
 const API_NAMES = new Set(['lockKind', 'lockName', 'lockScriptName']);
+/**
+ * A called lock's registry name keeps the word `scriptName` on an activity's lock call (lane P2's
+ * third round, item 12): read where the receiver is a lock call (`lc`, `lockCall`,
+ * `primaryLockCall`); a type call's and a code cell's `scriptName` name no lock.
+ */
+const LOCK_CALL = /^(lc|lockCall|primaryLockCall)$/;
 /** The directories the gate reads: those every source gate reads (lane cd-fixes-controls: hooks/). */
 const READ_DIRS = ['app', 'components', 'hooks', 'lib'];
 
@@ -146,6 +152,8 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
     if (ts.isPropertyAccessExpression(node)) {
       const name = node.name.text;
       if (API_NAMES.has(name)) count('api name');
+      else if (name === 'scriptName' && LOCK_CALL.test(terminalName(node.expression) ?? ''))
+        count('api name');
       else if (name === 'lockScriptInfo') {
         if (!placesLockScriptInfo(node)) refuse(node, 'lockScriptInfo taken whole');
       } else if (name === 'name') {
@@ -156,6 +164,8 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
       const key = node.argumentExpression;
       if (ts.isStringLiteralLike(key)) {
         if (API_NAMES.has(key.text)) count('api name');
+        else if (key.text === 'scriptName' && LOCK_CALL.test(terminalName(node.expression) ?? ''))
+          count('api name');
         else if (key.text === 'lockScriptInfo') {
           if (!placesLockScriptInfo(node)) refuse(node, 'lockScriptInfo taken whole');
         } else if (key.text === 'name') {
@@ -291,6 +301,18 @@ const KNOWN: Reads = {
   // lane (p-topics): the Fiber graph's party row writes the registry's name of its lock before
   // "lock hash", outside lockWords
   'components/fiber/fiber-network-graph.tsx': { 'api name': 2 },
+  // 14–20, found when the gate learned the identity parties' lock name (lane P2's third round,
+  // item 12, the test review's MUST-1): a .cell / .bit party's `scriptName`, renamed on the wire
+  // `lockScriptName`, and a called lock's `scriptName` on an activity's lock call. Converted to
+  // the decision in the next commit, but for the lists lane's activity row and the AI view's
+  // primary lock call
+  'components/identity/identity-overview.tsx': { 'api name': 4 },
+  'components/identity/dotcell-roles.tsx': { 'api name': 1 },
+  'components/identity/identity-records.tsx': { 'api name': 2 },
+  'components/identity/dotcell-party.tsx': { 'api name': 2 },
+  'components/asset/identity-document.tsx': { 'api name': 2 },
+  'lib/ai/markdown-renderer.ts': { 'api name': 3 },
+  'components/activity/activity-row.tsx': { 'api name': 2 },
 };
 
 describe('the gate reads the syntax, every form (lane B4 third round)', () => {
@@ -332,6 +354,20 @@ describe('the gate reads the syntax, every form (lane B4 third round)', () => {
     expect(
       lockNameReads(
         `party.lockScriptName; row['lockScriptName']; const { lockScriptName: n } = cell;`,
+        'x.ts'
+      )
+    ).toEqual({ 'api name': 3 });
+  });
+
+  // Lane P2's third round (item 12, the test review's MUST-1): a .cell / .bit party's lock name is
+  // `lockScriptName` on the wire now (it was `scriptName`, which the gate did not read); a called
+  // lock's registry name is still `scriptName` on an activity's lock call, read off the call (`lc`,
+  // `lockCall`, `primaryLockCall`); a type call's and a code cell's `scriptName` name no lock
+  it('counts a lock call’s scriptName, never a type call’s or a code cell’s', () => {
+    expect(
+      lockNameReads(
+        `lc.scriptName; c.primaryLockCall.scriptName; lockCall['scriptName'];
+         sc.scriptName; c.primaryTypeCall.scriptName; out.codeCell.scriptName;`,
         'x.ts'
       )
     ).toEqual({ 'api name': 3 });
@@ -402,11 +438,16 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // 11 files and 17 reads"): the item evidence (known writer 2), the identity overview (5) and the
   // identity evidence (6) say the lock through the decision too, 17 → 12 known reads in 8 files,
   // 30 → 25 in all in 16; of the second round's six known writers none is left
-  it('pins the totals: 25 reads in 16 files, the known writers 8 files and 12 reads', () => {
+  // Re-pinned on purpose (lane P2's third round, item 12; renamed, it was "… 25 reads in 16 files,
+  // … 8 files and 12 reads"): the gate learned a party's lock name and a called lock's, which it
+  // could not see (the test review's MUST-1): 16 reads in 7 more files came to light, so the
+  // totals RISE here, 12 → 28 known reads in 8 → 15 files, 25 → 41 in all in 16 → 23; they fall as
+  // the writers go to the decision
+  it('pins the totals: 41 reads in 23 files, the known writers 15 files and 28 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(16);
-    expect(total(all)).toBe(25);
-    expect(Object.keys(KNOWN)).toHaveLength(8);
-    expect(total(KNOWN)).toBe(12);
+    expect(Object.keys(all)).toHaveLength(23);
+    expect(total(all)).toBe(41);
+    expect(Object.keys(KNOWN)).toHaveLength(15);
+    expect(total(KNOWN)).toBe(28);
   });
 });

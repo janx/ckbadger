@@ -55,7 +55,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
  */
 interface RecordParty {
   lockHash: string | null;
-  scriptName: string | null;
+  lockScriptName: string | null;
 }
 
 /** "the manager's own JoyID wallet": an address record that is the owner's or manager's lock. */
@@ -65,7 +65,7 @@ function whose(lockHash: string | null, parties?: { owner: RecordParty; manager:
     manager = parties.manager.lockHash === lockHash;
   const party = owner ? parties.owner : manager ? parties.manager : null;
   if (!party) return null;
-  const lock = party.scriptName ? `${party.scriptName} ` : '';
+  const lock = party.lockScriptName ? `${party.lockScriptName} ` : '';
   return `the ${owner ? 'owner' : 'manager'}'s own ${lock}wallet`;
 }
 

@@ -16,7 +16,7 @@ describe('DotCellParty', () => {
           hashPrefix: PREFIX,
           lockHash: LOCK_HASH,
           address: ADDRESS,
-          scriptName: 'SECP256K1_BLAKE160',
+          lockScriptName: 'SECP256K1_BLAKE160',
         }}
       />
     );
@@ -31,7 +31,7 @@ describe('DotCellParty', () => {
   it('links a lock that encodes to no address by its full lock hash', () => {
     render(
       <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null, scriptName: null }}
+        party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null, lockScriptName: null }}
       />
     );
     expect(screen.getByRole('link')).toHaveAttribute('href', `/mainnet/address/${LOCK_HASH}`);
@@ -48,7 +48,7 @@ describe('DotCellParty', () => {
       try {
         render(
           <DotCellParty
-            party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null, scriptName: null }}
+            party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null, lockScriptName: null }}
             size={size}
           />
         );
@@ -66,7 +66,7 @@ describe('DotCellParty', () => {
   it('shows a bare prefix as an unresolved prefix, never as a link to an address', () => {
     render(
       <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: null, address: null, scriptName: null }}
+        party={{ hashPrefix: PREFIX, lockHash: null, address: null, lockScriptName: null }}
       />
     );
     expect(screen.queryByRole('link')).not.toBeInTheDocument();
@@ -77,7 +77,7 @@ describe('DotCellParty', () => {
   it('shortens a bare prefix in list rows but keeps the whole prefix in its tooltip', () => {
     render(
       <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: null, address: null, scriptName: null }}
+        party={{ hashPrefix: PREFIX, lockHash: null, address: null, lockScriptName: null }}
         size="row"
       />
     );
@@ -88,7 +88,7 @@ describe('DotCellParty', () => {
   it('carries the test id it is given', () => {
     render(
       <DotCellParty
-        party={{ hashPrefix: PREFIX, lockHash: null, address: null, scriptName: null }}
+        party={{ hashPrefix: PREFIX, lockHash: null, address: null, lockScriptName: null }}
         testId="dotcell-owner"
       />
     );

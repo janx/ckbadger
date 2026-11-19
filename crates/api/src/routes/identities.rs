@@ -867,7 +867,9 @@ pub struct PartyRef {
     pub hash_prefix: String,
     pub lock_hash: Option<String>,
     pub address: Option<String>,
-    pub script_name: Option<String>,
+    /// The registry's name for the party's lock code hash: `lockScriptName`, the one name every
+    /// route gives a lock's registry name (lane P2's third round, item 12; it was `scriptName`).
+    pub lock_script_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1063,7 +1065,7 @@ impl DotCellPartyResolver<'_> {
                     hash_prefix,
                     lock_hash: None,
                     address: None,
-                    script_name: None,
+                    lock_script_name: None,
                 },
                 None,
             ));
@@ -1086,7 +1088,7 @@ impl DotCellPartyResolver<'_> {
                 hash_prefix,
                 lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
                 address,
-                script_name,
+                lock_script_name: script_name,
             },
             Some(ResolvedLock {
                 lock_hash: lock_hash.to_vec(),
@@ -1113,7 +1115,7 @@ impl DotCellPartyResolver<'_> {
             hash_prefix: format!("0x{}", hex::encode(&lock_hash[..20])),
             lock_hash: Some(format!("0x{}", hex::encode(lock_hash))),
             address,
-            script_name,
+            lock_script_name: script_name,
         })
     }
 }

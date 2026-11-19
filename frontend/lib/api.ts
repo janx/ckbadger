@@ -2579,7 +2579,11 @@ interface DotCellPartyRef {
   hashPrefix: string;
   lockHash: string | null;
   address: string | null;
-  scriptName: string | null;
+  /**
+   * The registry's name for the party's lock code hash (lane P2's third round, item 12: the one
+   * name a lock's registry name has on the wire, `lockScriptName`; it was `scriptName`).
+   */
+  lockScriptName: string | null;
 }
 
 interface DotCellDecodedAddress {

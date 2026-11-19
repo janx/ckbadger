@@ -4337,6 +4337,14 @@ async fn test_assets_dotcell_item_detail_by_id_and_by_name() {
         "{item}"
     );
     assert_eq!(item["manager"]["hashPrefix"], SUPPORT_OWNER20);
+    // lane P2's third round (item 12): a party's lock name has the one name the other routes give
+    // a lock's registry name, `lockScriptName` (it was `scriptName`, the word a type call and a code
+    // cell keep)
+    for party in ["owner", "manager"] {
+        let fields = item[party].as_object().unwrap();
+        assert!(fields.contains_key("lockScriptName"), "{party}: {item}");
+        assert!(!fields.contains_key("scriptName"), "{party}: {item}");
+    }
     assert_eq!(item["records"].as_array().unwrap().len(), 0);
     assert_eq!(item["parent"], serde_json::Value::Null);
     assert_eq!(item["children"].as_array().unwrap().len(), 0);
@@ -4481,6 +4489,15 @@ async fn test_assets_dotcell_item_sale_state_resolves_through_sale_lock() {
     let sale = &body["sale"];
     assert_eq!(sale["priceShannons"], "10000000000");
     assert_eq!(sale["seller"]["lockHash"], SUPPORT_OWNER_LOCK_HASH);
+    // lane P2's third round (item 12): the seller's lock name is `lockScriptName`
+    assert!(sale["seller"]
+        .as_object()
+        .unwrap()
+        .contains_key("lockScriptName"));
+    assert!(!sale["seller"]
+        .as_object()
+        .unwrap()
+        .contains_key("scriptName"));
     assert!(sale["seller"]["address"]
         .as_str()
         .unwrap()
