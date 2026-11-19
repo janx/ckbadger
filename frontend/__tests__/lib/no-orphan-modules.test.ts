@@ -51,6 +51,10 @@ const ALLOWLIST: Record<string, string> = {
     'the controls library’s range (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
   'components/ui/text-field.tsx':
     'the controls library’s text field (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
+  'components/ui/pager.tsx':
+    'the controls library’s pager (lane C1): placed by the C2 lanes in the place of CursorPagination, mounted meanwhile by proof/controls.tsx',
+  'components/ui/copy-button.tsx':
+    'the controls library’s copy button (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
   'components/ui/select.tsx':
     'the controls library’s select (lane C1): drawn by the filter chips’ phone form and placed by the C2 lanes',
   'lib/tab-row-fit.ts': 'the tab row’s fit, imported by components/ui/tabs.tsx until a page does',
