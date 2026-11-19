@@ -187,16 +187,26 @@ export function CellVersions({
       </article>
     );
   };
-  // Lane P2's third round (item 3): consecutive versions that differ in nothing a reader can see
-  // (capacity, bytes, owner) fold: the run's first stands, and the current version, and those
-  // between them fold under the one fold control, two or more of them; a version that changes
-  // anything starts a run of its own and is never folded
+  // Lane P2's third round (item 3): consecutive versions alike in everything a version is fold: the
+  // run's first stands, and the current version, and those between them fold under the one fold
+  // control, two or more of them; a version that changes anything starts a run of its own and is
+  // never folded. Lane P2's fifth round (item 1): everything is the capacity, the lock (its script
+  // and the address that spells it), the type script and the data (its hash, as the route sends
+  // it): a .cell name's transfer, renewal or relink recreates its cell under the one shared lock at
+  // the same capacity and byte counts, its owner in the data, and folded as "the same bytes".
+  const sameScript = (a: ItemCellVersion['type'], b: ItemCellVersion['type']) =>
+    a === null || b === null
+      ? a === b
+      : a.codeHash === b.codeHash && a.hashType === b.hashType && a.args === b.args;
   const alike = (a: ItemCellVersion, b: ItemCellVersion) =>
     a.capacity === b.capacity &&
     a.anatomy.lockBytes === b.anatomy.lockBytes &&
     a.anatomy.typeBytes === b.anatomy.typeBytes &&
     a.anatomy.dataBytes === b.anatomy.dataBytes &&
-    a.ownerAddress === b.ownerAddress;
+    a.ownerAddress === b.ownerAddress &&
+    sameScript(a.lock, b.lock) &&
+    sameScript(a.type, b.type) &&
+    a.dataHash === b.dataHash;
   type Segment =
     | { kind: 'row'; v: ItemCellVersion; i: number }
     | { kind: 'fold'; id: string; hidden: { v: ItemCellVersion; i: number }[] };
@@ -236,6 +246,7 @@ export function CellVersions({
               key={segment.id}
               id={segment.id}
               hidden={segment.hidden}
+              lockAddressLabel={lockAddressLabel}
               open={opened.has(segment.id)}
               onToggle={(open) =>
                 setOpened((was) => {
@@ -260,18 +271,23 @@ export function CellVersions({
 
 /**
  * Versions alike folded (lane P2's third round, item 3): one row saying how many and what they
- * share, "2 more versions alike: 500 CKB held, the same bytes and owner", and the one fold control,
- * "all 2 versions ↓" / "fewer ↑", which opens them in place, the button kept and its focus with it.
+ * share, "2 more versions alike: 500 CKB held, the same owner, type and data", and the one fold
+ * control, "all 2 versions ↓" / "fewer ↑", which opens them in place, the button kept and its focus
+ * with it. Its words say what was compared and no more (lane P2's fifth round, item 1): the
+ * capacity, then the lock address by the rows' own word for it ("owner"; "lock" on a .cell name,
+ * whose lock every name shares, its owner in the data), the type and the data.
  */
 function VersionsFold({
   id,
   hidden,
+  lockAddressLabel,
   open,
   onToggle,
   children,
 }: {
   id: string;
   hidden: readonly { v: ItemCellVersion; i: number }[];
+  lockAddressLabel: string;
   open: boolean;
   onToggle: (open: boolean) => void;
   children: ReactNode;
@@ -282,7 +298,7 @@ function VersionsFold({
       <p className="text-text max-w-measure">
         {unitText(formatCount(hidden.length, 'more version', 'more versions'))} alike:{' '}
         <CkbAmount form="summary" shannons={BigInt(shared.capacity)} signed={false} tone="plain" />{' '}
-        held, the same bytes and owner
+        held, the same {lockAddressLabel.toLowerCase()}, type and data
       </p>
       <div id={id} className="space-y-3">
         {open && children}

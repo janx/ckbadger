@@ -198,6 +198,19 @@ describe('a refused lock fails its part, in its place', () => {
         anchor: null,
       })
     );
+    // and the distribution as the route reads it at that tip (lane cd-fixes-controls,
+    // review-fix-tests NOTE-4: it stood at the first tip's 11 holders, largest 20, beside these
+    // ten): ten holders, the largest 28, the next nine 72, none after them
+    vi.mocked(api.getTokenDistribution).mockResolvedValue({
+      holdersCount: 10,
+      totalSupply: '100',
+      largestHolderBalance: '28',
+      nextNineBalance: '72',
+      remainingBalance: '0',
+      unit: 'token',
+      decimals: 0,
+      buckets: [{ lowerBound: '0', upperBound: null, holdersCount: 10, balance: '100' }],
+    });
     // re-pinned on purpose (lane p-assets): the short list's form, "all N holders ↓"
     fireEvent.click(screen.getByRole('button', { name: /^all .*holders ↓$/ }));
     expect(await screen.findByRole('table', { name: 'All holders' })).toBeInTheDocument();

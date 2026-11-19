@@ -34,7 +34,7 @@ import type {
   ParticipantInfo,
   RowItemDelta,
 } from '@/lib/api';
-import { sentField } from '@/lib/older-api';
+import { sentField } from '@/lib/api-fields';
 
 import type { AssetClass } from '@/lib/design-tokens';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -112,7 +112,7 @@ function objectHeadline(
 
 /** An item's movement in its whole transaction, as the address route states it beside the item. */
 function rowItemMovement(item: RowItemDelta): ItemMovement {
-  return sentField(item, 'movement', "an address activity's item");
+  return sentField(item.movement, "an address activity's item", 'movement');
 }
 
 /**

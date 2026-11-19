@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pagedRead } from '@/__tests__/utils/paged-read';
+import { pagedRead, poolPagedRead } from '@/__tests__/utils/paged-read';
 
 const page = (n: number, hasMore: boolean, total?: number, next: string | null = null) => ({
   data: Array.from({ length: n }, (_, i) => i),
@@ -52,6 +52,26 @@ describe('pagedRead: a test’s page agrees with itself', () => {
     );
     // the pool's rows are not counted in the total, which counts committed rows
     expect(() => pagedRead(one(5, 19, false, 19))).not.toThrow();
+  });
+
+  // Lane cd-fixes-controls (review-fix-tests SHOULD-3): the tx pool's list states no `hasMore`;
+  // its "more" is its next cursor, as its page reads it (app/transactions/page.tsx), and the route
+  // pages by its limit (pool_transactions.rs: more only past a full page). Its pages go through the
+  // one checker, read that way.
+  it('reads a page of the pool’s list by its next cursor: a full page with one, a short last page', () => {
+    const pool = (n: number, next: string | null, total: number) => ({
+      data: Array.from({ length: n }, (_, i) => ({ hash: `0x${i}` })),
+      limit: 50,
+      nextCursor: next,
+      total,
+    });
+    expect(poolPagedRead(pool(50, 'p2', 51)).data).toHaveLength(50);
+    expect(poolPagedRead(pool(1, null, 51), 50).data).toHaveLength(1);
+    expect(() => poolPagedRead(pool(1, 'p2', 2))).toThrow(
+      'pagedRead: a page of 1 rows at 50 a page is short and says more rows follow'
+    );
+    expect(() => poolPagedRead(pool(51, 'p2', 60))).toThrow('holds more rows than a page');
+    expect(() => poolPagedRead(pool(3, null, 2))).toThrow('counts 2 rows in all, fewer than the 3');
   });
 
   it('refuses more rows than a page, more with no cursor, a last page with one, a short count', () => {

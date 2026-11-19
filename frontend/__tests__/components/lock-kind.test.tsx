@@ -10,7 +10,7 @@ import {
   namedLockWords,
   rowLock,
 } from '@/components/ui/lock-kind';
-import { lockCallFacts, lockPhrase } from '@/lib/lock-words';
+import { lockCallFacts, lockPhrase, partyLockSentence, partyLockWordsText } from '@/lib/lock-words';
 import { rowTagClass } from '@/components/ui/row-tag';
 import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
@@ -491,5 +491,22 @@ describe('lockCallFacts: a called lock as the decision reads it', () => {
     expect(() => lockCallFacts({ ...older, scriptName: 'Default Lock' } as never)).toThrow(
       "an activity's lock call: the API sends no lockScriptName: it is older than this page"
     );
+  });
+});
+
+// Lane P2's fifth round (item 3; review-fix-logic-routes S5): on an API one version older a .cell
+// party sends `scriptName`, not `lockScriptName`, and the party's lock read "an undefined lock". The
+// party's one reader refuses a party without the field by name; it never writes a word that is
+// not on chain.
+describe('a named party from an API older than this page', () => {
+  const older = {
+    address: ckbAddress({ codeHash: JOYID, hashType: 'type', args: `0x${'0a'.repeat(22)}` }),
+    scriptName: 'JoyID',
+  } as unknown as { lockScriptName: string | null; address: string | null };
+  it('is refused by name, never written "undefined"', () => {
+    expect(() => partyLockWordsText(older, 'row')).toThrow(
+      /a \.cell party: the API sends no lockScriptName: it is older than this page/
+    );
+    expect(() => partyLockSentence(older, 'row')).toThrow(/it is older than this page/);
   });
 });

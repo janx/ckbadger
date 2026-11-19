@@ -1,4 +1,5 @@
 'use client';
+import { sentField } from '@/lib/api-fields';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
@@ -517,7 +518,10 @@ export function ScriptHistoryFigure({
   // `capacity`, which the route states beside its parts (the page sums nothing)
   const days = chart.data.map((point) => ({
     date: point.date,
-    held: exactUnsignedInteger(point.values.capacity, `${family.name} ${point.date}: capacity`),
+    held: exactUnsignedInteger(
+      sentField(point.values.capacity, `${family.name} ${point.date}`, 'capacity'),
+      `${family.name} ${point.date}: capacity`
+    ),
   }));
   return (
     <div className="min-w-0">
@@ -583,7 +587,10 @@ export function ScriptHistoryReading({
   const unused = point ? BigInt(point.values.unused) : null;
   // the whole the day's cells hold, as the route states it (the page sums nothing)
   const held = point
-    ? exactUnsignedInteger(point.values.capacity, `history ${point.date}: capacity`)
+    ? exactUnsignedInteger(
+        sentField(point.values.capacity, `history ${point.date}`, 'capacity'),
+        `history ${point.date}: capacity`
+      )
     : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;

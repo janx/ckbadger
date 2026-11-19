@@ -1731,9 +1731,20 @@ describe('Address board · F2 blocks', () => {
     };
     const page = pageFixture([...addressActivitiesFixture, second]);
     // C14 asks each filter chip for a one-row page; answer it with one row and hasMore, as the
-    // API would, so the feed's two rows do not reach the chip's one-row invariant.
+    // API would, so the feed's two rows do not reach the chip's one-row invariant. Lane
+    // cd-fixes-controls (review-fix-tests SHOULD-3): as the API would means a full page of one at
+    // the size asked, naming the cursor after it (it was one row at 20 a page that said more
+    // followed and named no cursor, which the checker refuses)
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
-      p?.limit === 1 ? { ...page, data: page.data.slice(0, 1), hasMore: true } : page
+      p?.limit === 1
+        ? pagedRead({
+            ...page,
+            data: page.data.slice(0, 1),
+            limit: 1,
+            hasMore: true,
+            nextCursor: 'chip-1',
+          })
+        : page
     );
     render(<AddressDetailPage />);
     const history = await screen.findByRole('region', { name: 'History' });
@@ -2040,13 +2051,18 @@ describe('Address · consistency round (C13, C14)', () => {
   // Lane P (exact or none): a filter chip shows a count only when its one-row page proves it — 0
   // or 1 — and no number otherwise; "All" keeps the address's total; an empty filter is dimmed.
   it('counts a filter chip from its one-row page only when the count is exact; an empty filter is dimmed 0', async () => {
+    // a chip's one-row page as the API sends it: at the size asked (1), naming the cursor after
+    // it where more follow (lane cd-fixes-controls, review-fix-tests SHOULD-3: they were pages of
+    // 20, and "ckb"'s said more followed and named no cursor)
+    const chipPage = (rows: typeof addressActivitiesFixture, more: boolean) =>
+      pagedRead({ data: rows, limit: 1, hasMore: more, nextCursor: more ? 'chip-1' : null });
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.limit === 1 && p.filter && p.filter !== 'all'
         ? p.filter === 'token'
-          ? { ...pageFixture([addressActivitiesFixture[0]]), hasMore: false, total: undefined }
+          ? chipPage([addressActivitiesFixture[0]], false)
           : p.filter === 'ckb'
-            ? { ...pageFixture([addressActivitiesFixture[0]]), hasMore: true, total: undefined }
-            : { ...pageFixture([]), hasMore: false, total: undefined }
+            ? chipPage([addressActivitiesFixture[0]], true)
+            : chipPage([], false)
         : // the unfiltered page states the address's activity count (contracts W5-1)
           pageFixture(addressActivitiesFixture, addressActivitiesFixture.length)
     );

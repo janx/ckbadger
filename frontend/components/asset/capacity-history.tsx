@@ -1,4 +1,5 @@
 'use client';
+import { sentField } from '@/lib/api-fields';
 import type { AssetCapacityHistory, CollectionInsights } from '@/lib/api';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
@@ -19,8 +20,9 @@ export function CapacityHistory({ history, subject, weekly, assetClass }: Capaci
   // added here; then free was capacity − occupied, in AssetHistory: lane P2's third round, item 13)
   const daily = history.data.map((point) => ({
     date: point.date,
+    // the whole, stated from this plan on: a day without it is from an API older than this page
     capacity: exactUnsignedInteger(
-      point.values.capacity,
+      sentField(point.values.capacity, `${subject} ${point.date}`, 'capacity'),
       `${subject} ${point.date}: capacity`
     ).toString(),
     occupiedCapacity: exactUnsignedInteger(

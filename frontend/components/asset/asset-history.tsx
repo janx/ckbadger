@@ -1,4 +1,5 @@
 'use client';
+import { sentField } from '@/lib/api-fields';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
@@ -237,7 +238,11 @@ export function AssetHistory({
     previous = t;
     const capacity = exactUnsignedInteger(p.capacity, `${p.date} capacity`),
       occupied = exactUnsignedInteger(p.occupiedCapacity, `${p.date} occupied`),
-      free = exactUnsignedInteger(p.freeCapacity, `${p.date} free`);
+      // a day from an API older than this page sends no free part: refused by name (item 3)
+      free = exactUnsignedInteger(
+        sentField(p.freeCapacity, p.date, 'freeCapacity'),
+        `${p.date} free`
+      );
     if (occupied > capacity) throw new Error(`${p.date}: occupied exceeds held capacity`);
     // the route's parts make its whole, or the day is refused (never repaired here)
     if (occupied + free !== capacity)
