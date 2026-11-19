@@ -28,7 +28,7 @@ function Filter({ values = KINDS }: { values?: FilterValue<Kind>[] }) {
   const [value, setValue] = useState<Kind>('all');
   return (
     <>
-      <FilterChips label="kind" values={values} value={value} onChange={setValue} />
+      <FilterChips label="kind" values={values} value={value} onChange={setValue} counted />
       <p>showing {value}</p>
     </>
   );
@@ -148,9 +148,14 @@ describe('FilterChips: the board’s look', () => {
 });
 
 // Re-pinned on purpose (the coordinator's follow-up of lane C1): the phone form is decided by
-// measurement (lib/control-row-fit.ts `chipRowFits`: the row on one 328 px line), no longer by a
+// measurement (lib/control-row-fit.ts `chipFormFits`: the row on one 328 px line), no longer by a
 // count of values, as the board's pictures at 390 draw it: the address page's three kinds are
-// chips, the inventory's four standards (397.6 px) and the six kinds (783.2 px) a select.
+// chips, the inventory's four standards and the six kinds a select. Re-pinned again (lane
+// cd-fixes-controls, L1 NOTE 11): the row is measured from its labels and marks with room for a
+// count of five glyphs on each value of a filter that counts (287.2, 476.8 and 876.8 px), never
+// from its counts, so a filter keeps its form before and after they come; INSIDE and OVER are the
+// rows 7 px inside the line and 0.8 px over it with that room (they were 0.6 px either side of it
+// as written).
 const ADDRESS_KINDS: FilterValue<string>[] = [
   { key: 'all', label: 'all', count: 3 },
   { key: 'ckb', label: 'ckb', count: 2 },
@@ -165,19 +170,17 @@ const STANDARDS: FilterValue<string>[] = [
 const INSIDE: FilterValue<string>[] = [
   { key: 'all', label: 'all', count: 1234 },
   { key: 'tokens', label: 'tokens' },
-  { key: 'objects', label: 'objects' },
-  { key: 'domains', label: 'domains' },
+  { key: 'domain', label: 'domain' },
 ];
 const OVER: FilterValue<string>[] = [
   { key: 'all', label: 'all', count: 727 },
   { key: 'tokens', label: 'tokens' },
-  { key: 'objects', label: 'objects' },
-  { key: 'addresses', label: 'addresses' },
+  { key: 'domains', label: 'domains' },
 ];
 
 function Values({ label, values }: { label: string; values: FilterValue<string>[] }) {
   const [value, setValue] = useState('all');
-  return <FilterChips label={label} values={values} value={value} onChange={setValue} />;
+  return <FilterChips label={label} values={values} value={value} onChange={setValue} counted />;
 }
 
 /** The form a value set takes at a viewport: chips, or the select after its label. */
@@ -218,7 +221,7 @@ describe('FilterChips: the phone form, by the one function (lib/control-row-fit)
     expect(formAt(390, KINDS, 'kind')).toBe('select');
   });
 
-  it('keeps a row 0.6 px inside the line as chips, and draws one 0.6 px over it as a select', () => {
+  it('keeps a row with room for its counts inside the line as chips, and one 0.8 px over it a select', () => {
     expect(formAt(390, INSIDE)).toBe('chips');
     expect(formAt(360, INSIDE)).toBe('chips');
     expect(formAt(390, OVER)).toBe('select');
@@ -247,9 +250,59 @@ describe('FilterChips: the phone form, by the one function (lib/control-row-fit)
     vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>
       render(
-        <FilterChips label="kind" values={KINDS} value={'names' as Kind} onChange={() => {}} />
+        <FilterChips
+          label="kind"
+          values={KINDS}
+          value={'names' as Kind}
+          onChange={() => {}}
+          counted
+        />
       )
     ).toThrow('FilterChips "kind": no value names');
+  });
+
+  // Lane cd-fixes-controls (L1 NOTE 11): one filter, one form, decided from what does not change
+  // with the data; the arithmetic in __tests__/lib/control-row-fit.test.ts.
+  it('keeps one form before its counts come and after: the four standards are a select', () => {
+    const loading = STANDARDS.map((v) => ({ ...v, count: undefined }));
+    for (const viewport of [390, 360]) {
+      expect(formAt(viewport, loading)).toBe('select');
+      expect(formAt(viewport, STANDARDS)).toBe('select');
+    }
+  });
+
+  it('draws a count wider than its room by taking the counts off the row: one line, nothing cut', () => {
+    // 337.6 px as written, past the 328 px line; 161.2 px without its counts
+    const wide: FilterValue<string>[] = [
+      { key: 'all', label: 'all', count: 123_456_789 },
+      { key: 'ckb', label: 'ckb', count: 98_765_432 },
+      { key: 'dao', label: 'dao', count: 1, mark: 'gold' },
+    ];
+    for (const viewport of [390, 360]) {
+      atViewportWidth(viewport);
+      const { unmount } = render(<Values label="kind" values={wide} />);
+      const group = screen.getByRole('radiogroup', { name: 'kind' });
+      expect(
+        within(group)
+          .getAllByRole('radio')
+          .map((r) => r.textContent)
+      ).toEqual(['all', 'ckb', 'dao']);
+      unmount();
+    }
+    // from 640 the chips keep their counts
+    atViewportWidth(640);
+    render(<Values label="kind" values={wide} />);
+    expect(screen.getByRole('radio', { name: 'all 123,456,789' })).toBeInTheDocument();
+  });
+
+  it('refuses a count on a filter that does not say it counts: its form left it no room', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const viewport of [1280, 390]) {
+      atViewportWidth(viewport);
+      expect(() =>
+        render(<FilterChips label="kind" values={KINDS} value="all" onChange={() => {}} />)
+      ).toThrow('FilterChips "kind": a count (6122) on a filter that does not count its values');
+    }
   });
 
   it('refuses a filter with no label, at every width: its select would stand without one', () => {
@@ -257,7 +310,7 @@ describe('FilterChips: the phone form, by the one function (lib/control-row-fit)
     for (const viewport of [1280, 390]) {
       atViewportWidth(viewport);
       expect(() =>
-        render(<FilterChips label="" values={STANDARDS} value="all" onChange={() => {}} />)
+        render(<FilterChips label="" values={STANDARDS} value="all" onChange={() => {}} counted />)
       ).toThrow('FilterChips: a filter has a label');
     }
   });

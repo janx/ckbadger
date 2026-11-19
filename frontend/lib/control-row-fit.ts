@@ -20,8 +20,9 @@ import { fontPx, foreignTextPx, textPx } from '@/lib/type-metrics';
  * their counts are 356.4 px, so at 360 the counts leave (316.8 px without them) and at 390 (358 px)
  * they stay; the inventory's are 324 px and stay at 360, one more digit in a count and they leave.
  *
- * A row of filter chips is measured the same way (`chipRowFits`, below): below 640 a filter's
- * values are chips where their row fits one line of the narrowest phone, a select where it does not.
+ * A row of filter chips is measured the same way (`chipFormFits`, below): below 640 a filter's
+ * values are chips where their row fits one line of the narrowest phone, a select where it does not,
+ * decided from its labels and marks with room for its counts, never from the counts themselves.
  */
 
 /** The two steps a tab row is set at: a command row the section step from sm, the body step below it; a plain row the body step. */
@@ -128,31 +129,78 @@ const CHIP_MARK_PX = 7;
 const CHIP_LABEL_PX = fontPx('small');
 const CHIP_GAP_PX = 6;
 
-/** The width a row of filter chips takes on one line, to the hundredth of a pixel. */
-export function chipRowPx(items: readonly ChipRowItem[]): number {
-  const chips = items.reduce(
-    (sum, item) =>
-      sum +
+/** A row of chips, each its label, its mark where it has one and its count's glyphs (or none). */
+function chipsPx(chips: readonly { label: string; mark?: string; countGlyphs: number | null }[]) {
+  const sum = chips.reduce(
+    (total, chip) =>
+      total +
       CHIP_INSET_PX +
-      (item.mark === undefined ? 0 : CHIP_MARK_PX + CHIP_PART_GAP_PX) +
-      textPx([...item.label].length, CHIP_LABEL_PX) +
-      (item.count === undefined || item.count === null
-        ? 0
-        : CHIP_PART_GAP_PX + textPx(groupCount(item.count).length, COUNT_PX)),
+      (chip.mark === undefined ? 0 : CHIP_MARK_PX + CHIP_PART_GAP_PX) +
+      textPx([...chip.label].length, CHIP_LABEL_PX) +
+      (chip.countGlyphs === null ? 0 : CHIP_PART_GAP_PX + textPx(chip.countGlyphs, COUNT_PX)),
     0
   );
-  return hundredth(chips + Math.max(items.length - 1, 0) * CHIP_GAP_PX);
+  return hundredth(sum + Math.max(chips.length - 1, 0) * CHIP_GAP_PX);
+}
+
+/** The width a row of filter chips takes on one line as written, to the hundredth of a pixel. */
+export function chipRowPx(items: readonly ChipRowItem[]): number {
+  return chipsPx(
+    items.map((item) => ({
+      label: item.label,
+      mark: item.mark,
+      countGlyphs:
+        item.count === undefined || item.count === null ? null : groupCount(item.count).length,
+    }))
+  );
+}
+
+/**
+ * The glyphs of room a filter that counts its values leaves for each count when its phone form is
+ * decided (lane cd-fixes-controls, L1 NOTE 11): five, a count up to 9,999 as written, the day's
+ * counts of the kind filters (the board's 6,122 and 5,425) and the catalog's (727).
+ */
+export const CHIP_COUNT_CHARS = 5;
+
+/**
+ * The width a filter's row of chips takes on one line as its phone form is decided: its labels and
+ * marks as written, and, where the filter counts its values (`counted`), a count of
+ * CHIP_COUNT_CHARS glyphs on every value, whether its count has come, is narrower, or is none. A
+ * count on a filter that does not count its values is refused: its form left it no room.
+ */
+export function chipFormPx(items: readonly ChipRowItem[], counted: boolean): number {
+  return chipsPx(
+    items.map((item) => {
+      if (!counted && item.count !== undefined && item.count !== null)
+        throw new Error(`a count (${item.count}) on a filter that does not count its values`);
+      return { label: item.label, mark: item.mark, countGlyphs: counted ? CHIP_COUNT_CHARS : null };
+    })
+  );
 }
 
 /**
  * Whether a filter's values are chips below 640 (the controls board's pictures at 390): when their
- * row fits one line of the narrowest phone (`NARROWEST_LINE_PX`, a 360 px window's 328 px); else a
- * select after the filter's label. A fixed line, not the one measured, so a filter takes one form
- * on every phone and the same filter the same control on sibling pages. From 640 they are chips.
- * The board's cases: the address page's `all 3 · ckb 2 · dao 1` 200.8 px, chips; the inventory's
- * four standards 397.6 px and the six kinds of activity 783.2 px, selects.
+ * row with room for its counts (`chipFormPx`) fits one line of the narrowest phone
+ * (`NARROWEST_LINE_PX`, a 360 px window's 328 px); else a select after the filter's label. It is
+ * decided from what does not change with the data, its labels, its marks and whether it counts, so
+ * one filter takes one form on every page and every phone, before and after its counts come (L1
+ * NOTE 11: from the counts, the four standards were chips while they loaded and a select when they
+ * came). A fixed line, not the one measured. From 640 they are chips. The cases, with room: the
+ * address page's `all · ckb · dao` 287.2 px, chips; the inventory's four standards 476.8 px and
+ * the six kinds of activity 876.8 px, selects.
  */
-export function chipRowFits(items: readonly ChipRowItem[]): boolean {
+export function chipFormFits(items: readonly ChipRowItem[], counted: boolean): boolean {
+  return chipFormPx(items, counted) <= NARROWEST_LINE_PX;
+}
+
+/**
+ * Whether a row of chips below 640 draws its counts: while the row as written holds the narrowest
+ * line. A count wider than its room (more than CHIP_COUNT_CHARS glyphs) can push the row past it;
+ * then the counts leave the row, as they leave a tab row (the owner's phone rule): a chip is never
+ * cut and the row never takes a second line. The count of the chosen value stays with the list it
+ * filters.
+ */
+export function chipRowShowsCounts(items: readonly ChipRowItem[]): boolean {
   return chipRowPx(items) <= NARROWEST_LINE_PX;
 }
 
