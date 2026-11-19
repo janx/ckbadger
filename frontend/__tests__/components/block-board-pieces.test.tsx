@@ -124,6 +124,10 @@ describe('RewardBreakdown', () => {
     expect(pool.getAttribute('href')).toMatch(new RegExp(`/address/${rewardBlock.minerAddress}$`));
     // re-pinned (lane P1 follow-up): the title names the pool whole, then the address
     expect(pool).toHaveAttribute('title', `Example Pool · ${rewardBlock.minerAddress}`);
+    // lane P1 follow-up (item 3): the payee is a name inside the line, the inline look, no ink of
+    // MinerLink's own
+    expect(pool).toHaveClass('underline');
+    expect(pool).not.toHaveClass('text-text-bright');
     unmount();
     const unnamed = { ...rewardBlock, minerPool: null };
     wrap(<RewardBreakdown block={unnamed} />);

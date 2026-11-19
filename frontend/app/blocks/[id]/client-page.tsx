@@ -321,6 +321,7 @@ export default function BlockDetailPage() {
                     address={block.minerAddress}
                     pool={block.minerPool}
                     size="row"
+                    look="inline"
                     unnamed={<Address look="inline" address={block.minerAddress} size="row" />}
                   />
                 ) : (

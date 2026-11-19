@@ -138,6 +138,7 @@ export function RewardBreakdown({
               address={block.minerAddress}
               pool={block.minerPool}
               size="row"
+              look="inline"
               className="text-body font-normal"
             />
           </>

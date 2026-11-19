@@ -546,10 +546,13 @@ describe('Block board · first tier', () => {
     const summary = await screen.findByTestId('block-summary');
     expect(summary).not.toHaveTextContent('Example Pool');
     const strip = screen.getByRole('group', { name: 'Block status' });
-    expect(within(strip).getByRole('link', { name: 'Example Pool' })).toHaveAttribute(
-      'href',
-      `/mainnet/address/${block.minerAddress}`
-    );
+    const pool = within(strip).getByRole('link', { name: 'Example Pool' });
+    expect(pool).toHaveAttribute('href', `/mainnet/address/${block.minerAddress}`);
+    // lane P1 follow-up (item 3): a strip's value link is inline, as its block's and its epoch's
+    // are; no ink of MinerLink's own; its title names the pool whole, then the address
+    expect(pool).toHaveClass('underline');
+    expect(pool).not.toHaveClass('text-text-bright');
+    expect(pool).toHaveAttribute('title', `Example Pool · ${block.minerAddress}`);
   });
 
   it('counts both views in quiet 12 px beside 17 px tab names, and says where the txs came from (BA-40, BA-16)', async () => {
