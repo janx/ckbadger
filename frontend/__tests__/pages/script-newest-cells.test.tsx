@@ -213,8 +213,12 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     serve('Default Lock');
     const section = await renderPage();
     const footer = section.querySelector('[data-role="newest-footer"]') as HTMLElement;
-    const all = within(footer).getByRole('link', { name: 'All 887,562 cells ↓' });
+    // re-pinned on purpose (lane p-assets, the controls gate's work list): a way onward to a place
+    // on this page, the onward look writing its "↓" (it was a raw anchor typing "All … ↓")
+    const all = within(footer).getByRole('link', { name: /^all 887,562\scells$/ });
     expect(all).toHaveAttribute('href', '#its-cells');
+    expect(all).toHaveTextContent(/^all 887,562\scells\s↓$/);
+    expect(all).toHaveClass('text-jade');
     expect(document.getElementById('its-cells')).toHaveAttribute('aria-label', 'Its cells');
     expect(within(footer).getAllByRole('link')).toHaveLength(1);
     expect(section.querySelector('a[href*="/activities"]')).toBeNull();
@@ -285,11 +289,11 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     // 17:55 UTC on 2026-11-02 is 01:55 on 2026-11-03 in UTC+8.
     expect(rows[0]).toHaveTextContent('#20,907,299 · 2026-11-03');
     const footer = section.querySelector('[data-role="newest-footer"]') as HTMLElement;
-    expect(within(footer).getByRole('link', { name: 'All 22,291 cells ↓' })).toHaveAttribute(
+    expect(within(footer).getByRole('link', { name: /^all 22,291\scells$/ })).toHaveAttribute(
       'href',
       '#its-cells'
     );
-    expect(within(footer).getByRole('link', { name: 'Activity: Nervos DAO →' })).toHaveAttribute(
+    expect(within(footer).getByRole('link', { name: 'Activity: Nervos DAO' })).toHaveAttribute(
       'href',
       '/mainnet/activities?filter=dao'
     );
@@ -319,7 +323,7 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
       })
     ).toHaveAttribute('title', args);
     const footer = section.querySelector('[data-role="newest-footer"]') as HTMLElement;
-    expect(within(footer).getByRole('link', { name: 'Activity: Objects →' })).toHaveAttribute(
+    expect(within(footer).getByRole('link', { name: 'Activity: Objects' })).toHaveAttribute(
       'href',
       '/mainnet/activities?filter=object'
     );

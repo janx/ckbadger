@@ -393,12 +393,15 @@ export function ScriptNewestCells({
           </span>
         </p>
       )}
+      {/* Ways onward (the controls gate's one work-list entry, "All N cells ↓"): a place further
+          down this page and another page, each the onward look, its arrow the link's own ("↓" to
+          a place on this page, "→" to another) */}
       <p data-role="newest-footer" className="text-small mt-1 flex flex-wrap gap-x-4 gap-y-1">
-        <a href="#its-cells" className="text-text hover:text-jade">
-          All {unitNode(formatCount(family.liveCellsCount, 'cell'))} ↓
-        </a>
+        <Link href="#its-cells" look="onward">
+          all {unitNode(formatCount(family.liveCellsCount, 'cell'))}
+        </Link>
         {activity && (
-          <Link href={activity.href} className="text-text hover:text-jade">
+          <Link href={activity.href} look="onward">
             {activity.label}
           </Link>
         )}

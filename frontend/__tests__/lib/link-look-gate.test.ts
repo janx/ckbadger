@@ -318,8 +318,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/scripts/script-newest-cells.tsx': {
     lane: 'p-assets',
-    sites: { look: 6, ink: 6, raw: 1 },
-    reason: '6 without a look; inks by hand (hover:text-jade, text-text, text-text-dim); 1 raw <a>',
+    // look 6 → 5, ink 6 → 4, raw 1 → 0 (lane p-assets): the footer's two ways onward
+    sites: { look: 5, ink: 4 },
+    reason: '5 without a look; inks by hand (hover:text-jade, text-text, text-text-dim)',
   },
   'components/ui/address.tsx': {
     lane: 'p-assets',
@@ -512,8 +513,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the structure's
 // group link went, 2; the cell page's transaction links, 4: two looks, two inks) → 535 (lane
 // p-assets: the m-NFT issue sentence's two links, inline) → 531 (lane p-assets: a collection's
-// items list, its name a key, its holder and its block inline, 4: three looks, one ink)
-const TOLERATED_TOTAL = 531;
+// items list, its name a key, its holder and its block inline, 4: three looks, one ink) → 527
+// (lane p-assets: a script's newest cells' footer, two ways onward, 4: a look, two inks, a raw <a>)
+const TOLERATED_TOTAL = 527;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
