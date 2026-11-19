@@ -78,11 +78,6 @@ const CONTROL_FILES = [
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
-  'app/transactions/page.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 1, tab: 1, pager: 2 },
-    reason: 'the kind select, the committed / pool tabs, the two lists’ pagers',
-  },
   // ---- c2-chain: block, transaction, cell, address, script pages ----
   'app/address/[addr]/client-page.tsx': {
     lane: 'c2-chain',
@@ -191,7 +186,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 37;
+const TOLERATED_TOTAL = 33;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
