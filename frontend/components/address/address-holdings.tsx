@@ -19,7 +19,8 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatCount, countNoun } from '@/lib/format-count';
+import { formatCount } from '@/lib/format-count';
+import { occupiedCapacityText } from '@/lib/occupied';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
 import { Pager } from '@/components/ui/pager';
@@ -27,7 +28,6 @@ import type { StripFact } from '@/components/ui/status-strip';
 import { DetailFacts } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { charPx } from '@/lib/type-metrics';
-import { NoBreak } from '@/components/ui/no-break';
 import { Utc8Date } from '@/components/ui/utc8-date';
 import { Dotted, dottedGroup } from '@/components/ui/phone-row';
 import { percentOf } from '@/lib/format-unit';
@@ -184,18 +184,26 @@ function collectionOrder(groups: AddressHoldings['objectCollections']) {
   );
 }
 
-/** An exact CKB amount in the balance's line of exact parts (Address board), in one ink. */
+/**
+ * An exact CKB amount among the balance's labelled figures (Address board), in one ink, with its
+ * unit: the bar beside them is by CKB, the space bar under the holdings by bytes (lane P1, the
+ * plan: the two bars say their unit).
+ */
 function ExactParts({ shannons }: { shannons: bigint }) {
-  return <CkbAmount form="exact" shannons={shannons} signed={false} tone="plain" unit={false} />;
+  return <CkbAmount form="exact" shannons={shannons} signed={false} tone="plain" />;
 }
 
 /**
  * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, in
- * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — with its live
- * cells at the right; the 18 px partition with each share inside its part (a share its part cannot
- * hold is in the part's title, never cut); and the exact parts as three labelled facts
- * (`DetailFacts`: occupied, free, and DAO free, which says so when there is none). A DAO part of
- * the partition is drawn only when the address has CKB in the Nervos DAO.
+ * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — and beside it,
+ * exact, what the address can spend and, where it holds Nervos DAO cells, the compensation they
+ * have accrued unclaimed (lane P1, the plan's P1 paragraph: they stood under the bar and four
+ * sections down; the live cells it stood "in" are the status strip's, said once); the 18 px
+ * partition with each share inside its part (a share its part cannot hold is in the part's title,
+ * never cut), its parts named "occupied", "spendable" and "in the DAO" (they were occupied, free
+ * and DAO free: three frees for three things); and under it the two parts it cannot spend, as
+ * labelled facts with their unit (`DetailFacts`; "in the DAO" says so when there is none). A DAO
+ * part of the partition is drawn only when the address has CKB in the Nervos DAO.
  */
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
@@ -210,8 +218,8 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const parts = (
     [
       { key: 'occupied', value: occupied, color: DATA_COLOR, ink: 'text-base-bg' },
-      { key: 'free', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
-      { key: 'DAO free', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
+      { key: 'spendable', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
+      { key: 'in the DAO', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
   const share = (v: bigint) => percentOf(v, sum);
@@ -232,13 +240,28 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
             <span className="text-text-dim text-body"> CKB</span>
           </div>
         </div>
-        <span className="text-text-dim text-body tabular-nums">
-          in{' '}
-          <NoBreak>
-            <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
-            {countNoun(holdings.liveCellsCount, 'live cell')}
-          </NoBreak>
-        </span>
+        <div data-role="balance-beside" className="text-small min-w-0 tabular-nums">
+          <DetailFacts
+            facts={[
+              { label: 'spendable', value: <ExactParts shannons={free} /> },
+              ...(holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0
+                ? [
+                    {
+                      label: 'unclaimed compensation',
+                      value: (
+                        <ExactParts
+                          shannons={exactUnsignedInteger(
+                            holdings.daoUnclaimedCompensation,
+                            'Address unclaimed compensation'
+                          )}
+                        />
+                      ),
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
       </div>
       {!zero && (
         <div aria-label="Address capacity partition" className="mt-3.5">
@@ -293,9 +316,8 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                     </>
                   ),
                 },
-                { label: 'free', value: <ExactParts shannons={free} /> },
                 {
-                  label: 'DAO free',
+                  label: 'in the DAO',
                   value:
                     daoFree === BigInt(0) ? (
                       <span className="text-text-dim">no CKB in the Nervos DAO</span>
@@ -579,9 +601,11 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       )}
       <div className="space-y-2">
         <div className="text-small flex flex-wrap justify-between gap-2">
-          <span className="text-text-dim">On-chain space they take</span>
+          {/* the bar's unit, bytes (lane P1, the plan: the two bars say their unit; review
+              chain-b address-miner: its "102 / 122" beside the CKB bar above read as CKB) */}
+          <span className="text-text-dim">On-chain space they take, in bytes</span>
           <span>
-            {formatCkbAmount(occupied).full.replace(/\.0{8}$/, '')} CKB occupied in{' '}
+            {occupiedCapacityText(occupied, `Address ${holdings.lockScriptHash}`)} occupied in{' '}
             {unitNode(formatCount(holdings.liveCellsCount, 'cell'))}
           </span>
         </div>
@@ -626,9 +650,9 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 <ClassMark kind={c.mark} size={12} />
                 {c.label}
                 <span className="text-text-bright">
-                  {formatCkbAmount(holdings.classes[c.key].occupiedCapacity).full.replace(
-                    /\.0{8}$/,
-                    ''
+                  {occupiedCapacityText(
+                    BigInt(holdings.classes[c.key].occupiedCapacity),
+                    `Address ${holdings.lockScriptHash} ${c.label}`
                   )}
                 </span>
                 {occupied > BigInt(0) && (
@@ -647,7 +671,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               className="text-text-dim sm:col-span-2"
               title={spaceOrder(holdings)
                 .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0))
-                .map((c) => `${c.label} 0 CKB`)
+                .map((c) => `${c.label} 0 B`)
                 .join(' · ')}
             >
               nothing in{' '}
@@ -689,7 +713,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')
                   )}
                 </p>
-                <dl className="text-small grid gap-3 py-3 sm:grid-cols-3">
+                {/* its unclaimed compensation stands beside the balance, said once (lane P1) */}
+                <dl className="text-small grid gap-3 py-3 sm:grid-cols-2">
                   <div>
                     <dt className="text-text-dim">
                       {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
@@ -698,18 +723,6 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       <CkbAmount
                         form="summary"
                         shannons={BigInt(holdings.classes.dao.capacity)}
-                        signed={false}
-                        tone="plain"
-                        wrap
-                      />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-text-dim">Unclaimed compensation</dt>
-                    <dd className="mt-1">
-                      <CkbAmount
-                        form="summary"
-                        shannons={BigInt(holdings.daoUnclaimedCompensation)}
                         signed={false}
                         tone="plain"
                         wrap

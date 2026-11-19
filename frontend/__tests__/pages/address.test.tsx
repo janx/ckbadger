@@ -386,16 +386,18 @@ describe('Address v3', () => {
     // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
     // purpose: was every decimal)
     expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
-    expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent(
-      '54,571.35338057'
-    );
+    // re-pinned on purpose (lane P1): what it can spend stands beside the balance
+    expect(
+      screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
+    ).toHaveTextContent('54,571.35338057');
     // the exact parts, exact form (readability R5, re-pinned on purpose: was padded); re-pinned with
     // readability R4 (lane B7): a labelled fact (was the parts line's last item after "·")
     expect(
       factsOf(
         within(screen.getByLabelText('Address capacity partition')).getByTestId('balance-parts')
       )
-    ).toContainEqual(['DAO free', '9,589,480, free part of 5 deposits']);
+      // re-pinned on purpose (lane P1): "in the DAO", with its unit (it was "DAO free")
+    ).toContainEqual(['in the DAO', '9,589,480 CKB, free part of 5 deposits']);
     expect(container.querySelector('[data-tier="2"]')).toHaveClass(
       'mt-24',
       'border-t',
@@ -1313,7 +1315,8 @@ describe('Address board · F2 blocks', () => {
     render(<AddressDetailPage />);
     const balance = await screen.findByLabelText('Address capacity partition');
     const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
-    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'free', 'DAO free']);
+    // re-pinned on purpose (lane P1): the parts are named occupied, spendable and in the DAO
+    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'spendable', 'in the DAO']);
     for (const part of parts) expect(part).toHaveClass('min-w-[3px]');
     expect(parts[0].parentElement).toHaveClass('h-[18px]', 'gap-0.5');
     expect(balance).toHaveTextContent('free part of 5 deposits');
@@ -1826,7 +1829,7 @@ describe('Address · space legend (lane A follow-up)', () => {
     // the bar's own line says it measures bytes, and its total is bytes
     const space = legend.closest('div')!.parentElement!;
     expect(within(space).getByText('On-chain space they take, in bytes')).toBeInTheDocument();
-    expect(space).toHaveTextContent('3,887\u00a0B occupied in 16\u00a0cells');
+    expect(space).toHaveTextContent('3,887 B occupied in 16 cells');
     expect(
       [...document.querySelectorAll<HTMLElement>('[data-space-class]')].map(
         (b) => b.dataset.spaceClass

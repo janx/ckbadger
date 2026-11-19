@@ -44,8 +44,11 @@ describe('Address v3 components', () => {
     expect(figure).toHaveTextContent(/^100$/);
     expect(figure).toHaveAttribute('title', '100.00000001 CKB');
     expect(screen.queryByText('CKB held')).not.toBeInTheDocument();
-    // Lane P (Address.dc.html): the exact parts are the quiet line under the bar.
-    expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent('39.00000001');
+    // Lane P (Address.dc.html): the exact parts are the quiet line under the bar. Re-pinned on
+    // purpose (lane P1): what it can spend stands beside the balance, its single shannon there
+    expect(
+      screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
+    ).toHaveTextContent('39.00000001');
   });
 
   // Lane P, the Address board's balance hero: the 40 px figure (its fraction 22 px, dim), the
@@ -106,7 +109,10 @@ describe('Address v3 components', () => {
       expect(bar).toHaveClass('h-[18px]');
       const parts = [...bar.querySelectorAll('[data-part]')];
       expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'spendable']);
-      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'spendable 8.84%']);
+      // "spendable 8.84%" (15 glyphs, 108 px and 16 of padding) is wider than its 8.84 % of the
+      // 1,246 px bar (110 px): its share stands in the part's title, never cut (the next test)
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', '']);
+      expect(parts[1]).toHaveAttribute('title', 'spendable 8.84% · 28,256.66879443 CKB');
       // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals);
       // re-pinned with readability R4 (lane B7): labelled facts, each named as its part of the bar
       // (was one line joined by "·")
