@@ -86,8 +86,12 @@ describe('ActivityFeed', () => {
     // Phase 5 (H4): the tabs are a row under the feed's heading, which is the section's name, not
     // the tabs. Re-pinned (lane C2 topics): the board's tab row has one size, the section step
     // from 640 and the body step below it (it was the body step at every width); a plain row,
-    // not a command line: the names keep their case and no prompt square leads them.
-    expect(activity).toHaveClass('text-body', 'sm:text-section');
+    // not a command line: the names keep their case and no prompt square leads them. Re-pinned
+    // again (lane c2-finish, rulings round 2, the owner's ruling by role): a plain row stands
+    // under its section's heading, so it takes the body step at every width (17 px from 640 put
+    // two heading-sized lines one over the other under "feed --last 8").
+    expect(activity).toHaveClass('text-body');
+    expect(activity.className).not.toMatch(/sm:text-section/);
     expect(activity).not.toHaveClass('lowercase');
     expect(tabs.querySelector('.section-mark')).toBeNull();
     expect(transactions).toHaveClass('whitespace-nowrap');

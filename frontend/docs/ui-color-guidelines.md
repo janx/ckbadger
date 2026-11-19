@@ -95,6 +95,7 @@ text grade ("The ghost ink" below).
 | date                     | "2025-01-07", "3 m ago"                                                                                                                              | reading |
 | number                   | a count, a percentage, a size in bytes, where a pager is (`page 3 of 37`) (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
 | pager                    | where you are (`page 3 of 37`) reading; a way to go (`next →`) jade; the count line (`41–60 of 727`) and an end that cannot be taken quiet           | by part |
+| tab row                  | its names, the current one bright on the celadon line, its counts quiet; 17 px from 640 as its section's heading, else 14 px                         | by part |
 | unit                     | the "CKB" after each amount, "B", a display figure's unit                                                                                            | quiet   |
 | separator                | the "·" between the parts of a line, JSON's braces and commas, "→"                                                                                   | quiet   |
 | note                     | a line under a figure that says how to read it or what it leaves out, a figure's sub-line, a hint ("tap or hover"), the word "selected" before a pin | quiet   |
