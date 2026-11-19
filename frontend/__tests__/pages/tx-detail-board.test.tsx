@@ -1329,7 +1329,15 @@ describe('Transaction board, R2b-a fields', () => {
     // re-pinned on purpose (lane D2, gate D0′'s "said once"): the fee sentence ("ckb1…xxxxxxxx
     // paid a 0.00064119 CKB fee.") is gone; the payer and the fee stand in the status strip
     const summary = await screen.findByTestId('tx-summary');
-    expect(summary).toHaveTextContent(/^It ran \.bit Time Index State and \.bit Time Info\.$/);
+    // re-pinned on purpose (lane P1, the plan: "a transaction that moves only its fee says so in
+    // one line"; review chain-b tx-old-sample, its fee seven times above the fold): its one party
+    // lost only the fee, so the lede says so after the scripts it ran (it ended at "Info.")
+    expect(summary).toHaveTextContent(
+      new RegExp(
+        `^It ran \\.bit Time Index State and \\.bit Time Info\\. Only the fee moved: ${row('cjk9lz')} kept the rest of its CKB\\.$`
+      )
+    );
+    expect(screen.queryByTestId('tx-what-moved')).toBeNull();
     expect(screen.getByRole('group', { name: 'Transaction status' })).toHaveTextContent(
       `0.00064119 CKB · paid by ${row('cjk9lz')}`
     );

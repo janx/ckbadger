@@ -86,9 +86,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     lane: 'p-chain',
     // look 17 → 16 (lane D2): the facts rail's block link went with the rail; the strip's states
     // its look. Look 16 → 14, ink 16 → 12, raw 2 → 0 (lane D3): the script groups' code links
-    // moved to components/transaction/script-group-rows.tsx, each stating its look
-    sites: { look: 14, ink: 12 },
-    reason: '14 without a look; inks by hand (hover:text-jade, text-text-bright, text-text)',
+    // moved to components/transaction/script-group-rows.tsx, each stating its look. Look 14 → 9,
+    // ink 12 → 7 (lane P1): the lede's links (the three item names, the cellbase's paid block and
+    // its payees) are links inside the line, and the cellbase's own block went to the strip
+    sites: { look: 9, ink: 7 },
+    reason: '9 without a look; inks by hand (hover:text-jade, text-text-bright, text-text)',
   },
   'components/address/address-history.tsx': {
     lane: 'p-chain',
@@ -514,8 +516,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
 // and one ink) → 537 (lane D3, 14 more: the transaction page's script-group code links moved to
 // script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the structure's
-// group link went, 2; the cell page's transaction links, 4: two looks, two inks)
-const TOLERATED_TOTAL = 537;
+// group link went, 2; the cell page's transaction links, 4: two looks, two inks) → 527 (lane P1, 10
+// more: the transaction page's lede, its item names, the cellbase's paid block, and the cellbase's
+// own block, which the status strip states, 5 looks and 5 inks)
+const TOLERATED_TOTAL = 527;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
