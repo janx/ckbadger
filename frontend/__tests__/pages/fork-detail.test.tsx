@@ -342,6 +342,59 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(tier2).not.toHaveTextContent('miner witness unavailable');
   });
 
+  // PAGE-LANE-NOTES (B1): a phone row's third line wrote its label words in the reading ink
+  // ("committed in #12", "uncle in #12"): a label is quiet, its value reads (lane P4). The Hash
+  // column's short hash is a value, not a link: it was drawn in the boards' link ink (cyan), which
+  // reads as a link it is not; a value takes the reading ink.
+  it('sets a phone row’s labels quiet and its values in the reading ink, and draws no hash in a link’s ink (P4)', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    render(<ForkDetailPage />);
+    const txs = await screen.findAllByTestId('fork-tx-row-mobile');
+    const committed = txs[0].querySelector('[data-line="committed"]') as HTMLElement;
+    expect(within(committed).getByText('committed in')).toHaveClass('text-text-dim');
+    expect(within(committed).getByRole('link', { name: '#12' })).not.toHaveClass('text-text-dim');
+    const blocks = screen.getAllByTestId('fork-block-row-mobile');
+    const dropped = blocks.find((row) => row.textContent!.includes('′'))!;
+    const fate = dropped.querySelector('[data-line="fate"]') as HTMLElement;
+    expect(within(fate).getByText('uncle in')).toHaveClass('text-text-dim');
+    expect(within(fate).getByRole('link', { name: '#12' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12'
+    );
+    for (const row of blocks)
+      expect(row.querySelector('[style*="--ink"]'), 'a hash in the link ink').toBeNull();
+  });
+
+  // PAGE-LANE-NOTES (sweep at the new sizes, af272a5f; the sweep at 390 / 360): the five whole
+  // block hashes of tier 2 ("This node's fork event, as stored" and "Uncles in") scrolled inside
+  // their own box: at 13 px a hash is 66 × 7.8 = 514.8 px and its cell 474.6 at 1280 (588 less the
+  // 101.4 px label column and the 12 px gap: 40 px of scroll), 20 at 640, and on a phone. One id is
+  // wrapped, never scrolled (lane P4): each hash is set as a head's id is (HeadId), one line where
+  // its line holds it, else its two halves, `0x` and 32 digits over 32, 34 × 7.8 = 265.2 px.
+  it('sets tier 2’s whole hashes in designed lines, never in a box that scrolls (P4)', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByRole('heading', { name: 'This node’s fork event, as stored' });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2.querySelector('.overflow-x-auto')).toBeNull();
+    expect(tier2.querySelector('[data-full-value]')).toBeNull();
+    const event = uncleFixture.event;
+    const ids = [...tier2.querySelectorAll('[data-head-id]')].map((id) => id.getAttribute('title'));
+    for (const hash of [
+      event.forkPointHash,
+      event.firstOrphanHash!,
+      event.oldTipHash,
+      event.newTipHash,
+      uncleFixture.orphanedBlocks[0].hash,
+    ])
+      expect(ids, hash).toContain(hash);
+  });
+
   // A4 Chrome F4: at 1280 tier 2's two columns gave each hash 466 px (588 less a 110 px label
   // column and its 12 px gap) for 475.2 (66 characters at 12 px), a 9 px scroll; at 1024, 338. The
   // label column takes its labels' width ("first dropped", 13 characters: 93.6 px), and the
