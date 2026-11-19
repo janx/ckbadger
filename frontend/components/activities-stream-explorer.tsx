@@ -257,9 +257,11 @@ function ActivityStreamToolbar({
         onChange={onFilterChange}
         counted
       />
+      {/* the counts' period, said with them (lists lane P3: they are yesterday's, the list below
+          is the latest, which its own line says) */}
       {summary && (
         <p className="text-text-dim text-meta mt-2">
-          Yesterday, UTC+8 · kind occurrences may overlap; DAO counts actions.
+          Yesterday’s counts (UTC+8): kinds may overlap, DAO counts actions.
         </p>
       )}
       {counts && occurrences > 0 && (
@@ -580,6 +582,11 @@ export function ActivitiesStreamExplorer({
           <p className="text-text-dim py-4">Nothing of this kind in the latest activities.</p>
         ) : (
           <div>
+            {/* the list's period, as the counts' above (lists lane P3): the latest activities, as
+                they arrive, under each day's divider */}
+            <div data-role="list-period" className="text-text-dim text-small pt-3">
+              the latest · newest first · by day (UTC+8)
+            </div>
             {/* Readability B4: each day's rows, under its divider, with their runs folded; a run
                 folds within its day and across the older pages appended to it. */}
             {groups.map(({ key, label, items }) => (

@@ -39,22 +39,27 @@ export default function ActivitiesPage() {
           title="Activities"
           kind="index"
           actions={
-            <Link href="/transactions" className="text-text-dim hover:text-jade text-small">
-              Transactions →
+            <Link href="/transactions" look="onward" className="text-small">
+              Transactions
             </Link>
           }
         >
+          {/* What the page says first (lists lane P3): yesterday's activities, a count with its
+              noun and its period; the list below is the latest, by day (its own line says so). */}
           {summary && count !== undefined ? (
-            <p className="text-text text-body max-w-measure">
-              <span className="text-text-bright">{count.toLocaleString('en-US')}</span> yesterday
-              (UTC+8) ·{' '}
+            <p data-role="lede" className="text-text text-body max-w-measure">
+              <NoBreak>
+                <span className="text-text-bright">{count.toLocaleString('en-US')}</span>{' '}
+                {countNoun(count, 'activity', 'activities')}
+              </NoBreak>{' '}
+              yesterday (UTC+8), by{' '}
               <NoBreak>
                 <span className="text-text-bright">
                   {summary.uniqueAddressCount.toLocaleString('en-US')}
                 </span>{' '}
                 {countNoun(summary.uniqueAddressCount, 'address', 'addresses')}
-              </NoBreak>{' '}
-              took part
+              </NoBreak>
+              .
             </p>
           ) : error || txStatsError ? (
             <p role="alert" className="text-text-dim text-small max-w-measure">

@@ -322,8 +322,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- lists ----
   'app/activities/page.tsx': {
     family: 'lists',
-    sites: { link: 1, prose: 2 },
-    reason: 'the transactions link and the statistics error and empty sentences in the quiet ink',
+    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink
+    sites: { prose: 2 },
+    reason: 'the statistics error and empty sentences in the quiet ink',
   },
   'app/inventory/inventory-page-client.tsx': {
     family: 'lists',

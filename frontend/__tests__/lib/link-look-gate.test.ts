@@ -154,11 +154,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       'the look an Address had before (bright, a faint indigo underline), drawn while a caller states none: it goes with the last such call site (most are p-assets)',
   },
   // ---- p-lists ----
-  'app/activities/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-dim, hover:text-jade)',
-  },
+  // 'app/activities/page.tsx' left the list (lane P3: look 1, ink 1 → 0; the transactions link a way
+  // onward)
   'app/blocks/page.tsx': {
     lane: 'p-lists',
     sites: { look: 9, ink: 5 },
@@ -312,7 +309,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // deep-fork alert's words on its filled button, a transaction cell's "no readable amount of", the
 // block page's step arrow mark; TabLinks' name span is NAMED) → 111 (lane P3: the transactions
 // page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
-const TOLERATED_TOTAL = 111;
+// → 109 (lane P3: the activities page's way onward, 2)
+const TOLERATED_TOTAL = 109;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
