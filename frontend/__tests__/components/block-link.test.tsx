@@ -49,12 +49,19 @@ describe('sentence parts', () => {
 });
 
 // Lane c2-links: a height's look is where it stands, which its caller says; in a sentence it is a
-// name inside a line, in the line's ink.
+// name inside a line, in the line's ink, underlined in the muted ink (re-pinned with the
+// coordinator's ruling: inline was "no ink of its own" while the underline's colour waited).
 describe('BlockLink’s look', () => {
   const inks = (el: Element) =>
-    [...el.classList].filter((c) => /^(hover:)?text-|underline/.test(c));
+    [...el.classList].filter((c) => /^(hover:)?text-|underline|decoration/.test(c));
+  const UNDERLINE = [
+    'underline',
+    'decoration-1',
+    'underline-offset-[3px]',
+    'decoration-[color:var(--c-ink-muted)]',
+  ];
 
-  it('draws a row’s key bright, and a height inside a line in the line’s ink', () => {
+  it('draws a row’s key bright, and a height inside a line in the line’s ink, underlined', () => {
     render(
       <>
         <BlockLink number={7} look="key" />
@@ -64,7 +71,7 @@ describe('BlockLink’s look', () => {
     );
     const [key, inline, none] = screen.getAllByRole('link');
     expect(inks(key)).toEqual(['text-text-bright']);
-    expect(inks(inline)).toEqual([]);
+    expect(inks(inline)).toEqual(UNDERLINE);
     // no ink of its own where the caller states none, as before (hover is the one rule)
     expect(inks(none)).toEqual([]);
   });
@@ -75,6 +82,8 @@ describe('BlockLink’s look', () => {
         <SentenceNodes parts={heightListParts([7, 8])} />
       </p>
     );
-    for (const link of container.querySelectorAll('a')) expect(inks(link)).toEqual([]);
+    const links = container.querySelectorAll('a');
+    expect(links).toHaveLength(2);
+    for (const link of links) expect(inks(link)).toEqual(UNDERLINE);
   });
 });

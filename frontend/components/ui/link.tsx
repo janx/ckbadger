@@ -3,6 +3,7 @@
 import { forwardRef, useContext } from 'react';
 import { UNSAFE_LocationContext, UNSAFE_NavigationContext } from 'react-router-dom';
 import { prefixNetwork, resolveActiveNetwork } from '@/lib/active-network';
+import type { PaletteKey } from '@/lib/palette';
 import { cn } from '@/lib/utils';
 
 /**
@@ -13,10 +14,12 @@ import { cn } from '@/lib/utils';
  * one and refuses a link ink or an underline written by hand.
  *
  * - `key`: a row's key, the thing the row is about (a hash, a block number, a name): the bright ink.
- * - `inline`: a link inside a line: it keeps the line's ink. The board underlines it in 1 px of the
- *   `slate-other` line 3 px under the text; that line is 1.37–1.66 : 1 on the night grounds and
- *   1.50–1.84 : 1 on the day's, under the 3 : 1 of a shape, so the underline waits for a ruling and
- *   is not drawn yet.
+ * - `inline`: a link inside a line: it keeps the line's ink and is underlined, 1 px and 3 px under
+ *   the text, in the muted ink (`INLINE_UNDERLINE`; the coordinator's ruling of 2026-11-19, which
+ *   the owner sees at the next gate): plainly there on every ground, quieter than the words it
+ *   stands under, at least 3 : 1 on the four grounds in both themes (pinned in palette.test). The
+ *   board's `slate-other` line was 1.37–1.66 : 1 by night and 1.50–1.84 : 1 by day, under a
+ *   shape's floor. Under hover and focus the line follows its words into the celadon.
  * - `onward`: a way onward: celadon, never broken, its arrow written here and held to its last word
  *   (` →`; ` ↓` to a place further down this page; `ExternalLink` writes ` ↗` to another site).
  * - `block`: a link that is a block — a tile, a card, a row that is one link, a seal, an SVG mark:
@@ -32,13 +35,22 @@ export const LINK_LOOKS = ['key', 'inline', 'onward', 'block', 'nav'] as const;
 
 export type LinkLook = (typeof LINK_LOOKS)[number];
 
+/** The ink of a link-inside-a-line's underline: a shape, held at 3 : 1 on every ground. */
+export const INLINE_UNDERLINE: PaletteKey = 'ink-muted';
+
 const LOOK_CLASS: Record<LinkLook, string> = {
   key: 'text-text-bright',
-  inline: '',
+  // the line's ink; the underline in INLINE_UNDERLINE (its key written out: a class is a literal)
+  inline: 'underline decoration-1 underline-offset-[3px] decoration-[color:var(--c-ink-muted)]',
   onward: 'text-jade whitespace-nowrap',
   block: '',
   nav: '',
 };
+
+// The class writes the underline's key out (Tailwind reads a class whole); the key palette.test
+// pins at 3 : 1 is the one it draws, or nothing is drawn.
+if (!LOOK_CLASS.inline.includes(`decoration-[color:var(--c-${INLINE_UNDERLINE})]`))
+  throw new Error(`link: the inline look's underline is not drawn in ${INLINE_UNDERLINE}`);
 
 /** The classes of a look, for the link components alone (Link, ExternalLink). */
 export function linkLookClass(look: LinkLook | undefined, className?: string): string | undefined {

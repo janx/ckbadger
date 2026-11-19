@@ -58,7 +58,9 @@ describe('Address', () => {
     const inks = (el: Element) =>
       [...el.classList].filter((c) => /^text-text|underline|decoration/.test(c));
 
-    it('is a row’s key in the bright ink, or a name inside a line in the line’s ink', () => {
+    // Re-pinned with the coordinator's ruling: inline was "no ink of its own"; it is the line's
+    // ink with the muted underline now.
+    it('is a row’s key in the bright ink, or a name inside a line in its ink, underlined', () => {
       render(
         <>
           <Address address={testAddress} size="row" look="key" />
@@ -67,7 +69,12 @@ describe('Address', () => {
       );
       const [key, inline] = screen.getAllByRole('link');
       expect(inks(key)).toEqual(['text-text-bright']);
-      expect(inks(inline)).toEqual([]);
+      expect(inks(inline)).toEqual([
+        'underline',
+        'decoration-1',
+        'underline-offset-[3px]',
+        'decoration-[color:var(--c-ink-muted)]',
+      ]);
       // a look sets no size: the address keeps its own step and face
       expect(key).toHaveClass('text-body', 'font-mono');
     });

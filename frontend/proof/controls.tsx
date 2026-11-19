@@ -295,19 +295,27 @@ function Links() {
         <LinkLines />
       </div>
       <Note>in a well</Note>
-      <span className="text-small text-text">
-        paid by{' '}
-        <span
-          className="underline decoration-1 underline-offset-[3px]"
-          style={{ textDecorationColor: color('slate-other') }}
-        >
-          ckb1…dcratvu9
+      <span className="text-small text-text flex flex-wrap gap-x-6">
+        <span>
+          ruled:{' '}
+          <Link look="inline" href="/address/ckb1dcratvu9">
+            ckb1…dcratvu9
+          </Link>
+        </span>
+        <span>
+          board:{' '}
+          <span
+            className="underline decoration-1 underline-offset-[3px]"
+            style={{ textDecorationColor: color('slate-other') }}
+          >
+            ckb1…dcratvu9
+          </span>
         </span>
       </span>
       <Note>
-        not a link: the board’s underline of a link inside a line, the slate-other line, for the
-        ruling on its colour (1.37–1.66 : 1 on the night grounds, 1.50–1.84 : 1 by day, under the 3
-        : 1 of a shape); the links above do not draw it yet
+        a link inside a line, underlined as ruled (the muted ink: 5.40–6.57 : 1 on the night
+        grounds, 3.84–4.70 : 1 by day) beside the board’s slate-other line, drawn on a plain span
+        and not a link (1.37–1.66 : 1 by night, 1.50–1.84 : 1 by day), for the owner to compare
       </Note>
     </Item>
   );

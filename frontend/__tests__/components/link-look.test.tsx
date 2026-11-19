@@ -1,14 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, useLocation } from 'react-router-dom';
-import Link, { LINK_LOOKS } from '@/components/ui/link';
+import Link, { INLINE_UNDERLINE, LINK_LOOKS } from '@/components/ui/link';
 import { ExternalLink } from '@/components/ui/external-link';
 import { GLOBALS_CSS } from '@/__tests__/utils/css-paint';
+
+/** The underline of a link inside a line, as its classes write it: 1 px, 3 px under, muted. */
+const UNDERLINE = [
+  'underline',
+  'decoration-1',
+  'underline-offset-[3px]',
+  'decoration-[color:var(--c-ink-muted)]',
+];
 
 /**
  * The looks of a link (the controls board, gate D0′, item "links"; lane c2-links): a link says its
  * job, never its classes. Three looks a page's content draws — a row's key (the bright ink), a link
- * inside a line (the line's ink), a way onward (celadon, never broken, with its arrow, which the
+ * inside a line (the line's ink, underlined in the muted ink), a way onward (celadon, never broken,
+ * with its arrow, which the
  * component writes) — and two that draw no link ink of their own: a block (a tile, a card, a mark)
  * and the shell's navigation. Hover and focus turn any of them celadon: one rule, globals.css.
  */
@@ -33,7 +42,9 @@ describe('Link: the look a caller names', () => {
     expect(link.textContent).toBe('#7');
   });
 
-  it('draws a link inside a line in the line’s ink: no ink of its own', () => {
+  // Re-pinned on purpose (the coordinator's ruling): it was "no ink of its own", the underline
+  // waiting for its colour; it is now underlined in the muted ink, 1 px, 3 px under the text.
+  it('draws a link inside a line in the line’s ink, underlined in the muted ink', () => {
     render(
       <p className="text-text">
         paid by{' '}
@@ -42,7 +53,25 @@ describe('Link: the look a caller names', () => {
         </Link>
       </p>
     );
-    expect(ink(screen.getByRole('link'))).toEqual([]);
+    expect(ink(screen.getByRole('link'))).toEqual(UNDERLINE);
+    expect(UNDERLINE).toContain(`decoration-[color:var(--c-${INLINE_UNDERLINE})]`);
+  });
+
+  it('underlines a link inside a line alone: no other look draws the line', () => {
+    render(
+      <>
+        {LINK_LOOKS.filter((look) => look !== 'inline').map((look) => (
+          <Link key={look} href={`/${look}`} look={look}>
+            {look}
+          </Link>
+        ))}
+      </>
+    );
+    for (const link of screen.getAllByRole('link'))
+      expect(
+        [...link.classList].filter((c) => /underline|decoration/.test(c)),
+        link.textContent!
+      ).toEqual([]);
   });
 
   it('draws a way onward celadon and unbroken, and writes its arrow held to the last word', () => {
@@ -135,7 +164,8 @@ describe('ExternalLink: the same looks, its ↗ its own', () => {
     );
     const [key, inline] = screen.getAllByRole('link');
     expect(ink(key)).toEqual(['text-text-bright']);
-    expect(ink(inline)).toEqual([]);
+    // re-pinned with the ruling: the muted underline
+    expect(ink(inline)).toEqual(UNDERLINE);
   });
 });
 
@@ -143,9 +173,12 @@ describe('hover and focus: one rule for every look, by night and by day', () => 
   it('turns a link celadon under the pointer and under the keyboard’s focus', () => {
     const rule = GLOBALS_CSS.match(/\na:focus-visible,\na:hover\s*\{([^}]*)\}/);
     expect(rule, 'globals.css: one rule for a:focus-visible and a:hover').not.toBeNull();
-    expect(rule![1]).toMatch(/color: var\(--c-jade\);/);
+    expect(rule![1]).toMatch(/(^|\s)color: var\(--c-jade\);/);
     // the glow is the theme's: none by day (--m-glow is 0)
     expect(rule![1]).toMatch(/calc\(0\.45 \* var\(--m-glow\)\)/);
+    // an underline follows its words into the celadon; it does not stay muted (the rule is
+    // `a` and a state, over the one class that colours the line)
+    expect(rule![1]).toMatch(/text-decoration-color: currentColor;/);
   });
 
   it('leaves an SVG link its own hover and focus', () => {
