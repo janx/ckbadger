@@ -412,8 +412,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // takes its look, a row's clock and the uncle sentence read in the reading ink
   'app/forks/page.tsx': {
     family: 'topics',
-    sites: { prose: 2 },
-    reason: 'the loading and empty fork-history lines',
+    // prose 2 → 1 (lane P4): the empty fork-history line reads in the reading ink
+    sites: { prose: 1 },
+    reason: 'the loading fork-history line, a transient note',
   },
   'app/hardforks/page.tsx': {
     family: 'topics',

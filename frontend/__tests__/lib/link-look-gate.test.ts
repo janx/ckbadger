@@ -429,12 +429,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       '3 without a look; inks by hand (hover:underline, hover:text-jade, text-text-bright); 1 raw <a>',
   },
   // 'app/forks/[height]/[orphan]/client-page.tsx' left the list (lane P4: look 10, ink 7 → 0)
-  'app/forks/page.tsx': {
-    lane: 'p-topics',
-    sites: { look: 3, ink: 4, raw: 1 },
-    reason:
-      '3 without a look; inks by hand (text-text, hover:text-jade, hover:underline); 1 raw <a>',
-  },
+  // 'app/forks/page.tsx' left the list (lane P4: look 3, ink 4, raw 1 → 0)
   'app/hardforks/page.tsx': {
     lane: 'p-topics',
     sites: { look: 3, ink: 4, raw: 1 },
@@ -514,8 +509,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // party's lock-hash link states `block` and its hand-written underline went, 2) → 554 (lane D4
 // follow-up: the asset feed's phone row, its key and its block link, 3: two looks, one ink) → 551
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
-// and one ink) → 533 (lane P4: the fork page's 17, MinerLink's look 1)
-const TOLERATED_TOTAL = 533;
+// and one ink) → 533 (lane P4: the fork page's 17, MinerLink's look 1) → 525 (lane P4: the forks
+// page's 8)
+const TOLERATED_TOTAL = 525;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

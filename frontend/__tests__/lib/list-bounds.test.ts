@@ -170,6 +170,8 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
         'WIDEST_ROW_COUNT',
         // lane B4 fix round (review-rules-logic NOTE 4, tests NOTE-4): occupied bytes
         'WIDEST_OCCUPIED_CHANGE',
+        // lane P4: the forks page's "Found apart", kept on the page before
+        'WIDEST_SIBLING_GAP',
       ].sort(),
     });
   });
