@@ -485,12 +485,20 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     const row = h1.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();
-    const range = within(row).getByRole('group', { name: 'Range' });
-    const all = within(range).getByRole('button', { name: 'ALL' });
-    expect(all).toHaveAttribute('aria-pressed', 'true');
-    // A pressed range stays neutral (R11; D3 call 8): no jade text in tier 1.
-    expect(all).toHaveClass('text-text-bright');
-    expect(all.className).not.toMatch(/jade/);
+    // Re-pinned on purpose (lane c2-chain, the controls board): the range is the library's
+    // RangeSelect, a radio group whose spans are written `30 d · 90 d · 1 y · all` (it was a group
+    // of pressed buttons, "30D 90D 1Y ALL"); the chosen span is the board's one selected state, the
+    // celadon line around the bright ink, so still no jade text in tier 1 (R11; D3 call 8).
+    const range = within(row).getByRole('radiogroup', { name: 'range' });
+    expect(
+      within(range)
+        .getAllByRole('radio')
+        .map((r) => r.textContent)
+    ).toEqual(['30 d', '90 d', '1 y', 'all']);
+    const all = within(range).getByRole('radio', { name: 'all' });
+    expect(all).toHaveAttribute('aria-checked', 'true');
+    expect(all).toHaveClass('text-text-bright', 'border-jade');
+    expect(all.className).not.toMatch(/text-jade/);
     const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
     expect(lede).toHaveTextContent(
       /^An universal Account Protocol for Web3 Mass-adoption · joy\.id ↗$/
@@ -512,7 +520,8 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
   it('puts the range buttons in the chart’s caption row below md, not in the title row (PA-18)', async () => {
     stubViewportFromMd(false);
     await renderJoyid();
-    const groups = within(hero()).getAllByRole('group', { name: 'Range' });
+    // re-pinned (lane c2-chain): the range is the library's radio group
+    const groups = within(hero()).getAllByRole('radiogroup', { name: 'range' });
     expect(groups).toHaveLength(1);
     const [range] = groups;
     const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
@@ -524,9 +533,9 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(caption.children).toHaveLength(1);
     expect(follows(hero().querySelector('[data-role="figure"]')!, caption)).toBe(true);
     // still the page's range: it draws the picture again
-    fireEvent.click(within(range).getByRole('button', { name: '90D' }));
-    expect(within(range).getByRole('button', { name: '90D' })).toHaveAttribute(
-      'aria-pressed',
+    fireEvent.click(within(range).getByRole('radio', { name: '90 d' }));
+    expect(within(range).getByRole('radio', { name: '90 d' })).toHaveAttribute(
+      'aria-checked',
       'true'
     );
   });
@@ -618,7 +627,7 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     fireEvent.keyDown(main, { key: 'ArrowLeft' });
     expect(reading).not.toHaveTextContent('last full day');
     expect(reading).not.toHaveTextContent('2026-10-29');
-    fireEvent.click(within(hero()).getByRole('button', { name: '90D' }));
+    fireEvent.click(within(hero()).getByRole('radio', { name: '90 d' }));
     // The picture and its reading are drawn again for the new range.
     await waitFor(() =>
       expect(factsOf(screen.getByTestId('script-history-reading'))[0]).toEqual([

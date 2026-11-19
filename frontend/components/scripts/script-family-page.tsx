@@ -2,7 +2,7 @@
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { CellBar } from '@/components/ui/cell-bar';
-import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
+import { RangeSelect } from '@/components/ui/range-select';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
@@ -33,7 +33,7 @@ import {
   blockLink,
 } from '@/components/scripts/script-family-board';
 import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/api';
-import type { CapacityRangeKey } from '@/lib/capacity-range';
+import { CAPACITY_RANGE_OPTIONS, type CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
@@ -524,14 +524,15 @@ export function ScriptFamilyPage({
   // caption row, right over the picture it redraws, below md.
   const fromMd = useFromMd();
   const range = (
-    <CapacityRangeSelector
+    <RangeSelect
+      label="range"
+      options={CAPACITY_RANGE_OPTIONS}
       value={capacityRange}
       onChange={(next) => {
         // Another range draws other days: a hovered day of the old one lets go.
         setActive(null);
         onCapacityRange(next);
       }}
-      quiet
     />
   );
   if (!family.references || !family.history)
