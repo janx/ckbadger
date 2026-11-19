@@ -1688,6 +1688,15 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn realized_apc_is_cut_at_two_places() {
+        // lane exactness, part A2, S5: 2 of 3 over a year is 66.666…%, "66.66%" (half up "66.67%")
+        assert_eq!(
+            realized_apc(2, 3, 31_557_600_000).unwrap().as_deref(),
+            Some("66.66%")
+        );
+    }
+
+    #[test]
     fn realized_apc_uses_actual_chain_duration_and_marks_zero_span_undefined() {
         const YEAR_MS: i128 = 31_557_600_000;
         assert_eq!(

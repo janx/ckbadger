@@ -485,6 +485,29 @@ fn rolling_24h_tx_window(
     Ok(Some((count, i128::from(span_ms))))
 }
 
+/// The status bar's block time: the window's span over its gaps, in seconds at two places.
+fn format_avg_block_time(
+    span_ms: i128,
+    gaps: i128,
+    latest_block: i64,
+) -> Result<String, ApiRouteError> {
+    crate::utils::exact_ratio::format_ratio(span_ms, gaps * 1_000, 2)
+        .map(|value| format!("{value}s"))
+        .map_err(|e| ApiError::internal(format!("avg block time at {latest_block}: {e}")))
+}
+
+/// An asset-ecosystem category's share of the live capacity, a percentage at two places.
+fn category_percentage(value: i128, live_capacity: i128) -> Result<String, ApiRouteError> {
+    crate::utils::exact_ratio::format_ratio(
+        value
+            .checked_mul(100)
+            .ok_or_else(|| ApiError::internal("asset percentage numerator overflows i128"))?,
+        live_capacity,
+        2,
+    )
+    .map_err(ApiError::internal)
+}
+
 fn format_transaction_rates(
     window: Option<(i128, i128)>,
     latest_block: i64,
@@ -3025,11 +3048,7 @@ async fn fetch_network_stats_from_db(
     let remaining_blocks =
         epoch_blocks_left(latest_block, epoch_number, epoch_index, epoch_length)?;
     let avg_block_time = avg_block_span
-        .map(|(span_ms, gaps)| {
-            crate::utils::exact_ratio::format_ratio(span_ms as i128, gaps as i128 * 1_000, 2)
-                .map(|value| format!("{value}s"))
-                .map_err(|e| ApiError::internal(format!("avg block time at {latest_block}: {e}")))
-        })
+        .map(|(span_ms, gaps)| format_avg_block_time(span_ms as i128, gaps as i128, latest_block))
         .transpose()?;
     // No estimate without both: the genesis tip's header states no epoch length, and fewer than
     // two headers give no block time.
@@ -5139,16 +5158,7 @@ fn build_capacity_breakdown(
             "categorized capacity exceeds total live capacity: live_capacity={live_capacity}, dao={dao_capacity}, tokens={token_capacity}, objects={object_capacity}"
         )));
     }
-    let pct = |value: i128| -> Result<String, ApiRouteError> {
-        crate::utils::exact_ratio::format_ratio(
-            value
-                .checked_mul(100)
-                .ok_or_else(|| ApiError::internal("asset percentage numerator overflows i128"))?,
-            live_capacity,
-            2,
-        )
-        .map_err(ApiError::internal)
-    };
+    let pct = |value: i128| category_percentage(value, live_capacity);
     Ok(vec![
         CapacityCategory {
             category: "dao".to_string(),
@@ -5408,6 +5418,35 @@ mod tests {
             format_transaction_rates(Some((1, 0)), 20).unwrap(),
             (None, None, None)
         );
+    }
+
+    /// lane exactness, part A2, S5: the rates are cut at the places the status bar shows: 2 transactions in 3 s is
+    /// 0.666… a second (0.66, half up 0.67), 39.98… a minute (39.9, half up 40.0) and 57,580.8…
+    /// a day (57580, half up 57581).
+    #[test]
+    fn transaction_rates_are_cut_never_rounded() {
+        assert_eq!(
+            format_transaction_rates(Some((2, 3_001)), 20).unwrap(),
+            (
+                Some("0.66".into()),
+                Some("39.9".into()),
+                Some("57580".into())
+            )
+        );
+    }
+
+    /// lane exactness, part A2, S5: the status bar's block time is the span over its gaps, cut at two places: 99,550
+    /// ms over 10 gaps is 9.955 s, "9.95s" (half up "9.96s").
+    #[test]
+    fn average_block_time_is_cut_at_two_places() {
+        assert_eq!(format_avg_block_time(99_550, 10, 20).unwrap(), "9.95s");
+    }
+
+    /// lane exactness, part A2, S5: an asset-ecosystem category's share of the live capacity is cut: 2 of 3 is 66.66 %
+    /// (half up 66.67).
+    #[test]
+    fn an_ecosystem_share_is_cut() {
+        assert_eq!(category_percentage(2, 3).unwrap(), "66.66");
     }
 
     #[test]
