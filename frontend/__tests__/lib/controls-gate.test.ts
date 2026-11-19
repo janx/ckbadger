@@ -178,15 +178,19 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
   // ---- shell: the header's search field and the command palette ----
+  // The two named exceptions (lane c2-topics): comboboxes with their own behaviour, not
+  // TextFields; each stands in the well of every field, WELL_MATERIAL of components/ui/text-field.tsx.
   'components/command-palette.tsx': {
     lane: 'shell',
     sites: { 'text-input': 1 },
-    reason: 'the palette’s query field (a combobox of its own)',
+    reason:
+      'the palette’s query field: a combobox of its own (its commands, its keys), in WELL_MATERIAL',
   },
   'components/search-bar.tsx': {
     lane: 'shell',
     sites: { 'text-input': 1 },
-    reason: 'the header’s search field (a combobox with its own cursor): the well TextField copies',
+    reason:
+      'the header’s search field: a combobox with its own cursor and list, the well TextField copies (WELL_MATERIAL)',
   },
   // ---- shared: the old pager ----
   'components/ui/cursor-pagination.tsx': {

@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils';
 import { cssVars, SEARCH_RESULT_COLORS } from '@/lib/design-tokens';
 import { fontPx, textPx } from '@/lib/type-metrics';
 import { SEARCH_PLACEHOLDER, SEARCH_PLACEHOLDER_SHORT } from '@/lib/header-fit';
+import { WELL_MATERIAL } from '@/components/ui/text-field';
 
 interface SearchBarProps {
   className?: string;
@@ -249,19 +250,22 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               // the text (U-01; a jade ">" before it), a block cursor after it while focused (the
               // native caret is hidden under it), and
               // a jade-tinted border with a soft ring on focus. The "/" key hint stays. The
-              // compact and default fields are wells (material pass v2, move 2: `.well`, dark
-              // glass inset, square corners); the home hero field keeps its approved
-              // jade border and glow. That focus look is the field's one focus line: it opts out
-              // of the global jade outline (visual finish V9, one ring per control).
+              // compact and default fields stand in the well of every field (WELL_MATERIAL,
+              // components/ui/text-field.tsx: the well's ground, the frame line, its inset,
+              // square), the one the controls board's text field and select copy; the field is a
+              // combobox of its own (its cursor, its list), so it keeps its box and its focus. The
+              // home hero field keeps its approved jade border and glow. That focus look is the
+              // field's one focus line: it opts out of the global jade outline (visual finish V9,
+              // one ring per control).
               'text-text-bright w-full font-mono transition-colors focus-visible:outline-none',
               isInputFocused && 'caret-transparent',
               isHome
                 ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 border pl-8 pr-20 shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.18),0_6px_20px_rgb(var(--rgb-jade)/calc(0.18*var(--m-glow)))] focus:ring-2 md:pr-28'
                 : isCompact
-                  ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key
-                    // from md; below it no key and no room for one (PA-04).
-                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] md:pr-9'
-                  : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4'
+                  ? // TX-03 (Main.dc.html): a 36 px field, one "/" key from md; below it no key
+                    // and no room for one (PA-04).
+                    `${WELL_MATERIAL} placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] md:pr-9`
+                  : `${WELL_MATERIAL} placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgb(var(--rgb-jade)/0.12),0_0_12px_rgb(var(--rgb-jade)/calc(0.1*var(--m-glow)))] sm:py-3 sm:pl-8 sm:pr-4`
             )}
           />
           {/* The prompt (U-01, the boards' `.search .sq`): the 7 px cinnabar square, centred on

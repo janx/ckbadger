@@ -313,10 +313,12 @@ describe('SearchBar', () => {
   it('draws the compact search as a prompt: ">", the typed text itself, a block cursor on focus and one "/" key', () => {
     render(<SearchBar variant="compact" />);
     const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
-    // material pass v2 (move 2): the field is a well (`.well`: dark inset glass, the row-rule
-    // border; square, ruling R1)
-    expect(input).toHaveClass('well', 'h-9');
-    expect(input).not.toHaveClass('bg-base-surface', 'border-base-border');
+    // material pass v2 (move 2): the field is a well (dark inset glass; square, ruling R1).
+    // Re-pinned on purpose (lane C2 topics): the well of every field, WELL_MATERIAL, its frame the
+    // controls board's line (border-base-border; it was the generic `.well`, whose frame is the
+    // subtler base-border-subtle), never the surface's fill
+    expect(input).toHaveClass(...WELL_MATERIAL.split(' '), 'h-9');
+    expect(input).not.toHaveClass('well', 'bg-base-surface');
     expect(input).toHaveClass(
       // the jade-tinted focus border and its soft ring
       'focus:border-jade/50',
