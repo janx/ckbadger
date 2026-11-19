@@ -224,7 +224,9 @@ function SupplyNote({ view }: { view: AllocationView }) {
       <Comment lines={supplyComment(view)} />
       <p
         data-testid="ckbytes-formula"
-        className="text-text-dim text-meta max-w-measure m-0 mt-3 pl-[18px] font-mono"
+        // the figure's caption, where it comes from and the block it is read at: the reading ink at
+        // 13 px (BRIEF-ink-size-roles item 3: it was quiet at 12)
+        className="text-small max-w-measure m-0 mt-3 pl-[18px] font-mono"
       >
         {supplyFormula(view)}
       </p>

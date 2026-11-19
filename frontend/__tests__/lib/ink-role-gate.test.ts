@@ -874,43 +874,29 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
     reason:
       'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading blocks…”',
   },
-  'components/home/ckbytes-section.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the CKBytes formula, a note under the figure',
-  },
-  'app/activities/page.tsx': {
-    family: 'lists',
-    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink; prose 2 → 1
-    // (the P3 follow-up's 2d): the statistics error is a statement, the reading ink
-    sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the empty line, no complete statistics for yesterday',
-  },
   'app/inventory/inventory-page-client.tsx': {
     family: 'lists',
     // link 1 → 0 (controls lane C2): the class links are the controls board's tab row
     sites: { prose: 1 },
-    reason: 'decided (the P3 follow-up): the loading line',
+    reason:
+      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading inventory…”',
   },
   'app/transactions/page.tsx': {
     family: 'lists',
-    // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);
-    // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
-    // reading ink, one of them new; the yesterday line is the lede, in the reading ink; prose 9 → 8
-    // (the P3 follow-up's 2b): "No complete transaction count for …" went with the page's
-    // subtraction (the day's user transactions are its activity row's, the route's count); prose
-    // 8 → 4 (the P3 follow-up's 2d): the three error lines and the truncated pool's line are
-    // statements, the reading ink
-    sites: { td: 2, prose: 4 },
+    // td 2, prose 4 → prose 2 (BRIEF-ink-size-roles items 1 and 3): the pool's two interpretation
+    // states are a cell's content, the empty line and the note under the kind chips sentences, the
+    // reading ink
+    sites: { prose: 2 },
     reason:
-      'decided (the P3 follow-up): the pool’s two interpretation states (unavailable, partial) for an empty value in table cells; the empty line (no complete statistics), the note under the kind chips and the two loading lines',
+      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Reading the pool…”, “Loading transactions…”',
   },
   'components/activities-stream-explorer.tsx': {
     family: 'lists',
-    // prose 5 → 4 (the P3 follow-up's 2d): the error's message is a statement, the reading ink
-    sites: { prose: 4 },
+    // prose 4 → 2 (BRIEF-ink-size-roles item 3): the counts' period note and the empty line are
+    // sentences, the reading ink
+    sites: { prose: 2 },
     reason:
-      'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
+      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Reading activities…”, “Reading older activities…”',
   },
   'app/scripts/[name]/client-page.tsx': {
     family: 'lists',
@@ -931,9 +917,9 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
       'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading the newest cells…”',
   },
 };
-/** The pinned sites and files of DECIDED: 19 sites in 9 files (BRIEF-ink-size-roles item 1, the blocks list: the cycles' state is a cell's content, the reading ink). */
-const DECIDED_SITES = 19;
-const DECIDED_FILES = 9;
+/** The pinned sites and files of DECIDED: 11 sites in 7 files (BRIEF-ink-size-roles items 1 and 3, the decided sites read again: the empty-state lines, the notes and the CKBytes caption are sentences and the pool's states a cell's content, the reading ink; only the loading lines stay decided). */
+const DECIDED_SITES = 11;
+const DECIDED_FILES = 7;
 
 /**
  * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
@@ -1257,7 +1243,7 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
-  it('holds the decided sites apart, 19 in 9 files, none of them also on the work list', () => {
+  it('holds the decided sites apart, 11 in 7 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
       0

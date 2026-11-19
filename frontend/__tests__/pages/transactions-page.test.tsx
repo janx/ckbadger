@@ -850,9 +850,16 @@ describe('Transactions pool view', () => {
     );
     render(<TransactionsPage />);
     fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
-    expect(
-      await screen.findByRole('table', { name: 'Transactions in the pool' })
-    ).toHaveTextContent('Interpretation partial');
+    const partial = await screen.findByRole('table', { name: 'Transactions in the pool' });
+    expect(partial).toHaveTextContent('Interpretation partial');
+    // BRIEF-ink-size-roles item 1: the interpretation's state is a cell's content, the reading ink,
+    // and the wait after the status a time, the reading ink (both were quiet)
+    expect(within(partial).getByText('Interpretation partial')).not.toHaveClass('text-text-dim');
+    const ages = Array.from(partial.querySelectorAll('tbody time'));
+    expect(ages.length).toBeGreaterThan(0);
+    for (const age of ages)
+      for (let el: Element | null = age; el && el.tagName !== 'TD'; el = el.parentElement)
+        expect(el.className).not.toMatch(/text-text-dim/);
     expect(api.getPoolTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
     expect(screen.getByTestId('pool-banner')).toHaveTextContent(
       '0 pending · 1 proposed · 0 awaiting index'
@@ -1059,9 +1066,9 @@ it('does not infer a transaction total from kind counts when yesterday is incomp
     })
   );
   render(<TransactionsPage />);
-  expect(
-    await screen.findByText(`No complete activity statistics for ${yesterday} (UTC+8).`)
-  ).toBeInTheDocument();
+  const none = await screen.findByText(`No complete activity statistics for ${yesterday} (UTC+8).`);
+  // BRIEF-ink-size-roles item 3: an empty-state sentence, the reading ink (it was quiet)
+  expect(none).not.toHaveClass('text-text-dim');
   expect(document.querySelector('[data-role="lede"]')).toHaveTextContent(
     'Yesterday’s counts are unavailable.'
   );

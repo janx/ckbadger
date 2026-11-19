@@ -236,8 +236,11 @@ describe('CkbytesSection', () => {
     expect(formula.textContent).toBe(
       `C ${MINUS} burnt ${MINUS} S · from the DAO header of #20,820,045`
     );
-    // R4 (re-pinned on purpose): the formula is information, in the dim ink
-    expect(formula).toHaveClass('text-text-dim', 'text-meta', 'font-mono');
+    // R4 (re-pinned on purpose): the formula is information, in the dim ink. Re-pinned on purpose
+    // (BRIEF-ink-size-roles item 3): it is the figure's caption, where the figure comes from with the block it is read at,
+    // the reading ink at 13 px
+    expect(formula).toHaveClass('text-small', 'font-mono');
+    expect(formula.className).not.toMatch(/text-text-dim|text-meta/);
     expect(within(formula).queryByRole('link')).toBeNull();
   });
 
