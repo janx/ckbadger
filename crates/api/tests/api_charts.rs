@@ -66,6 +66,8 @@ async fn supply_and_secondary_history_exclude_in_progress_tip_day() {
             // re-pinned for the four bands (lane D1, second follow-up): the DAO's deposits are
             // keyed daoDeposited (were nervosdao)
             assert_eq!(json["data"][0]["values"]["daoDeposited"], "123.00000001");
+            // its DAO cells are its deposits: nothing withdrawing (lane exactness, part B1)
+            assert_eq!(json["data"][0]["values"]["daoWithdrawing"], "0");
         }
         if path == "secondary-issuance" {
             assert_eq!(json["data"][0]["values"]["mining"], "1.50000001");
@@ -304,14 +306,12 @@ fn ckb_shannons(text: &str) -> i128 {
     whole.parse::<i128>().unwrap() * 100_000_000 + fraction.parse::<i128>().unwrap()
 }
 
-/// Total supply draws C in four bands that partition it (lane D1, second follow-up, item 1): the
-/// CKB circulating outside the DAO, the DAO's deposits, the DAO compensation not yet claimed and
-/// the burnt, summing to C at every row, and it sends the protocol circulation, C − genesis burnt −
-/// S, as its own value, the amount the site calls circulating. Here S is 300.00000003 CKB of which
-/// 100.00000001 is compensation not yet claimed (the treasury the other 200.00000002), C the genesis
-/// burn and 1,300.00000003 CKB, and 250.5 CKB is deposited.
+/// A store older than `protocol_deposited`'s writer has days without it, and the Supply chart
+/// cannot draw its five bands from them: it refuses with the date and the re-sync words, and
+/// never falls back to four (lane exactness, part B1). The seed is this file's earlier four-band one, whose
+/// snapshot has no `protocol_deposited`.
 #[tokio::test]
-async fn total_supply_partitions_c_and_states_the_protocol_circulation() {
+async fn total_supply_refuses_a_snapshot_without_protocol_deposited() {
     let store = test_store();
     seed_genesis_baseline(&store);
     let genesis_burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
@@ -374,6 +374,164 @@ async fn total_supply_partitions_c_and_states_the_protocol_circulation() {
     let app = create_router(test_config(store)).await;
 
     let (status, json) = get_json(&app, "/charts/total-supply").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(message.contains("2020-05-12"), "{message}");
+    assert!(message.contains("protocol_deposited"), "{message}");
+    assert!(
+        message.contains("delete RocksDB and re-sync from genesis"),
+        "{message}"
+    );
+}
+
+/// A DAO's life on three days, seeded through the indexer's own reducer
+/// (`reduce_dao_daily_snapshot`), so each snapshot is the row the indexer writes (lane exactness, part B1):
+///
+/// - 2020-05-12: three deposits, of 300, 250 and 100 CKB;
+/// - 2020-05-15: a withdrawal request on the 250;
+/// - 2020-05-20: that withdrawal completed (its 1.5 CKB of compensation claimed), and a request on
+///   the 100.
+///
+/// C is the genesis burn and 2,000, 2,100 and 2,200 CKB; S is 300, 320 and 330 CKB, of which the
+/// compensation not yet claimed is 10.00000001, 12.5 and 13 CKB. The tip is on 2020-05-25.
+fn seed_dao_life(store: &Arc<CkbadgerStore>) {
+    use ckbadger_store::dao_snapshot::{
+        reduce_dao_daily_snapshot, DaoObservationKind, DaoSnapshotDelta, DaoSnapshotObservation,
+    };
+    seed_genesis_baseline(store);
+    let genesis_burnt = store.get_genesis_baseline().unwrap().unwrap().burnt;
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let noon = |date: &str| -> i64 {
+        chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d")
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap()
+            .and_local_timezone(utc8)
+            .single()
+            .unwrap()
+            .timestamp_millis()
+    };
+    seed_block_headers_at(
+        store,
+        &[
+            (0, noon("2020-05-12")),
+            (1, noon("2020-05-15")),
+            (2, noon("2020-05-20")),
+            (3, utc_ms("2020-05-25T04:00:00Z")),
+        ],
+    );
+    let ckb = ckb_shannons;
+    // (date, deposits' Δ, DAO cells' Δ, C over the genesis burn, S, unclaimed, of it still
+    // accruing on deposits, claimed)
+    let days = [
+        (
+            "2020-05-12",
+            ckb("650"),
+            ckb("650"),
+            ckb("2000"),
+            ckb("300"),
+            ckb("10.00000001"),
+            ckb("10.00000001"),
+            0,
+        ),
+        (
+            "2020-05-15",
+            -ckb("250"),
+            0,
+            ckb("2100"),
+            ckb("320"),
+            ckb("12.5"),
+            ckb("11"),
+            0,
+        ),
+        (
+            "2020-05-20",
+            -ckb("100"),
+            -ckb("250"),
+            ckb("2200"),
+            ckb("330"),
+            ckb("13"),
+            ckb("12.4"),
+            ckb("1.5"),
+        ),
+    ];
+    let mut previous: Option<DaoDailySnapshot> = None;
+    for (number, (date, deposits, cells, issued, pool, unclaimed, accruing, claimed)) in
+        days.into_iter().enumerate()
+    {
+        let mut field = [0u8; 32];
+        for (index, value) in [
+            u64::try_from(genesis_burnt + issued).unwrap(),
+            10_000_000_000_000_000,
+            u64::try_from(pool).unwrap(),
+            504_000_000_000_000_000,
+        ]
+        .iter()
+        .enumerate()
+        {
+            field[index * 8..index * 8 + 8].copy_from_slice(&value.to_le_bytes());
+        }
+        let snapshot = reduce_dao_daily_snapshot(
+            previous.as_ref(),
+            DaoSnapshotDelta {
+                active_capacity: deposits,
+                protocol_capacity: cells,
+                gross_deposits: deposits.max(0),
+                ..Default::default()
+            },
+            DaoSnapshotObservation {
+                kind: DaoObservationKind::SealedDay,
+                date: chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").unwrap(),
+                block_number: number as i64,
+                chain_time_ms: noon(date),
+                dao_field: &field,
+                daily_depositor_addresses: 0,
+                compensation: ckbadger_store::DaoCompensationBreakdown {
+                    claimed,
+                    unclaimed,
+                    active_unmade: accruing,
+                },
+            },
+        )
+        .unwrap();
+        let date_key = date.replace('-', "");
+        store
+            .put_daily_stats(
+                &date_key,
+                &DailyStats {
+                    blocks_count: 1,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let key = ckbadger_store::keys::encode_stats_key(
+            ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            date_key.as_bytes(),
+        );
+        store
+            .put_cf(
+                store.cf_stats_dao(),
+                &key,
+                &bincode::serialize(&snapshot).unwrap(),
+            )
+            .unwrap();
+        previous = Some(snapshot);
+    }
+}
+
+/// The Supply chart draws C in five bands that make it (lane exactness, part B1, the lead's brief): the CKB outside
+/// the Nervos DAO (`outsideDao`, circulating − protocol_deposited), the deposits (`daoDeposited`,
+/// total_deposited), the CKB in withdrawal requests (`daoWithdrawing`, protocol_deposited −
+/// total_deposited), the DAO compensation not yet claimed and the burnt; and it sends C and the
+/// protocol circulation, C − genesis burnt − S. On the seed each day's five bands differ from one
+/// another, and they make C to the shannon.
+#[tokio::test]
+async fn total_supply_draws_five_bands_that_make_c() {
+    let store = test_store();
+    seed_dao_life(&store);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/charts/total-supply").await;
     assert_eq!(status, StatusCode::OK, "{json}");
     let keys: Vec<&str> = json["series"]
         .as_array()
@@ -384,10 +542,9 @@ async fn total_supply_partitions_c_and_states_the_protocol_circulation() {
     assert_eq!(
         keys,
         [
-            // re-pinned for lane exactness, part A2 (M1): the liquid band is what circulates and is not deposited
-            // (a withdrawal request's principal is in it), keyed for that (was outsideDao)
-            "circulatingNotDeposited",
+            "outsideDao",
             "daoDeposited",
+            "daoWithdrawing",
             "unclaimedCompensation",
             "burnt"
         ]
@@ -401,33 +558,91 @@ async fn total_supply_partitions_c_and_states_the_protocol_circulation() {
     assert_eq!(
         labels,
         [
-            "Circulating, not deposited",
+            "Outside the Nervos DAO",
             "Deposited in the Nervos DAO",
+            "Withdrawing from the Nervos DAO",
             "Unclaimed DAO compensation",
             "Burnt"
         ]
     );
     let points = json["data"].as_array().unwrap();
-    assert!(!points.is_empty(), "{json}");
+    let dates: Vec<&str> = points
+        .iter()
+        .map(|point| point["date"].as_str().unwrap())
+        .collect();
+    let expected_dates: Vec<String> = (12..=24).map(|day| format!("2020-05-{day:02}")).collect();
+    assert_eq!(dates, expected_dates, "{json}");
     for point in points {
         let values = &point["values"];
-        assert_eq!(values["circulatingNotDeposited"], "749.5", "{point}");
-        assert_eq!(values["daoDeposited"], "250.5", "{point}");
-        assert_eq!(values["unclaimedCompensation"], "100.00000001", "{point}");
-        assert_eq!(values["burnt"], "8400000200.00000002", "{point}");
-        assert_eq!(values["totalIssuance"], "8400001300.00000003", "{point}");
-        // the four bands make C, to the shannon
-        let bands: i128 = keys
+        let date = point["date"].as_str().unwrap();
+        // (outside, deposited, withdrawing, unclaimed, burnt, C, circulating) from the day of the
+        // seed's last change
+        let expected = match date {
+            "2020-05-12" | "2020-05-13" | "2020-05-14" => {
+                // 1,700 circulates: 650 in deposit cells, none in requests, 1,050 outside
+                [
+                    "1050",
+                    "650",
+                    "0",
+                    "10.00000001",
+                    "8400000289.99999999",
+                    "8400002000",
+                    "1700",
+                ]
+            }
+            "2020-05-15" | "2020-05-16" | "2020-05-17" | "2020-05-18" | "2020-05-19" => {
+                // 1,780 circulates: the 250 requested left the deposits and is still in a DAO cell
+                [
+                    "1130",
+                    "400",
+                    "250",
+                    "12.5",
+                    "8400000307.5",
+                    "8400002100",
+                    "1780",
+                ]
+            }
+            _ => {
+                // 1,870 circulates: the 250 withdrawn left the DAO; the 100 requested is withdrawing
+                [
+                    "1470",
+                    "300",
+                    "100",
+                    "13",
+                    "8400000317",
+                    "8400002200",
+                    "1870",
+                ]
+            }
+        };
+        for (key, value) in keys
+            .iter()
+            .chain(["totalIssuance", "circulating"].iter())
+            .zip(expected)
+        {
+            assert_eq!(values[*key], value, "{key} on {date}: {point}");
+        }
+        // the five make C, to the shannon, and every two of them differ
+        let bands: Vec<i128> = keys
             .iter()
             .map(|key| ckb_shannons(values[*key].as_str().unwrap()))
-            .sum();
+            .collect();
         assert_eq!(
-            bands,
+            bands.iter().sum::<i128>(),
             ckb_shannons(values["totalIssuance"].as_str().unwrap()),
             "{point}"
         );
-        // circulating is the protocol circulation, C − genesis burnt − S: 1,000 CKB
-        assert_eq!(values["circulating"], "1000", "{point}");
+        for (i, a) in bands.iter().enumerate() {
+            for b in &bands[i + 1..] {
+                assert_ne!(a, b, "two bands alike on {date}: {point}");
+            }
+        }
+        // what circulates is outside the DAO, deposited or withdrawing
+        assert_eq!(
+            bands[0] + bands[1] + bands[2],
+            ckb_shannons(values["circulating"].as_str().unwrap()),
+            "{point}"
+        );
     }
 }
 

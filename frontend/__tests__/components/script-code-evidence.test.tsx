@@ -97,6 +97,7 @@ describe('script code evidence', () => {
           requireFirstN: 0,
           keyHashes: [],
           verifiedByTx: `0x${'12'.repeat(32)}`,
+          verifiedCodeCell: `0x${'34'.repeat(32)}:1`,
           witnessState: 'verified',
           owners: [],
         }}
@@ -104,6 +105,13 @@ describe('script code evidence', () => {
     );
     expect(screen.getByText(fullText(/3 of 5 keys/))).toBeInTheDocument();
     expect(screen.getByText(/This holder signed to spend/)).toBeInTheDocument();
+    // Lane P2's third round (item 16): the spending transaction opens at the code cell it spent
+    // (`transactionAtCellHref`), which its page then never folds away (it linked the transaction
+    // bare)
+    expect(screen.getByRole('link', { name: /0x12121212/ })).toHaveAttribute(
+      'href',
+      `/mainnet/tx/0x${'12'.repeat(32)}#0x${'34'.repeat(32)}-1`
+    );
   });
 
   it('links every code cell each holder owns to its cell page', () => {
@@ -128,6 +136,7 @@ describe('script code evidence', () => {
           requireFirstN: null,
           keyHashes: [],
           verifiedByTx: null,
+          verifiedCodeCell: null,
           witnessState: 'not_applicable',
           owners: [owner('0x02', [`${txA}:0`, `${txA}:1`]), owner('0x03', [`${txB}:2`])],
         }}
@@ -216,6 +225,7 @@ describe('script code evidence', () => {
       threshold: 1,
       keyCount: keyHashes.length,
       verifiedByTx: '0x' + '77'.repeat(32),
+      verifiedCodeCell: `0x${'77'.repeat(32)}:0`,
     });
     const tx = '0x' + '77'.repeat(32);
     const refA = '0x' + 'aa'.repeat(32);

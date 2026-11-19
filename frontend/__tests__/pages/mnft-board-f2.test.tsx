@@ -180,14 +180,36 @@ describe('Mnft board (F2 objects)', () => {
       expect.stringMatching(/^issued .+ ago · last moved .+ ago$/)
     );
     const props = within(header).getByLabelText('Properties');
+    // re-pinned on purpose (lane P2's third round, item 8): tier 1 says the token in plain words a
+    // reader who does not know the m-NFT script can read, "Number" and "Transfer" (it said the
+    // script's "Token" and "State" with the state byte, "0x03 · claimed · locked"); the script's
+    // terms stand once, in the evidence tier's permissions
+    // re-pinned on purpose (lane P2's third round, item 1): the issuer is said once, where the
+    // reader meets it first, the lede ("Issued by Issuer A …"); the properties' Issuer row and the
+    // Class metric's "by …" said it again (the issuer's record stands in the evidence tier)
     expect([...props.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
-      'Token',
-      'State',
-      'Issuer',
+      'Number',
+      'Transfer',
       'Characteristic',
     ]);
     expect(props).toHaveTextContent('#99 of 200 issued · 1,500 planned');
-    expect(props).toHaveTextContent('Issuer A · 2 classes');
+    expect(props).toHaveTextContent('not allowed, the token is locked · claimed by its holder');
+    // lane P2's third round (item 4): each value at one gap (12 px) after its label, left-aligned,
+    // the label column the longest label's, "Characteristic", 14 characters at the page's 14 px
+    // (8.4 px a glyph): 117.6, 118 px
+    for (const row of props.querySelectorAll<HTMLElement>(':scope > div')) {
+      expect(row).not.toHaveClass('justify-between');
+      expect(row.style.gridTemplateColumns).toBe('118px minmax(0, 1fr)');
+      expect(row.querySelector('dd')).not.toHaveClass('text-right');
+    }
+    expect(props).not.toHaveTextContent(/0x0\d|unclaimed|unlocked/);
+    expect(screen.getByRole('region', { name: 'mNFT permissions' })).toHaveTextContent(
+      /State 0x\d\d · claimed · locked/
+    );
+    expect(header).toHaveTextContent(/^.*Issued by Issuer A/);
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).not.toHaveTextContent(/by Issuer A|· to /);
+    expect(screen.getByText('Name · Issuer A').closest('[data-tier="2"]')).not.toBeNull();
     expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
   });
 
@@ -201,7 +223,9 @@ describe('Mnft board (F2 objects)', () => {
     const props = within(screen.getByRole('banner')).getByLabelText('Properties');
     expect(props).toHaveClass('md:grid-cols-2');
     expect(props).not.toHaveClass('sm:grid-cols-2');
-    const characteristic = [...props.querySelectorAll('dd')][3];
+    // re-pinned on purpose (lane P2's third round, item 1): the third row now, the Issuer row gone
+    // (the issuer is said once, in the lede)
+    const characteristic = [...props.querySelectorAll('dd')][2];
     expect(characteristic).not.toHaveClass('break-all');
     expect(characteristic).toHaveTextContent('none, all zero · 8 bytes');
     expect(within(characteristic).getByText('8 bytes')).toHaveClass('whitespace-nowrap');
@@ -230,13 +254,17 @@ describe('Mnft board (F2 objects)', () => {
 
   it('shows CKB held in its cell through its owners (OB-M7)', async () => {
     await page();
-    const cell = screen.getByRole('region', { name: 'CKB held in its cell' });
+    // re-pinned on purpose (lane P2's third round, item 1): the asset pages' one pattern, the
+    // section headed "History" with the sentence its versions give, no figure of its own (CKB held
+    // and its split are the metric); it was "CKB held in its cell" headed "CKB held"
+    const cell = screen.getByRole('region', { name: 'History' });
     const rows = within(cell).getAllByRole('article');
     expect(rows.map((r) => r.querySelector('a')!.textContent)).toEqual(['Issued', 'Moved', 'Now']);
     expect(cell).toHaveTextContent('1 CKB per byte');
-    // Phase 5 (D12): the section's heading is 'CKB held', its rate and split beside it.
-    const heading = within(cell).getByRole('heading', { name: 'CKB held' });
-    expectPrompt(heading, 'CKB held');
+    expect(cell.querySelector('[data-role="history-sentence"]')).not.toBeNull();
+    const heading = within(cell).getByRole('heading', { name: 'History' });
+    expectPrompt(heading, 'History');
+    expect(heading.parentElement).not.toHaveTextContent(/occupied|free/);
     expect(heading).not.toHaveTextContent('1 CKB per byte');
     expect(heading.parentElement).toHaveTextContent('1 CKB per byte');
   });
@@ -249,7 +277,9 @@ describe('Mnft board (F2 objects)', () => {
     for (const label of ['Owner', 'Class', 'Issued', 'Last moved', 'CKB held in its cell'])
       expect(within(rail).getByText(label)).toBeInTheDocument();
     expect(rail).toHaveTextContent('PW Lock · since');
-    expect(rail).toHaveTextContent('by Issuer A');
+    // re-pinned on purpose (lane P2's third round, item 1): the issuer is said once, in the lede;
+    // the Class metric's note "by Issuer A" said it again
+    expect(rail).not.toHaveTextContent('by Issuer A');
     expect(rail).toHaveTextContent('2 transfers since issue');
     const cls = screen.getByRole('region', { name: 'In Class A' });
     expect(cls).toHaveTextContent('200 issued of 1,500 · 198 live');

@@ -59,7 +59,7 @@ describe('whole ids in the evidence tier (items 8, 9)', () => {
       <dl>
         <NamedParty
           label="owner"
-          party={{ hashPrefix: prefix, lockHash: null, address: null, scriptName: null }}
+          party={{ hashPrefix: prefix, lockHash: null, address: null, lockScriptName: null }}
         />
       </dl>
     );

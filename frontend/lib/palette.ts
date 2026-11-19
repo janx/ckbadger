@@ -92,6 +92,13 @@ const dark = {
    * (5.73:1) by the board's 1.5:1 for a stack's fills.
    */
   'gold-ramp': '#a68b57',
+  /**
+   * The DAO's withdrawal requests in a stack, the principal still in a DAO cell (the Supply chart,
+   * lane exactness, part B1): old gold mixed into the page ground at 48 %, so it reads as the DAO's gold and stands
+   * between its two neighbours, the deposits' gold (3.22:1) and the unclaimed compensation's
+   * gold-ramp (1.73:1), and off the ground (3.32:1), each over the board's 1.5:1 for a stack's fills.
+   */
+  'gold-mid': '#786540',
   rouge: '#ff9e88',
   /**
    * The cinnabar text's quiet step at text grade, like every other `*-dim` (UI review 2026-11-14):
@@ -278,6 +285,8 @@ const light: Palette = {
   'gold-bright': '#684e0d',
   /** By day the gold mixed into the paper at 30 %: 3.34:1 to the gold, 1.55 to the slate, 1.51 to the paper. */
   'gold-ramp': '#d0c3a4',
+  /** By day the gold mixed into the paper at 62 %: 2.02:1 to the gold, 1.65 to the gold-ramp, 2.49 to the paper. */
+  'gold-mid': '#ac9660',
   rouge: '#a8392a',
   'rouge-dim': '#9b4f43',
   'rouge-bright': '#902214',

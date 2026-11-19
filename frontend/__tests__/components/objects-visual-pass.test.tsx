@@ -26,8 +26,8 @@ it('reads the latest complete week by default instead of "No completed weekly to
     <AssetHistory
       assetClass="objects"
       daily={[
-        { date: '2026-10-27', capacity: '100', occupiedCapacity: '60' },
-        { date: '2026-10-29', capacity: '100', occupiedCapacity: '60' },
+        { date: '2026-10-27', capacity: '100', occupiedCapacity: '60', freeCapacity: '40' },
+        { date: '2026-10-29', capacity: '100', occupiedCapacity: '60', freeCapacity: '40' },
       ]}
       weekly={[{ weekStart: '2026-10-19', count: 5 }]}
       weeklyNoun="transfers"
@@ -94,8 +94,10 @@ it('says "at issue" for an m-NFT token’s lock footnote', () => {
       ownerAddress: ckbAddress({ codeHash: v.lock.codeHash, args }),
     },
   ];
+  // re-pinned on purpose (lane P2's third round, item 15): the footnote says where the lock
+  // changed, the day the cell went under it ("since", it is live), where it said "now"
   expect(lockFootnote(versions, 'token')).toBe(
-    'Lock: UniPass with 20-byte args at issue → PW Lock with 20-byte args now. Type and data never changed.'
+    'Lock: UniPass with 20-byte args at issue → PW Lock with 20-byte args since 2023-11-15. Type and data never changed.'
   );
   expect(lockFootnote(versions, 'object')).toContain('at minting');
 });

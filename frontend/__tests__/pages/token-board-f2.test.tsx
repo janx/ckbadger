@@ -85,6 +85,7 @@ const history: TokenHistory = {
       supply: '1000000000000',
       capacity: '50000000000001',
       occupiedCapacity: '15300000000000',
+      freeCapacity: '34700000000001',
     },
   ],
   weeklyTransactions: [{ weekStart: '2024-01-01', transactionsCount: 5 }],

@@ -59,11 +59,10 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   // re-pinned on purpose (lane P2's follow-up, item 5): a version of the object's own cell is the
   // page of the thing itself, the exact form, no padding (it was the column's "500.00000000")
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500 CKB');
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
-    '229.00000000'
-  );
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
-    '271.00000000'
+  // re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.queryByLabelText(`Object ${id} capacity partition`)).toBeNull();
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    '229 occupied · 271 free'
   );
   expect(container.querySelector('[data-tier="2"]')).toHaveClass(
     'mt-24',
@@ -162,11 +161,11 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
     'title',
     'melted, in Spore’s words'
   );
-  // Consistency plan C4: the zero is "0 CKB" (was "0.00000000").
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent('0 CKB');
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).not.toHaveTextContent(
-    '0.00000000'
+  // Consistency plan C4: the zero is "0 CKB" (was "0.00000000"). re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    /CKB held in its cell0 CKB/
   );
+  expect(screen.getByRole('region', { name: 'Metrics' })).not.toHaveTextContent('0.00000000');
   // re-pinned on purpose (lane P2's follow-up, item 5): a version of the object's own cell is the
   // page of the thing itself, the exact form, no padding (it was the column's "500.00000000")
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500 CKB');
@@ -357,8 +356,9 @@ it('keeps object data visible with a background refresh error', async () => {
   expect(await screen.findByText(/Could not refresh object/)).toHaveTextContent(
     'Showing previously loaded data'
   );
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
-    '500.00000000'
+  // re-pinned on purpose (lane P2's third round, item 1): the object page takes the asset pages' one pattern, the metric states CKB held and its split, and the section is headed "History" with its sentence and its versions, no display figure of its own (the capacity partition said the metric again)
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    /CKB held in its cell500 CKB/
   );
 });
 it('switches to real transaction layer and requests its own full scope', async () => {

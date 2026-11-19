@@ -13,7 +13,10 @@ import { formatCount } from '@/lib/format-count';
  * - `box` (the default), a list's way to go UNDER it, in the words the rows' fold and the short
  *   list's form use: folded, the whole list's count, "all 158 cells ↓" (the Pager's `more` form, as
  *   the placement lane ruled: "↓" opens in place); opened, the way back, "fewer ↑". The Pager's
- *   box: celadon words in a thumb's box, 32 px below 640 and 28 px from it.
+ *   box: celadon words in a thumb's box, 32 px below 640 and 28 px from it. A list the route sends
+ *   no count of (a collection's activity before its count is derived) folds too, asked for by name,
+ *   `uncounted` (lane P2's third round, item 9): "all activity ↓", no number where there is none;
+ *   the count stays required of a caller that has one.
  * - `inline` (the lead's final round, item 3), the rest of a list INSIDE a line of names (a head's
  *   calls, a participant's objects): folded, how many are folded, "+3 more locks", or the words of
  *   a figure that stands for them (`words`, a phone line's "+1 −1 objects"); opened, "fewer". It is
@@ -25,35 +28,43 @@ import { formatCount } from '@/lib/format-count';
  * It is a control of the library (`__tests__/lib/controls-gate.test.ts`, CONTROL_FILES): the words a
  * hand-built fold writes are this file's own here.
  */
-export function FoldToggle({
-  open,
-  count,
-  singular,
-  plural,
-  controls,
-  onToggle,
-  form = 'box',
-  words,
-}: {
-  /** Whether the list is drawn whole. */
-  open: boolean;
-  /**
-   * The box form: the whole list's count (`all 158 cells ↓`). The inline form: how many the fold
-   * holds (`+3 more locks`).
-   */
-  count: number;
-  singular: string;
-  plural?: string;
-  /** The id of the element the fold opens and folds. */
-  controls: string;
-  onToggle: (open: boolean) => void;
-  form?: 'box' | 'inline';
-  /** The inline form only: the folded words of a figure that stands for the folded list. */
-  words?: string;
-}) {
-  if (words !== undefined && form !== 'inline')
-    throw new Error(`a box fold writes its own words (all ${count} ${singular} ↓), not "${words}"`);
-  if (form === 'inline')
+export function FoldToggle(
+  props: {
+    /** Whether the list is drawn whole. */
+    open: boolean;
+    /** The id of the element the fold opens and folds. */
+    controls: string;
+    onToggle: (open: boolean) => void;
+  } & (
+    | {
+        form?: 'box';
+        /** The whole list's count, its noun's forms: `all 158 cells ↓`. */
+        count: number;
+        singular: string;
+        plural?: string;
+      }
+    | {
+        form?: 'box';
+        /**
+         * A list the route sends no count of, asked for by name (lane P2's third round, item 9): its
+         * name, `all activity ↓`, no number where there is none. A caller that has a count gives it.
+         */
+        uncounted: string;
+      }
+    | {
+        form: 'inline';
+        /** How many the fold holds: `+3 more locks`. */
+        count: number;
+        singular: string;
+        plural?: string;
+        /** The folded words of a figure that stands for the folded list. */
+        words?: string;
+      }
+  )
+) {
+  const { open, controls, onToggle } = props;
+  if (props.form === 'inline') {
+    const { count, singular, plural, words } = props;
     return (
       <button
         type="button"
@@ -68,6 +79,11 @@ export function FoldToggle({
           : (words ?? `+${formatCount(count, `more ${singular}`, plural && `more ${plural}`)}`)}
       </button>
     );
+  }
+  if ('words' in props)
+    throw new Error(`a box fold writes its own words (all … ↓), not "${String(props.words)}"`);
+  const whole =
+    'uncounted' in props ? props.uncounted : formatCount(props.count, props.singular, props.plural);
   return (
     <button
       type="button"
@@ -78,7 +94,7 @@ export function FoldToggle({
       // the Pager's way to go: celadon words in a thumb's box, 32 px below 640 and 28 px from it
       className="text-jade text-small inline-flex h-8 items-center whitespace-nowrap underline-offset-4 hover:underline sm:h-7"
     >
-      {open ? 'fewer ↑' : `all ${formatCount(count, singular, plural)} ↓`}
+      {open ? 'fewer ↑' : `all ${whole} ↓`}
     </button>
   );
 }

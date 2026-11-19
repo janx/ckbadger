@@ -54,6 +54,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "not_applicable",
                   "owners": []
                 }
@@ -78,6 +79,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "not_applicable",
                   "owners": [
                     {
@@ -110,6 +112,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "not_applicable",
                   "owners": []
                 }
@@ -132,6 +135,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "not_applicable",
                   "owners": []
                 }
@@ -158,6 +162,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "not_applicable",
               "owners": []
             }
@@ -180,6 +185,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "not_applicable",
               "owners": []
             }
@@ -202,6 +208,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "not_applicable",
               "owners": [
                 {
@@ -255,6 +262,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "not_applicable",
               "owners": []
             }
@@ -790,6 +798,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "not_applicable",
                   "owners": []
                 }
@@ -814,6 +823,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "not_applicable",
                   "owners": [
                     {
@@ -850,6 +860,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "not_applicable",
               "owners": [
                 {
@@ -897,6 +908,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "not_applicable",
               "owners": []
             }
@@ -1290,6 +1302,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "unavailable",
                   "owners": []
                 }
@@ -1314,6 +1327,7 @@
                   "requireFirstN": null,
                   "keyHashes": [],
                   "verifiedByTx": null,
+                  "verifiedCodeCell": null,
                   "witnessState": "not_applicable",
                   "owners": []
                 }
@@ -1340,6 +1354,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "not_applicable",
               "owners": []
             }
@@ -1377,6 +1392,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "unavailable",
               "owners": []
             }

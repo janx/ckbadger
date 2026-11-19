@@ -256,6 +256,7 @@ describe('a refused lock fails its part, in its place', () => {
             date: '2024-01-01',
             capacity: '10000000001',
             occupiedCapacity: '6100000000',
+            freeCapacity: '3900000001',
             supply: '13',
           },
         ]}

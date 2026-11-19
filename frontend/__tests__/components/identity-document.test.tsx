@@ -1,10 +1,12 @@
 import { render, screen } from '@/__tests__/utils/test-utils';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { MnftPermissions, NamedParty } from '@/components/asset/identity-document';
 import { mnftProtocolProducer } from '@/__tests__/msw/fixtures/item-producer';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 // The identity read-out these tests covered moved to components/identity/* (F2 identities,
 // round 2); its invariants are tested there (identity-sections / identity-evidence tests).
 it('links only a uniquely resolved named party', () => {
+  const address = seededAddress('manager', JOYID_CODE_HASH);
   render(
     <dl>
       <NamedParty
@@ -12,13 +14,15 @@ it('links only a uniquely resolved named party', () => {
         party={{
           hashPrefix: '0x11',
           lockHash: '0x22',
-          address: 'ckb1manager',
-          scriptName: 'JoyID',
+          // re-pinned on purpose (lane P2's third round, item 12): a party's lock is read off its address by the one decision, so the fixture's address is a real one (it was a made-up string)
+          address,
+          lockScriptName: 'JoyID',
         }}
       />
     </dl>
   );
-  expect(screen.getByRole('link')).toHaveAttribute('href', '/mainnet/address/ckb1manager');
+  expect(screen.getByRole('link')).toHaveAttribute('href', `/mainnet/address/${address}`);
+  // the lock's words are the one decision's, off the address (a JoyID lock's name stays its name)
   expect(screen.getByText('JoyID')).toBeInTheDocument();
 });
 // Lane c2-finish (item 4, and rulings round 1): a party with no unique address writes its
@@ -29,7 +33,7 @@ it('copies an unresolved party’s lock-hash prefix by the icon after it', () =>
     <dl>
       <NamedParty
         label="Manager"
-        party={{ hashPrefix: '0x1122', lockHash: null, address: null, scriptName: null }}
+        party={{ hashPrefix: '0x1122', lockHash: null, address: null, lockScriptName: null }}
       />
     </dl>
   );
@@ -51,4 +55,11 @@ it('uses official configure permissions and keeps locked state independent', () 
   expect(panel).toHaveTextContent('Destroy before claimForbidden');
   expect(panel).toHaveTextContent('Transfer after claimAllowed');
   expect(panel).toHaveTextContent('locked state prevents transfer');
+  // lane P2's third round (item 4): each permission's word at one gap after its name, left-aligned,
+  // the name column the longest name's, "Update characteristic", 21 characters at the meta step's
+  // 12 px (7.2 px a glyph): 151.2, 152 px
+  for (const row of panel.querySelectorAll<HTMLElement>('dl > div')) {
+    expect(row).not.toHaveClass('justify-between');
+    expect(row.style.gridTemplateColumns).toBe('152px minmax(0, 1fr)');
+  }
 });

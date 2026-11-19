@@ -72,11 +72,15 @@ interface Tolerated {
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   chain: 31,
   assets: 33,
-  lists: 36,
+  // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
+  // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
+  // prose site gone with its entry
+  lists: 35,
   topics: 14,
   shared: 9,
 };
-const TOLERATED_FILES = 58;
+// 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list
+const TOLERATED_FILES = 57;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
@@ -384,12 +388,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'notes in table cells: 5 (two dashes, two no-deployment notes, custody unavailable); prose by kind: 2 loading (capacity history, cells), 1 empty (no capacity history)',
   },
-  'components/scripts/script-hero.tsx': {
-    family: 'lists',
-    sites: { prose: 1 },
-    reason:
-      "the hero's companion line, shared with the scripts list page (P3's, left to it by lane P2's follow-up)",
-  },
+  // components/scripts/script-hero.tsx left the list (lane P2's third round, item 10): the hero's
+  // companion line reads in the reading ink (the scripts list page no longer draws it)
   'components/scripts/script-newest-cells.tsx': {
     // link 1 → 0 (lane p-assets: each link states its look)
     // prose 2 → 1 (lane P2's follow-up, item 4): the caption reads in the reading ink
@@ -1210,7 +1210,9 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.values(QUIET_SITES).reduce((total, entry) => total + entry.count, 0)).toBe(3);
   });
 
-  it('tolerates 123 sites in 58 files: the pinned totals by family, which only fall', () => {
+  // Re-pinned on purpose (lane P2's third round, item 10, at its merge; renamed, it was "… 123 sites
+  // in 58 files …" on the base): the script hero's companion line left the list
+  it('tolerates 122 sites in 57 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =

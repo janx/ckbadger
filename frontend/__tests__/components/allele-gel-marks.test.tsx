@@ -228,3 +228,53 @@ describe('every word of the gel in its place (readability F3)', () => {
     }
   );
 });
+
+// Lane P2's third round (item 5; the review's "gel: two saturated blocks each write one word"): a
+// band wrote its trait value alone ("COPPER"), its share of the objects only in its hover title,
+// and under each lane a bare "3", which only the legend's "variants per gene" explained. A band
+// now prints its share under its value where the band holds two lines and the lane holds the
+// figure, and a lane its count with the noun where the lane holds it (else the bare count the
+// legend reads).
+describe('a band says its share, a lane its variants', () => {
+  it('prints each band’s share under its value, and the lane’s count with its noun', () => {
+    stubChartWidth(1248);
+    const { container } = render(<AlleleGel lanes={LANES} total={90} subject="Gel" />);
+    const level = container.querySelector('[data-lane="Level"]')!;
+    const words = [...level.querySelectorAll('text')].map((t) => t.textContent);
+    // 40, 30 and 20 of 90 objects
+    expect(words).toEqual(
+      expect.arrayContaining(['COPPER', '44.44%', 'SILVER', '33.33%', 'GOLD', '22.22%'])
+    );
+    // one unit: the count and its noun joined by a no-break space
+    expect(level.querySelector('[data-variants]')!.textContent).toBe('3\u00a0variants');
+    // the share stands inside its band, under the value
+    const copper = level.querySelector('[data-allele="COPPER"]')!;
+    const share = [...level.querySelectorAll('text')].find((t) => t.textContent === '44.44%')!;
+    const value = [...level.querySelectorAll('text')].find((t) => t.textContent === 'COPPER')!;
+    const top = Number(copper.getAttribute('y'));
+    const bottom = top + Number(copper.getAttribute('height'));
+    expect(Number(share.getAttribute('y'))).toBeGreaterThan(Number(value.getAttribute('y')));
+    expect(Number(share.getAttribute('y'))).toBeLessThan(bottom);
+    expect(Number(value.getAttribute('y'))).toBeGreaterThan(top);
+  });
+
+  it('keeps the bare count where the noun does not fit the lane, and no share it cannot hold', () => {
+    stubChartWidth(1248);
+    // twenty lanes at 1,248 px: 62 px each, which holds a band's value but not "3 variants"
+    // (10 glyphs at 7.2 px, 72 px, in the 48 px between its insets) nor a share (6 glyphs, 43.2 px,
+    // in 40 px of label room)
+    const many = Array.from({ length: 20 }, (_, i) =>
+      lane(`g${i}`, [
+        ['A', 40],
+        ['B', 30],
+        ['C', 20],
+      ])
+    );
+    const { container } = render(<AlleleGel lanes={many} total={90} subject="Gel" />);
+    const first = container.querySelector('[data-lane="g0"]')!;
+    expect(first.querySelector('[data-variants]')!.textContent).toBe('3');
+    const words = [...first.querySelectorAll('text')].map((t) => t.textContent);
+    expect(words).toContain('A');
+    expect(words).not.toContain('44.44%');
+  });
+});

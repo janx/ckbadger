@@ -93,8 +93,10 @@ describe('Charts index encodings (F2 charts)', () => {
     const supply = chartModel(def('total-supply'), {
       title: 'Total Supply',
       series: [
-        { key: 'circulatingNotDeposited', label: 'Circulating, not deposited', color: '#00c389' },
+        // re-pinned for lane exactness, part B1: five bands, the DAO's cells whole
+        { key: 'outsideDao', label: 'Outside the Nervos DAO', color: '#00c389' },
         { key: 'daoDeposited', label: 'Deposited in the Nervos DAO', color: '#3b82f6' },
+        { key: 'daoWithdrawing', label: 'Withdrawing from the Nervos DAO', color: '#786540' },
         { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#a68b57' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
@@ -102,8 +104,9 @@ describe('Charts index encodings (F2 charts)', () => {
         {
           date: '2026-10-29',
           values: {
-            circulatingNotDeposited: '3',
+            outsideDao: '2',
             daoDeposited: '2',
+            daoWithdrawing: '1',
             unclaimedCompensation: '1',
             burnt: '1',
             totalIssuance: '7',
@@ -113,8 +116,9 @@ describe('Charts index encodings (F2 charts)', () => {
       ],
     });
     expect(supply.series.map((s) => [s.label, s.color])).toEqual([
-      ['Circulating, not deposited', DATA_COLOR],
+      ['Outside the Nervos DAO', DATA_COLOR],
       ['Deposited in the Nervos DAO', CLASS_COLORS.dao],
+      ['Withdrawing from the Nervos DAO', 'var(--c-gold-mid)'],
       ['Unclaimed DAO compensation', 'var(--c-gold-ramp)'],
       ['Burnt', CLASS_COLORS.ckb],
     ]);

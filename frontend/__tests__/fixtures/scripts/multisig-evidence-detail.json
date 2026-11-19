@@ -27,6 +27,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "never_signed"
       },
       "event": "deployed",
@@ -54,6 +55,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "unavailable"
       },
       "event": "deployed",
@@ -81,6 +83,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "unavailable"
       },
       "event": "deployed",
@@ -120,6 +123,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "never_signed"
       },
       "hashType": "type",
@@ -150,6 +154,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "unavailable"
       },
       "hashType": "type",
@@ -180,6 +185,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "unavailable"
       },
       "hashType": "type",
@@ -216,6 +222,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "never_signed"
           },
           "dataReferenceHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
@@ -241,6 +248,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "unavailable"
           },
           "dataReferenceHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
@@ -266,6 +274,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "unavailable"
           },
           "dataReferenceHash": "0x9191919191919191919191919191919191919191919191919191919191919191",
@@ -308,6 +317,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "never_signed"
           },
           "hashType": "type",
@@ -340,6 +350,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "unavailable"
           },
           "hashType": "type",
@@ -372,6 +383,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "unavailable"
           },
           "hashType": "type",
