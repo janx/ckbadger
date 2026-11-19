@@ -207,9 +207,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       'a supply event tx link, the empty and peak lines and the history notes in the quiet ink',
   },
   'components/asset/cell-versions.tsx': {
+    // link 2 → 1 (lane p-assets: a version's lock is the one decision's words, no link)
     // link 4 → 2 (lane p-assets: each link states its look)
     family: 'assets',
-    sites: { link: 2, prose: 1 },
+    sites: { link: 1, prose: 1 },
     reason:
       "a version's block, owner, lock and spending-tx links and the empty sentence in the quiet ink",
   },
