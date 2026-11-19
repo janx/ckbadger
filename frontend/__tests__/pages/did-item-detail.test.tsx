@@ -195,9 +195,11 @@ it('titles a did:ckb by its handle, reads its document and places it among did:c
   await waitFor(() =>
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.test')
   );
-  expect(
-    screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')
-  ).toHaveTextContent('.test');
+  // re-pinned on purpose (lane P2's third round, item 6): the handle is the title whole, in the
+  // title's ink; its personal data server's domain is no standard's suffix and is not drawn in the
+  // rose a .bit's or a .cell's suffix takes (the review: it read as a top-level domain)
+  expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^alice\.test$/);
+  expect(screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')).toBeNull();
   // The DID string is the identity line under the title (with copy), not the title.
   expect(screen.getByRole('heading', { level: 1 }).closest('header')).toHaveTextContent(
     'did:ckb:ceirceirceirceirceirceirceirceir'
