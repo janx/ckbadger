@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { ActivityRow, ActivityRowHead, RowArticle } from '@/components/activity/activity-row';
 import { ACTIVITY_HEAD_CLASS, SectionHeading } from '@/components/home/section';
+import { Tabs, type Tab } from '@/components/ui/tabs';
 import { useFreshKeys } from '@/hooks/useFreshKeys';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { api, type Transaction } from '@/lib/api';
@@ -16,9 +17,10 @@ export const FEED_ROWS = 8;
 
 type FeedTab = 'activity' | 'transactions';
 
-const TABS: { id: FeedTab; label: string; viewAll: string }[] = [
-  { id: 'activity', label: 'Latest activity', viewAll: '/activities' },
-  { id: 'transactions', label: 'Transactions', viewAll: '/transactions' },
+/** The feed's two lists: each a tab of the row and the whole list its "view all" goes to. */
+const TABS: (Tab<FeedTab> & { viewAll: string })[] = [
+  { key: 'activity', label: 'Latest activity', viewAll: '/activities' },
+  { key: 'transactions', label: 'Transactions', viewAll: '/transactions' },
 ];
 
 /**
@@ -39,7 +41,7 @@ export function ActivityFeed() {
     queryFn: () => api.getTransactions({ limit: 10 }),
     refetchInterval: 10000,
   });
-  const active = TABS.find((t) => t.id === tab) as (typeof TABS)[number];
+  const active = TABS.find((t) => t.key === tab) as (typeof TABS)[number];
 
   return (
     <div data-testid="home-feed" className="flex min-w-0 flex-col">
@@ -59,46 +61,30 @@ export function ActivityFeed() {
           }
         />
       </div>
-      <div className="border-row-rule flex items-center border-b">
-        <div role="group" aria-label="Feed" className="flex gap-4 sm:gap-6">
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              aria-pressed={tab === t.id}
-              onClick={() => setTab(t.id)}
-              className={cn(
-                'text-body -mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 transition-colors',
-                tab === t.id
-                  ? 'border-jade text-text-bright font-medium'
-                  : 'text-text-dim hover:text-text border-transparent'
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      {/* Keyed by tab: a tab switch starts a fresh "new rows" baseline. */}
-      {tab === 'activity' ? (
-        <FeedList
-          key="activity"
-          query={activities}
-          what="activity"
-          keyOf={(a) => a.txHash}
-          row={(a, fresh) => <ActivityRow activity={a} fresh={fresh} age />}
-          items={activities.data}
-        />
-      ) : (
-        <FeedList
-          key="transactions"
-          query={transactions}
-          what="transactions"
-          keyOf={(t) => t.hash}
-          row={(t, fresh) => <TxRow tx={t} fresh={fresh} />}
-          items={transactions.data?.data}
-        />
-      )}
+      {/* The controls board's tab row, a plain row inside the feed (the heading above stays its
+          command line), the names in their own case; the current tab's list is its panel. */}
+      <Tabs label="Feed" tabs={TABS} value={tab} onChange={setTab}>
+        {/* Keyed by tab: a tab switch starts a fresh "new rows" baseline. */}
+        {tab === 'activity' ? (
+          <FeedList
+            key="activity"
+            query={activities}
+            what="activity"
+            keyOf={(a) => a.txHash}
+            row={(a, fresh) => <ActivityRow activity={a} fresh={fresh} age />}
+            items={activities.data}
+          />
+        ) : (
+          <FeedList
+            key="transactions"
+            query={transactions}
+            what="transactions"
+            keyOf={(t) => t.hash}
+            row={(t, fresh) => <TxRow tx={t} fresh={fresh} />}
+            items={transactions.data?.data}
+          />
+        )}
+      </Tabs>
     </div>
   );
 }

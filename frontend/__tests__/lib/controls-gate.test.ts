@@ -92,36 +92,20 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
       'a collection’s items pager: a list in id order whose search pages carry no total, which no mode of the Pager draws (pages needs the count; time says newer / older; more appends)',
   },
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
-  'app/fiber/channels/client-page.tsx': {
-    lane: 'c2-topics',
-    sites: { pager: 1 },
-    reason: 'the Fiber channels list’s pager',
-  },
-  'app/forks/page.tsx': {
-    lane: 'c2-topics',
-    sites: { pager: 2 },
-    reason: 'the branch switches’ “Show all … ↓” and their pager',
-  },
-  'app/network/nodes-table.tsx': {
-    lane: 'c2-topics',
-    sites: { select: 2, 'text-input': 2, pager: 1 },
-    reason: 'the nodes table’s two filter selects, country and version fields, and “Load more”',
-  },
-  'components/home/activity-feed.tsx': {
-    lane: 'c2-topics',
-    sites: { tab: 1 },
-    reason: 'the home feed’s tabs',
-  },
   // ---- shell: the header's search field and the command palette ----
+  // The two named exceptions (lane c2-topics): comboboxes with their own behaviour, not
+  // TextFields; each stands in the well of every field, WELL_MATERIAL of components/ui/text-field.tsx.
   'components/command-palette.tsx': {
     lane: 'shell',
     sites: { 'text-input': 1 },
-    reason: 'the palette’s query field (a combobox of its own)',
+    reason:
+      'the palette’s query field: a combobox of its own (its commands, its keys), in WELL_MATERIAL',
   },
   'components/search-bar.tsx': {
     lane: 'shell',
     sites: { 'text-input': 1 },
-    reason: 'the header’s search field (a combobox with its own cursor): the well TextField copies',
+    reason:
+      'the header’s search field: a combobox with its own cursor and list, the well TextField copies (WELL_MATERIAL)',
   },
   // ---- shared: the old pager ----
   'components/ui/cursor-pagination.tsx': {
@@ -132,7 +116,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 15;
+const TOLERATED_TOTAL = 6;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

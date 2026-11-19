@@ -51,7 +51,10 @@ describe('inks with no theme token (V11)', () => {
       pendingHover: 'var(--c-stream-pending-hover)',
     });
     expect(BLOCK_POSITION_COLORS).toEqual({ currentTile: 'var(--c-tile-current)' });
-    expect(FIBER_COLORS.filterOn).toBe('var(--c-slate-other)');
+    // re-pinned on purpose (lane C2 topics): the channels list's state filter is the controls
+    // board's filter chips, whose chosen one is the celadon line, so the pressed edge in the
+    // "other" slate went with the page's own chips (it was var(--c-slate-other))
+    expect(FIBER_COLORS).not.toHaveProperty('filterOn');
     const { dark } = PALETTE;
     expect(dark['row-tag-accent-edge']).toBe('#46554f');
     expect([dark['search-panel'], dark['search-selected'], dark['search-hover']]).toEqual([

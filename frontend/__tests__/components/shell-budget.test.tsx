@@ -674,7 +674,10 @@ describe('the classes and sources the budget reads', () => {
     expect(switcher).toHaveAttribute('data-placement', 'nav');
     expect(switcher).toHaveClass('mr-1', 'border-r', 'pr-2');
     const input = within(banner).getByRole('textbox');
-    expect(input).toHaveClass('well', 'text-body', 'pl-7', 'pr-3', 'md:pr-9');
+    // re-pinned (lane C2 topics): the field's 1 px border is the well material's `border` (it was
+    // the generic `.well`'s 1 px border); the insets the budget reads are unchanged
+    expect(input).toHaveClass('border', 'text-body', 'pl-7', 'pr-3', 'md:pr-9');
+    expect(input).not.toHaveClass('well');
     const fieldBox = input.closest('form')!.parentElement!.parentElement as HTMLElement;
     expect(fieldBox).toHaveClass('w-full', 'max-w-[clamp(18rem,36vw,36rem)]');
     expect(fieldBox.parentElement).toHaveClass('flex-1', 'gap-3');

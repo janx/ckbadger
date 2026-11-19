@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@testing-library/react';
-import { TextField } from '@/components/ui/text-field';
+import { FIELD_WELL, TextField, WELL_MATERIAL } from '@/components/ui/text-field';
 import { inkOf, READING } from '@/__tests__/utils/ink-role';
 import { targetHeightPx } from '@/__tests__/utils/tailwind-box';
 
@@ -70,6 +72,23 @@ describe('TextField', () => {
     expect(well).toHaveClass('bg-base-void', 'border', 'border-base-border');
     expect(well.className).toMatch(/shadow-\[inset_0_1px_3px_var\(--m-well-inset\)\]/);
     expect(well.className).not.toMatch(/rounded/);
+  });
+
+  // Lane C2 (topics): the board's field copies the header search field's well; the header's
+  // search field and the command palette's query field are comboboxes of their own (their cursor,
+  // their list, their keys), not TextFields, so the well is one constant every field reads: the
+  // text field's and the select's box (FIELD_WELL) and the two comboboxes' own boxes.
+  it('is one material, read by the text field, the select and the shell’s two comboboxes', () => {
+    const root = join(__dirname, '..', '..');
+    const source = (file: string) => readFileSync(join(root, file), 'utf8');
+    expect(FIELD_WELL.split(' ')).toEqual(expect.arrayContaining(WELL_MATERIAL.split(' ')));
+    expect(source('components/ui/select.tsx')).toMatch(
+      /import \{ FIELD_WELL \} from '@\/components\/ui\/text-field';/
+    );
+    for (const file of ['components/search-bar.tsx', 'components/command-palette.tsx'])
+      expect(source(file), file).toMatch(
+        /import \{[^}]*\bWELL_MATERIAL\b[^}]*\} from '@\/components\/ui\/text-field';/
+      );
   });
 
   it('stands 28 px high from 640 and 32 below it', () => {

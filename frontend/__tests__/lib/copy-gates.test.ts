@@ -188,8 +188,9 @@ describe('copy gates (U-15)', () => {
     'No readable text; see the raw bytes below',
     // the forks table's rollback column
     'No rollback at detection',
-    // a dial failure's name in the network filter
-    'No authenticated session before deadline',
+    // a dial failure's name in the network evidence and its filter (re-pinned, lane C2 topics:
+    // the words a phone's select holds; it was "No authenticated session before deadline")
+    'No authenticated session in time',
     // a day's row title in the network shares (what the row holds)
     'No retained round observation',
     'No retained labels',

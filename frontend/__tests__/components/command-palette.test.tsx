@@ -19,6 +19,7 @@ vi.mock('@/src/navigation', () => ({
 }));
 
 import { CommandPalette } from '@/components/command-palette';
+import { WELL_MATERIAL } from '@/components/ui/text-field';
 
 describe('CommandPalette', () => {
   beforeEach(() => {
@@ -45,6 +46,17 @@ describe('CommandPalette', () => {
     const input = screen.getByLabelText('Command palette input');
     expect(input).toHaveClass('focus-visible:outline-none', 'focus:ring-1', 'focus:ring-jade');
     expect(input).not.toHaveClass('outline-none');
+  });
+
+  // Lane C2 (topics): the palette's query field is a combobox of its own (its commands, its keys),
+  // not a TextField; it stands in the well every field stands in, the one material, and keeps its
+  // own box and focus ring.
+  it('stands its query field in the well of every field: the one material', () => {
+    render(<CommandPalette />);
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    const input = screen.getByLabelText('Command palette input');
+    expect(input).toHaveClass(...WELL_MATERIAL.split(' '));
+    expect(input).not.toHaveClass('well');
   });
 
   it('places the fixed overlay outside a backdrop-filter containing block', () => {

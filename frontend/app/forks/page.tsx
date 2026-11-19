@@ -8,7 +8,7 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager, type PagerProps } from '@/components/ui/pager';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ClockText, useClockTime } from '@/components/ui/utc8-date';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
@@ -16,7 +16,7 @@ import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ForkNodeRecord, type ReorgEvent } from '@/lib/api';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -155,6 +155,35 @@ function competingLine(record: ForkNodeRecord): string | null {
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+/** The branch switches' total: the API serves it on every page, and a page without it is refused. */
+function switchesTotal(total: number | undefined): number {
+  if (total === undefined) throw new Error('Forks list response has no total');
+  return total;
+}
+
+/**
+ * The pager's short-list form while the first page's first five stand for the list, in its exact
+ * words: "all N branch switches ↓" where the page holds every switch the API counts (it must then
+ * hold as many rows as the served total), else "next K ↓", K the page's rows past the five, after
+ * which the time pager stands.
+ */
+function firstPageMore(
+  read: { data: readonly ReorgEvent[]; total?: number; hasMore: boolean },
+  onShow: () => void
+): Extract<PagerProps, { mode: 'more' }> {
+  if (read.hasMore)
+    return { mode: 'more', next: { count: read.data.length - PREVIEW_ROWS, onShow } };
+  const total = switchesTotal(read.total);
+  if (total !== read.data.length)
+    throw new Error(
+      `Forks list: the first page holds ${read.data.length} switches and no more, but the total is ${total}`
+    );
+  return {
+    mode: 'more',
+    all: { count: total, singular: 'branch switch', plural: 'branch switches', onShow },
+  };
 }
 
 const seenWhen = (event: ReorgEvent) => formatUtc8DateTime(event.detectedAt).slice(0, 19);
@@ -372,7 +401,7 @@ export default function ForksPage() {
       `Fork overview: days hold ${switches} switches but the window says ${data.nodeSwitchesInWindow}`
     );
   const competing = data ? competingLine(data.nodeRecord) : null;
-  // Collapsed to the first rows until "Show all" (R15); a later page is always shown whole.
+  // Collapsed to the first rows until "all … ↓" (R15); a later page is always shown whole.
   const collapsed =
     !expanded &&
     !hasPrevious &&
@@ -387,6 +416,9 @@ export default function ForksPage() {
   // again only when one of the titles shown changes (lane E4).
   const now = useClockTime((t) => shown.map((e) => switchTitle(e, t)).join('\n'));
   const total = events.data?.total;
+  // where the list stands in time (lib/pagination.ts): its page and the pages its served total
+  // makes at the served page size; nothing for a list on one page, an empty one too
+  const switchesAt = events.data ? timePageAt('branch switches', page, events.data) : null;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
@@ -547,31 +579,28 @@ export default function ForksPage() {
                     </div>
                   )}
                 />
+                {/* The controls board's pager: the short list's own form while the first five
+                    stand for the list ("all 18 branch switches ↓", or "next 45 ↓" where the list
+                    is longer than a page), then a cursor in time, newest first (switchesAt). */}
                 {collapsed ? (
-                  <button
-                    type="button"
-                    aria-expanded={false}
-                    onClick={() => setExpanded(true)}
-                    className="text-text hover:text-text-bright text-small mt-3 hover:underline"
-                  >
-                    {total === undefined
-                      ? 'Show all branch switches ↓'
-                      : `Show all ${total.toLocaleString('en-US')} branch switches ↓`}
-                  </button>
-                ) : (
-                  <div className="mt-5">
-                    <CursorPagination
-                      total={events.data.total}
-                      totalLabel="switches"
-                      pageSize={limit}
-                      page={page}
-                      currentCount={events.data.data.length}
-                      hasMore={events.data.hasMore}
-                      hasPrevious={hasPrevious}
-                      onNext={() => goToNext(events.data!.nextCursor)}
-                      onPrevious={goToPrevious}
-                    />
+                  <div className="mt-3">
+                    <Pager {...firstPageMore(events.data, () => setExpanded(true))} />
                   </div>
+                ) : (
+                  switchesAt && (
+                    <div className="mt-5">
+                      <Pager
+                        mode="time"
+                        label="branch switches"
+                        order="newest first"
+                        {...switchesAt}
+                        onNewer={hasPrevious ? goToPrevious : undefined}
+                        onOlder={
+                          events.data.hasMore ? () => goToNext(events.data!.nextCursor) : undefined
+                        }
+                      />
+                    </div>
+                  )
                 )}
               </>
             )}

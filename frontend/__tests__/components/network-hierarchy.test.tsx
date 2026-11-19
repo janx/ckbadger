@@ -675,7 +675,9 @@ describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
     render(wrap(<PeersTable />));
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(5));
     expect(limits).toEqual(['5']);
-    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    // re-pinned (lane C2 topics): the controls board's short-list form, "next 50 ↓" (it was the
+    // button "Load more")
+    fireEvent.click(screen.getByRole('button', { name: 'next 50 ↓' }));
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(7));
     expect(limits).toEqual(['5', '50']);
   });
