@@ -74,8 +74,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/cell/[outpoint]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 15, ink: 8 },
-    reason: '15 without a look; inks by hand (text-text-bright, text-text, hover:text-text-bright)',
+    // look 15 → 14, ink 8 → 7 (lane D2): the Created fact's block link (text-text-bright) went to
+    // the status strip, whose link states its look
+    sites: { look: 14, ink: 7 },
+    reason: '14 without a look; inks by hand (text-text-bright, text-text, hover:text-text-bright)',
   },
   'app/tx/[hash]/client-page.tsx': {
     lane: 'p-chain',
@@ -522,9 +524,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-// 610 → 607 (lane D2): the transaction page's facts rail and its block link went (1), the block
-// page's facts aside and its two links (2)
-const TOLERATED_TOTAL = 607;
+// 610 → 605 (lane D2): the transaction page's facts rail and its block link went (1), the block
+// page's facts aside and its two links (2), the cell page's Created block link (2: look, ink)
+const TOLERATED_TOTAL = 605;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

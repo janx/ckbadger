@@ -63,10 +63,12 @@ describe('code cell page against the CellCode board', () => {
     const { container } = view();
     const codeCellOf = await screen.findByTestId('code-cell-of');
     expect(codeCellOf).toHaveTextContent('· code cell of JoyID, v5');
-    // the name plate (seals by kind, C10): on the kind line, with the cell's status, after "Cell"
+    // the name plate (seals by kind, C10): on the kind line, after "Cell". Re-pinned on purpose
+    // (lane D2): the cell's status is the status strip's first fact, so it no longer stands
+    // between "Cell" and this (the kind line read "Celllive· code cell of JoyID, v5")
     const { kindLine, nameBox } = expectNamePlate(container, 'Cell');
     expect(kindLine).toContainElement(codeCellOf);
-    expect(kindLine).toHaveTextContent(/^Celllive· code cell of JoyID, v5$/);
+    expect(kindLine).toHaveTextContent(/^Cell· code cell of JoyID, v5$/);
     expect(nameBox).not.toContainElement(codeCellOf);
     const facts = screen.getByRole('region', { name: 'Cell facts' });
     await within(facts).findByRole('link', { name: 'Multisig' });
@@ -205,6 +207,8 @@ describe('code cell page · visual pass', () => {
   it('shows the epoch the code cell was created in (SC-C9)', async () => {
     view();
     const facts = await screen.findByRole('region', { name: 'Cell facts' });
-    expect(facts).toHaveTextContent('epoch 13,150 · 935/1500');
+    // re-pinned on purpose (lane D2): the epoch is a fact of its own, "Epoch" (it was the line
+    // "epoch 13,150 · 935/1500" under the Created fact's time, which went to the status strip)
+    expect(facts).toHaveTextContent('Epoch13,150 · 935/1500');
   });
 });

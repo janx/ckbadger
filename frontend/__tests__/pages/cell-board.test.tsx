@@ -174,8 +174,11 @@ describe('Cell page against the Cell board', () => {
     const { plate, below } = expectNamePlate(container, 'Cell');
     // re-pinned with readability R4 (lane B7): the lede stands in one holder that sets it on the
     // measure (it was below's own child)
-    expect(below!.children).toHaveLength(1);
-    const holder = below!.firstElementChild!;
+    // re-pinned on purpose (lane D2): the status strip first under the plate, the lede's holder
+    // after it (the holder was below's one child)
+    expect(below!.children).toHaveLength(2);
+    expect(below!.firstElementChild).toBe(screen.getByRole('group', { name: 'Cell status' }));
+    const holder = below!.lastElementChild!;
     expect(holder).toHaveAttribute('data-detail-lede');
     expect(holder).toHaveClass('max-w-measure');
     expect(holder.firstElementChild!.firstElementChild).toBe(line);
@@ -186,16 +189,18 @@ describe('Cell page against the Cell board', () => {
     expectBefore(outpointLine, line);
   });
 
-  // The name plate (C10): the kind line "Cell" with its status, the h1 the short out point alone
-  // (the dim "Cell" that opened it is the kind line now), the id line the full out point and its
-  // copy; under both, the inventory line, the origin line and the "only name" sentence, in order.
-  it('stands the cell’s name plate beside its stone: Cell and its status, the short out point, the full one', async () => {
+  // The name plate (C10): the kind line "Cell", the h1 the short out point alone (the dim "Cell"
+  // that opened it is the kind line now), the id line the full out point and its copy; under both,
+  // the status strip, then the inventory line, the origin line and the "only name" sentence, in
+  // order. Re-pinned on purpose (lane D2; renamed, it was "…: Cell and its status, the short out
+  // point, the full one"): the state is the strip's first fact, said once, so the kind line holds
+  // the kind word alone (it held "Cell" and the live dot and "live").
+  it('stands the cell’s name plate beside its stone: Cell, the short out point, the full one', async () => {
     const { container } = view();
     await screen.findByTestId('cell-inventory');
     const { kindLine, nameBox, title, below } = expectNamePlate(container, 'Cell');
-    // the kind word, then the status: the live dot (no text) and "live"
-    expect(kindLine.children).toHaveLength(2);
-    expect(kindLine).toHaveTextContent(/^Celllive$/);
+    expect(kindLine.children).toHaveLength(1);
+    expect(kindLine).toHaveTextContent(/^Cell$/);
     expect(title).toHaveTextContent(/^0xbe1b9761…936cd8:1$/);
     // U-09, the lead's question 2 (re-pinned on purpose): the h1 holds one thing, the out point as
     // TitleId writes it (the row form until its line is measured), where it held the bare text
@@ -431,12 +436,16 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
     mockObjectReads();
   });
 
-  it('keeps the board facts on one strip: epoch under Created, "0 free", no Owner (SC-C9)', async () => {
+  // Re-pinned on purpose (lane D2; renamed, it was "…: epoch under Created, …"): the capacity,
+  // the created time and block went to the status strip under the id line, so the epoch it was
+  // created in is a fact of its own (it was the Created fact's second line, under the time)
+  it('keeps the board facts on one strip: the epoch its own fact, "0 free", no Owner (SC-C9)', async () => {
     view();
     const facts = await screen.findByRole('region', { name: 'Cell facts' });
-    // the epoch takes its own line under the time, so the seven facts fit one row at 1440
-    expect(facts).toHaveTextContent('2026-10-22 22:43:55 UTC+8epoch 15,157 · 112/1800');
-    expect(within(facts).getByText(/^epoch 15,157/)).toHaveClass('block');
+    expect(within(facts).getByText('Epoch').parentElement).toHaveTextContent(
+      /^Epoch15,157 · 112\/1800$/
+    );
+    expect(facts).not.toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(facts).toHaveTextContent('Occupied320 B · 0 free');
     expect(within(facts).queryByText('Owner')).toBeNull();
   });
