@@ -252,8 +252,19 @@ const FEEDS: Reads = {
   // the one rule for a registry name (`registeredName`), and a tile's lock name handed to
   // `cellLockFacts`
   'components/transaction/transaction-cell-tiles.tsx': { 'registry name': 2 },
-  // "Lock of output i": the output's name handed to `cellLockFacts`
-  'app/tx/[hash]/client-page.tsx': { 'registry name': 1 },
+  // "Lock of output i": the output's name handed to `cellLockFacts`; and the cellbase witness's
+  // miner lock (lane P1 follow-up; it was known writer 12's second part), its name handed to
+  // `cellLockFacts` with the lock
+  'app/tx/[hash]/client-page.tsx': { 'registry name': 2 },
+  // a group's registry name, handed to `cellLockFacts` with a lock group's script (lane P1
+  // follow-up; it was known writer 12): a type group keeps the name, the decision being a lock's
+  'components/transaction/script-group-rows.tsx': { 'registry name': 1 },
+  // the cell's lock: the registry's name for its code hash handed to `cellLockFacts` with the
+  // lock and its address (lane P1 follow-up; it was known writer 8, with the fact's `lockName`)
+  'app/cell/[outpoint]/client-page.tsx': { 'registry name': 1 },
+  // the address's lock (`addressLockName`, lane P1 follow-up; it was known writers 7 and 11): the
+  // registry's name in its script info, handed to `cellLockFacts` with the lock and the address
+  'components/address/address-holdings.tsx': { 'script info name': 1 },
   // an address record that is the owner's or manager's own: the party's name handed with the
   // record's address to `partyLockSentence` (lane P2's third round, item 12)
   'components/identity/identity-records.tsx': { 'api name': 1 },
@@ -285,21 +296,31 @@ const KNOWN: Reads = {
   // script's name), components/identity/identity-overview.tsx (3, the .bit Cell summary's minted
   // and holding locks; its Owner note was cellOwnerLockPart already) and
   // components/identity/identity-evidence.tsx (1, the name cell's "Lock · …" row)
-  'components/address/address-holdings.tsx': { 'script info name': 1 },
-  'app/cell/[outpoint]/client-page.tsx': { 'api name': 1, 'registry name': 1 },
   // registry name 1 → 0 (lane D3): the structure's group names, the third copy of the registry
   // rule (9), went with the list; the cell page's groups are the rows of script-group-rows.tsx
-  'components/cell/cell-transactions.tsx': { 'api name': 2 },
-  'components/cell/cell-microscope.tsx': { 'api name': 1 },
   // 4 → 2 (lane D2): the kind line's lock link and name went to the status strip, whose lock is
   // address-holdings.tsx's one read
-  'app/address/[addr]/client-page.tsx': { 'script info name': 2 },
   // 3 → 1 (lane D3): the cellbase witness's lock stays; the script groups' name and link (12)
   // moved with the rows to script-group-rows.tsx, where one read gives both
-  'app/tx/[hash]/client-page.tsx': { 'registry name': 1 },
   // known writer 12 moved, not a new writer (lane D3): the transaction page's script groups, the
   // rows the cell page now draws too, their two reads (a group's name, its link) made one
-  'components/transaction/script-group-rows.tsx': { 'registry name': 1 },
+  // 6 → 5 (lane p-assets, R8): the life sentence names the lock it sits under once, its story
+  // and its lede alike
+  // 4 → 3 (lane p-assets): the Owner fact's note is cellOwnerLockPart (writer 5's first read);
+  // the .bit Cell summary's wallet and holder words stay, prose that names a default lock too
+  // app/cell/[outpoint]/client-page.tsx, components/cell/cell-transactions.tsx and
+  // components/cell/cell-microscope.tsx left (lane P1 follow-up; writers 8, 9 and 10): the cell
+  // page decides its lock once (`cellLockFacts`, `lockWords`), and its Lock fact, its spend
+  // requirement and the microscope's readout write the decision's name (`lockLabel`); a lock on
+  // the default lock's code hash by data is written by its code hash and "by data"
+  // components/address/address-holdings.tsx and app/address/[addr]/client-page.tsx left (lane P1
+  // follow-up; writers 7 and 11): the address's lock is named once, `addressLockName`, its one
+  // read feeding the decision; the strip and the lock byte map write that name (4 → 2 in lane D2:
+  // the kind line's lock link and name went to the strip)
+  // app/tx/[hash]/client-page.tsx (3 → 1 in lane D3: the script groups' name and link moved to
+  // script-group-rows.tsx, where one read gives both) and script-group-rows.tsx left (lane P1
+  // follow-up; known writer 12): the cellbase witness's miner lock and a lock group are named by
+  // the decision, their reads feed it
   // 13, found when the gate learned `lockScriptName` (lane cd-fixes-controls), for the topic page
   // lane (p-topics): the Fiber graph's party row writes the registry's name of its lock before
   // "lock hash", outside lockWords
@@ -439,6 +460,21 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // 11 files and 17 reads"): the item evidence (known writer 2), the identity overview (5) and the
   // identity evidence (6) say the lock through the decision too, 17 → 12 known reads in 8 files,
   // 30 → 25 in all in 16; of the second round's six known writers none is left
+  // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 36 reads in 21 files, … 13 files
+  // and 23 reads"): the cell page decides its lock once, its registry read feeds the decision and
+  // the three `lockName`s are the decision's name; 23 → 18 known reads in 10 files, 36 → 32 in all
+  // in 19
+  // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 32 reads in 19 files, … 10 files
+  // and 18 reads"): known writer 12, the cellbase witness's lock and the script groups, feeds the
+  // decision; its two reads move to the feeds, 18 → 16 known reads in 8 files, all still 32 in 19
+  // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 32 reads in 19 files, … 8 files and
+  // 16 reads"): the address's lock is named once by the decision; the page's two reads went, the
+  // holdings' one feeds it: 16 → 13 known reads in 6 files, 32 → 30 in all in 18
+  // Re-pinned on purpose (the merge of lane P1's follow-up with lane P2's; renamed, it was "… 25
+  // reads in 16 files, … 8 files and 12 reads" on the base): this lane's follow-up took the cell
+  // page's, the address's and the transaction page's known writers (7 to 12), 10 known reads in 7
+  // files, four of its reads feeding the decision now; 12 → 2 known reads in 1 file (the Fiber
+  // graph's, writer 13), 25 → 19 in all in 13
   // Re-pinned on purpose (lane P2's third round, item 12; renamed, it was "… 25 reads in 16 files,
   // … 8 files and 12 reads"): the gate learned a party's lock name and a called lock's, which it
   // could not see (the test review's MUST-1): 16 reads in 7 more files came to light, so the
@@ -447,11 +483,17 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (lane P2's third round, item 12b; renamed, it was "… 41 reads in 23
   // files, … 15 files and 28 reads"): the .cell parties' lock words go through the decision, 28 →
   // 15 known reads in 15 → 10 files; the records' one read feeds it; 41 → 29 in all in 23 → 19
-  it('pins the totals: 29 reads in 19 files, the known writers 10 files and 15 reads', () => {
+  // Re-pinned on purpose (the merge of lane P1's third round with lane P2's; renamed, it was "… 19
+  // reads in 13 files, … 1 file and 2 reads" on the base, "… 29 reads in 19 files, … 10 files
+  // and 15 reads" here): the base took the cell page's, the address's and the transaction page's
+  // known writers, this lane the identity parties'; what is left known is the Fiber graph's (2),
+  // the AI view's primary lock call (1) and the lists lane's activity row (2): 5 known reads in 3
+  // files; the records' read feeds the decision; 23 reads in all in 16 files
+  it('pins the totals: 23 reads in 16 files, the known writers 3 files and 5 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(19);
-    expect(total(all)).toBe(29);
-    expect(Object.keys(KNOWN)).toHaveLength(10);
-    expect(total(KNOWN)).toBe(15);
+    expect(Object.keys(all)).toHaveLength(16);
+    expect(total(all)).toBe(23);
+    expect(Object.keys(KNOWN)).toHaveLength(3);
+    expect(total(KNOWN)).toBe(5);
   });
 });

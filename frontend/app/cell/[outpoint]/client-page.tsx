@@ -31,6 +31,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { TitleId } from '@/components/ui/title-id';
 import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import type { StripFact } from '@/components/ui/status-strip';
+import { cellLockFacts, lockWords, type LockWords } from '@/components/ui/lock-kind';
 
 /** What `outpointParts` accepts, as the not-an-id page states it. */
 const OUTPOINT_RULE =
@@ -139,11 +140,14 @@ function ScriptFact({
   label,
   script,
   name,
+  byHashType = null,
   owner,
 }: {
   label: string;
   script: Cell['lock'];
   name: string | null;
+  /** "by <hash type>" after a lock the one decision writes by its code hash (`LockWords`). */
+  byHashType?: string | null;
   /** Lane L: the lock's address, the cell's owner, linked under the args (the Lock fact only). */
   owner?: string;
 }) {
@@ -191,17 +195,19 @@ function ScriptFact({
       ) : (
         <span title={script.codeHash}>{text}</span>
       )}
+      {byHashType && ` by ${byHashType}`}
     </Fact>
   );
 }
 
 function CellFacts({
   cell,
-  lockName,
+  lock,
   typeName,
 }: {
   cell: Cell;
-  lockName: string | null;
+  /** The lock's words, the one decision's in a fact (`lockWords`, as a column's: never empty). */
+  lock: LockWords | null;
   typeName: string | null;
 }) {
   let amounts: { capacity: bigint; occupied: bigint };
@@ -230,16 +236,17 @@ function CellFacts({
       <Fact label="Occupied">
         <span>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
         <span className="text-text-dim text-small">
-          ·{' '}
-          {capacity === occupied ? (
-            '0'
-          ) : (
-            <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" />
-          )}{' '}
-          free
+          · {/* no free CKB with its unit too (lane P1, third round; NOTE 5: it read "0 free") */}
+          <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" /> free
         </span>
       </Fact>
-      <ScriptFact label="Lock" script={cell.lock} name={lockName} owner={cell.address} />
+      <ScriptFact
+        label="Lock"
+        script={cell.lock}
+        name={lock && lock.form !== 'not-indexed' ? lock.name : null}
+        byHashType={lock?.form === 'lock' ? lock.byHashType : null}
+        owner={cell.address}
+      />
       <ScriptFact label="Type" script={cell.type} name={typeName} />
       <Fact
         label="Data"
@@ -354,6 +361,23 @@ function cellStripFacts(cell: Cell): StripFact[] {
 function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | null }) {
   const names = useScriptNames(cell);
   const outpoint = `${cell.txHash}:${cell.outputIndex}`;
+  // The lock's words, the one decision's (components/ui/lock-kind.tsx; lane P1 follow-up, the
+  // lock-words gate): its script and the registry's name for its code hash, the address the API
+  // spells checked against the script. The cell's facts name the default lock too (a column's
+  // form); a lock on the default lock's code hash by data is not the default lock, and the
+  // registry's name, which is the default lock's, is not written for it.
+  const lock = cell.lock
+    ? lockWords(
+        cellLockFacts(
+          { lock: cell.lock, name: names.lock, address: cell.address ?? null },
+          `cell ${outpoint}`
+        ),
+        'column'
+      )
+    : null;
+  if (cell.lock && lock === null)
+    throw new Error(`cell ${outpoint}: a column's lock words are never empty`);
+  const lockLabel = lock && lock.form !== 'not-indexed' ? lock.name : null;
   // The seals by kind (C3): the cell's own stone, classed by the transaction page's one
   // classifier from the class fields the API serves for it; spent, in the dead ink.
   const seal = cellPageSeal(cell, kindOf);
@@ -429,7 +453,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <CellMicroscope
               key={outpoint}
               cell={cell}
-              lockName={names.lock}
+              lockLabel={lockLabel}
               typeName={names.type}
             />
             <CellScriptGroups cell={cell} />
@@ -441,14 +465,15 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             Unable to refresh cell: {refreshError.message}. Showing previously loaded data.
           </p>
         )}
-        <CellFacts cell={cell} lockName={names.lock} typeName={names.type} />
+        <CellFacts cell={cell} lock={lock} typeName={names.type} />
         {cell.daoInfo && (
           // The command runs on the status the API gives (deposited, withdrawing, withdrawn); the
           // heading says it, so the line under it does not say it again.
           <DetailSection title="Nervos DAO" args={cell.daoInfo.daoStatus}>
             {/* F-9: the API sends every DAO cell's exact compensation (shannons) with its state
                 and block; an answer without them is a broken read and fails here, by name. */}
-            <p className="text-text-dim text-small max-w-measure">
+            {/* its deposit block and compensation: values, the reading ink (R3; P1 follow-up) */}
+            <p className="text-text text-small max-w-measure">
               deposit block <BlockLink look="inline" number={cell.daoInfo.depositBlockNumber} /> ·{' '}
               {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
               <CkbAmount
@@ -479,7 +504,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             </ul>
           </DetailSection>
         )}
-        <CellTransactions cell={cell} lockName={names.lock} typeName={names.type} />
+        <CellTransactions cell={cell} lockLabel={lockLabel} typeName={names.type} />
       </DetailLayout>
     </>
   );

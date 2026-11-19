@@ -299,8 +299,19 @@ function CellKindLine({ cell, typeName }: { cell: Cell; typeName: string | null 
             : `This cell carries the type script ${typeName}`}
       </KindSentence>
     );
+  // a cell with no type script that holds data says so (lane P1, third round; review p-logic-chain
+  // NOTE 3: a contract binary no registered script references read "holds plain CKB")
   return (
-    <KindSentence mark={kindOf(cell)}>This cell holds plain CKB, with no type script</KindSentence>
+    <KindSentence mark={kindOf(cell)}>
+      {cell.dataSize > 0 ? (
+        <>
+          This cell holds {unitText(formatCount(cell.dataSize, 'byte'))} of data, with no type
+          script
+        </>
+      ) : (
+        'This cell holds plain CKB, with no type script'
+      )}
+    </KindSentence>
   );
 }
 

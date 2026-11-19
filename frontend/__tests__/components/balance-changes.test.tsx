@@ -238,3 +238,57 @@ describe('BalanceChanges names no lock for a party on the default lock (B4 item 
     expect(locks).toHaveLength(2);
   });
 });
+
+// Lane P1 follow-up (review chain-b tx-dao-deposit: the table's rows stood in the API's order, the
+// largest change last and under the fold of the page, while the figure above sorts by size): the
+// order a reader needs, who gave, then who got, each the largest first (the feed's order,
+// lib/participant-order.ts), and the Net row with the fee last, in the table and the cards alike.
+describe('BalanceChanges, the order a reader needs', () => {
+  it('lists who gave, then who got, each the largest first, the Net row last', () => {
+    for (const width of [912, 358]) {
+      stubChartWidth(width);
+      const a = activity();
+      const [from, to, third] = a.participants;
+      const shuffled = { ...a, participants: [third, from, to] };
+      const { unmount } = render(
+        <BalanceChanges activity={shuffled} fee="64119" compensation={null} />
+      );
+      const rows =
+        width >= 700
+          ? within(screen.getByRole('table')).getAllByRole('row').slice(1)
+          : within(screen.getByRole('list')).getAllByRole('listitem');
+      const tails = [from, to, third].map((p) => p.address!.slice(-6));
+      expect(rows.map((row) => tails.findIndex((tail) => row.textContent!.includes(tail)))).toEqual(
+        [0, 1, 2, -1]
+      );
+      expect(rows[rows.length - 1]).toHaveTextContent(/^Net/);
+      unmount();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Lane P1, third round (review p-logic-chain NOTE 4: the table ordered parties by CKB alone, so a
+  // party that gave only a token stood last, after the receivers): a party gave if its CKB or any
+  // item left it, and it stands among the givers.
+  it('counts a party that gave only an item among the givers', () => {
+    stubChartWidth(912);
+    const a = activity();
+    const [from, to, third] = a.participants;
+    // the fee's payer gave CKB alone; the object's giver and receiver kept their CKB
+    const payer = { ...third, ckbDelta: '-64119', itemDeltas: [] };
+    const giver = { ...from, ckbDelta: '0' };
+    const receiver = { ...to, ckbDelta: '0' };
+    render(
+      <BalanceChanges
+        activity={{ ...a, participants: [receiver, payer, giver] }}
+        fee="64119"
+        compensation={null}
+      />
+    );
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    const tails = [payer, giver, receiver].map((p) => p.address!.slice(-6));
+    expect(rows.map((row) => tails.findIndex((tail) => row.textContent!.includes(tail)))).toEqual([
+      0, 1, 2, -1,
+    ]);
+  });
+});

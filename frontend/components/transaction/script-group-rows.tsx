@@ -3,6 +3,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { formatStandard } from '@/components/activity-event-row';
 import { kindOf, registeredName } from '@/components/transaction/transaction-cell-tiles';
+import { cellLockFacts, lockWords } from '@/components/ui/lock-kind';
 import type { MatrixColumn, MatrixGroup } from '@/components/transaction/script-group-matrix';
 import type {
   CellDep,
@@ -44,15 +45,33 @@ export function groupCells(g: TransactionScriptGroup): string[] {
 /**
  * A group's name and its script page, from one read of the registry's name for its code hash (the
  * one rule, `registeredName`): the name, or the hash at the row size; the script's page by that
- * name, or by the code hash where the registry has none.
+ * name, or by the code hash where the registry has none. A lock group's name is the one decision's
+ * (`lockWords`, lane P1 follow-up): a lock on the default lock's code hash by data is another lock,
+ * the registry's name for that code hash is the default lock's, and it is written by its code hash
+ * and "by data", its page that lock's.
  */
 function groupNaming(
   g: TransactionScriptGroup,
   lookup: ScriptLookupResponse | undefined
 ): { label: string; href: string } {
-  const name = registeredName(lookup, g.script.codeHash);
+  const registered = registeredName(lookup, g.script.codeHash);
+  let name = registered;
+  let by = '';
+  if (g.kind === 'lock') {
+    const lock = lockWords(
+      cellLockFacts(
+        { lock: g.script, name: registered, address: null },
+        `lock group ${g.scriptHash}`
+      ),
+      'column'
+    );
+    if (lock === null)
+      throw new Error(`lock group ${g.scriptHash}: a column's lock words are never empty`);
+    name = lock.form === 'not-indexed' ? null : lock.name;
+    by = lock.form === 'lock' && lock.byHashType ? ` by ${lock.byHashType}` : '';
+  }
   return {
-    label: name ?? shortenHash(g.script.codeHash, 'row'),
+    label: `${name ?? shortenHash(g.script.codeHash, 'row')}${by}`,
     href: getScriptDetailHref({
       name,
       codeHash: g.script.codeHash,

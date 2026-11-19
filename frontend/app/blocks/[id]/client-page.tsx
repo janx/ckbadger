@@ -4,6 +4,7 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
+import { ExternalLink } from '@/components/ui/external-link';
 import { useParams, useRouter } from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
@@ -320,6 +321,7 @@ export default function BlockDetailPage() {
                     address={block.minerAddress}
                     pool={block.minerPool}
                     size="row"
+                    look="inline"
                     unnamed={<Address look="inline" address={block.minerAddress} size="row" />}
                   />
                 ) : (
@@ -430,10 +432,7 @@ export default function BlockDetailPage() {
                   </dd>
                   {genesisEpoch && (
                     // What the header says, and why it reads 0 / 0: no length is invented for it.
-                    <dd
-                      data-testid="block-epoch-genesis"
-                      className="text-text-dim max-w-measure mt-1"
-                    >
+                    <dd data-testid="block-epoch-genesis" className="text-text max-w-measure mt-1">
                       the genesis header’s epoch field is {block.rawHeader.epoch}, so it states no
                       epoch length;{' '}
                       <Link look="inline" href="/blocks/1">
@@ -546,9 +545,10 @@ export default function BlockDetailPage() {
                 <DetailSection
                   title="Uncles"
                   actions={
+                    // the site's word, the forks chart's (lane P1 follow-up; it read "the NC-Max
+                    // orphan rate", the protocol's term): one word for one thing
                     <span className="text-text-dim text-small">
-                      {block.unclesCount.toLocaleString('en-US')} · counted toward the NC-Max orphan
-                      rate
+                      {block.unclesCount.toLocaleString('en-US')} · counted toward the uncle rate
                     </span>
                   }
                 >
@@ -583,7 +583,7 @@ export default function BlockDetailPage() {
                     <p
                       role="alert"
                       data-testid="block-proposals-error"
-                      className="text-text-dim text-small max-w-measure"
+                      className="text-text text-small max-w-measure"
                     >
                       Failed to load proposals: {proposalsError.message}
                     </p>
@@ -614,8 +614,10 @@ export default function BlockDetailPage() {
                               </span>
                             ))}
                         </p>
+                        {/* a proposal's commitment, or that it has none in its window: a
+                            statement, the reading ink (R3; lane P1 follow-up) */}
                         {proposal.committedTxHash ? (
-                          <p className="text-text-dim max-w-measure">
+                          <p className="text-text max-w-measure">
                             →{' '}
                             <Link look="inline" href={`/tx/${proposal.committedTxHash}`}>
                               <Hash
@@ -635,9 +637,7 @@ export default function BlockDetailPage() {
                             </Link>
                           </p>
                         ) : (
-                          <p className="text-text-dim">
-                            No indexed commitment in its proposal window.
-                          </p>
+                          <p className="text-text">No indexed commitment in its proposal window.</p>
                         )}
                       </article>
                     ))
@@ -725,17 +725,16 @@ export default function BlockDetailPage() {
                 className="mb-3"
               />
               <div className="flex flex-wrap gap-4">
+                {/* each a way out of the site, the onward look with its ↗ (lane P1 follow-up) */}
                 {resources.map((resource) => (
-                  <a
+                  <ExternalLink
                     key={resource.url}
                     href={resource.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    data-testid="block-hardfork-resource-link"
-                    className="text-interactive text-small"
+                    look="onward"
+                    className="text-small"
                   >
                     {resource.label}
-                  </a>
+                  </ExternalLink>
                 ))}
               </div>
             </section>
@@ -837,13 +836,14 @@ export default function BlockDetailPage() {
 
 function ArrowLink({ href, label, d }: { href: string; label: string; d: string }) {
   return (
-    // a block: a box whose mark draws its own ink, quiet, celadon under the pointer (the link's
-    // hover reaches it through the group)
+    // a block: a box whose mark takes the link's ink (stroke currentColor), celadon under the
+    // pointer and the focus by the one rule (app/globals.css); no ink written on the mark (the
+    // link-look gate; lane P1 follow-up: it was the quiet ink, celadon through the group hover)
     <Link
       look="block"
       href={href}
       aria-label={label}
-      className="border-base-border group flex h-9 w-9 shrink-0 items-center justify-center border"
+      className="border-base-border flex h-9 w-9 shrink-0 items-center justify-center border"
     >
       <svg
         aria-hidden="true"
@@ -853,7 +853,6 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
         fill="none"
         stroke="currentColor"
         strokeWidth="1.5"
-        className="text-text-dim group-hover:text-jade group-focus-visible:text-jade"
       >
         <path d={d} />
       </svg>
@@ -996,35 +995,39 @@ function UncleRow({
             <Hash hash={uncle.hash} size="row" className="text-small" />
           </Link>
         </span>
-        <span className="text-text-dim">
-          {error ? (
-            `sibling facts unavailable: ${error.message}`
-          ) : !detail ? (
-            'reading its sibling…'
-          ) : detail.sameParentAs === null ? (
-            <>
-              the canonical{' '}
-              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-                {formatBlockNumber(detail.canonicalAtHeight.number)}
-              </Link>{' '}
-              has another parent
-            </>
-          ) : (
-            <>
-              sibling of{' '}
-              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-                {formatBlockNumber(detail.sameParentAs)}
-              </Link>{' '}
-              <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-                <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
-              </Link>
-              , same parent{' '}
-              <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
-                {formatBlockNumber(uncle.number - 1)}
-              </Link>
-            </>
-          )}
-        </span>
+        {/* its sibling line: a statement in the reading ink, or its failure; the line being read
+            is quiet, a transient line (R3; lane P1 follow-up) */}
+        {error ? (
+          <span className="text-text">sibling facts unavailable: {error.message}</span>
+        ) : !detail ? (
+          <span className="text-text-dim">reading its sibling…</span>
+        ) : (
+          <span className="text-text">
+            {detail.sameParentAs === null ? (
+              <>
+                the canonical{' '}
+                <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                  {formatBlockNumber(detail.canonicalAtHeight.number)}
+                </Link>{' '}
+                has another parent
+              </>
+            ) : (
+              <>
+                sibling of{' '}
+                <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                  {formatBlockNumber(detail.sameParentAs)}
+                </Link>{' '}
+                <Link look="inline" href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                  <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
+                </Link>
+                , same parent{' '}
+                <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
+                  {formatBlockNumber(uncle.number - 1)}
+                </Link>
+              </>
+            )}
+          </span>
+        )}
         <span className="text-text-dim">
           {unitNode(formatUtc8Time(uncle.timestamp))}
           {detail?.msAfterSibling != null &&
@@ -1065,7 +1068,7 @@ function CellbaseHeadline({
               {activity.participants.map((party, i) => (
                 <Fragment key={party.lockHash ?? party.lockHashPrefix ?? i}>
                   {i > 0 && (i === activity.participants.length - 1 ? ' and ' : ', ')}
-                  <ParticipantRefView participant={party} size="row" compact quiet />
+                  <ParticipantRefView participant={party} size="row" compact quiet look="inline" />
                 </Fragment>
               ))}
             </>

@@ -452,8 +452,9 @@ could trail `total` on `/transactions` and `/cells/live` by that block.)
 `GET /addresses/{addr}/holdings` streams the complete existing owner live-cell
 index in one pinned read view. It returns:
 
-- `lockScriptHash`, `balance`, `occupiedCapacity`, `freeCapacity`,
-  `daoFreeCapacity`, `liveCellsCount`.
+- `lockScriptHash`, `balance`, `occupiedCapacity` (every live cell's),
+  `daoCellsCapacity`, `otherCellsOccupiedCapacity`, `otherCellsFreeCapacity`,
+  `liveCellsCount`.
 - `classes`: fixed keys `dao`, `token`, `object`, `identity`, `script`, `plain`;
   each contains `cellCount`, `capacity`, `occupiedCapacity`.
 - `holdings`: `dao` counts live DAO cells (both phases), `token` counts distinct
@@ -468,9 +469,17 @@ index in one pinned read view. It returns:
 itemCount: number, compositionCounts: <the same six counters>}`. These are
   whole-owner totals, independent of the currently displayed item page.
 
-All capacities/compensation are exact decimal **shannon strings**. The disjoint
-partition is `balance = occupiedCapacity + freeCapacity + daoFreeCapacity`;
-`freeCapacity` excludes DAO free capacity. DAO holdings follow the current cell
+All capacities/compensation are exact decimal **shannon strings**. The balance
+is stated in three disjoint parts, each true by its name, and the route fails
+with the address and the operands if they do not make it:
+`balance = daoCellsCapacity + otherCellsOccupiedCapacity + otherCellsFreeCapacity`.
+`daoCellsCapacity` is the whole capacity of the address's Nervos DAO cells
+(deposits and withdrawal requests, the `dao` class); `otherCellsOccupiedCapacity`
+is what pays for the bytes of its other cells; `otherCellsFreeCapacity` is the
+rest of its other cells, the CKB they hold beyond what their bytes occupy. No
+part is "spendable": a lock, a `since` or a cellbase's maturity decides that,
+and the route reads none of them. (`freeCapacity` and `daoFreeCapacity`, the
+other cells' free part and the DAO cells' free part, are gone.) DAO holdings follow the current cell
 lock, including a withdrawal request received from another depositor. The older
 `/dao/deposits/{lock_hash}` and `/dao/summary/{lock_hash}` describe the original
 depositor's lifecycle history and must not stand in for current holdings.

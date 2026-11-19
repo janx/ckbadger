@@ -2,6 +2,7 @@
 import { ItemDeltaFact, readable } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { formatOccupiedDelta } from '@/lib/occupied';
+import { orderParticipants } from '@/lib/participant-order';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { LockWordsView, partyLock } from '@/components/ui/lock-kind';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -107,6 +108,25 @@ function netNote(note: ReturnType<typeof balanceNet>['note']): string {
   }
 }
 
+/**
+ * The order a reader needs (lane P1 follow-up; third round, review p-logic-chain NOTE 4): who gave,
+ * then who got, then who neither gave nor got; each group in the feed's order, the largest CKB
+ * change first (`orderParticipants`). A party gave if its CKB or any item left it: a party that gave
+ * only a token stood last, ordered by CKB alone. A party that gave CKB and got an item gave.
+ */
+function balanceOrder(participants: ParticipantInfo[]): ParticipantInfo[] {
+  const gave = (p: ParticipantInfo) =>
+    BigInt(p.ckbDelta) < BigInt(0) || p.itemDeltas.some((i) => BigInt(String(i.delta)) < BigInt(0));
+  const got = (p: ParticipantInfo) =>
+    BigInt(p.ckbDelta) > BigInt(0) || p.itemDeltas.some((i) => BigInt(String(i.delta)) > BigInt(0));
+  const ordered = orderParticipants(participants);
+  return [
+    ...ordered.filter(gave),
+    ...ordered.filter((p) => !gave(p) && got(p)),
+    ...ordered.filter((p) => !gave(p) && !got(p)),
+  ];
+}
+
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address}:${i}`;
 }
@@ -129,6 +149,10 @@ export function BalanceChanges({
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const form = balanceForm(width);
+  // the order a reader needs (lane P1 follow-up; review chain-b): who gave, then who got, each
+  // the largest first, as the feed and What moved order them; the Net row, with the fee, last. Read
+  // in the section's boundary, so a value it cannot read fails the section in place.
+  const parties = () => balanceOrder(activity.participants);
   const net = () =>
     balanceNet({
       hash: activity.txHash,
@@ -159,7 +183,7 @@ export function BalanceChanges({
                 </span>
                 <span role="columnheader">Items</span>
               </div>
-              {activity.participants.map((p, i) => (
+              {parties().map((p, i) => (
                 <div
                   key={partyKey(p, i)}
                   role="row"
@@ -167,7 +191,8 @@ export function BalanceChanges({
                   className={cn(BALANCE_GRID, 'border-row-rule items-baseline border-b py-2')}
                 >
                   <span role="cell" className="min-w-0">
-                    <ParticipantRefView participant={p} size="row" compact quiet />
+                    {/* the row's party, its key (components/ui/link.tsx) */}
+                    <ParticipantRefView participant={p} size="row" compact quiet look="key" />
                     {/* a space between the party and its lock: two units, a line between them
                         where they do not fit the track together (B4 second fix round) */}{' '}
                     <LockLabel participant={p} size="row" />
@@ -214,12 +239,14 @@ export function BalanceChanges({
             </div>
           ) : (
             <ul aria-label="Balance changes by participant" data-form={form}>
-              {activity.participants.map((p, i) => {
+              {parties().map((p, i) => {
                 // the three-line card is a phone's (under 480 px of container): tight; the
                 // two-line card is drawn at 1024 too (the 640 px column), beside the summary,
                 // the tiles and What moved, which write the same party at the row size (R9)
                 const size: ShortSize = form === 'three-line' ? 'tight' : 'row';
-                const party = <ParticipantRefView participant={p} size={size} compact quiet />;
+                const party = (
+                  <ParticipantRefView participant={p} size={size} compact quiet look="key" />
+                );
                 const ckb = <CkbAmount form="summary" shannons={BigInt(p.ckbDelta)} />;
                 const occupied = (
                   <>

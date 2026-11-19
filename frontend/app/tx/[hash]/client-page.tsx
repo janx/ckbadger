@@ -30,7 +30,14 @@ import {
   readable,
 } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
-import { flowKey, onlyFeeMoved, txFlows } from '@/lib/tx-flows';
+import {
+  daoStepsAttributed,
+  flowKey,
+  onlyFeeMoved,
+  txFlows,
+  type FlowEnd,
+  type TxFlow,
+} from '@/lib/tx-flows';
 import { anchoredOutPoint } from '@/lib/tx-cell-link';
 import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
@@ -73,7 +80,9 @@ import {
   type CellDep,
   type ItemDelta,
   type ParticipantInfo,
+  TAG_DAO,
 } from '@/lib/api';
+import { BlockLink } from '@/components/ui/block-link';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { txComment } from '@/lib/tx-comment';
@@ -90,6 +99,7 @@ import {
   capacityEquation,
   txLinks,
   txMovements,
+  type TxMovement,
   type TxHover,
   type TxLinkSets,
 } from '@/lib/tx-detail-model';
@@ -184,7 +194,7 @@ function Parties({ parties }: { parties: readonly ParticipantInfo[] }) {
       {shown.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && (parties.length > 2 ? ', ' : ' and ')}
-          <ParticipantRefView participant={p} size="row" compact quiet />
+          <ParticipantRefView participant={p} size="row" compact quiet look="inline" />
         </Fragment>
       ))}
       {parties.length > 2 && ` and ${parties.length - 2} more`}
@@ -281,6 +291,179 @@ function listWords(words: readonly string[]): string {
  * its fee says so in one sentence, and with that sentence the figure and a one-party table, which
  * would restate the fee alone, are not drawn (`onlyFeeMoved`).
  */
+/**
+ * A transaction's Nervos DAO steps in the lede, from the activity's own kind (lane P1 follow-up;
+ * review chain-b tx-dao-deposit: the page drew a deposit as a payment): each kind of step once, with
+ * its amount where the transaction takes one such step and its count where it takes several (the
+ * API states no total, and the page sums none), and the parties the activity tags DAO, whose cells
+ * hold the step. Compensation is the DAO's word, never interest.
+ */
+function DaoSentences({ activity }: { activity: GlobalActivity }) {
+  const steps = activity.protocolActions.filter((pa) => pa.protocol === 'dao');
+  if (steps.length === 0) return null;
+  const holders = activity.participants.filter((p) => (p.tags & TAG_DAO) !== 0);
+  if (holders.length === 0)
+    throw new Error(`${activity.txHash}: a Nervos DAO step and no party the activity tags DAO`);
+  // whose each step is, where the activity says it (lane P1, third round; review p-logic-chain
+  // SHOULD 2): one party tagged DAO, or steps of one kind. Otherwise each step is said without a
+  // party, and the parties whose cells took them are named once after them.
+  const attributed = daoStepsAttributed(activity);
+  const who = <Parties parties={holders} />;
+  const amount = (shannons: bigint) => (
+    <CkbAmount form="summary" shannons={shannons} signed={false} tone="plain" />
+  );
+  const kinds = [...new Set(steps.map((pa) => pa.action))];
+  return (
+    <>
+      {kinds.map((kind) => {
+        const of = steps.filter((pa) => pa.action === kind);
+        const one = of.length === 1 ? protocolActionMeta(of[0]) : null;
+        const count = of.length.toLocaleString('en-US');
+        switch (kind) {
+          case 'deposit':
+            return one ? (
+              <Fragment key={kind}>
+                {amount(one.capacity!)} went into a Nervos DAO deposit
+                {attributed && <> held by {who}</>}.{' '}
+              </Fragment>
+            ) : (
+              <Fragment key={kind}>
+                {count} Nervos DAO deposits were made{attributed && <>, held by {who}</>}.{' '}
+              </Fragment>
+            );
+          case 'withdraw_request':
+            if (!attributed)
+              return one ? (
+                <Fragment key={kind}>
+                  A Nervos DAO deposit of {amount(one.capacity!)}, made at{' '}
+                  <BlockLink look="inline" number={one.depositBlock!} />, was asked to be
+                  withdrawn.{' '}
+                </Fragment>
+              ) : (
+                <Fragment key={kind}>
+                  {count} Nervos DAO deposits were asked to be withdrawn.{' '}
+                </Fragment>
+              );
+            return one ? (
+              <Fragment key={kind}>
+                {who} asked to withdraw a Nervos DAO deposit of {amount(one.capacity!)}, made at{' '}
+                <BlockLink look="inline" number={one.depositBlock!} />.{' '}
+              </Fragment>
+            ) : (
+              <Fragment key={kind}>
+                {who} asked to withdraw {count} Nervos DAO deposits.{' '}
+              </Fragment>
+            );
+          case 'withdraw_complete':
+            if (!attributed)
+              return one ? (
+                <Fragment key={kind}>
+                  {amount(one.capacity!)} came out of the Nervos DAO, with{' '}
+                  {amount(one.compensation!)} of compensation.{' '}
+                </Fragment>
+              ) : (
+                <Fragment key={kind}>
+                  {count} Nervos DAO deposits were withdrawn, each with its compensation.{' '}
+                </Fragment>
+              );
+            return one ? (
+              <Fragment key={kind}>
+                {who} withdrew {amount(one.capacity!)} from the Nervos DAO, with{' '}
+                {amount(one.compensation!)} of compensation.{' '}
+              </Fragment>
+            ) : (
+              <Fragment key={kind}>
+                {who} withdrew {count} Nervos DAO deposits, each with its compensation.{' '}
+              </Fragment>
+            );
+          default:
+            throw new Error(`${activity.txHash}: a Nervos DAO step "${kind}" has no sentence`);
+        }
+      })}
+      {!attributed && <>The parties whose cells took these steps: {who}. </>}
+    </>
+  );
+}
+
+/**
+ * One movement in the lede, as the figure draws it (lane P1, third round; review p-logic-chain
+ * SHOULD 5 and NOTE 2): what left the givers, what reached the receivers, and, where the flow has
+ * one, the part minted here or burnt here (a flow has at most one of each terminal, `txFlows`).
+ * "100 Seal moved from A to B." / "100 Seal reached B: 50 from A, and 50 minted here." / "100 Seal
+ * left A: 60 to B, and 40 burnt." / "100 Seal was minted to B." / "100 Seal left A and was burnt."
+ */
+function MovementSentence({ m, flow }: { m: TxMovement; flow: TxFlow }) {
+  const minted = flow.from.find((e) => e.t === 'minted')?.amount;
+  const burnt = flow.to.find((e) => e.t === 'burnt')?.amount;
+  const named = (amount: bigint) =>
+    m.item ? (
+      <ItemName item={m.item} amount={amount} />
+    ) : (
+      <CkbAmount form="summary" shannons={amount} signed={false} tone="plain" />
+    );
+  // a part of a token's flow, in its units (the name stands once, at the sentence's head)
+  const part = (amount: bigint) => {
+    if (m.item?.kind !== 'token')
+      throw new Error(`${flow.key}: a part minted or burnt beside its parties, of no token`);
+    return (
+      <TokenAmount
+        form="summary"
+        amount={amount.toString()}
+        decimals={m.item.decimals ?? null}
+        tone="plain"
+      />
+    );
+  };
+  if (m.from.length > 0 && m.to.length > 0) {
+    if (minted === undefined && burnt === undefined)
+      return (
+        <>
+          {named(flow.received)} moved from <Parties parties={m.from} /> to{' '}
+          <Parties parties={m.to} />.{' '}
+        </>
+      );
+    if (burnt === undefined)
+      return (
+        <>
+          {named(flow.received)} reached <Parties parties={m.to} />: {part(flow.sent)} from{' '}
+          <Parties parties={m.from} />, and {part(minted!)} minted here.{' '}
+        </>
+      );
+    if (minted === undefined)
+      return (
+        <>
+          {named(flow.sent)} left <Parties parties={m.from} />: {part(flow.received)} to{' '}
+          <Parties parties={m.to} />, and {part(burnt)} burnt.{' '}
+        </>
+      );
+    return (
+      <>
+        {named(flow.sent)} left <Parties parties={m.from} /> and {part(minted)} were minted here;{' '}
+        {part(flow.received)} reached <Parties parties={m.to} /> and {part(burnt)} were burnt.{' '}
+      </>
+    );
+  }
+  if (m.to.length > 0)
+    return m.item && minted !== undefined ? (
+      <>
+        {named(flow.received)} was minted to <Parties parties={m.to} />.{' '}
+      </>
+    ) : (
+      <>
+        {named(flow.received)} arrived at <Parties parties={m.to} />.{' '}
+      </>
+    );
+  return m.item && burnt !== undefined ? (
+    <>
+      {named(flow.sent)} left <Parties parties={m.from} /> and was burnt.{' '}
+    </>
+  ) : (
+    <>
+      {named(flow.sent)} left <Parties parties={m.from} />.{' '}
+    </>
+  );
+}
+
 function TxSummary({
   activity,
   fee,
@@ -290,9 +473,19 @@ function TxSummary({
   fee: string;
   compensation: bigint | null;
 }) {
-  const moves = txMovements(activity);
+  const items = txMovements(activity);
   const flows = txFlows({ hash: activity.txHash, activity, fee, compensation });
-  const feeOnly = onlyFeeMoved(flows);
+  const feeOnly = onlyFeeMoved(activity, flows);
+  // the CKB leg beside the items (lane P1, third round; review p-logic-chain NOTE 2: an NFT sale
+  // said the NFT and not the payment): where an item moved, the CKB that reached parties is said
+  // after it, from the CKB flow's parties
+  const ckbFlow = flows.find((f) => f.key === 'ckb');
+  const partiesOf = (ends: readonly FlowEnd[]) =>
+    ends.flatMap((e) => (e.t === 'party' ? [e.party] : []));
+  const moves: TxMovement[] =
+    items.some((m) => m.item !== null) && ckbFlow && ckbFlow.received > BigInt(0)
+      ? [...items, { item: null, from: partiesOf(ckbFlow.from), to: partiesOf(ckbFlow.to) }]
+      : items;
   const flowOf = (item: ItemDelta | null) => {
     const key = item ? flowKey(item) : 'ckb';
     const flow = flows.find((f) => f.key === key);
@@ -316,39 +509,9 @@ function TxSummary({
     <p data-testid="tx-summary" className="text-text text-body max-w-measure">
       {moves.length === 0 && mark && <ClassMark kind={mark} size={12} className="mr-1.5" />}
       {ran.length > 0 && `It ran ${listWords(ran)}. `}
-      {moves.map((m, i) => {
-        const flow = flowOf(m.item);
-        // what the sentence says moved: what reached its receivers, or what left its givers
-        const amount = m.to.length > 0 ? flow.received : flow.sent;
-        return (
-          <Fragment key={i}>
-            {m.item ? (
-              <ItemName item={m.item} amount={amount} />
-            ) : (
-              <CkbAmount form="summary" shannons={amount} signed={false} tone="plain" />
-            )}
-            {m.from.length > 0 && m.to.length > 0 ? (
-              <>
-                {' moved from '}
-                <Parties parties={m.from} />
-                {' to '}
-                <Parties parties={m.to} />
-              </>
-            ) : m.to.length > 0 ? (
-              <>
-                {' arrived at '}
-                <Parties parties={m.to} />
-              </>
-            ) : (
-              <>
-                {' left '}
-                <Parties parties={m.from} />
-              </>
-            )}
-            {'. '}
-          </Fragment>
-        );
-      })}
+      {moves.map((m, i) => (
+        <MovementSentence key={i} m={m} flow={flowOf(m.item)} />
+      ))}
       {feeOnly && (
         <>
           {'Only the fee moved: '}
@@ -356,26 +519,34 @@ function TxSummary({
           {` kept the rest of ${activity.participants.length === 1 ? 'its' : 'their'} CKB. `}
         </>
       )}
+      {/* the DAO's steps beside whatever else moved (lane P1, third round; NOTE 2: they were
+          skipped when an item moved, an iCKB deposit saying only its iCKB) */}
+      {readable(activity.txHash, () => (
+        <DaoSentences activity={activity} />
+      ))}
       {moves.length === 0 &&
-        activity.protocolActions.map((pa, i) => (
-          <Fragment key={i}>
-            {readable(activity.txHash, () => {
-              // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
-              const parts = protocolActionNoteParts(pa, 'row');
-              return parts.length ? (
-                <>
-                  {parts.map((part, j) => (
-                    <Fragment key={j}>
-                      {j > 0 && ', '}
-                      {part}
-                    </Fragment>
-                  ))}
-                  {'. '}
-                </>
-              ) : null;
-            })}
-          </Fragment>
-        ))}
+        // the DAO's steps are said above, in their sentences; the other protocols' facts here
+        activity.protocolActions
+          .filter((pa) => pa.protocol !== 'dao')
+          .map((pa, i) => (
+            <Fragment key={i}>
+              {readable(activity.txHash, () => {
+                // prose: the facts in a sentence, joined by commas (a "·" list is for rows)
+                const parts = protocolActionNoteParts(pa, 'row');
+                return parts.length ? (
+                  <>
+                    {parts.map((part, j) => (
+                      <Fragment key={j}>
+                        {j > 0 && ', '}
+                        {part}
+                      </Fragment>
+                    ))}
+                    {'. '}
+                  </>
+                ) : null;
+              })}
+            </Fragment>
+          ))}
     </p>
   );
 }
@@ -427,8 +598,23 @@ function WitnessRow({
     }
     if (w.kind === 'cellbase') {
       const witness = required(tx.cellbaseWitness, tx.hash, 'cellbaseWitness');
-      const lock =
-        registeredName(lookup, witness.lock.codeHash) ?? shortenHash(witness.lock.codeHash, 'row');
+      // the miner lock by the one decision (lane P1 follow-up): its name, or "lock 0x…" and its
+      // hash type where the name does not cover it (a lock on the default lock's code hash by data)
+      const words = lockWords(
+        cellLockFacts(
+          {
+            lock: witness.lock,
+            name: registeredName(lookup, witness.lock.codeHash),
+            address: null,
+          },
+          `Transaction ${tx.hash} cellbase witness`
+        ),
+        'column'
+      );
+      if (words === null)
+        throw new Error(`${tx.hash}: a column's lock words are never empty (its cellbase witness)`);
+      const named = words.form !== 'not-indexed' && words.name !== null;
+      const lock = `${named ? 'lock ' : ''}${lockWordsText(words, 'row')}`;
       if (minerMessage && minerMessage.raw !== witness.message)
         throw new Error(
           `${tx.hash}: the block's miner message ${minerMessage.raw} is not its cellbase witness message ${witness.message}`
@@ -439,7 +625,7 @@ function WitnessRow({
           : minerMessage.text === null
             ? `${formatCount((witness.message.length - 2) / 2, 'byte')}, not text`
             : `“${minerMessage.text}”`;
-      return `miner lock ${lock}(${shortenHash(witness.lock.args, 'row')}) · message ${message}`;
+      return `miner ${lock}(${shortenHash(witness.lock.args, 'row')}) · message ${message}`;
     }
     return fields.map((f) => `${f.name} ${formatCount(f.end - f.start, 'B', 'B')}`).join(' · ');
   };
@@ -524,7 +710,8 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
         ?.filter((name) => name.outputIndex === witness.index)
         .map((name) => (
           <div key={name.identityId} data-testid="tx-witness-dotcell-records">
-            <p className="text-text-dim text-small max-w-measure mb-3">
+            {/* which name's records these are: a statement, the reading ink (R3; P1 follow-up) */}
+            <p className="text-text text-small max-w-measure mb-3">
               records payload of{' '}
               <Link look="inline" href={getIdentityItemDetailHref('dotcell', name.label)}>
                 {name.name}
@@ -617,7 +804,8 @@ function DepRow({
           {dep.resolvedCells.map((cell) => {
             const memberServes = names([...cell.scriptHashes, ...cell.outputLockScriptHashes]);
             return (
-              <span key={`${cell.txHash}:${cell.index}`} className="text-text-dim block">
+              // a member of the group, its cell and what it serves: values, the reading ink
+              <span key={`${cell.txHash}:${cell.index}`} className="text-text block">
                 <Link look="inline" href={`/cell/${cell.txHash}-${cell.index}`}>
                   ↳ <ShortId value={cell.txHash} kind="hash" size="row" />
                   <OutpointIndex index={cell.index} />
@@ -926,7 +1114,10 @@ export default function TransactionDetailPage() {
     activity !== undefined &&
     activity !== null &&
     readPart(() =>
-      onlyFeeMoved(txFlows({ hash, activity, fee: tx.fee, compensation: compensation ?? null }))
+      onlyFeeMoved(
+        activity,
+        txFlows({ hash, activity, fee: tx.fee, compensation: compensation ?? null })
+      )
     ).value === true;
 
   // ---- hover linking by group identity (TX-14) ----
@@ -1026,7 +1217,7 @@ export default function TransactionDetailPage() {
         ? activityHeadline(activity)
         : 'Transaction';
   const summary = isProvisional ? (
-    <p className="text-text-dim text-small max-w-measure">
+    <p className="text-text text-small max-w-measure">
       Activity and canonical cell structure are available once this transaction is committed and
       indexed.
     </p>
@@ -1038,7 +1229,29 @@ export default function TransactionDetailPage() {
       {tx.pays === undefined ? (
         <ActivityReadError txHash={hash} error={new Error('cellbase has no "pays" field')} />
       ) : tx.pays === null ? (
-        'It pays no block’s reward: no block before it is final yet.'
+        // the API's null: the block whose reward it would pay is the genesis block or before it
+        // (lane P1, third round; review p-logic-chain SHOULD 4: it read "no block before it is
+        // final yet", false for block 0 and for the blocks after it)
+        tx.blockNumber === 0 ? (
+          readable(hash, () => (
+            <>
+              The genesis block’s cellbase pays no block’s reward: it created the chain’s first
+              cells,{' '}
+              <CkbAmount
+                form="summary"
+                shannons={exactUnsignedInteger(
+                  required(tx.outputsCapacity, hash, 'outputsCapacity'),
+                  `${hash}: outputs capacity`
+                )}
+                signed={false}
+                tone="plain"
+              />
+              .
+            </>
+          ))
+        ) : (
+          'It pays no block’s reward: the block whose reward it would pay is the genesis block, which earns none, or would come before the chain began.'
+        )
       ) : (
         readable(hash, () => {
           const pays = tx.pays!;
@@ -1216,6 +1429,7 @@ export default function TransactionDetailPage() {
               size="row"
               compact
               quiet
+              look="inline"
             />
             {unitNode(
               feePaidBy.length > 1 && ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`
@@ -1439,9 +1653,14 @@ export default function TransactionDetailPage() {
                 )
               }
             >
-              <p className="text-text-dim text-small max-w-measure -mt-2 mb-4">
+              {/* an explaining sentence: the reading ink (R3; lane P1 follow-up) */}
+              <p className="text-text text-small max-w-measure -mt-2 mb-4">
                 {tx.isCellbase
-                  ? 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
+                  ? tx.blockNumber === 0
+                    ? 'The genesis cellbase consumes no cell: it creates the chain’s first cells.'
+                    : tx.pays === null
+                      ? 'A cellbase consumes no cell; this one pays no block’s reward.'
+                      : 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
                   : compensation
                     ? 'A transaction spends whole cells and creates new ones. The Nervos DAO adds the compensation; the rest of the difference is the fee.'
                     : 'A transaction spends whole cells and creates new ones. Capacity is conserved; the difference is the fee.'}
@@ -1554,7 +1773,7 @@ export default function TransactionDetailPage() {
                   {selectedGroup && (
                     <p
                       data-testid="tx-witness-focused-group"
-                      className="text-text-dim max-w-measure mt-3 [overflow-wrap:anywhere]"
+                      className="text-text max-w-measure mt-3 [overflow-wrap:anywhere]"
                     >
                       Focused script group: {selectedGroup}{' '}
                       <button

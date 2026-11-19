@@ -70,8 +70,9 @@ export function RewardBreakdown({
 }) {
   const context = `Block ${block.number} reward`;
   if (!block.rewardBreakdown || block.miningReward === null) {
+    // statements: genesis has no reward, or which block's cellbase pays it (R3; lane P1 follow-up)
     return (
-      <p className="text-text-dim text-small max-w-measure">
+      <p className="text-text text-small max-w-measure">
         {block.number === 0 ? (
           'Genesis has no mining reward.'
         ) : (
@@ -124,6 +125,13 @@ export function RewardBreakdown({
     proposal: <SentenceNodes parts={proposalNote(proposalFees, proposalFeesError)} />,
   };
   const share = (value: bigint) => (total === BigInt(0) ? '0.00' : percentFigure(value, total));
+  // a fee share with nothing in it says nothing ("0 of 0 in fees of the 0 transactions committed
+  // here"): it is not drawn, and a reward that holds no fee says so once (lane P1 follow-up;
+  // review chain-a block-quiet). The issuance shares are drawn always.
+  const rows = parts.filter(
+    (p) => p.value > BigInt(0) || (p.key !== 'committed' && p.key !== 'proposal')
+  );
+  const noFees = parts[2].value === BigInt(0) && parts[3].value === BigInt(0);
   return (
     <div className="text-small space-y-3">
       <div data-testid="reward-total" className="text-text-bright text-body font-medium">
@@ -137,6 +145,7 @@ export function RewardBreakdown({
               address={block.minerAddress}
               pool={block.minerPool}
               size="row"
+              look="inline"
               className="text-body font-normal"
             />
           </>
@@ -165,7 +174,7 @@ export function RewardBreakdown({
         </div>
       )}
       <dl className="grid grid-cols-[14px_minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-2 md:grid-cols-[14px_190px_150px_minmax(0,1fr)]">
-        {parts.map((p) => (
+        {rows.map((p) => (
           <div key={p.key} className="contents">
             <span
               aria-hidden="true"
@@ -188,6 +197,7 @@ export function RewardBreakdown({
           </div>
         ))}
       </dl>
+      {noFees && <p className="text-text max-w-measure">This block earned no fees.</p>}
     </div>
   );
 }
@@ -196,7 +206,7 @@ export function RewardBreakdown({
 export function RewardPaidBy({ block }: { block: RewardBlock }) {
   if (block.rewardPaidAtBlock === null) return null;
   return (
-    <span className="text-text-dim text-small">
+    <span className="text-text text-small">
       paid by the cellbase of{' '}
       <Link look="inline" href={`/blocks/${block.rewardPaidAtBlock}`}>
         {formatBlockNumber(block.rewardPaidAtBlock)}

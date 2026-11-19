@@ -30,6 +30,7 @@ import { formatCount } from '@/lib/format-count';
 import { occupiedCapacityText } from '@/lib/occupied';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
+import { cellLockFacts, lockWords } from '@/components/ui/lock-kind';
 import { Pager } from '@/components/ui/pager';
 import type { StripFact } from '@/components/ui/status-strip';
 import { DetailFacts } from '@/components/ui/detail-layout';
@@ -71,8 +72,14 @@ export function AddressLoadState({
         ? `${label} unavailable.`
         : null;
   if (sentence === null) return null;
-  return (
-    <p className="text-text-dim text-small max-w-measure py-3" role={error ? 'alert' : 'status'}>
+  // a failed read is a statement, the reading ink; the loading and unavailable line is quiet, a
+  // transient or empty line (R3; lane P1 follow-up)
+  return error ? (
+    <p className="text-text text-small max-w-measure py-3" role="alert">
+      {sentence}
+    </p>
+  ) : (
+    <p className="text-text-dim text-small max-w-measure py-3" role="status">
       {sentence}
     </p>
   );
@@ -137,14 +144,16 @@ const composition = [
   ['decodePending', 'decode_pending'],
 ] as const;
 /** "free part of 5 deposits": what the DAO free figure is made of (BA-37). */
-function daoFreeNote(holdings: AddressHoldings): string | undefined {
+/** The Nervos DAO cells a DAO part holds, by kind: "in 5 deposits", "in 1 deposit and 1 withdrawal request". */
+function daoCellsNote(holdings: AddressHoldings): string {
   const { depositCellsCount: deposits, withdrawalRequestCellsCount: requests } = holdings;
-  if (deposits + requests === 0) return undefined;
+  if (deposits + requests === 0)
+    throw new Error(`Address ${holdings.lockScriptHash}: CKB in Nervos DAO cells and no DAO cell`);
   const parts = [
     ...(deposits ? [formatCount(deposits, 'deposit')] : []),
     ...(requests ? [formatCount(requests, 'withdrawal request')] : []),
   ];
-  return `free part of ${parts.join(' and ')}`;
+  return `in ${parts.join(' and ')}`;
 }
 
 /**
@@ -189,32 +198,37 @@ function ExactParts({ shannons }: { shannons: bigint }) {
 /**
  * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, in
  * its summary form (R5: whole CKB from 1,000 up, the exact value in its title) — and beside it,
- * exact, what the address can spend and, where it holds Nervos DAO cells, the compensation they
- * have accrued unclaimed (lane P1, the plan's P1 paragraph: they stood under the bar and four
- * sections down; the live cells it stood "in" are the status strip's, said once); the 18 px
- * partition with each share inside its part (a share its part cannot hold is in the part's title,
- * never cut), its parts named "occupied", "spendable" and "in the DAO" (they were occupied, free
- * and DAO free: three frees for three things); and under it the two parts it cannot spend, as
- * labelled facts with their unit (`DetailFacts`; "in the DAO" says so when there is none). A DAO
- * part of the partition is drawn only when the address has CKB in the Nervos DAO.
+ * exact, where it holds Nervos DAO cells, the compensation they have accrued unclaimed (lane P1);
+ * the 18 px partition with each share inside its part (a share its part cannot hold is in the
+ * part's title, never cut); and under it the same parts as labelled facts with their unit
+ * (`DetailFacts`). The parts are the route's three, each true by its name, that make the balance
+ * exactly (lane P1, third round; the lead's ruling on review p-logic-chain MUST 3 and SHOULD 3):
+ * "in Nervos DAO cells" (their whole capacity, as "Deposited" says it), "occupied" (what pays for
+ * the bytes of its other cells) and "free" (the rest of those), with one quiet line saying what
+ * "free" is. None is "spendable" (it was: said of the genesis burn cell's 8.4 billion and a
+ * miner's immature rewards), and a part with nothing in it is not drawn.
  */
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
   const sum = exactUnsignedInteger(holdings.balance, 'Address balance');
-  const occupied = exactUnsignedInteger(holdings.occupiedCapacity, 'Address occupied');
-  const free = exactUnsignedInteger(holdings.freeCapacity, 'Address free');
-  const daoFree = exactUnsignedInteger(holdings.daoFreeCapacity, 'Address DAO free');
-  if (occupied + free + daoFree !== sum)
+  const daoCells = exactUnsignedInteger(holdings.daoCellsCapacity, 'Address Nervos DAO cells');
+  const occupied = exactUnsignedInteger(
+    holdings.otherCellsOccupiedCapacity,
+    'Address other cells occupied'
+  );
+  const free = exactUnsignedInteger(holdings.otherCellsFreeCapacity, 'Address other cells free');
+  if (daoCells + occupied + free !== sum)
     throw new Error(
-      `Address ${holdings.lockScriptHash}: occupied ${occupied} + free ${free} + DAO free ${daoFree} ≠ balance ${sum} shannons`
+      `Address ${holdings.lockScriptHash}: Nervos DAO cells ${daoCells} + occupied ${occupied} + free ${free} ≠ balance ${sum} shannons`
     );
   const parts = (
     [
+      { key: 'in Nervos DAO cells', value: daoCells, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
       { key: 'occupied', value: occupied, color: DATA_COLOR, ink: 'text-base-bg' },
-      { key: 'spendable', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
-      { key: 'in the DAO', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
+      { key: 'free', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
     ] as const
   ).filter((p) => p.value > BigInt(0));
+  const holdsDao = holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0;
   const share = (v: bigint) => percentOf(v, sum);
   const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
   const zero = sum === BigInt(0);
@@ -233,35 +247,32 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
             <span className="text-text-dim text-body"> CKB</span>
           </div>
         </div>
-        <div data-role="balance-beside" className="text-small min-w-0 tabular-nums">
-          <DetailFacts
-            facts={[
-              { label: 'spendable', value: <ExactParts shannons={free} /> },
-              ...(holdings.depositCellsCount + holdings.withdrawalRequestCellsCount > 0
-                ? [
-                    {
-                      label: 'unclaimed compensation',
-                      value: (
-                        <ExactParts
-                          shannons={exactUnsignedInteger(
-                            holdings.daoUnclaimedCompensation,
-                            'Address unclaimed compensation'
-                          )}
-                        />
-                      ),
-                    },
-                  ]
-                : []),
-            ]}
-          />
-        </div>
+        {holdsDao && (
+          <div data-role="balance-beside" className="text-small min-w-0 tabular-nums">
+            <DetailFacts
+              facts={[
+                {
+                  label: 'unclaimed compensation',
+                  value: (
+                    <ExactParts
+                      shannons={exactUnsignedInteger(
+                        holdings.daoUnclaimedCompensation,
+                        'Address unclaimed compensation'
+                      )}
+                    />
+                  ),
+                },
+              ]}
+            />
+          </div>
+        )}
       </div>
       {!zero && (
         <div aria-label="Address capacity partition" className="mt-3.5">
           <div
             ref={barRef}
             role="img"
-            aria-label={`Balance partition: ${parts.map((p) => `${p.key} ${exact(p.value)} (${share(p.value)})`).join(', ')}${daoFree === BigInt(0) ? ', nothing in the Nervos DAO' : ''}`}
+            aria-label={`Balance partition: ${parts.map((p) => `${p.key} ${exact(p.value)} (${share(p.value)})`).join(', ')}`}
             className="text-meta flex h-[18px] gap-0.5"
           >
             {parts.map((p) => {
@@ -300,31 +311,48 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
           <div data-testid="balance-parts" className="text-small mt-2 tabular-nums">
             <DetailFacts
               facts={[
-                {
-                  label: 'occupied',
-                  value: (
-                    <>
-                      <ExactParts shannons={occupied} />{' '}
-                      <span className="text-text-dim">pays for the bytes its cells keep</span>
-                    </>
-                  ),
-                },
-                {
-                  label: 'in the DAO',
-                  value:
-                    daoFree === BigInt(0) ? (
-                      <span className="text-text-dim">no CKB in the Nervos DAO</span>
-                    ) : (
-                      <>
-                        <ExactParts shannons={daoFree} />
-                        {daoFreeNote(holdings) && (
-                          <span className="text-text-dim">, {daoFreeNote(holdings)}</span>
-                        )}
-                      </>
-                    ),
-                },
+                ...(daoCells > BigInt(0)
+                  ? [
+                      {
+                        label: 'in Nervos DAO cells',
+                        value: (
+                          <>
+                            <ExactParts shannons={daoCells} />{' '}
+                            <span className="text-text-dim">{daoCellsNote(holdings)}</span>
+                          </>
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(occupied > BigInt(0)
+                  ? [
+                      {
+                        label: 'occupied',
+                        value: (
+                          <>
+                            <ExactParts shannons={occupied} />{' '}
+                            <span className="text-text-dim">
+                              pays for the bytes of its other cells
+                            </span>
+                          </>
+                        ),
+                      },
+                    ]
+                  : []),
+                ...(free > BigInt(0)
+                  ? [{ label: 'free', value: <ExactParts shannons={free} /> }]
+                  : []),
               ]}
             />
+            {/* what "free" is, said once in a quiet line (the lead's ruling): no part is called
+                spendable, since the page cannot know what a lock, a since or a cellbase's
+                maturity allows */}
+            {free > BigInt(0) && (
+              <div data-testid="free-note" className="text-text-dim max-w-measure mt-1.5">
+                Free is the CKB its other cells hold beyond what their bytes occupy; whether it can
+                be spent, their locks decide.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -344,12 +372,40 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
  * live cells and the holdings come with the holdings read, and an address read without its lock
  * script states no lock (the evidence tier says "Script unavailable").
  */
+/**
+ * The address's lock as the one decision names it (`lockWords`, lane P1 follow-up; the lock-words
+ * gate's known writers 7 and 11): the registry's name for its code hash ('Unknown' is the API's
+ * word for none), the lock read off the address and checked against its script. A lock on the
+ * default lock's code hash by data is another lock; the registry's name is the default lock's, so
+ * it has none and is written by its code hash (its hash type is the strip's note and the byte
+ * map's field). The strip and the evidence tier's byte map both write this one name.
+ */
+export function addressLockName(address: Address): string | null {
+  const lock = address.lockScript;
+  if (!lock) throw new Error(`address ${address.lockScriptHash}: no lock script to name`);
+  const registered = address.lockScriptInfo?.name ?? null;
+  const words = lockWords(
+    cellLockFacts(
+      {
+        lock,
+        name: registered !== null && registered.toLowerCase() !== 'unknown' ? registered : null,
+        address: address.address ?? null,
+      },
+      `address ${address.lockScriptHash}`
+    ),
+    'column'
+  );
+  if (words === null)
+    throw new Error(`address ${address.lockScriptHash}: a column's lock words are never empty`);
+  return words.form === 'not-indexed' ? null : words.name;
+}
+
 export function addressStripFacts(
   address: Address,
   holdings: AddressHoldings | undefined
 ): StripFact[] {
   const lock = address.lockScript;
-  const lockName = address.lockScriptInfo?.name;
+  const lockName = lock ? addressLockName(address) : null;
   const facts: StripFact[] = [];
   if (lock)
     facts.push({
@@ -699,105 +755,91 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       <div className="grid items-start gap-x-12 gap-y-9 lg:grid-cols-2">
         {holdings.holdings.dao > 0 && (
           <HoldingSection kind="dao" summary={summary('dao')} active={active} onActive={setActive}>
-            {holdings.holdings.dao === 0 ? (
-              <p className="text-text-dim text-small py-4">No live DAO holdings.</p>
-            ) : (
-              <>
-                <p className="text-text-dim text-small max-w-measure pt-3">
-                  {unitNode(formatCount(holdings.depositCellsCount, 'deposit'))} ·{' '}
-                  {unitNode(
-                    formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request')
-                  )}
-                </p>
-                {/* its unclaimed compensation stands beside the balance, said once (lane P1) */}
-                <dl className="text-small grid gap-3 py-3 sm:grid-cols-2">
-                  <div>
-                    <dt className="text-text-dim">
-                      {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
-                    </dt>
-                    <dd className="mt-1">
-                      <CkbAmount
-                        form="summary"
-                        shannons={BigInt(holdings.classes.dao.capacity)}
-                        signed={false}
-                        tone="plain"
-                        wrap
-                      />
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-text-dim">Estimated APC</dt>
-                    <dd className="mt-1">
-                      {holdings.estimatedApc === null ? 'Unavailable' : `${holdings.estimatedApc}%`}
-                    </dd>
-                  </div>
-                </dl>
-                {deposits.data && (
-                  <AddressStaleNotice error={deposits.error} label="DAO holdings" />
-                )}
-                {deposits.data ? (
-                  <>
-                    {deposits.data.data.map((cell) => {
-                      const d = cell.dao;
-                      if (!d)
-                        throw new Error(
-                          `DAO cell ${cell.txHash}:${cell.outputIndex} has no deposit evidence`
-                        );
-                      if (d.status !== 'deposited' && d.status !== 'withdrawing')
-                        throw new Error(
-                          `Live DAO cell ${cell.txHash}:${cell.outputIndex} has invalid phase ${d.status}`
-                        );
-                      const eventBlock =
-                        d.status === 'withdrawing' ? d.withdrawRequestBlock : d.depositBlockNumber;
-                      const eventTimestamp =
-                        d.status === 'withdrawing'
-                          ? d.withdrawRequestTimestamp
-                          : d.depositTimestamp;
-                      if (eventBlock === null || eventTimestamp === null)
-                        throw new Error(
-                          `DAO cell ${cell.txHash}:${cell.outputIndex} is missing ${d.status} evidence`
-                        );
-                      return (
-                        <div
-                          key={`${cell.txHash}:${cell.outputIndex}`}
-                          data-dao-cell
-                          className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
-                        >
-                          <span className="text-text-dim">
-                            <Link look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
-                              {d.status === 'deposited'
-                                ? 'deposited'
-                                : d.status === 'withdrawing'
-                                  ? 'withdraw requested'
-                                  : 'withdrawn'}
-                            </Link>{' '}
-                            at{' '}
-                            <Link look="inline" href={`/blocks/${eventBlock}`}>
-                              {formatBlockNumber(eventBlock)}
-                            </Link>{' '}
-                            · <Utc8Date timestamp={eventTimestamp} />
-                          </span>
-                          <CkbAmount
-                            form="column"
-                            shannons={BigInt(cell.capacity)}
-                            signed={false}
-                            tone="plain"
-                            wrap
-                          />
-                        </div>
-                      );
-                    })}
-                    <AddressPagination
-                      pagination={daoPage}
-                      read={deposits.data}
-                      label="DAO cells"
+            <>
+              <p className="text-text text-small max-w-measure pt-3">
+                {unitNode(formatCount(holdings.depositCellsCount, 'deposit'))} ·{' '}
+                {unitNode(formatCount(holdings.withdrawalRequestCellsCount, 'withdrawal request'))}
+              </p>
+              {/* its unclaimed compensation stands beside the balance, said once (lane P1) */}
+              <dl className="text-small grid gap-3 py-3 sm:grid-cols-2">
+                <div>
+                  <dt className="text-text-dim">
+                    {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
+                  </dt>
+                  <dd className="mt-1">
+                    <CkbAmount
+                      form="summary"
+                      shannons={BigInt(holdings.classes.dao.capacity)}
+                      signed={false}
+                      tone="plain"
+                      wrap
                     />
-                  </>
-                ) : (
-                  <AddressLoadState label="DAO deposits" error={deposits.error} read={deposits} />
-                )}
-              </>
-            )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-text-dim">Estimated APC</dt>
+                  <dd className="mt-1">
+                    {holdings.estimatedApc === null ? 'Unavailable' : `${holdings.estimatedApc}%`}
+                  </dd>
+                </div>
+              </dl>
+              {deposits.data && <AddressStaleNotice error={deposits.error} label="DAO holdings" />}
+              {deposits.data ? (
+                <>
+                  {deposits.data.data.map((cell) => {
+                    const d = cell.dao;
+                    if (!d)
+                      throw new Error(
+                        `DAO cell ${cell.txHash}:${cell.outputIndex} has no deposit evidence`
+                      );
+                    if (d.status !== 'deposited' && d.status !== 'withdrawing')
+                      throw new Error(
+                        `Live DAO cell ${cell.txHash}:${cell.outputIndex} has invalid phase ${d.status}`
+                      );
+                    const eventBlock =
+                      d.status === 'withdrawing' ? d.withdrawRequestBlock : d.depositBlockNumber;
+                    const eventTimestamp =
+                      d.status === 'withdrawing' ? d.withdrawRequestTimestamp : d.depositTimestamp;
+                    if (eventBlock === null || eventTimestamp === null)
+                      throw new Error(
+                        `DAO cell ${cell.txHash}:${cell.outputIndex} is missing ${d.status} evidence`
+                      );
+                    return (
+                      <div
+                        key={`${cell.txHash}:${cell.outputIndex}`}
+                        data-dao-cell
+                        className="border-row-rule text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
+                      >
+                        <span className="text-text">
+                          <Link look="inline" href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
+                            {d.status === 'deposited'
+                              ? 'deposited'
+                              : d.status === 'withdrawing'
+                                ? 'withdraw requested'
+                                : 'withdrawn'}
+                          </Link>{' '}
+                          at{' '}
+                          <Link look="inline" href={`/blocks/${eventBlock}`}>
+                            {formatBlockNumber(eventBlock)}
+                          </Link>{' '}
+                          · <Utc8Date timestamp={eventTimestamp} />
+                        </span>
+                        <CkbAmount
+                          form="column"
+                          shannons={BigInt(cell.capacity)}
+                          signed={false}
+                          tone="plain"
+                          wrap
+                        />
+                      </div>
+                    );
+                  })}
+                  <AddressPagination pagination={daoPage} read={deposits.data} label="DAO cells" />
+                </>
+              ) : (
+                <AddressLoadState label="DAO deposits" error={deposits.error} read={deposits} />
+              )}
+            </>
           </HoldingSection>
         )}
         {holdings.holdings.token > 0 && (
@@ -813,9 +855,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             onActive={setActive}
           >
             {tokens.data && <AddressStaleNotice error={tokens.error} label="tokens" />}
-            {holdings.holdings.token === 0 ? (
-              <p className="text-text-dim text-small py-4">No tokens held.</p>
-            ) : tokens.data ? (
+            {tokens.data ? (
               <>
                 {tokens.data.data.map((t) => (
                   <div
@@ -857,9 +897,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             onActive={setActive}
           >
             {identities.data && <AddressStaleNotice error={identities.error} label="identities" />}
-            {holdings.holdings.identity === 0 ? (
-              <p className="text-text-dim text-small py-4">No identity cells held.</p>
-            ) : identities.data ? (
+            {identities.data ? (
               <>
                 {identities.data.data.map((c) => {
                   const d = c.display;
@@ -884,7 +922,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           {formatStandard(d.standard)}
                         </span>
                       </div>
-                      <div className="text-text-dim text-small flex flex-wrap justify-between gap-2">
+                      <div className="text-text text-small flex flex-wrap justify-between gap-2">
                         <span>
                           {unitNode(
                             c.expiresAt === null
@@ -1129,7 +1167,7 @@ function AddressCollectionObjects({
                       <CompositionBadge tier={d.compositionTier} size="sm" />
                     )}
                   </span>
-                  <span role="cell" className="text-text-dim hidden tabular-nums sm:block">
+                  <span role="cell" className="text-text hidden tabular-nums sm:block">
                     <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
                       {formatBlockNumber(c.createdAtBlock)}
                     </Link>

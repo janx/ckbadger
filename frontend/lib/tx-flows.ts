@@ -8,7 +8,7 @@
  * an exact bigint; a sum that does not conserve is an upstream bug and throws with the transaction
  * hash.
  */
-import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import { TAG_DAO, type GlobalActivity, type ItemDelta, type ParticipantInfo } from '@/lib/api';
 import { PARTICIPANT_LIMIT } from '@/lib/participant-order';
 
 export type FlowAsset =
@@ -53,6 +53,62 @@ export interface TxFlow {
 }
 
 const ZERO = BigInt(0);
+
+/** A Nervos DAO step in words, by the activity's action (the API's `dao` protocol actions). */
+const DAO_STEP: Readonly<Record<string, string>> = {
+  deposit: 'Nervos DAO deposit',
+  withdraw_request: 'Nervos DAO withdrawal request',
+  withdraw_complete: 'Nervos DAO withdrawal',
+};
+
+/**
+ * Whether the activity says whose each Nervos DAO step is (lane P1, third round; review
+ * p-logic-chain SHOULD 2). A DAO action names no party; the DAO tag says only that a party's cells
+ * took one of the steps. So a step is a party's where one party is tagged, or where every step is
+ * of one kind (each tagged party took that kind of step); where several parties are tagged and the
+ * steps are of more than one kind, the activity does not say which is whose. (What the route would
+ * have to send for it: each DAO action's owner, the lock hash of the cell that took the step.)
+ */
+export function daoStepsAttributed(activity: {
+  protocolActions: GlobalActivity['protocolActions'];
+  participants: readonly Pick<ParticipantInfo, 'tags'>[];
+}): boolean {
+  const kinds = new Set(
+    activity.protocolActions.filter((a) => a.protocol === 'dao').map((a) => a.action)
+  );
+  const tagged = activity.participants.filter((p) => (p.tags & TAG_DAO) !== 0);
+  return kinds.size <= 1 || tagged.length <= 1;
+}
+
+/**
+ * What a party's Nervos DAO step is, in words, from the activity's own kind (lane P1 follow-up;
+ * review chain-b tx-dao-deposit: What moved drew a deposit to its holder as a payment): the
+ * transaction's DAO actions, each named once, for a party the activity tags DAO (`TAG_DAO`: its
+ * cells hold the step); "a Nervos DAO step" where the activity does not say whose each step is
+ * (`daoStepsAttributed`), never a step the party did not take; null for any other party, or where
+ * the transaction takes no DAO step. A DAO action this page has no words for fails, by the
+ * transaction and the action.
+ */
+export function daoStepOf(
+  activity: {
+    txHash: string;
+    protocolActions: GlobalActivity['protocolActions'];
+    participants: readonly Pick<ParticipantInfo, 'tags'>[];
+  },
+  party: Pick<ParticipantInfo, 'tags'>
+): string | null {
+  if ((party.tags & TAG_DAO) === 0) return null;
+  const steps = [
+    ...new Set(activity.protocolActions.filter((a) => a.protocol === 'dao').map((a) => a.action)),
+  ];
+  if (steps.length === 0) return null;
+  const words = steps.map((step) => {
+    const said = DAO_STEP[step];
+    if (!said) throw new Error(`${activity.txHash}: a Nervos DAO step "${step}" has no words`);
+    return said;
+  });
+  return daoStepsAttributed(activity) ? words.join(', ') : 'a Nervos DAO step';
+}
 
 function exact(value: string | number, what: string, hash: string): bigint {
   const s = String(value);
@@ -191,11 +247,18 @@ export function txFlows({
 
 /**
  * Whether a transaction moved its fee and nothing else (lane P1, the plan's "a transaction that
- * moves only its fee says so in one line"): its flows are the CKB flow alone, which ends at the
- * miner and at no party, with no Nervos DAO compensation entering it. A transaction that moved
- * nothing, not even a fee, did not move "only its fee".
+ * moves only its fee says so in one line"): it takes no protocol step, and its flows are the CKB
+ * flow alone, which ends at the miner and at no party, with no Nervos DAO compensation entering
+ * it. A transaction that moved nothing, not even a fee, did not move "only its fee". The one
+ * decision the lede, What moved and the balance table follow (lane P1, third round; review
+ * p-logic-chain MUST 2: a DAO deposit or withdrawal request from the owner's own address leaves its
+ * one party −fee and no item, and read as "only the fee moved").
  */
-export function onlyFeeMoved(flows: readonly TxFlow[]): boolean {
+export function onlyFeeMoved(
+  activity: Pick<GlobalActivity, 'protocolActions'>,
+  flows: readonly TxFlow[]
+): boolean {
+  if (activity.protocolActions.length > 0) return false;
   if (flows.length !== 1 || flows[0].asset.kind !== 'ckb') return false;
   const [ckb] = flows;
   return (

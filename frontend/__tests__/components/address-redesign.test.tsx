@@ -24,6 +24,8 @@ import { addressCellSealId } from '@/lib/address-cell-seal';
 import type { Activity, ItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
 import { factsOf } from '@/__tests__/utils/facts';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 
 describe('Address v3 components', () => {
   it('keeps the balance hero once and preserves a single shannon in the partition', () => {
@@ -33,8 +35,9 @@ describe('Address v3 components', () => {
           ...holdingsFixture,
           balance: '10000000001',
           occupiedCapacity: '6100000000',
-          freeCapacity: '3900000001',
-          daoFreeCapacity: '0',
+          daoCellsCapacity: '0',
+          otherCellsOccupiedCapacity: '6100000000',
+          otherCellsFreeCapacity: '3900000001',
         }}
       />
     );
@@ -45,10 +48,13 @@ describe('Address v3 components', () => {
     expect(figure).toHaveAttribute('title', '100.00000001 CKB');
     expect(screen.queryByText('CKB held')).not.toBeInTheDocument();
     // Lane P (Address.dc.html): the exact parts are the quiet line under the bar. Re-pinned on
-    // purpose (lane P1): what it can spend stands beside the balance, its single shannon there
-    expect(
-      screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
-    ).toHaveTextContent('39.00000001');
+    // purpose (lane P1, third round; the lead's ruling on review p-logic-chain MUST 3): its free
+    // part, with its single shannon, is one of the balance's three parts under the bar (it stood
+    // beside the balance as "spendable")
+    expect(factsOf(screen.getByTestId('balance-parts'))).toContainEqual([
+      'free',
+      '39.00000001 CKB',
+    ]);
   });
 
   // Lane P, the Address board's balance hero: the 40 px figure (its fraction 22 px, dim), the
@@ -59,8 +65,9 @@ describe('Address v3 components', () => {
       ...holdingsFixture,
       balance: '31974266879443',
       occupiedCapacity: '29148600000000',
-      freeCapacity: '2825666879443',
-      daoFreeCapacity: '0',
+      daoCellsCapacity: '0',
+      otherCellsOccupiedCapacity: '29148600000000',
+      otherCellsFreeCapacity: '2825666879443',
       depositCellsCount: 0,
       withdrawalRequestCellsCount: 0,
       liveCellsCount: 828,
@@ -91,10 +98,11 @@ describe('Address v3 components', () => {
       expect(within(figure as HTMLElement).queryByText(/^\.66879443$/)).toBeNull();
       expect(figure.querySelector('wbr')).toBeNull();
       expect(hero).not.toHaveTextContent(/live cells?/);
-      // beside the balance, exact: what it can spend; no compensation where it holds no DAO cell
-      expect(factsOf(hero.querySelector('[data-role="balance-beside"]')!)).toEqual([
-        ['spendable', '28,256.66879443 CKB'],
-      ]);
+      // re-pinned on purpose (lane P1, third round; MUST 3): nothing beside the balance where it
+      // holds no DAO cell (it read "spendable 28,256.66879443 CKB", said of CKB a lock, a since or
+      // a cellbase's maturity may hold back)
+      expect(hero.querySelector('[data-role="balance-beside"]')).toBeNull();
+      expect(hero).not.toHaveTextContent('spendable');
     });
 
     it('draws the 18 px partition with each share inside and the exact parts in one line', () => {
@@ -103,26 +111,37 @@ describe('Address v3 components', () => {
       const bar = screen.getByRole('img', { name: /^Balance partition:/ });
       // re-pinned on purpose (lane P1; review chain-b address-dao-depositor: three "free"s for
       // three things): the parts are "occupied", "spendable" and "in the DAO"
+      // Re-pinned on purpose (lane P1, third round; the lead's ruling on review p-logic-chain MUST 3
+      // and SHOULD 3): the route's three parts, each true by its name: "in Nervos DAO cells" (their
+      // whole capacity), "occupied" (the bytes of its other cells) and "free" (the rest of those);
+      // none is "spendable", and a DAO part is drawn where it holds DAO cells
       expect(bar).toHaveAccessibleName(
-        'Balance partition: occupied 291,486.00000000 CKB (91.16%), spendable 28,256.66879443 CKB (8.84%), nothing in the Nervos DAO'
+        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.84%)'
       );
       expect(bar).toHaveClass('h-[18px]');
       const parts = [...bar.querySelectorAll('[data-part]')];
-      expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'spendable']);
-      // "spendable 8.84%" (15 glyphs, 108 px and 16 of padding) is wider than its 8.84 % of the
-      // 1,246 px bar (110 px): its share stands in the part's title, never cut (the next test)
-      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', '']);
-      expect(parts[1]).toHaveAttribute('title', 'spendable 8.84% · 28,256.66879443 CKB');
+      expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
+      // re-pinned (lane P1, third round): "free 8.84%" (10 glyphs, 72 px and 16 of padding) fits
+      // its 8.84 % of the 1,246 px bar (110 px), where "spendable 8.84%" (124 px) did not
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
+      expect(parts[1]).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
       // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals);
       // re-pinned with readability R4 (lane B7): labelled facts, each named as its part of the bar
       // (was one line joined by "·")
       // re-pinned on purpose (lane P1): the parts under the bar are the two the reader cannot
       // spend, each with its unit (the bar is by CKB); what it can spend stands beside the
       // balance, said once
+      // re-pinned on purpose (lane P1, third round; MUST 3 and SHOULD 3): the three parts, the DAO
+      // part only where it holds DAO cells (it read "in the DAO: no CKB in the Nervos DAO"), and
+      // one quiet line saying what "free" is
       expect(factsOf(screen.getByTestId('balance-parts'))).toEqual([
-        ['occupied', '291,486 CKB pays for the bytes its cells keep'],
-        ['in the DAO', 'no CKB in the Nervos DAO'],
+        ['occupied', '291,486 CKB pays for the bytes of its other cells'],
+        ['free', '28,256.66879443 CKB'],
       ]);
+      expect(screen.getByTestId('free-note')).toHaveTextContent(
+        'Free is the CKB its other cells hold beyond what their bytes occupy; whether it can be spent, their locks decide.'
+      );
+      expect(screen.getByTestId('free-note')).toHaveClass('text-text-dim');
     });
 
     it('keeps a share that cannot fit inside its part in the part title, never cut', () => {
@@ -130,10 +149,10 @@ describe('Address v3 components', () => {
       render(<AddressBalance holdings={board} />);
       const free = screen
         .getByRole('img', { name: /^Balance partition:/ })
-        .querySelector('[data-part="spendable"]')!;
+        .querySelector('[data-part="free"]')!;
       expect(free).toHaveTextContent(/^$/);
-      // re-pinned on purpose (lane P1): the part is "spendable"
-      expect(free).toHaveAttribute('title', 'spendable 8.84% · 28,256.66879443 CKB');
+      // re-pinned on purpose (lane P1, third round): the part is "free" (it was "spendable")
+      expect(free).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
     });
 
     it('adds the DAO part only when the address has CKB in the Nervos DAO', () => {
@@ -142,26 +161,50 @@ describe('Address v3 components', () => {
       const bar = screen.getByRole('img', { name: /^Balance partition:/ });
       expect(
         [...bar.querySelectorAll('[data-part]')].map((p) => p.getAttribute('data-part'))
-      ).toEqual(['occupied', 'spendable', 'in the DAO']);
-      // the exact form (R5, re-pinned on purpose: was "9,589,480.00000000"); re-pinned with
-      // readability R4 (lane B7): a labelled fact (was the line's last item after "·"); re-pinned
-      // on purpose (lane P1): "in the DAO", with its unit (it was "DAO free")
-      expect(factsOf(screen.getByTestId('balance-parts')).at(-1)).toEqual([
-        'in the DAO',
-        '9,589,480 CKB, free part of 5 deposits',
+      ).toEqual(['in Nervos DAO cells', 'occupied', 'free']);
+      // re-pinned on purpose (lane P1, third round; the lead's ruling on SHOULD 3): its DAO cells
+      // whole, as "Deposited" says them in its holdings (it read "in the DAO 9,589,480 CKB, free
+      // part of 5 deposits", the free part alone, while its 520 CKB of occupied stood under
+      // "occupied")
+      expect(factsOf(screen.getByTestId('balance-parts'))).toEqual([
+        ['in Nervos DAO cells', '9,590,000 CKB in 5 deposits'],
+        ['occupied', '6,607 CKB pays for the bytes of its other cells'],
+        ['free', '54,571.35338057 CKB'],
       ]);
-      // lane P1: its unclaimed compensation stands beside the balance, exact, with what it can
-      // spend
+      // lane P1: its unclaimed compensation stands beside the balance, exact (re-pinned, third
+      // round: alone, no "spendable" beside it)
       expect(
         factsOf(
           screen
             .getByRole('region', { name: 'Balance' })
             .querySelector('[data-role="balance-beside"]')!
         )
-      ).toEqual([
-        ['spendable', '54,571.35338057 CKB'],
-        ['unclaimed compensation', '259,870.84255174 CKB'],
+      ).toEqual([['unclaimed compensation', '259,870.84255174 CKB']]);
+    });
+
+    // Lane P1, third round (review p-logic-chain SHOULD 3): a deposit of exactly its occupied 102
+    // CKB has no free part, and it is still 102 CKB in a Nervos DAO cell: the page never says the
+    // address holds nothing in the Nervos DAO beside "1 deposit".
+    it('states a 102 CKB deposit as 102 CKB in Nervos DAO cells', () => {
+      stubChartWidth(1248);
+      render(
+        <AddressBalance
+          holdings={{
+            ...board,
+            balance: '10200000000',
+            occupiedCapacity: '10200000000',
+            daoCellsCapacity: '10200000000',
+            otherCellsOccupiedCapacity: '0',
+            otherCellsFreeCapacity: '0',
+            depositCellsCount: 1,
+            daoUnclaimedCompensation: '0',
+          }}
+        />
+      );
+      expect(factsOf(screen.getByTestId('balance-parts'))).toEqual([
+        ['in Nervos DAO cells', '102 CKB in 1 deposit'],
       ]);
+      expect(document.body).not.toHaveTextContent(/no CKB in the Nervos DAO/);
     });
 
     it('states a zero balance as a ghost 0 CKB with no bar', () => {
@@ -171,7 +214,9 @@ describe('Address v3 components', () => {
             ...board,
             balance: '0',
             occupiedCapacity: '0',
-            freeCapacity: '0',
+            daoCellsCapacity: '0',
+            otherCellsOccupiedCapacity: '0',
+            otherCellsFreeCapacity: '0',
             liveCellsCount: 0,
           }}
         />
@@ -237,6 +282,33 @@ describe('Address v3 components', () => {
     // Lane D2: a fact the page does not know is not passed: before the holdings read answers, the
     // strip states the lock and the transactions alone; the class counts must add up to the live
     // cells it states, or it refuses them by name.
+    // Lane P1 follow-up (the lock-words gate's known writer 7, the address's lock): the strip's
+    // lock is the one decision's. A lock on the default lock's code hash by data is not the default
+    // lock; the registry's name for that code hash is the default lock's and is not written for it,
+    // and its link opens that lock (its code hash by data), not the default lock's page.
+    it('names a lock on the default lock’s code hash by data by its code hash, not the default’s name', () => {
+      const args = `0x${'ab'.repeat(20)}`;
+      const byData = {
+        ...addressFixture,
+        address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+        lockScript: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+        lockScriptInfo: {
+          codeHash: DEFAULT_LOCK_CODE_HASH,
+          name: 'SECP256K1/blake160',
+          scriptKind: 'lock',
+          deprecated: false,
+        },
+      };
+      render(<StatusStrip label="Address status" facts={addressStripFacts(byData, undefined)} />);
+      const strip = screen.getByRole('group', { name: 'Address status' });
+      expect(factsOf(strip)[0]).toEqual(['lock', '0x9bd7e06f…a3cce8 · data · 20-byte args']);
+      expect(within(strip).getByRole('link', { name: '0x9bd7e06f…a3cce8' })).toHaveAttribute(
+        'href',
+        `/mainnet/script/${DEFAULT_LOCK_CODE_HASH}?hashType=data&kind=lock`
+      );
+      expect(strip).not.toHaveTextContent('SECP256K1/blake160');
+    });
+
     it('states what it knows before the holdings answer, and refuses class counts that do not add up', () => {
       const { unmount } = render(
         <StatusStrip label="Address status" facts={addressStripFacts(addressFixture, undefined)} />
@@ -381,24 +453,27 @@ describe('Address v3 components', () => {
     // minimum; Capacity 196 → 201 and Occupied 178 → 170 with their units at 12 px; Created at
     // 100 → 86), so the table is 965 px (renamed: it said "keeps the table at 992 px").
     // Re-pinned on purpose (readability R6): the cell's row stone 30 → 18 px, its footprint 38 →
-    // 26, Cell 226 → 214, the table 953 px (renamed: "965 px").
-    it('budgets the seal in the Cell column and keeps the table at 953 px', () => {
+    // 26, Cell 226 → 214, the table 953 px (renamed: "965 px"). Re-pinned on purpose (lane P1
+    // follow-up, item 6; renamed, it was "… 953 px"): Occupied is bounded by the largest
+    // transaction's 1,236,271 bytes, 170 → 186, the table 969 px.
+    it('budgets the seal in the Cell column and keeps the table at 969 px', () => {
       render(<AddressLiveCells rows={cells} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const widths = Array.from(table.querySelectorAll('col')).map(
         (c) => (c as HTMLElement).style.minWidth
       );
-      expect(widths).toEqual(['214px', '282px', '201px', '170px', '86px']);
+      expect(widths).toEqual(['214px', '282px', '201px', '186px', '86px']);
       // the out point and its gap, 187.6 rounded up with the stone's footprint
       expect(214 - 188).toBe(ROW_SEAL.cell.footprint);
-      expect(Number.parseFloat(table.style.minWidth)).toBe(953);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(969);
     });
 
     // Re-pinned on purpose (readability F3-e): the table changes form at its 965 px (was 992).
-    // Re-pinned on purpose (readability R6): at its 953 px (was 965).
+    // Re-pinned on purpose (readability R6): at its 953 px (was 965). Re-pinned on purpose (lane
+    // P1 follow-up, item 6): at its 969 px (was 953).
     it.each([
-      [953, 'table'],
-      [952, 'rows'],
+      [969, 'table'],
+      [968, 'rows'],
     ])('changes form where it did: at %i px it is %s', (width, form) => {
       atContainerWidth(width);
       const { container } = render(<AddressLiveCells rows={cells} />);
@@ -420,7 +495,11 @@ describe('Address v3 components', () => {
 
     // re-pinned on purpose (readability R6): the cell's stone footprint 38 → 26, Cell 226 → 214,
     // 953 px (renamed: "965 px")
-    it('the live cells: 953 px, a table from it', () => {
+    // Re-pinned on purpose (lane P1 follow-up, item 6; renamed, it was "… 953 px …"): a cell's
+    // occupied capacity is bounded by the largest transaction, genesis's 1,236,271 bytes
+    // (LARGEST_TX_BYTES, of record), not a block's 597,000: genesis's cells are past the limit
+    // (its secp256k1 data cell alone is 1,048,576 bytes). Occupied 170 → 186, 953 → 969
+    it('the live cells: 969 px, a table from it', () => {
       const budgets = [
         // the stone and its gap, the out point at the row size with a four-digit index
         ceil(ROW_SEAL.cell.footprint + at('0xdce40476…3993e1:9999', 13) + 16),
@@ -428,52 +507,57 @@ describe('Address v3 components', () => {
         ceil(16 + 8 + at('Other scripts', 13) + 8 + at('0x00000000…000000', 13) + 16),
         // under a billion CKB on one line with its unit at 12 px
         ceil(at('999,999,999.99999999', 13) + at(' CKB', 12) + 16),
-        // a cell is at most a block's 597,000 bytes
-        ceil(at('597,000.00000000', 13) + at(' CKB', 12) + 16),
+        // a cell is at most the largest transaction's 1,236,271 bytes, genesis's
+        ceil(at('1,236,271.00000000', 13) + at(' CKB', 12) + 16),
         // "#99,999,999", the last column
         ceil(at('#99,999,999', 13)),
       ];
-      expect(budgets).toEqual([214, 282, 201, 170, 86]);
-      expect(budgets.reduce((s, w) => s + w, 0)).toBe(953);
+      expect(budgets).toEqual([214, 282, 201, 186, 86]);
+      expect(budgets.reduce((s, w) => s + w, 0)).toBe(969);
       render(<AddressLiveCells rows={addressProducerCells.data} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
       expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
       expect(cols[1].width).toBe('auto');
-      expect(Number.parseFloat(table.style.minWidth)).toBe(953);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(969);
     });
 
-    it('the transactions: 1,006 px, a table from it', () => {
+    // Re-pinned on purpose (lane P1 follow-up, item 6; renamed, it was "… 1,006 px …"): a
+    // transaction's inputs are written grouped (c6f9ea20) and number at most 13,568 (MAX_TX_INPUTS,
+    // consensus: a 44-byte input, floor(597,000 / 44)), not four digits: "13,568 → 9,999", Cells
+    // 110 → 126, 1,006 → 1,022. A size is bounded by the largest transaction, 1,236,271 bytes
+    // (LARGEST_TX_BYTES), narrower than "Unavailable"
+    it('the transactions: 1,022 px, a table from it', () => {
       const budgets = [
         // the hash at the row size
         ceil(at('0x00000000…000000', 13) + 16),
         // a pool transaction's wait on one line, wider than "#99,999,999", a date or its badge
         ceil(at('in pool for 99d', 13) + 16),
-        // four digits a side (the inputs as written, the outputs grouped)
-        ceil(at('9999 → 9,999', 13) + 16),
+        // the inputs at most 13,568, the outputs at most 9,999, both grouped
+        ceil(at('13,568 → 9,999', 13) + 16),
         // a change under a billion CKB with its sign
         ceil(at('+999,999,999.99999999', 13) + 16),
         // a fee under 100 CKB
         ceil(at('99.99999999', 13) + 16),
-        // "Unavailable", wider than a size of "597,000"
+        // "Unavailable", wider than a size of "1,236,271"
         ceil(at('Unavailable', 13) + 16),
         // the cycle limit, "3,500,000,000"
         ceil(at('3,500,000,000', 13) + 16),
         // a script: its 12 px mark, its 6 px gap and 12 characters of its name; the last column
         ceil(12 + 6 + at('x'.repeat(12), 13)),
       ];
-      expect(budgets).toEqual([149, 133, 110, 180, 102, 102, 118, 112]);
-      expect(budgets.reduce((s, w) => s + w, 0)).toBe(1006);
+      expect(budgets).toEqual([149, 133, 126, 180, 102, 102, 118, 112]);
+      expect(budgets.reduce((s, w) => s + w, 0)).toBe(1022);
       render(<AddressTransactions rows={addressTransactionsFixture} />);
       const table = screen.getByRole('table');
       const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
       expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
       expect(cols[7].width).toBe('auto');
-      expect(Number.parseFloat(table.style.minWidth)).toBe(1006);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(1022);
       for (const [width, form] of [
         [1232, 'table'],
-        [1006, 'table'],
-        [1005, 'rows'],
+        [1022, 'table'],
+        [1021, 'rows'],
         [608, 'rows'],
         [358, 'rows'],
       ] as const) {

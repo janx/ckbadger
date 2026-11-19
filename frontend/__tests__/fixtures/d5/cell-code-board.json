@@ -11,7 +11,7 @@
     "totalBytes": 100438
   },
   "lockScriptHash": "0x02e3dbc290f45cc0cadea20c58e50ce496df173f67819e8d4bf77d885454bc1c",
-  "address": "ckb1qpw9q60tppt7l3j7r09qcp7lxnp3vcanvgha8pmvsa3jplykxn32sqvctyreatest0ycs0zx",
+  "address": "ckb1qpw9q60tppt7l3j7r09qcp7lxnp3vcanvgha8pmvsa3jplykxn32sqt9nql36afq2sax7xp22q65ld9w9hhdd9sycs0zx",
   "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
   "typeCodeHash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
   "typeHashType": "type",

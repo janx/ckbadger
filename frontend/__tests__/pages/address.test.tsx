@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import {
@@ -105,8 +107,9 @@ const emptyHoldings: AddressHoldings = {
   ...holdingsFixture,
   balance: '0',
   occupiedCapacity: '0',
-  freeCapacity: '0',
-  daoFreeCapacity: '0',
+  daoCellsCapacity: '0',
+  otherCellsOccupiedCapacity: '0',
+  otherCellsFreeCapacity: '0',
   liveCellsCount: 0,
   depositCellsCount: 0,
   withdrawalRequestCellsCount: 0,
@@ -400,18 +403,21 @@ describe('Address v3', () => {
     // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
     // purpose: was every decimal)
     expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
-    // re-pinned on purpose (lane P1): what it can spend stands beside the balance
+    // re-pinned on purpose (lane P1, third round; the lead's ruling on review p-logic-chain MUST
+    // 3): beside the balance its unclaimed compensation alone; its free part is one of the three
+    // parts under the bar (it stood beside the balance as "spendable")
     expect(
       screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
-    ).toHaveTextContent('54,571.35338057');
+    ).not.toHaveTextContent('spendable');
     // the exact parts, exact form (readability R5, re-pinned on purpose: was padded); re-pinned with
     // readability R4 (lane B7): a labelled fact (was the parts line's last item after "·")
     expect(
       factsOf(
         within(screen.getByLabelText('Address capacity partition')).getByTestId('balance-parts')
       )
-      // re-pinned on purpose (lane P1): "in the DAO", with its unit (it was "DAO free")
-    ).toContainEqual(['in the DAO', '9,589,480 CKB, free part of 5 deposits']);
+      // re-pinned on purpose (lane P1, third round; SHOULD 3): its DAO cells whole (it was "in the
+      // DAO 9,589,480 CKB, free part of 5 deposits", their free part alone)
+    ).toContainEqual(['in Nervos DAO cells', '9,590,000 CKB in 5 deposits']);
     expect(container.querySelector('[data-tier="2"]')).toHaveClass(
       'mt-24',
       'border-t',
@@ -606,6 +612,32 @@ describe('Address v3', () => {
       expect(link).toHaveAttribute('href', expect.stringContaining('/scripts/JoyID'));
     const strip = screen.getByRole('group', { name: 'Address status' });
     expect(within(strip).getByText('deprecated')).toHaveClass('text-negative');
+  });
+  // Lane P1 follow-up (the lock-words gate's known writer 11, the lock byte map's name and link):
+  // the address's lock is named once, by the one decision, and the strip and the byte map write
+  // it. A lock on the default lock's code hash by data is not the default lock: the registry's name
+  // for that code hash ("SECP256K1/blake160") is written nowhere, and no link opens the default
+  // lock's named page.
+  it('writes no default lock name for a lock on its code hash by data, strip or byte map', async () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...addressFixture,
+      address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+      lockScript: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+      lockScriptInfo: {
+        codeHash: DEFAULT_LOCK_CODE_HASH,
+        name: 'SECP256K1/blake160',
+        scriptKind: 'lock',
+        deprecated: false,
+      },
+    });
+    render(<AddressDetailPage />);
+    await loaded();
+    expect(
+      screen.getByRole('heading', { name: 'The lock script this address names' })
+    ).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('SECP256K1/blake160');
+    expect(document.querySelector('a[href*="/scripts/"]')).toBeNull();
   });
   it('shows raw script identity when no registered name is present', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({
@@ -1385,11 +1417,12 @@ describe('Address board · F2 blocks', () => {
     render(<AddressDetailPage />);
     const balance = await screen.findByLabelText('Address capacity partition');
     const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
-    // re-pinned on purpose (lane P1): the parts are named occupied, spendable and in the DAO
-    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'spendable', 'in the DAO']);
+    // re-pinned on purpose (lane P1, third round; the lead's ruling on MUST 3 and SHOULD 3): the
+    // route's three parts, each true by its name (they were occupied, spendable and in the DAO)
+    expect(parts.map((p) => p.dataset.part)).toEqual(['in Nervos DAO cells', 'occupied', 'free']);
     for (const part of parts) expect(part).toHaveClass('min-w-[3px]');
     expect(parts[0].parentElement).toHaveClass('h-[18px]', 'gap-0.5');
-    expect(balance).toHaveTextContent('free part of 5 deposits');
+    expect(balance).toHaveTextContent('9,590,000 CKB in 5 deposits');
   });
 
   it('shows a token type hash only beside names that occur twice (BA-32)', async () => {
@@ -1566,15 +1599,24 @@ describe('Address board · F2 blocks', () => {
   it('names the lock code and offers JSON and Markdown in the Lock script section (BA-38)', async () => {
     render(<AddressDetailPage />);
     const lock = await section(/^The lock script this address names/);
-    expect(lock).toHaveTextContent(/code_hash0x0+64 · JoyID/);
+    // re-pinned (lane P1 follow-up): the fixture's lock is the JoyID lock its address spells (its
+    // code hash was 0x0…64, which the address does not spell and the lock words now refuse)
+    expect(lock).toHaveTextContent(
+      'code_hash0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323 · JoyID'
+    );
     // Responsive fix plan 2026-11-01 (A3): in the break-all box the lock name split "Def/ault Lock".
     expect(within(lock).getByText('JoyID')).toHaveClass('whitespace-nowrap');
     expect(within(lock).getByRole('link', { name: 'Markdown' }).getAttribute('href')).toBe(
       `/mainnet/address/${addressText}.md`
     );
-    expect(within(lock).getByRole('link', { name: 'JSON' }).getAttribute('href')).toMatch(
-      new RegExp(`/addresses/${addressText}$`)
+    // Re-pinned on purpose (lane P1 follow-up, the link-look gate): the API's JSON is a way out of
+    // the site, an ExternalLink to the API's absolute URL ("JSON ↗", a new tab), not a raw <a>
+    const json = within(lock).getByRole('link', { name: /^JSON\s↗$/ });
+    expect(json.getAttribute('href')).toMatch(
+      new RegExp(`^https?://[^/]+/api/mainnet/v1/addresses/${addressText}$`)
     );
+    expect(json).toHaveAttribute('target', '_blank');
+    expect(json).toHaveAttribute('rel', 'noreferrer');
   });
 
   it('draws the lock script as its occupied bytes and derives its two names (C6)', async () => {
@@ -1871,8 +1913,9 @@ describe('Address · space legend (lane A follow-up)', () => {
     ...holdingsFixture,
     balance: '3844275078856',
     occupiedCapacity: '388700000000',
-    freeCapacity: '3455575078856',
-    daoFreeCapacity: '0',
+    daoCellsCapacity: '0',
+    otherCellsOccupiedCapacity: '388700000000',
+    otherCellsFreeCapacity: '3455575078856',
     liveCellsCount: 16,
     depositCellsCount: 0,
     withdrawalRequestCellsCount: 0,

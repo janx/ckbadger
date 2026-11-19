@@ -6,6 +6,7 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type Cell } from '@/lib/api';
 import { expectBefore, expectOnePageSeal } from '@/__tests__/utils/seals';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 
 let outpoint = `0x${'ab'.repeat(32)}-0`;
 vi.mock('@/src/navigation', () => ({
@@ -44,7 +45,8 @@ const base = {
     totalBytes: 61,
   },
   lockScriptHash: `0x${'11'.repeat(32)}`,
-  address: 'ckb1qtest',
+  // the address that spells its lock (the lock words read the lock off it and check the two)
+  address: ckbAddress({ codeHash: `0x${'22'.repeat(32)}`, args: `0x${'33'.repeat(20)}` }),
   typeScriptHash: undefined,
   dataSize: 0,
   createdAtBlock: 123,

@@ -176,7 +176,7 @@ const sporeTx = {
  * section, the groups inside each transaction's structure): the embed in tier 1, then the script
  * groups of the developer tier, in the transaction page's rows.
  */
-function view(target: Cell, props: { lockName?: string | null; typeName?: string | null } = {}) {
+function view(target: Cell, props: { lockLabel?: string | null; typeName?: string | null } = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
@@ -200,7 +200,7 @@ describe('Its transactions against the Cell board', () => {
   });
 
   it('draws continuity dashes and names locks on the tiles (SC-C7)', async () => {
-    view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
+    view(cell, { lockLabel: 'Nervape Shadow Lock', typeName: 'Spore' });
     const structure = await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
     expect(lookupScripts).toHaveBeenCalledWith(
       expect.arrayContaining([SECP, SHADOW, SPORE, CKBFS]),
@@ -253,7 +253,7 @@ describe('Its transactions against the Cell board', () => {
         resolvedCells: [],
       },
     ]);
-    view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
+    view(cell, { lockLabel: 'Nervape Shadow Lock', typeName: 'Spore' });
     await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
     // U-16 (re-pinned): the dep is a reference, written as the transaction page writes it — its
     // kind, then the out point shortened (was the full out point and "(dep_group)")
@@ -264,7 +264,7 @@ describe('Its transactions against the Cell board', () => {
   });
 
   it('carries the live cell past its transaction into a dashed "Not spent yet" box (SC-C7)', async () => {
-    view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
+    view(cell, { lockLabel: 'Nervape Shadow Lock', typeName: 'Spore' });
     const structure = await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
     expect(
       structure.querySelector('[data-onward-bridge][data-onward-from="out:1"]')
@@ -349,7 +349,7 @@ describe('Its transactions against the Cell board', () => {
         },
       ],
     });
-    view(codeCell, { lockName: 'Multisig', typeName: 'Type ID' });
+    view(codeCell, { lockLabel: 'Multisig', typeName: 'Type ID' });
     const structure = await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
     expect(
       await within(structure).findByRole('list', { name: 'Cell continuity' })
@@ -374,7 +374,7 @@ describe('Its transactions · visual pass', () => {
   });
 
   it('puts the "Not spent yet" box right after the onward bridge, before the groups table', async () => {
-    view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
+    view(cell, { lockLabel: 'Nervape Shadow Lock', typeName: 'Spore' });
     // Lane U follow-up: the list is named by its transaction.
     const groups = await screen.findByRole('heading', {
       name: 'Script groups of the transaction that created it',

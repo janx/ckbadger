@@ -65,8 +65,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
   'app/address/[addr]/client-page.tsx': {
     family: 'chain',
-    sites: { prose: 4 },
-    reason: 'section sentences and an empty state in the quiet ink: explaining sentences read',
+    // prose 4 → 2 (lane P1 follow-up): the .cell names' and the Fiber channels' section sentences
+    // are statements, in the reading ink
+    sites: { prose: 2 },
+    reason:
+      "empty 2: the evidence tier's 'Script unavailable' and the history's no-activities line",
   },
   'app/blocks/[id]/client-page.tsx': {
     family: 'chain',
@@ -74,14 +77,17 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // link 11 → 10 (lane P1): the cellbase row's "reward for #N, to …" is its statement, the
     // reading ink; link 10 → 7 (lane P1): the activity rows' transaction link and the hardfork
     // link state their looks, and the uncle row's links read in the line's ink
-    sites: { link: 7, prose: 7 },
+    // link 7 → 0, prose 7 → 4 (lane P1 follow-up): the genesis epoch's note, a proposal's
+    // commitment (or that it has none in its window), the proposals' failure and an uncle's
+    // sibling line are statements, in the reading ink, their links with them
+    sites: { prose: 4 },
     reason:
-      'block heights, hashes and the hardfork link in quiet facts and proposal rows; empty and loading lines; the proposal notes',
+      'empty 3: no uncles, no proposals, no activities in this block; loading 1: the proposals',
   },
   'app/blocks/[id]/uncles/[index]/client-page.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: 'the empty proposals sentence',
+    reason: "empty 1: 'This uncle proposed nothing.'",
   },
   'app/blocks/page.tsx': {
     family: 'chain',
@@ -91,79 +97,83 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'ages, reward-finality heights, cycles states and HF links quiet in table cells and rows; the loading and error lines',
   },
-  'app/cell/[outpoint]/client-page.tsx': {
-    family: 'chain',
-    // link 4 → 1, prose 2 → 1 (B7): the out-point sentence reads in the reading ink
-    sites: { link: 1, prose: 1 },
-    reason: 'the DAO line and its deposit block link in the quiet ink',
-  },
+  // 'app/cell/[outpoint]/client-page.tsx' left the list (lane P1 follow-up): the DAO line, its
+  // deposit block and its compensation, is values in the reading ink (link 4 → 1, prose 2 → 1 in
+  // B7: the out-point sentence reads)
   'app/tx/[hash]/client-page.tsx': {
     family: 'chain',
     // link 6 → 3 (lane D3): the script groups' code links moved to
     // components/transaction/script-group-rows.tsx, in the reading ink
-    sites: { link: 3, prose: 12 },
+    // link 3 → 0, prose 12 → 8 (lane P1 follow-up): a .cell witness's "records payload of <name>
+    // (output #N)", a dep group's member rows, the provisional transaction's summary, the cells'
+    // explaining sentence and the focused script group are statements, in the reading ink
+    sites: { prose: 8 },
     reason:
-      'cell and dep links, the waiting and empty lines, the witness and dep notes in the quiet ink',
+      "loading 5: the graph section, the node's waiting line and its message, the graph, the cell deps; empty 3: no witness bytes, no witness chosen, no cell deps",
   },
   'components/address/address-history.tsx': {
     family: 'chain',
     // link 1 → 0 (lane P1): the script link states its look, the line's reading ink
     sites: { td: 1 },
-    reason: "a cell's cycles state in a table cell",
+    reason: "empty 1: a transaction's cycles cell with no figure ('Not computed', 'Failed')",
   },
   'components/address/address-holdings.tsx': {
     family: 'chain',
     // prose 7 → 6 (B7): the balance's parts are labelled facts, no longer a quiet <p>
-    sites: { link: 4, prose: 6 },
-    reason: 'deposit block and cell links, empty holdings and the collection note in the quiet ink',
+    // link 4 → 0, prose 6 → 2 (lane P1 follow-up): the DAO counts, a deposit's state, block and
+    // day, an identity's expiry and holding block and a live cell's block are values in the reading
+    // ink; a read that failed says so in the reading ink; three empty lines went, each in a
+    // section drawn only when its class holds something (they could not be reached)
+    sites: { prose: 2 },
+    reason:
+      "loading 1: the load state's loading and unavailable line; note 1: the collections' hint",
   },
   'components/blocks/block-position.tsx': {
     family: 'chain',
-    sites: { link: 1, prose: 7 },
+    // link 1 → 0, prose 7 → 2 (lane P1 follow-up): the position sentence, the two failures, a
+    // proposal arc's uncle line and an uncle's "Included by #N" are statements, in the reading ink
+    sites: { prose: 2 },
     reason:
-      'the position sentence with its block links, the proposal-origin lines and the uncle notes in the quiet ink',
+      "loading 1: the proposal origins being read; label 1: an uncle row's 'Uncle parent → included uncle'",
   },
   'components/blocks/block-transactions-table.tsx': {
     family: 'chain',
-    sites: { td: 2 },
-    reason: "a transaction's index and its cycles state quiet in table cells",
+    // td 2 → 1 (lane P1 follow-up): a transaction's index in its block is a value, the reading ink
+    sites: { td: 1 },
+    reason: "empty 1: a transaction's cycles cell with no figure ('Not yet run', 'Replay failed')",
   },
-  'components/blocks/block-visual.tsx': {
-    family: 'chain',
-    sites: { prose: 1 },
-    reason:
-      'the size-and-cycles sentence under the blocks figure (a note under a figure, or a reading: P1 decides)',
-  },
-  'components/blocks/reward-breakdown.tsx': {
-    family: 'chain',
-    sites: { link: 3, prose: 1 },
-    reason: 'the reward sentence and its finality, payment and cellbase links in the quiet ink',
-  },
+  // 'components/blocks/block-visual.tsx' left the list (lane P1 follow-up): the size-and-cycles
+  // line under the blocks figure is a reading of it, its figures values, in the reading ink
+  // 'components/blocks/reward-breakdown.tsx' left the list (lane P1 follow-up): the reward's
+  // sentences (genesis has none; paid by a block's cellbase, not indexed yet) and "paid by the
+  // cellbase of #N · 0x…" are statements, in the reading ink, their links with them
   'components/cell-graph-renderer.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason:
-      "the graph's empty state (an empty state reads; a placeholder is the rule's open point)",
+    reason: "empty 1: the graph's 'No graph data.' (lane P1 follow-up)",
   },
   'components/cell-graph.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: "the graph's loading placeholder (the rule's open point: loading lines)",
+    reason: "loading 1: the graph's 'Loading graph…' (lane P1 follow-up)",
   },
   'components/cell/cell-microscope.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: 'the empty-data sentence',
+    reason: "empty 1: the data box's 'No data: the cell carries 0 bytes.' (lane P1 follow-up)",
   },
   'components/cell/cell-transactions.tsx': {
     family: 'chain',
-    sites: { link: 1, prose: 2 },
-    reason: 'the loading line, the as-of block link and the code-cell note in the quiet ink',
+    // link 1 → 0 (lane P1 follow-up): a live cell's age and the block it is as of are values, in
+    // the reading ink
+    sites: { prose: 2 },
+    reason:
+      "loading 1: a transaction being read; note 1: the code cells' 'the spender picks its own cell deps'",
   },
   'components/cell/code-cell-board.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: 'the empty version-history sentence',
+    reason: "empty 1: 'No registered Type ID version history for this binary.' (lane P1 follow-up)",
   },
   'components/home/ckbytes-section.tsx': {
     family: 'chain',
@@ -173,16 +183,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
   // link is its key, the key look's ink)
-  'components/transaction/script-group-matrix.tsx': {
-    family: 'chain',
-    // link 1 → 0 (lane P1): a group only attached names its script in the reading ink
-    sites: { prose: 1 },
-    reason: 'the runs line in the quiet ink',
-  },
+  // 'components/transaction/script-group-matrix.tsx' left the list (lane P1 follow-up): a group's
+  // runs line ("guards out 1 for the next spend · …") is a statement, in the reading ink, a group
+  // only attached as one that ran (link 1 → 0 in lane P1: its script's name reads)
   'components/transaction/tx-structure.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: "the structure's legend line (a note under a figure: P1 decides)",
+    reason: "note 1: the structure's legend line, a note under the figure (lane P1 follow-up)",
   },
   // ---- assets ----
   'app/tokens/[typeHash]/client-page.tsx': {
