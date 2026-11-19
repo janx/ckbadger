@@ -170,28 +170,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // fold 5 → 0): a protocol list's lines and the participants fold by FoldToggle's box under their
   // lines, the head's names and a participant's objects (and its phone object count) by its inline
   // form inside the line
-  'components/address/address-holdings.tsx': {
-    lane: 'p-chain',
-    sites: { fold: 1 },
-    reason: 'a collection’s objects opened in place (“objects ↓” / “close ↑”), a button by hand',
-  },
-  'components/transaction/what-moved.tsx': {
-    lane: 'p-chain',
-    sites: { fold: 1 },
-    reason: 'the parties’ “more” that opens the rest of an end in place, a button by hand',
-  },
-  'app/network/advertisement-graph.tsx': {
-    lane: 'p-topics',
-    sites: { fold: 1 },
-    reason:
-      'the observations’ “fewer ↑” beside the Pager’s “all N ↓”, a fold by hand: FoldToggle’s two forms',
-  },
-  'app/network/nodes-table.tsx': {
-    lane: 'p-topics',
-    sites: { fold: 4 },
-    reason:
-      'a peer’s evidence opened under its row in its three forms (a spread of its toggle), and the phone’s filters folded into one button',
-  },
+  // the lead's final round, item 3: the advertisement graph's observations fold by FoldToggle's
+  // box (fold 1 → 0); the address holdings' collection rows, what-moved's rest of a side and the
+  // nodes table's peer rows and phone filters are another kind of thing, NAMED with their controls
   // ---- shell ----
   'components/crash-page.tsx': {
     lane: 'shell',
@@ -217,8 +198,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // holdings 1, what-moved 1, the advertisement graph 1) → 12 (the merge with the P3 follow-up: the
 // activity row's protocol list folds by FoldToggle, e03f828f) → 11 (the lead's final round: the
 // head's names fold by FoldToggle's inline form) → 8 (the activity row's objects, phone object
-// count and participants: FoldToggle's inline and box forms)
-const TOLERATED_TOTAL = 8;
+// count and participants: FoldToggle's inline and box forms) → 1 (the lead's final round, item
+// 3: the advertisement graph's fold is FoldToggle's box; the holdings' rows, what-moved's rest of a
+// side and the nodes table's rows and filters are NAMED; the crash page's reload stands)
+const TOLERATED_TOTAL = 1;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
@@ -335,6 +318,27 @@ const NAMED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the composition legend’s tiers: the inventory’s tier filter keeps its own form, the owner’s first-class rule for composition',
   },
+  // ---- what the lead's final round (item 3) found to be another kind of thing than a fold of a
+  // list: a row that opens its own detail, a node of a figure, a disclosure of a section's
+  // controls; each control says it is open (aria-expanded) and stays mounted ----
+  'components/address/address-holdings.tsx': {
+    lane: 'p-chain',
+    sites: { fold: 1 },
+    reason:
+      'a collection’s row that opens its own objects under it (a paged list of its own): its control is the row itself and its “objects ↓” / “close ↑” button, which stays, not a fold of the holdings list',
+  },
+  'components/transaction/what-moved.tsx': {
+    lane: 'p-chain',
+    sites: { fold: 1 },
+    reason:
+      'the flow figure’s “N more parties” end: a node of the figure with its ribbon and the rest’s summed amount, which draws the side’s parties in its place; its control is the node itself, not a list’s way to go',
+  },
+  'app/network/nodes-table.tsx': {
+    lane: 'p-topics',
+    sites: { fold: 4 },
+    reason:
+      'a peer’s row that opens its own evidence under it, in its three forms (one toggle spread on the row’s 44 px button, “Show / Hide evidence for …”), and the phone’s four filters behind one “filters” button (aria-controls, the section’s controls): rows and a section’s controls, not a fold of a list',
+  },
 };
 
 /**
@@ -346,7 +350,9 @@ const NAMED: Readonly<Record<string, Tolerated>> = {
  * SHOULD-6): the shell's two menus (the theme menu's button, the navigation menu's) and the allele
  * gel's gene lanes, a figure's own selection.
  */
-const NAMED_TOTAL = 29;
+// → 35 (the lead's final round, item 3: the address holdings' collection row 1, what-moved's rest
+// of a side 1, the nodes table's peer rows 3 and phone filters 1, another kind of thing than a fold)
+const NAMED_TOTAL = 35;
 
 interface Site {
   kind: Kind;

@@ -855,6 +855,12 @@ describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
     const fewer = screen.getByRole('button', { name: 'fewer ↑' });
     expect(fewer).toHaveClass('h-8', 'sm:h-7', 'text-jade', 'text-small');
     expect(fewer).toHaveAttribute('aria-expanded', 'true');
+    // the lead's final round, item 3: FoldToggle, one button both ways that names the list it
+    // opens (it was the Pager's part, then a second button: focus fell to the page between them)
+    expect(fewer).toBe(all);
+    expect(document.getElementById(all.getAttribute('aria-controls')!)).toBe(
+      screen.getByRole('list', { name: /advertiser to advertised/ })
+    );
     fireEvent.click(fewer);
     expect(screen.getAllByRole('listitem')).toHaveLength(10);
   });
