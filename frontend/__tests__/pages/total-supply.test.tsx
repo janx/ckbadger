@@ -23,9 +23,10 @@ describe('TotalSupplyPage', () => {
       data: [
         {
           date: '2026-02-23',
-          // re-pinned for the four bands (lane D1, second follow-up, item 1): four bands that make C, and the protocol circulation
+          // re-pinned for the four bands (lane D1, second follow-up, item 1): four bands that make C, and the protocol circulation;
+          // re-pinned for lane exactness, part A2 (M1): the bands named and keyed for what they hold
           values: {
-            outsideDao: '70.00000001',
+            circulatingNotDeposited: '70.00000001',
             daoDeposited: '30.00000002',
             unclaimedCompensation: '0.5',
             burnt: '0.00000001',
@@ -35,8 +36,8 @@ describe('TotalSupplyPage', () => {
         },
       ],
       series: [
-        { key: 'outsideDao', label: 'Outside the DAO', color: '#00c389' },
-        { key: 'daoDeposited', label: 'In the Nervos DAO', color: '#3b82f6' },
+        { key: 'circulatingNotDeposited', label: 'Circulating, not deposited', color: '#00c389' },
+        { key: 'daoDeposited', label: 'Deposited in the Nervos DAO', color: '#3b82f6' },
         { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#a68b57' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
@@ -57,7 +58,7 @@ describe('TotalSupplyPage', () => {
         {
           label: '2026-02-23',
           values: {
-            outsideDao: '70.00000001',
+            circulatingNotDeposited: '70.00000001',
             daoDeposited: '30.00000002',
             unclaimedCompensation: '0.5',
             burnt: '0.00000001',
@@ -67,8 +68,8 @@ describe('TotalSupplyPage', () => {
       // F2 charts: the DAO band is gold, the class colour, not the API's blue (CH-06); its
       // compensation not yet claimed the gold a step down
       series: [
-        { label: 'Outside the DAO', color: 'var(--c-jade)' },
-        { label: 'In the Nervos DAO', color: 'var(--c-gold)' },
+        { label: 'Circulating, not deposited', color: 'var(--c-jade)' },
+        { label: 'Deposited in the Nervos DAO', color: 'var(--c-gold)' },
         { label: 'Unclaimed DAO compensation', color: 'var(--c-gold-ramp)' },
         { label: 'Burnt', color: 'var(--c-slate-ckb)' },
       ],

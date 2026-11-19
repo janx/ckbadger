@@ -454,12 +454,19 @@ protocol_circulating =
 liquid = protocol_circulating - locked_in_dao
 ```
 
-| Layer (key)                                          | Calculation                                  | At Genesis |
-| ---------------------------------------------------- | -------------------------------------------- | ---------- |
-| Outside the DAO (`outsideDao`)                       | `liquid`                                     | ~25.2B     |
-| In the Nervos DAO (`daoDeposited`)                   | active DAO deposit principal                 | ~0         |
-| Unclaimed DAO compensation (`unclaimedCompensation`) | `unclaimed_compensation`                     | 0          |
-| Burnt (`burnt`)                                      | `GenesisBaseline.burnt + secondary_treasury` | 8.4B       |
+| Layer (key)                                            | Calculation                                  | At Genesis |
+| ------------------------------------------------------ | -------------------------------------------- | ---------- |
+| Circulating, not deposited (`circulatingNotDeposited`) | `liquid`                                     | ~25.2B     |
+| Deposited in the Nervos DAO (`daoDeposited`)           | active DAO deposit principal                 | ~0         |
+| Unclaimed DAO compensation (`unclaimedCompensation`)   | `unclaimed_compensation`                     | 0          |
+| Burnt (`burnt`)                                        | `GenesisBaseline.burnt + secondary_treasury` | 8.4B       |
+
+Each layer is named for what it holds. `locked_in_dao` is `total_deposited`,
+the status-0 deposits only, the amount the DAO page and the circulation-ratio
+chart call deposited. A withdrawing cell (a phase-1 withdraw request) is drawn
+in two layers: its principal left `total_deposited` at its request, so it is in
+"Circulating, not deposited" until it is claimed, and its frozen compensation is
+in "Unclaimed DAO compensation".
 
 Outstanding `unclaimed_compensation` (compensation accruing on live deposits
 plus compensation frozen on phase-1 withdraw-request cells) is part of S: it is
@@ -672,14 +679,14 @@ statistics `estimated_apc`.
 
 ### Choosing the Correct Supply Base
 
-| Use Case                                        | Base                                                                |
-| ----------------------------------------------- | ------------------------------------------------------------------- |
-| Secondary issuance percentage distribution      | DAO field `C`                                                       |
-| Estimated APC                                   | Theoretical issuance seeded by `GenesisBaseline.total_issuance`     |
-| Nominal APC chart                               | Modeled supply seeded by `baseline.total_issuance - baseline.burnt` |
-| Protocol circulating supply / circulation ratio | `C - baseline.burnt - S`                                            |
-| Total Supply Chart's layer outside the DAO      | Protocol circulation minus DAO-locked principal                     |
-| Total Supply Chart's `circulating`              | `C - baseline.burnt - S` (the protocol circulation)                 |
+| Use Case                                          | Base                                                                |
+| ------------------------------------------------- | ------------------------------------------------------------------- |
+| Secondary issuance percentage distribution        | DAO field `C`                                                       |
+| Estimated APC                                     | Theoretical issuance seeded by `GenesisBaseline.total_issuance`     |
+| Nominal APC chart                                 | Modeled supply seeded by `baseline.total_issuance - baseline.burnt` |
+| Protocol circulating supply / circulation ratio   | `C - baseline.burnt - S`                                            |
+| Total Supply Chart's "Circulating, not deposited" | Protocol circulation minus the deposits' principal (status 0)       |
+| Total Supply Chart's `circulating`                | `C - baseline.burnt - S` (the protocol circulation)                 |
 
 ### DAO Compensation vs Secondary Allocation
 

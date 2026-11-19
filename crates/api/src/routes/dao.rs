@@ -690,6 +690,15 @@ fn dao_latest_to_response(
     );
     let live_cells_count =
         i64::from(latest.deposit_cells_count) + i64::from(latest.withdrawal_request_cells_count);
+    // the singleton's legacy `active_deposits` counts the same cells under an untrue name (a
+    // withdrawal request is no active deposit): it is their sum, or the row is wrong (lane exactness, part A2, S2)
+    anyhow::ensure!(
+        i64::from(latest.active_deposits) == live_cells_count,
+        "dao_latest_stats at block {block}: active_deposits {} is not {} deposits + {} withdrawal requests",
+        latest.active_deposits,
+        latest.deposit_cells_count,
+        latest.withdrawal_request_cells_count
+    );
     let secondary_issuance = latest
         .mining_reward
         .checked_add(latest.deposit_compensation)
@@ -1208,7 +1217,8 @@ fn realized_apc(
     let denominator = free
         .checked_mul(duration_ms)
         .ok_or("DAO APC denominator overflow")?;
-    crate::utils::exact_ratio::format_percent(numerator, denominator, 2)
+    // cut at the two places the calculator shows, never rounded (lane exactness, part A2, S5)
+    crate::utils::exact_ratio::format_percent_cut(numerator, denominator, 2)
         .map(|value| Some(format!("{value}%")))
 }
 
@@ -1677,6 +1687,15 @@ mod tests {
     use crate::cache::InMemoryCache;
     use ckbadger_store::types::CachedBlockHeader;
     use std::time::Duration;
+
+    #[test]
+    fn realized_apc_is_cut_at_two_places() {
+        // lane exactness, part A2, S5: 2 of 3 over a year is 66.666…%, "66.66%" (half up "66.67%")
+        assert_eq!(
+            realized_apc(2, 3, 31_557_600_000).unwrap().as_deref(),
+            Some("66.66%")
+        );
+    }
 
     #[test]
     fn realized_apc_uses_actual_chain_duration_and_marks_zero_span_undefined() {

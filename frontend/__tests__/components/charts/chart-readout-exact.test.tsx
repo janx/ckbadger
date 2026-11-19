@@ -68,9 +68,10 @@ describe('a CKB chart’s readouts state the exact value', () => {
       data: [
         {
           date: '2026-02-23',
-          // re-pinned for the four bands (lane D1, second follow-up, item 1): the four bands that make C, C and the protocol circulation
+          // re-pinned for the four bands (lane D1, second follow-up, item 1): the four bands that make C, C and the protocol circulation;
+          // re-pinned for lane exactness, part A2 (M1): the bands named and keyed for what they hold
           values: {
-            outsideDao: '8131306075.44505907',
+            circulatingNotDeposited: '8131306075.44505907',
             daoDeposited: '1234.50000000',
             unclaimedCompensation: '2',
             burnt: '0.1',
@@ -80,8 +81,8 @@ describe('a CKB chart’s readouts state the exact value', () => {
         },
       ],
       series: [
-        { key: 'outsideDao', label: 'Outside the DAO', color: '#00c389' },
-        { key: 'daoDeposited', label: 'In the Nervos DAO', color: '#3b82f6' },
+        { key: 'circulatingNotDeposited', label: 'Circulating, not deposited', color: '#00c389' },
+        { key: 'daoDeposited', label: 'Deposited in the Nervos DAO', color: '#3b82f6' },
         { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#a68b57' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
@@ -90,7 +91,7 @@ describe('a CKB chart’s readouts state the exact value', () => {
     const plot = await screen.findByRole('img', { name: 'Supply, CKB' });
     fireEvent.keyDown(plot, { key: 'ArrowLeft' });
     expect(screen.getByRole('status', { name: 'Supply readout' })).toHaveTextContent(
-      '2026-02-23 · Outside the DAO 8,131,306,075.44505907 CKB · In the Nervos DAO 1,234.5 CKB · Unclaimed DAO compensation 2 CKB · Burnt 0.1 CKB'
+      '2026-02-23 · Circulating, not deposited 8,131,306,075.44505907 CKB · Deposited in the Nervos DAO 1,234.5 CKB · Unclaimed DAO compensation 2 CKB · Burnt 0.1 CKB'
     );
   });
 });

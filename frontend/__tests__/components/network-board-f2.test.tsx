@@ -293,7 +293,8 @@ describe('Network board (F2 charts)', () => {
       [...bar.querySelectorAll('[data-provider]')].map((n) => n.getAttribute('data-provider'))
     ).toEqual(['Amazon.com', 'Hetzner Online GmbH', 'Unknown']);
     expect(
-      screen.getByText('36 of the 66 verified nodes run on Amazon.com, across 2 countries.')
+      // re-pinned for lane exactness, part A2 (NOTE 3): no second country count
+      screen.getByText('36 of the 66 verified nodes run on Amazon.com.')
     ).toBeInTheDocument();
     expect(screen.queryByText('AS16509 Amazon.com')).toBeNull();
   });

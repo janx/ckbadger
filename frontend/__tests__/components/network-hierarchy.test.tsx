@@ -553,7 +553,8 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     const caption = section.lastElementChild as HTMLElement;
     expect(caption).toHaveAttribute('data-role', 'caption');
     expect(caption).toHaveTextContent(
-      /^36 of the 66 verified nodes run on Amazon\.com, across 2 countries\.$/
+      // re-pinned for lane exactness, part A2 (NOTE 3): no second country count
+      /^36 of the 66 verified nodes run on Amazon\.com\.$/
     );
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');

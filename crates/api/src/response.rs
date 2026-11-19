@@ -159,6 +159,19 @@ pub struct CursorPaginatedResponse<T> {
     pub pool: Option<crate::pool::PoolSummaryResponse>,
 }
 
+/// Where a page of a holders ranking starts: after the place of its cursor `(count, owner)` in the
+/// ranking's order (count desc, owner asc), whether or not that holder still stands there (lane exactness, part A2,
+/// S1: a cursor whose holder moved or left was a 400). `ranking` is in that order; a page without
+/// a cursor starts at the top. The page's first rank is this index plus one.
+pub fn ranked_page_start(ranking: &[(Vec<u8>, i64)], cursor: Option<&(i64, Vec<u8>)>) -> usize {
+    match cursor {
+        None => 0,
+        Some((count, owner)) => ranking.partition_point(|(lock, held)| {
+            *held > *count || (*held == *count && lock.as_slice() <= owner.as_slice())
+        }),
+    }
+}
+
 /// A page of a ranked list with the rank of its first row (lane exactness, part A, A3): the 1-based position, in
 /// the request's read view, of the row the page starts at, counted with its rows and its total.
 /// A page computed the rank from the rows it had read before, which is wrong once the list moves

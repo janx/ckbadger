@@ -1286,8 +1286,9 @@ async fn test_network_stats_reads_derived_statistics() {
     // (a raw or wider window would inflate this far beyond the expectation).
     let window_ms = now_ms - (now_hour - 3600) * 1000;
     let numerator = 200i128 * 86_400 * 1000;
-    let expected_per_day =
-        ((numerator + i128::from(window_ms) / 2) / i128::from(window_ms)).to_string();
+    // re-pinned for lane exactness, part A2 (S5): the rate is cut, never rounded (this was the
+    // half-up quotient)
+    let expected_per_day = (numerator / i128::from(window_ms)).to_string();
     assert_eq!(json["transactionsPerDay"], expected_per_day);
     assert_eq!(json["difficulty"], "1.32 E");
     assert_eq!(json["avgBlockTime"], "8.00s");
@@ -3029,8 +3030,9 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
-    // round(1440 / 82800 * 86400) = round(1502.6) = 1503 — NOT the raw 1440.
-    assert_eq!(json["transactionsPerDay"], "1503");
+    // 1440 / 82800 * 86400 = 1502.6…, cut: 1502 — NOT the raw 1440 (re-pinned for lane exactness,
+    // part A2, S5: it was rounded, 1503).
+    assert_eq!(json["transactionsPerDay"], "1502");
 
     // Internal consistency: perDay ≈ perMinute × 1440 within perMinute's
     // one-decimal formatting granularity (0.05 × 1440 = 72) plus rounding.
@@ -3045,7 +3047,8 @@ async fn test_network_stats_transactions_per_day_matches_window_rate() {
         .parse()
         .unwrap();
     assert!(
-        (per_day - per_minute * 1440.0).abs() <= 0.05 * 1440.0 + 0.5,
+        // cut, perMinute may be up to 0.1 under its value, perDay up to 1 (lane exactness, A2)
+        (per_day - per_minute * 1440.0).abs() <= 0.1 * 1440.0 + 1.0,
         "perDay ({}) must be consistent with perMinute ({}) × 1440",
         per_day,
         per_minute
