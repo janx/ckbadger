@@ -1326,6 +1326,26 @@ describe('Transactions kind in the URL (D11)', () => {
     expect(chip('all')).toHaveAttribute('aria-checked', 'true');
   });
 
+  // The page-phase review's SHOULD 6 (the P3 follow-up): the cellbases tab left a chosen kind
+  // pressed, and in the URL, over a list of every cellbase, which no kind filters (no cellbase is a
+  // DAO transaction). Opening the cellbases sets the kind back to "all", here and in the URL.
+  it('sets the kind back to all, in the URL too, when the cellbases are opened', async () => {
+    const router = renderAt('/mainnet/transactions?kind=dao');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: /^cellbases/ }));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(router.state.historyAction).toBe('REPLACE');
+    expect(chip('all')).toHaveAttribute('aria-checked', 'true');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'false');
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'cellbase',
+      })
+    );
+  });
+
   it('follows the URL when it changes under the mounted page', async () => {
     const router = renderAt('/mainnet/transactions?kind=dao');
     expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'true');

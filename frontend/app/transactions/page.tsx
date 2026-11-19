@@ -510,12 +510,10 @@ export default function TransactionsPage() {
   const largestPoolSize = poolHead.data?.data.length
     ? Math.max(...poolHead.data.data.map((row) => row.txSize))
     : undefined;
-  const chooseKind = (value: TransactionKind) => {
+  const setKindAndUrl = (value: TransactionKind) => {
     setKind(value);
     committedPage.reset();
     poolPage.reset();
-    // a kind is of the user transactions: chosen over the cellbases, it shows them
-    if (tab === 'cellbases') setTab('committed');
     // D11: the URL names the chosen kind (replace: a filter is not a step of history). Outside a
     // router there is no address to keep in step, and leaving the page would reload it.
     if (inRouter) {
@@ -524,6 +522,18 @@ export default function TransactionsPage() {
       else query.set('kind', value);
       router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
     }
+  };
+  const chooseKind = (value: TransactionKind) => {
+    setKindAndUrl(value);
+    // a kind is of the user transactions: chosen over the cellbases, it shows them
+    if (tab === 'cellbases') setTab('committed');
+  };
+  // no kind filters the cellbases (no cellbase is a DAO or a token transaction): opening them sets
+  // the kind back to "all", in the URL too, so no chip stands pressed over a list it does not
+  // filter (the page-phase review's SHOULD 6)
+  const chooseTab = (value: 'committed' | 'cellbases' | 'pool') => {
+    if (value === 'cellbases' && kind !== 'all') setKindAndUrl('all');
+    setTab(value);
   };
   const active = tab === 'committed' ? committed : tab === 'cellbases' ? cellbases : pool;
   // where the committed list stands in time (lib/pagination.ts): its page, and the pages its
@@ -689,7 +699,7 @@ export default function TransactionsPage() {
               { key: 'pool', label: 'in the pool' },
             ]}
             value={tab}
-            onChange={setTab}
+            onChange={chooseTab}
           >
             <div className="mt-3 space-y-8">
               <div className="text-text-dim text-small">
