@@ -342,8 +342,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     queryFn: () => api.getTokenHolders(typeHash, { limit, cursor: pagination.cursor }),
   });
   /**
-   * A holder's share of the same response's supply, exact to 0.01 %: its text, and the same
-   * rounding as an integer of hundredths for the bar's geometry.
+   * A holder's share of the same response's supply: the stated share is its text (`percentOf`);
+   * the bar's width is drawing, the share in hundredths cut by `formatScaledInteger`, never a
+   * figure on the page (review of phases C and D, charts NOTE 9: this said "the same rounding").
    */
   const holderShare = (h: TokenHolder) => {
     const total = exactUnsignedInteger(holders.data!.totalSupply, 'holder-page supply'),
