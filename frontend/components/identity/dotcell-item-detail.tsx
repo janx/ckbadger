@@ -54,7 +54,7 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
       {/* The endpoint declares no total, so a count is shown only once the whole list is here. */}
       {children.length === 0 && !hasMore ? (
         // C16: nothing to list is a line, not a heading over an empty list.
-        <p className="text-text-dim text-small">Sub-names · none</p>
+        <p className="text-text text-small">Sub-names · none</p>
       ) : (
         <h3 className="text-text-dim text-small font-normal">
           {hasMore ? 'Sub-names' : `Sub-names · ${children.length.toLocaleString('en-US')}`}

@@ -15,6 +15,7 @@ import {
 } from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
 import { ledeRestatements } from '@/__tests__/utils/lede-rule';
+import { fullText } from '@/__tests__/utils/full-text';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import {
   api,
@@ -209,7 +210,12 @@ describe('Mnft board (F2 objects)', () => {
     expect(header).toHaveTextContent(/^.*Issued by Issuer A/);
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     expect(metrics).not.toHaveTextContent(/by Issuer A|· to /);
-    expect(screen.getByText('Name · Issuer A').closest('[data-tier="2"]')).not.toBeNull();
+    // re-pinned on purpose (the ink and size roles round): the issuer's name is a value at 13 px,
+    // its label "Name ·" quiet at 12 beside it (one line, 12 px and quiet throughout before)
+    const issuerName = screen.getByText(fullText('Name · Issuer A'));
+    expect(issuerName.closest('[data-tier="2"]')).not.toBeNull();
+    expect(issuerName).toHaveClass('text-text', 'text-small');
+    expect(within(issuerName).getByText('Name ·')).toHaveClass('text-text-dim', 'text-meta');
     expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
   });
 

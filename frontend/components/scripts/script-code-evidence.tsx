@@ -292,9 +292,10 @@ export function ScriptCodeClassSummary({
           </p>
         </Prose>
       )}
+      {/* a class's name, its capacity and its count, values: the reading ink at 13 px */}
       <ul
         aria-label="Code classes"
-        className="text-text-dim text-meta flex flex-wrap gap-x-7 gap-y-1.5"
+        className="text-text text-small flex flex-wrap gap-x-7 gap-y-1.5"
       >
         {ordered.map((row) => (
           <li key={row.class} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -389,22 +390,20 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </div>
       )}
       {custody.lockArgs && (
-        <div
-          className="text-text-dim text-meta mt-1 font-mono [overflow-wrap:anywhere]"
-          title={custody.lockArgs}
-        >
-          Lock args {custody.lockArgs}
+        <div className="text-text mt-1 font-mono [overflow-wrap:anywhere]" title={custody.lockArgs}>
+          <span className="text-text-dim text-meta">Lock args</span> {custody.lockArgs}
         </div>
       )}
       {custody.keyHashes.length > 0 && (
         // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep): its words
-        // in the ink of the tier it stands in; the hashes keep the quiet ink they took from it
+        // in the ink of the tier it stands in; the hashes are values, the reading ink at 13 px (ink
+        // and size roles: they kept the quiet 12 px they took from the line around them)
         <SectionDisclosure
           form="inner"
           className="mt-1"
           summary={<>{custody.keyHashes.length} committed key hashes</>}
         >
-          <ul className="text-meta text-text-dim space-y-1 break-all font-mono">
+          <ul className="text-text text-small space-y-1 break-all font-mono">
             {custody.keyHashes.map((hash) => (
               <li key={hash}>{hash}</li>
             ))}
@@ -585,7 +584,7 @@ export function ScriptCapacityEvidenceChart({
             {markers.map((marker) => (
               <span
                 key={key(marker)}
-                className="border-base-border text-text text-meta inline-flex shrink-0 items-center gap-1 border px-2 py-1"
+                className="border-base-border text-text text-small inline-flex shrink-0 items-center gap-1 border px-2 py-1"
               >
                 <button
                   type="button"

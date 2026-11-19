@@ -83,5 +83,5 @@ function PartyIdentity({ party, size }: { party: PartyDisplay; size: ShortSize |
     );
   }
 
-  return <span className="text-text-dim text-body font-mono">Unavailable</span>;
+  return <span className="text-text text-body font-mono">Unavailable</span>;
 }

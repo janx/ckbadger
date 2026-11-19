@@ -17,7 +17,7 @@ export function NamedParty({ party, label }: { party: DotCellPartyRef; label: st
               hash={party.address ?? party.lockHash}
               kind={party.address ? 'address' : 'hash'}
               size="row"
-              className="text-meta"
+              className="text-small"
             />
           </AppLink>
         ) : (
@@ -66,7 +66,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
       >
         What its configuration permits
       </h2>
-      <p className="text-text text-meta max-w-measure">
+      <p className="text-text text-small max-w-measure">
         Configure 0x{configure.toString(16).padStart(2, '0')} · zero permission bits allow the
         operation.
       </p>
@@ -96,7 +96,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
         ))}
       </dl>
       {state && (
-        <p className="text-meta max-w-measure">
+        <p className="text-text text-small max-w-measure">
           State 0x{state.value.toString(16).padStart(2, '0')} ·{' '}
           {state.claimed ? 'claimed' : 'unclaimed'} · {state.locked ? 'locked' : 'unlocked'}.{' '}
           {state.locked

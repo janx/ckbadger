@@ -199,11 +199,15 @@ describe('MnftItemDetailPage', () => {
     expect(screen.getByText(/^Issued by Issuer A/)).toBeInTheDocument();
     // the issuer's raw metadata, the library's inner disclosure in tier 2 (lane cd-fixes-controls,
     // the disclosure sweep): its words at the control step, 13 px, and the quiet ink (they were
-    // 12 px in the page's bright ink); shut; its bytes at 12 px as before
+    // 12 px in the page's bright ink); shut; re-pinned on purpose (the ink and size roles round):
+    // its bytes are a value, the reading ink at 13 px (they were 12 px)
     const metadata = screen.getByText('Raw issuer metadata');
     expect(metadata).toHaveClass('text-small', 'text-text-dim');
     expect(metadata.closest('details')).not.toHaveAttribute('open');
-    expect(metadata.closest('details')!.querySelector('pre')).toHaveClass('text-meta');
+    expect(metadata.closest('details')!.querySelector('pre')).toHaveClass(
+      'text-small',
+      'text-text'
+    );
     expect(screen.getByRole('link', { name: 'Open the class' })).toHaveAttribute(
       'href',
       `/mainnet/classes/${detail.class.classId}`
