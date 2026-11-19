@@ -242,8 +242,11 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           {/* F2 objects (OB-M6): the board's four properties; configure decoding is tier 2. */}
           {/* One column until md: at 640 the 2×2 grid broke "8 bytes" (responsive B#15). */}
           <dl aria-label="Properties" className="grid gap-x-7 md:grid-cols-2">
+            {/* Lane P2's third round (item 8): plain words a reader who does not know the m-NFT
+                script can read; the script's own terms (its state byte, claimed, locked) stand
+                once, in the evidence tier's permissions */}
             <div className="border-row-rule flex justify-between gap-3 border-b py-2">
-              <dt className="text-text-dim">Token</dt>
+              <dt className="text-text-dim">Number</dt>
               <dd className="text-text-bright text-right">
                 #<AssetCount value={item.tokenIndex} />{' '}
                 <span className="text-text-dim">
@@ -253,11 +256,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               </dd>
             </div>
             <div className="border-row-rule flex justify-between gap-3 border-b py-2">
-              <dt className="text-text-dim">State</dt>
-              <dd className="text-text-bright text-right">
-                0x{item.state.toString(16).padStart(2, '0')} ·{' '}
-                {item.claimed ? 'claimed' : 'unclaimed'} · {item.locked ? 'locked' : 'unlocked'}
-              </dd>
+              <dt className="text-text-dim">Transfer</dt>
+              <dd className="text-text-bright text-right">{transferWords(item)}</dd>
             </div>
             <div className="border-row-rule flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Issuer</dt>
@@ -577,4 +577,25 @@ function IssuedTo({ cell }: { cell: ItemCellVersion }) {
       <PartReadError what="the lock it was issued to" where="the Issued fact" error={read.error} />
     );
   return <>{read.value}</>;
+}
+
+/**
+ * Whether the token can be transferred, in plain words (lane P2's third round, item 8): not while
+ * it is locked; otherwise as its class's configuration permits, before or after its holder claims
+ * it (the permissions the evidence tier lists, the script's own terms said there once).
+ */
+function transferWords(item: {
+  locked: boolean;
+  claimed: boolean;
+  permissions: { allowTransferBeforeClaim: boolean; allowTransferAfterClaim: boolean };
+}): string {
+  const allowed = item.claimed
+    ? item.permissions.allowTransferAfterClaim
+    : item.permissions.allowTransferBeforeClaim;
+  const transfer = item.locked
+    ? 'not allowed, the token is locked'
+    : allowed
+      ? 'allowed'
+      : 'not allowed by its class';
+  return `${transfer} · ${item.claimed ? 'claimed by its holder' : 'not claimed yet'}`;
 }

@@ -180,13 +180,22 @@ describe('Mnft board (F2 objects)', () => {
       expect.stringMatching(/^issued .+ ago · last moved .+ ago$/)
     );
     const props = within(header).getByLabelText('Properties');
+    // re-pinned on purpose (lane P2's third round, item 8): tier 1 says the token in plain words a
+    // reader who does not know the m-NFT script can read, "Number" and "Transfer" (it said the
+    // script's "Token" and "State" with the state byte, "0x03 · claimed · locked"); the script's
+    // terms stand once, in the evidence tier's permissions
     expect([...props.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
-      'Token',
-      'State',
+      'Number',
+      'Transfer',
       'Issuer',
       'Characteristic',
     ]);
     expect(props).toHaveTextContent('#99 of 200 issued · 1,500 planned');
+    expect(props).toHaveTextContent('not allowed, the token is locked · claimed by its holder');
+    expect(props).not.toHaveTextContent(/0x0\d|unclaimed|unlocked/);
+    expect(screen.getByRole('region', { name: 'mNFT permissions' })).toHaveTextContent(
+      /State 0x\d\d · claimed · locked/
+    );
     expect(props).toHaveTextContent('Issuer A · 2 classes');
     expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
   });
