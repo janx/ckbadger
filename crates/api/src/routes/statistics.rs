@@ -722,14 +722,30 @@ pub struct StackedAreaSeries {
     pub id: Option<String>,
 }
 
+/// A band a chart page draws where the chart has more series than the page draws (the
+/// chart-hero board, lane D1: a stack shows at most five ordered bands, or a ranking's five largest
+/// and the rest). It names the series it merges, in stack order; every point of the chart carries
+/// the band's own value under `key`, computed by the route from the same exact integers as its
+/// members, never summed from their rounded percentages.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StackedAreaBand {
+    pub key: String,
+    pub label: String,
+    pub members: Vec<String>,
+}
+
 /// Serialized with `peaks`: each series' peak by series key, derived from
-/// `data` by the one [`series_peak`] (CH-21).
+/// `data` by the one [`series_peak`] (CH-21); and with `bands` where the
+/// route draws fewer bands than it has series.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StackedAreaChartResponse {
     pub data: Vec<StackedAreaDataPoint>,
     pub series: Vec<StackedAreaSeries>,
     pub title: String,
+    #[serde(default)]
+    pub bands: Option<Vec<StackedAreaBand>>,
 }
 
 impl Serialize for StackedAreaChartResponse {
@@ -750,11 +766,15 @@ impl Serialize for StackedAreaChartResponse {
                 peaks.insert(series.key.as_str(), peak);
             }
         }
-        let mut state = serializer.serialize_struct("StackedAreaChartResponse", 4)?;
+        let mut state = serializer.serialize_struct("StackedAreaChartResponse", 5)?;
         state.serialize_field("data", &self.data)?;
         state.serialize_field("series", &self.series)?;
         state.serialize_field("title", &self.title)?;
         state.serialize_field("peaks", &peaks)?;
+        match &self.bands {
+            Some(bands) => state.serialize_field("bands", bands)?,
+            None => state.skip_field("bands")?,
+        }
         state.end()
     }
 }
@@ -1054,6 +1074,8 @@ fn build_most_utilized_share_chart(
 
         let mut values: HashMap<String, String> = HashMap::new();
         let mut selected_sum: i128 = 0;
+        // the five largest, whose complement is the drawn `rest` band (`ranked_share_bands`)
+        let mut drawn_sum: i128 = 0;
         for (index, key) in top_keys.iter().enumerate() {
             let value = states
                 .get(key)
@@ -1066,6 +1088,9 @@ fn build_most_utilized_share_chart(
                 )));
             }
             selected_sum += value;
+            if index < RANKED_SHARE_DRAWN {
+                drawn_sum += value;
+            }
             values.insert(format!("top{index}"), value.to_string());
         }
 
@@ -1087,6 +1112,9 @@ fn build_most_utilized_share_chart(
         }
         let others = total - selected_sum;
         values.insert("others".to_string(), others.to_string());
+        if top_keys.len() > RANKED_SHARE_DRAWN {
+            values.insert("rest".to_string(), (total - drawn_sum).to_string());
+        }
 
         data.push(StackedAreaDataPoint {
             date: format_chart_date(&format!("{date:08}"))?,
@@ -1094,18 +1122,55 @@ fn build_most_utilized_share_chart(
         });
     }
 
+    let bands = ranked_share_bands(&series);
     Ok(StackedAreaChartResponse {
         data,
         series,
         title: chart_title,
+        bands: Some(bands),
     })
+}
+
+/// How many ranks of a share history the chart page draws as bands of their own (the chart-hero
+/// board, lane D1: a ranked stack draws its five largest and one band for the rest).
+const RANKED_SHARE_DRAWN: usize = 5;
+
+/// The bands a ranked share history is drawn in: its five largest, each its own series, and the
+/// rest — every rank after them and the remainder past the named ranks — as `rest`, whose value
+/// [`build_most_utilized_share_chart`] writes per day as the day's total less the five largest.
+/// With five or fewer named ranks the remainder (`others`) is the last band as it is.
+fn ranked_share_bands(series: &[StackedAreaSeries]) -> Vec<StackedAreaBand> {
+    let (named, remainder): (Vec<&StackedAreaSeries>, Vec<&StackedAreaSeries>) =
+        series.iter().partition(|entry| entry.key != "others");
+    let own = |entry: &StackedAreaSeries| StackedAreaBand {
+        key: entry.key.clone(),
+        label: entry.label.clone(),
+        members: vec![entry.key.clone()],
+    };
+    if named.len() <= RANKED_SHARE_DRAWN {
+        return series.iter().map(own).collect();
+    }
+    let mut bands: Vec<StackedAreaBand> = named[..RANKED_SHARE_DRAWN]
+        .iter()
+        .map(|entry| own(entry))
+        .collect();
+    bands.push(StackedAreaBand {
+        key: "rest".to_string(),
+        label: "Others".to_string(),
+        members: named[RANKED_SHARE_DRAWN..]
+            .iter()
+            .chain(remainder.iter())
+            .map(|entry| entry.key.clone())
+            .collect(),
+    });
+    bands
 }
 
 async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:most-utilized-scripts:v6", chain)?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-scripts:v7", chain)?;
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedScriptsChartResponse>(&cache_key)
@@ -1296,7 +1361,7 @@ async fn get_most_utilized_assets_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedAssetsChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:most-utilized-assets:v3", chain)?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-assets:v4", chain)?;
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedAssetsChartResponse>(&cache_key)
@@ -1568,6 +1633,7 @@ async fn get_cell_count_chart(
         data,
         series,
         title: "Cell Count".to_string(),
+        bands: None,
     })
 }
 
@@ -1937,6 +2003,7 @@ async fn get_common_knowledge_composition_chart(
             data: vec![],
             series: vec![],
             title: "Common Knowledge Bytes Composition".to_string(),
+            bands: None,
         });
     }
 
@@ -2088,6 +2155,7 @@ async fn get_common_knowledge_composition_chart(
             },
         ],
         title: "Common Knowledge Bytes Composition".to_string(),
+        bands: None,
     };
 
     if stacked_chart_response_has_data(&response) {
@@ -3696,6 +3764,7 @@ async fn get_total_supply_chart(
         data,
         series,
         title: "Total Supply".to_string(),
+        bands: None,
     };
 
     // The complete-day boundary is part of the cache key, so a new canonical
@@ -4280,10 +4349,31 @@ fn hodl_wave_cache_has_holder_count(response: &StackedAreaChartResponse) -> bool
     })
 }
 
+/// The five bands the HODL wave's page draws (the chart-hero board, lane D1), oldest first: an
+/// ordered scale merges its young neighbours. `1m6m` and `lt1m` are written into every point by
+/// [`get_hodl_wave_chart`]; the other three are series of their own.
+fn hodl_wave_bands() -> Vec<StackedAreaBand> {
+    [
+        ("gt3y", "3 years or more", &["gt3y"][..]),
+        ("1y3y", "1 to 3 years", &["1y3y"][..]),
+        ("6m1y", "6 to 12 months", &["6m1y"][..]),
+        ("1m6m", "1 to 6 months", &["3m6m", "1m3m"][..]),
+        ("lt1m", "under 1 month", &["1w1m", "1d1w", "24h"][..]),
+    ]
+    .into_iter()
+    .map(|(key, label, members)| StackedAreaBand {
+        key: key.to_string(),
+        label: label.to_string(),
+        members: members.iter().map(|m| m.to_string()).collect(),
+    })
+    .collect()
+}
+
 async fn get_hodl_wave_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    let cache_key = "chart:hodl-wave";
+    // v2 (lane D1): the drawn bands, `bands` and the merged `1m6m` and `lt1m`
+    let cache_key = "chart:hodl-wave:v2";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         if hodl_wave_cache_has_holder_count(&cached) {
             return ok(cached);
@@ -4343,6 +4433,22 @@ async fn get_hodl_wave_chart(
             values.insert("6m1y".to_string(), pct(w.band_6m_1y)?);
             values.insert("1y3y".to_string(), pct(w.band_1y_3y)?);
             values.insert("gt3y".to_string(), pct(w.band_gt_3y)?);
+            // The two bands the page draws by merging neighbours (`hodl_wave_bands`): each from
+            // the exact capacities of its members, never from their rounded percentages.
+            let merged = |parts: &[i128]| -> Result<String, ApiRouteError> {
+                let sum = parts
+                    .iter()
+                    .try_fold(0i128, |sum, part| sum.checked_add(*part))
+                    .ok_or_else(|| {
+                        ApiError::internal(format!("HODL band capacity overflows for {date}"))
+                    })?;
+                pct(sum)
+            };
+            values.insert("1m6m".to_string(), merged(&[w.band_3m_6m, w.band_1m_3m])?);
+            values.insert(
+                "lt1m".to_string(),
+                merged(&[w.band_1w_1m, w.band_1d_1w, w.band_24h])?,
+            );
             values.insert("holderCount".to_string(), w.holder_count.to_string());
 
             Ok(StackedAreaDataPoint {
@@ -4407,6 +4513,7 @@ async fn get_hodl_wave_chart(
         data,
         series,
         title: "CKB HODL Wave".to_string(),
+        bands: Some(hodl_wave_bands()),
     };
 
     state.cache.set(cache_key, &response, CacheTtl::CHART).await;
@@ -6101,6 +6208,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(hodl_wave_cache_has_holder_count(&response));
     }
@@ -6116,6 +6224,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(!hodl_wave_cache_has_holder_count(&response));
     }
@@ -6132,6 +6241,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(!hodl_wave_cache_has_holder_count(&response));
     }
@@ -6148,6 +6258,7 @@ mod tests {
             }],
             series: vec![],
             title: "CKB HODL Wave".to_string(),
+            bands: None,
         };
         assert!(!hodl_wave_cache_has_holder_count(&response));
     }

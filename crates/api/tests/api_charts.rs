@@ -604,7 +604,7 @@ async fn test_most_utilized_scripts_chart_draws_five_largest_and_the_rest() {
         );
         // the rest band is named like the API's own remainder
         assert_eq!(chart["bands"][5]["label"], "Others", "{scope}");
-        assert_eq!(chart["bands"][0]["label"], "Script 1 (lock)", "{scope}");
+        assert_eq!(chart["bands"][0]["label"], "Script 1 (type)", "{scope}");
         // ranks six and seven (200 + 100, or 1,200 + 1,100) and the API's remainder (0)
         assert_eq!(chart["data"][0]["values"]["rest"], rest, "{scope}");
         assert_eq!(chart["series"].as_array().unwrap().len(), 8, "{scope}");

@@ -1148,6 +1148,7 @@ async fn get_token_capacity_chart(
             },
         ],
         title: format!("{title} Capacity History"),
+        bands: None,
     })
 }
 
