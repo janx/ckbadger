@@ -482,15 +482,15 @@ All activity storage is in the **domain store** (mutable, supports delete on rol
 
 ### Column Families
 
-| CF                                  | Key Size  | Value                           | Purpose                                                          |
-| ----------------------------------- | --------- | ------------------------------- | ---------------------------------------------------------------- |
-| `CF_TX_ACTIONS`                     | 12 bytes  | `StoredTxActions` (bincode)     | Per-tx actions record                                            |
-| `CF_ADDR_TXS`                       | 44 bytes  | `AddrTxValue` (bincode)         | Address → tx thin index with capacity change, tx flags, and tags |
-| `CF_ADDR_TXS_BY_PREFIX`             | 32 bytes  | `AddrTxValue` (bincode)         | Same index for a party NAMED by its 20-byte lock-hash prefix     |
-| `CF_ADDR_PREFIX_STATS`              | 20 bytes  | `AddrPrefixStats` (bincode)     | Per-prefix count of named participations without a cell          |
-| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 44 bytes  | `Vec<AssetAction>` (bincode)    | Spore/mNFT collection feeds                                      |
-| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 44 bytes  | `Vec<AssetAction>` (bincode)    | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
-| `CF_STATS_CHAIN` (prefixed)         | variable  | `DailyActivityStats` (bincode)  | Hourly/daily aggregation                                         |
+| CF                                  | Key Size | Value                          | Purpose                                                          |
+| ----------------------------------- | -------- | ------------------------------ | ---------------------------------------------------------------- |
+| `CF_TX_ACTIONS`                     | 12 bytes | `StoredTxActions` (bincode)    | Per-tx actions record                                            |
+| `CF_ADDR_TXS`                       | 44 bytes | `AddrTxValue` (bincode)        | Address → tx thin index with capacity change, tx flags, and tags |
+| `CF_ADDR_TXS_BY_PREFIX`             | 32 bytes | `AddrTxValue` (bincode)        | Same index for a party NAMED by its 20-byte lock-hash prefix     |
+| `CF_ADDR_PREFIX_STATS`              | 20 bytes | `AddrPrefixStats` (bincode)    | Per-prefix count of named participations without a cell          |
+| `CF_OBJECT_COLLECTION_ACTIVITIES`   | 44 bytes | `Vec<AssetAction>` (bincode)   | Spore/mNFT collection feeds                                      |
+| `CF_IDENTITY_COLLECTION_ACTIVITIES` | 44 bytes | `Vec<AssetAction>` (bincode)   | .bit AccountCell/.bit Cell/did:ckb collection feeds              |
+| `CF_STATS_CHAIN` (prefixed)         | variable | `DailyActivityStats` (bincode) | Hourly/daily aggregation                                         |
 
 **Note**: `CF_TX_ACTIONS` uses the RocksDB string `"activities"` (same physical column family name as the old `CF_ACTIVITIES`). The Rust constant was renamed for clarity.
 
@@ -792,17 +792,17 @@ kind) leave the decoded value `null` and state why — `decodeError` on a lock c
 subType(2) + pubkeyHash(20) expects 22"`. The response is still a 200. A lock with no registry layout
 has neither a value nor a reason.
 
-| Lock Script         | Layout                                            | Decoder Output                                                     |
-| ------------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
-| Default Lock        | codec `secp256k1_blake160`                        | `{"lock": "secp256k1_blake160", "pubkeyHash": "0x…"}`              |
-| Default Multisig    | codec `multisig`                                  | `{"lock": "multisig", "multisigScriptHash": "0x…", "since"?}`      |
-| Anyone-Can-Pay      | codec `anyone_can_pay`                            | `{"lock": "anyone_can_pay", "pubkeyHash", minimum exponents?}`     |
-| Omnilock            | codec `omnilock`                                  | `{"lock": "omnilock", "authFlag", "authKind", …}`                  |
-| RGB++ Lock          | codec `rgbpp`                                     | `{"protocol": "rgbpp", "btcTxid": "...", "outIndex": N}`           |
-| BTC Time Lock       | codec `btc_time_lock`                             | `{"protocol": "rgbpp", "action": "btcTimeLock", "btcTxid": "..."}` |
-| Fiber locks         | codecs `fiber_funding`, `fiber_commitment`        | `{"protocol": "fiber", "action": …}`                               |
-| UTXOSwap Intent     | codec `utxoswap_intent`                           | `{"protocol": "utxoswap", …}`                                      |
-| JoyID               | fields `subType(2) + pubkeyHash(20)`              | `{"lock": "joyid", "subType": "0x0001", "pubkeyHash": "0x…"}`      |
+| Lock Script         | Layout                                             | Decoder Output                                                     |
+| ------------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
+| Default Lock        | codec `secp256k1_blake160`                         | `{"lock": "secp256k1_blake160", "pubkeyHash": "0x…"}`              |
+| Default Multisig    | codec `multisig`                                   | `{"lock": "multisig", "multisigScriptHash": "0x…", "since"?}`      |
+| Anyone-Can-Pay      | codec `anyone_can_pay`                             | `{"lock": "anyone_can_pay", "pubkeyHash", minimum exponents?}`     |
+| Omnilock            | codec `omnilock`                                   | `{"lock": "omnilock", "authFlag", "authKind", …}`                  |
+| RGB++ Lock          | codec `rgbpp`                                      | `{"protocol": "rgbpp", "btcTxid": "...", "outIndex": N}`           |
+| BTC Time Lock       | codec `btc_time_lock`                              | `{"protocol": "rgbpp", "action": "btcTimeLock", "btcTxid": "..."}` |
+| Fiber locks         | codecs `fiber_funding`, `fiber_commitment`         | `{"protocol": "fiber", "action": …}`                               |
+| UTXOSwap Intent     | codec `utxoswap_intent`                            | `{"protocol": "utxoswap", …}`                                      |
+| JoyID               | fields `subType(2) + pubkeyHash(20)`               | `{"lock": "joyid", "subType": "0x0001", "pubkeyHash": "0x…"}`      |
 | Nervape Shadow Lock | fields `prefix(1) + hash(32)` (raw, uninterpreted) | `{"lock": "shadow-lock", "prefix": "0x07", "hash": "0x…"}`         |
 
 **RGB++ decoder**: args[0..4] = out_index (u32 LE), args[4..36] = btc_txid (32 bytes LE, reversed for display). Minimum 36 bytes.
@@ -830,13 +830,16 @@ out.
 
 ### Script Info Resolution
 
-Script names are resolved via `ScriptInfo` lookup and cached per-request:
+Script names are the registry's labels of each script's pair (code hash, hash type), read from
+`script_info` by the pair and cached per request:
 
 ```rust
-fn resolve_script_info_cached(store, cache, code_hash) -> Option<&ScriptInfo>
+fn cached_script_name(store, cache, code_hash, hash_type) -> anyhow::Result<Option<String>>
 ```
 
-The cache avoids repeated DB lookups for the same code_hash within a single API request. Used for both type call and lock call name resolution.
+The cache avoids repeated DB lookups for the same pair within a single API request. Used for both
+type call and lock call name resolution. A pair the registry does not name has no name, whatever
+the code hash is named by another hash type.
 
 ---
 
@@ -1190,8 +1193,8 @@ Protocol identification comes from the shared `ProtocolRegistry` built from
 
 ### API
 
-| File                                  | Content                                                                |
-| ------------------------------------- | ---------------------------------------------------------------------- |
+| File                                  | Content                                                                                         |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------- |
 | `crates/api/src/routes/activities.rs` | Endpoints, response types, page completion, `decode_lock_args` (registry `[lock_args]` layouts) |
 
 ### Statistics

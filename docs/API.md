@@ -163,7 +163,10 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `CursorPaginatedResponse<MnftItemActivityResponse>` — per-item activity entries
 - `NftCollectionDetailResponse` — counts, composition, class/issuer summary
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
-- `CursorPaginatedResponse<CollectionHolderResponse>` — holders with item counts
+- `CursorPaginatedResponse<CollectionHolderResponse>` — holders with item counts, each with its lock's
+  `lockKind` and `lockHashType`: the lock is named by its pair (code hash, hash type), never by its
+  code hash alone (lane rd/api-lock-names; the same on identity, token and cluster holders, an
+  item's owner lock, a token's supply events and issuer)
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
 - `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`)
 
@@ -411,7 +414,7 @@ could trail `total` on `/transactions` and `/cells/live` by that block.)
   - `display: TransactionCellDisplay | null` — the token / object / identity / file display the
     transaction detail serves for this cell (`transaction_cells::from_parts`), `null` when its
     type script has none.
-- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo` (`deprecated` reflects the stored script record, e.g. an address on a superseded ACP deployment reports `true`).
+- `AddressResponse` — lock_script_hash, balance, used_capacity, lock_script (`ScriptResponse`) + `lock_script_info: LockScriptInfo`, the registry's label of the lock's pair (code hash, hash type): a lock whose pair the registry does not name has none, whatever another hash type of its code hash is named (`deprecated` reflects the pair's label, e.g. an address on a superseded ACP deployment reports `true`).
   `address` is always the canonical lowercase RFC-0021 encoding of the lock script on the serving
   network — never the raw input echoed back. `pendingSummary` is described below
 - `CursorPaginatedResponse<PrefixTransactionResponse>` — `txHash`, `blockNumber`, `txIndex`,
@@ -579,7 +582,7 @@ status.
 - `MinerDistributionResponse` — `data: Vec<MinerDistributionDataPoint>`, explicit
   `windowDays`/`fromDate`/`toDate`; each row exposes the canonical
   `minerLockHash` and an optional resolvable CKB `address`
-- `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`
+- `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`, one entry per script pair: `{codeHash, hashType, name, count}` (`name`: the registry's label of the pair, `null` when none)
 - `CellSizeDistributionChartResponse` — the cell-size histogram (`ChartResponse`, flattened) and its two wholes
 - `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened) and its window: `epochs`, `intervals`, `beyondRange`
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
@@ -749,9 +752,9 @@ bands it draws and the wholes it divides by, read-only on the store:
 
 **D4 exact read contracts**
 
-- Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockKind} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
-- Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind`; percentages use this page's denominator, never another request's cached total.
-- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity}]`, `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
+- Detail and list `cellsCount` is the exact physical live type-index count, including zero-amount cells. Detail includes `sameSymbolTokens: [{typeScriptHash, holdersCount}]`; matching a symbol is never identity. Detail `issuer: {lockHash, address, lockKind, lockHashType} | null` is emitted only when standard sUDT/plain xUDT arguments prove owner-lock authority. Arbitrary compatible scripts and xUDT owner-mode/extension flags do not prove this. `maximumSupplyStatus` remains `unknown` for unproven constraints. Stored metadata provenance is not recorded and must not be inferred from equality with a bundled label.
+- Holder pages retain `data/total/limit/hasMore/nextCursor`, adding `totalSupply` and `anchor: {blockNumber,blockHash} | null` from the same request view. Each holder adds nullable `lockKind` and its lock's `lockHashType` (the name is the registry's label of the lock's pair, never of its code hash alone); percentages use this page's denominator, never another request's cached total.
+- History returns `source: "indexed_chain_time"`, `completeThrough` (last complete UTC+8 date), canonical `anchor`, `daily: [{date,supply,capacity,occupiedCapacity}]`, `weekly: [{weekStart,transfersCount}]`, `supplyEvents`, `mintCount`, `burnCount`, and `transfersCount`. Supply/amount/capacity are exact decimal strings; capacity units are shannons. Daily rows include quiet dates with unchanged state. Weeks start Monday and only finished weeks are returned. Counters count indexed transfer records (including mint/burn legs); they are not unique-transaction counts. All supply events through the anchor are returned, oldest first, with `txHash, blockNumber, txIndex, transferSequence, timestamp` (milliseconds), `kind: mint|burn, amount, supplyAfter, lockHash, address, lockKind, lockHashType`. The lock is the mint recipient or burn sender. The final supply must equal current holder balances; inconsistent or missing evidence fails contextually.
 - Distribution returns `holdersCount,totalSupply,largestHolderBalance,nextNineBalance,remainingBalance,decimals,unit,buckets`. Bucket boundaries are raw integer strings, lower inclusive/upper exclusive; the last upper bound is null. Known decimals produce token-unit ranges below 1, 1–10, 10–100, 100–1,000, 1,000–10,000, 10,000–100,000, and at least 100,000. Unknown decimals explicitly use raw units. Counts and balances cover every positive holder, including values above u128.
 - New feeds accept `limit` (1–100) and `cursor=block:realTxIndex`, return exact deduplicated `total`, and share the existing `GlobalActivityResponse` / `TransactionResponse` projections. Every participant remains present. Token amount moved can be read as the sum of positive deltas for that token in the complete activity; transaction `value` continues to mean CKB moved. Old `/activities` remains the transfer-pair grouping API with its independent transfer-sequence cursor.
 - Read complexity: history and feeds scan that token's transfer prefix, distribution scans its holder prefix, live count scans its physical type-cell prefix. History joins relevant headers only and trusts their indexed chain time; it never scans the full chain's headers or substitutes RPC. No new persistent writes.
@@ -999,7 +1002,7 @@ disabled or empty state. A point lookup still returns not found.
 | Method | Path                                             | Handler                                          | Purpose                                                                                             |
 | ------ | ------------------------------------------------ | ------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
 | GET    | `/api/v1/scripts`                                | `list_scripts`                                   | List script families from warmup cache (search/sort/cursor)                                         |
-| POST   | `/api/v1/scripts/lookup`                         | `lookup_scripts`                                 | Bulk-resolve up to 100 code_hashes (optional `tx_hash` per-tx resolution)                           |
+| POST   | `/api/v1/scripts/lookup`                         | `lookup_scripts`                                 | Bulk-resolve up to 100 scripts by their pairs (optional `tx_hash` per-tx resolution)                |
 | GET    | `/api/v1/scripts/code-cell`                      | `get_code_cell`                                  | Resolve a code-cell outpoint for a `code_hash`                                                      |
 | GET    | `/api/v1/scripts/code-cells`                     | `get_code_cells`                                 | List all code cells (live+consumed) for a `code_hash`, with ambiguity info                          |
 | GET    | `/api/v1/scripts/charts/capacity-history`        | `get_script_capacity_history_chart_by_code_hash` | Capacity history chart for a script identified by `code_hash` (range + `script_kind`)               |
@@ -1010,7 +1013,10 @@ disabled or empty state. A point lookup still returns not found.
 **Params**
 
 - `ListParams` — `limit`, `cursor`, `network`, `decoder_type` (unused), `search`, `sort_key`, `sort_direction`
-- `LookupScriptsRequest` (POST body via `Json<>`) — `code_hashes: Vec<String>`, optional `tx_hash`
+- `LookupScriptsRequest` (POST body via `Json<>`, unknown fields refused) — `scripts: [{codeHash, hashType}]`
+  (a script is its pair; a code hash alone is no script, and a body of `codeHashes` is a 400; a
+  `hashType` that is not `data` \| `type` \| `data1` \| `data2` is a 400, before anything is read),
+  optional `tx_hash` (its `cell_deps` resolve only the pairs of the form they serve)
 - `CodeCellQuery` — `code_hash`, optional `hash_type` (`data` \| `type` \| `data1` \| `data2`). With
   `hash_type` the lookup resolves the exact observed reference form (a data-family form only
   resolves when a code cell with that data hash exists on chain); without it the whole deployment
@@ -1022,11 +1028,18 @@ disabled or empty state. A point lookup still returns not found.
 **Responses**
 
 - `CursorPaginatedResponse<ScriptFamilyListItemResponse>` — script family listing (from `crate::response`)
-- `HashMap<String, ScriptLookupInfo>` — keyed by reference hash; each entry has resolution_state (`resolved`/`ambiguous`) and optional `ambiguity: ScriptResolutionAmbiguityResponse`.
-  Every deployment-scoped field describes **the queried reference**, never a sibling deployment
-  that happens to share the same bytecode: `liveCellsCount`/`ownedCapacitySum`/`ownedKnowledgeSum`
-  and `scriptKind` come from the queried reference's own usage rollup (zero when the reference has
-  no indexed usage), and `codeCellTxHash`/`codeCellOutputIndex`/`codeCellsLiveCount`/`codeCellsTotal`
+- `HashMap<String, ScriptLookupInfo>` — keyed `"<code hash>:<hash type>"` (lower-case hex), one entry
+  per pair asked that the registry names or the chain has used (a pair with neither is absent);
+  `hashType` is the pair's. Each entry has `resolutionState` (`resolved`: one binary; `ambiguous`:
+  several live binaries; `unresolved`: no binary resolves the pair, its name and usage stand) and
+  optional `ambiguity: ScriptResolutionAmbiguityResponse`. `name` is the registry's label of the
+  pair (`script_info` by the pair), "Unknown" when it names none — never the name of the code
+  hash by another hash type, and no other pair is tried.
+  Every deployment-scoped field describes **the queried pair**, never a sibling deployment
+  that happens to share the same bytecode, nor the code hash by another hash type:
+  `cellsCount`/`liveCellsCount`/`ownedCapacitySum`/`ownedKnowledgeSum` (cells ever and live whose
+  lock or type script is exactly the pair, as lock plus as type) and `scriptKind` come from the
+  pair's own `script_reference_info` row (zero when the pair has no indexed usage), and `codeCellTxHash`/`codeCellOutputIndex`/`codeCellsLiveCount`/`codeCellsTotal`
   cover only the code cells deployed under that reference. `codeHash` remains the resolved bytecode
   version hash, which two deployments of one binary legitimately share. `deprecated` is reported for
   ambiguous references too, from the reference's own record.
