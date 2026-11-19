@@ -8,7 +8,7 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
-import { Pager } from '@/components/ui/pager';
+import { Pager, type PagerProps } from '@/components/ui/pager';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ClockText, useClockTime } from '@/components/ui/utc8-date';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
@@ -161,6 +161,29 @@ function competingLine(record: ForkNodeRecord): string | null {
 function switchesTotal(total: number | undefined): number {
   if (total === undefined) throw new Error('Forks list response has no total');
   return total;
+}
+
+/**
+ * The pager's short-list form while the first page's first five stand for the list, in its exact
+ * words: "all N branch switches ↓" where the page holds every switch the API counts (it must then
+ * hold as many rows as the served total), else "next K ↓", K the page's rows past the five, after
+ * which the time pager stands.
+ */
+function firstPageMore(
+  read: { data: readonly ReorgEvent[]; total?: number; hasMore: boolean },
+  onShow: () => void
+): Extract<PagerProps, { mode: 'more' }> {
+  if (read.hasMore)
+    return { mode: 'more', next: { count: read.data.length - PREVIEW_ROWS, onShow } };
+  const total = switchesTotal(read.total);
+  if (total !== read.data.length)
+    throw new Error(
+      `Forks list: the first page holds ${read.data.length} switches and no more, but the total is ${total}`
+    );
+  return {
+    mode: 'more',
+    all: { count: total, singular: 'branch switch', plural: 'branch switches', onShow },
+  };
 }
 
 const seenWhen = (event: ReorgEvent) => formatUtc8DateTime(event.detectedAt).slice(0, 19);
@@ -557,19 +580,11 @@ export default function ForksPage() {
                   )}
                 />
                 {/* The controls board's pager: the short list's own form while the first five
-                    stand for the list ("all 18 branch switches ↓"), then a cursor in time, newest
-                    first (switchesAt). */}
+                    stand for the list ("all 18 branch switches ↓", or "next 45 ↓" where the list
+                    is longer than a page), then a cursor in time, newest first (switchesAt). */}
                 {collapsed ? (
                   <div className="mt-3">
-                    <Pager
-                      mode="more"
-                      all={{
-                        count: switchesTotal(events.data.total),
-                        singular: 'branch switch',
-                        plural: 'branch switches',
-                        onShow: () => setExpanded(true),
-                      }}
-                    />
+                    <Pager {...firstPageMore(events.data, () => setExpanded(true))} />
                   </div>
                 ) : (
                   switchesAt && (

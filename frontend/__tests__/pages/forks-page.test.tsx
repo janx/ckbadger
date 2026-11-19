@@ -289,7 +289,7 @@ describe('ForksPage', () => {
     // pager, "all 18 branch switches ↓" in celadon words (it was "Show all 18 branch switches ↓"
     // in the reading ink, a disclosure with aria-expanded; the board's is a way to go, the rest of
     // the list, and it goes once taken); the count is a unit, held by no-break spaces
-    const more = screen.getByRole('button', { name: 'all 18 branch switches ↓' });
+    const more = screen.getByRole('button', { name: 'all 18\u00a0branch\u00a0switches ↓' });
     expect(more).toHaveClass('text-small', 'text-jade');
     expect(more).not.toHaveAttribute('aria-expanded');
     expect(screen.queryByText(fullText(/18 switches/))).toBeNull();
@@ -329,7 +329,10 @@ describe('ForksPage', () => {
     await waitFor(() => expect(table()).toBeInTheDocument());
     const bodyRows = () => table().querySelectorAll('tbody tr');
     expect(bodyRows()).toHaveLength(5);
-    fireEvent.click(screen.getByRole('button', { name: 'all 15 branch switches ↓' }));
+    // re-pinned on purpose (the coordinator's Chrome check, lane C2 topics): the fifteen are longer
+    // than a page, so the short-list form is the rows the click adds to the five shown, "next 3 ↓"
+    // (it was "all 15 branch switches ↓", a click that showed eight)
+    fireEvent.click(screen.getByRole('button', { name: 'next 3 ↓' }));
     expect(bodyRows()).toHaveLength(8);
     // the page of the pages the served total makes at the served page size; newer is quiet words
     expect(pager()).toHaveTextContent('newest first← newerpage 1 of 2older →');
@@ -362,7 +365,9 @@ describe('ForksPage', () => {
     });
     const { unmount } = render(<ForksPage />);
     await waitFor(() => expect(table()).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: 'all 18 branch switches ↓' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'all 18\u00a0branch\u00a0switches ↓' })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^next \d/ })).toBeNull();
     unmount();
     // ten a page of 27: the click adds the five rows the first page holds past the five shown
