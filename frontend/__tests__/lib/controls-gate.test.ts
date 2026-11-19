@@ -177,11 +177,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'a token’s holders pager',
   },
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
-  'app/fiber/channels/client-page.tsx': {
-    lane: 'c2-topics',
-    sites: { pager: 1 },
-    reason: 'the Fiber channels list’s pager',
-  },
   'app/forks/page.tsx': {
     lane: 'c2-topics',
     sites: { pager: 2 },
@@ -217,7 +212,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 49;
+const TOLERATED_TOTAL = 48;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
