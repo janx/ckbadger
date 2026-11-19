@@ -18,8 +18,11 @@ import { LINK_LOOKS } from '@/components/ui/link';
  *   app/globals.css; an arbitrary `text-[color:…]` or `text-[var(…)]`), a decoration class
  *   (`underline`, `no-underline`, `overline`, `line-through`, `decoration-*`, `underline-offset-*`),
  *   or a `color` / `textDecoration…` key of a `style` object. A size step, an alignment or a wrap
- *   (`text-body`, `text-right`, `text-nowrap`) is no ink. The shell's navigation (`look="nav"` in
- *   `components/layout/`) writes its own design and is not counted;
+ *   (`text-body`, `text-right`, `text-nowrap`) is no ink. Since lane cd-fixes-controls (T NOTE-2)
+ *   the same is read on every element inside a link (`<Link><span className="text-jade
+ *   hover:underline">`), one site a child, up to a link inside it, which is read on its own. The
+ *   shell's navigation (`look="nav"` in `components/layout/`) writes its own design and is not
+ *   counted;
  * - `raw`: an `<a>` outside the two link components (components/ui/link.tsx, external-link.tsx).
  *
  * A look is read through string literals, `?:`, `&&` and the file's own constants; a look handed
@@ -39,8 +42,9 @@ import { LINK_LOOKS } from '@/components/ui/link';
  * The sites tolerated today are listed per file with their count per kind, the lane that takes them
  * (by page family: `p-chain`, `p-assets`, `p-lists`, `p-topics`, `d1-charts`, `shell`) and a
  * reason: the work list of the lanes that follow. A new site fails, and so does one that went until
- * its count is lowered; the list's total is pinned and only falls. A raw `<a>` kept by decision is
- * NAMED apart, with its reason.
+ * its count is lowered; the list's total is pinned and only falls. A site kept by decision is NAMED
+ * apart, per kind, with its reason, and held by the scan as the list is (lane cd-fixes-controls, T
+ * NOTE-1: a named site that went fails until its count is lowered).
  */
 
 type Kind = 'look' | 'ink' | 'raw';
@@ -70,19 +74,31 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     // Look 20 → 18 (lane P1): the lede's miner went, the cellbase row's paid block states its look.
     // Look 18 → 0, ink 7 → 1 (lane P1): every link states its look; the step arrows are blocks
     // whose mark draws its own ink. The hardfork resources' raw <a> and its ink stay (an external
-    // link with the page's test id, which ExternalLink does not carry)
-    sites: { ink: 1, raw: 1 },
-    reason: "the hardfork resources' raw <a>, inked by hand (text-interactive)",
+    // link with the page's test id, which ExternalLink does not carry). Ink 1 → 2 (lane
+    // cd-fixes-controls, at its merge with P1: the reader reads an ink inside a link): a step
+    // arrow's mark, an <svg> in the quiet ink turning celadon with its block's group hover
+    sites: { ink: 2, raw: 1 },
+    reason:
+      "the hardfork resources' raw <a>, inked by hand (text-interactive); a step arrow's mark inked inside its block link (text-text-dim, group-hover:text-jade)",
   },
   'components/participant-ref.tsx': {
     lane: 'p-chain',
     sites: { look: 3, ink: 2 },
     reason: '3 without a look; inks by hand (hover:text-jade, text-text, text-jade-dim)',
   },
+  // lane P1 took this file's own inks off the list; the reader of an ink inside a link (lane
+  // cd-fixes-controls) finds one left, on a token amount's "no readable amount of"
+  'components/transaction/transaction-cell-content.tsx': {
+    lane: 'p-chain',
+    sites: { ink: 1 },
+    reason:
+      'an ink on a child of its inline link: the “no readable amount of” span’s text-text-dim',
+  },
   'components/transaction/transaction-list-table.tsx': {
     lane: 'p-chain',
-    sites: { look: 2, ink: 2 },
-    reason: '2 without a look; inks by hand (hover:text-jade, hover:underline)',
+    sites: { look: 2, ink: 3 },
+    reason:
+      '2 without a look; inks by hand (hover:text-jade, hover:underline), and one on a child (the Hash’s text-text-bright)',
   },
   // ---- p-assets ----
   // app/scripts/[name]/client-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
@@ -165,13 +181,15 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/transactions/page.tsx': {
     lane: 'p-lists',
-    sites: { look: 3, ink: 1 },
-    reason: '3 without a look; inks by hand (text-text-dim, hover:text-jade)',
+    sites: { look: 3, ink: 2 },
+    reason:
+      '3 without a look; inks by hand (text-text-dim, hover:text-jade), and one on a child (the Hash’s text-text-bright)',
   },
   'components/activity-event-row.tsx': {
     lane: 'p-lists',
-    sites: { look: 5, ink: 5 },
-    reason: '5 without a look; inks by hand (hover:text-jade, text-text-bright, text-positive)',
+    sites: { look: 5, ink: 6 },
+    reason:
+      '5 without a look; inks by hand (hover:text-jade, text-text-bright, text-positive), and one on a child (a span’s text-text-dim)',
   },
   'components/activity/activity-row.tsx': {
     lane: 'p-lists',
@@ -233,7 +251,14 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // the DAO page's board, its growth section and its sources left the list (lane P4: look 13,
   // ink 8, raw 1; look 1; look 2, ink 2 → 0)
   // 'components/deep-fork-alert.tsx' left the list (lane P4: look 1, ink 1 → 0, the button the
-  // block look, its words' ink on a span inside it)
+  // block look, its words' ink on a span inside it), and came back when the reader learned an ink
+  // written inside a link (lane cd-fixes-controls, T NOTE-2): ink 1
+  'components/deep-fork-alert.tsx': {
+    lane: 'p-topics',
+    sites: { ink: 1 },
+    reason:
+      'a link drawn as a filled button: its words’ ink, the one its fill calls for, written on a span inside it (style color), which no look carries',
+  },
   // the Fiber board, step and graph left the list (lane P4: look 11, ink 11 → 0)
   'components/forks/miner-link.tsx': {
     lane: 'p-topics',
@@ -246,8 +271,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- shell ----
   'components/stats-bar.tsx': {
     lane: 'shell',
-    sites: { look: 2 },
-    reason: '2 without a look',
+    sites: { look: 2, ink: 5 },
+    reason:
+      '2 without a look; five inks on children: the epoch link’s label, value and position spans (text-text-dim, text-text-bright with group-hover:text-jade, text-text)',
   },
 };
 
@@ -287,17 +313,35 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // strip states, 10), the block page's lede and cellbase row (2), the cell page's origin line and
 // its code-cell link (8), and every link of the chain pages' files states its look, inks by hand
 // gone (135 in seventeen files, fifteen leaving the list; the address's API JSON and the block's
-// hardfork resources keep their raw anchors)
-const TOLERATED_TOTAL = 110;
+// hardfork resources keep their raw anchors) → 121 (lane cd-fixes-controls, T NOTE-2: the reader
+// learned an ink written on an element inside a link; with the lanes' merges, eleven stand — the
+// transactions page's and the transaction list's Hash in the bright ink, the activity row's span
+// in the quiet ink, the status line's epoch link's five label, value and position spans, the
+// deep-fork alert's words on its filled button, a transaction cell's "no readable amount of", the
+// block page's step arrow mark; TabLinks' name span is NAMED)
+const TOLERATED_TOTAL = 121;
 
-/** Raw anchors kept by decision, by file: their count and why. */
-const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
+/** Sites kept by decision, by file: their count per kind and why. */
+interface Named {
+  sites: Partial<Record<Kind, number>>;
+  reason: string;
+}
+
+const NAMED: Readonly<Record<string, Named>> = {
   'components/layout/wordmark.tsx': {
-    count: 1,
+    sites: { raw: 1 },
     reason:
       'the error page’s bare home link (`plain`): it renders without the router, and its href stays `/` where Link would prefix the network',
   },
+  'components/ui/tabs.tsx': {
+    sites: { ink: 1 },
+    reason:
+      'TabLinks’ stated design: a tab’s name span carries its state (bright where current, a zero quiet, else the reading ink) and its hover and focus jade from the whole 32 px target (group-hover, group-focus-visible); its link is `block`, which draws no ink',
+  },
 };
+
+/** The pinned total of NAMED's sites: 1, and TabLinks' name since the reader learned a child's ink. */
+const NAMED_TOTAL = 2;
 
 /** The files that draw the one `<a>` of a link (they own it). */
 const LINK_FILES = ['components/ui/link.tsx', 'components/ui/external-link.tsx'];
@@ -559,6 +603,46 @@ function scanLinks(
         line: lineOf(node),
         what: `<${tag}> ${[...inked, ...(styleInk ? ['style color'] : [])].join(' ')}`,
       });
+
+    // an ink or an underline written on an element inside the link (lane cd-fixes-controls, T
+    // NOTE-2), one site a child, up to a link inside it, which is read on its own
+    const isLink = (n: ts.JsxOpeningElement | ts.JsxSelfClosingElement) =>
+      ts.isIdentifier(n.tagName) && (n.tagName.text === 'a' || LINK_COMPONENTS.has(n.tagName.text));
+    const childInks = (n: ts.Node) => {
+      if (ts.isJsxElement(n) || ts.isJsxSelfClosingElement(n)) {
+        const open = ts.isJsxElement(n) ? n.openingElement : n;
+        if (isLink(open)) return;
+        const own = (key: string) =>
+          open.attributes.properties.find(
+            (a): a is ts.JsxAttribute =>
+              ts.isJsxAttribute(a) && ts.isIdentifier(a.name) && a.name.text === key
+          );
+        const childCls = own('className');
+        const childClsValue = childCls && valueOf(childCls);
+        const childInked = childClsValue ? classTokens(childClsValue).filter(isLinkInk) : [];
+        const childStyle = own('style');
+        const childStyleValue = childStyle && valueOf(childStyle);
+        const childStyleInk = childStyleValue ? styleInks(childStyleValue) : false;
+        if (childStyleInk === null)
+          refuse(
+            open,
+            `a style inside a link the scan cannot read: ${childStyleValue!.getText(source)}`
+          );
+        if (childInked.length || childStyleInk)
+          sites.push({
+            kind: 'ink',
+            line: lineOf(open),
+            what: `<${tag}> > <${open.tagName.getText(source)}> ${[
+              ...childInked,
+              ...(childStyleInk ? ['style color'] : []),
+            ].join(' ')}`,
+          });
+        if (ts.isJsxElement(n)) n.children.forEach(childInks);
+        return;
+      }
+      ts.forEachChild(n, childInks);
+    };
+    if (children) children.forEach(childInks);
   };
 
   const visit = (node: ts.Node) => {
@@ -574,15 +658,17 @@ function scanLinks(
 function toleratedFailures(
   found: ReadonlyMap<string, readonly Site[]>,
   tolerated: Readonly<Record<string, Tolerated>>,
-  named: Readonly<Record<string, { count: number; reason: string }>> = {}
+  named: Readonly<Record<string, Named>> = {}
 ): string[] {
   const out: string[] = [];
-  for (const path of [...new Set([...found.keys(), ...Object.keys(tolerated)])].sort()) {
+  const paths = new Set([...found.keys(), ...Object.keys(tolerated), ...Object.keys(named)]);
+  for (const path of [...paths].sort()) {
     const sites = found.get(path) ?? [];
     const entry = tolerated[path];
+    const kept = named[path];
     for (const kind of KINDS) {
       const of = sites.filter((s) => s.kind === kind);
-      const allowed = (entry?.sites[kind] ?? 0) + (kind === 'raw' ? (named[path]?.count ?? 0) : 0);
+      const allowed = (entry?.sites[kind] ?? 0) + (kept?.sites[kind] ?? 0);
       if (of.length > allowed)
         out.push(
           `${path}: ${of.length} ${kind} site(s), ${allowed} tolerated — a new one: ${of
@@ -594,8 +680,9 @@ function toleratedFailures(
           `${path}: ${of.length} ${kind} site(s), ${allowed} tolerated — lower its count to ${of.length}`
         );
     }
-    if (entry && entry.reason.trim().length <= 10)
-      out.push(`${path}: a reason too short to say why: "${entry.reason}"`);
+    for (const listed of [entry, kept])
+      if (listed && listed.reason.trim().length <= 10)
+        out.push(`${path}: a reason too short to say why: "${listed.reason}"`);
   }
   return out;
 }
@@ -684,6 +771,32 @@ describe('the link scan finds what it must, and only that', () => {
     ).toEqual(['raw <a>', 'raw <a>', 'ink <a> hover:text-text-bright hover:underline']);
   });
 
+  // Lane cd-fixes-controls (T NOTE-2): a link's ink or underline written on a child walked past
+  it('finds a link ink or an underline written on a child, not past a link inside it', () => {
+    expect(
+      read(`
+        export const A = ({ on }: { on: boolean }) => (
+          <p>
+            <Link href="/a" look="inline"><span className="text-jade hover:underline">a</span></Link>
+            <Link href="/b" look="key"><Hash className="text-text-bright" value="0x1" /></Link>
+            <a href="#c"><span style={{ color: 'var(--c-text)' }}>c</span></a>
+            <Link href="/d" look="key"><span className="font-mono text-body">d</span></Link>
+            <Link href="/e" look="key">{on && <span className="text-text-dim">e</span>}</Link>
+            <Link href="/f" look="key">
+              <Link href="/g" look="key" className="text-text">g</Link>
+            </Link>
+          </p>
+        );`)
+    ).toEqual([
+      'ink <Link> > <span> text-jade hover:underline',
+      'ink <Link> > <Hash> text-text-bright',
+      'raw <a>',
+      'ink <a> > <span> style color',
+      'ink <Link> > <span> text-text-dim',
+      'ink <Link> text-text',
+    ]);
+  });
+
   it('lets the shell’s navigation write its own design, in the shell alone', () => {
     const nav = `
       export const N = () => (
@@ -754,9 +867,25 @@ describe('the tolerated list keys a file by its count per kind, so it only shrin
     ]);
   });
 
-  it('counts a raw anchor named by decision apart from the list', () => {
-    const named = { 'app/b.tsx': { count: 1, reason: 'a bare home link outside the router' } };
+  // Re-pinned (lane cd-fixes-controls, T NOTE-1): a site named by decision is counted per kind,
+  // and held by the scan as the tolerated list is: one that went fails until its count is lowered
+  it('counts a site named by decision apart from the list, and holds it as the list', () => {
+    const named = {
+      'app/b.tsx': { sites: { raw: 1 }, reason: 'a bare home link outside the router' },
+    };
     expect(toleratedFailures(new Map([['app/b.tsx', [site('raw', 4)]]]), {}, named)).toEqual([]);
+    expect(toleratedFailures(new Map(), {}, named)).toEqual([
+      'app/b.tsx: 0 raw site(s), 1 tolerated — lower its count to 0',
+    ]);
+    expect(
+      toleratedFailures(
+        new Map([['app/b.tsx', [site('raw', 4)]]]),
+        {},
+        {
+          'app/b.tsx': { sites: { raw: 1 }, reason: 'kept' },
+        }
+      )
+    ).toEqual(['app/b.tsx: a reason too short to say why: "kept"']);
   });
 });
 
@@ -788,7 +917,7 @@ describe('every link states its look (lane c2-links)', () => {
   });
 
   it('writes no link without its look, with a hand-written ink or raw, but the list’s', () => {
-    expect(toleratedFailures(found, TOLERATED, NAMED_RAW)).toEqual([]);
+    expect(toleratedFailures(found, TOLERATED, NAMED)).toEqual([]);
   });
 
   it(`tolerates ${TOLERATED_TOTAL} sites in all: the pinned total, which only falls`, () => {
@@ -797,6 +926,14 @@ describe('every link states its look (lane c2-links)', () => {
       0
     );
     expect(total).toBe(TOLERATED_TOTAL);
-    expect(Object.values(NAMED_RAW).reduce((sum, e) => sum + e.count, 0)).toBe(1);
+  });
+
+  it(`names ${NAMED_TOTAL} sites kept by decision, each with its reason: the pinned total`, () => {
+    expect(
+      Object.values(NAMED).reduce(
+        (sum, entry) => sum + Object.values(entry.sites).reduce((a, n) => a + (n ?? 0), 0),
+        0
+      )
+    ).toBe(NAMED_TOTAL);
   });
 });

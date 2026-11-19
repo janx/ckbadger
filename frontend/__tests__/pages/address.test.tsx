@@ -45,6 +45,7 @@ import {
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/api')>()),
@@ -131,6 +132,19 @@ const tab = async (name: string) =>
 // Phase 5 (A21): the holdings heading runs on the address's live cells (U-16, re-pinned: the count
 // and its noun are one unit, a no-break space between them).
 const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+\scells?$/ });
+/** `n` distinct live cells, the address's object cells repeated, numbered from `from` (a page of
+ * them agrees with itself: pagedRead). */
+/** `n` distinct activities, the address's repeated with their own tx hashes, from `from`. */
+const activitiesPage = (n: number, from = 0) =>
+  Array.from({ length: n }, (_, i) => ({
+    ...addressActivitiesFixture[(from + i) % addressActivitiesFixture.length],
+    txHash: `0x${(4096 + from + i).toString(16).padStart(64, '0')}`,
+  }));
+const liveCellsPage = (n: number, from = 0) =>
+  Array.from({ length: n }, (_, i) => ({
+    ...addressObjectsFixture[(from + i) % addressObjectsFixture.length],
+    outputIndex: 1000 + from + i,
+  }));
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -699,6 +713,51 @@ describe('Address v3', () => {
     await loaded();
     expect(screen.queryByTestId('address-dotcell-names')).not.toBeInTheDocument();
   });
+  // Lane cd-fixes-controls, item 1 (L1 MUST 1): an address whose live cells are not a multiple of
+  // the page size. `next →` moves the walk to page 2 at once while the list keeps page 1's
+  // response until page 2's arrives (keepPreviousData); the pager read page 1's response as page
+  // 2, rows 21–40 of 25, threw, and the address page was the crash page. The page a response was
+  // asked for travels with it: while page 2 loads the pager says page 1's figures and offers no
+  // next; when page 2 arrives, its own.
+  it('steps into the last page of 25 live cells while page 2 is still on its way', async () => {
+    let arrive: () => void = () => {};
+    const second = new Promise<void>((resolve) => (arrive = resolve));
+    vi.mocked(api.getAddressCells).mockImplementation(async (_a, p) => {
+      if (p?.class) return pagedRead(pageFixture([]));
+      if (!p?.cursor)
+        return pagedRead({
+          ...pageFixture(liveCellsPage(20), 25),
+          hasMore: true,
+          nextCursor: 'cell-20',
+        });
+      await second;
+      return pagedRead(pageFixture(liveCellsPage(5, 20), 25), 20);
+    });
+    render(<AddressDetailPage />);
+    await loaded();
+    await tab('Live cells');
+    const history = screen.getByRole('region', { name: 'History' });
+    const pages = await within(history).findByRole('navigation', { name: 'live cells' });
+    expect(pages).toHaveTextContent(/^1–20 of 25 · 20 a page/);
+    fireEvent.click(within(pages).getByRole('button', { name: 'next →' }));
+    // page 2 is asked for; page 1's rows stand, and the pager says page 1, with no way on
+    await waitFor(() =>
+      expect(api.getAddressCells).toHaveBeenLastCalledWith(addressHash, {
+        limit: 20,
+        cursor: 'cell-20',
+        class: undefined,
+      })
+    );
+    const kept = within(history).getByRole('navigation', { name: 'live cells' });
+    expect(kept).toHaveTextContent(/^1–20 of 25/);
+    expect(within(kept).getByText('page 1 of 2')).toBeInTheDocument();
+    expect(within(kept).queryByRole('button', { name: 'next →' })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => arrive());
+    const last = await within(history).findByText('page 2 of 2');
+    expect(last.closest('nav')).toHaveTextContent(/^21–25 of 25/);
+  });
+
   // Lane P1 (the placement lane's note: the class filter appeared only once the holdings had
   // loaded, its counts coming from them, and pushed the list down when it did): the filter stands
   // from the first draw, its classes without counts until the holdings answer, so nothing jumps.
@@ -726,26 +785,31 @@ describe('Address v3', () => {
     // the library's pager counts the page of it (`1–14 of 40 · 20 a page`, `next →`; it was a
     // Next button with no count); the class filter is the library's chips, a radio group "class"
     // (was a group of pressed buttons "Filter live cells").
-    vi.mocked(api.getAddressCells).mockImplementation(async (_a, p) => ({
-      ...pageFixture(
-        p?.class === 'identity'
-          ? addressIdentitiesFixture
-          : p?.class === 'dao'
-            ? addressDaoCellsFixture
-            : addressObjectsFixture,
-        p?.class ? undefined : holdingsFixture.liveCellsCount
-      ),
-      hasMore: p?.class !== 'identity',
-      nextCursor: p?.class === 'identity' ? null : 'next-cell',
-    }));
+    // Re-pinned on purpose (lane cd-fixes-controls, item 1): the page agrees with itself
+    // (pagedRead): a first page of 20 live cells of the 40 the address holds, with more after
+    // it; it served the 14 object cells and said more followed, a short page that is no first
+    // page and hid the crash below (its range read 1–14 of 40)
+    const firstCells = liveCellsPage(20);
+    vi.mocked(api.getAddressCells).mockImplementation(async (_a, p) =>
+      p?.class === 'identity'
+        ? pagedRead(pageFixture(addressIdentitiesFixture))
+        : p?.class === 'dao'
+          ? pagedRead(pageFixture(addressDaoCellsFixture))
+          : p?.cursor
+            ? // the second and last page: the address's other 20 cells
+              pagedRead(pageFixture(liveCellsPage(20, 20), holdingsFixture.liveCellsCount), 20)
+            : pagedRead({
+                ...pageFixture(firstCells, holdingsFixture.liveCellsCount),
+                hasMore: true,
+                nextCursor: 'next-cell',
+              })
+    );
     render(<AddressDetailPage />);
     await loaded();
     await tab('Live cells');
     const history = screen.getByRole('region', { name: 'History' });
     const pages = await within(history).findByRole('navigation', { name: 'live cells' });
-    expect(pages).toHaveTextContent(
-      new RegExp(`^1–${addressObjectsFixture.length} of ${holdingsFixture.liveCellsCount} · 20`)
-    );
+    expect(pages).toHaveTextContent(new RegExp(`^1–20 of ${holdingsFixture.liveCellsCount} · 20`));
     fireEvent.click(within(pages).getByRole('button', { name: 'next →' }));
     await waitFor(() =>
       expect(api.getAddressCells).toHaveBeenCalledWith(addressHash, {
@@ -836,10 +900,16 @@ describe('Address v3', () => {
   });
   // F2 blocks (BA-35, R2b-a filter=script): one "Script" chip, as the Address board.
   it('uses one script-call filter and resets the activity cursor', async () => {
+    // re-pinned (lane cd-fixes-controls, item 1): the pages agree with themselves (pagedRead): a
+    // full first page with an older one after it, then that older and last page (it served the
+    // same short page with more after it at every cursor, whose next cursor repeated the one it
+    // was asked with: an API fault the pager now refuses)
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
-      p?.filter === 'all'
-        ? { ...pageFixture(addressActivitiesFixture), hasMore: true, nextCursor: 'next-act' }
-        : pageFixture([])
+      p?.filter !== 'all'
+        ? pagedRead(pageFixture([]))
+        : p.cursor
+          ? pagedRead(pageFixture(activitiesPage(5, 20)), 20)
+          : pagedRead({ ...pageFixture(activitiesPage(20)), hasMore: true, nextCursor: 'next-act' })
     );
     render(<AddressDetailPage />);
     await loaded();

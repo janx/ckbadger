@@ -445,20 +445,22 @@ export default function ScriptsPage() {
   // The table's page (declared first: its request goes first).
   // The page a response was asked as travels with it: the table keeps the page it shows while the
   // next one loads (keepPreviousData), and the pager writes that page's figures, not the next's.
+  // The walk's `ask` stamps it, the one owner of that rule (lane cd-fixes-controls, item 1: this
+  // page carried its own `page` field, a second owner).
+  const askScripts = pagination.ask((cursor) =>
+    api.getScripts({
+      limit: pageSize,
+      cursor,
+      decoderType: undefined,
+      search,
+      role,
+      sortKey,
+      sortDirection,
+    })
+  );
   const read = useQuery({
     queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
-    queryFn: async () => ({
-      ...(await api.getScripts({
-        limit: pageSize,
-        cursor: pagination.cursor,
-        decoderType: undefined,
-        search,
-        role,
-        sortKey,
-        sortDirection,
-      })),
-      page: pagination.page,
-    }),
+    queryFn: askScripts,
     placeholderData: keepPreviousData,
   });
   const { data, isError, error } = read;
@@ -479,7 +481,7 @@ export default function ScriptsPage() {
   const rows = data?.data ?? [];
   // the shown page's figures (lib/pagination.ts), at the page it was asked as; nothing for one page,
   // an empty page past the end its place and a way back (lane c2-finish, 1b)
-  const scriptsAt = data ? rankedPageAt('scripts', data.page, data) : null;
+  const scriptsAt = data ? rankedPageAt('scripts', data, pagination) : null;
   const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
@@ -718,15 +720,7 @@ export default function ScriptsPage() {
                 )}
                 {data && (data.data.length > 0 || scriptsAt) && (
                   <div className="border-base-border mt-4 border-t pt-4">
-                    {scriptsAt && (
-                      <Pager
-                        mode="pages"
-                        label="scripts"
-                        {...scriptsAt}
-                        onPrevious={pagination.goToPrevious}
-                        onNext={() => pagination.goToNext(data.nextCursor)}
-                      />
-                    )}
+                    {scriptsAt && <Pager mode="pages" label="scripts" {...scriptsAt} />}
                   </div>
                 )}
               </Tabs>

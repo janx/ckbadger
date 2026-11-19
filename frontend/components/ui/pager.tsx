@@ -5,17 +5,19 @@ import type { RankedPage } from '@/lib/pagination';
 import { cn } from '@/lib/utils';
 
 /**
- * A ranked list in pages, as lib/pagination.ts's `rankedPageAt` gives it: the page, the rows a
- * page holds, whether a page follows, the rows shown (none for an empty page past the end) and,
- * where the page's own response counts the rows, the count and the pages.
+ * A ranked list in pages, as lib/pagination.ts's `rankedPageAt` gives it: the page whose rows are
+ * drawn, the rows a page holds, the rows shown (none where the list moved under the reader) and,
+ * where the page's own response counts the rows, the count and the pages; and its ways, back and
+ * on, each there or not (the helper's, from the walk and the response: lane cd-fixes-controls).
  */
 interface PagesProps extends RankedPage {
   mode: 'pages';
   /** The list it pages, for a screen reader (`tokens`). */
   label: string;
-  onPrevious: () => void;
-  onNext: () => void;
 }
+
+/** What a page of a list that moved under the reader says where its range stood. */
+export const LIST_MOVED = 'the list changed as you paged';
 
 /** A list in time, paged by a cursor: its order, the page where the caller knows it, either end. */
 interface TimeProps {
@@ -128,7 +130,7 @@ export function Pager(props: PagerProps) {
     );
   }
 
-  const { label, page, pageSize, hasMore, rows, count, onPrevious, onNext } = props;
+  const { label, page, pageSize, rows, count, onPrevious, onNext } = props;
   whole(label, 'page', page);
   whole(label, 'pageSize', pageSize);
   if (count) {
@@ -148,22 +150,24 @@ export function Pager(props: PagerProps) {
       throw new Error(`Pager "${label}": ${rows.to - rows.from + 1} rows on a page of ${pageSize}`);
   } else if (page === 1)
     throw new Error(`Pager "${label}": an empty first page (a list with no rows draws no pager)`);
-  if (page === 1 && !hasMore) return null;
   return (
     <nav aria-label={label} className={LINE}>
-      {/* one unit: the range never breaks at its dash, nor the line before its "·"; an empty page
-          past the end (the list shrank under the reader) shows no range, only where it stands */}
-      {rows && (
+      {/* one unit: the range never breaks at its dash, nor the line before its "·"; a page of a
+          list that moved under the reader (lane cd-fixes-controls, item 2) shows no range: it
+          says so, once, in the quiet ink */}
+      {rows ? (
         <span className="mr-auto whitespace-nowrap">
           {groupCount(rows.from)}–{groupCount(rows.to)}
           {count && ` of ${groupCount(count.total)}`}
           <span className="hidden sm:inline"> · {groupCount(pageSize)} a page</span>
         </span>
+      ) : (
+        <span className="mr-auto">{LIST_MOVED}</span>
       )}
-      <span className={cn('flex flex-wrap items-center gap-x-[18px]', !rows && 'ml-auto')}>
-        <Go words="← prev" onGo={page > 1 ? onPrevious : undefined} />
+      <span className="flex flex-wrap items-center gap-x-[18px]">
+        <Go words="← prev" onGo={onPrevious} />
         <At page={page} pages={count?.pages} />
-        <Go words="next →" onGo={hasMore ? onNext : undefined} />
+        <Go words="next →" onGo={onNext} />
       </span>
     </nav>
   );

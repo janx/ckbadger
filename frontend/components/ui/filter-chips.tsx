@@ -3,7 +3,7 @@
 import { useRef, type KeyboardEvent } from 'react';
 import { Select } from '@/components/ui/select';
 import { useFromSm } from '@/hooks/useFromMd';
-import { chipRowFits, type ChipRowItem } from '@/lib/control-row-fit';
+import { chipFormFits, chipRowShowsCounts, type ChipRowItem } from '@/lib/control-row-fit';
 import { groupCount } from '@/lib/format-count';
 import { color, type PaletteKey } from '@/lib/palette';
 import { rovingTarget } from '@/lib/roving-focus';
@@ -30,6 +30,12 @@ interface FilterChipsProps<K extends string> {
   values: readonly FilterValue<K>[];
   value: K;
   onChange: (key: K) => void;
+  /**
+   * The filter states a count on its values, as they come (lane cd-fixes-controls, L1 NOTE 11):
+   * its phone form leaves room for a count on every value, so the form is the same before and
+   * after they come. A count on a filter that does not say so is refused.
+   */
+  counted?: boolean;
   className?: string;
 }
 
@@ -54,16 +60,19 @@ export function chipClass(checked: boolean, zero: boolean): string {
  * one value at a time ("all" or one kind), so it is a radio group, not toggle buttons: a pressed
  * toggle reads as a switch that a second press turns off, which none of the site's filters does;
  * "one of N" is what it is, the phone's select says the same, and the arrows move between the
- * values with one stop in the tab order. Below 640 the values are chips where their row fits one
- * line of the narrowest phone, and that select after the filter's label where it does not
- * (lib/control-row-fit.ts `chipRowFits`, the board's pictures at 390: the address page's three
- * kinds are chips, the inventory's four standards a select); from 640 they are chips.
+ * values with one stop in the tab order. Below 640 the values are chips where their row, with room
+ * for its counts where it counts, fits one line of the narrowest phone, and that select after the
+ * filter's label where it does not (lib/control-row-fit.ts `chipFormFits`, the board's pictures at
+ * 390: the address page's three kinds are chips, the inventory's four standards a select); from
+ * 640 they are chips. The form is decided from the labels, the marks and `counted`, never from the
+ * counts; a count wider than its room takes the counts off a phone's row (`chipRowShowsCounts`).
  */
 export function FilterChips<K extends string>({
   label,
   values,
   value,
   onChange,
+  counted = false,
   className,
 }: FilterChipsProps<K>) {
   const fromSm = useFromSm();
@@ -72,10 +81,18 @@ export function FilterChips<K extends string>({
     throw new Error('FilterChips: a filter has a label (its select stands after it on a phone)');
   const index = values.findIndex((v) => v.key === value);
   if (index < 0) throw new Error(`FilterChips "${label}": no value ${value}`);
+  // decided at every width, so a count on a filter that does not count is refused at every width
+  let fits: boolean;
+  try {
+    fits = chipFormFits(values, counted);
+  } catch (error) {
+    throw new Error(`FilterChips "${label}": ${(error as Error).message}`);
+  }
+  const chips = fromSm || fits;
   const words = (v: FilterValue<K>) =>
     v.count === undefined || v.count === null ? v.label : `${v.label} ${groupCount(v.count)}`;
 
-  if (!fromSm && !chipRowFits(values))
+  if (!chips)
     return (
       <Select
         label={label}
@@ -86,6 +103,7 @@ export function FilterChips<K extends string>({
       />
     );
 
+  const showCounts = fromSm || chipRowShowsCounts(values);
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const to = rovingTarget(event.key, index, values.length, 'any');
     if (to === null) return;
@@ -126,7 +144,7 @@ export function FilterChips<K extends string>({
               />
             )}
             <span>{v.label}</span>
-            {v.count !== undefined && v.count !== null && (
+            {showCounts && v.count !== undefined && v.count !== null && (
               <>
                 <span className="sr-only"> </span>
                 {/* a count: 12 px in the quiet ink, at every state of its chip */}

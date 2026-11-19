@@ -17,15 +17,18 @@ const text = (el: Element | null) => el?.textContent?.replace(/ /g, ' ') ?? nul
 afterEach(() => vi.restoreAllMocks());
 
 // Re-pinned on purpose (lane c2-finish, item 1): the pages mode takes a ranked page as
-// lib/pagination.ts's rankedPageAt gives it — the page, its size, its rows (none past the end),
-// the response's "more" and, where the response counts the rows, the count and the pages — where
-// it took a flat from / to / total / pages that a list with no count or a shrunk list could not
-// give. Every case below is the case it was, in that shape, and three are new.
+// lib/pagination.ts's rankedPageAt gives it — the page, its size, its rows (none past the end)
+// and, where the response counts the rows, the count and the pages. Re-pinned again (lane
+// cd-fixes-controls, items 1 and 2): its ways to go are the helper's too, `onPrevious` and
+// `onNext`, each there or not (they were the caller's callbacks beside the response's `hasMore`,
+// which a caller could pair with another page's response); a way that is not there is the quiet
+// end; and a page with no rows (the list moved under the reader) says so where the range stood.
+// The "nothing for one page" case moved to the helper, whose null it is (pagination.test, "draws
+// nothing for a list on one page").
 describe('Pager: pages', () => {
   const page3 = {
     page: 3,
     pageSize: 20,
-    hasMore: true,
     rows: { from: 41, to: 60 },
     count: { total: 727, pages: 37 },
   };
@@ -58,7 +61,14 @@ describe('Pager: pages', () => {
 
   it('draws an end that cannot be taken in the quiet ink, and not as a control', () => {
     const { unmount } = render(
-      <Pager mode="pages" label="tokens" {...page3} page={1} rows={{ from: 1, to: 20 }} {...go} />
+      <Pager
+        mode="pages"
+        label="tokens"
+        {...page3}
+        page={1}
+        rows={{ from: 1, to: 20 }}
+        onNext={() => {}}
+      />
     );
     expect(screen.queryByRole('button', { name: '← prev' })).toBeNull();
     expect(inkOf(screen.getByText('← prev'))).toBe(QUIET);
@@ -71,28 +81,11 @@ describe('Pager: pages', () => {
         {...page3}
         page={37}
         rows={{ from: 721, to: 727 }}
-        hasMore={false}
-        {...go}
+        onPrevious={() => {}}
       />
     );
     expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
     expect(inkOf(screen.getByText('next →'))).toBe(QUIET);
-  });
-
-  it('draws nothing for one page', () => {
-    const { container } = render(
-      <Pager
-        mode="pages"
-        label="tokens"
-        page={1}
-        pageSize={20}
-        hasMore={false}
-        rows={{ from: 1, to: 8 }}
-        count={{ total: 8, pages: 1 }}
-        {...go}
-      />
-    );
-    expect(container).toBeEmptyDOMElement();
   });
 
   it('groups every figure and computes none: it writes the pages it is given', () => {
@@ -102,7 +95,6 @@ describe('Pager: pages', () => {
         label="blocks"
         page={100001}
         pageSize={20}
-        hasMore
         rows={{ from: 2000001, to: 2000020 }}
         // the caller's figure, not ⌈53,025,887 / 20⌉ = 2,651,295: the pager divides nothing
         count={{ total: 53025887, pages: 2651300 }}
@@ -139,7 +131,6 @@ describe('Pager: pages', () => {
         label="objects"
         page={2}
         pageSize={24}
-        hasMore
         rows={{ from: 25, to: 48 }}
         count={null}
         onPrevious={() => {}}
@@ -158,10 +149,9 @@ describe('Pager: pages', () => {
         label="objects"
         page={3}
         pageSize={24}
-        hasMore={false}
         rows={{ from: 49, to: 52 }}
         count={null}
-        {...go}
+        onPrevious={() => {}}
       />
     );
     expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
@@ -169,27 +159,51 @@ describe('Pager: pages', () => {
   });
 
   // Item 1b: the list shrank under the reader: an empty page past the first is where it stands
-  // and a way back, no rows and no count.
-  it('draws an empty page past the end as where it stands and a way back', async () => {
+  // and a way back, no rows and no count. Re-pinned (lane cd-fixes-controls, item 2): a page with
+  // no rows is the list that moved under the reader (an empty page past the end, a page whose rows
+  // run past the count, a page past the pages), and the pager says so once, in the quiet ink,
+  // where the range stood: "the list changed as you paged".
+  it('draws a page of a list that moved as where it stands, says so, and a way back', async () => {
     const user = userEvent.setup();
     const onPrevious = vi.fn();
-    render(
+    const { unmount } = render(
       <Pager
         mode="pages"
         label="holders"
         page={2}
         pageSize={20}
-        hasMore={false}
         rows={null}
         count={null}
         onPrevious={onPrevious}
-        onNext={() => {}}
       />
     );
-    expect(text(screen.getByRole('navigation', { name: 'holders' }))).toBe('← prevpage 2next →');
+    expect(text(screen.getByRole('navigation', { name: 'holders' }))).toBe(
+      'the list changed as you paged← prevpage 2next →'
+    );
+    expect(inkOf(screen.getByText('the list changed as you paged'))).toBe(QUIET);
     expect(screen.queryByRole('button', { name: 'next →' })).toBeNull();
     await user.click(screen.getByRole('button', { name: '← prev' }));
     expect(onPrevious).toHaveBeenCalledTimes(1);
+    unmount();
+    // a page of 37 read at a tip where it holds rows past the count: a way on by the response
+    const onNext = vi.fn();
+    render(
+      <Pager
+        mode="pages"
+        label="holders"
+        page={37}
+        pageSize={20}
+        rows={null}
+        count={null}
+        onPrevious={() => {}}
+        onNext={onNext}
+      />
+    );
+    expect(text(screen.getByRole('navigation', { name: 'holders' }))).toBe(
+      'the list changed as you paged← prevpage 37next →'
+    );
+    await user.click(screen.getByRole('button', { name: 'next →' }));
+    expect(onNext).toHaveBeenCalledTimes(1);
   });
 
   it('refuses figures that do not hold together', () => {
@@ -203,9 +217,7 @@ describe('Pager: pages', () => {
     expect(at({ page: 2.5 })).toThrow('Pager "tokens": page 2.5 is not a whole number');
     expect(at({ count: { total: 0, pages: 0 } })).toThrow('Pager "tokens": 0 pages');
     // an empty first page is no page to draw: a list with no rows draws no pager
-    expect(at({ page: 1, rows: null, hasMore: false })).toThrow(
-      'Pager "tokens": an empty first page'
-    );
+    expect(at({ page: 1, rows: null })).toThrow('Pager "tokens": an empty first page');
   });
 });
 

@@ -723,30 +723,31 @@ function FullAssetFeed({
 }: AssetFeedProps & { initialTab?: FeedLayer }) {
   const [tab, setTab] = useState<FeedLayer>(initialTab);
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  // a change of page size at md starts each walk again (lane c2-finish, 1d)
-  const actsPages = useCursorPagination(pageSize),
-    txPages = useCursorPagination(pageSize);
   // The URL's cursor, until the reader goes newer from it: the API pages one way (older), so the
   // way newer from a cursor the walk has no history of is the newest end (the page lane notes:
   // a reader who landed on page 3 could not go newer at all)
   const [urlCursor, setUrlCursor] = useState(initialActivityCursor);
-  const activityCursor = actsPages.cursor ?? urlCursor;
+  // a change of page size at md starts each walk again (lane c2-finish, 1d); the activities' walk
+  // starts from the URL's cursor, so its first page is stamped there (lane cd-fixes-controls)
+  const actsPages = useCursorPagination(pageSize, urlCursor),
+    txPages = useCursorPagination(pageSize);
+  const activityCursor = actsPages.cursor;
   useEffect(() => {
     onActivityCursorChange?.(activityCursor);
   }, [activityCursor, onActivityCursorChange]);
   const acts = useQuery({
     queryKey: ['asset-feed', queryKey, 'activities', activityCursor, pageSize],
-    queryFn: () => loadActivities({ limit: pageSize, cursor: activityCursor }),
+    queryFn: actsPages.ask((cursor) => loadActivities({ limit: pageSize, cursor })),
     enabled: tab === 'activities',
   });
   const txs = useQuery({
     queryKey: ['asset-feed', queryKey, 'transactions', txPages.cursor, pageSize],
-    queryFn: () => loadTransactions({ limit: pageSize, cursor: txPages.cursor }),
+    queryFn: txPages.ask((cursor) => loadTransactions({ limit: pageSize, cursor })),
     enabled: tab === 'transactions',
   });
   const current = tab === 'activities' ? acts : txs,
     pages = tab === 'activities' ? actsPages : txPages;
-  const at = current.data ? timePageAt(tab, pages.page, current.data) : null;
+  const at = current.data ? timePageAt(tab, current.data, pages) : null;
   // A page counts from where its cursor started: an activity page opened at a cursor from the
   // URL (an identity page's link) is not counted from the newest end, so it names no page.
   const fromNewest = tab === 'transactions' || urlCursor === undefined;
@@ -803,11 +804,7 @@ function FullAssetFeed({
                   page={fromNewest ? at.page : undefined}
                   pages={fromNewest ? at.pages : undefined}
                   onNewer={newer}
-                  onOlder={
-                    current.data.hasMore
-                      ? () => pages.goToNext(current.data!.nextCursor)
-                      : undefined
-                  }
+                  onOlder={at.onOlder}
                 />
               </div>
             )}
