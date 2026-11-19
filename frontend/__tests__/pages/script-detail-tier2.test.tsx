@@ -244,11 +244,14 @@ describe('Script page · the family tables budgeted from what they hold (readabi
     // eight digits of live cells, or "unavailable"; the last column
     ceil(Math.max(at('99,999,999', 13), at('unavailable', 13))),
   ];
+  // Re-pinned on purpose (BRIEF-ink-size-roles item 2: a link and a cell's value are never the
+  // meta size): "current" and the block link under the date read at the cell's 13 px, 67 → 71 and
+  // 96 → 102; the narrow table's sum is 580 (it was 570), within the 608 px of board L7's 640
   const narrowVersions = [
-    // "v99", "current" under it at 12 px
-    ceil(Math.max(at('v99', 13), at('current', 12)) + 16),
-    // the date, the block under it at 12 px
-    ceil(Math.max(at('2023-10-07', 13), at('#99,999,999', 12)) + 16),
+    // "v99", "current" under it at the cell's 13 px
+    ceil(Math.max(at('v99', 13), at('current', 13)) + 16),
+    // the date, the block link under it at the cell's 13 px
+    ceil(Math.max(at('2023-10-07', 13), at('#99,999,999', 13)) + 16),
     // the flexible column: the out point at the row size; its notes and the hash wrap under it
     ceil(at('0x12345678…abcdef:99', 13) + 16),
     // a status breaks before the hash it names; the hash is one unit
@@ -322,10 +325,10 @@ describe('Script page · the family tables budgeted from what they hold (readabi
   it('pins every column of the four tables to its content', async () => {
     expect(references).toEqual([81, 149, 88, 196, 71]);
     expect(versions).toEqual([67, 94, 102, 207, 172, 243, 86]);
-    expect(narrowVersions).toEqual([67, 96, 172, 149, 86]);
+    expect(narrowVersions).toEqual([71, 102, 172, 149, 86]);
     expect(cells).toEqual([201, 118, 149, 102, 217, 102, 188]);
     expect([sum(references), sum(versions), sum(narrowVersions), sum(cells)]).toEqual([
-      585, 971, 570, 1077,
+      585, 971, 580, 1077,
     ]);
     await mount(1248);
     await formOf('Its cells');
@@ -350,12 +353,14 @@ describe('Script page · the family tables budgeted from what they hold (readabi
     ]);
   });
 
-  it('changes the versions to the 608 px table below 971 and to rows below 570', async () => {
+  // re-pinned on purpose and renamed (BRIEF-ink-size-roles item 2; it was "… to rows below 570"):
+  // the narrow table's sum is 580
+  it('changes the versions to the 608 px table below 971 and to rows below 580', async () => {
     await formsAt([
       [971, { 'Code versions': 'table' }],
       [970, { 'Code versions': 'narrow-table' }],
-      [570, { 'Code versions': 'narrow-table' }],
-      [569, { 'Code versions': 'rows' }],
+      [580, { 'Code versions': 'narrow-table' }],
+      [579, { 'Code versions': 'rows' }],
     ]);
   });
 

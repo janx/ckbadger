@@ -79,14 +79,16 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
   // prose site gone with its entry
   // lists 23 → 15 (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink)
-  lists: 15,
+  // lists 15 → 0 (BRIEF-ink-size-roles item 1, the script pages: their cells' states and dashes and their empty lines in the reading ink, their loading lines decided)
+  lists: 0,
   topics: 14,
   shared: 9,
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
 // 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
 // 51 → 49 (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink)
-const TOLERATED_FILES = 49;
+// 49 → 46 (BRIEF-ink-size-roles item 1, the script pages: their cells' states and dashes and their empty lines in the reading ink, their loading lines decided)
+const TOLERATED_FILES = 46;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
@@ -315,13 +317,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // components/identity/identity-records.tsx left the list (lane P2's follow-up, item 4): the records and TTL count line reads in the reading ink
   // ---- lists ----
-  'app/scripts/[name]/client-page.tsx': {
-    // td 3 → 2, prose 6 → 4 (lane P2's follow-up, item 4): the version hash is a value and the two statements (the resolution, the capacity caption) read in the reading ink
-    family: 'lists',
-    sites: { td: 2, prose: 4 },
-    reason:
-      'notes in table cells: 2 (custody and evidence unavailable); prose by kind: 2 loading (cells, capacity history), 2 empty (no code-cell deployments, no capacity history)',
-  },
+  // 'app/scripts/[name]/client-page.tsx' left the list (BRIEF-ink-size-roles items 1 and 3: td 2,
+  // prose 4 → DECIDED prose 2): "Custody evidence unavailable" and "Evidence unavailable" are a
+  // cell's content, "No code-cell deployments" and "No capacity history." empty-state sentences, the
+  // reading ink; its two loading lines are decided
   // 'app/scripts/page.tsx' left the list (lane P3: prose 1 → 0; the code-class bar is named by
   // the summary sentence, in the reading ink, no quiet label over it)
   // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles items 1 and 3:
@@ -332,24 +331,14 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // cell's content, the reading ink; the minted " / N" reads at the cell's 13 px, its slash quiet
   // components/scripts/script-code-evidence.tsx left the list (lane P2's follow-up, item 4): the unspendable note reads in the reading ink
   // components/scripts/script-family-board.tsx left the list (lane P2's follow-up, item 4): the handover line reads in the reading ink
-  'components/scripts/script-family-page.tsx': {
-    // link 3 → 0, td 9 → 8 (lane p-assets: each link states its look)
-    // link 4 → 3, prose 6 → 5 (B7): the lede and its link read in the reading ink
-    // td 8 → 5, prose 5 → 3 (lane P2's follow-up, item 4): the replacing block, the deployments' out points and a cell's block and day are values, and the reference sentence and the cells line statements, in the reading ink
-    family: 'lists',
-    sites: { td: 5, prose: 3 },
-    reason:
-      'notes in table cells: 5 (two dashes, two no-deployment notes, custody unavailable); prose by kind: 2 loading (capacity history, cells), 1 empty (no capacity history)',
-  },
+  // 'components/scripts/script-family-page.tsx' left the list (BRIEF-ink-size-roles items 1 and 3:
+  // td 5, prose 3 → DECIDED prose 2): the dashes, "No deployment observed" and "custody
+  // unavailable" are a cell's content, "No capacity history." an empty-state sentence, the reading
+  // ink; its two loading lines are decided
   // components/scripts/script-hero.tsx left the list (lane P2's third round, item 10): the hero's
   // companion line reads in the reading ink (the scripts list page no longer draws it)
-  'components/scripts/script-newest-cells.tsx': {
-    // link 1 → 0 (lane p-assets: each link states its look)
-    // prose 2 → 1 (lane P2's follow-up, item 4): the caption reads in the reading ink
-    family: 'lists',
-    sites: { prose: 1 },
-    reason: 'prose by kind: 1 loading (the newest cells)',
-  },
+  // 'components/scripts/script-newest-cells.tsx' left the list (BRIEF-ink-size-roles item 1:
+  // prose 1 → DECIDED prose 1): its loading line is decided
   // components/transaction/transaction-list-table.tsx left the list (lane P3: td 3 → 0; the
   // cellbase reward left with the cellbases' own list, the cycles state with the cycles column, the
   // cells count reads in the reading ink)
@@ -921,10 +910,28 @@ const DECIDED: Readonly<Record<string, Tolerated>> = {
     reason:
       'decided (the P3 follow-up): the counts’ period note, the empty line and the two loading lines',
   },
+  'app/scripts/[name]/client-page.tsx': {
+    family: 'lists',
+    sites: { prose: 2 },
+    reason:
+      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading cells…”, “Loading capacity history…”',
+  },
+  'components/scripts/script-family-page.tsx': {
+    family: 'lists',
+    sites: { prose: 2 },
+    reason:
+      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading capacity history…”, “Loading cells…”',
+  },
+  'components/scripts/script-newest-cells.tsx': {
+    family: 'lists',
+    sites: { prose: 1 },
+    reason:
+      'a loading status, in the data’s place until it comes and gone with it (BRIEF-ink-size-roles): “Loading the newest cells…”',
+  },
 };
-/** The pinned sites and files of DECIDED: 15 sites in 6 files, the P3 follow-up's 2d. */
-const DECIDED_SITES = 15;
-const DECIDED_FILES = 6;
+/** The pinned sites and files of DECIDED: 20 sites in 9 files (BRIEF-ink-size-roles item 1, the script pages: their cells' states and dashes and their empty lines in the reading ink, their loading lines decided). */
+const DECIDED_SITES = 20;
+const DECIDED_FILES = 9;
 
 /**
  * The elements that carry the `quiet` class (the set-back row, R4: every word under it quiet on
@@ -1225,12 +1232,21 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   });
 
   // Re-pinned on purpose (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink; renamed, it was "107 sites in 51 files").
+  // Re-pinned on purpose (BRIEF-ink-size-roles item 1, the script pages: their cells' states and dashes and their empty lines in the reading ink, their loading lines decided; renamed, it was "99 sites in 49 files").
   // Re-pinned on purpose (lane P2's third round, item 10, at its merge; renamed, it was "… 123 sites
   // in 58 files …" on the base): the script hero's companion line left the list. Re-pinned on
   // purpose (the third read's T NOTE-3; renamed, it was "122 sites in 57 files"): the decided
   // sites left the work list for DECIDED, 15 in 6 files
-  it('tolerates 99 sites in 49 files: the pinned totals by family, which only fall', () => {
-    const byFamily: Partial<Record<Family, number>> = {};
+  it('tolerates 84 sites in 46 files: the pinned totals by family, which only fall', () => {
+    // every family counted from 0, so a family whose last entry left reads 0 (BRIEF-ink-size-roles:
+    // lists ends at 0)
+    const byFamily: Record<Family, number> = {
+      chain: 0,
+      assets: 0,
+      lists: 0,
+      topics: 0,
+      shared: 0,
+    };
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =
         (byFamily[entry.family] ?? 0) +
@@ -1239,7 +1255,7 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
-  it('holds the decided sites apart, 15 in 6 files, none of them also on the work list', () => {
+  it('holds the decided sites apart, 20 in 9 files, none of them also on the work list', () => {
     const sites = Object.values(DECIDED).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((n, k) => n + (k ?? 0), 0),
       0

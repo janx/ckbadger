@@ -1187,7 +1187,8 @@ export default function ScriptDetailPage({
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
           <DetailLayout title="No script deployments">
-            <p className="text-text-dim text-small py-8">
+            {/* an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3) */}
+            <p className="text-small max-w-measure py-8">
               The script request returned no code-cell deployments.
             </p>
           </DetailLayout>
@@ -1554,7 +1555,8 @@ export default function ScriptDetailPage({
                           return custody ? (
                             <ScriptCustodyEvidence custody={custody} />
                           ) : (
-                            <span className="text-text-dim">Custody evidence unavailable</span>
+                            // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+                            <span>Custody evidence unavailable</span>
                           );
                         },
                       },
@@ -1763,7 +1765,8 @@ export default function ScriptDetailPage({
                 markers={namedScriptDetail?.history ?? []}
               />
             ) : (
-              <p className="text-text-dim text-small py-6">No capacity history.</p>
+              // an empty-state sentence, the reading ink (BRIEF-ink-size-roles item 3)
+              <p className="text-small max-w-measure py-6">No capacity history.</p>
             )}
             {!isCodeHashMode && familyCapacityChartError && (
               <p role="alert" className="text-negative text-small max-w-measure">
@@ -1809,7 +1812,8 @@ export default function ScriptDetailPage({
                       row.custody ? (
                         <ScriptCustodyEvidence custody={row.custody} />
                       ) : (
-                        <span className="text-text-dim">Evidence unavailable</span>
+                        // a cell's content, the reading ink (BRIEF-ink-size-roles item 1)
+                        <span>Evidence unavailable</span>
                       ),
                   },
                 ]}
