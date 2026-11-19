@@ -42,8 +42,6 @@ export interface TxFold {
    * rest is its one link to the transaction.
    */
   onToggle?: (side: Side, open: boolean) => void;
-  /** What a sheet that draws none of its cells is not ("this cell", on the cell page). */
-  subject?: string;
 }
 
 /**
@@ -281,7 +279,6 @@ export function TxStructure({
                 count={cells.length}
                 shown={shown.length}
                 folded={folded}
-                subject={fold.subject}
                 onToggle={fold.onToggle && ((open) => fold.onToggle!(side, open))}
               />
             )}
@@ -513,8 +510,9 @@ export function FoldBack({ onFold }: { onFold: () => void }) {
 /**
  * The fold row (lane D3; the board's dashed row): what the sheet folds, by counting — "152 more
  * cells from ckb1…sqylvfrs" when every folded cell has one lock (the same lock, not the same
- * shortened address), else "152 more cells consumed"; where the sheet draws none of its cells and
- * the page says what they are not, ", none of them this cell". It never sums: the sheet's total
+ * shortened address), else "152 more cells consumed"; a sheet that draws none of its cells counts
+ * them all, "2 cells created" (lane P1: on a cell page, ", none of them this cell" said what the
+ * reader knows, and is gone). It never sums: the sheet's total
  * is the head's, the API's. The way to the rest is the short list's form, the Pager's
  * "all 158 cells ↓"; opened, the row stands after the last cell and folds the sheet again with the
  * rows' fold's words, "fewer ↑". Without a control (the cell page) the row is the count alone.
@@ -524,14 +522,12 @@ function FoldRow({
   count,
   shown,
   folded,
-  subject,
   onToggle,
 }: {
   side: Side;
   count: number;
   shown: number;
   folded: readonly CellTileData[];
-  subject?: string;
   onToggle?: (open: boolean) => void;
 }) {
   const words = () => {
@@ -539,12 +535,6 @@ function FoldRow({
     // "1 more cell created", as the board writes it)
     const lock = folded[0].seal.id.lock;
     const shared = folded.length > 1 && folded.every((c) => c.seal.id.lock === lock);
-    const not =
-      shown === 0 && subject !== undefined
-        ? folded.length === 1
-          ? `, not ${subject}`
-          : `, none of them ${subject}`
-        : '';
     return (
       <span data-fold-words="" className="min-w-0">
         {unitNode(
@@ -559,7 +549,6 @@ function FoldRow({
         ) : (
           side
         )}
-        {not}
       </span>
     );
   };

@@ -179,7 +179,6 @@ export function TransactionEvidence({
           head: 0,
           keep: [focus],
           open: { consumed: false, created: false },
-          subject: 'this cell',
         }}
       />
     </div>

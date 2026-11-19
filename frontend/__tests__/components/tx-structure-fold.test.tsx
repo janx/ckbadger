@@ -214,14 +214,16 @@ describe('TxStructure: a sheet folds after six tiles (lane D3)', () => {
 
   // The cell page (the board's embed): this cell's tile and its continuity partner; the rest is a
   // count, and the way to it is the link to the transaction, so the rows hold no control.
+  // Re-pinned on purpose (lane P1, lane D3's note): a sheet that draws none of its cells counts
+  // them, and no longer adds ", none of them this cell", which said what the reader knows.
   it('draws a cell page’s own cell alone, each sheet’s rest a count with no control', () => {
     const { container } = structure({
-      fold: { head: 0, keep: ['out:0'], open: closed, subject: 'this cell' },
+      fold: { head: 0, keep: ['out:0'], open: closed },
     });
     const consumed = sheet(container, 'consumed');
     expect(consumed.ids).toEqual([]);
     expect(consumed.fold!.querySelector('[data-fold-words]')).toHaveTextContent(
-      /^158 cells from ckb1…sqylvfrs, none of them this cell$/
+      /^158 cells from ckb1…sqylvfrs$/
     );
     expect(within(consumed.fold!).queryByRole('button')).toBeNull();
     const created = sheet(container, 'created');
@@ -232,14 +234,16 @@ describe('TxStructure: a sheet folds after six tiles (lane D3)', () => {
     expect(within(created.fold!).queryByRole('button')).toBeNull();
   });
 
-  it('says "not this cell" of a single cell it does not draw', () => {
+  // Re-pinned on purpose, and renamed (lane P1, lane D3's note; it was 'says "not this cell" of a
+  // single cell it does not draw'): one cell a sheet does not draw is counted, "1 cell consumed"
+  it('counts a single cell it does not draw', () => {
     const { container } = structure({
       inputs: [tile('in:0', OWNER, 'ckb1…sqylvfrs')],
       outputs: cells('out', 2),
-      fold: { head: 0, keep: ['out:1'], open: closed, subject: 'this cell' },
+      fold: { head: 0, keep: ['out:1'], open: closed },
     });
     expect(sheet(container, 'consumed').fold!.querySelector('[data-fold-words]')).toHaveTextContent(
-      /^1 cell consumed, not this cell$/
+      /^1 cell consumed$/
     );
   });
 
