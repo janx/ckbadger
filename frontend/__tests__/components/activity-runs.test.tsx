@@ -409,6 +409,28 @@ describe('a row’s recognised codes (C7)', () => {
     ]);
   });
 
+  // At the merge of resync/all: a recognised code is named by the code its pair runs, and where
+  // the pair is not the registry's reference for that code the API writes its hash type beside the
+  // name (`scriptNameBy`), which a head writes by the one text rule (`withNameBy`, lib/lock-words)
+  it('names a recognised code run by another reference than the registry’s with its hash type', async () => {
+    const byData2 = (n: number): GlobalActivity => ({
+      ...merge(n),
+      recognizedTypes: [
+        {
+          typeCodeHash: '0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95',
+          typeHashType: 'data2',
+          scriptName: 'xUDT',
+          scriptNameBy: 'data2',
+        },
+      ],
+    });
+    expect(await drawnFeed([plain(11), byData2(12), plain(13)])).toEqual([
+      'CKB Transfer',
+      'Script call · xUDT · by data2',
+      'CKB Transfer',
+    ]);
+  });
+
   // runSubject's refusals change with the field: a row WITHOUT the list (or with no list, null) is
   // refused, an API older than the page; there is no row "whose codes the stores cannot say" any
   // more (the list is read from the row, never resolved per item), so no committed row stands
@@ -940,7 +962,10 @@ describe('a called lock on a registered code hash by another hash type (the lock
     lockHashType: 'data',
     lockArgs: '0x' + 'ab'.repeat(20),
     scriptHash: '0x' + 'cd'.repeat(32),
-    scriptName: 'Default Lock',
+    // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+    // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+    // stopgap that dropped the name is gone
+    scriptName: undefined,
     decoded: null,
     decodeError: null,
   };

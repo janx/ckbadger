@@ -1346,7 +1346,7 @@ fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
     collected
 }
 
-pub(super) use super::types::{ScriptReferenceUsageChanges, ScriptUsageChanges};
+pub(super) use super::types::ScriptReferenceUsageChanges;
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -1593,7 +1593,6 @@ impl Indexer {
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         input_script_hashes: InputScriptHashes,
         address_balance_changes: super::types::AddressBalanceChanges,
-        script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
         script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
         token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
@@ -1962,24 +1961,8 @@ impl Indexer {
             )?;
         }
 
-        // Parallel DB reads for address balances and script usage
+        // Parallel DB reads for address balances and script reference usage
         let lock_hash_keys: Vec<&Vec<u8>> = address_balance_changes.keys();
-        let unique_code_hashes: Vec<Vec<u8>> = if !script_usage_changes.is_empty() {
-            let mut seen = std::collections::HashSet::new();
-            script_usage_changes
-                .keys()
-                .into_iter()
-                .filter_map(|(code_hash, _)| {
-                    if seen.insert(code_hash.clone()) {
-                        Some(code_hash.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            vec![]
-        };
         let reference_keys: Vec<(Vec<u8>, u8)> = if !script_reference_usage_changes.is_empty() {
             let mut seen = std::collections::HashSet::new();
             script_reference_usage_changes
@@ -1993,10 +1976,7 @@ impl Indexer {
         } else {
             vec![]
         };
-        let code_hash_refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
-
         let need_balances = !lock_hash_keys.is_empty();
-        let need_scripts = !code_hash_refs.is_empty();
         let need_script_references = !reference_keys.is_empty();
         let mut updated_script_references: Vec<(i64, HashMap<(Vec<u8>, u8), ScriptReferenceInfo>)> =
             Vec::new();
@@ -2005,31 +1985,24 @@ impl Indexer {
         let mut append_history_batch =
             StoreBatch::journaled(self.writer.store(), &block_overlay, 2);
 
-        if need_balances || need_scripts || need_script_references {
+        if need_balances || need_script_references {
             let writer = &self.writer;
-            let (existing_balances, existing_scripts, existing_script_references) =
-                std::thread::scope(|s| {
-                    let bal = if need_balances {
-                        Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
-                    } else {
-                        None
-                    };
-                    let scr = if need_scripts {
-                        Some(s.spawn(|| writer.read_script_info(&code_hash_refs)))
-                    } else {
-                        None
-                    };
-                    let refs = if need_script_references {
-                        Some(s.spawn(|| writer.read_script_reference_info(&reference_keys)))
-                    } else {
-                        None
-                    };
-                    (
-                        bal.map(|h| h.join().unwrap()),
-                        scr.map(|h| h.join().unwrap()),
-                        refs.map(|h| h.join().unwrap()),
-                    )
-                });
+            let (existing_balances, existing_script_references) = std::thread::scope(|s| {
+                let bal = if need_balances {
+                    Some(s.spawn(|| writer.read_address_balances(&lock_hash_keys)))
+                } else {
+                    None
+                };
+                let refs = if need_script_references {
+                    Some(s.spawn(|| writer.read_script_reference_info(&reference_keys)))
+                } else {
+                    None
+                };
+                (
+                    bal.map(|h| h.join().unwrap()),
+                    refs.map(|h| h.join().unwrap()),
+                )
+            });
             if let Some(existing) = existing_balances {
                 let existing = existing?;
                 batch_new_addresses = count_new_addresses(&address_balance_changes, &existing)?;
@@ -2037,13 +2010,6 @@ impl Indexer {
                     existing,
                     &address_balance_changes,
                     &mut data_batch,
-                )?;
-            }
-            if let Some(existing) = existing_scripts {
-                self.writer.apply_script_usage_changes(
-                    existing?,
-                    &script_usage_changes,
-                    &mut domain_analytics_batch,
                 )?;
             }
             if let Some(existing) = existing_script_references {
@@ -3332,7 +3298,7 @@ impl Indexer {
                             parsed.number
                         );
                     }
-                    BatchWriter::accumulate_tx_activity_stats(classified, &mut block_activity);
+                    BatchWriter::accumulate_tx_activity_stats(classified, &mut block_activity)?;
 
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
@@ -6648,33 +6614,6 @@ mod tests {
             batch.commit().unwrap();
         }
 
-        /// Stage 9b of the rollback adjusts the lock's `script_info` from the
-        /// cells it deletes; the fixture write path is handed empty script
-        /// deltas, so seed the row it will subtract from.
-        pub(super) fn seed_secp_script_info(store: &CkbadgerStore) {
-            seed_script_info(store, SECP_CODE_HASH);
-        }
-
-        pub(super) fn seed_script_info(store: &CkbadgerStore, code_hash_hex: &str) {
-            let code_hash = hex::decode(code_hash_hex.trim_start_matches("0x")).unwrap();
-            let mut batch = ckbadger_store::batch::StoreBatch::new(store);
-            batch.put_script_info(
-                &code_hash,
-                &ckbadger_store::types::ScriptInfo {
-                    code_hash: code_hash.clone(),
-                    hash_type: 1,
-                    lock_live_cells_count: 1_000,
-                    lock_owned_capacity_sum: 1_000_000_000_000_000,
-                    lock_owned_knowledge_sum: 1_000_000_000_000_000,
-                    type_live_cells_count: 1_000,
-                    type_owned_capacity_sum: 1_000_000_000_000_000,
-                    type_owned_knowledge_sum: 1_000_000_000_000_000,
-                    ..Default::default()
-                },
-            );
-            batch.commit().unwrap();
-        }
-
         pub(super) fn indexer_for_live_write_test(store: Arc<CkbadgerStore>) -> Indexer {
             // Live-path writers derive knowledge_size from DAO `U` minus the
             // genesis baseline; seed a baseline with zero virtual occupied
@@ -7133,11 +7072,9 @@ mod tests {
             input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         ) -> Result<(
-            ScriptUsageChanges,
             ScriptReferenceUsageChanges,
             EntityDailyChanges<UndatedScriptKey>,
         )> {
-            let mut usage = ScriptUsageChanges::new();
             let mut references = ScriptReferenceUsageChanges::new();
             let mut daily = EntityDailyChanges::new();
             for tx in all_tx_data {
@@ -7154,26 +7091,16 @@ mod tests {
                         tx.block_number, hex::encode(tx.hash)
                     )
                     })?;
-                    let value = usage
-                        .block_mut(tx.block_number)?
-                        .entry((code_hash.to_vec(), is_type))
-                        .or_default();
                     let reference = references
                         .block_mut(tx.block_number)?
                         .entry((code_hash.to_vec(), hash_type, is_type))
                         .or_default();
                     let sign = if created { 1 } else { -1 };
                     if created {
-                        value.0 += 1;
-                        value.2 += i128::from(capacity);
-                        value.4 += i128::from(occupied);
                         reference.0 += 1;
                         reference.2 += i128::from(capacity);
                         reference.4 += i128::from(occupied);
                     }
-                    value.1 += sign;
-                    value.3 += i128::from(sign) * i128::from(capacity);
-                    value.5 += i128::from(sign) * i128::from(occupied);
                     reference.1 += sign;
                     reference.3 += i128::from(sign) * i128::from(capacity);
                     reference.5 += i128::from(sign) * i128::from(occupied);
@@ -7238,7 +7165,7 @@ mod tests {
                     }
                 }
             }
-            Ok((usage, references, daily))
+            Ok((references, daily))
         }
 
         async fn write_live_blocks_inner(
@@ -7293,7 +7220,7 @@ mod tests {
                     token_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?
                 }
             };
-            let (script_usage_changes, script_reference_usage_changes, script_daily_changes) =
+            let (script_reference_usage_changes, script_daily_changes) =
                 fixture_script_deltas_from_cells(
                     &all_tx_data,
                     &input_cell_info,
@@ -7318,7 +7245,6 @@ mod tests {
                     batch_cell_infos,
                     input_script_hashes,
                     address_balance_changes,
-                    script_usage_changes,
                     script_reference_usage_changes,
                     script_daily_changes,
                     token_daily_changes,
@@ -7994,8 +7920,6 @@ mod tests {
             blocks.push(completion_block(527));
 
             let (unbatched, unbatched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(unbatched.as_ref());
-            seed_script_info(unbatched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             crate::derive::derive_to_completion(unbatched.as_ref()).unwrap();
             assert!(dao_live_agg_meta(&unbatched)
                 .is_complete(&ckbadger_store::derive_ops::DAO_LIVE_AGG));
@@ -8051,8 +7975,6 @@ mod tests {
 
             // One batch over the same blocks writes the same rows.
             let (batched, batched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(batched.as_ref());
-            seed_script_info(batched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             crate::derive::derive_to_completion(batched.as_ref()).unwrap();
             write_live_blocks_with_parser_script_deltas(&batched_indexer, blocks[..3].to_vec())
                 .await
@@ -8082,8 +8004,6 @@ mod tests {
 
             // Live-maintained rows equal a from-scratch derivation at the tip.
             let (rebuilt, rebuilt_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(rebuilt.as_ref());
-            seed_script_info(rebuilt.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             crate::derive::derive_to_completion(rebuilt.as_ref()).unwrap();
             write_live_blocks_with_parser_script_deltas(&rebuilt_indexer, blocks[..2].to_vec())
                 .await
@@ -8106,8 +8026,6 @@ mod tests {
             let _detectors =
                 crate::db::writer::activities::test_detector_override::without_extra_detectors();
             let (store, indexer) = live_dao_fixture_store();
-            seed_secp_script_info(store.as_ref());
-            seed_script_info(store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             write_live_blocks_with_parser_script_deltas(
                 &indexer,
                 phase_setup_blocks()[..2].to_vec(),
@@ -8335,16 +8253,12 @@ mod tests {
             }
 
             let (unbatched, unbatched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(unbatched.as_ref());
-            seed_script_info(unbatched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             for single in blocks.clone() {
                 write_live_blocks_with_parser_script_deltas(&unbatched_indexer, vec![single])
                     .await
                     .unwrap();
             }
             let (batched, batched_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(batched.as_ref());
-            seed_script_info(batched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             write_live_blocks_with_parser_script_deltas(&batched_indexer, blocks.clone())
                 .await
                 .unwrap();
@@ -8412,9 +8326,15 @@ mod tests {
                 .expect("roll back request and backward-time completion");
             let dao_code =
                 hex::decode(crate::parser::dao::DAO_CODE_HASH.trim_start_matches("0x")).unwrap();
-            let script_after_rollback = batched.get_script_info(&dao_code).unwrap().unwrap();
+            // The DAO type script's usage is its pair's reference row (lane
+            // rd/api-lock-names: the lumped `script_info` counters, seeded here
+            // with 1,000 cells, are gone).
+            let script_after_rollback = batched
+                .get_script_reference_info(1, &dao_code)
+                .unwrap()
+                .unwrap();
             assert_eq!(
-                script_after_rollback.type_live_cells_count, 1001,
+                script_after_rollback.type_live_cells_count, 1,
                 "deposit is the sole surviving DAO type cell after rollback"
             );
             assert_eq!(cell_payloads(&batched), immutable_cells_before);
@@ -8464,8 +8384,6 @@ mod tests {
                 block.block.header.timestamp = format!("0x{raw_ms:x}");
             }
             let (store, indexer) = live_dao_fixture_store();
-            seed_secp_script_info(store.as_ref());
-            seed_script_info(store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             let day_key =
                 |day: &[u8]| keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, day);
             let stats_dao = store.cf(ckbadger_store::CF_STATS_DAO);
@@ -8634,8 +8552,6 @@ mod tests {
                 write_live_block(&single_indexer, block).await.unwrap();
             }
             let (batch_store, batch_indexer) = live_dao_fixture_store();
-            seed_secp_script_info(batch_store.as_ref());
-            seed_script_info(batch_store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
             // The rollback DAO boundary search spans genesis..tip. This live
             // fixture normally starts at block 99, so fill its earlier
             // canonical headers before exercising rollback/replay.
@@ -9016,7 +8932,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
 
             // Address history the cleanup has no business reading: 300 rows of
             // unrelated locks, all below the cleanup range.
@@ -9078,6 +8993,66 @@ mod tests {
             );
         }
 
+        /// Lane rd/api-lock-names (domain store): CKB names a script by the pair
+        /// (code hash, hash type). A live batch used to sum every cell of a code
+        /// hash into one `script_info` row, whatever its hash type, so a cell
+        /// locked by the default lock's code hash by `data` was counted as the
+        /// default lock's. Live sync writes no `script_info` row now (the row is
+        /// the registry's label of one pair, label import's alone), and each
+        /// pair's usage is its own `script_reference_info` row.
+        #[tokio::test]
+        async fn live_batch_writes_no_script_info_row_and_counts_each_pair_apart() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            let by_data = Script {
+                code_hash: SECP_CODE_HASH.to_string(),
+                hash_type: "data".to_string(),
+                args: format!("0x{}", "04".repeat(20)),
+            };
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![
+                        cellbase_tx(0xc1, FUNDING_CAPACITY),
+                        transfer_tx(0xd1, 0xc0, FUNDING_CAPACITY - 100_000_000, by_data),
+                    ],
+                ),
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+            }
+
+            let rows = store
+                .iterator_cf(store.cf_script_info(), rocksdb::IteratorMode::Start)
+                .count();
+            assert_eq!(rows, 0, "live sync writes no script_info row");
+            let secp = hex::decode(SECP_CODE_HASH.trim_start_matches("0x")).unwrap();
+            let by_type = store.get_script_reference_info(1, &secp).unwrap().unwrap();
+            assert_eq!(
+                (by_type.lock_cells_count, by_type.lock_live_cells_count),
+                (2, 1),
+                "the default lock: two cellbase outputs, one spent"
+            );
+            let by_data = store.get_script_reference_info(0, &secp).unwrap().unwrap();
+            assert_eq!(
+                (by_data.lock_cells_count, by_data.lock_live_cells_count),
+                (1, 1),
+                "the code hash by data: its one output, counted as itself"
+            );
+            assert_eq!(
+                by_data.lock_owned_capacity_sum,
+                i128::from(FUNDING_CAPACITY - 100_000_000)
+            );
+        }
+
         /// A lock the injected detector names by its FULL hash. Deliberately a
         /// lock no fixture cell uses.
         fn lock_named_hash() -> [u8; 32] {
@@ -9118,7 +9093,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
             write_live_block(
                 &indexer,
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
@@ -9361,7 +9335,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
 
             // Funding batch: cellbase only, so no participant is named yet.
             write_live_block(
@@ -9677,13 +9650,6 @@ mod tests {
             // affected day's first block; date it a day earlier so block 99
             // stays that first block.
             super::live_dao_fee::seed_pre_parent_header(store.as_ref());
-            super::live_dao_fee::seed_secp_script_info(store.as_ref());
-            for code_hash in [
-                fixture::ACCOUNT_TYPE_CODE_HASH_TESTNET,
-                fixture::ACCOUNT_LOCK_CODE_HASH_TESTNET,
-            ] {
-                super::live_dao_fee::seed_script_info(store.as_ref(), code_hash);
-            }
             for block in dotcell_rollback_blocks() {
                 super::live_dao_fee::write_live_block(&indexer, block)
                     .await
@@ -11572,8 +11538,7 @@ mod tests {
     mod mnft_live {
         use super::live_dao_fee::{
             block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
-            seed_pre_parent_header, seed_script_info, seed_secp_script_info, write_live_block,
-            AR_DEPOSIT, FUNDING_CAPACITY,
+            seed_pre_parent_header, write_live_block, AR_DEPOSIT, FUNDING_CAPACITY,
         };
         use super::*;
         use crate::parser::mnft::{
@@ -11762,14 +11727,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
-            for code_hash in [
-                MNFT_ISSUER_CODE_HASH,
-                MNFT_CLASS_CODE_HASH,
-                MNFT_TOKEN_CODE_HASH,
-            ] {
-                seed_script_info(store.as_ref(), code_hash);
-            }
             for b in [
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
                 mint_block(),
@@ -11848,14 +11805,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
-            for code_hash in [
-                MNFT_ISSUER_CODE_HASH,
-                MNFT_CLASS_CODE_HASH,
-                MNFT_TOKEN_CODE_HASH,
-            ] {
-                seed_script_info(store.as_ref(), code_hash);
-            }
             crate::derive::derive_to_completion(store.as_ref()).unwrap();
             let mut counts = Vec::new();
             for b in [
@@ -11948,14 +11897,6 @@ mod tests {
                     .set_secondary_epoch_reward(61_369_863_013_698)
                     .unwrap();
                 seed_pre_parent_header(store.as_ref());
-                seed_secp_script_info(store.as_ref());
-                for code_hash in [
-                    MNFT_ISSUER_CODE_HASH,
-                    MNFT_CLASS_CODE_HASH,
-                    MNFT_TOKEN_CODE_HASH,
-                ] {
-                    seed_script_info(store.as_ref(), code_hash);
-                }
                 (store, indexer)
             };
             let (single, single_indexer) = open();
@@ -13251,6 +13192,125 @@ mod tests {
                 "live and bulk append-only cell payload counts must agree"
             );
         }
+
+        /// The lead's ruling, both sync paths (lane rd/api-lock-names): a
+        /// generic (non Type ID) type reference is counted in a family by the
+        /// binaries its live code cells hold. Block 101 deploys a registered
+        /// family's binary under a generic type script and locks a cell by
+        /// that reference; block 102, in the second chain only, consumes the
+        /// code cell. Bulk finalize and the live per-block rollup write the
+        /// same script rows, the user cell counted in the family while the
+        /// code is live and in none once it is gone.
+        #[tokio::test]
+        async fn bulk_and_live_count_a_generic_type_reference_by_its_live_code_cells() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let family_id = "family/parity-generic";
+            let binary = ScriptParser::compute_data_hash(b"\x7fELF\x05");
+            let version = ckbadger_store::ScriptVersionInfo {
+                version_hash: binary.to_vec(),
+                family_id: Some(family_id.to_string()),
+                name: Some("Parity Generic".to_string()),
+                registered_references: vec![(binary.to_vec(), 2)],
+                ..Default::default()
+            };
+            let family = ckbadger_store::ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: "Parity Generic".to_string(),
+                ..Default::default()
+            };
+            let deployment = typed_script(format!("0x{}", hex::encode([0x43; 32])), 0xe1);
+            let reference = ScriptParser::compute_script_hash(&deployment);
+            let user_lock = Script {
+                code_hash: format!("0x{}", hex::encode(&reference)),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            };
+            let deploy = tx(
+                0xb1,
+                vec![input(0x90, 0)],
+                vec![
+                    output(800_00000000, lock_script(), Some(deployment)),
+                    output(700_00000000, user_lock, None),
+                    output(3000_00000000, lock_script(), None),
+                ],
+                vec![
+                    "0x7f454c4605".to_string(),
+                    "0x".to_string(),
+                    "0x".to_string(),
+                ],
+            );
+            let retire = tx(
+                0xb2,
+                vec![input(0xb1, 0)],
+                vec![output(790_00000000, lock_script(), None)],
+                vec!["0x".to_string()],
+            );
+            let mut chain = vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0x90, 5000_00000000)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0x91, 100_00000000), deploy],
+                ),
+            ];
+            let mut retired = chain.clone();
+            retired.push(block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0x92, 100_00000000), retire],
+            ));
+            chain.push(block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0x92, 100_00000000)],
+            ));
+
+            for (blocks, counted, case) in [
+                (chain, 1, "the code live: the user cell in the family"),
+                (retired, 0, "the code consumed: in no family"),
+            ] {
+                let bulk =
+                    crate::sync::bulk_build::materialize_bulk_artifacts_with_script_label_for_test(
+                        &blocks, &binary, &version, family_id, &family,
+                    )
+                    .unwrap();
+                let dir = tempfile::tempdir().unwrap();
+                let live = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                live.set_secondary_epoch_reward(61_369_863_013_698).unwrap();
+                live.put_script_version(&binary, &version).unwrap();
+                live.put_script_family_direct(family_id, &family).unwrap();
+                live.put_script_version_by_family_direct(family_id, &binary)
+                    .unwrap();
+                live.insert_script_version_by_label("Parity Generic", &binary)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(live.clone());
+                for block in blocks {
+                    super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                        &indexer,
+                        vec![block],
+                    )
+                    .await
+                    .unwrap();
+                }
+                let live_rows =
+                    crate::sync::bulk_build::collect_script_binding_rows_for_test(live.as_ref())
+                        .unwrap();
+                assert_eq!(live_rows, bulk.script_binding_rows, "{case}");
+                let family_key = (
+                    ckbadger_store::CF_SCRIPT_FAMILIES,
+                    family_id.as_bytes().to_vec(),
+                );
+                for (rows, path) in [(&live_rows, "live"), (&bulk.script_binding_rows, "bulk")] {
+                    let row: ckbadger_store::ScriptFamilyInfo = bincode::deserialize(
+                        rows.get(&family_key)
+                            .unwrap_or_else(|| panic!("{path}: no family row ({case})")),
+                    )
+                    .unwrap();
+                    assert_eq!(row.live_cells_count, counted, "{path}: {case}");
+                }
+            }
+        }
     }
 
     mod live_token_binding {
@@ -13718,12 +13778,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             super::live_dao_fee::seed_pre_parent_header(store.as_ref());
-            super::live_dao_fee::seed_secp_script_info(store.as_ref());
-            super::live_dao_fee::seed_script_info(store.as_ref(), XUDT_CODE_HASH_TYPE);
-            super::live_dao_fee::seed_script_info(
-                store.as_ref(),
-                crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET,
-            );
             if let Some((type_hash, row)) = label_row {
                 store.put_token_direct(&type_hash, &row).unwrap();
             }
@@ -14372,7 +14426,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             super::live_dao_fee::seed_pre_parent_header(store.as_ref());
-            super::live_dao_fee::seed_secp_script_info(store.as_ref());
             let indexer = indexer_for_live_write_test(store.clone());
             for block in blocks {
                 super::live_dao_fee::write_live_blocks_with_parser_token_daily(
@@ -15296,8 +15349,8 @@ mod tests {
     mod orphan_tip_reorg {
         use super::live_dao_fee::{
             block, block_hash, cellbase_tx, indexer_for_live_write_test, lock_script_b,
-            lock_script_c, seed_pre_parent_header, seed_secp_script_info, transfer_tx,
-            write_live_block, AR_DEPOSIT, FUNDING_CAPACITY,
+            lock_script_c, seed_pre_parent_header, transfer_tx, write_live_block, AR_DEPOSIT,
+            FUNDING_CAPACITY,
         };
         use super::*;
         use crate::rpc::TransactionView;
@@ -15581,7 +15634,6 @@ mod tests {
                 .set_secondary_epoch_reward(61_369_863_013_698)
                 .unwrap();
             seed_pre_parent_header(store.as_ref());
-            seed_secp_script_info(store.as_ref());
             assert_floor_header_seeded(store.as_ref());
 
             // A is canonical when it is written.

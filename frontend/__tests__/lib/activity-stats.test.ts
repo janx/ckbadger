@@ -43,14 +43,19 @@ describe('activityTypeShares', () => {
 
 describe('scriptShares', () => {
   const entries = [
-    { codeHash: '0xaaaa000000000000', name: '.bit Time Info', count: 4395 },
-    { codeHash: '0xbbbb000000000000', name: '.bit Time Index State', count: 4395 },
-    { codeHash: '0xcccc000000000000', name: 'Bitcoin SPV Type Lock', count: 240 },
-    { codeHash: '0xdddd000000000000', name: '.bit Lock', count: 20 },
-    { codeHash: '0xeeee000000000000', name: null, count: 9 },
-    { codeHash: '0xffff000000000000', name: '  ', count: 3 },
-    { codeHash: '0x1111000000000000', name: 'quiet', count: 0 },
-    { codeHash: '0x2222000000000000', name: 'rare', count: 1 },
+    { codeHash: '0xaaaa000000000000', hashType: 'type', name: '.bit Time Info', count: 4395 },
+    {
+      codeHash: '0xbbbb000000000000',
+      hashType: 'type',
+      name: '.bit Time Index State',
+      count: 4395,
+    },
+    { codeHash: '0xcccc000000000000', hashType: 'type', name: 'Bitcoin SPV Type Lock', count: 240 },
+    { codeHash: '0xdddd000000000000', hashType: 'type', name: '.bit Lock', count: 20 },
+    { codeHash: '0xeeee000000000000', hashType: 'type', name: null, count: 9 },
+    { codeHash: '0xffff000000000000', hashType: 'type', name: '  ', count: 3 },
+    { codeHash: '0x1111000000000000', hashType: 'type', name: 'quiet', count: 0 },
+    { codeHash: '0x2222000000000000', hashType: 'type', name: 'rare', count: 1 },
   ];
 
   // Re-pinned on purpose (the page-phase review's SHOULD 5): the total and the rest are the
@@ -68,10 +73,29 @@ describe('scriptShares', () => {
       '.bit Time Index State',
       'Bitcoin SPV Type Lock',
       '.bit Lock',
-      // U-09 (re-pinned): a share bar's label in the home stats card, the tight size
-      '0xeeee…0000',
+      // U-09 (re-pinned): a share bar's label in the home stats card, the tight size; re-pinned
+      // again (lane rd/api-lock-names): an unnamed script is its code hash and its hash type
+      '0xeeee…0000 by type',
     ]);
     expect(s.others).toEqual({ scripts: 2, count: 4, share: 4 / 9063 });
+  });
+
+  // Lane rd/api-lock-names: a count is one script's, by its pair. One code hash by type and by
+  // data is two scripts: two rows, each keyed, labelled and linked as itself.
+  it('ranks one code hash by type and by data as two scripts', () => {
+    // the route's shape since the merge of fix/readability (its total and rest stated)
+    const s = scriptShares({
+      scriptCounts: [
+        { codeHash: '0x9bd7000000000000', hashType: 'type', name: 'Default Lock', count: 5 },
+        { codeHash: '0x9bd7000000000000', hashType: 'data', name: null, count: 2 },
+      ],
+      scriptCalls: 7,
+      scriptRest: null,
+    });
+    expect(s.top.map((r) => [r.key, r.label, r.hashType])).toEqual([
+      ['0x9bd7000000000000:type', 'Default Lock', 'type'],
+      ['0x9bd7000000000000:data', '0x9bd7…0000 by data', 'data'],
+    ]);
   });
 
   it('has no others row when every script fits', () => {
@@ -94,19 +118,23 @@ describe('scriptShares', () => {
 });
 
 describe('scriptLabel', () => {
-  it('uses the name when known, else a short code hash', () => {
+  // re-pinned (lane rd/api-lock-names): the name is the pair's; without one the script is its
+  // short code hash and its hash type, never the code hash alone
+  it('uses the name when known, else a short code hash and its hash type', () => {
     expect(
       scriptLabel({
         name: 'xUDT',
         codeHash: '0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95',
+        hashType: 'data1',
       })
     ).toBe('xUDT');
     expect(
       scriptLabel({
         name: null,
         codeHash: '0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95',
+        hashType: 'data1',
       })
-    ).toBe('0x50bd…1b95');
+    ).toBe('0x50bd…1b95 by data1');
   });
 });
 

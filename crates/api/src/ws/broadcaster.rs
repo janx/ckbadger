@@ -49,6 +49,9 @@ fn pin_broadcast_read_view() -> ReadViewGuard {
 
 pub async fn start_block_broadcaster(
     store: Arc<CkbadgerStore>,
+    // the request namer's (`utils::ScriptNamer`): a generic type reference is named by its live
+    // code cells; no activity builder reads it
+    append_only_store: Arc<CkbadgerStore>,
     ws_manager: Arc<WsManager>,
     ckb_rpc_url: String,
     ckb_network: String,
@@ -215,7 +218,7 @@ pub async fn start_block_broadcaster(
 
             // Broadcast latest activities after new blocks
             if !payload_failed {
-                broadcast_latest_activities(&store, &ws_manager, &ckb_network);
+                broadcast_latest_activities(&store, &append_only_store, &ws_manager, &ckb_network);
             }
         }
     }
@@ -258,6 +261,7 @@ fn build_block_transaction_messages(
 
 fn broadcast_latest_activities(
     store: &CkbadgerStore,
+    ao_store: &CkbadgerStore,
     ws_manager: &Arc<WsManager>,
     ckb_network: &str,
 ) {
@@ -269,7 +273,7 @@ fn broadcast_latest_activities(
             return;
         }
     };
-    let mut script_info_cache = HashMap::new();
+    let mut script_info_cache = crate::utils::ScriptNamer::new(store, ao_store);
     let mut address_cache = HashMap::new();
     let activities = items
         .iter()

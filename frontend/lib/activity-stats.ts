@@ -2,6 +2,7 @@
  * The homepage's activity numbers: one total, the share of each activity type, and the ranked
  * script calls — all from `/stats/activity-summary-24h` and `/stats/daily-activities` rows.
  */
+import { withNameBy } from '@/lib/lock-words';
 import type {
   ActivitySummary24h,
   ScriptCountEntry,
@@ -45,6 +46,8 @@ export function activityTypeShares(c: ActivityCounts): ShareRow[] {
 
 export interface ScriptShareRow extends ShareRow {
   codeHash: string;
+  /** The script's hash type: a row is one script, by its pair. */
+  hashType: string;
   name: string | null;
 }
 
@@ -57,12 +60,17 @@ export interface ScriptShares {
 }
 
 /**
- * A script's name when the API knows one, else its code hash at the tight size: the label of a
- * share bar in the home page's stats card (U-09).
+ * A script's name when the API knows one (the registry's name of its pair), else its code hash at
+ * the tight size and its hash type: the label of a share bar in the home page's stats card (U-09).
+ * A script is its pair (lane rd/api-lock-names), so an unnamed one is never its code hash alone.
  */
-export function scriptLabel(entry: Pick<ScriptCountEntry, 'name' | 'codeHash'>): string {
+export function scriptLabel(
+  entry: Pick<ScriptCountEntry, 'name' | 'nameBy' | 'codeHash' | 'hashType'>
+): string {
   const name = entry.name?.trim();
-  return name ? name : shortenHash(entry.codeHash, 'tight');
+  if (!name) return `${shortenHash(entry.codeHash, 'tight')} by ${entry.hashType}`;
+  // the code the pair runs, by another reference than the registry's: "xUDT · by data2"
+  return withNameBy(name, entry.nameBy);
 }
 
 /** How many scripts the route names before its rest (`scriptRest`): its `SCRIPT_TOP`. */
@@ -84,12 +92,14 @@ export function scriptShares(
   if (total === 0) return { total: 0, top: [], others: null };
   return {
     total,
+    // each script by its pair: one code hash by type and by data is two rows
     top: named.map((e) => ({
-      key: e.codeHash,
+      key: `${e.codeHash}:${e.hashType}`,
       label: scriptLabel(e),
       count: e.count,
       share: e.count / total,
       codeHash: e.codeHash,
+      hashType: e.hashType,
       name: e.name,
     })),
     others: summary.scriptRest && {

@@ -90,13 +90,6 @@ pub fn materialize_address_balances_for_test(
 }
 
 #[doc(hidden)]
-pub fn materialize_script_infos_for_test(
-    blocks: &[crate::rpc::BlockResponseWithCycles],
-) -> anyhow::Result<std::collections::HashMap<Vec<u8>, ckbadger_store::ScriptInfo>> {
-    bulk_build::owners::script::materialize_script_infos_for_test(blocks)
-}
-
-#[doc(hidden)]
 pub fn materialize_script_reference_infos_for_test(
     blocks: &[crate::rpc::BlockResponseWithCycles],
 ) -> anyhow::Result<std::collections::HashMap<(Vec<u8>, u8), ckbadger_store::ScriptReferenceInfo>> {

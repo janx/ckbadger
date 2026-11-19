@@ -430,6 +430,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             {/* a column headed "Lock" is never empty: the default lock by its name (B4) */}
             <LockKind
               lockKind={h.lockKind}
+              lockKindBy={h.lockKindBy}
               lockCodeHash={h.lockCodeHash}
               address={h.address}
               size="row"

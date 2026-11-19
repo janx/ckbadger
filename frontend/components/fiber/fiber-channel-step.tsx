@@ -6,7 +6,8 @@ import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
 import { TxStructure, type TxContinuity } from '@/components/transaction/tx-structure';
 import { cellTiles, sheetTotals } from '@/components/transaction/transaction-cell-tiles';
-import { api, type TransactionDetail } from '@/lib/api';
+import { api, type ScriptPair, type TransactionDetail } from '@/lib/api';
+import { distinctScriptPairs } from '@/lib/script-pair';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
 import { BOARD_INKS } from '@/lib/design-tokens';
@@ -35,14 +36,11 @@ interface Props {
   box: FiberStepBox;
 }
 
-function codeHashesOf(tx: TransactionDetail | undefined): string[] {
+/** The transaction's scripts, each by its pair (code hash, hash type): lane rd/api-lock-names. */
+function scriptsOf(tx: TransactionDetail | undefined): ScriptPair[] {
   if (!tx) return [];
-  return Array.from(
-    new Set(
-      [...(tx.inputs ?? []), ...(tx.outputs ?? [])]
-        .flatMap((cell) => [cell.lock?.codeHash, cell.type?.codeHash])
-        .filter((hash): hash is string => hash !== undefined)
-    )
+  return distinctScriptPairs(
+    [...(tx.inputs ?? []), ...(tx.outputs ?? [])].flatMap((cell) => [cell.lock, cell.type])
   );
 }
 
@@ -66,11 +64,11 @@ export function FiberChannelStep({
     queryKey: ['cell-transaction-detail', txHash],
     queryFn: () => api.getTransactionDetail(txHash),
   });
-  const codeHashes = codeHashesOf(transaction.data);
+  const scripts = scriptsOf(transaction.data);
   const lookup = useQuery({
-    queryKey: ['scriptLookup', codeHashes, txHash],
-    queryFn: () => api.lookupScripts(codeHashes, txHash),
-    enabled: codeHashes.length > 0,
+    queryKey: ['scriptLookup', scripts, txHash],
+    queryFn: () => api.lookupScripts(scripts, txHash),
+    enabled: scripts.length > 0,
     staleTime: Infinity,
   });
   const header = (

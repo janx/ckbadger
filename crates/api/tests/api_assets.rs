@@ -6304,16 +6304,8 @@ async fn collection_holder_rows_carry_registry_lock_kind() {
     let dotcell = ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION;
     let named_holder = [0x44u8; 32];
     let unnamed_holder = [0x55u8; 32];
+    seed_script_label(store.as_ref(), &secp, 1, "SECP256K1/blake160");
     let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_info(
-        &secp,
-        &ckbadger_store::types::ScriptInfo {
-            code_hash: secp.clone(),
-            hash_type: 1,
-            name: Some("SECP256K1/blake160".into()),
-            ..Default::default()
-        },
-    );
     for (holder, code) in [(named_holder, &secp), (unnamed_holder, &unnamed)] {
         batch.put_lock_script(
             &holder,
@@ -6960,4 +6952,99 @@ async fn test_assets_list_names_the_block_its_snapshot_was_built_at() {
     assert_eq!(detail["holdersCount"], 2);
     let (_, summary) = get_json(&app, "/assets/summary").await;
     assert_eq!(summary["anchor"], block(3));
+}
+
+/// Lane rd/api-lock-names: every collection source names a holder's lock by
+/// its pair (code hash, hash type) and sends the hash type beside the code
+/// hash. A holder locked by the default lock's code hash by `data` holds by
+/// another script: the default lock's name does not reach it.
+#[tokio::test]
+async fn by_pair_collection_holder_rows_name_a_lock_by_its_pair() {
+    let store = test_store();
+    let class_id = [0x6eu8; 24];
+    let cluster_id = [0x6fu8; 32];
+    let dotbit = ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
+    let dotcell = ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION;
+    let by_type = [0x44u8; 32];
+    let by_data = [0x45u8; 32];
+    seed_default_lock_by_type_and_by_data(&store, &by_type, &by_data);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft_collection_aggregate(
+        &class_id,
+        &MnftCollectionAggregate {
+            name: Some("Pairs".to_string()),
+            standard: ObjectStandard::MnftClass,
+            total_count: 3,
+            live_count: 3,
+            holders_count: 2,
+            activities_count: 0,
+            ..Default::default()
+        },
+    );
+    batch.put_mnft_collection_owner_count(&class_id, &by_type, 2);
+    batch.put_mnft_collection_owner_count(&class_id, &by_data, 1);
+    batch.put_cluster_owner_count(&cluster_id, &by_type, 2);
+    batch.put_cluster_owner_count(&cluster_id, &by_data, 1);
+    for (collection, standard) in [
+        (dotbit, IdentityStandard::DotBit),
+        (dotcell, IdentityStandard::DotCell),
+    ] {
+        batch.put_identity_collection_aggregate(
+            &collection,
+            &IdentityCollectionAggregate {
+                name: None,
+                standard,
+                total_count: 3,
+                live_count: 3,
+                holders_count: 2,
+                activities_count: 0,
+            },
+        );
+    }
+    batch.put_identity_owner_count(&dotbit, &by_type, 2);
+    batch.put_identity_owner_count(&dotbit, &by_data, 1);
+    batch.put_identity_owner20_count(&dotcell, &by_type[..20], 2);
+    batch.put_identity_owner20_count(&dotcell, &by_data[..20], 1);
+    batch.commit().unwrap();
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(by_type.to_vec()),
+                name: Some("Pairs Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0x33; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        format!("/assets/objects/0x{}/holders", hex::encode(class_id)),
+        format!("/spore/clusters/0x{}/holders", hex::encode(cluster_id)),
+        "/assets/identities/dotbit/holders".to_string(),
+        "/assets/identities/dotcell/holders".to_string(),
+    ] {
+        let (status, holders) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {holders}");
+        let rows = holders["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{path}: {holders}");
+        assert_eq!(rows[0]["lockKind"], "Default Lock", "{path}: {holders}");
+        assert_eq!(
+            rows[1]["lockCodeHash"], TEST_SECP_LOCK_CODE_HASH,
+            "{path}: {holders}"
+        );
+        assert!(
+            rows[1]["lockKind"].is_null(),
+            "{path}: the default lock's name does not reach the lock by data: {holders}"
+        );
+        assert_eq!(rows[0]["lockHashType"], "type", "{path}: {holders}");
+        assert_eq!(rows[1]["lockHashType"], "data", "{path}: {holders}");
+    }
 }

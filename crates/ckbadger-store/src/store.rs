@@ -850,6 +850,12 @@ const LABEL_IMPORT: &str = "label import (indexer startup, `ckbadger label-impor
 const LABELS_REASON: &str =
     "label metadata, not chain state; a rollback through a block journaled \
     before a label change restores that block's pre-change rows until the next import";
+/// `script_info` (lane rd/api-lock-names, L N1): the registry's labels of the
+/// pseudo deployments, which no batch journals.
+const PSEUDO_LABELS_REASON: &str =
+    "the registry's labels of the pseudo deployments (Zero Lock, Type ID), not chain state: \
+    label import rewrites the whole column family at every start and nothing journals it, so a \
+    rollback leaves it as the last import wrote it";
 const DERIVE: &str = "background derivation (derive scheduler, rollback reset)";
 const DERIVE_REASON: &str =
     "a derived aggregate is rebuilt from canonical rows; a rollback resets \
@@ -915,6 +921,13 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         keys::sync_meta_keys::NETWORK_IDENTITY,
         "network guard (first start)",
         "the network the store is built for; constant",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
+        keys::sync_meta_keys::STORE_LAYOUT,
+        "store layout guard (stamps a fresh store)",
+        "the layout the store is built with; constant",
         NEVER,
     ),
     outside(
@@ -1037,8 +1050,8 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         CF_SCRIPT_INFO,
         OutsideWriter::LabelImport,
         LABEL_IMPORT,
-        LABELS_REASON,
-        ALSO_JOURNALED,
+        PSEUDO_LABELS_REASON,
+        NEVER,
     ),
     whole_cf(
         CF_TOKENS,
@@ -6462,6 +6475,60 @@ mod tests {
         // The DAO tip summary's never-journaled rows still admit any writer.
         let latest = keys::encode_stats_key(keys::STATS_PREFIX_DAO_LATEST_STATS, b"latest");
         write(None, CF_STATS_DAO, &latest).unwrap();
+    }
+
+    /// L N1 / T N3 (lane rd/api-lock-names): label import is the only writer
+    /// of `script_info`. Its whole-CF entry is never journaled and admits
+    /// label import alone, so a live block batch writing a label row is
+    /// refused at commit (no journal row can name it either), as is a direct
+    /// write outside label import's scope; inside the scope it is written.
+    /// (Bulk build writes none: `bulk_build_writes_no_script_info_row…`.)
+    #[test]
+    fn label_import_is_the_only_writer_of_script_info() {
+        let entry = outside_journal_entry(CF_SCRIPT_INFO, &[0x11; 33]).unwrap();
+        assert!(entry.never_journaled, "nothing journals script_info");
+        assert_eq!(entry.writer, Some(OutsideWriter::LabelImport));
+        assert!(crate::block_overlay::is_outside_journal(
+            CF_SCRIPT_INFO,
+            &keys::encode_script_info_key(&[0x11; 32], 0)
+        ));
+
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.enforce_journal_discipline();
+        let label = crate::types::ScriptInfo {
+            name: "Zero Lock".to_string(),
+            ..Default::default()
+        };
+        let refused = |result: anyhow::Result<()>, what: &str| {
+            let error = result.expect_err(what).to_string();
+            assert!(error.contains("OUTSIDE_JOURNAL"), "{what}: {error}");
+        };
+        let key = keys::encode_script_info_key(&[0x11; 32], 0);
+        refused(
+            crate::commit_journaled_block(&store, 3, |batch| {
+                batch
+                    .put_raw_cf_by_name(CF_SCRIPT_INFO, &key, b"live")
+                    .unwrap();
+            })
+            .map(|_| ()),
+            "a live block batch writing a label row",
+        );
+        refused(
+            store.put_script_info_direct(&[0x11; 32], 0, &label),
+            "a direct write outside label import's scope",
+        );
+        assert!(store.list_script_infos().unwrap().is_empty());
+        {
+            let _scope = store
+                .outside_journal_scope(OutsideWriter::LabelImport)
+                .unwrap();
+            store
+                .put_script_info_direct(&[0x11; 32], 0, &label)
+                .unwrap();
+        }
+        assert_eq!(store.list_script_infos().unwrap().len(), 1);
+        assert!(store.journal_entries(3).unwrap().is_empty());
     }
 
     /// A never-journaled key written through a journaled batch goes straight

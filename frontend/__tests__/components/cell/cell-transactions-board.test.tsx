@@ -4,6 +4,7 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CellScriptGroups, CellTransactions } from '@/components/cell/cell-transactions';
 import type { Cell, TransactionDetail } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
 
@@ -191,11 +192,12 @@ describe('Its transactions against the Cell board', () => {
     vi.clearAllMocks();
     getTransactionDetail.mockResolvedValue(sporeTx);
     getTransactionCellDeps.mockResolvedValue([]);
+    // the registry's names, each by its script's pair (lane rd/api-lock-names)
     lookupScripts.mockResolvedValue({
-      [SECP]: { name: 'Default Lock' },
-      [SHADOW]: { name: 'Nervape Shadow Lock' },
-      [SPORE]: { name: 'Spore' },
-      [CKBFS]: { name: 'CKBFS' },
+      [scriptLookupKey(SECP, 'type')]: { name: 'Default Lock' },
+      [scriptLookupKey(SHADOW, cell.lock!.hashType)]: { name: 'Nervape Shadow Lock' },
+      [scriptLookupKey(SPORE, cell.type!.hashType)]: { name: 'Spore' },
+      [scriptLookupKey(CKBFS, 'data1')]: { name: 'CKBFS' },
     });
   });
 
@@ -203,7 +205,12 @@ describe('Its transactions against the Cell board', () => {
     view(cell, { lockLabel: 'Nervape Shadow Lock', typeName: 'Spore' });
     const structure = await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
     expect(lookupScripts).toHaveBeenCalledWith(
-      expect.arrayContaining([SECP, SHADOW, SPORE, CKBFS]),
+      expect.arrayContaining([
+        { codeHash: SECP, hashType: 'type' },
+        { codeHash: SHADOW, hashType: cell.lock!.hashType },
+        { codeHash: SPORE, hashType: cell.type!.hashType },
+        { codeHash: CKBFS, hashType: 'data1' },
+      ]),
       cell.txHash
     );
     const continuity = await within(structure).findByRole('list', { name: 'Cell continuity' });

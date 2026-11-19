@@ -1741,50 +1741,26 @@ pub struct DailyBlockStats {
     pub total_uncles: i32,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+/// A script's identity: its code hash and its hash type byte (data 0, type 1,
+/// data1 2, data2 4).
+pub type ScriptPair = (Vec<u8>, u8);
+
+/// The scripts registry's label of ONE script, a `CF_SCRIPT_INFO` row keyed
+/// by the script's pair (code hash, hash type) (`keys::encode_script_info_key`).
+///
+/// CKB identifies a script by the pair: the same code hash by `type` and by
+/// `data` are two scripts (lane rd/api-lock-names). Label import is the only
+/// writer, one row per registered deployment, the pseudo deployments (Zero
+/// Lock, Type ID) included; the row carries no usage. A script's usage is its
+/// `script_reference_info` row, keyed by the same pair.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScriptInfo {
-    pub code_hash: Vec<u8>,
-    pub hash_type: u8,
-    pub name: Option<String>,
+    pub name: String,
     #[serde(default)]
     pub deprecated: bool,
     pub category: Option<String>,
     pub website: Option<String>,
     pub description: Option<String>,
-    pub cells_count: i64,
-    pub capacity_used: i128,
-    // Per-kind usage stats (lock vs type)
-    pub lock_cells_count: i64,
-    pub lock_live_cells_count: i64,
-    pub lock_capacity_sum: i128,
-    pub lock_owned_capacity_sum: i128,
-    #[serde(default)]
-    pub lock_used_capacity_sum: i128,
-    #[serde(default)]
-    pub lock_owned_knowledge_sum: i128,
-    pub type_cells_count: i64,
-    pub type_live_cells_count: i64,
-    pub type_capacity_sum: i128,
-    pub type_owned_capacity_sum: i128,
-    #[serde(default)]
-    pub type_used_capacity_sum: i128,
-    #[serde(default)]
-    pub type_owned_knowledge_sum: i128,
-    /// type_script_hash of the deployment cell (from label data).
-    /// Used to find the code cell for hash_type="data"/"data1"/"data2" scripts.
-    #[serde(default)]
-    pub dep_type_hash: Option<Vec<u8>>,
-    /// data_hash of the deployment cell (from label data).
-    /// Used as fallback when dep_type_hash is absent (e.g. genesis cells).
-    #[serde(default)]
-    pub dep_data_hash: Option<Vec<u8>>,
-    /// Pre-resolved code cell outpoint (resolved during label import).
-    /// Only populated for scripts where runtime lookup is expensive
-    /// (data/data1/data2 without dep_type_hash).
-    #[serde(default)]
-    pub code_cell_tx_hash: Option<Vec<u8>>,
-    #[serde(default)]
-    pub code_cell_output_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -3163,7 +3139,12 @@ impl ActivityKindCounts {
 /// it began with `transfer_count`, a day's or an hour's plain CKB transfers,
 /// which never come near 2,893,086,722 (CKB carries well under 10^8
 /// transactions a day), so a row written before is refused, never misread:
-/// re-sync from genesis.
+/// delete RocksDB and re-sync from genesis.
+///
+/// This is the rows' strict decode only. Whether a build may read a store at
+/// all is the store layout stamp's to say ([`crate::STORE_LAYOUT`], checked
+/// before the indexer's first write and when the API opens the store): a
+/// store whose rows lack this prefix is refused there first.
 pub const ACTIVITY_STATS_LAYOUT: u32 = 0xAC71_0002;
 
 /// One UTC+8 day's or hour's activity: the value of an `ACTIVITY_DAILY` /
@@ -3180,12 +3161,52 @@ pub struct DailyActivityStats {
     pub unique_address_count: u32,
     /// Sum of positive participant CKB deltas in shannons, excluding cellbase
     pub total_ckb_moved: u128,
-    /// Per-script activity counts: hex code_hash -> count
+    /// Per-script activity counts, keyed by the script's pair:
+    /// `"<hex code hash>:<hash type>"` (`script_count_key`) -> count. CKB names a
+    /// script by the pair; the same code hash by another hash type is another
+    /// script, counted apart (lane rd/api-lock-names; the key was the code hash
+    /// alone).
     pub script_counts: BTreeMap<String, u32>,
     /// Per-protocol action counts: "rgbpp:leap_to_ckb" -> count. Actions, not
     /// transactions: the DAO split by action (`dao:deposit`,
     /// `dao:withdraw_request`, `dao:withdraw_complete`) is read here.
     pub protocol_action_counts: BTreeMap<String, u32>,
+}
+
+/// A [`DailyActivityStats::script_counts`] key: the script's pair,
+/// `"<hex code hash>:<hash type>"` (e.g. `"9bd7…cce8:type"`). A hash type CKB
+/// does not define is an error, named.
+pub fn script_count_key(code_hash: &[u8], hash_type: i16) -> anyhow::Result<String> {
+    let label = u8::try_from(hash_type)
+        .ok()
+        .and_then(ckbadger_common::hash_type_label)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "script 0x{} has hash type {hash_type}, not a CKB hash type",
+                hex::encode(code_hash)
+            )
+        })?;
+    Ok(format!("{}:{label}", hex::encode(code_hash)))
+}
+
+/// The pair a [`script_count_key`] names: the code hash and its hash type
+/// byte. Any other key is a corrupt row, named.
+pub fn decode_script_count_key(key: &str) -> anyhow::Result<(Vec<u8>, u8)> {
+    // A bare `<code hash>` key is the layout before store layout 1, written
+    // by an older build: the reader says the way out.
+    let (code_hash, label) = key.split_once(':').ok_or_else(|| {
+        anyhow::anyhow!(
+            "script count key {key:?} is not <code hash>:<hash type>; a row of another store \
+             layout: delete RocksDB and re-sync from genesis"
+        )
+    })?;
+    let code_hash = hex::decode(code_hash)
+        .ok()
+        .filter(|bytes| bytes.len() == 32)
+        .ok_or_else(|| anyhow::anyhow!("script count key {key:?}: not a 32-byte code hash"))?;
+    let hash_type = ckbadger_common::hash_type_from_label(label)
+        .ok_or_else(|| anyhow::anyhow!("script count key {key:?}: not a CKB hash type"))?;
+    Ok((code_hash, hash_type))
 }
 
 impl DailyActivityStats {
@@ -3196,49 +3217,57 @@ impl DailyActivityStats {
     /// accumulation, bulk build's runs and the API's rolling 24 h window all
     /// fold transactions through it. (A rollback does not recompute: the
     /// block journal restores each bucket row a rolled-back block wrote.)
-    pub fn accumulate_from_tx_actions(&mut self, tx: crate::ClassifiedTxActions<&TxActions>) {
+    ///
+    /// A stored or chain fact it cannot count (a call's hash type outside
+    /// 0/1/2/4, an overflow) is an error naming the block and transaction,
+    /// never a panic: the API reads stored rows through it (L N3, lane
+    /// rd/api-lock-names).
+    pub fn accumulate_from_tx_actions(
+        &mut self,
+        tx: crate::ClassifiedTxActions<&TxActions>,
+    ) -> anyhow::Result<()> {
         let tx_actions = tx.actions();
-        let Some(kind) = tx.bucket() else {
-            // A cellbase is counted once, as a cellbase, and in nothing else.
-            self.coinbase_count = self.coinbase_count.checked_add(1).unwrap_or_else(|| {
-                panic!(
-                    "coinbase_count overflow: block={} tx=0x{}",
-                    tx_actions.block_number,
-                    hex::encode(&tx_actions.tx_hash)
-                )
-            });
-            return;
-        };
-
-        let slot = self.kind_counts.slot(kind);
-        *slot = slot.checked_add(1).unwrap_or_else(|| {
-            panic!(
-                "activity kind {} count overflow: block={} tx=0x{}",
-                kind.as_filter(),
+        let at = || {
+            format!(
+                "block={} tx=0x{}",
                 tx_actions.block_number,
                 hex::encode(&tx_actions.tx_hash)
             )
-        });
+        };
+        let Some(kind) = tx.bucket() else {
+            // A cellbase is counted once, as a cellbase, and in nothing else.
+            self.coinbase_count = self
+                .coinbase_count
+                .checked_add(1)
+                .ok_or_else(|| anyhow::anyhow!("coinbase_count overflow: {}", at()))?;
+            return Ok(());
+        };
+
+        let slot = self.kind_counts.slot(kind);
+        *slot = slot.checked_add(1).ok_or_else(|| {
+            anyhow::anyhow!(
+                "activity kind {} count overflow: {}",
+                kind.as_filter(),
+                at()
+            )
+        })?;
 
         self.total_ckb_moved = self
             .total_ckb_moved
             .checked_add(tx_actions.ckb_moved())
-            .unwrap_or_else(|| {
-                panic!(
-                    "total_ckb_moved overflow: block={} tx=0x{}",
-                    tx_actions.block_number,
-                    hex::encode(&tx_actions.tx_hash)
-                )
-            });
+            .ok_or_else(|| anyhow::anyhow!("total_ckb_moved overflow: {}", at()))?;
 
-        // Count each involved script from type_calls and lock_calls — excludes coinbase
+        // Count each involved script, by its pair, from type_calls and
+        // lock_calls — excludes coinbase
         for tc in &tx_actions.type_calls {
-            let hex = hex::encode(&tc.type_code_hash);
-            *self.script_counts.entry(hex).or_insert(0) += 1;
+            let key = script_count_key(&tc.type_code_hash, tc.type_hash_type)
+                .map_err(|e| anyhow::anyhow!("type call of {}: {e}", at()))?;
+            *self.script_counts.entry(key).or_insert(0) += 1;
         }
         for lc in &tx_actions.lock_calls {
-            let hex = hex::encode(&lc.lock_code_hash);
-            *self.script_counts.entry(hex).or_insert(0) += 1;
+            let key = script_count_key(&lc.lock_code_hash, lc.lock_hash_type)
+                .map_err(|e| anyhow::anyhow!("lock call of {}: {e}", at()))?;
+            *self.script_counts.entry(key).or_insert(0) += 1;
         }
 
         // Count each protocol action — excludes coinbase
@@ -3246,6 +3275,7 @@ impl DailyActivityStats {
             let key = format!("{}:{}", pa.protocol, pa.action);
             *self.protocol_action_counts.entry(key).or_insert(0) += 1;
         }
+        Ok(())
     }
 
     /// The stored value of an activity bucket row: [`ACTIVITY_STATS_LAYOUT`],
@@ -3262,8 +3292,8 @@ impl DailyActivityStats {
     pub fn decode(bucket: &str, value: &[u8]) -> anyhow::Result<Self> {
         let refused = |reason: String| {
             anyhow::anyhow!(
-                "activity stats row of {bucket} ({} bytes) {reason}: written by an older layout, \
-                 re-sync from genesis",
+                "activity stats row of {bucket} ({} bytes) {reason}: written by another store \
+                 layout, delete RocksDB and re-sync from genesis",
                 value.len()
             )
         };
@@ -3675,15 +3705,15 @@ mod tests {
         ];
         let mut all = DailyActivityStats::default();
         for tx in &txs {
-            all.accumulate_from_tx_actions(tx.into());
+            all.accumulate_from_tx_actions(tx.into()).unwrap();
         }
         let mut first = DailyActivityStats::default();
         let mut second = DailyActivityStats::default();
         for tx in &txs[..2] {
-            first.accumulate_from_tx_actions(tx.into());
+            first.accumulate_from_tx_actions(tx.into()).unwrap();
         }
         for tx in &txs[2..] {
-            second.accumulate_from_tx_actions(tx.into());
+            second.accumulate_from_tx_actions(tx.into()).unwrap();
         }
         first.unique_address_count = 7;
         second.unique_address_count = 9;
@@ -3815,7 +3845,9 @@ mod tests {
                 .to_string();
             assert!(
                 err.contains("activity stats row of 20261117")
-                    && err.contains("written by an older layout, re-sync from genesis"),
+                    && err.contains(
+                        "written by another store layout, delete RocksDB and re-sync from genesis"
+                    ),
                 "{err}"
             );
         }
@@ -3921,7 +3953,7 @@ mod tests {
             Some("protocol")
         );
         let mut stats = DailyActivityStats::default();
-        stats.accumulate_from_tx_actions((&tx).into());
+        stats.accumulate_from_tx_actions((&tx).into()).unwrap();
         assert_eq!(counted_kinds(&stats), vec!["protocol"]);
     }
 
@@ -3967,7 +3999,7 @@ mod tests {
                         cases += 1;
                         let tx = signal_tx(tags, protocols, type_call, lock_call, is_cellbase);
                         let mut stats = DailyActivityStats::default();
-                        stats.accumulate_from_tx_actions((&tx).into());
+                        stats.accumulate_from_tx_actions((&tx).into()).unwrap();
                         let got = counted_kinds(&stats);
                         let ok = match crate::global_bucket::classify_global_bucket(&tx) {
                             None => got.is_empty() && stats.coinbase_count == 1,
@@ -4410,11 +4442,11 @@ mod tests {
                 .collect(),
         };
         let mut stats = DailyActivityStats::default();
-        stats.accumulate_from_tx_actions((&actions).into());
+        stats.accumulate_from_tx_actions((&actions).into()).unwrap();
         assert_eq!(stats.total_ckb_moved, 100, "exclude sender, change and fee");
         assert_eq!(actions.ckb_moved(), 100);
         actions.is_cellbase = true;
-        stats.accumulate_from_tx_actions((&actions).into());
+        stats.accumulate_from_tx_actions((&actions).into()).unwrap();
         assert_eq!(stats.total_ckb_moved, 100, "issuance is not movement");
     }
 

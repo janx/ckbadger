@@ -1461,8 +1461,8 @@ fn bulk_build_materializes_script_daily_deltas_from_same_block_recreate() {
         .expect("lock daily delta");
     let lock_info = snapshot
         .core
-        .script_infos
-        .get(&lock_code_hash)
+        .script_reference_infos
+        .get(&(lock_code_hash.clone(), 1))
         .expect("lock script info");
     assert_eq!(
         lock_daily.owned_capacity_delta,
@@ -1480,8 +1480,8 @@ fn bulk_build_materializes_script_daily_deltas_from_same_block_recreate() {
         .expect("type daily delta");
     let type_info = snapshot
         .core
-        .script_infos
-        .get(&type_code_hash)
+        .script_reference_infos
+        .get(&(type_code_hash.clone(), 1))
         .expect("type script info");
     assert_eq!(
         type_daily.owned_capacity_delta,

@@ -422,19 +422,6 @@ async fn test_search_exact_script_hash_uses_reference_version_resolution() {
     let store = test_store();
     let reference_hash = vec![0x93; 32];
 
-    store
-        .put_script_info_direct(
-            &reference_hash,
-            &ScriptInfo {
-                code_hash: reference_hash.clone(),
-                hash_type: 0,
-                lock_cells_count: 1,
-                lock_live_cells_count: 1,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_script_version(
         &reference_hash,

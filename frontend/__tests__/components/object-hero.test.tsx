@@ -51,7 +51,9 @@ it('says the lock a cell sits under through the decision’s sentence form', () 
     timestamp: '0',
     isLive: true,
     lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
-    lockName: 'Default Lock',
+    // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair runs,
+    // and a lock on the default lock's code hash by data runs none, so it sends no name
+    lockName: null,
     ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
   });
   expect(itemLifeSentence([byData])).toBe(
@@ -319,7 +321,7 @@ describe('the lock footnote says where the lock changed', () => {
   const DEFAULT_ARGS = `0x${'01'.repeat(20)}`;
   const under = (
     lock: { codeHash: string; hashType: 'type' | 'data'; args: string },
-    lockName: string,
+    lockName: string | null,
     day: number,
     isLive: boolean
   ) =>
@@ -369,7 +371,10 @@ describe('the lock footnote says where the lock changed', () => {
     const byData = { ...DEFAULT, hashType: 'data' as const };
     const versions = [
       under(DEFAULT, 'Default Lock', 0, false),
-      under(byData, 'Default Lock', 1, true),
+      // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+      // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+      // stopgap that dropped the name is gone
+      under(byData, null, 1, true),
     ];
     expect(lockFootnote(versions, 'object')).toBe(
       'Lock: Default Lock with 20-byte args at minting → lock 0x9bd7e06f…a3cce8 by data with 20-byte args since 2026-01-02. Type and data never changed.'

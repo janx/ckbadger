@@ -196,7 +196,13 @@ pub struct TokenIssuer {
     pub lock_hash: String,
     pub address: Option<String>,
     pub lock_code_hash: Option<String>,
+    /// The lock's hash type beside its code hash: the pair names the lock
+    /// (lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
     pub lock_kind: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_kind_by: Option<String>,
 }
 
 /// One holder; its lock as [`TokenIssuer`] names it.
@@ -207,7 +213,13 @@ pub struct TokenHolderResponse {
     pub address: Option<String>,
     pub balance: String,
     pub lock_code_hash: Option<String>,
+    /// The lock's hash type beside its code hash: the pair names the lock
+    /// (lane rd/api-lock-names); `None` when its script is not indexed.
+    pub lock_hash_type: Option<String>,
     pub lock_kind: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_kind_by: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -641,11 +653,18 @@ async fn get_token(
                 let lock: [u8; 32] = info.type_args[..32]
                     .try_into()
                     .expect("validated owner hash width");
-                let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
+                let owner = super::assets::owner_lock(
+                    &state.store,
+                    &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
+                    &lock,
+                    &state.ckb_network,
+                )?;
                 response.issuer = Some(TokenIssuer {
                     lock_hash: format!("0x{}", hex::encode(lock)),
                     address: owner.as_ref().and_then(|owner| owner.address.clone()),
                     lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                    lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
+                    lock_kind_by: owner.as_ref().and_then(|owner| owner.lock_kind_by.clone()),
                     lock_kind: owner.and_then(|owner| owner.lock_kind),
                 });
             }
@@ -725,6 +744,7 @@ async fn get_token_holders(
 
     // Only the rendered rows: the `limit + 1`-th row existed solely to detect
     // `has_more` and was truncated away above.
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let holders: Vec<TokenHolderResponse> = page
         .into_iter()
         .map(|(lock_script_hash, balance)| {
@@ -732,10 +752,13 @@ async fn get_token_holders(
                 .as_slice()
                 .try_into()
                 .map_err(|_| ApiError::internal("invalid token holder lock length"))?;
-            let owner = super::assets::owner_lock(&state.store, &lock, &state.ckb_network)?;
+            let owner =
+                super::assets::owner_lock(&state.store, &mut names, &lock, &state.ckb_network)?;
             Ok(TokenHolderResponse {
                 address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
+                lock_kind_by: owner.as_ref().and_then(|owner| owner.lock_kind_by.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
                 lock_script_hash: format!("0x{}", hex::encode(lock)),
                 balance: balance.to_string(),

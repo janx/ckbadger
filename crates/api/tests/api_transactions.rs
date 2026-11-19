@@ -3657,17 +3657,7 @@ async fn cell_deps_name_output_locks_code_sizes_and_script_names() {
     let store = test_store();
     let code_data = vec![0x7fu8; 52];
     let code_hash = ckb_types::packed::CellOutput::calc_data_hash(&code_data);
-    let mut batch = StoreBatch::new(store.as_ref());
-    batch.put_script_info(
-        code_hash.as_slice(),
-        &ScriptInfo {
-            code_hash: code_hash.as_slice().to_vec(),
-            hash_type: 2,
-            name: Some("Test Lock".into()),
-            ..Default::default()
-        },
-    );
-    batch.commit().unwrap();
+    seed_script_label(store.as_ref(), code_hash.as_slice(), 2, "Test Lock");
     let code = ckb_types::core::TransactionBuilder::default()
         .output(ckb_types::packed::CellOutput::default())
         .output_data(code_data.pack())
@@ -3736,6 +3726,92 @@ async fn cell_deps_name_output_locks_code_sizes_and_script_names() {
     assert_eq!(
         json[0]["outputLockScriptHashes"],
         serde_json::json!([attached_hash]),
+        "{json}"
+    );
+}
+
+/// Lane rd/api-lock-names (T SHOULD-3): a resolved dependency names the scripts
+/// it supplies by the code each pair runs. The code cell's binary is
+/// registered by its data hash (`data`); one output lock references it by
+/// `data`, the registry's reference ("Test Lock"), another by `data1`, the
+/// same code by another reference ("Test Lock · by data1").
+#[tokio::test]
+async fn by_pair_cell_deps_name_each_supplied_script_by_its_pair() {
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    let code_data = vec![0x7fu8; 52];
+    let code_hash = ckb_types::packed::CellOutput::calc_data_hash(&code_data);
+    seed_script_label(store.as_ref(), code_hash.as_slice(), 0, "Test Lock");
+    let code = ckb_types::core::TransactionBuilder::default()
+        .output(ckb_types::packed::CellOutput::default())
+        .output_data(code_data.pack())
+        .build();
+    let attached = |hash_type: ckb_types::core::ScriptHashType| {
+        ckb_types::packed::Script::new_builder()
+            .code_hash(code_hash.clone())
+            .hash_type(hash_type.into())
+            .args(ckb_types::bytes::Bytes::from(vec![0x01]).pack())
+            .build()
+    };
+    let by_data = attached(ckb_types::core::ScriptHashType::Data);
+    let by_data1 = attached(ckb_types::core::ScriptHashType::Data1);
+    let tx = ckb_types::core::TransactionBuilder::default()
+        .cell_dep(
+            ckb_types::packed::CellDep::new_builder()
+                .out_point(
+                    ckb_types::packed::OutPoint::new_builder()
+                        .tx_hash(code.hash())
+                        .index(0u32.pack())
+                        .build(),
+                )
+                .dep_type(ckb_types::core::DepType::Code.into())
+                .build(),
+        )
+        .output(
+            ckb_types::packed::CellOutput::new_builder()
+                .lock(by_data.clone())
+                .build(),
+        )
+        .output(
+            ckb_types::packed::CellOutput::new_builder()
+                .lock(by_data1.clone())
+                .build(),
+        )
+        .output_data(Vec::<u8>::new().pack())
+        .output_data(Vec::<u8>::new().pack())
+        .build();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+    let block = ckb_types::core::BlockBuilder::default()
+        .number(77u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(code)
+        .transaction(tx)
+        .build();
+    let chain = seed_ckb_chain(&[block]);
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/cell-deps", hex::encode(tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let member = &json[0]["resolvedCells"][0];
+    assert_eq!(
+        member["outputLockScriptHashes"].as_array().unwrap().len(),
+        2,
+        "{json}"
+    );
+    assert_eq!(
+        member["scriptNames"],
+        serde_json::json!(["Test Lock", "Test Lock · by data1"]),
         "{json}"
     );
 }

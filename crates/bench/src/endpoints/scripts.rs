@@ -16,12 +16,12 @@ pub fn entries() -> Vec<EndpointEntry> {
             module: "scripts",
             method: Method::Post,
             path_template: "/scripts/lookup",
-            description: "Lookup scripts by code_hash",
+            description: "Lookup scripts by their pair (code_hash, hash_type)",
             resolve: Box::new(|base, _p| {
                 let dao = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
                 Some(post(
                     &format!("{base}/scripts/lookup"),
-                    &format!(r#"{{"codeHashes":["{dao}"]}}"#),
+                    &format!(r#"{{"scripts":[{{"codeHash":"{dao}","hashType":"type"}}]}}"#),
                 ))
             }),
             expect_status: 200,

@@ -93,6 +93,33 @@ async fn network_transaction_window_uses_effective_time_when_raw_tip_moves_backw
     assert_eq!(json["transactionsPerDay"], "320");
 }
 
+/// Lane rd/api-lock-names, fix round M1: `/statistics/network` states the
+/// layout the domain store was built with (`storeLayout`), so the verify
+/// check `store_layout_matches_build` sees a skipped re-sync: the stamp's
+/// value on a stamped store, `null` on one not stamped.
+#[tokio::test]
+async fn network_stats_state_the_store_layout() {
+    for stamped in [true, false] {
+        let store = test_store();
+        seed_block_headers_at(&store, &[(0, 1_700_337_600_000)]);
+        if stamped {
+            store
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
+        }
+        let mut config = test_config(store);
+        let _rpc = mock_indexed_node_tip(&mut config).await;
+        let app = create_router(config).await;
+        let (status, json) = get_json(&app, "/statistics/network").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        if stamped {
+            assert_eq!(json["storeLayout"], ckbadger_store::STORE_LAYOUT, "{json}");
+        } else {
+            assert!(json["storeLayout"].is_null(), "{json}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_network_stats_reports_initializing_before_genesis() {
     let store = test_store();
@@ -2453,11 +2480,6 @@ async fn test_knowledge_composition_chart_states_its_whole() {
     seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
     let state = test_app_state(test_config(store));
     // No typed scripts: the whole knowledge size is plain transfer cells.
-    state.mem_cache.set(
-        ckbadger_api::warmup::CACHE_KEY_SCRIPTS_ALL,
-        &Vec::<(Vec<u8>, ckbadger_store::ScriptInfo)>::new(),
-        std::time::Duration::from_secs(60),
-    );
     let app = router_from_state(state);
     let (status, json) = get_json(&app, "/charts/common-knowledge-composition").await;
     assert_eq!(status, StatusCode::OK, "{json}");
@@ -3280,6 +3302,102 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
     assert_eq!(after_reorg["totalCkbMoved"], "646");
 }
 
+/// Lane rd/api-lock-names (T N9): the 24 h summary's `scriptCounts` are keyed
+/// by the pair and named by the code each pair runs, through the window the
+/// route scans itself (`activity_window`), not only the daily rows: one
+/// transaction calling the default lock by `type`, its code hash by `data` and
+/// its binary by `data1` is three scripts.
+#[tokio::test]
+async fn activity_summary_24h_counts_and_names_each_script_by_its_pair() {
+    let store = test_store();
+    run_label_import_bundled(&store, "mainnet").unwrap();
+    observe_default_lock_deployment(&store);
+    let tip_time = 1_700_000_000_000i64;
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(
+        0,
+        &CachedBlockHeader {
+            hash: vec![0; 32],
+            timestamp: tip_time,
+            chain_time_ms: tip_time,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+        },
+    );
+    let default_lock = default_lock_code_hash();
+    let binary = hex::decode(DEFAULT_LOCK_BINARY).unwrap();
+    let actions = TxActions {
+        recognized_type_codes: vec![],
+        tx_hash: vec![0x10; 32],
+        block_hash: vec![0; 32],
+        block_number: 0,
+        tx_index: 1,
+        timestamp: tip_time,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: [(&default_lock, 1i16), (&default_lock, 0), (&binary, 2)]
+            .into_iter()
+            .map(
+                |(code_hash, hash_type)| ckbadger_store::types::LockCallEntry {
+                    lock_code_hash: code_hash.clone(),
+                    lock_hash_type: hash_type,
+                    lock_args: vec![0x12; 20],
+                },
+            )
+            .collect(),
+        participants: vec![],
+    };
+    batch.put_tx_actions(&actions);
+    index_tx_of_actions(&mut batch, &actions);
+    // The block's cellbase, as the indexer leaves it: its `tx_index` row at
+    // position 0 and no `activities` row (the window reads it there).
+    index_tx_of_actions(
+        &mut batch,
+        &TxActions {
+            tx_hash: vec![0x0f; 32],
+            tx_index: 0,
+            is_cellbase: true,
+            lock_calls: vec![],
+            ..actions.clone()
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/stats/activity-summary-24h").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let entries = json["scriptCounts"].as_array().unwrap();
+    let entry = |code_hash: &[u8], hash_type: &str| {
+        entries
+            .iter()
+            .find(|e| {
+                e["codeHash"] == format!("0x{}", hex::encode(code_hash))
+                    && e["hashType"] == hash_type
+            })
+            .unwrap_or_else(|| panic!("0x{} by {hash_type}: {json}", hex::encode(code_hash)))
+    };
+    assert_eq!(entries.len(), 3, "{json}");
+    let by_type = entry(&default_lock, "type");
+    assert_eq!(by_type["name"], "Default Lock", "{json}");
+    assert!(by_type["nameBy"].is_null(), "{json}");
+    assert_eq!(by_type["count"], 1, "{json}");
+    let by_data = entry(&default_lock, "data");
+    assert!(by_data["name"].is_null(), "{json}");
+    assert!(by_data["nameBy"].is_null(), "{json}");
+    let by_binary = entry(&binary, "data1");
+    assert_eq!(by_binary["name"], "Default Lock", "{json}");
+    assert_eq!(by_binary["nameBy"], "data1", "{json}");
+}
+
 // ============================================================
 // F-6: a day's activity kinds are what the activity filter lists
 // ============================================================
@@ -3396,7 +3514,7 @@ async fn daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all(
         // The live writer's order: classify once, then the bucket row and the
         // day's counts from that one classification.
         let classified = ClassifiedTxActions::classify(actions);
-        BatchWriter::accumulate_tx_activity_stats(classified, &mut day);
+        BatchWriter::accumulate_tx_activity_stats(classified, &mut day).unwrap();
         // A cellbase has its `tx_index` row and no `activities` row.
         index_tx_of_actions(&mut batch, actions);
         if !actions.is_cellbase {
@@ -3424,7 +3542,8 @@ async fn daily_activity_kinds_are_what_the_activity_filter_lists_and_sum_to_all(
             ..tx(0, 0, &[], false, false)
         }),
         &mut day,
-    );
+    )
+    .unwrap();
     let writer = BatchWriter::new(store.clone(), store.clone());
     writer
         .update_activity_bucket_stats(
@@ -4034,11 +4153,6 @@ async fn test_knowledge_composition_chart_excludes_a_lagging_tip_day() {
     seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
     let state = test_app_state(test_config(store));
     // No typed scripts: the whole knowledge size is plain transfer cells.
-    state.mem_cache.set(
-        ckbadger_api::warmup::CACHE_KEY_SCRIPTS_ALL,
-        &Vec::<(Vec<u8>, ckbadger_store::ScriptInfo)>::new(),
-        std::time::Duration::from_secs(60),
-    );
     let app = router_from_state(state);
 
     let (status, json) = get_json(&app, "/charts/common-knowledge-composition").await;
@@ -5127,6 +5241,65 @@ async fn hardforks_counts_live_references_and_known_versions_per_hash_type() {
         ]),
         "{body}"
     );
+}
+
+/// Lane rd/api-lock-names: a day's script counts count each script by its
+/// pair (code hash, hash type) and name it by its pair. A day that called the
+/// default lock (its code hash by `type`) once and the same code hash by
+/// `data` once called two scripts once each; the default lock's name does not
+/// reach the script by data, and the two are not summed under one code hash.
+#[tokio::test]
+async fn by_pair_daily_activity_script_counts_count_and_name_each_pair() {
+    let store = test_store();
+    run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+    // the genesis default lock's Type ID bound to its binary, as the indexer records it
+    observe_default_lock_deployment(store.as_ref());
+    let secp = default_lock_code_hash();
+    let mut day = ckbadger_store::types::DailyActivityStats::default();
+    let mut actions = make_test_tx_actions(&[0x12; 32], &[0xa1; 32], &[0xba; 32], 5, 1, 0, 0);
+    actions.lock_calls = [1i16, 0]
+        .into_iter()
+        .map(|hash_type| ckbadger_store::types::LockCallEntry {
+            lock_code_hash: secp.clone(),
+            lock_hash_type: hash_type,
+            lock_args: vec![0x12; 20],
+        })
+        .collect();
+    day.accumulate_from_tx_actions((&actions).into()).unwrap();
+    store.put_daily_activity_stats("20240115", &day).unwrap();
+    // the day's chain row, which the route reads its user transactions from
+    // (fix/readability's daily route: a day without it is refused)
+    store
+        .put_daily_stats(
+            "20240115",
+            &ckbadger_store::types::DailyStats {
+                transactions_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let counts = json[0]["scriptCounts"].as_array().unwrap();
+    assert_eq!(counts.len(), 2, "two scripts, one call each: {json}");
+    let of = |hash_type: &str| {
+        counts
+            .iter()
+            .find(|entry| entry["hashType"] == hash_type)
+            .unwrap_or_else(|| panic!("no count for the pair by {hash_type}: {json}"))
+    };
+    assert_eq!(of("type")["codeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert_eq!(of("type")["name"], "Default Lock", "{json}");
+    assert_eq!(of("type")["count"], 1, "{json}");
+    assert_eq!(of("data")["codeHash"], TEST_SECP_LOCK_CODE_HASH, "{json}");
+    assert!(
+        of("data")["name"].is_null(),
+        "the default lock's name does not reach the script by data: {json}"
+    );
+    assert_eq!(of("data")["count"], 1, "{json}");
 }
 
 /// lane exactness, part A, A1: the miners card's "Others" is the window's blocks found by every miner after the five

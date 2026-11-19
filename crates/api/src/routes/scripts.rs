@@ -1,7 +1,7 @@
 #![allow(clippy::type_complexity)]
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     routing::{get, post},
     Json, Router,
 };
@@ -26,23 +26,13 @@ use crate::utils::script_resolution::{
     reference_form_member_version_with_lineage, resolve_dep_cells_for_transaction,
 };
 use crate::utils::{
-    apply_owned_capacity_delta, date_keys_inclusive, deployment_reference_hashes,
-    hash_type_to_string, hash_type_to_u8, historical_family_member_candidate,
-    list_version_code_cells, merge_script_info_for_reference, parse_chart_date_range, parse_hash32,
+    apply_owned_capacity_delta, date_keys_inclusive, hash_type_to_string, hash_type_to_u8,
+    list_version_code_cells, pair_deployment_hashes, parse_chart_date_range, parse_hash32,
     resolve_script_by_hash, resolve_script_form_by_hash, CurrentScriptVersionResolution,
     VersionCodeCell,
 };
-use crate::warmup::{CACHE_KEY_SCRIPTS_ALL, CACHE_KEY_SCRIPT_FAMILIES_ALL};
+use crate::warmup::CACHE_KEY_SCRIPT_FAMILIES_ALL;
 use crate::AppState;
-
-fn load_script_infos_cached(
-    state: &Arc<AppState>,
-) -> Result<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>, ApiRouteError> {
-    state
-        .mem_cache
-        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
-        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
-}
 
 pub(crate) fn load_script_families_cached(
     state: &Arc<AppState>,
@@ -153,108 +143,74 @@ pub struct DeploymentUsage {
     pub owned_knowledge_sum: String,
 }
 
-/// Request body for bulk script lookup by code_hash
+/// Request body for bulk script lookup, each script by its pair (code hash,
+/// hash type): CKB identifies a script by the pair, so a code hash alone asks
+/// for no script (lane rd/api-lock-names).
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LookupScriptsRequest {
-    /// List of code_hash values (hex strings with 0x prefix)
-    pub code_hashes: Vec<String>,
+    /// The scripts asked, at most 100.
+    pub scripts: Vec<LookupScriptPair>,
     #[serde(default)]
     pub tx_hash: Option<String>,
 }
 
-/// Lightweight script info for lookup results
+/// One script asked of `POST /scripts/lookup`: its code hash (0x and 64 hex
+/// digits) and its hash type (`data`, `type`, `data1`, `data2`).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LookupScriptPair {
+    pub code_hash: String,
+    pub hash_type: String,
+}
+
+/// The key of one pair in the lookup's answer: `"<code hash>:<hash type>"`,
+/// the code hash lowercase with its 0x.
+pub fn script_lookup_key(code_hash: &[u8], hash_type: &str) -> String {
+    format!("0x{}:{hash_type}", hex::encode(code_hash))
+}
+
+/// One pair's lookup result: the script (`reference_hash`, `hash_type`) asked.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScriptLookupInfo {
     pub reference_hash: String,
+    /// The resolved binary (its code's data hash); the reference itself when
+    /// the pair resolves to no one binary (`resolutionState` says which).
     pub code_hash: String,
+    /// The name of the code the pair runs (`utils::ScriptNamer`, the one
+    /// rule every route reads); "Unknown" when it runs no registered
+    /// family's code (never a name across hash kinds).
     pub name: String,
-    /// The queried reference's own label description (`ScriptInfo.description`);
-    /// `null` when the reference has none.
+    /// The pair's hash type where the named pair is not the registry's
+    /// reference for its code (the same code by another reference), written
+    /// beside the name; `null` for a registered reference and an unnamed pair.
+    pub name_by: Option<String>,
+    /// The named family's (or pseudo deployment's) description; `null` when
+    /// it has none or the pair is unnamed.
     pub description: Option<String>,
     pub deprecated: bool,
     pub script_kind: Option<String>,
     pub decoder_type: Option<String>,
-    pub hash_type: Option<String>,
+    /// The hash type asked: the pair's.
+    pub hash_type: String,
     pub deployment_type_hash: Option<String>,
     pub deployment_data_hash: Option<String>,
     pub code_cell_tx_hash: Option<String>,
     pub code_cell_output_index: Option<i32>,
+    /// The pair's own usage (`script_reference_info`): cells ever and live
+    /// whose lock or type script is exactly this pair, and the live ones'
+    /// capacity and occupied capacity.
+    pub cells_count: i64,
     pub live_cells_count: i64,
     pub owned_capacity_sum: String,
     pub owned_knowledge_sum: String,
     pub code_cells_live_count: i64,
     pub code_cells_total: i64,
+    /// `resolved` (one binary), `ambiguous` (several live binaries), or
+    /// `unresolved` (no binary resolves the pair; its name and usage stand).
     pub resolution_state: String,
     pub ambiguity: Option<ScriptResolutionAmbiguityResponse>,
-}
-
-/// Resolve the deployment code cell outpoint for a script.
-///
-/// Tries type-ref lookup first, then data-hash lookup as fallback (not mutually exclusive).
-/// Both paths use ckbadger's own domain store indexes — no dependency on CKB node RocksDB.
-#[cfg_attr(not(test), allow(dead_code))]
-fn resolve_code_cell(
-    info: &ckbadger_store::ScriptInfo,
-    store: &ckbadger_store::CkbadgerStore,
-    cells_store: &ckbadger_store::CkbadgerStore,
-) -> Result<(Option<String>, Option<i32>), ApiRouteError> {
-    let (type_ref, data_ref) = deployment_reference_hashes(info);
-
-    // Step 1: try type-ref lookup (CF_CELL_BY_TYPE)
-    if let Some(type_hash) = type_ref.as_deref() {
-        let cells = store
-            .list_cells_by_type(type_hash, 1, None, cells_store)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to resolve code cell by deployment type hash 0x{}: {}",
-                    hex::encode(type_hash),
-                    e
-                ))
-            })?;
-        if let Some((tx_hash, idx, _)) = cells.first() {
-            let output_index = i32::from(*idx);
-            return Ok((
-                Some(format!("0x{}", hex::encode(tx_hash))),
-                Some(output_index),
-            ));
-        }
-    }
-
-    // Step 2: try data-hash lookup (CF_CELL_BY_DATA_HASH) — runs even if type-ref was attempted.
-    // Uses find_any_cell_by_data_hash which checks both live and consumed cells,
-    // since code cells may have been consumed while the script is still in use.
-    if let Some(data_hash) = data_ref.as_deref() {
-        if let Some((tx_hash, idx, _)) = store
-            .find_any_cell_by_data_hash(data_hash, cells_store)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to resolve code cell by deployment data hash 0x{}: {}",
-                    hex::encode(data_hash),
-                    e
-                ))
-            })?
-        {
-            let output_index = i32::from(idx);
-            return Ok((
-                Some(format!("0x{}", hex::encode(tx_hash))),
-                Some(output_index),
-            ));
-        }
-    }
-
-    // Step 3: use the imported outpoint when no live deployment cell found.
-    if let (Some(tx_hash), Some(idx)) = (&info.code_cell_tx_hash, info.code_cell_output_index) {
-        if !tx_hash.is_empty() {
-            return Ok((
-                Some(format!("0x{}", hex::encode(tx_hash))),
-                Some(idx as i32),
-            ));
-        }
-    }
-
-    Ok((None, None))
 }
 
 fn script_kind_from_counts(lock_cells_count: i64, type_cells_count: i64) -> Option<String> {
@@ -644,7 +600,9 @@ fn reference_custody(
                     "current code binding for type reference 0x{}: {e}",
                     hex::encode(reference_hash)
                 ))
-            })?;
+            })?
+            .current()
+            .map(<[u8]>::to_vec);
             let cells = state
                 .store
                 .list_cells_by_type(reference_hash, usize::MAX, None, &state.append_only_store)
@@ -823,64 +781,17 @@ enum ScriptIdentifierResolution {
     NotFound,
 }
 
-fn fallback_script_version_info(
-    state: &AppState,
-    reference_hash: &[u8],
-    version_hash: &[u8],
-) -> Result<ckbadger_store::types::ScriptVersionInfo, ApiRouteError> {
-    let direct_info = state
-        .store
-        .get_script_info(reference_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let version_info = if reference_hash == version_hash {
-        None
-    } else {
-        state
-            .store
-            .get_script_info(version_hash)
-            .map_err(|e| ApiError::internal(e.to_string()))?
-    };
-
-    let fallback = match (direct_info, version_info) {
-        (Some(direct), Some(version)) => {
-            let candidates = vec![direct.clone(), version];
-            merge_script_info_for_reference(&candidates, reference_hash).unwrap_or(direct)
-        }
-        (Some(direct), None) => direct,
-        (None, Some(version)) => version,
-        (None, None) => {
-            return Ok(ckbadger_store::types::ScriptVersionInfo {
-                version_hash: version_hash.to_vec(),
-                ..Default::default()
-            });
-        }
-    };
-
-    Ok(ckbadger_store::types::ScriptVersionInfo {
+/// A resolved binary with no `script_versions` row: a version the registry
+/// does not label, so it carries no label and no usage of its own. (It once
+/// borrowed both from the `script_info` row of the reference's code hash —
+/// whatever hash type that row had summed — and of the version hash: lane
+/// rd/api-lock-names.) The asked pair's own label and usage come from its
+/// pair's rows, in `build_lookup_info`.
+fn unlabelled_script_version_info(version_hash: &[u8]) -> ckbadger_store::types::ScriptVersionInfo {
+    ckbadger_store::types::ScriptVersionInfo {
         version_hash: version_hash.to_vec(),
-        name: fallback.name,
-        family_id: None,
-        deprecated: fallback.deprecated,
-        category: fallback.category,
-        website: fallback.website,
-        description: fallback.description,
-        lock_cells_count: fallback.lock_cells_count,
-        lock_live_cells_count: fallback.lock_live_cells_count,
-        lock_capacity_sum: fallback.lock_capacity_sum,
-        lock_owned_capacity_sum: fallback.lock_owned_capacity_sum,
-        lock_used_capacity_sum: fallback.lock_used_capacity_sum,
-        lock_owned_knowledge_sum: fallback.lock_owned_knowledge_sum,
-        type_cells_count: fallback.type_cells_count,
-        type_live_cells_count: fallback.type_live_cells_count,
-        type_capacity_sum: fallback.type_capacity_sum,
-        type_owned_capacity_sum: fallback.type_owned_capacity_sum,
-        type_used_capacity_sum: fallback.type_used_capacity_sum,
-        type_owned_knowledge_sum: fallback.type_owned_knowledge_sum,
-        canonical_reference_hash: None,
-        canonical_hash_type: None,
-        type_id_deployments: Vec::new(),
-        registered_references: Vec::new(),
-    })
+        ..Default::default()
+    }
 }
 
 fn resolve_script_identifier(
@@ -889,7 +800,7 @@ fn resolve_script_identifier(
 ) -> Result<ScriptIdentifierResolution, ApiRouteError> {
     let resolution = resolve_script_by_hash(&state.store, &state.append_only_store, hash_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    finish_script_identifier_resolution(state, hash_bytes, resolution)
+    finish_script_identifier_resolution(state, resolution)
 }
 
 /// Resolve exactly one observed reference form (code_hash + hash_type) into the
@@ -907,12 +818,11 @@ fn resolve_script_identifier_for_form(
         hash_bytes,
     )
     .map_err(|e| ApiError::internal(e.to_string()))?;
-    finish_script_identifier_resolution(state, hash_bytes, resolution)
+    finish_script_identifier_resolution(state, resolution)
 }
 
 fn finish_script_identifier_resolution(
     state: &AppState,
-    hash_bytes: &[u8],
     resolution: CurrentScriptVersionResolution,
 ) -> Result<ScriptIdentifierResolution, ApiRouteError> {
     match resolution {
@@ -920,7 +830,7 @@ fn finish_script_identifier_resolution(
             let resolved = *resolved;
             let version_info = match resolved.version_info {
                 Some(version_info) => version_info,
-                None => fallback_script_version_info(state, hash_bytes, &resolved.version_hash)?,
+                None => unlabelled_script_version_info(&resolved.version_hash),
             };
             let code_cells = list_version_code_cells(
                 &state.store,
@@ -949,32 +859,49 @@ fn finish_script_identifier_resolution(
 }
 
 fn checked_capacity_totals(
-    info: &ckbadger_store::ScriptInfo,
+    info: &ckbadger_store::ScriptReferenceInfo,
     context: &str,
 ) -> Result<(i128, i128), ApiRouteError> {
-    let capacity = info.lock_owned_capacity_sum + info.type_owned_capacity_sum;
-    let used = info.lock_owned_knowledge_sum + info.type_owned_knowledge_sum;
+    let overflow = || {
+        ApiError::internal(format!(
+            "live capacity overflow in {}: code_hash=0x{}, hash_type={}",
+            context,
+            hex::encode(&info.reference_hash),
+            info.hash_type
+        ))
+    };
+    let capacity = info
+        .lock_owned_capacity_sum
+        .checked_add(info.type_owned_capacity_sum)
+        .ok_or_else(overflow)?;
+    let used = info
+        .lock_owned_knowledge_sum
+        .checked_add(info.type_owned_knowledge_sum)
+        .ok_or_else(overflow)?;
     if capacity < 0 {
         return Err(ApiError::internal(format!(
-            "negative live capacity in {}: code_hash=0x{}, capacity={}",
+            "negative live capacity in {}: code_hash=0x{}, hash_type={}, capacity={}",
             context,
-            hex::encode(&info.code_hash),
+            hex::encode(&info.reference_hash),
+            info.hash_type,
             capacity
         )));
     }
     if used < 0 {
         return Err(ApiError::internal(format!(
-            "negative live common knowledge size in {}: code_hash=0x{}, used={}",
+            "negative live common knowledge size in {}: code_hash=0x{}, hash_type={}, used={}",
             context,
-            hex::encode(&info.code_hash),
+            hex::encode(&info.reference_hash),
+            info.hash_type,
             used
         )));
     }
     if used > capacity {
         return Err(ApiError::internal(format!(
-            "live common knowledge size exceeds total in {}: code_hash=0x{}, used={}, capacity={}",
+            "live common knowledge size exceeds total in {}: code_hash=0x{}, hash_type={}, used={}, capacity={}",
             context,
-            hex::encode(&info.code_hash),
+            hex::encode(&info.reference_hash),
+            info.hash_type,
             used,
             capacity
         )));
@@ -982,32 +909,45 @@ fn checked_capacity_totals(
     Ok((capacity, used))
 }
 
-/// The queried reference's OWN live usage: (live_cells, owned_capacity,
+/// The queried pair's OWN usage: (cells, live_cells, owned_capacity,
 /// owned_knowledge), validated fail-fast.
 ///
-/// `/scripts/lookup` responses are keyed by the reference the caller asked
-/// about, so the numbers must be that reference's usage rollup
-/// (`CF_SCRIPT_INFO`, keyed by the reference bytes) and nothing else. A
-/// bytecode version can be deployed under several independent references
-/// (e.g. the RGB++ testnet signet and BTC-testnet3 type-id deployments share
-/// one binary); resolving stats through the version — or through any
-/// version-level "associated" reference slot — served one deployment's
-/// numbers for every sibling. A reference with no ScriptInfo row has no
-/// indexed usage: zero is the truth, not a fallback.
+/// `/scripts/lookup` responses are keyed by the pair (code hash, hash type)
+/// the caller asked about, so the numbers must be that pair's usage row
+/// (`CF_SCRIPT_REFERENCE_INFO`, keyed by the pair) and nothing else: not the
+/// same code hash by another hash type (another script; lane
+/// rd/api-lock-names, when one row by the code hash summed them), and not a
+/// sibling deployment of the same binary (e.g. the RGB++ testnet signet and
+/// BTC-testnet3 type-id deployments share one binary; resolving stats through
+/// the version served one deployment's numbers for every sibling). A pair
+/// with no usage row was never used on chain: zero is the truth, not a
+/// fallback.
 fn reference_own_stats(
-    script_info: Option<&ckbadger_store::ScriptInfo>,
-) -> Result<(i64, i128, i128), ApiRouteError> {
-    match script_info {
+    usage: Option<&ckbadger_store::ScriptReferenceInfo>,
+) -> Result<(i64, i64, i128, i128), ApiRouteError> {
+    match usage {
         Some(info) => {
             let (owned_capacity, owned_knowledge) =
                 checked_capacity_totals(info, "script lookup reference stats")?;
+            let count_overflow = || {
+                ApiError::internal(format!(
+                    "script lookup reference cell count overflow: code_hash=0x{}, hash_type={}",
+                    hex::encode(&info.reference_hash),
+                    info.hash_type
+                ))
+            };
             Ok((
-                info.lock_live_cells_count + info.type_live_cells_count,
+                info.lock_cells_count
+                    .checked_add(info.type_cells_count)
+                    .ok_or_else(count_overflow)?,
+                info.lock_live_cells_count
+                    .checked_add(info.type_live_cells_count)
+                    .ok_or_else(count_overflow)?,
                 owned_capacity,
                 owned_knowledge,
             ))
         }
-        None => Ok((0, 0, 0)),
+        None => Ok((0, 0, 0, 0)),
     }
 }
 fn apply_direction(ordering: Ordering, direction: SortDirection) -> Ordering {
@@ -1361,6 +1301,7 @@ fn family_classes_for_list(
         )?;
         if family_id.is_none()
             && member.current_version_hash.is_none()
+            && !member.runs_several
             && registered.contains(&(member.hash_type, member.reference_hash.clone()))
         {
             return Err(ApiError::internal(format!("script list registered reference 0x{} type {} lacks current binding and family lineage", hex::encode(&member.reference_hash), member.hash_type)));
@@ -1714,6 +1655,10 @@ struct FamilyMemberForm {
     reference_hash: Vec<u8>,
     hash_type: u8,
     current_version_hash: Option<Vec<u8>>,
+    /// A generic type reference whose live code cells hold several binaries:
+    /// it has no current binary, and a family only where all are one family's
+    /// versions (the lead's ruling), so missing a family is no lost binding.
+    runs_several: bool,
     info: ckbadger_store::types::ScriptReferenceInfo,
 }
 
@@ -1726,52 +1671,36 @@ fn resolve_member_form(
     hash_type: u8,
     info: ckbadger_store::types::ScriptReferenceInfo,
 ) -> Result<(Option<String>, FamilyMemberForm), ApiRouteError> {
-    let current_version_hash = reference_form_member_version_with_lineage(
+    // THE family of a form (`utils::reference_form_family`), the rule every
+    // script name reads too: counting and naming agree by construction. A
+    // generic reference may have no current binary (retired or ambiguous),
+    // while the indexed binding still identifies the family of its historical
+    // usage; that binding is never presented as the current executable.
+    let form = crate::utils::reference_form_family(
         &state.store,
         &state.append_only_store,
-        hash_type,
-        &reference_hash,
+        membership,
         &|hash| allowed_versions.contains(hash),
-        Some(observed_type_ids.contains(&reference_hash)),
+        observed_type_ids.contains(&reference_hash),
+        &reference_hash,
+        hash_type,
     )
     .map_err(|e| {
         ApiError::internal(format!(
-            "resolve script reference 0x{} type {}: {e}",
+            "resolve family for script reference 0x{} type {}: {e:#}",
             hex::encode(&reference_hash),
             hash_type
         ))
     })?;
-    // A generic reference may have no current binary (retired or ambiguous),
-    // while the indexed binding still identifies the family of its historical
-    // usage. Never present that historical binding as the current executable.
-    let family_candidate = historical_family_member_candidate(
-        &state.store,
-        hash_type,
-        &reference_hash,
-        current_version_hash.clone(),
-    )
-    .map_err(|e| {
-        ApiError::internal(format!(
-            "read historical reference binding 0x{}: {e}",
-            hex::encode(&reference_hash)
-        ))
-    })?;
-    let family_id = membership
-        .resolve_family(&reference_hash, hash_type, family_candidate.as_deref())
-        .map_err(|e| {
-            ApiError::internal(format!(
-                "resolve family for script reference 0x{} type {}: {e}",
-                hex::encode(&reference_hash),
-                hash_type
-            ))
-        })?
-        .map(str::to_string);
+    let family_id = form.family_id.map(str::to_string);
+    let current_version_hash = form.current_version_hash;
     Ok((
         family_id,
         FamilyMemberForm {
             reference_hash,
             hash_type,
             current_version_hash,
+            runs_several: form.runs_several,
             info,
         },
     ))
@@ -1831,6 +1760,7 @@ fn family_member_reference_forms(
         };
         if !is_member {
             if member.current_version_hash.is_none()
+                && !member.runs_several
                 && registered_references
                     .contains(&(member.hash_type, member.reference_hash.clone()))
             {
@@ -2448,26 +2378,135 @@ fn observed_type_id_versions(
         .collect()
 }
 
-/// Build a ScriptLookupInfo from a resolved script identifier.
+/// What the lookup knows of one asked pair (code hash, hash type) before its
+/// binary is resolved: its name (the one rule, `utils::ScriptNamer`) and its
+/// own usage row.
+struct LookupPair {
+    reference_hash: Vec<u8>,
+    hash_type: u8,
+    hash_type_label: &'static str,
+    named: Option<crate::utils::ScriptName>,
+    usage: Option<ckbadger_store::ScriptReferenceInfo>,
+}
+
+impl LookupPair {
+    fn read(
+        state: &AppState,
+        names: &mut crate::utils::ScriptNamer<'_>,
+        reference_hash: Vec<u8>,
+        hash_type_label: &str,
+    ) -> Result<Self, ApiRouteError> {
+        let hash_type = hash_type_to_u8(hash_type_label).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Invalid hashType '{hash_type_label}': expected one of data, type, data1, data2"
+            ))
+        })?;
+        let hash_type_label = hash_type_to_string(hash_type)
+            .ok_or_else(|| ApiError::internal(format!("hash type {hash_type} has no label")))?;
+        let context = || {
+            format!(
+                "script lookup 0x{} by {hash_type_label}",
+                hex::encode(&reference_hash)
+            )
+        };
+        let named = names
+            .name(&reference_hash, hash_type)
+            .map_err(|e| ApiError::internal(format!("{}: {e:#}", context())))?;
+        let usage = state
+            .store
+            .get_script_reference_info(hash_type, &reference_hash)
+            .map_err(|e| ApiError::internal(format!("{}: {e:#}", context())))?;
+        Ok(Self {
+            reference_hash,
+            hash_type,
+            hash_type_label,
+            named,
+            usage,
+        })
+    }
+
+    fn key(&self) -> String {
+        script_lookup_key(&self.reference_hash, self.hash_type_label)
+    }
+
+    /// The name of the code the pair runs, or "Unknown" where it runs no
+    /// registered family's code.
+    fn name(&self) -> String {
+        match &self.named {
+            Some(named) => named.name.clone(),
+            None => "Unknown".to_string(),
+        }
+    }
+
+    /// The hash type to write beside the name ([`crate::utils::ScriptName::by`]).
+    fn name_by(&self) -> Option<String> {
+        self.named.as_ref().and_then(|named| named.by())
+    }
+
+    /// An answer for a pair no single binary resolves (`ambiguous` with the
+    /// candidates, or `unresolved`): its name, label and usage stand.
+    fn unresolved_info(
+        &self,
+        resolution_state: &str,
+        ambiguity: Option<ScriptResolutionAmbiguityResponse>,
+    ) -> Result<ScriptLookupInfo, ApiRouteError> {
+        let reference_hash_hex = format!("0x{}", hex::encode(&self.reference_hash));
+        let (cells_count, live_cells_count, owned_capacity_sum, owned_knowledge) =
+            reference_own_stats(self.usage.as_ref())?;
+        let (deployment_type_hash, deployment_data_hash) =
+            pair_deployment_hashes(&self.reference_hash, self.hash_type);
+        Ok(ScriptLookupInfo {
+            reference_hash: reference_hash_hex.clone(),
+            code_hash: reference_hash_hex,
+            name: self.name(),
+            name_by: self.name_by(),
+            description: self
+                .named
+                .as_ref()
+                .and_then(|named| named.description.clone()),
+            deprecated: self.named.as_ref().is_some_and(|named| named.deprecated),
+            script_kind: self.usage.as_ref().and_then(|usage| {
+                script_kind_from_counts(usage.lock_cells_count, usage.type_cells_count)
+            }),
+            decoder_type: None,
+            hash_type: self.hash_type_label.to_string(),
+            deployment_type_hash: deployment_type_hash.map(|h| format!("0x{}", hex::encode(h))),
+            deployment_data_hash: deployment_data_hash.map(|h| format!("0x{}", hex::encode(h))),
+            code_cell_tx_hash: None,
+            code_cell_output_index: None,
+            cells_count,
+            live_cells_count,
+            owned_capacity_sum: owned_capacity_sum.to_string(),
+            owned_knowledge_sum: owned_knowledge.to_string(),
+            code_cells_live_count: 0,
+            code_cells_total: 0,
+            resolution_state: resolution_state.to_string(),
+            ambiguity,
+        })
+    }
+}
+
+/// Build a ScriptLookupInfo for a pair resolved to one binary.
 ///
 /// Shared by both per-tx and global resolution paths. The response is keyed
-/// by the queried reference, so everything deployment-scoped in it — usage
-/// stats and code cells — belongs to THAT reference's deployment:
+/// by the queried pair, so everything in it belongs to THAT pair:
 ///
-/// - Stats come from the queried reference's own `CF_SCRIPT_INFO` row
+/// - Its name, description and deprecated flag are the name of the code the
+///   pair runs (`utils::ScriptNamer`: the family of the binary it resolves
+///   to, as the family pages count it; never a name across hash kinds).
+/// - Stats come from the queried pair's own `CF_SCRIPT_REFERENCE_INFO` row
 ///   ([`reference_own_stats`]), never resolved through the version.
 /// - Code cells are the resolved bytecode's instances restricted to this
 ///   deployment: for a type-form reference the cells whose type script IS the
 ///   reference; when the reference is the bytecode hash itself, every
 ///   instance of that bytecode.
 fn build_lookup_info(
-    state: &AppState,
-    reference_hash: &[u8],
-    reference_hash_hex: &str,
+    pair: &LookupPair,
     version_hash: &[u8],
     version_info: &ckbadger_store::types::ScriptVersionInfo,
     code_cells: Vec<VersionCodeCell>,
 ) -> Result<ScriptLookupInfo, ApiRouteError> {
+    let reference_hash = pair.reference_hash.as_slice();
     let mut code_cells: Vec<VersionCodeCell> = code_cells
         .into_iter()
         .filter(|(_, _, cell, _)| {
@@ -2478,49 +2517,37 @@ fn build_lookup_info(
         })
         .collect();
     sort_code_cells(&mut code_cells);
-    let script_info = state
-        .store
-        .get_script_info(reference_hash)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let (live_cells_count, owned_capacity_sum, owned_knowledge) =
-        reference_own_stats(script_info.as_ref())?;
+    let (cells_count, live_cells_count, owned_capacity_sum, owned_knowledge) =
+        reference_own_stats(pair.usage.as_ref())?;
     let code_cell = code_cells.first();
-    let hash_type = script_info
-        .as_ref()
-        .and_then(|info| hash_type_to_string(info.hash_type).map(|s| s.to_string()));
-    let (deployment_type_hash, deployment_data_hash) = script_info
-        .as_ref()
-        .map(|info| {
-            let (type_ref, data_ref) = deployment_reference_hashes(info);
-            (
-                type_ref.map(|h| format!("0x{}", hex::encode(h))),
-                data_ref.map(|h| format!("0x{}", hex::encode(h))),
-            )
-        })
-        .unwrap_or((None, None));
+    // The deployment a resolved pair runs: by `type` its type hash is the
+    // reference; its data hash is the resolved binary's (a data pair's
+    // reference is that binary).
+    let (deployment_type_hash, _) = pair_deployment_hashes(reference_hash, pair.hash_type);
+    let deployment_data_hash = Some(version_hash.to_vec());
 
     Ok(ScriptLookupInfo {
-        reference_hash: reference_hash_hex.to_string(),
+        reference_hash: format!("0x{}", hex::encode(reference_hash)),
         code_hash: format!("0x{}", hex::encode(version_hash)),
-        name: resolved_version_name(state, version_hash, version_info, "Unknown")?,
-        description: script_info
+        name: pair.name(),
+        name_by: pair.name_by(),
+        description: pair
+            .named
             .as_ref()
-            .and_then(|info| info.description.clone()),
+            .and_then(|named| named.description.clone()),
         deprecated: version_info.deprecated
-            || script_info
-                .as_ref()
-                .map(|info| info.deprecated)
-                .unwrap_or(false),
-        script_kind: script_info
-            .as_ref()
-            .and_then(|info| script_kind_from_counts(info.lock_cells_count, info.type_cells_count)),
+            || pair.named.as_ref().is_some_and(|named| named.deprecated),
+        script_kind: pair.usage.as_ref().and_then(|usage| {
+            script_kind_from_counts(usage.lock_cells_count, usage.type_cells_count)
+        }),
         decoder_type: version_info.category.clone(),
-        hash_type,
-        deployment_type_hash,
-        deployment_data_hash,
+        hash_type: pair.hash_type_label.to_string(),
+        deployment_type_hash: deployment_type_hash.map(|h| format!("0x{}", hex::encode(h))),
+        deployment_data_hash: deployment_data_hash.map(|h| format!("0x{}", hex::encode(h))),
         code_cell_tx_hash: code_cell
             .map(|(tx_hash, _, _, _)| format!("0x{}", hex::encode(tx_hash))),
         code_cell_output_index: code_cell.map(|(_, output_index, _, _)| i32::from(*output_index)),
+        cells_count,
         live_cells_count,
         owned_capacity_sum: owned_capacity_sum.to_string(),
         owned_knowledge_sum: owned_knowledge.to_string(),
@@ -2536,19 +2563,30 @@ fn build_lookup_info(
 
 async fn lookup_scripts(
     State(state): State<Arc<AppState>>,
-    Json(request): Json<LookupScriptsRequest>,
+    request: Result<Json<LookupScriptsRequest>, JsonRejection>,
 ) -> ApiResult<HashMap<String, ScriptLookupInfo>> {
-    if request.code_hashes.len() > 100 {
-        return Err(ApiError::bad_request(
-            "Too many code_hashes, maximum is 100",
-        ));
+    // A body that is not the request (the old `{"codeHashes":[…]}`, a pair
+    // without its hash type, an unknown field, no JSON content type) is this
+    // route's 400 in its own JSON error, as every other fault of the request
+    // is, never axum's plain-text 422 (lane rd/api-lock-names, L S3).
+    let Json(request) = request.map_err(|rejection| {
+        ApiError::bad_request(format!(
+            "Invalid lookup body: {}; expected {{\"scripts\": [{{\"codeHash\", \"hashType\"}}], \"txHash\"?}}",
+            rejection.body_text()
+        ))
+    })?;
+    if request.scripts.len() > 100 {
+        return Err(ApiError::bad_request(format!(
+            "Too many scripts: {} asked, maximum is 100",
+            request.scripts.len()
+        )));
     }
 
     // Every request-supplied hash is validated before any short-circuit below,
     // so whether a malformed one is reported never depends on an unrelated
-    // field. `txHash` used to be checked after the empty-`code_hashes` early
-    // return, which made `{"codeHashes": [], "txHash": "0x1234"}` a silent 200
-    // and the same body with one code hash a 400 — one field, two contracts.
+    // field. `txHash` used to be checked after the empty-list early return,
+    // which made an empty list with `"txHash": "0x1234"` a silent 200 and the
+    // same body with one script a 400 — one field, two contracts.
     let tx_hash = match request.tx_hash.as_deref() {
         Some(tx_hash) => {
             parse_hash32(tx_hash, "txHash")?;
@@ -2557,20 +2595,36 @@ async fn lookup_scripts(
         None => None,
     };
 
-    // One malformed code_hash fails the whole batch rather than being truncated
-    // into a lookup for a different script.
-    let code_hash_bytes = request
-        .code_hashes
+    // One malformed pair fails the whole batch rather than being truncated
+    // into a lookup for a different script. The answer holds one entry per
+    // pair, so a pair asked twice is a fault of the request, named.
+    let mut asked = HashSet::new();
+    let pairs = request
+        .scripts
         .iter()
-        .map(|h| parse_hash32(h, "code_hashes entry"))
-        .collect::<Result<Vec<Vec<u8>>, _>>()?;
+        .map(|pair| {
+            let code_hash = parse_hash32(&pair.code_hash, "scripts entry codeHash")?;
+            hash_type_to_u8(&pair.hash_type).ok_or_else(|| {
+                ApiError::bad_request(format!(
+                    "Invalid hashType '{}' for {}: expected one of data, type, data1, data2",
+                    pair.hash_type, pair.code_hash
+                ))
+            })?;
+            if !asked.insert((code_hash.clone(), pair.hash_type.as_str())) {
+                return Err(ApiError::bad_request(format!(
+                    "Script {} by {} is asked twice: ask each pair once",
+                    pair.code_hash, pair.hash_type
+                )));
+            }
+            Ok((code_hash, pair.hash_type.as_str()))
+        })
+        .collect::<Result<Vec<(Vec<u8>, &str)>, ApiRouteError>>()?;
 
-    if code_hash_bytes.is_empty() {
+    if pairs.is_empty() {
         return ok(HashMap::new());
     }
 
     let mut result: HashMap<String, ScriptLookupInfo> = HashMap::new();
-    let all_script_infos = load_script_infos_cached(&state)?;
     let per_tx_mappings = match tx_hash {
         Some(tx_hash) => resolve_dep_cells_for_transaction(&state, tx_hash).map_err(|e| {
             ApiError::internal(format!("failed to resolve cell deps of tx {tx_hash}: {e}"))
@@ -2578,13 +2632,21 @@ async fn lookup_scripts(
         None => None,
     };
 
-    for code_hash in &code_hash_bytes {
-        let reference_hash_hex = format!("0x{}", hex::encode(code_hash));
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
+    for (code_hash, hash_type_label) in pairs {
+        let pair = LookupPair::read(&state, &mut names, code_hash, hash_type_label)?;
+        let key = pair.key();
 
-        // Per-tx resolution: if cell_deps provide a version_hash, use it directly
+        // Per-tx resolution: the transaction's cell deps bind a type
+        // reference to its binary (type script hash -> data hash) and a data
+        // reference to itself (data hash -> data hash); each binds only its
+        // own form of the pair.
         if let Some(version_hash) = per_tx_mappings
             .as_ref()
-            .and_then(|m| m.get(code_hash.as_slice()))
+            .and_then(|m| m.get(pair.reference_hash.as_slice()))
+            .filter(|version_hash| {
+                (pair.hash_type == 1) == (version_hash.as_slice() != pair.reference_hash.as_slice())
+            })
         {
             let version_info = match state.store.get_script_version(version_hash).map_err(|e| {
                 ApiError::internal(format!(
@@ -2593,7 +2655,7 @@ async fn lookup_scripts(
                 ))
             })? {
                 Some(info) => info,
-                None => fallback_script_version_info(&state, code_hash, version_hash)?,
+                None => unlabelled_script_version_info(version_hash),
             };
 
             let code_cells =
@@ -2605,108 +2667,41 @@ async fn lookup_scripts(
                         ))
                     })?;
 
-            let info = build_lookup_info(
-                &state,
-                code_hash,
-                &reference_hash_hex,
-                version_hash,
-                &version_info,
-                code_cells,
-            )?;
-            result.insert(reference_hash_hex.clone(), info);
+            let info = build_lookup_info(&pair, version_hash, &version_info, code_cells)?;
+            result.insert(key, info);
             continue;
         }
 
-        match resolve_script_identifier(&state, code_hash)? {
+        match resolve_script_identifier_for_form(&state, &pair.reference_hash, pair.hash_type)? {
             ScriptIdentifierResolution::Resolved(resolved) => {
                 let ResolvedScriptIdentifier {
                     version_hash,
                     version_info,
                     code_cells,
                 } = *resolved;
-                let info = build_lookup_info(
-                    &state,
-                    code_hash,
-                    &reference_hash_hex,
-                    &version_hash,
-                    &version_info,
-                    code_cells,
-                )?;
-                result.insert(reference_hash_hex.clone(), info);
+                let info = build_lookup_info(&pair, &version_hash, &version_info, code_cells)?;
+                result.insert(key, info);
             }
             ScriptIdentifierResolution::Ambiguous(ambiguous) => {
                 let AmbiguousScriptIdentifier { version_hashes } = ambiguous;
-                let infos_bare: Vec<ckbadger_store::ScriptInfo> = all_script_infos
-                    .iter()
-                    .map(|(_, info)| info.clone())
-                    .collect();
-                let merged = merge_script_info_for_reference(&infos_bare, code_hash);
-                // Try to get a known name: first from merged ScriptInfo, then from any version
-                let merged_name = merged
-                    .as_ref()
-                    .and_then(|m| m.name.clone())
-                    .filter(|n| crate::utils::is_known_script_name(Some(n.as_str())));
-                let name = if let Some(n) = merged_name {
-                    n
-                } else {
-                    // Try each version_hash for a name
-                    let mut found_name = None;
-                    for vh in &version_hashes {
-                        if let Some(vi) = state
-                            .store
-                            .get_script_version(vh)
-                            .map_err(|e| ApiError::internal(e.to_string()))?
-                        {
-                            let n = resolved_version_name(&state, vh, &vi, "")?;
-                            if !n.is_empty() {
-                                found_name = Some(n);
-                                break;
-                            }
-                        }
-                    }
-                    found_name.unwrap_or_else(|| "Ambiguous Script Reference".to_string())
-                };
-                let script_kind = merged
-                    .as_ref()
-                    .and_then(|m| script_kind_from_counts(m.lock_cells_count, m.type_cells_count));
-                let hash_type = merged
-                    .as_ref()
-                    .and_then(|m| hash_type_to_string(m.hash_type).map(|s| s.to_string()));
-                // The reference's own deprecated flag (merged across its
-                // related deployment rows) is known even when the version is
-                // ambiguous — report it, never a hardcoded false.
-                let deprecated = merged.as_ref().map(|m| m.deprecated).unwrap_or(false);
-                result.insert(
-                    reference_hash_hex.clone(),
-                    ScriptLookupInfo {
-                        reference_hash: reference_hash_hex.clone(),
-                        code_hash: reference_hash_hex.clone(),
-                        name,
-                        description: merged.as_ref().and_then(|m| m.description.clone()),
-                        deprecated,
-                        script_kind,
-                        decoder_type: None,
-                        hash_type,
-                        deployment_type_hash: None,
-                        deployment_data_hash: None,
-                        code_cell_tx_hash: None,
-                        code_cell_output_index: None,
-                        live_cells_count: 0,
-                        owned_capacity_sum: "0".to_string(),
-                        owned_knowledge_sum: "0".to_string(),
-                        code_cells_live_count: 0,
-                        code_cells_total: 0,
-                        resolution_state: "ambiguous".to_string(),
-                        ambiguity: Some(ScriptResolutionAmbiguityResponse {
-                            version_hashes: version_hashes
-                                .into_iter()
-                                .map(|hash| format!("0x{}", hex::encode(hash)))
-                                .collect(),
-                        }),
-                    },
-                );
+                let info = pair.unresolved_info(
+                    "ambiguous",
+                    Some(ScriptResolutionAmbiguityResponse {
+                        version_hashes: version_hashes
+                            .into_iter()
+                            .map(|hash| format!("0x{}", hex::encode(hash)))
+                            .collect(),
+                    }),
+                )?;
+                result.insert(key, info);
             }
-            ScriptIdentifierResolution::NotFound => {}
+            // A pair no binary resolves is still answered when the registry
+            // names it or the chain has used it: its name and usage stand.
+            ScriptIdentifierResolution::NotFound => {
+                if pair.named.is_some() || pair.usage.is_some() {
+                    result.insert(key, pair.unresolved_info("unresolved", None)?);
+                }
+            }
         }
     }
 
@@ -3648,15 +3643,14 @@ mod tests {
     use super::{
         apply_script_chart_delta, checked_capacity_totals,
         latest_complete_script_chart_date_from_tip, observed_type_id_versions, reference_own_stats,
-        resolve_code_cell, resolve_script_capacity_chart_bounds, verified_multisig_config,
-        CodeCellQuery, ListParams,
+        resolve_script_capacity_chart_bounds, verified_multisig_config, CodeCellQuery, ListParams,
     };
     use axum::extract::Query;
     use axum::http::StatusCode;
     use axum::http::Uri;
     use ckb_types::{packed, prelude::*};
     use ckbadger_store::types::ScriptVersionInfo;
-    use ckbadger_store::ScriptInfo;
+    use ckbadger_store::ScriptReferenceInfo;
     use std::collections::BTreeMap;
 
     #[test]
@@ -3755,8 +3749,9 @@ mod tests {
 
     #[test]
     fn checked_capacity_totals_errors_on_negative_capacity() {
-        let info = ScriptInfo {
-            code_hash: vec![0xAA; 32],
+        let info = ScriptReferenceInfo {
+            reference_hash: vec![0xAA; 32],
+            hash_type: 1,
             lock_owned_capacity_sum: -1,
             ..Default::default()
         };
@@ -3767,8 +3762,9 @@ mod tests {
 
     #[test]
     fn checked_capacity_totals_errors_when_occupied_exceeds_capacity() {
-        let info = ScriptInfo {
-            code_hash: vec![0xBB; 32],
+        let info = ScriptReferenceInfo {
+            reference_hash: vec![0xBB; 32],
+            hash_type: 1,
             lock_owned_capacity_sum: 100,
             lock_owned_knowledge_sum: 101,
             ..Default::default()
@@ -3842,72 +3838,13 @@ mod tests {
         assert_eq!(params.hash_type, None);
     }
 
-    /// When type-ref lookup fails (dep_type_hash set but no matching live cell),
-    /// resolve_code_cell must fall through to the data-hash lookup instead of
-    /// returning (None, None).
+    /// When the code cell has been consumed, the lookup by data hash the
+    /// script resolution uses (`find_any_cell_by_data_hash`) must still find
+    /// it via the preserved CF_CELL_BY_DATA_HASH index entry + consumed cell
+    /// lookup. (It tested `resolve_code_cell`, a test-only copy of that path
+    /// removed by the fix round of lane rd/api-lock-names, T N4.)
     #[test]
-    fn resolve_code_cell_falls_through_type_to_data_hash() {
-        use ckbadger_store::{CkbadgerStore, LiveCellInfo, StoreBatch};
-        use std::sync::Arc;
-
-        let dir = tempfile::tempdir().unwrap();
-        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-
-        let tx_hash = vec![0xCA; 32];
-        let output_index: i16 = 0;
-        let block_num: i64 = 5;
-        let data_hash = vec![0xDD; 32];
-
-        // Write a live cell that is findable by data_hash.
-        let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, output_index);
-        let cell_info = LiveCellInfo {
-            capacity: 200_00000000,
-            lock_code_hash: [0x22; 32],
-            lock_hash_type: 1,
-            lock_args: vec![0x33; 20],
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 100,
-            udt_amount: None,
-            data_hash: None,
-        };
-        let marker = ckbadger_store::types::encode_live_cell_marker(block_num);
-        let payload = cell_info.encode().unwrap();
-        store
-            .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
-            .unwrap();
-        store
-            .put_cf(store.cf_cells(), &outpoint_key, &payload)
-            .unwrap();
-
-        // Write CF_CELL_BY_DATA_HASH index entry.
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cell_by_data_hash(&data_hash, block_num, &tx_hash, output_index);
-        batch.commit().unwrap();
-
-        // ScriptInfo with dep_type_hash set (triggers type-ref path) but no matching cell,
-        // AND data_ref available via hash_type=0.
-        let info = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0,
-            dep_type_hash: Some(vec![0xFF; 32]), // no live cell with this type hash
-            ..Default::default()
-        };
-
-        let (resolved_tx, resolved_idx) = resolve_code_cell(&info, &store, &store).unwrap();
-        assert_eq!(
-            resolved_tx.as_deref(),
-            Some(format!("0x{}", hex::encode(&tx_hash)).as_str()),
-            "should resolve code cell via data_hash fallback"
-        );
-        assert_eq!(resolved_idx, Some(0));
-    }
-
-    /// When the code cell has been consumed, resolve_code_cell must still find it
-    /// via the preserved CF_CELL_BY_DATA_HASH index entry + consumed cell lookup.
-    #[test]
-    fn resolve_code_cell_finds_consumed_code_cell_by_data_hash() {
+    fn a_consumed_code_cell_is_found_by_its_data_hash() {
         use ckbadger_store::{CkbadgerStore, LiveCellInfo, StoreBatch};
         use std::sync::Arc;
 
@@ -3948,25 +3885,24 @@ mod tests {
         batch.put_cell_by_data_hash(&data_hash, block_num, &tx_hash, output_index);
         batch.commit().unwrap();
 
-        let info = ScriptInfo {
-            code_hash: data_hash.clone(),
-            hash_type: 0, // data hash type
-            ..Default::default()
-        };
-
-        let (resolved_tx, resolved_idx) = resolve_code_cell(&info, &store, &store).unwrap();
+        let (resolved_tx, resolved_idx, _) = store
+            .find_any_cell_by_data_hash(&data_hash, &store)
+            .unwrap()
+            .expect("the consumed code cell");
         assert_eq!(
-            resolved_tx.as_deref(),
-            Some(format!("0x{}", hex::encode(&tx_hash)).as_str()),
+            resolved_tx, tx_hash,
             "should resolve consumed code cell via data_hash index"
         );
-        assert_eq!(resolved_idx, Some(0));
+        assert_eq!(resolved_idx, 0);
     }
 
     #[test]
     fn reference_own_stats_serves_the_reference_rows_own_numbers() {
-        let info = ScriptInfo {
-            code_hash: vec![0xAA; 32],
+        let info = ScriptReferenceInfo {
+            reference_hash: vec![0xAA; 32],
+            hash_type: 1,
+            lock_cells_count: 4,
+            type_cells_count: 3,
             lock_live_cells_count: 3,
             type_live_cells_count: 2,
             lock_owned_capacity_sum: 100_00000000,
@@ -3975,7 +3911,9 @@ mod tests {
             type_owned_knowledge_sum: 10_00000000,
             ..Default::default()
         };
-        let (live, owned_capacity, owned_knowledge) = reference_own_stats(Some(&info)).unwrap();
+        let (cells, live, owned_capacity, owned_knowledge) =
+            reference_own_stats(Some(&info)).unwrap();
+        assert_eq!(cells, 7);
         assert_eq!(live, 5);
         assert_eq!(owned_capacity, 150_00000000);
         assert_eq!(owned_knowledge, 71_00000000);
@@ -3983,15 +3921,16 @@ mod tests {
 
     #[test]
     fn reference_own_stats_reports_zero_for_unindexed_reference() {
-        // A reference with no ScriptInfo row has no indexed usage; zero is the
-        // truth, not a fallback into some other deployment's numbers.
-        assert_eq!(reference_own_stats(None).unwrap(), (0, 0, 0));
+        // A pair with no usage row was never used; zero is the truth, not a
+        // fallback into some other deployment's (or hash type's) numbers.
+        assert_eq!(reference_own_stats(None).unwrap(), (0, 0, 0, 0));
     }
 
     #[test]
     fn reference_own_stats_rejects_invalid_reference_totals() {
-        let info = ScriptInfo {
-            code_hash: vec![0xEE; 32],
+        let info = ScriptReferenceInfo {
+            reference_hash: vec![0xEE; 32],
+            hash_type: 1,
             lock_owned_capacity_sum: 100,
             lock_owned_knowledge_sum: 101,
             ..Default::default()

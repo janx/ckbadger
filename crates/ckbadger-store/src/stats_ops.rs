@@ -946,35 +946,64 @@ impl CkbadgerStore {
 
     // ---- Script info ----
 
-    pub fn get_script_info(&self, code_hash: &[u8]) -> anyhow::Result<Option<ScriptInfo>> {
-        self.get_cf(self.cf_script_info(), code_hash)?
-            .map(|value| Self::decode_script_info(code_hash, &value))
+    /// The registry's label of the script (code_hash, hash_type), or `None`
+    /// when the registry does not name that pair. There is no read by a code
+    /// hash alone: the same code hash by another hash type is another script.
+    pub fn get_script_info(
+        &self,
+        code_hash: &[u8],
+        hash_type: u8,
+    ) -> anyhow::Result<Option<ScriptInfo>> {
+        let key = keys::encode_script_info_key(code_hash, hash_type);
+        self.get_cf(self.cf_script_info(), &key)?
+            .map(|value| Self::decode_script_info(&key, &value))
             .transpose()
     }
 
-    /// Decode one stored `script_info` row: the one codec every reader uses
-    /// (the indexer types a failure as rebuild-required, finding 12).
-    pub fn decode_script_info(code_hash: &[u8], value: &[u8]) -> anyhow::Result<ScriptInfo> {
+    /// Decode one stored `script_info` row by its key: the one codec every
+    /// reader uses. A failure names the pair (or the bad key).
+    pub fn decode_script_info(key: &[u8], value: &[u8]) -> anyhow::Result<ScriptInfo> {
+        let (code_hash, hash_type) = keys::decode_script_info_key(key)?;
         bincode::deserialize(value).map_err(|e| {
             anyhow::anyhow!(
-                "failed to deserialize script info: code_hash=0x{}, {} bytes, error={}",
-                bytes_to_hex(code_hash),
+                "failed to deserialize script info: code_hash=0x{}, hash_type={}, {} bytes, \
+                 error={}",
+                bytes_to_hex(&code_hash),
+                hash_type,
                 value.len(),
                 e
             )
         })
     }
 
+    /// Write the registry's label of the script (code_hash, hash_type). Label
+    /// import is the only writer (domain store, outside the journal in its
+    /// `OutsideWriter::LabelImport` scope).
     pub fn put_script_info_direct(
         &self,
         code_hash: &[u8],
+        hash_type: u8,
         info: &ScriptInfo,
     ) -> anyhow::Result<()> {
         let value = bincode::serialize(info)?;
-        self.put_cf(self.cf_script_info(), code_hash, &value)
+        self.put_cf(
+            self.cf_script_info(),
+            &keys::encode_script_info_key(code_hash, hash_type),
+            &value,
+        )
     }
 
-    pub fn list_script_infos(&self) -> anyhow::Result<Vec<(Vec<u8>, ScriptInfo)>> {
+    /// Remove the registry's label of the script (code_hash, hash_type): label
+    /// import, when the registry no longer names that pair on this network.
+    pub fn delete_script_info_direct(&self, code_hash: &[u8], hash_type: u8) -> anyhow::Result<()> {
+        self.delete_cf(
+            self.cf_script_info(),
+            &keys::encode_script_info_key(code_hash, hash_type),
+        )
+    }
+
+    /// Every label row, each with its pair (code hash, hash type).
+    pub fn list_script_infos(&self) -> anyhow::Result<Vec<(ScriptPair, ScriptInfo)>> {
         let iter = self.iterator_cf(self.cf_script_info(), rocksdb::IteratorMode::Start);
         let mut results = Vec::new();
 
@@ -982,14 +1011,11 @@ impl CkbadgerStore {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!("failed to iterate script_info in list_script_infos: {}", e)
             })?;
-            let info: ScriptInfo = bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize script info in list_script_infos: code_hash=0x{}, error={}",
-                    bytes_to_hex(&key),
-                    e
-                )
-            })?;
-            results.push((key.to_vec(), info));
+            let pair = keys::decode_script_info_key(&key)
+                .map_err(|e| anyhow::anyhow!("list_script_infos: {e:#}"))?;
+            let info = Self::decode_script_info(&key, &value)
+                .map_err(|e| anyhow::anyhow!("list_script_infos: {e:#}"))?;
+            results.push((pair, info));
         }
         Ok(results)
     }
@@ -1871,13 +1897,93 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
         let code_hash = vec![0xAB; 32];
         store
-            .put_cf(store.cf_script_info(), &code_hash, b"invalid-script-info")
+            .put_cf(
+                store.cf_script_info(),
+                &keys::encode_script_info_key(&code_hash, 1),
+                b"invalid-script-info",
+            )
             .unwrap();
 
         let err = store.list_script_infos().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("failed to deserialize script info in list_script_infos"));
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("list_script_infos")
+                && text.contains("failed to deserialize script info")
+                && text.contains(&"ab".repeat(32))
+                && text.contains("hash_type=1"),
+            "{text}"
+        );
+    }
+
+    /// Lane rd/api-lock-names: a row keyed by a code hash alone (the layout
+    /// before the label was keyed by the pair) is a corrupt row, named, never
+    /// read as some pair's label.
+    #[test]
+    fn test_list_script_infos_refuses_a_key_by_the_code_hash_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let label = bincode::serialize(&ScriptInfo {
+            name: "Default Lock".to_string(),
+            ..Default::default()
+        })
+        .unwrap();
+        store
+            .put_cf(store.cf_script_info(), &[0x9b; 32], &label)
+            .unwrap();
+
+        let err = store.list_script_infos().unwrap_err();
+        let text = format!("{err:#}");
+        assert!(
+            text.contains("is 32 bytes, not 33")
+                && text.contains(&"9b".repeat(32))
+                && text.contains("delete RocksDB and re-sync from genesis"),
+            "{text}"
+        );
+    }
+
+    /// Lane rd/api-lock-names: CKB names a script by (code hash, hash type).
+    /// The label of the default lock's code hash by `type` is that pair's row
+    /// alone: the same code hash by `data` has no label, and a label written
+    /// for it is its own row.
+    #[test]
+    fn test_script_info_is_keyed_by_the_pair() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
+        let secp = hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+            .unwrap();
+        let default_lock = ScriptInfo {
+            name: "Default Lock".to_string(),
+            description: Some("the default lock".to_string()),
+            ..Default::default()
+        };
+        store
+            .put_script_info_direct(&secp, 1, &default_lock)
+            .unwrap();
+
+        assert_eq!(
+            store.get_script_info(&secp, 1).unwrap(),
+            Some(default_lock.clone())
+        );
+        for other in [0u8, 2, 4] {
+            assert_eq!(store.get_script_info(&secp, other).unwrap(), None);
+        }
+        let other_script = ScriptInfo {
+            name: "Another".to_string(),
+            ..Default::default()
+        };
+        store
+            .put_script_info_direct(&secp, 0, &other_script)
+            .unwrap();
+        assert_eq!(
+            store.list_script_infos().unwrap(),
+            vec![
+                ((secp.clone(), 0), other_script),
+                ((secp.clone(), 1), default_lock)
+            ]
+        );
+        store.delete_script_info_direct(&secp, 0).unwrap();
+        assert_eq!(store.get_script_info(&secp, 0).unwrap(), None);
+        assert_eq!(store.list_script_infos().unwrap().len(), 1);
     }
 
     #[test]
@@ -2261,6 +2367,159 @@ mod daily_activity_stats_tests {
         assert_eq!(loaded, stats);
     }
 
+    /// Lane rd/api-lock-names: a day's script counts are keyed by the pair
+    /// (code hash, hash type). A transaction that calls the default lock's
+    /// code hash by `type` and by `data` called two scripts, counted apart;
+    /// the key reads back to its pair, and a key by the code hash alone (the
+    /// layout before) is refused, named.
+    #[test]
+    fn daily_script_counts_are_keyed_by_the_pair() {
+        let secp = hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8")
+            .unwrap();
+        let actions = TxActions {
+            recognized_type_codes: vec![],
+            tx_hash: vec![0xa1; 32],
+            block_hash: vec![0xba; 32],
+            block_number: 5,
+            tx_index: 1,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: [1i16, 0, 1]
+                .into_iter()
+                .map(|hash_type| LockCallEntry {
+                    lock_code_hash: secp.clone(),
+                    lock_hash_type: hash_type,
+                    lock_args: vec![0x12; 20],
+                })
+                .collect(),
+            participants: vec![],
+        };
+        let mut day = DailyActivityStats::default();
+        day.accumulate_from_tx_actions((&actions).into()).unwrap();
+        let hex = "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+        assert_eq!(
+            day.script_counts,
+            std::collections::BTreeMap::from([
+                (format!("{hex}:data"), 1),
+                (format!("{hex}:type"), 2)
+            ])
+        );
+        assert_eq!(
+            decode_script_count_key(&format!("{hex}:data")).unwrap(),
+            (secp.clone(), 0)
+        );
+        let refused = decode_script_count_key(hex).unwrap_err().to_string();
+        assert!(
+            refused.contains("is not <code hash>:<hash type>")
+                && refused.contains("delete RocksDB and re-sync from genesis"),
+            "{refused}"
+        );
+        assert!(script_count_key(&secp, 3).is_err());
+    }
+
+    /// T N8 (lane rd/api-lock-names): the label row writers label import
+    /// uses cannot reach the append-only store: `script_info` is a domain CF,
+    /// and the append-only store's handle refuses it (a panic naming the CF and
+    /// the store class) before any write, so `CF_CELLS` is never touched; the
+    /// cell payload a test put there is unchanged.
+    #[test]
+    fn the_label_row_writers_cannot_reach_the_append_only_store() {
+        let dir = TempDir::new().unwrap();
+        let cells = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let outpoint = crate::keys::encode_outpoint(&[0xcc; 32], 0);
+        cells
+            .put_cf(cells.cf_cells(), &outpoint, b"payload")
+            .unwrap();
+        let label = ScriptInfo {
+            name: "Zero Lock".to_string(),
+            ..Default::default()
+        };
+        let put = || cells.put_script_info_direct(&[0; 32], 0, &label);
+        let delete = || cells.delete_script_info_direct(&[0; 32], 0);
+        for (what, panic) in [
+            (
+                "put",
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(put)).err(),
+            ),
+            (
+                "delete",
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(delete)).err(),
+            ),
+        ] {
+            let panic = panic.unwrap_or_else(|| panic!("{what} was not refused"));
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .unwrap_or_default();
+            assert!(
+                message.contains("CF 'script_info' is not allowed in"),
+                "{what}: {message}"
+            );
+        }
+        assert_eq!(
+            cells.get_cf(cells.cf_cells(), &outpoint).unwrap(),
+            Some(b"payload".to_vec())
+        );
+    }
+
+    /// T N6 (lane rd/api-lock-names): a day's script count key that is not a
+    /// pair is refused, each fault named: bad hex, a code hash of 31 bytes, a
+    /// hash type label the chain does not have.
+    #[test]
+    fn a_script_count_key_that_is_not_a_pair_is_refused_named() {
+        let short = "ab".repeat(31);
+        for (key, fault) in [
+            (
+                format!("{}:type", "zz".repeat(32)),
+                "not a 32-byte code hash",
+            ),
+            (format!("{short}:type"), "not a 32-byte code hash"),
+            (format!("{}:Type", "ab".repeat(32)), "not a CKB hash type"),
+            (format!("{}:data3", "ab".repeat(32)), "not a CKB hash type"),
+        ] {
+            let refused = decode_script_count_key(&key).unwrap_err().to_string();
+            assert!(
+                refused.contains(fault) && refused.contains(&key),
+                "{key}: {refused}"
+            );
+        }
+    }
+
+    /// L N3 (lane rd/api-lock-names): a stored transaction whose call names a
+    /// hash type outside 0/1/2/4 is an error naming the block and transaction,
+    /// not a panic: the API reads stored rows through this accumulator
+    /// (`activity_window`).
+    #[test]
+    fn a_call_of_another_hash_type_is_an_error_naming_its_transaction() {
+        let actions = TxActions {
+            recognized_type_codes: vec![],
+            tx_hash: vec![0xa1; 32],
+            block_hash: vec![0xba; 32],
+            block_number: 5,
+            tx_index: 1,
+            timestamp: 1_700_000_000_000,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![LockCallEntry {
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 3,
+                lock_args: vec![0x12; 20],
+            }],
+            participants: vec![],
+        };
+        let refused = DailyActivityStats::default()
+            .accumulate_from_tx_actions((&actions).into())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("lock call of block=5") && refused.contains(&hex::encode([0xa1; 32])),
+            "{refused}"
+        );
+    }
+
     #[test]
     fn test_list_daily_activity_stats_returns_all_dates() {
         let (_dir, store) = open_test_store();
@@ -2327,7 +2586,9 @@ mod daily_activity_stats_tests {
         for err in errors {
             let err = format!("{err:#}");
             assert!(
-                err.contains("written by an older layout, re-sync from genesis"),
+                err.contains(
+                    "written by another store layout, delete RocksDB and re-sync from genesis"
+                ),
                 "{err}"
             );
         }

@@ -289,6 +289,7 @@ function ScopedCollectionHolders({
               plain words, no chip (lane p-assets; D5 as the readability plan changed it) */}
         <LockKind
           lockKind={holder.lockKind}
+          lockKindBy={holder.lockKindBy}
           lockCodeHash={holder.lockCodeHash}
           address={holder.address}
           size="row"

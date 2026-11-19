@@ -28,21 +28,10 @@ use crate::utils::stats_bucket::{
 };
 use crate::utils::{
     apply_owned_capacity_delta, dao_supply, dao_treasury, format_duration, hash_type_to_string,
-    historical_family_member_candidate, observed_type_id_references_from_versions,
-    protocol_circulating, reference_form_member_version_with_lineage, script_to_address,
+    protocol_circulating, script_to_address,
 };
-use crate::warmup::CACHE_KEY_SCRIPTS_ALL;
 use crate::AppState;
 use tracing::instrument;
-
-fn load_script_infos_cached(
-    state: &Arc<AppState>,
-) -> Result<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>, ApiRouteError> {
-    state
-        .mem_cache
-        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
-        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
-}
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
@@ -155,6 +144,11 @@ pub struct NetworkStats {
     pub dao_locked: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
+    /// The layout the domain store was built with (`sync_meta` `store_layout`,
+    /// stamped by the indexer); `null` on a store not stamped yet. The verify
+    /// check `store_layout_matches_build` holds it to the build's layout, so a
+    /// skipped re-sync is seen (lane rd/api-lock-names, fix round M1).
+    pub store_layout: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -868,11 +862,6 @@ struct AssetEntity {
     final_used_capacity: i128,
 }
 
-fn is_known_script_name(name: &str) -> bool {
-    let trimmed = name.trim();
-    !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("unknown")
-}
-
 fn format_asset_label(name: &str, asset_type: &str) -> String {
     format!("{name} ({asset_type})")
 }
@@ -1211,30 +1200,12 @@ async fn get_most_utilized_scripts_chart(
     }
 
     // Family provenance survives code retirement. Membership and exact totals
-    // share the writer's operators, matching /scripts/{name}/usage. Loose
-    // references without a family keep their own identity and label.
-    let script_infos_by_code_hash: HashMap<Vec<u8>, ckbadger_store::ScriptInfo> =
-        load_script_infos_cached(&state)?.into_iter().collect();
-    let versions = state
-        .store
-        .list_script_versions()
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let membership =
-        ckbadger_store::ScriptFamilyMembershipIndex::new(versions.iter().map(|(_, info)| info))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-    let family_versions: std::collections::HashSet<Vec<u8>> = versions
-        .iter()
-        .filter(|(_, info)| info.family_id.is_some())
-        .map(|(hash, _)| hash.clone())
-        .collect();
-    let observed_type_ids = observed_type_id_references_from_versions(&versions);
-    let family_names: HashMap<String, String> = state
-        .store
-        .list_script_families()
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .into_iter()
-        .map(|(family_id, info)| (family_id, info.name))
-        .collect();
+    // share the writer's operators, matching /scripts/{name}/usage. Every
+    // form is named by the one rule (`utils::ScriptRegistry::name`, the
+    // family of the code it runs, which is the family it is counted in);
+    // loose forms without a family keep their own identity and label.
+    let registry = crate::utils::ScriptRegistry::load(&state.store)
+        .map_err(|e| ApiError::internal(format!("script registry for the chart: {e:#}")))?;
 
     let mut labels_by_key: HashMap<String, String> = HashMap::new();
     let mut entity_key_by_form: HashMap<(Vec<u8>, u8), String> = HashMap::new();
@@ -1245,45 +1216,30 @@ async fn get_most_utilized_scripts_chart(
         .list_script_reference_infos()
         .map_err(|e| ApiError::internal(e.to_string()))?
     {
-        let member_version = reference_form_member_version_with_lineage(
-            &state.store,
-            &state.append_only_store,
-            hash_type,
-            &reference_hash,
-            &|hash: &[u8]| family_versions.contains(hash),
-            Some(observed_type_ids.contains(&reference_hash)),
-        )
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        let family_candidate = historical_family_member_candidate(
-            &state.store,
-            hash_type,
-            &reference_hash,
-            member_version,
-        )
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-        let family_id = membership
-            .resolve_family(&reference_hash, hash_type, family_candidate.as_deref())
-            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let name = registry
+            .name(
+                &state.store,
+                &state.append_only_store,
+                &reference_hash,
+                hash_type,
+            )
+            .map_err(|e| ApiError::internal(format!("{e:#}")))?;
 
         // Aggregation keys are identities, never display names: a family bucket
         // is keyed by its family_id, a loose reference form by (code_hash,
-        // hash_type). Buckets that merely share a label stay separate -- the
-        // junk secp data form inherits the type form's ScriptInfo label
-        // (ScriptInfo is keyed by code_hash alone) and two unrelated
-        // deployments may carry the same name, yet none of them are the same
-        // script. Labels ride along for display only, and loose forms carry
-        // their form so same-named identities stay distinguishable.
-        let (key, label) = match family_id {
-            Some(family_id) => {
-                let name = family_names.get(family_id).ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "script version points to missing family in most-utilized chart: family_id={}",
-                        family_id
-                    ))
-                })?;
-                (format!("family:{family_id}"), name.clone())
-            }
-            None => {
+        // hash_type). Buckets that merely share a label stay separate -- two
+        // unrelated deployments may carry the same name, yet they are not the
+        // same script. A loose form is a pseudo deployment named by its own
+        // label, or its code hash (the junk secp data form runs no code: lane
+        // rd/api-lock-names), and carries its form so same-named identities
+        // stay distinguishable.
+        let (key, label) = match name {
+            Some(crate::utils::ScriptName {
+                family_id: Some(family_id),
+                name,
+                ..
+            }) => (format!("family:{family_id}"), name),
+            loose => {
                 let code_hash_hex = format!("0x{}", hex::encode(&reference_hash));
                 let hash_type_name = hash_type_to_string(hash_type).ok_or_else(|| {
                     ApiError::internal(format!(
@@ -1291,16 +1247,9 @@ async fn get_most_utilized_scripts_chart(
                         code_hash_hex, hash_type
                     ))
                 })?;
-                let script_name = script_infos_by_code_hash
-                    .get(&reference_hash)
-                    .and_then(|info| info.name.as_deref())
-                    .unwrap_or("Unknown")
-                    .trim()
-                    .to_string();
-                let display = if is_known_script_name(&script_name) {
-                    script_name
-                } else {
-                    code_hash_hex.clone()
+                let display = match loose {
+                    Some(pseudo) => pseudo.name,
+                    None => code_hash_hex.clone(),
                 };
                 (
                     format!("ref:{code_hash_hex}:{hash_type_name}"),
@@ -2038,11 +1987,18 @@ async fn get_common_knowledge_composition_chart(
         });
     }
 
-    let script_infos = load_script_infos_cached(&state)?;
-    let type_code_hashes: HashSet<Vec<u8>> = script_infos
-        .into_iter()
-        .map(|(code_hash, _)| code_hash)
-        .collect();
+    // Every code hash a script reference form has used (its pair's usage row):
+    // the daily deltas below are read per code hash, every hash type of it.
+    // A scan of the whole CF, so it runs off the async worker (L N7).
+    let store = state.store.clone();
+    let type_code_hashes: HashSet<Vec<u8>> =
+        tokio::task::spawn_blocking(move || store.list_script_reference_infos())
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .map_err(|e| ApiError::internal(format!("script usage rows: {e}")))?
+            .into_iter()
+            .map(|((code_hash, _hash_type), _)| code_hash)
+            .collect();
 
     let mut type_daily_delta: HashMap<u32, i128> = HashMap::new();
     let mut dao_daily_delta: HashMap<u32, i128> = HashMap::new();
@@ -3297,6 +3253,10 @@ async fn fetch_network_stats_from_db(
         circulating_supply,
         dao_locked,
         api_background_tasks: None,
+        store_layout: state
+            .store
+            .get_store_layout()
+            .map_err(|e| ApiError::internal(format!("store layout: {e:#}")))?,
     })
 }
 
@@ -4863,8 +4823,46 @@ pub struct DailyActivityStatsResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ScriptCountEntry {
     pub code_hash: String,
+    /// The script's hash type: a count is one script's, by its pair (code
+    /// hash, hash type) (lane rd/api-lock-names).
+    pub hash_type: String,
+    /// The name of the code the pair runs (`utils::ScriptRegistry::name`);
+    /// `None` when it runs no registered family's code.
     pub name: Option<String>,
+    /// The pair's hash type where the named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub name_by: Option<String>,
     pub count: u32,
+}
+
+/// A day's (or the 24-hour window's) script counts as rows, each script by its
+/// pair (`ckbadger_store::script_count_key`), named by the one rule (the code
+/// it runs, `utils::ScriptNamer`, each pair named once), the largest count
+/// first.
+fn script_count_entries(
+    namer: &mut crate::utils::ScriptNamer<'_>,
+    counts: &std::collections::BTreeMap<String, u32>,
+) -> Result<Vec<ScriptCountEntry>, ApiRouteError> {
+    let mut entries = Vec::with_capacity(counts.len());
+    for (key, &count) in counts {
+        let (code_hash, hash_type) = ckbadger_store::decode_script_count_key(key)
+            .map_err(|e| ApiError::internal(format!("activity script count: {e:#}")))?;
+        let name = namer
+            .name(&code_hash, hash_type)
+            .map_err(|e| ApiError::internal(format!("activity script count {key}: {e:#}")))?;
+        let hash_type = hash_type_to_string(hash_type).ok_or_else(|| {
+            ApiError::internal(format!("activity script count {key}: not a CKB hash type"))
+        })?;
+        entries.push(ScriptCountEntry {
+            code_hash: format!("0x{}", hex::encode(&code_hash)),
+            hash_type: hash_type.to_string(),
+            name_by: name.as_ref().and_then(|name| name.by()),
+            name: name.map(|name| name.name),
+            count,
+        });
+    }
+    entries.sort_by_key(|item| std::cmp::Reverse(item.count));
+    Ok(entries)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4923,7 +4921,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:v5:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v6:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -4962,46 +4960,13 @@ async fn get_daily_activity_stats(
             .collect()
     };
 
-    // Collect all unique code_hashes across selected days and resolve names
-    let mut unique_code_hashes: HashSet<String> = HashSet::new();
-    for (_date, s) in &selected {
-        for code_hash in s.script_counts.keys() {
-            unique_code_hashes.insert(code_hash.clone());
-        }
-    }
-
-    let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
-    for code_hash_hex in &unique_code_hashes {
-        let bytes = hex::decode(code_hash_hex).map_err(|e| {
-            ApiError::internal(format!(
-                "invalid daily activity script code hash {code_hash_hex}: {e}"
-            ))
-        })?;
-        let name = state
-            .store
-            .get_script_info(&bytes)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to read script info for code hash {code_hash_hex}: {e}"
-                ))
-            })?
-            .and_then(|info| info.name);
-        name_cache.insert(code_hash_hex.clone(), name);
-    }
+    // Each script by its pair, named once per pair across the selected days.
+    let mut namer = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
 
     let result: Vec<DailyActivityStatsResponse> = selected
         .into_iter()
         .map(|(date, s)| {
-            let mut script_counts: Vec<ScriptCountEntry> = s
-                .script_counts
-                .iter()
-                .map(|(code_hash_hex, &count)| ScriptCountEntry {
-                    code_hash: format!("0x{}", code_hash_hex),
-                    name: name_cache.get(code_hash_hex).cloned().flatten(),
-                    count,
-                })
-                .collect();
-            script_counts.sort_by_key(|item| std::cmp::Reverse(item.count));
+            let script_counts = script_count_entries(&mut namer, &s.script_counts)?;
 
             Ok(DailyActivityStatsResponse {
                 date,
@@ -5043,7 +5008,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:v3:tip:{}",
+            "stats:activity-summary-24h:v4:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -5060,42 +5025,13 @@ async fn get_activity_summary_24h(
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
             .map_err(|e| ApiError::internal(e.to_string()))?;
-    let agg_script_counts = &agg.script_counts;
-
-    // Resolve script names
-    let mut name_cache: HashMap<String, Option<String>> = HashMap::new();
-    for code_hash_hex in agg_script_counts.keys() {
-        let bytes = hex::decode(code_hash_hex).map_err(|e| {
-            ApiError::internal(format!(
-                "invalid 24h activity script code hash {code_hash_hex}: {e}"
-            ))
-        })?;
-        let name = state
-            .store
-            .get_script_info(&bytes)
-            .map_err(|e| {
-                ApiError::internal(format!(
-                    "failed to read script info for code hash {code_hash_hex}: {e}"
-                ))
-            })?
-            .and_then(|info| info.name);
-        name_cache.insert(code_hash_hex.clone(), name);
-    }
-
-    let mut script_counts: Vec<ScriptCountEntry> = agg_script_counts
-        .iter()
-        .map(|(ch, &count)| ScriptCountEntry {
-            code_hash: format!("0x{}", ch),
-            name: name_cache.get(ch).cloned().flatten(),
-            count,
-        })
-        .collect();
-    // ranked by calls, ties by code hash, so the five named and the rest are one partition
-    script_counts.sort_by(|a, b| {
-        b.count
-            .cmp(&a.count)
-            .then_with(|| a.code_hash.cmp(&b.code_hash))
-    });
+    // Each script by its pair (lane rd/api-lock-names), ranked by calls, ties
+    // by the pair (code hash, then hash type: `script_count_entries`), so the
+    // five named and the rest are one partition.
+    let script_counts = script_count_entries(
+        &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
+        &agg.script_counts,
+    )?;
     let script_calls = script_counts.iter().map(|e| u64::from(e.count)).sum();
     let rest = script_counts.get(SCRIPT_TOP..).unwrap_or_default();
     let script_rest = (!rest.is_empty()).then(|| ScriptRest {

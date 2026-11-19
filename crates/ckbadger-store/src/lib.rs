@@ -44,6 +44,7 @@ mod dotbit_ops;
 mod dotcell_ops;
 mod fiber_ops;
 mod identity_ops;
+mod layout_ops;
 mod mnft_ops;
 mod network_ops;
 mod object_ops;
@@ -80,10 +81,11 @@ pub use block_overlay::{
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
 pub use global_bucket::{classify_global_bucket, ClassifiedTxActions, GlobalBucket};
+pub use layout_ops::{StoreLayoutMismatch, StoreLayoutState, STORE_LAYOUT, STORE_LAYOUT_CHANGE};
 pub use network_types::*;
 pub use object_ops::CollectionActivityPage;
 pub use reorg_ops::{JournalEntry, RollbackResult};
-pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
+pub use script_reference_ops::{ReferenceCode, ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 pub use stats_ops::DaoDayFacts;
 pub use store::{
     cf_spec, cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,

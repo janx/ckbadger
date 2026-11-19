@@ -456,6 +456,9 @@ describe('Asset history', () => {
         ),
         address:
           'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq9nnw7qkdnnclfkg59uzn8umtfd2kwxceqvguktl',
+        // re-keyed (lane rd/api-lock-names, fix round ruling 2): the API names the code a pair
+        // runs, and a lock on the default lock's code hash by data runs none, so it sends no name
+        lockKind: null,
       };
       render(
         <AssetHistory

@@ -30,6 +30,11 @@ impl LiveCellOwner {
         self.live.iter()
     }
 
+    /// The live cell at `outpoint`, if it is live.
+    pub(crate) fn live_slot(&self, outpoint: &OutPointKey) -> Option<&LiveCellSlot> {
+        self.live.get(outpoint)
+    }
+
     pub(crate) fn estimated_bytes(&self) -> u64 {
         std::mem::size_of::<Self>() as u64
             + self.live.capacity() as u64

@@ -4,9 +4,12 @@ import { render } from '../utils/test-utils';
 import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import ScriptByCodeHashPage from '@/app/script/[codeHash]/client-page';
 import { api } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 
-vi.mock('@/lib/api', () => ({
+// the module's own error classes stay (a read failure's words read them), its reads are mocked
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
     lookupScripts: vi.fn(),
     getCodeCell: vi.fn(),
@@ -48,12 +51,15 @@ describe('ScriptByCodeHashPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     currentCodeHashParam = mockCodeHash;
-    currentSearch = new URLSearchParams();
-    vi.mocked(api.lookupScripts).mockImplementation(async (codeHashes) => {
+    // the page reads the pair asked (lane rd/api-lock-names): these fixtures are by `type`
+    currentSearch = new URLSearchParams('hashType=type');
+    vi.mocked(api.lookupScripts).mockImplementation(async (scripts) => {
       const response: Record<string, any> = {};
+      const asks = (codeHash: string) =>
+        scripts.some((script) => script.codeHash === codeHash && script.hashType === 'type');
 
-      if (codeHashes.includes(mockCodeHash)) {
-        response[mockCodeHash] = {
+      if (asks(mockCodeHash)) {
+        response[scriptLookupKey(mockCodeHash, 'type')] = {
           referenceHash: mockCodeHash,
           codeHash: mockCodeHash,
           name: 'Unknown',
@@ -64,6 +70,7 @@ describe('ScriptByCodeHashPage', () => {
           deploymentDataHash: mockDataHash,
           codeCellTxHash: mockDeploymentTxHash,
           codeCellOutputIndex: 0,
+          cellsCount: 15,
           liveCellsCount: 15,
           ownedCapacitySum: '25000000000',
           ownedKnowledgeSum: '14000000000',
@@ -74,8 +81,8 @@ describe('ScriptByCodeHashPage', () => {
         };
       }
 
-      if (codeHashes.includes(mockGovernanceCodeHash)) {
-        response[mockGovernanceCodeHash] = {
+      if (asks(mockGovernanceCodeHash)) {
+        response[scriptLookupKey(mockGovernanceCodeHash, 'type')] = {
           referenceHash: mockGovernanceCodeHash,
           codeHash: mockGovernanceCodeHash,
           name: 'Governance Lock',
@@ -86,6 +93,7 @@ describe('ScriptByCodeHashPage', () => {
           deploymentDataHash: null,
           codeCellTxHash: null,
           codeCellOutputIndex: null,
+          cellsCount: 0,
           liveCellsCount: 0,
           ownedCapacitySum: '0',
           ownedKnowledgeSum: '0',
@@ -167,7 +175,7 @@ describe('ScriptByCodeHashPage', () => {
   it('counts the conflicting bytecode versions of an ambiguous reference in its heading', async () => {
     const versions = [`0x${'aa'.repeat(32)}`, `0x${'bb'.repeat(32)}`];
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [mockCodeHash]: {
+      [scriptLookupKey(mockCodeHash, 'type')]: {
         referenceHash: mockCodeHash,
         codeHash: mockCodeHash,
         name: 'Unknown',
@@ -178,6 +186,7 @@ describe('ScriptByCodeHashPage', () => {
         deploymentDataHash: null,
         codeCellTxHash: null,
         codeCellOutputIndex: null,
+        cellsCount: 0,
         liveCellsCount: 0,
         ownedCapacitySum: '0',
         ownedKnowledgeSum: '0',
@@ -202,7 +211,7 @@ describe('ScriptByCodeHashPage', () => {
 
   it('redirects known script hash to the unified named script detail page', async () => {
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [mockCodeHash]: {
+      [scriptLookupKey(mockCodeHash, 'type')]: {
         referenceHash: mockCodeHash,
         codeHash: mockCodeHash,
         name: 'Default Lock',
@@ -213,6 +222,7 @@ describe('ScriptByCodeHashPage', () => {
         deploymentDataHash: mockDataHash,
         codeCellTxHash: null,
         codeCellOutputIndex: null,
+        cellsCount: 15,
         liveCellsCount: 15,
         ownedCapacitySum: '25000000000',
         ownedKnowledgeSum: '14000000000',
@@ -239,8 +249,30 @@ describe('ScriptByCodeHashPage', () => {
   // stays on the code hash, by the hash type the link gives.
   it('stays on a code hash its family does not reference by the hash type asked', async () => {
     currentSearch = new URLSearchParams('hashType=data&kind=lock');
+    // the registry names the type pair; the data pair is another script, answered by its own
+    // label (none) and its own usage (lane rd/api-lock-names)
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [mockCodeHash]: {
+      [scriptLookupKey(mockCodeHash, 'data')]: {
+        referenceHash: mockCodeHash,
+        codeHash: mockCodeHash,
+        name: 'Unknown',
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'data',
+        deploymentTypeHash: null,
+        deploymentDataHash: mockCodeHash,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+        cellsCount: 2,
+        liveCellsCount: 2,
+        ownedCapacitySum: '20000000000',
+        ownedKnowledgeSum: '12200000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
+        resolutionState: 'unresolved',
+        ambiguity: null,
+      },
+      [scriptLookupKey(mockCodeHash, 'type')]: {
         referenceHash: mockCodeHash,
         codeHash: mockCodeHash,
         name: 'Default Lock',
@@ -251,6 +283,7 @@ describe('ScriptByCodeHashPage', () => {
         deploymentDataHash: mockDataHash,
         codeCellTxHash: null,
         codeCellOutputIndex: null,
+        cellsCount: 15,
         liveCellsCount: 15,
         ownedCapacitySum: '25000000000',
         ownedKnowledgeSum: '14000000000',
@@ -276,7 +309,7 @@ describe('ScriptByCodeHashPage', () => {
   it('sends a code hash its family references by the hash type asked to the family', async () => {
     currentSearch = new URLSearchParams('hashType=type&kind=lock');
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [mockCodeHash]: {
+      [scriptLookupKey(mockCodeHash, 'type')]: {
         referenceHash: mockCodeHash,
         codeHash: mockCodeHash,
         name: 'Default Lock',
@@ -287,6 +320,7 @@ describe('ScriptByCodeHashPage', () => {
         deploymentDataHash: mockDataHash,
         codeCellTxHash: null,
         codeCellOutputIndex: null,
+        cellsCount: 15,
         liveCellsCount: 15,
         ownedCapacitySum: '25000000000',
         ownedKnowledgeSum: '14000000000',
@@ -422,9 +456,10 @@ describe('ScriptByCodeHashPage', () => {
   // three pages).
   it('pages its cells forward from a cursor and back to the first page', async () => {
     const lookup = vi.mocked(api.lookupScripts).getMockImplementation()!;
-    vi.mocked(api.lookupScripts).mockImplementation(async (hashes) => {
-      const found = await lookup(hashes);
-      return { ...found, [mockCodeHash]: { ...found[mockCodeHash], liveCellsCount: 45 } };
+    vi.mocked(api.lookupScripts).mockImplementation(async (scripts) => {
+      const found = await lookup(scripts);
+      const key = scriptLookupKey(mockCodeHash, 'type');
+      return { ...found, [key]: { ...found[key], liveCellsCount: 45 } };
     });
     // re-pinned (lane cd-fixes-controls, item 1): two pages that agree with themselves
     // (pagedRead), one cell with an older one after it, then that one and last (it served the same
@@ -480,6 +515,76 @@ describe('ScriptByCodeHashPage', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  // Lane rd/api-lock-names: CKB names a script by the pair (code hash, hash type). A code hash
+  // alone is ambiguous: the page says so and lists the pairs on it that exist, each a link to its
+  // own page; it guesses none and redirects nowhere.
+  it('lists the pairs on a code hash asked alone, guessing none', async () => {
+    currentSearch = new URLSearchParams();
+    vi.mocked(api.lookupScripts).mockImplementation(async (scripts) => {
+      expect(scripts).toEqual(
+        ['type', 'data', 'data1', 'data2'].map((hashType) => ({
+          codeHash: mockCodeHash,
+          hashType,
+        }))
+      );
+      const entry = (hashType: string, name: string) => ({
+        referenceHash: mockCodeHash,
+        codeHash: mockCodeHash,
+        name,
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+        cellsCount: 1,
+        liveCellsCount: 1,
+        ownedCapacitySum: '10000000000',
+        ownedKnowledgeSum: '6100000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
+        resolutionState: 'unresolved' as const,
+        ambiguity: null,
+      });
+      return {
+        [scriptLookupKey(mockCodeHash, 'type')]: entry('type', 'Default Lock'),
+        [scriptLookupKey(mockCodeHash, 'data')]: entry('data', 'Unknown'),
+      };
+    });
+
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+
+    expect(
+      await screen.findByText(
+        'a code hash alone names no script: a script is its code hash and its hash type.'
+      )
+    ).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: 'by type' })).toHaveAttribute(
+      'href',
+      `/mainnet/script/${mockCodeHash}?hashType=type`
+    );
+    expect(screen.getByRole('heading', { level: 1, name: mockCodeHash })).toBeInTheDocument();
+    expect(screen.getByText('Default Lock')).toBeInTheDocument();
+    expect(document.title).toMatch(/ · script · CKBadger$/);
+    expect(screen.getByRole('link', { name: 'by data' })).toHaveAttribute(
+      'href',
+      `/mainnet/script/${mockCodeHash}?hashType=data`
+    );
+    expect(screen.queryByRole('link', { name: 'by data1' })).toBeNull();
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole('table', { name: 'Code versions' })).toBeNull();
+  });
+
+  // A failed read of the pairs says so in the page's words; it is never left "Reading…".
+  it('says so when the pairs on a code hash cannot be read', async () => {
+    currentSearch = new URLSearchParams();
+    vi.mocked(api.lookupScripts).mockRejectedValue(new Error('lookup transport failed'));
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Could not read this code hash's scripts: lookup transport failed"
+    );
+    expect(screen.queryByText('Reading the scripts on this code hash…')).toBeNull();
   });
 
   it('redirects /script/<name> alias to the named detail page', async () => {

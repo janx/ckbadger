@@ -68,6 +68,9 @@ pub struct DaoOwner {
     pub lock_code_hash: String,
     pub lock_hash_type: String,
     pub lock_kind: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_kind_by: Option<String>,
     pub deposit_count: u64,
     pub capacity: String,
     pub share_percent: String,
@@ -385,6 +388,7 @@ fn build_ranking(store: &CkbadgerStore, tip_hash: &[u8]) -> anyhow::Result<DaoDe
 
 fn build_evidence(
     store: &CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     network: &str,
     tip_number: i64,
     tip: &CachedBlockHeader,
@@ -505,18 +509,18 @@ fn build_evidence(
                 hex::encode(lock_hash)
             ),
         };
-        let lock_kind = store
-            .get_script_info(&lock.code_hash)?
-            .and_then(|info| info.name)
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case("unknown"));
+        // The name of the code the lock's pair runs, the one rule
+        // (`utils::ScriptNamer`): the default lock's code hash by `data` runs
+        // no code and is not named "Default Lock".
+        let lock_name = names.name_stored(&lock.code_hash, lock.hash_type)?;
         owner_rows.push(DaoOwner {
             rank: index + 1,
             lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
             address,
             lock_code_hash: format!("0x{}", hex::encode(lock.code_hash)),
             lock_hash_type: hash_type.to_string(),
-            lock_kind,
+            lock_kind_by: lock_name.as_ref().and_then(|name| name.by()),
+            lock_kind: lock_name.map(|name| name.name),
             deposit_count: *count,
             capacity: capacity.to_string(),
             share_percent: share(*capacity, phase0.capacity)?
@@ -605,6 +609,7 @@ pub(super) async fn get_evidence(
         };
         Ok(Ok(build_evidence(
             &state.store,
+            &mut crate::utils::ScriptNamer::new(&state.store, &state.append_only_store),
             &state.ckb_network,
             tip_number,
             &tip,

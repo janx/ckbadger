@@ -13,6 +13,7 @@ import { scriptHash } from '@/__tests__/utils/ckb-hash';
 import type { ScriptLookupResponse, TransactionDetail, TransactionScriptGroup } from '@/lib/api';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { shortenHash } from '@/lib/shorten';
+import { scriptLookupKey } from '@/lib/script-pair';
 
 /** The long deposit with a Type ID on its change output, a group that ran with no cell dep. */
 function withTypeId(): TransactionDetail {
@@ -79,9 +80,10 @@ describe('scriptGroupRows: one wording for a transaction’s script groups (lane
 });
 
 // Lane P1 follow-up (the lock-words gate's known writer 12, script-group-rows): a lock group's name
-// is the one decision's. The registry names a lock by its code hash, so the name it sends for the
-// default lock's code hash is the default lock's; a lock group on that code hash by data is another
-// lock, written by its code hash and "by data", and its link opens that lock, not the default's.
+// is the one decision's. A lock group on the default lock's code hash by data is another lock,
+// written by its code hash and "by data", and its link opens that lock, not the default's.
+// Re-keyed (lane rd/api-lock-names): the lookup answers each pair; the registry names the default
+// lock's pair (its code hash by type) and not the code hash by data.
 describe('a lock group’s name is the one decision’s (lane P1 follow-up)', () => {
   const script = {
     codeHash: DEFAULT_LOCK_CODE_HASH,
@@ -100,7 +102,10 @@ describe('a lock group’s name is the one decision’s (lane P1 follow-up)', ()
       cycles: '0',
     }) as unknown as TransactionScriptGroup;
   const lookup = {
-    [DEFAULT_LOCK_CODE_HASH]: { codeHash: DEFAULT_LOCK_CODE_HASH, name: 'SECP256K1/blake160' },
+    [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'type')]: {
+      codeHash: DEFAULT_LOCK_CODE_HASH,
+      name: 'SECP256K1/blake160',
+    },
   } as unknown as ScriptLookupResponse;
 
   it('names a lock group on the default lock’s code hash by data by its code hash and "by data"', () => {
@@ -115,7 +120,25 @@ describe('a lock group’s name is the one decision’s (lane P1 follow-up)', ()
   it('names the default lock’s group and a type group by the registry’s name', () => {
     expect(groupLabel(group('type'), lookup)).toBe('SECP256K1/blake160');
     expect(groupHref(group('type'), lookup)).toBe('/scripts/SECP256K1%2Fblake160');
-    // the decision is a lock's: a type group keeps the registry's name for its code hash
-    expect(groupLabel(group('data', 'type'), lookup)).toBe('SECP256K1/blake160');
+    // re-pinned (lane rd/api-lock-names, T SHOULD-4): a type group on the default lock's code hash
+    // by data is its own pair and runs no code the registry names; an unnamed script is its code
+    // hash and its hash type, so two unnamed groups on one code hash read apart
+    expect(groupLabel(group('data', 'type'), lookup)).toBe(
+      `${shortenHash(DEFAULT_LOCK_CODE_HASH, 'row')} by data`
+    );
+  });
+
+  // Lane rd/api-lock-names, the fix round's ruling: a type group whose pair runs a family's code by
+  // another reference than the registry's is named with its hash type beside the name.
+  it('names a type group by another reference with its hash type beside the name', () => {
+    const xudt = `0x${'50'.repeat(32)}`;
+    const byData2 = {
+      ...group('data2', 'type'),
+      script: { codeHash: xudt, hashType: 'data2', args: '0x' },
+    } as unknown as TransactionScriptGroup;
+    const names = {
+      [scriptLookupKey(xudt, 'data2')]: { codeHash: xudt, name: 'xUDT', nameBy: 'data2' },
+    } as unknown as ScriptLookupResponse;
+    expect(groupLabel(byData2, names)).toBe('xUDT · by data2');
   });
 });

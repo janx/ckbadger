@@ -6,6 +6,7 @@ import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
 import { api, type Cell } from '@/lib/api';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { formatCapacity } from '@/lib/utils';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
@@ -33,10 +34,13 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
+// A raw reference page reads its script by the pair, so it carries the hash type asked
+// (lane rd/api-lock-names); the named page carries none.
+let currentSearch = new URLSearchParams();
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ name: 'SECP256K1_BLAKE160' }),
   usePathname: () => '/scripts/SECP256K1_BLAKE160',
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => currentSearch,
 }));
 
 const sharedVersionCodeHash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -434,8 +438,9 @@ describe('ScriptDetailPage', () => {
         return emptyCells;
       })
     );
+    currentSearch = new URLSearchParams();
     vi.mocked(api.lookupScripts).mockResolvedValue({
-      [sharedVersionCodeHash]: {
+      [scriptLookupKey(sharedVersionCodeHash, 'type')]: {
         codeHash: sharedVersionCodeHash,
         name: 'SECP256K1_BLAKE160',
         scriptKind: 'lock',
@@ -445,13 +450,14 @@ describe('ScriptDetailPage', () => {
         deploymentDataHash: firstDeploymentDataHash,
         codeCellTxHash: firstDeploymentTxHash,
         codeCellOutputIndex: 0,
+        cellsCount: 7,
         liveCellsCount: 7,
         ownedCapacitySum: '9000000000',
         ownedKnowledgeSum: '5490000000',
         codeCellsLiveCount: 2,
         codeCellsTotal: 2,
       },
-      [legacyVersionCodeHash]: {
+      [scriptLookupKey(legacyVersionCodeHash, 'type')]: {
         codeHash: legacyVersionCodeHash,
         name: 'SECP256K1_BLAKE160',
         scriptKind: 'lock',
@@ -461,13 +467,14 @@ describe('ScriptDetailPage', () => {
         deploymentDataHash: legacyDeploymentDataHash,
         codeCellTxHash: legacyDeploymentTxHash,
         codeCellOutputIndex: 0,
+        cellsCount: 1,
         liveCellsCount: 1,
         ownedCapacitySum: '1000000000',
         ownedKnowledgeSum: '610000000',
         codeCellsLiveCount: 0,
         codeCellsTotal: 1,
       },
-      [secondGovernanceCodeHash]: {
+      [scriptLookupKey(secondGovernanceCodeHash, 'type')]: {
         codeHash: secondGovernanceCodeHash,
         name: secondGovernanceScriptName,
         scriptKind: 'lock',
@@ -477,6 +484,7 @@ describe('ScriptDetailPage', () => {
         deploymentDataHash: null,
         codeCellTxHash: null,
         codeCellOutputIndex: null,
+        cellsCount: 0,
         liveCellsCount: 0,
         ownedCapacitySum: '0',
         ownedKnowledgeSum: '0',
@@ -647,6 +655,7 @@ describe('ScriptDetailPage', () => {
       } else {
         vi.mocked(api.getCodeCells).mockRejectedValue(new Error('code cells invariant failed'));
       }
+      currentSearch = new URLSearchParams('hashType=type');
       render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
       expect(await screen.findByRole('alert')).toHaveTextContent(
         `Could not read this script: ${
@@ -659,6 +668,7 @@ describe('ScriptDetailPage', () => {
 
   it('keeps a resolved raw reference visible as an error when its code-cell query returns 404', async () => {
     vi.mocked(api.getCodeCells).mockRejectedValue({ status: 404, message: 'reference missing' });
+    currentSearch = new URLSearchParams('hashType=type');
     render(<ScriptDetailPage codeHash={sharedVersionCodeHash} />);
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Could not read this script: reference missing'

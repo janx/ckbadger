@@ -684,10 +684,13 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_IDENTITY_DATA, None),
     (ckbadger_store::store::CF_IDENTITY_BY_COLLECTION, None),
     (ckbadger_store::store::CF_STATS_IDENTITY, None),
-    // B-3 addresses.rs: address balances, script usage and script reference
-    // usage are applied block by block.
+    // B-3 addresses.rs: address balances and script reference usage are
+    // applied block by block. `script_info` is not here (lane
+    // rd/api-lock-names, T N3): it holds the pseudo deployments' labels,
+    // which label import alone writes, and a block's batch writing it is
+    // refused (`store.rs` `label_import_is_the_only_writer_of_script_info`),
+    // so no journal row restores it.
     (ckbadger_store::CF_ADDR_BALANCE, None),
-    (ckbadger_store::store::CF_SCRIPT_INFO, None),
     (ckbadger_store::store::CF_SCRIPT_REFERENCE_INFO, None),
     // B-3 addresses.rs: the script version / family rollups are recomputed
     // and written per block that moves a reference or a Type ID binding.

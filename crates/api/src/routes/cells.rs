@@ -26,15 +26,11 @@ use crate::response::{
 use crate::utils::address::compute_script_hash;
 use crate::utils::script_resolution::{list_version_code_cells, CurrentScriptVersionResolution};
 use crate::utils::{
-    address_to_lock_script_hash, deployment_key_for_script, deployment_reference_hashes,
-    is_ckb_address, is_known_script_name, merge_script_info_for_reference, parse_address_to_script,
-    parse_hash32, parse_optional_block_tx_cursor, parse_output_index, registered_script_name,
-    resolve_code_hash_for_hash_type, resolve_script_form_by_hash, script_to_address,
-    shannon_to_ckb_u128,
+    address_to_lock_script_hash, is_ckb_address, parse_address_to_script, parse_hash32,
+    parse_optional_block_tx_cursor, parse_output_index, resolve_script_form_by_hash,
+    script_to_address, shannon_to_ckb_u128,
 };
-use crate::warmup::{
-    CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP, CACHE_KEY_SCRIPTS_ALL,
-};
+use crate::warmup::{CachedAddressEntry, CACHE_KEY_ADDRESSES_ACTIVE, CACHE_KEY_ADDRESSES_TOP};
 use crate::AppState;
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::{keys, CkbadgerStore};
@@ -1874,14 +1870,24 @@ pub struct CellResponse {
     pub type_hash_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_protocol_name: Option<String>,
-    /// The script registry's name for the lock reference (`lock_code_hash`),
-    /// `null` when unregistered. Set only on list rows ([`named_cell_response`]).
+    /// The name of the code the lock's pair runs (`utils::ScriptNamer`),
+    /// `null` when it runs no registered family's code. Set only on list rows
+    /// ([`named_cell_response`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lock_script_name: Option<Option<String>>,
-    /// The script registry's name for the type reference, `null` when the
-    /// cell has no type or the reference is unregistered.
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `null` otherwise.
+    /// Set only on list rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_script_name_by: Option<Option<String>>,
+    /// The name of the code the type's pair runs, `null` when the cell has no
+    /// type or it runs no registered family's code.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub type_script_name: Option<Option<String>>,
+    /// The type's hash type where its named pair is not the registry's
+    /// reference for its code; `null` otherwise. Set only on list rows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_script_name_by: Option<Option<String>>,
     pub data_size: i32,
     pub created_at_block: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1911,6 +1917,9 @@ pub(crate) struct DepGroupItem {
 #[serde(rename_all = "camelCase")]
 pub struct CodeCellScript {
     pub name: String,
+    /// The pair's hash type where its named pair is not the registry's
+    /// reference for this code, written beside the name; `None` otherwise.
+    pub name_by: Option<String>,
     pub code_hash: String,
     pub hash_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2122,6 +2131,9 @@ pub struct OccupiedCapacityBreakdown {
 pub struct LockScriptInfo {
     pub code_hash: String,
     pub name: String,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub name_by: Option<String>,
     pub script_kind: Option<String>,
     pub deprecated: bool,
 }
@@ -2347,7 +2359,9 @@ fn cell_info_to_response(
         udt_amount: info.udt_amount.map(|amount| amount.to_string()),
         matched_script_kind: None,
         lock_script_name: None,
+        lock_script_name_by: None,
         type_script_name: None,
+        type_script_name_by: None,
     })
 }
 
@@ -2355,7 +2369,7 @@ fn cell_info_to_response(
 /// names of its lock and type references (SC-S7), the names the Scripts page
 /// shows.
 fn named_cell_response(
-    store: &CkbadgerStore,
+    names: &mut crate::utils::ScriptNamer<'_>,
     tx_hash: &[u8],
     output_index: i16,
     info: &ckbadger_store::PositionedCellInfo,
@@ -2363,22 +2377,34 @@ fn named_cell_response(
     virtual_occupied: i128,
 ) -> Result<CellResponse, ApiRouteError> {
     let mut cell = cell_info_to_response(tx_hash, output_index, info, network, virtual_occupied)?;
-    let name = |code_hash: &[u8]| {
-        registered_script_name(store, code_hash).map_err(|e| {
+    // Each script by its pair (code hash, hash type): the same code hash by
+    // another hash type is another script (lane rd/api-lock-names).
+    let mut name = |code_hash: &[u8], hash_type: i16| {
+        names.name_stored(code_hash, hash_type).map_err(|e| {
             ApiError::internal(format!(
-                "cell {}:{output_index} script name of 0x{}: {e:#}",
+                "cell {}:{output_index} script name of 0x{} by hash type {hash_type}: {e:#}",
                 hex::encode(tx_hash),
                 hex::encode(code_hash)
             ))
         })
     };
-    cell.lock_script_name = Some(name(&info.lock_code_hash)?);
-    cell.type_script_name = Some(
-        match info.type_code_hash.as_ref().map(|hash| hash.as_slice()) {
-            Some(code_hash) => name(code_hash)?,
-            None => None,
-        },
-    );
+    let lock_name = name(&info.lock_code_hash, info.lock_hash_type)?;
+    cell.lock_script_name_by = Some(lock_name.as_ref().and_then(|name| name.by()));
+    cell.lock_script_name = Some(lock_name.map(|name| name.name));
+    let type_name = match (&info.type_code_hash, info.type_hash_type) {
+        (Some(code_hash), Some(hash_type)) => name(code_hash, hash_type)?,
+        (None, None) => None,
+        (code_hash, hash_type) => {
+            return Err(ApiError::internal(format!(
+                "cell {}:{output_index} type script is partial: code_hash={:?}, hash_type={:?}",
+                hex::encode(tx_hash),
+                code_hash.as_ref().map(hex::encode),
+                hash_type
+            )))
+        }
+    };
+    cell.type_script_name_by = Some(type_name.as_ref().and_then(|name| name.by()));
+    cell.type_script_name = Some(type_name.map(|name| name.name));
     Ok(cell)
 }
 
@@ -2969,11 +2995,12 @@ async fn list_live_cells(
     };
 
     let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let cells: Vec<CellResponse> = raw_cells
         .iter()
         .map(|(tx_hash, output_index, info)| {
             named_cell_response(
-                &state.store,
+                &mut names,
                 tx_hash,
                 *output_index,
                 info,
@@ -3015,16 +3042,6 @@ async fn list_live_cells(
 
 fn parse_hash_type(hash_type: &str) -> Option<u8> {
     ckbadger_common::hash_type_from_label(hash_type)
-}
-
-fn load_script_infos_cached(
-    state: &Arc<AppState>,
-) -> Result<Vec<ckbadger_store::ScriptInfo>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    state
-        .mem_cache
-        .get::<Vec<(Vec<u8>, ckbadger_store::ScriptInfo)>>(CACHE_KEY_SCRIPTS_ALL)
-        .map(|rows| rows.into_iter().map(|(_, info)| info).collect())
-        .ok_or_else(|| ApiError::warmup_pending("script cache unavailable; warmup in progress"))
 }
 
 /// Which cell-by-code index a by-script row was enumerated from. In
@@ -3359,11 +3376,12 @@ async fn list_cells_by_script(
     };
 
     let virtual_occupied = state.genesis_baseline()?.virtual_occupied;
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let cells: Vec<CellResponse> = rows
         .iter()
         .map(|(phase, tx_hash, output_index, info)| {
             let mut cell = named_cell_response(
-                &state.store,
+                &mut names,
                 tx_hash,
                 *output_index,
                 info,
@@ -3482,13 +3500,6 @@ async fn get_address(
             .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let (lock_script, lock_script_info, address) = if let Some(entry) = lock_script_entry {
-        let store = state.store.clone();
-        let code_hash_c = entry.code_hash.clone();
-        let script_info = tokio::task::spawn_blocking(move || store.get_script_info(&code_hash_c))
-            .await
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-
         // The stored per-lock hash_type is authoritative (never a script_info
         // canonical default). Only 0/1/2/4 are valid on chain, so anything else is
         // upstream store corruption and must be reported, not rendered as a guess.
@@ -3499,6 +3510,20 @@ async fn get_address(
                 entry.hash_type
             ))
         })?;
+        // The name of the code the lock's pair runs, the one rule
+        // (`utils::ScriptNamer`): a lock on a registered code hash by another
+        // hash type runs that code only where its data hash is the binary's.
+        let store = state.store.clone();
+        let cells_store = state.append_only_store.clone();
+        let code_hash_c = entry.code_hash.clone();
+        let hash_type_c = entry.hash_type;
+        let script_info = tokio::task::spawn_blocking(move || {
+            crate::utils::ScriptNamer::new(&store, &cells_store)
+                .name_stored(&code_hash_c, hash_type_c)
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(format!("{e:#}")))?;
 
         let script = ScriptResponse {
             code_hash: format!("0x{}", hex::encode(&entry.code_hash)),
@@ -3526,8 +3551,9 @@ async fn get_address(
         );
 
         let script_info_response = script_info.map(|si| LockScriptInfo {
-            code_hash: format!("0x{}", hex::encode(&si.code_hash)),
-            name: si.name.unwrap_or_else(|| "Unknown".to_string()),
+            code_hash: format!("0x{}", hex::encode(&entry.code_hash)),
+            name_by: si.by(),
+            name: si.name,
             script_kind: Some("lock".to_string()),
             deprecated: si.deprecated,
         });
@@ -3593,68 +3619,67 @@ async fn address_pending_summary(
     .map_err(|e| ApiError::internal(e.to_string()))
 }
 
+/// The scripts a code cell serves: the pairs that resolve to THIS cell (lane
+/// rd/api-lock-names, the fix round's ruling): its type script hash by `type`
+/// (when it has a type script) and its data hash by `data`, `data1` and
+/// `data2`, each listed where the registry registers it or the chain has used
+/// it (its `script_reference_info` row). Each is named by the one rule
+/// (`utils::ScriptNamer`: the family of the code it runs, "Unknown" where it
+/// runs none), its hash type in `nameBy` where it is not the registry's
+/// reference for this code; each pair is itself, never merged into another's
+/// entry. `None` when the cell serves no such pair.
 fn lookup_code_cell_scripts(
     state: &Arc<AppState>,
     data_hash: &[u8],
     type_script_hash: Option<&Vec<u8>>,
 ) -> Result<Option<Vec<CodeCellScript>>, (axum::http::StatusCode, axum::Json<ApiError>)> {
-    let all_script_infos: Vec<ckbadger_store::ScriptInfo> = load_script_infos_cached(state)?;
-
-    let mut scripts: Vec<CodeCellScript> = Vec::new();
-    let mut deployment_index: HashMap<Vec<u8>, usize> = HashMap::new();
-
-    let mut upsert = |reference_hash: &[u8], hash_type_hint: &str| {
-        let Some(resolved) = merge_script_info_for_reference(&all_script_infos, reference_hash)
-        else {
-            return;
-        };
-
-        let deployment_key = deployment_key_for_script(&resolved);
-        let code_hash_for_link =
-            resolve_code_hash_for_hash_type(&all_script_infos, reference_hash, "type")
-                .unwrap_or_else(|| reference_hash.to_vec());
-        let (deployment_type_hash, deployment_data_hash) = deployment_reference_hashes(&resolved);
-        let name = resolved.name.unwrap_or_else(|| "Unknown".to_string());
-
-        let entry = CodeCellScript {
-            name,
-            code_hash: format!("0x{}", hex::encode(code_hash_for_link)),
-            hash_type: hash_type_hint.to_string(),
-            deployment_type_hash: deployment_type_hash
-                .as_ref()
-                .map(|h| format!("0x{}", hex::encode(h))),
-            deployment_data_hash: deployment_data_hash
-                .as_ref()
-                .map(|h| format!("0x{}", hex::encode(h))),
-        };
-
-        if let Some(idx) = deployment_index.get(&deployment_key).copied() {
-            let existing = &mut scripts[idx];
-            if !is_known_script_name(Some(existing.name.as_str()))
-                && is_known_script_name(Some(entry.name.as_str()))
-            {
-                existing.name = entry.name.clone();
-            }
-            if existing.hash_type != "type" && entry.hash_type == "type" {
-                existing.hash_type = "type".to_string();
-                existing.code_hash = entry.code_hash.clone();
-            }
-            if existing.deployment_type_hash.is_none() {
-                existing.deployment_type_hash = entry.deployment_type_hash.clone();
-            }
-            if existing.deployment_data_hash.is_none() {
-                existing.deployment_data_hash = entry.deployment_data_hash.clone();
-            }
-            return;
-        }
-
-        deployment_index.insert(deployment_key, scripts.len());
-        scripts.push(entry);
-    };
-
-    upsert(data_hash, "data");
+    let mut pairs: Vec<(&[u8], u8)> = Vec::new();
     if let Some(type_hash) = type_script_hash {
-        upsert(type_hash, "type");
+        pairs.push((type_hash.as_slice(), 1));
+    }
+    for data_hash_type in [0u8, 2, 4] {
+        pairs.push((data_hash, data_hash_type));
+    }
+
+    let registry = crate::utils::ScriptRegistry::load(&state.store)
+        .map_err(|e| ApiError::internal(format!("code cell script registry: {e:#}")))?;
+    let mut scripts: Vec<CodeCellScript> = Vec::new();
+    for (reference_hash, hash_type) in pairs {
+        let context = || {
+            format!(
+                "code cell script 0x{} by hash type {hash_type}",
+                hex::encode(reference_hash)
+            )
+        };
+        let used = state
+            .store
+            .get_script_reference_info(hash_type, reference_hash)
+            .map_err(|e| ApiError::internal(format!("{}: {e:#}", context())))?
+            .is_some();
+        if !used && !registry.is_registered(reference_hash, hash_type) {
+            continue;
+        }
+        let name = registry
+            .name(
+                &state.store,
+                &state.append_only_store,
+                reference_hash,
+                hash_type,
+            )
+            .map_err(|e| ApiError::internal(format!("{}: {e:#}", context())))?;
+        let hash_type_label = hash_type_to_str(i16::from(hash_type))
+            .ok_or_else(|| ApiError::internal(format!("{}: not a CKB hash type", context())))?;
+        scripts.push(CodeCellScript {
+            name_by: name.as_ref().and_then(|name| name.by()),
+            name: match name {
+                Some(name) => name.name,
+                None => "Unknown".to_string(),
+            },
+            code_hash: format!("0x{}", hex::encode(reference_hash)),
+            hash_type: hash_type_label.to_string(),
+            deployment_type_hash: type_script_hash.map(|hash| format!("0x{}", hex::encode(hash))),
+            deployment_data_hash: Some(format!("0x{}", hex::encode(data_hash))),
+        });
     }
 
     if scripts.is_empty() {
@@ -3949,14 +3974,17 @@ async fn get_cell(
         hash
     });
 
-    let code_cell_of = if let Some(dh) = data_hash.as_ref() {
-        lookup_code_cell_scripts(
-            &state,
-            dh,
-            info.type_script_hash().map(|hash| hash.to_vec()).as_ref(),
-        )?
-    } else {
-        None
+    // Only code resolves a script to a cell: a cell whose data is not code
+    // (`keys::is_code_cell`) serves none.
+    let code_cell_of = match (cell_data.as_deref(), data_hash.as_ref()) {
+        (Some(data), Some(dh)) if ckbadger_store::keys::is_code_cell(data) => {
+            lookup_code_cell_scripts(
+                &state,
+                dh,
+                info.type_script_hash().map(|hash| hash.to_vec()).as_ref(),
+            )?
+        }
+        _ => None,
     };
     // A binary that does not parse is chain data: described in `elf`, the
     // cell still served (lane B, B1).
@@ -6378,6 +6406,7 @@ mod tests {
 
     #[test]
     fn test_is_known_script_label() {
+        use crate::utils::is_known_script_name;
         assert!(!is_known_script_name(Some("unknown")));
         assert!(!is_known_script_name(Some(" Unknown ")));
         assert!(!is_known_script_name(Some(" ")));

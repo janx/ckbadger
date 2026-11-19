@@ -187,6 +187,10 @@ describe('FiberNetworkGraph', () => {
     const party = net.parties.find((p) => p.address?.endsWith('ppedrr'))!;
     expect(party.lockScriptName).toBe('Default Lock');
     party.address = byData;
+    // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+    // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+    // stopgap that dropped the name is gone
+    party.lockScriptName = null;
     render(<Graph network={net} />);
     fireEvent.mouseEnter(node(byData.slice(-6)));
     expect(

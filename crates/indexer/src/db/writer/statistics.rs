@@ -44,8 +44,8 @@ fn deserialize_stats<T: serde::de::DeserializeOwned>(raw: &[u8], metric: &str) -
 fn accumulate_tx_actions_stats(
     tx_actions: ClassifiedTxActions<&TxActions>,
     stats: &mut DailyActivityStats,
-) {
-    stats.accumulate_from_tx_actions(tx_actions);
+) -> anyhow::Result<()> {
+    stats.accumulate_from_tx_actions(tx_actions)
 }
 
 /// Pre-computed DAO deposit statistics for daily snapshots.
@@ -682,8 +682,8 @@ impl BatchWriter {
     pub fn accumulate_tx_activity_stats(
         tx_actions: ClassifiedTxActions<&TxActions>,
         stats: &mut DailyActivityStats,
-    ) {
-        accumulate_tx_actions_stats(tx_actions, stats);
+    ) -> anyhow::Result<()> {
+        accumulate_tx_actions_stats(tx_actions, stats)
     }
 
     /// Apply one block's activity counts to its bucket of `kind` (the
@@ -4002,7 +4002,7 @@ mod activity_stats_tests {
     /// The sync paths' order: classify the transaction once, accumulate
     /// that classification.
     fn accumulate(actions: &TxActions, stats: &mut DailyActivityStats) {
-        accumulate_tx_actions_stats(ClassifiedTxActions::classify(actions), stats);
+        accumulate_tx_actions_stats(ClassifiedTxActions::classify(actions), stats).unwrap();
     }
 
     /// The kind counts with exactly one kind at `n`.

@@ -18,6 +18,8 @@ vi.mock('@/lib/api', async (importOriginal) => ({
     getScripts: vi.fn(),
     getScriptFamilyDetail: vi.fn(),
     getScriptUsage: vi.fn(),
+    lookupScripts: vi.fn(),
+    getCodeCell: vi.fn(),
     getGlobalActivities: vi.fn(),
     getTransactionDetail: vi.fn(),
     getTransactionLifecycle: vi.fn(),
@@ -315,7 +317,10 @@ describe('renderMarkdownPage', () => {
       lockHashType: 'data',
       lockArgs: '0x' + 'ab'.repeat(20),
       scriptHash: '0x' + 'cd'.repeat(32),
-      scriptName: 'Default Lock',
+      // re-keyed at the merge (lane rd/api-lock-names): the API names the code a pair runs, and a
+      // lock on the default lock's code hash by data runs none, so it sends no name; the client's
+      // stopgap that dropped the name is gone
+      scriptName: null,
       decoded: null,
       decodeError: null,
     };
@@ -346,11 +351,9 @@ describe('renderMarkdownPage', () => {
       origin: 'http://localhost:3000',
     });
     expect(result.status).toBe(200);
+    // the page's decision fed what the API sends: no name for that lock (re-keyed at the merge)
     const page = lockNoun(
-      namedLockWords(
-        { name: 'Default Lock', codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data' },
-        'column'
-      ),
+      namedLockWords({ name: null, codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data' }, 'column'),
       'row'
     );
     expect(page).toBe('lock 0x9bd7e06f…a3cce8 by data');
@@ -579,6 +582,56 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Chart miner-address-distribution');
     expect(result.body).toContain('ExampleMiner');
     expect(result.body).toContain('Total blocks: 100');
+  });
+
+  // Lane rd/api-lock-names, L S5: a code hash alone names no script. The view of
+  // /script/{codeHash} with no hashType asked lists the pairs on it, as the HTML page does; it
+  // asked the lookup by `type` alone and wrote that pair as the script.
+  it('lists the pairs on a code hash asked without a hash type, guessing none', async () => {
+    const codeHash = `0x${'9b'.repeat(32)}`;
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [`${codeHash}:type`]: {
+        codeHash,
+        hashType: 'type',
+        name: 'Default Lock',
+        nameBy: null,
+        scriptKind: 'lock',
+        liveCellsCount: 7,
+        cellsCount: 9,
+        ownedCapacitySum: '700',
+      },
+      [`${codeHash}:data1`]: {
+        codeHash,
+        hashType: 'data1',
+        name: 'Default Lock',
+        nameBy: 'data1',
+        scriptKind: 'lock',
+        liveCellsCount: 2,
+        cellsCount: 2,
+        ownedCapacitySum: '200',
+      },
+    } as any);
+
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(`/script/${codeHash}`),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+
+    expect(result.status).toBe(200);
+    expect(vi.mocked(api.lookupScripts)).toHaveBeenCalledWith(
+      ['type', 'data', 'data1', 'data2'].map((hashType) => ({ codeHash, hashType }))
+    );
+    expect(vi.mocked(api.getCodeCell)).not.toHaveBeenCalled();
+    expect(result.body).toContain(
+      'A code hash alone names no script: a script is its code hash and its hash type.'
+    );
+    expect(result.body).toContain(
+      '| hashType | name | nameBy | scriptKind | liveCellsCount | cellsCount | ownedCapacitySum |'
+    );
+    expect(result.body).toContain('| type | Default Lock | - | lock | 7 | 9 | 700 |');
+    expect(result.body).toContain('| data1 | Default Lock | data1 | lock | 2 | 2 | 200 |');
+    expect(result.body).not.toContain('queryHashType');
   });
 
   // lane exactness, part A2 (the routes review's N8): a chart's columns are named with its axes, so the two duration

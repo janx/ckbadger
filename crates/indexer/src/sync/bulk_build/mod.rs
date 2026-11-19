@@ -31,11 +31,11 @@ use ckbadger_store::types::{
     DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
-    AddressBalance, CkbadgerStore, ClassifiedTxActions, ScriptInfo, BATCH_LOOP_ONLY_CFS,
-    CF_ADDR_TXS, CF_ADDR_TXS_BY_PREFIX, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS,
-    CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE,
-    CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS,
-    CF_LOCK_SCRIPTS, CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
+    AddressBalance, CkbadgerStore, ClassifiedTxActions, BATCH_LOOP_ONLY_CFS, CF_ADDR_TXS,
+    CF_ADDR_TXS_BY_PREFIX, CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELL_BY_DATA_HASH,
+    CF_CELL_BY_LOCK, CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE,
+    CF_CONSUMED_CELLS, CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
+    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
     CF_TX_ACTIONS_BY_BUCKET, CF_TX_HASH_MAP, CF_TX_INDEX, FINALIZE_WRITTEN_CFS,
 };
 use rayon::prelude::*;
@@ -1589,7 +1589,8 @@ fn materialize_finalize_phases(
             tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
         perf_stats.record_finalize_step(5, finalize_started.elapsed());
         perf_stats.record_finalize_step(6, finalize_started.elapsed());
-        owners.materialize_all(&mut materializer)?;
+        let identities = interner.snapshot_for_reads();
+        owners.materialize_all(&mut materializer, &sequencer, &identities)?;
     }
 
     // Step 11: metadata (the HODL + cell distribution tracker rows and
@@ -1670,7 +1671,16 @@ impl CoreOwners {
         Ok(address_deltas)
     }
 
-    fn materialize_all(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
+    /// Every owner's sealed and final rows. `sequencer` and `identities` are
+    /// the run's live set and interned identities at finalize: the script
+    /// owner settles what each generic type reference runs against them
+    /// (`ScriptOwner::settle_generic_type_codes`) before its final rows.
+    fn materialize_all(
+        self,
+        materializer: &mut materialize::Materializer<'_>,
+        sequencer: &sequencer::BulkSequencer,
+        identities: &interner::FrozenIdentityView,
+    ) -> Result<()> {
         let Self {
             mut address,
             mut script,
@@ -1684,6 +1694,12 @@ impl CoreOwners {
         address.materialize_final(materializer)?;
         drop(address);
 
+        let ctx = owners::ReducerContext::new(identities);
+        script.settle_generic_type_codes(materializer.domain_store(), |outpoint| {
+            sequencer
+                .live_slot(outpoint)
+                .and_then(|slot| owners::script::generic_type_reference_of_slot(ctx, slot))
+        })?;
         script.flush_sealed(materializer)?;
         script.materialize_final(materializer)?;
         drop(script);
@@ -1997,7 +2013,7 @@ impl ActivityStatsAccumulator {
             crate::db::BatchWriter::accumulate_tx_activity_stats(
                 tx_actions.view(),
                 &mut open.stats,
-            );
+            )?;
             if !tx_actions.is_cellbase {
                 for participant in &tx_actions.participants {
                     // `Lock` participants only — same rule as the live path.
@@ -3534,7 +3550,7 @@ impl BulkBuildRuntimeState {
             emit_final_snapshot_rows(&sequencer, &frozen, |row| sink.push(row))
         })?;
 
-        owners.materialize_all(materializer)?;
+        owners.materialize_all(materializer, &sequencer, &frozen)?;
 
         stage_tracker_rows(domain_store, &hodl_tracker, &cell_dist_tracker)?;
         Ok(live_cell_summary)
@@ -3928,7 +3944,8 @@ struct BlockHistoryRows {
 #[derive(Debug, Default, Clone)]
 pub struct CoreOwnerStateSnapshot {
     pub address_balances: HashMap<Vec<u8>, AddressBalance>,
-    pub script_infos: HashMap<Vec<u8>, ScriptInfo>,
+    /// Script usage by its pair (code hash, hash type).
+    pub script_reference_infos: HashMap<(Vec<u8>, u8), ckbadger_store::ScriptReferenceInfo>,
     pub token_state: owners::token::TokenStateSnapshot,
     pub dao_state: owners::dao::DaoStateSnapshot,
     pub object_state: owners::object::ObjectStateSnapshot,
@@ -6847,8 +6864,8 @@ fn collect_core_owner_state_snapshot(
         address_balances.insert(key.to_vec(), balance);
     }
 
-    let script_infos = domain_store
-        .list_script_infos()?
+    let script_reference_infos = domain_store
+        .list_script_reference_infos()?
         .into_iter()
         .collect::<HashMap<_, _>>();
 
@@ -7122,7 +7139,7 @@ fn collect_core_owner_state_snapshot(
 
     Ok(CoreOwnerStateSnapshot {
         address_balances,
-        script_infos,
+        script_reference_infos,
         token_state,
         dao_state,
         object_state,
@@ -8987,7 +9004,7 @@ mod tests {
             .materialize_final_snapshot(&final_snapshot_rows)
             .expect("materialize final snapshot rows");
         owners
-            .materialize_all(&mut materializer)
+            .materialize_all(&mut materializer, &sequencer, &frozen)
             .expect("materialize core owners");
         let _ = materializer.finish();
 
@@ -11675,12 +11692,14 @@ mod tests {
                 .daily_stats
                 .entry(date.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx.into());
+                .accumulate_from_tx_actions(tx.into())
+                .unwrap();
             oracle
                 .hourly_stats
                 .entry(hour.clone())
                 .or_default()
-                .accumulate_from_tx_actions(tx.into());
+                .accumulate_from_tx_actions(tx.into())
+                .unwrap();
             if !tx.is_cellbase {
                 for participant in &tx.participants {
                     if let ParticipantId::Lock(lock_hash) = participant.id {

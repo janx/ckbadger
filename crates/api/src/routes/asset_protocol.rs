@@ -349,10 +349,11 @@ fn dotcell_record_edits(
     let last = match edits.last() {
         None => None,
         Some((version, editor)) => {
-            let resolver = super::identities::DotCellPartyResolver {
-                store: &state.store,
-                network: &state.ckb_network,
-            };
+            let resolver = super::identities::DotCellPartyResolver::new(
+                &state.store,
+                &state.append_only_store,
+                &state.ckb_network,
+            );
             Some(DotCellLastRecordEdit {
                 editor: resolver.resolve(editor)?,
                 editor_run: edits
@@ -807,7 +808,7 @@ pub(crate) fn protocol(
                     dotcell_versions.push(DotCellVersionFacts{tx_hash:version.response.tx_hash.clone(),consumed_by_tx:version.response.consumed_by_tx.clone(),manager_hash20:name.manager_hash20,block_number:version.response.block_number,timestamp:version.response.timestamp.clone()});
                     let witness=tx.witnesses.get(index).ok_or_else(||anyhow::anyhow!(".cell records witness missing at output {index}"))?;
                     let records=ckbadger_indexer::parser::DotCellParser::parse_witness_records(witness,&name.records_hash)?;
-                    let resolver=super::identities::DotCellPartyResolver{store:&state.store,network:&state.ckb_network};
+                    let resolver=super::identities::DotCellPartyResolver::new(&state.store,&state.append_only_store,&state.ckb_network);
                     let owner=resolver.resolve(&name.owner_hash20).map_err(|(_,e)|anyhow::anyhow!("{}",e.0.message))?;let manager=resolver.resolve(&name.manager_hash20).map_err(|(_,e)|anyhow::anyhow!("{}",e.0.message))?;
                     for (n,a,b) in [("layoutVersion",0,1),("recordsHash",1,33),("nextId",33,53),("expiredAt",53,58),("owner",58,78),("manager",78,98),("label",98,data.len())]{fields.push(field(&data,n,a,b)?)}
                     let records:Vec<_>=records.iter().map(super::identities::dotcell_record_response).collect();

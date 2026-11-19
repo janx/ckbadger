@@ -1565,15 +1565,7 @@ async fn fiber_channels_sort_by_capacity_with_totals_and_network_names_parties_p
     batch.put_fiber_channel(&[0x05; 32], &late);
     batch.put_lock_script(&party_a, &lock_a);
     batch.put_lock_script(&party_b, &lock_b);
-    batch.put_script_info(
-        &lock_a.code_hash,
-        &ckbadger_store::types::ScriptInfo {
-            code_hash: lock_a.code_hash.clone(),
-            hash_type: 1,
-            name: Some("Default Lock".into()),
-            ..Default::default()
-        },
-    );
+    seed_script_label(&store, &lock_a.code_hash, 1, "Default Lock");
     batch.put_token(
         &[0x77; 32],
         &ckbadger_store::types::TokenInfo {
@@ -1666,4 +1658,111 @@ async fn fiber_channels_sort_by_capacity_with_totals_and_network_names_parties_p
     assert_eq!(party["lockScriptName"], "Default Lock", "{party}");
     assert_eq!(network["pairs"][0]["firstOpenTimestamp"], "1700000000000");
     assert_eq!(network["pairs"][0]["lastOpenTimestamp"], "1700000200000");
+}
+
+/// Lane rd/api-lock-names (T SHOULD-3): a Fiber party is named by the code its
+/// lock pair runs, on the channel and in the network's party ranking: the
+/// default lock by its name; its code hash by `data` (runs no code) by none;
+/// the default lock's binary by `data1` by the default lock's name with
+/// "data1" beside it.
+#[tokio::test]
+async fn by_pair_fiber_parties_name_each_lock_by_its_pair() {
+    let store = test_store();
+    seed_fiber_headers(&store);
+    // A Fiber party's lock must hash to its key: each lock is a real script.
+    run_label_import_bundled(&store, "mainnet").unwrap();
+    observe_default_lock_deployment(&store);
+    let default_lock = default_lock_code_hash();
+    let default_binary = hex::decode(DEFAULT_LOCK_BINARY).unwrap();
+    let mut batch = StoreBatch::new(&store);
+    let mut lock = |code_hash: &[u8], hash_type: u8, args: u8| -> Vec<u8> {
+        let hash = compute_script_hash(code_hash, hash_type, &[args; 20]);
+        batch.put_lock_script(
+            &hash,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: code_hash.to_vec(),
+                hash_type: i16::from(hash_type),
+                args: vec![args; 20],
+            },
+        );
+        hash
+    };
+    let by_type = lock(&default_lock, 1, 0x44);
+    let by_data = lock(&default_lock, 0, 0x45);
+    let by_binary = lock(&default_binary, 2, 0x46);
+    batch.commit().unwrap();
+    let channel = |participants: Vec<Vec<u8>>, funding: u8| FiberChannel {
+        funding_tx_hash: vec![funding; 32],
+        funding_output_index: 0,
+        state: FiberChannelState::Open,
+        capacity: 300_000_000_000,
+        udt_type_hash: None,
+        udt_amount: None,
+        open_block: 10,
+        open_timestamp: 1_700_000_000_000,
+        close_tx_hash: None,
+        close_block: None,
+        close_timestamp: None,
+        commitment_tx_hash: None,
+        commitment_output_index: None,
+        delay_epoch: None,
+        settlement_tx_hash: None,
+        settlement_block: None,
+        settlement_timestamp: None,
+        participants,
+        funding_lock_args: vec![0x44; 20],
+    };
+    let mut batch = StoreBatch::new(&store);
+    batch.put_fiber_channel(
+        &[0x01; 32],
+        &channel(vec![by_type.to_vec(), by_data.to_vec()], 0x11),
+    );
+    batch.put_fiber_channel(
+        &[0x02; 32],
+        &channel(vec![by_binary.to_vec(), by_type.to_vec()], 0x12),
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let expected = [
+        (
+            by_type,
+            serde_json::json!("Default Lock"),
+            serde_json::Value::Null,
+        ),
+        (by_data, serde_json::Value::Null, serde_json::Value::Null),
+        (
+            by_binary,
+            serde_json::json!("Default Lock"),
+            serde_json::json!("data1"),
+        ),
+    ];
+
+    let (status, network) = get_json(&app, "/fiber/network").await;
+    assert_eq!(status, StatusCode::OK, "{network}");
+    let parties = network["parties"].as_array().unwrap();
+    for (lock, name, by) in &expected {
+        let party = parties
+            .iter()
+            .find(|p| p["lockScriptHash"] == format!("0x{}", hex::encode(lock)))
+            .unwrap_or_else(|| panic!("party 0x{} ranked: {network}", hex::encode(lock)));
+        assert_eq!(party["lockScriptName"], *name, "{party}");
+        assert_eq!(party["lockScriptNameBy"], *by, "{party}");
+    }
+
+    let mut seen = 0;
+    for id in [[0x01u8; 32], [0x02; 32]] {
+        let (status, json) =
+            get_json(&app, &format!("/fiber/channels/0x{}", hex::encode(id))).await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        for party in json["observedParties"].as_array().unwrap() {
+            let (_, name, by) = expected
+                .iter()
+                .find(|(lock, _, _)| party["lockScriptHash"] == format!("0x{}", hex::encode(lock)))
+                .unwrap_or_else(|| panic!("an expected party: {party}"));
+            assert_eq!(party["lockScriptName"], *name, "{party}");
+            assert_eq!(party["lockScriptNameBy"], *by, "{party}");
+            seen += 1;
+        }
+    }
+    assert_eq!(seen, 4, "every observed party of both channels was read");
 }

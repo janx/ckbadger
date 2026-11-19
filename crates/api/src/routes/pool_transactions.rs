@@ -253,7 +253,7 @@ fn pool_transactions_page(
     } else {
         None
     };
-    let mut script_cache = super::activities::ScriptNameCache::new();
+    let mut script_cache = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let mut addresses = HashMap::new();
     let mut data = Vec::with_capacity(records.len());
     for record in records {

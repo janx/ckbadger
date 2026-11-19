@@ -394,10 +394,6 @@ impl<K: Eq + std::hash::Hash, V> PerBlock<K, V> {
 /// A live batch's per-block address deltas.
 pub type AddressBalanceChanges = PerBlock<Vec<u8>, AddressBalanceDelta>;
 
-/// Per-block script usage by `(code_hash, is_type)`: `(cells, live, capacity,
-/// owned capacity, used, owned knowledge)` deltas.
-pub type ScriptUsageChanges = PerBlock<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
-
 /// Per-block script reference usage by `(reference_hash, hash_type, is_type)`.
 pub type ScriptReferenceUsageChanges =
     PerBlock<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>;

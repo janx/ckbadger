@@ -193,6 +193,15 @@ impl BulkSequencer {
         self.live_cells.live_slots()
     }
 
+    /// The live cell at `outpoint`, if it is live: the run's live set, the
+    /// one the final snapshot writes the live markers from.
+    pub(crate) fn live_slot(
+        &self,
+        outpoint: &super::facts::OutPointKey,
+    ) -> Option<&super::live_cells::LiveCellSlot> {
+        self.live_cells.live_slot(outpoint)
+    }
+
     pub(crate) fn live_cells_bytes(&self) -> u64 {
         self.live_cells.estimated_bytes() + std::mem::size_of::<Option<LiveCellSummary>>() as u64
     }

@@ -493,15 +493,7 @@ async fn test_address_activities_return_type_calls_and_support_type_call_filter(
             chain_time_ms: 1_700_000_888_000,
         },
     );
-    core_batch.put_script_info(
-        &type_code_hash,
-        &ScriptInfo {
-            code_hash: type_code_hash.clone(),
-            hash_type: 1,
-            name: Some("RGB++ Lock".to_string()),
-            ..Default::default()
-        },
-    );
+    seed_script_label(core_store.as_ref(), &type_code_hash, 1, "RGB++ Lock");
     core_batch.commit().unwrap();
 
     let config = test_config_with_append_only(core_store, append_only_store);
@@ -582,15 +574,7 @@ async fn test_latest_activities_return_type_calls() {
     };
 
     let mut core_batch = StoreBatch::new(core_store.as_ref());
-    core_batch.put_script_info(
-        &type_code_hash,
-        &ScriptInfo {
-            code_hash: type_code_hash.clone(),
-            hash_type: 1,
-            name: Some("RGB++ Lock".to_string()),
-            ..Default::default()
-        },
-    );
+    seed_script_label(core_store.as_ref(), &type_code_hash, 1, "RGB++ Lock");
     core_batch.put_block_header(
         99,
         &CachedBlockHeader {
@@ -2890,16 +2874,8 @@ async fn redesign_block_feed_and_direct_activity_share_exact_participants() {
             args: vec![0x11; 20],
         },
     );
-    batch.put_script_info(
-        &code_hash,
-        &ScriptInfo {
-            code_hash: code_hash.clone(),
-            hash_type: 1,
-            name: Some("JoyID".into()),
-            ..Default::default()
-        },
-    );
     batch.commit().unwrap();
+    seed_script_label(store.as_ref(), &code_hash, 1, "JoyID");
     let app = create_router(test_config(store)).await;
     let (status, first) = get_json(&app, "/activities?blockNumber=42&limit=1").await;
     assert_eq!(status, StatusCode::OK, "{first}");
@@ -3368,6 +3344,39 @@ async fn block_activities_read_the_header_once_and_the_rows_with_one_multi_get()
     assert_eq!(store.multi_gets(ckbadger_store::CF_TX_INDEX), 0);
 }
 
+/// Lane rd/api-lock-names: a party's lock is named by its pair (code hash,
+/// hash type). A lock on the default lock's code hash by `data` is another
+/// script, and the default lock's name does not reach it.
+#[tokio::test]
+async fn by_pair_activity_participants_name_a_lock_by_its_pair() {
+    let store = test_store();
+    let by_type = [0x12; 32];
+    let by_data = [0x13; 32];
+    seed_committed_activity(&store, &by_type, &[0xa1; 32], 42, 1, 800, 0);
+    seed_committed_activity(&store, &by_data, &[0xa2; 32], 42, 2, -900, 0);
+    seed_default_lock_by_type_and_by_data(&store, &by_type, &by_data);
+    let app = create_router(test_config(store)).await;
+
+    let activity = |tx: &str| format!("/transactions/0x{}/activity", tx.repeat(32));
+    let (status, json) = get_json(&app, &activity("a1")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["participants"][0]["lockKind"], "Default Lock",
+        "{json}"
+    );
+    let (status, json) = get_json(&app, &activity("a2")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["participants"][0]["lockHash"],
+        format!("0x{}", hex::encode(by_data)),
+        "{json}"
+    );
+    assert!(
+        json["participants"][0]["lockKind"].is_null(),
+        "the default lock's name does not reach the lock by data: {json}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The fold's code (the page-phase review's MUST-1, the P3 follow-up)
 // ---------------------------------------------------------------------------
@@ -3399,7 +3408,7 @@ fn token_row(code: [u8; 32], standard: &str) -> ckbadger_store::types::TokenInfo
 /// creating output, the DAO for a DAO step), and a recognised script that moved nothing stated no
 /// code. Now every activity states `recognizedTypes`: the codes its row records
 /// (`recognized_type_codes`, written by the indexer from the transaction's own cells), each
-/// (code hash, hash type) once, named by the registry. So an sUDT and an xUDT transfer, a Spore and
+/// (code hash, hash type) once, named by its pair. So an sUDT and an xUDT transfer, a Spore and
 /// an m-NFT transfer, a .bit Cell and a did:ckb transfer each name a different code, a row may
 /// name two, and a row whose script moved nothing names its code too.
 #[tokio::test]
@@ -3548,6 +3557,7 @@ async fn recognized_types_are_read_from_the_row_alone() {
         "typeCodeHash": format!("0x{}", "5e".repeat(32)),
         "typeHashType": "type",
         "scriptName": null,
+        "scriptNameBy": null,
     }]);
     let (status, json) = get_json(&app, "/activities").await;
     assert_eq!(status, StatusCode::OK, "{json}");
@@ -3561,4 +3571,90 @@ async fn recognized_types_are_read_from_the_row_alone() {
     .await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json["data"][0]["recognizedTypes"], recorded, "{json}");
+}
+
+/// Lane rd/api-lock-names, at the merge of fix/readability, carried to C7 at the merge of
+/// resync/all into resync/type-codes: an activity's `recognizedTypes` names each code by the code
+/// its pair runs (`utils::ScriptNamer`), as every other site does, with the hash type beside the
+/// name where the pair is not the registry's reference for that code (`scriptNameBy`); C7 named the
+/// code hash alone (`cached_script_name`), and `itemTypes` before it was named the same way as
+/// here. A Nervos DAO step's code is the DAO's Type ID by `type`: "Nervos DAO" where the indexer
+/// bound that Type ID to its binary, no name where nothing runs under it. A family registered by
+/// its binary (`data`) and bound to a Type ID: the binary is the family by its own reference, the
+/// Type ID by `type` the family "by type".
+#[tokio::test]
+async fn recognized_types_name_each_code_by_the_code_its_pair_runs() {
+    use ckbadger_store::types::TypeCode;
+
+    let dao: [u8; 32] = hex::decode(&ckbadger_indexer::parser::dao::DAO_CODE_HASH[2..])
+        .unwrap()
+        .try_into()
+        .unwrap();
+    for bound in [true, false] {
+        let store = test_store();
+        run_label_import_bundled(store.as_ref(), "mainnet").unwrap();
+        if bound {
+            observe_registered_type_deployments(store.as_ref());
+        }
+        let tx_hash = [0x71u8; 32];
+        let mut actions = make_test_tx_actions(&[0x24; 32], &tx_hash, &[0xb7; 32], 300, 0, 100, 0);
+        actions.protocol_actions =
+            vec![ProtocolAction::new("dao", "deposit", serde_json::json!({}))];
+        actions.recognized_type_codes = vec![TypeCode {
+            code_hash: dao,
+            hash_type: 1,
+        }];
+        seed_named_tx(&store, 300, &tx_hash, &actions);
+        let app = create_router(test_config(store)).await;
+        let (status, json) = get_json(&app, "/activities").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        assert_eq!(
+            json["data"][0]["recognizedTypes"],
+            serde_json::json!([{
+                "typeCodeHash": ckbadger_indexer::parser::dao::DAO_CODE_HASH,
+                "typeHashType": "type",
+                "scriptName": if bound { serde_json::json!("Nervos DAO") } else { serde_json::Value::Null },
+                "scriptNameBy": null,
+            }]),
+            "bound={bound}: {json}"
+        );
+    }
+
+    let (binary, type_id) = ([0x6bu8; 32], [0x6cu8; 32]);
+    let store = test_store();
+    seed_family_run_by_its_type_id(&store, &binary, &type_id, "Fam");
+    let tx_hash = [0x72u8; 32];
+    let mut actions = make_test_tx_actions(&[0x25; 32], &tx_hash, &[0xb8; 32], 301, 0, 100, 0);
+    actions.recognized_type_codes = vec![
+        TypeCode {
+            code_hash: binary,
+            hash_type: 0,
+        },
+        TypeCode {
+            code_hash: type_id,
+            hash_type: 1,
+        },
+    ];
+    seed_named_tx(&store, 301, &tx_hash, &actions);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["data"][0]["recognizedTypes"],
+        serde_json::json!([
+            {
+                "typeCodeHash": format!("0x{}", hex::encode(binary)),
+                "typeHashType": "data",
+                "scriptName": "Fam",
+                "scriptNameBy": null,
+            },
+            {
+                "typeCodeHash": format!("0x{}", hex::encode(type_id)),
+                "typeHashType": "type",
+                "scriptName": "Fam",
+                "scriptNameBy": "type",
+            },
+        ]),
+        "{json}"
+    );
 }

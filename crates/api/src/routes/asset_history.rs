@@ -47,7 +47,13 @@ pub(crate) struct CellVersion {
     pub anatomy: CellAnatomy,
     pub data_hash: Option<String>,
     pub lock_name: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    pub lock_name_by: Option<String>,
     pub type_name: Option<String>,
+    /// The type's hash type where its named pair is not the registry's
+    /// reference for its code; `None` otherwise.
+    pub type_name_by: Option<String>,
 }
 
 pub(crate) struct CanonicalCellVersion {
@@ -156,6 +162,7 @@ pub(crate) fn canonical_versions_at(
             format!("consumed_cells row of {}", consumed[i].0)
         })?
         .into_iter();
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let mut versions = Vec::with_capacity(outpoints.len());
     for ((tx_hash, index), (context, marker)) in outpoints.iter().zip(markers) {
         let consumer = match &marker {
@@ -167,14 +174,16 @@ pub(crate) fn canonical_versions_at(
             ),
         };
         versions.push(canonical_version_from_marker(
-            state, tx_hash, *index, &context, marker, consumer,
+            state, &mut names, tx_hash, *index, &context, marker, consumer,
         )?);
     }
     Ok(versions)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn canonical_version_from_marker(
     state: &AppState,
+    names: &mut crate::utils::ScriptNamer<'_>,
     tx_hash: &[u8],
     index: i16,
     context: &str,
@@ -256,6 +265,17 @@ fn canonical_version_from_marker(
             "lock script cannot be encoded as an address: it has no address form (its args are longer than an address can carry): {context}"
         )
     })?;
+    let lock_name = names.name_stored(&cell.lock_code_hash, cell.lock_hash_type)?;
+    let type_name = match (&cell.type_code_hash, cell.type_hash_type) {
+        (Some(code), Some(hash_type)) => names.name_stored(code, hash_type)?,
+        (None, None) => None,
+        (code, hash_type) => anyhow::bail!(
+            "cell 0x{}: partial type script code_hash={:?} hash_type={:?}",
+            hex::encode(tx_hash),
+            code.as_ref().map(hex::encode),
+            hash_type
+        ),
+    };
     Ok(CanonicalCellVersion {
         response: CellVersion {
             tx_hash: format!("0x{}", hex::encode(tx_hash)),
@@ -283,17 +303,12 @@ fn canonical_version_from_marker(
             data_hash: cell
                 .script_data_hash()
                 .map(|h| format!("0x{}", hex::encode(h))),
-            lock_name: state
-                .store
-                .get_script_info(&cell.lock_code_hash)?
-                .and_then(|info| info.name),
-            type_name: match &cell.type_code_hash {
-                Some(code) => state
-                    .store
-                    .get_script_info(code)?
-                    .and_then(|info| info.name),
-                None => None,
-            },
+            // Each script named by the code its pair runs, the one rule
+            // (`utils::ScriptNamer`).
+            lock_name_by: lock_name.as_ref().and_then(|name| name.by()),
+            lock_name: lock_name.map(|name| name.name),
+            type_name_by: type_name.as_ref().and_then(|name| name.by()),
+            type_name: type_name.map(|name| name.name),
         },
         tx_hash: tx_hash.to_vec(),
         cell,

@@ -27,7 +27,6 @@ const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 pub const CACHE_KEY_ADDRESSES_TOP: &str = "addresses:top";
 pub const CACHE_KEY_ADDRESSES_ACTIVE: &str = "addresses:active";
 pub const CACHE_KEY_SCRIPT_FAMILIES_ALL: &str = "scripts:families:all";
-pub const CACHE_KEY_SCRIPTS_ALL: &str = "scripts:all";
 pub const CACHE_KEY_SCRIPTS_NAMED: &str = "scripts:named";
 pub const CACHE_KEY_SCRIPT_VERSIONS_ALL: &str = "scripts:versions:all";
 const ADDRESS_CACHE_LIMIT: usize = 500;
@@ -739,11 +738,6 @@ fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
         &script_families,
         CacheTtl::ASSETS,
     );
-
-    let script_infos = state.store.list_script_infos()?;
-    state
-        .mem_cache
-        .set(CACHE_KEY_SCRIPTS_ALL, &script_infos, CacheTtl::ASSETS);
 
     let script_versions = state.store.list_script_versions()?;
     state.mem_cache.set(

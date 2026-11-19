@@ -14,6 +14,7 @@ import {
 import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
 import { scriptGroupRows } from '@/components/transaction/script-group-rows';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
+import { distinctScriptPairs } from '@/lib/script-pair';
 import { formatDurationMs } from '@/lib/utils';
 import { BOARD_INKS, CELL_COLORS } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
@@ -37,19 +38,18 @@ function useCellTransaction(hash: string) {
     queryKey: ['cell-transaction-detail', hash],
     queryFn: () => api.getTransactionDetail(hash),
   });
-  const codeHashes = Array.from(
-    new Set(
-      [...(transaction.data?.inputs ?? []), ...(transaction.data?.outputs ?? [])]
-        .flatMap((cell) => [cell.lock?.codeHash, cell.type?.codeHash])
-        .concat((transaction.data?.scriptGroups ?? []).map((group) => group.script.codeHash))
-        .filter((value): value is string => value !== undefined && value !== TYPE_ID_CODE_HASH)
-    )
+  // Each script by its pair (code hash, hash type): lane rd/api-lock-names.
+  const scripts = distinctScriptPairs(
+    [...(transaction.data?.inputs ?? []), ...(transaction.data?.outputs ?? [])]
+      .flatMap((cell) => [cell.lock, cell.type])
+      .concat((transaction.data?.scriptGroups ?? []).map((group) => group.script))
+      .filter((script) => script && script.codeHash !== TYPE_ID_CODE_HASH)
   );
   // The transaction page's naming path: one lookup of the tx's script references.
   const lookup = useQuery({
-    queryKey: ['scriptLookup', codeHashes, hash],
-    queryFn: () => api.lookupScripts(codeHashes, hash),
-    enabled: codeHashes.length > 0,
+    queryKey: ['scriptLookup', scripts, hash],
+    queryFn: () => api.lookupScripts(scripts, hash),
+    enabled: scripts.length > 0,
     staleTime: Infinity,
   });
   const dependencies = useQuery({

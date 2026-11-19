@@ -7,7 +7,7 @@
  * renderer's import graph free of React.
  */
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
-import type { ScriptRefHashType } from '@/lib/script-ref';
+import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
 
 /**
@@ -26,6 +26,12 @@ export interface LockFacts {
   name: string | null;
   codeHash: string | null;
   hashType: ScriptRefHashType | null;
+  /**
+   * The hash type the API writes beside a name (lane rd/api-lock-names): the named pair runs a
+   * registered family's code but is not the registry's reference for it (`xUDT · by data2`). Null
+   * for a registered reference; absent where the place has no API name.
+   */
+  nameBy?: ScriptRefHashType | null;
 }
 
 /** What a lock is called where it stands, or null where nothing is written (see `lockWords`). */
@@ -53,9 +59,13 @@ export type LockWords =
  * - The default lock is the pair (its code hash, `type`). Beside a party it is silent: a shortened
  *   address is `ckb1…` and its tail, so no name beside an address means the default lock. In a
  *   column headed "Lock" a cell is never empty: the default lock is its name in quiet words.
- * - A lock on the default lock's code hash by `data`, `data1` or `data2` is another lock (no cell's
- *   data hashes to that code hash): the registry names locks by code hash, so the name it sends is
- *   the default lock's and not this lock's; it is written by its code hash and its hash type.
+ * - A name is the API's: the name of the code the lock's pair runs (lane rd/api-lock-names, one
+ *   rule, on the server). Where that pair is not the registry's reference for the code, the hash
+ *   type the API sends (`nameBy`) stands beside the name ("xUDT · by data2").
+ * - A lock without a name is its code hash, and its hash type where that is not `type`: a lock on
+ *   the default lock's code hash by `data`, `data1` or `data2` runs no code (no cell's data hashes
+ *   to a type hash), so the API names it nothing, and it is "lock 0x9bd7…cce8 by data". (The
+ *   client's stopgap that dropped a name the API sent for that lock is gone with the API's name.)
  * - A place that knows only a bare code hash cannot tell; it names the lock as the API does, never
  *   silent, since silence says "the default lock".
  * - A lock that is not indexed (no code hash, no name) is silent beside a party and "not indexed"
@@ -88,30 +98,49 @@ export function namedLockWords(facts: LockFacts, place: 'column' | 'sentence'): 
   if (codeHash !== null && hashType !== null && isDefaultLock(codeHash, hashType))
     return { form: 'default', name, codeHash, place };
   if (codeHash === null && name === null) return { form: 'not-indexed' };
-  const notTheDefault =
-    codeHash !== null &&
-    hashType !== null &&
-    isDefaultLock(codeHash, 'type') &&
-    hashType !== 'type';
-  return notTheDefault
-    ? { form: 'lock', name: null, codeHash, hashType, byHashType: hashType }
-    : { form: 'lock', name, codeHash, hashType, byHashType: null };
+  if (name !== null)
+    return { form: 'lock', name, codeHash, hashType, byHashType: facts.nameBy ?? null };
+  return {
+    form: 'lock',
+    name: null,
+    codeHash,
+    hashType,
+    byHashType: hashType !== null && hashType !== 'type' ? hashType : null,
+  };
 }
 
 /**
  * A named party's lock (a .cell name's owner, manager, a sale's seller; lane P2's third round,
- * item 12): the registry's name the API sends for its lock code hash (`lockScriptName`) and, where
- * the party has an address, the lock read off it, which decides (a lock on the default lock's code
- * hash by data is not the default lock). A party with no address keeps the name alone.
+ * item 12): the name the API sends for the code its lock's pair runs (`lockScriptName`), with the
+ * hash type beside it (`lockScriptNameBy`), and, where the party has an address, the lock read off
+ * it, which decides the default lock. A party with no address keeps the name alone.
  */
 export function namedPartyLockFacts(party: {
   lockScriptName: string | null;
+  /** The hash type the API writes beside the name (`LockFacts.nameBy`), where it sends one. */
+  lockScriptNameBy?: string | null;
   address: string | null;
 }): LockFacts {
   const name = party.lockScriptName;
-  if (party.address === null) return { name, codeHash: null, hashType: null };
+  const nameBy = nameByOf(party.lockScriptNameBy, `party ${party.address ?? '(no address)'}`);
+  if (party.address === null) return { name, codeHash: null, hashType: null, nameBy };
   const { codeHash, hashType } = addressScript(party.address);
-  return { name, codeHash, hashType };
+  return { name, codeHash, hashType, nameBy };
+}
+
+/**
+ * The hash type the API writes beside a name, read as the chain writes hash types: absent or null
+ * is none, any other word is a contract break, named with `where`.
+ */
+export function nameByOf(
+  value: string | null | undefined,
+  where: string
+): ScriptRefHashType | null {
+  if (value === undefined || value === null) return null;
+  const hashType = normalizeScriptRefHashType(value);
+  if (hashType === null)
+    throw new Error(`${where}: name's hash type ${JSON.stringify(value)} is not a CKB hash type`);
+  return hashType;
 }
 
 /** A named party's lock in a fact's note or a row (the decision's column words, never silent). */
@@ -157,8 +186,9 @@ export function lockNoun(words: LockWords, size: ShortSize): string {
   if (words.form === 'not-indexed') return 'lock not indexed';
   // a lock without a name is "lock 0x…", its hash type after it where it has one
   if (words.name === null) return lockWordsText(words, size);
-  // a named lock never carries a hash type: the decision drops a name it does not cover
-  return /lock$/i.test(words.name) ? words.name : `${words.name} lock`;
+  // a named lock by another reference than the registry's carries its hash type after the noun
+  const by = words.form === 'lock' && words.byHashType ? ` · by ${words.byHashType}` : '';
+  return /lock$/i.test(words.name) ? `${words.name}${by}` : `${words.name} lock${by}`;
 }
 
 /** Letters whose spoken names start with a vowel sound: "ay", "ee", "ef", "aitch", "eye", "el", … */
@@ -182,6 +212,16 @@ function articleBySound(name: string): 'a' | 'an' {
 }
 
 /**
+ * A script's name with the hash type the API writes beside it (`nameBy`, lane rd/api-lock-names):
+ * the named pair runs a registered family's code but is not the registry's reference for it,
+ * "xUDT · by data2"; the name alone where it is that reference. The one text rule every place that
+ * writes a script's name follows (a lock's words say it through `lockWordsText` too).
+ */
+export function withNameBy(name: string, by: string | null | undefined): string {
+  return by === null || by === undefined ? name : `${name} · by ${by}`;
+}
+
+/**
  * The words as text, for a place that writes a string (a tile's lock beside its owner): the name,
  * else "lock <code hash>" at the place's size, "by <hash type>" after it where the name does not
  * cover it; "not indexed".
@@ -189,7 +229,8 @@ function articleBySound(name: string): 'a' | 'an' {
 export function lockWordsText(words: LockWords, size: ShortSize): string {
   if (words.form === 'not-indexed') return 'not indexed';
   const by = words.form === 'lock' && words.byHashType ? ` by ${words.byHashType}` : '';
-  if (words.name !== null) return `${words.name}${by}`;
+  // a name by another reference than the registry's: "xUDT · by data2"
+  if (words.name !== null) return `${words.name}${by && ` ·${by}`}`;
   if (words.codeHash === null) throw new Error('a lock with neither a name nor a code hash');
   return `lock ${shortenHash(words.codeHash, size)}${by}`;
 }

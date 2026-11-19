@@ -169,6 +169,18 @@ pub struct FrontendServiceConfig {
     pub default_network: String,
 }
 
+/// The domain store's layout must be this build's (`ckbadger_store::STORE_LAYOUT`,
+/// stamped by the indexer, the stamp's only writer): the API reads the one
+/// layout check when it opens the store and serves no other layout. A store
+/// with no row yet is accepted (the indexer stamps it before its first
+/// write); any other is refused, both layouts named, with the remedy.
+pub(crate) fn ensure_store_layout_readable(store: &CkbadgerStore) -> Result<()> {
+    match store.check_store_layout()? {
+        Ok(_) => Ok(()),
+        Err(mismatch) => bail!("the API refuses to serve the domain store: {mismatch}"),
+    }
+}
+
 /// Run the API server (API + WebSocket only, no frontend). Blocks until shutdown.
 pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     let addr = format!("{}:{}", config.host, config.port);
@@ -204,6 +216,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         secondary_path.as_path(),
         config.store_runtime_config,
     )?);
+    ensure_store_layout_readable(&store)?;
 
     let append_only_secondary_path =
         secondary_store_path(&config.append_only_data_path, SecondaryStoreOwner::Api);
@@ -553,6 +566,37 @@ async fn serve_frontend_file(path: &Path, request_path: &str) -> Response {
 mod tests {
     use super::*;
     use axum::body::Body;
+
+    /// The API reads the one layout check at open (lane rd/api-lock-names,
+    /// fix round M1): a store an older build wrote is refused, both layouts
+    /// named, with the remedy; a stamped store and a store with no row yet
+    /// are served.
+    #[test]
+    fn the_api_refuses_a_store_of_another_layout_at_open() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        ensure_store_layout_readable(&store).unwrap();
+
+        store.set_network_identity("mainnet").unwrap();
+        let words = ensure_store_layout_readable(&store)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            words.contains("the API refuses to serve the domain store")
+                && words.contains("no store layout stamp")
+                && words.contains("delete RocksDB and re-sync from genesis"),
+            "{words}"
+        );
+
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT)
+            .unwrap();
+        ensure_store_layout_readable(&store).unwrap();
+        store
+            .set_store_layout(ckbadger_store::STORE_LAYOUT + 1)
+            .unwrap();
+        assert!(ensure_store_layout_readable(&store).is_err());
+    }
     use axum::http::Request;
     use http_body_util::BodyExt;
     use tower::ServiceExt;

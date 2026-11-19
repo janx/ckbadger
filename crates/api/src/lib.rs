@@ -508,6 +508,7 @@ async fn start_background_tasks(state: Arc<AppState>, pool_poll_interval: std::t
     tokio::spawn(warmup::warmup_chart_caches(state.clone()));
     tokio::spawn(ws::start_block_broadcaster(
         state.store.clone(),
+        state.append_only_store.clone(),
         state.ws_manager.clone(),
         state.ckb_rpc_url.clone(),
         state.ckb_network.clone(),

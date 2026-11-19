@@ -27,6 +27,7 @@ import {
   type TransactionLifecycle,
 } from '@/lib/api';
 import { classifyActivity } from '@/lib/activity-classify';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/markdown-format';
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
@@ -160,8 +161,13 @@ function parseOutpoint(outpoint: string): { txHash: string; outputIndex: number 
   return { txHash, outputIndex };
 }
 
-function parseScriptHashType(raw: string | null): ScriptRefHashType {
-  if (raw === null) return 'type';
+const SCRIPT_REF_HASH_TYPES: readonly ScriptRefHashType[] = ['type', 'data', 'data1', 'data2'];
+
+/** The `hashType` asked, or null when none is: a code hash alone names no script, so the view
+ * guesses none (lane rd/api-lock-names, L S5: it defaulted to `type`, where the HTML page lists
+ * the pairs). */
+function parseScriptHashType(raw: string | null): ScriptRefHashType | null {
+  if (raw === null) return null;
   if (raw === 'type' || raw === 'data' || raw === 'data1' || raw === 'data2') {
     return raw;
   }
@@ -1833,11 +1839,53 @@ export async function renderMarkdownPage(
     }
     case 'script_by_code_hash': {
       const hashType = parseScriptHashType(searchParams.get('hashType'));
+      if (hashType === null) {
+        // The pairs on the code hash that the registry names or the chain has used, as the HTML
+        // page lists them; no code cell, which belongs to a pair.
+        const lookup = await api.lookupScripts(
+          SCRIPT_REF_HASH_TYPES.map((pairHashType) => ({
+            codeHash: page.codeHash,
+            hashType: pairHashType,
+          }))
+        );
+        const pairs = SCRIPT_REF_HASH_TYPES.map(
+          (pairHashType) => lookup[scriptLookupKey(page.codeHash, pairHashType)]
+        ).filter((pair) => pair !== undefined);
+        const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+          `# Script Code Hash ${hashShort(page.codeHash, 14, 12)}`,
+          '',
+          'A code hash alone names no script: a script is its code hash and its hash type.',
+          '',
+          pairs.length === 0
+            ? 'No script on this code hash is indexed.'
+            : markdownTable(
+                [
+                  'hashType',
+                  'name',
+                  'nameBy',
+                  'scriptKind',
+                  'liveCellsCount',
+                  'cellsCount',
+                  'ownedCapacitySum',
+                ],
+                pairs.map((pair) => [
+                  pair.hashType,
+                  pair.name,
+                  pair.nameBy ?? '-',
+                  pair.scriptKind ?? '-',
+                  pair.liveCellsCount,
+                  pair.cellsCount,
+                  pair.ownedCapacitySum,
+                ])
+              ),
+        ]);
+        return { status: 200, body };
+      }
       const [lookup, codeCell] = await Promise.all([
-        api.lookupScripts([page.codeHash]),
+        api.lookupScripts([{ codeHash: page.codeHash, hashType }]),
         api.getCodeCell(page.codeHash, hashType),
       ]);
-      const matched = lookup[page.codeHash];
+      const matched = lookup[scriptLookupKey(page.codeHash, hashType)];
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
         `# Script Code Hash ${hashShort(page.codeHash, 14, 12)}`,
         '',
@@ -1847,6 +1895,7 @@ export async function renderMarkdownPage(
             ['codeHash', page.codeHash],
             ['queryHashType', hashType],
             ['knownName', matched?.name ?? '-'],
+            ['knownNameBy', matched?.nameBy ?? '-'],
             ['knownScriptKind', matched?.scriptKind ?? '-'],
             ['knownHashType', matched?.hashType ?? '-'],
             ['knownLiveCellsCount', matched?.liveCellsCount ?? '-'],

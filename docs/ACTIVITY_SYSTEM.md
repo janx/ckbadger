@@ -847,13 +847,16 @@ out.
 
 ### Script Info Resolution
 
-Script names are resolved via `ScriptInfo` lookup and cached per-request:
+Script names are the registry's labels of each script's pair (code hash, hash type), read from
+`script_info` by the pair and cached per request:
 
 ```rust
-fn resolve_script_info_cached(store, cache, code_hash) -> Option<&ScriptInfo>
+fn cached_script_name(store, cache, code_hash, hash_type) -> anyhow::Result<Option<String>>
 ```
 
-The cache avoids repeated DB lookups for the same code_hash within a single API request. Used for both type call and lock call name resolution.
+The cache avoids repeated DB lookups for the same pair within a single API request. Used for both
+type call and lock call name resolution. A pair the registry does not name has no name, whatever
+the code hash is named by another hash type.
 
 ---
 

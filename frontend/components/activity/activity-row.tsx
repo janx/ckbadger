@@ -1,4 +1,5 @@
 'use client';
+import { nameByOf, withNameBy } from '@/lib/lock-words';
 import {
   useId,
   useLayoutEffect,
@@ -353,10 +354,15 @@ interface CallRef {
 }
 
 function typeCallRef(sc: ActivityTypeCall): CallRef {
-  const name = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'row');
+  const base = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName }, 'row');
+  // a name by another reference than the registry's carries its hash type (lane rd/api-lock-names)
+  const name = sc.scriptName ? withNameBy(base, sc.scriptNameBy) : base;
   return {
     name,
-    call: sc.typeArgs === '0x' ? name : `${name}(${sc.typeArgs})`,
+    call:
+      sc.typeArgs === '0x'
+        ? name
+        : withNameBy(`${base}(${sc.typeArgs})`, sc.scriptName ? sc.scriptNameBy : null),
     href: getScriptDetailHref({
       name: sc.scriptName,
       codeHash: sc.typeCodeHash,
@@ -368,19 +374,26 @@ function typeCallRef(sc: ActivityTypeCall): CallRef {
 
 function lockCallRef(lc: ActivityLockCall): CallRef {
   // a lock's words and its page are the one decision's (lib/lock-words.ts), fed its code hash, hash
-  // type and the API's name together, as a list names locks: a lock on a registered code hash by
-  // another hash type is not that lock, so neither its words nor its link take the name (the lead's
-  // final round, item 7: a Default Lock code by data read "Default Lock" and opened its page)
-  const words = namedLockWords(
-    {
-      name: lc.scriptName ?? null,
-      codeHash: lc.lockCodeHash,
-      hashType: normalizeScriptRefHashType(lc.lockHashType),
-    },
-    'column'
-  );
+  // type and the API's name together, as a list names locks: the name is the code the lock's pair
+  // runs (lane rd/api-lock-names; a lock on a registered code hash by another hash type runs none,
+  // and the API sends no name: the lead's final round, item 7), its hash type beside a name by
+  // another reference than the registry's
+  const facts = {
+    name: lc.scriptName ?? null,
+    codeHash: lc.lockCodeHash,
+    hashType: normalizeScriptRefHashType(lc.lockHashType),
+    nameBy: nameByOf(lc.scriptNameBy, `lock call ${lc.scriptHash}`),
+  };
+  const words = namedLockWords(facts, 'column');
   const name = lockNoun(words, 'row');
-  const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
+  const by = words.form === 'lock' && words.name !== null ? facts.nameBy : null;
+  const call =
+    lc.lockArgs === '0x'
+      ? name
+      : withNameBy(
+          `${lockNoun(namedLockWords({ ...facts, nameBy: null }, 'column'), 'row')}(${lc.lockArgs})`,
+          by
+        );
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
   const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError, 'row') : null;
   return {
@@ -400,10 +413,12 @@ function lockCallRef(lc: ActivityLockCall): CallRef {
  * name it: each code once, by the registry's name (else its short code hash), a link to its page.
  */
 function recognizedTypeRef(t: RecognizedType): CallRef {
-  const name = formatScriptRef(
+  const base = formatScriptRef(
     { codeHash: t.typeCodeHash, scriptName: t.scriptName ?? undefined },
     'row'
   );
+  // a name by another reference than the registry's carries its hash type (lane rd/api-lock-names)
+  const name = t.scriptName ? withNameBy(base, t.scriptNameBy) : base;
   return {
     name,
     call: name,

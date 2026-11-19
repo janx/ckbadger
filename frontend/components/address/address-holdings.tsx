@@ -7,6 +7,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { Hash } from '@/components/ui/hash';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenHash } from '@/lib/shorten';
+import { withNameBy } from '@/lib/lock-words';
 import Link from '@/components/ui/link';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { formatStandard } from '@/components/activity-event-row';
@@ -390,6 +391,9 @@ export function addressLockName(address: Address): string | null {
       {
         lock,
         name: registered !== null && registered.toLowerCase() !== 'unknown' ? registered : null,
+        // the hash type beside a name by another reference than the registry's (lane
+        // rd/api-lock-names)
+        nameBy: address.lockScriptInfo?.nameBy,
         address: address.address ?? null,
       },
       `address ${address.lockScriptHash}`
@@ -398,7 +402,9 @@ export function addressLockName(address: Address): string | null {
   );
   if (words === null)
     throw new Error(`address ${address.lockScriptHash}: a column's lock words are never empty`);
-  return words.form === 'not-indexed' ? null : words.name;
+  if (words.form === 'not-indexed' || words.name === null) return null;
+  // a name by another reference than the registry's carries its hash type (lane rd/api-lock-names)
+  return words.form === 'lock' ? withNameBy(words.name, words.byHashType) : words.name;
 }
 
 export function addressStripFacts(

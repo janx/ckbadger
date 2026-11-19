@@ -57,6 +57,8 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
 interface RecordParty {
   lockHash: string | null;
   lockScriptName: string | null;
+  /** The hash type beside the name (lane rd/api-lock-names). */
+  lockScriptNameBy?: string | null;
 }
 
 /**
@@ -75,7 +77,11 @@ function whose(
   const party = owner ? parties.owner : manager ? parties.manager : null;
   if (!party) return null;
   return `the ${owner ? 'owner' : 'manager'}'s own address, under ${partyLockSentence(
-    { lockScriptName: party.lockScriptName, address },
+    {
+      lockScriptName: party.lockScriptName,
+      lockScriptNameBy: party.lockScriptNameBy,
+      address,
+    },
     'row'
   )}`;
 }

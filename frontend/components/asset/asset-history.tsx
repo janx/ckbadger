@@ -449,6 +449,7 @@ export function AssetHistory({
           {/* U-15: a lock the registry does not name reads "lock <code hash>". */}
           <LockKind
             lockKind={e.lockKind}
+            lockKindBy={e.lockKindBy}
             lockCodeHash={e.lockCodeHash}
             address={e.address}
             size="row"

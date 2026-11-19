@@ -672,17 +672,7 @@ async fn collection_gallery_rows_carry_mint_chain_time_and_owner_lock_kind() {
     let registered = lock_code.clone();
     let app = spore_genetics_fixture_seeded(false, 0, false, false, move |store| {
         seed_block_headers_at(store, &[(99, 1_700_000_000_500), (100, 1_700_000_000_100)]);
-        let mut batch = StoreBatch::new(store);
-        batch.put_script_info(
-            &registered,
-            &ckbadger_store::types::ScriptInfo {
-                code_hash: registered.clone(),
-                hash_type: 1,
-                name: Some("JoyID".into()),
-                ..Default::default()
-            },
-        );
-        batch.commit().unwrap();
+        seed_script_label(store, &registered, 1, "JoyID");
     })
     .await;
     let (status, gallery) = get_json(
@@ -3133,4 +3123,82 @@ async fn cluster_protocol_legacy_two_field_description_uses_owning_parser() {
         "{protocol}"
     );
     assert_eq!(protocol["current"]["fields"].as_array().unwrap().len(), 2);
+}
+
+/// Lane rd/api-lock-names (T SHOULD-3): a gallery row names its owner's lock by
+/// the code the lock's pair runs. The rows' lock is the code hash 0x41… by
+/// `type`. Where the indexer bound that Type ID to a binary the registry
+/// registers by its data hash, the lock runs that family's code by another
+/// reference: its name, with "type" beside it. Where the registry registers
+/// 0x41… by `data` only, the lock by `type` runs no code it names: no name
+/// crosses hash kinds.
+#[tokio::test]
+async fn by_pair_collection_gallery_rows_name_the_owner_lock_by_its_pair() {
+    let gallery = |app: axum::Router| async move {
+        let (status, gallery) = get_json(
+            &app,
+            &format!(
+                "/spore/clusters/0x{}/gallery?limit=100",
+                hex::encode([0x77; 32])
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{gallery}");
+        gallery
+    };
+    let app = spore_genetics_fixture_seeded(false, 0, false, false, |store| {
+        seed_block_headers_at(store, &[(99, 1_700_000_000_500), (100, 1_700_000_000_100)]);
+        seed_family_run_by_its_type_id(store, &[0x3c; 32], &[0x41; 32], "Pair Lock");
+    })
+    .await;
+    let json = gallery(app).await;
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 8, "{json}");
+    for row in rows {
+        assert_eq!(row["lockHashType"], "type", "{row}");
+        assert_eq!(row["lockKind"], "Pair Lock", "{row}");
+        assert_eq!(row["lockKindBy"], "type", "{row}");
+    }
+
+    let app = spore_genetics_fixture_seeded(false, 0, false, false, |store| {
+        seed_block_headers_at(store, &[(99, 1_700_000_000_500), (100, 1_700_000_000_100)]);
+        seed_script_label(store, &[0x41; 32], 0, "Data Only Lock");
+    })
+    .await;
+    let json = gallery(app).await;
+    for row in json["data"].as_array().unwrap() {
+        assert!(row["lockKind"].is_null(), "{row}");
+        assert!(row["lockKindBy"].is_null(), "{row}");
+    }
+}
+
+/// Lane rd/api-lock-names (T SHOULD-3): an item's cell versions name each
+/// version's lock and type by the code the pair runs. The lock (0x41… by
+/// `type`) runs a family registered by its binary's data hash, under a Type ID
+/// the indexer bound to that binary: the family's name with "type" beside it.
+/// The type (0x42… by `type`) has a family registered by `data` only: by
+/// `type` it runs no code the registry names, and has no name.
+#[tokio::test]
+async fn by_pair_cell_versions_name_each_lock_and_type_by_its_pair() {
+    let (store, id) = history_fixture();
+    seed_family_run_by_its_type_id(&store, &[0x3c; 32], &[0x41; 32], "Pair Lock");
+    seed_script_label(&store, &[0x42; 32], 0, "Data Only Type");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/cell-versions",
+            hex::encode(&id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let rows = json["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{json}");
+    for row in rows {
+        assert_eq!(row["lockName"], "Pair Lock", "{row}");
+        assert_eq!(row["lockNameBy"], "type", "{row}");
+        assert!(row["typeName"].is_null(), "{row}");
+        assert!(row["typeNameBy"].is_null(), "{row}");
+    }
 }

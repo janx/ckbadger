@@ -131,7 +131,7 @@ impl ActivityWindow {
                 // The one classification the filter lists the transaction by.
                 block
                     .stats
-                    .accumulate_from_tx_actions(ClassifiedTxActions::classify(tx));
+                    .accumulate_from_tx_actions(ClassifiedTxActions::classify(tx))?;
                 for participant in &tx.participants {
                     if let ParticipantId::Lock(hash) = participant.id {
                         block.addresses.insert(hash);
@@ -459,9 +459,11 @@ mod tests {
                 }
             );
             assert_eq!(stats.total_ckb_moved, 7);
+            // re-pinned (lane rd/api-lock-names): a count is one script's,
+            // keyed by its pair (`script_count_key`); aa64e305 left this red
             assert_eq!(
                 stats.script_counts,
-                BTreeMap::from([(hex::encode([script; 32]), 1)])
+                BTreeMap::from([(format!("{}:type", hex::encode([script; 32])), 1)])
             );
             assert_eq!(
                 stats.protocol_action_counts,

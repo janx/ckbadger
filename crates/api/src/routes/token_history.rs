@@ -442,11 +442,16 @@ pub(super) struct SupplyEvent {
     amount: String,
     supply_after: String,
     lock_hash: String,
-    /// This and the next two: the party's lock, named as
-    /// [`super::tokens::TokenIssuer`] names it.
+    /// This and the next three: the party's lock, named as
+    /// [`super::tokens::TokenIssuer`] names it, by its pair (code hash, hash
+    /// type).
     address: Option<String>,
     lock_code_hash: Option<String>,
+    lock_hash_type: Option<String>,
     lock_kind: Option<String>,
+    /// The lock's hash type where its named pair is not the registry's
+    /// reference for its code, written beside the name; `None` otherwise.
+    lock_kind_by: Option<String>,
 }
 
 pub(super) async fn history(
@@ -685,6 +690,7 @@ fn build_supply_events(
     cursor: Option<(i64, i32)>,
 ) -> anyhow::Result<CursorPaginatedResponse<SupplyEvent>> {
     let store = &state.store;
+    let mut names = crate::utils::ScriptNamer::new(&state.store, &state.append_only_store);
     let days = TokenDays::load(store, hash)?;
     let total = days.days.iter().try_fold(0u64, |sum, (_, delta, ..)| {
         sum.checked_add(delta.mint_count)
@@ -793,13 +799,15 @@ fn build_supply_events(
             let lock32: [u8; 32] = lock.try_into().with_context(|| {
                 format!("token supply event invalid lock block={block} sequence={seq}")
             })?;
-            let owner = owner_lock(store, &lock32, &state.ckb_network).map_err(|(_, error)| {
-                anyhow::anyhow!(
-                    "token supply event party block={block} sequence={seq}: {} {}",
-                    error.0.message,
-                    context()
-                )
-            })?;
+            let owner = owner_lock(store, &mut names, &lock32, &state.ckb_network).map_err(
+                |(_, error)| {
+                    anyhow::anyhow!(
+                        "token supply event party block={block} sequence={seq}: {} {}",
+                        error.0.message,
+                        context()
+                    )
+                },
+            )?;
             events.push(SupplyEvent {
                 tx_hash: format!("0x{}", hex::encode(&row.tx_hash)),
                 block_number: block,
@@ -812,6 +820,8 @@ fn build_supply_events(
                 lock_hash: format!("0x{}", hex::encode(lock)),
                 address: owner.as_ref().and_then(|owner| owner.address.clone()),
                 lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_hash_type: owner.as_ref().map(|owner| owner.lock_hash_type.clone()),
+                lock_kind_by: owner.as_ref().and_then(|owner| owner.lock_kind_by.clone()),
                 lock_kind: owner.and_then(|owner| owner.lock_kind),
             });
         }

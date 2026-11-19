@@ -136,6 +136,38 @@ describe('ActivityStats', () => {
     expect(screen.queryByText(/Hover for details/)).not.toBeInTheDocument();
   });
 
+  // Lane rd/api-lock-names (T N9): each share row is a pair. An unnamed pair links to its code
+  // hash with its hash type (no guess of another pair's page); a pair named by another reference
+  // writes its hash type beside the name and links to its family's page.
+  it('links an unnamed pair with its hash type and writes a name by another reference', async () => {
+    const codeHash = `0x${'9b'.repeat(32)}`;
+    server.use(
+      http.get(`${API}/stats/activity-summary-24h`, () =>
+        HttpResponse.json({
+          ...activitySummary24h,
+          scriptCounts: [
+            { codeHash, hashType: 'data', name: null, count: 30 },
+            { codeHash, hashType: 'data1', name: 'Default Lock', nameBy: 'data1', count: 20 },
+          ],
+          // the route's whole since the merge of fix/readability: its total and its rest
+          scriptCalls: 50,
+          scriptRest: null,
+        })
+      )
+    );
+    render(<ActivityStats />);
+    const scripts = await screen.findByTestId('home-activity-scripts');
+    await waitFor(() => expect(scripts.querySelectorAll('[data-rank-row]')).toHaveLength(2));
+    expect(within(scripts).getByRole('link', { name: /0x9b9b.*by data\b/ })).toHaveAttribute(
+      'href',
+      `/mainnet/script/${codeHash}?hashType=data`
+    );
+    expect(within(scripts).getByRole('link', { name: /Default Lock · by data1/ })).toHaveAttribute(
+      'href',
+      '/mainnet/scripts/Default%20Lock'
+    );
+  });
+
   it('charts daily activity with the last day highlighted as the headline', async () => {
     render(<ActivityStats />);
     await waitFor(() =>

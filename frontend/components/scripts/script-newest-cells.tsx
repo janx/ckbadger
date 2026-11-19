@@ -1,4 +1,5 @@
 'use client';
+import { withNameBy } from '@/lib/lock-words';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
@@ -106,7 +107,9 @@ function whatOf({ cell: row, detail, error }: Row, size: ShortSize): What {
     throw new Error(`Cell ${row.txHash}:${row.outputIndex} row has no typeScriptName (R6)`);
   return {
     state: 'typed',
-    text: row.typeScriptName ?? `type ${shortenHash(row.typeCodeHash, size)}`,
+    text: row.typeScriptName
+      ? withNameBy(row.typeScriptName, row.typeScriptNameBy)
+      : `type ${shortenHash(row.typeCodeHash, size)}`,
     href: `/script/${row.typeCodeHash}?hashType=${row.typeHashType}`,
     title: `type script ${row.typeCodeHash} · ${row.typeHashType}`,
   };
