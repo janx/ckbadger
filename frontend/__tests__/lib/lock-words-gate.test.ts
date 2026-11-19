@@ -265,14 +265,13 @@ const DECIDED: Reads = {
 const KNOWN: Reads = {
   // components/asset/cell-versions.tsx left (lane p-assets): a version's lock is cellOwnerLockPart
   // (writer 1)
-  'components/asset/item-evidence.tsx': { 'api name': 1 },
   // components/asset/mnft-detail.tsx (1) and components/asset/object-hero.tsx (5) left (lane P2's
   // follow-up, item 6): the Issued note, the life sentence and the lock footnote say the lock
-  // through the decision's sentence form (cellLockSentence, cellLockWords)
-  // 4 → 3 (lane p-assets): the Owner fact's note is cellOwnerLockPart (writer 5's first read);
-  // the .bit Cell summary's wallet and holder words stay, prose that names a default lock too
-  'components/identity/identity-overview.tsx': { 'api name': 3 },
-  'components/identity/identity-evidence.tsx': { 'api name': 1 },
+  // through the decision's sentence form (cellLockSentence, cellLockWords). Then the rest of the
+  // second round's writers left with them: components/asset/item-evidence.tsx (1, the lock
+  // script's name), components/identity/identity-overview.tsx (3, the .bit Cell summary's minted
+  // and holding locks; its Owner note was cellOwnerLockPart already) and
+  // components/identity/identity-evidence.tsx (1, the name cell's "Lock · …" row)
   'components/address/address-holdings.tsx': { 'script info name': 1 },
   'app/cell/[outpoint]/client-page.tsx': { 'api name': 1, 'registry name': 1 },
   // registry name 1 → 0 (lane D3): the structure's group names, the third copy of the registry
@@ -399,11 +398,15 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // 13 files and 23 reads"): the m-NFT Issued note (known writer 3) and the object hero's prose
   // (known writer 4) say the lock through the decision's sentence form, 23 → 17 known reads in 11
   // files, 36 → 30 in all in 19
-  it('pins the totals: 30 reads in 19 files, the known writers 11 files and 17 reads', () => {
+  // Re-pinned on purpose (lane P2's follow-up, item 6; renamed, it was "… 30 reads in 19 files, …
+  // 11 files and 17 reads"): the item evidence (known writer 2), the identity overview (5) and the
+  // identity evidence (6) say the lock through the decision too, 17 → 12 known reads in 8 files,
+  // 30 → 25 in all in 16; of the second round's six known writers none is left
+  it('pins the totals: 25 reads in 16 files, the known writers 8 files and 12 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(19);
-    expect(total(all)).toBe(30);
-    expect(Object.keys(KNOWN)).toHaveLength(11);
-    expect(total(KNOWN)).toBe(17);
+    expect(Object.keys(all)).toHaveLength(16);
+    expect(total(all)).toBe(25);
+    expect(Object.keys(KNOWN)).toHaveLength(8);
+    expect(total(KNOWN)).toBe(12);
   });
 });

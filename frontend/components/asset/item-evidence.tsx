@@ -15,6 +15,8 @@ import { cn } from '@/lib/utils';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { ShortId } from '@/components/ui/short-id';
 import { Select } from '@/components/ui/select';
+import { cellLockWords } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
   /** F2 identities (round 2, ID-C9): the data map's title for the selected version. */
@@ -28,6 +30,10 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
       : protocol.versions.find((v) => `${v.cell.txHash}:${v.cell.outputIndex}` === selected);
   if (!version) throw new Error(`${protocol.itemId}: missing selected protocol version`);
   const { cell } = version;
+  const lock = readPart(() => {
+    const words = cellLockWords(cell);
+    return words.form === 'not-indexed' ? null : words.name;
+  });
   return (
     <section aria-label="Raw item evidence" className="min-w-0 space-y-5">
       {/* the controls board's select, after its label; the well no wider than the column. A
@@ -55,8 +61,19 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
           <OutpointIndex index={cell.outputIndex} />
         </AppLink>
       </div>
+      {/* the lock script's name is the one decision's (lane P2's follow-up, item 6): a lock on the
+          default lock's code hash by data has no registered name; a refusal fails in place */}
+      {lock.error !== undefined && (
+        <PartReadError
+          what="the lock script"
+          where={`cell ${cell.txHash}:${cell.outputIndex}`}
+          error={lock.error}
+        />
+      )}
       {[
-        { kind: 'lock' as const, script: cell.lock, name: cell.lockName },
+        ...(lock.error === undefined
+          ? [{ kind: 'lock' as const, script: cell.lock, name: lock.value }]
+          : []),
         { kind: 'type' as const, script: cell.type, name: cell.typeName },
       ].map(
         ({ kind, script, name }) =>

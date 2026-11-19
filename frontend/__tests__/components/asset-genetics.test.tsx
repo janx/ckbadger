@@ -1,4 +1,6 @@
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import {
   ObjectGeneticsView,
   ObjectGeneticsEvidence,
@@ -391,6 +393,29 @@ describe('Per-version raw protocol and item context', () => {
     expect(within(lock).getByLabelText('lock script parts')).toHaveTextContent(
       protocol.versions[1].cell.lock.codeHash
     );
+  });
+
+  // Lane P2's follow-up (item 6): the lock script's name is the one decision's, off the cell's lock
+  // and its owner's address: a lock on the default lock's code hash by data is not the default
+  // lock, whose name the registry sends for that code hash (no cell's data hashes to it)
+  it('names the lock script through the decision, never the default lock’s name for a by-data lock', () => {
+    const protocol: ItemProtocol = structuredClone(didProtocolProducer);
+    const cell = protocol.versions[0].cell;
+    const args = `0x${'01'.repeat(20)}`;
+    Object.assign(cell, {
+      lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+      lockName: 'Default Lock',
+      ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+    });
+    const { unmount } = render(<ItemEvidence protocol={protocol} />);
+    expect(screen.getByText(/^lock script ·/)).toHaveTextContent('lock script · Unregistered');
+    unmount();
+    Object.assign(cell, {
+      lock: { ...cell.lock, hashType: 'type' },
+      ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
+    });
+    render(<ItemEvidence protocol={protocol} />);
+    expect(screen.getByText(/^lock script ·/)).toHaveTextContent('lock script · Default Lock');
   });
   it('uses the exact resulting cell and represents burn without a resulting cell', () => {
     const tx = itemTransactionsProducer.data[0];

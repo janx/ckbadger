@@ -215,6 +215,10 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     expect(records).toHaveTextContent('ttl 300');
     expect(records).not.toHaveTextContent('52'.repeat(40));
     const cell = screen.getByRole('region', { name: 'Name cell' });
+    // lane P2's follow-up (item 6): the lock's words are the one decision's, a lock the registry
+    // does not name by its code hash (it was "Lock · not named")
+    expect(cell).toHaveTextContent('Lock · lock 0x41414141…414141');
+    expect(cell).not.toHaveTextContent('Lock · not named');
     expect(cell).toHaveTextContent('the namespace, the same for every name');
     expect(cell).toHaveTextContent('ownership is the owner field in the data');
     expect(await within(cell).findByRole('link', { name: 'ckb.cell' })).toHaveAttribute(

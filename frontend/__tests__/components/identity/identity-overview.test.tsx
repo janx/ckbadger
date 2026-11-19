@@ -299,6 +299,45 @@ describe('.bit witness facts (ID-B1, ID-C6)', () => {
   });
 });
 
+// Lane P2's follow-up (item 6): the .bit Cell summary says the lock it was minted into and the one
+// that holds it now through the decision's sentence form (it said the API's name as "a <name>
+// wallet", "a wallet whose lock is not named" when there was none, and its own article rule)
+describe('.bit Cell summary names its locks through the decision', () => {
+  it('says a lock the registry does not name by its code hash, and the default lock by its name', () => {
+    const protocol = structuredClone(bitCellProtocolProducer) as Extract<
+      ItemProtocol,
+      { kind: 'bit_cell' }
+    >;
+    const summary = () =>
+      render(
+        <IdentitySummary
+          protocol={protocol}
+          term={identityTerm(protocol)}
+          now={NOW}
+          isLive
+          subject="888899.bit"
+        />
+      );
+    const { unmount } = summary();
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      /Minted on \S+ into a lock 0x41414141…414141 that still holds it\./
+    );
+    expect(screen.getByTestId('identity-summary')).not.toHaveTextContent('wallet');
+    unmount();
+    const args = `0x${'01'.repeat(20)}`;
+    for (const v of protocol.versions)
+      Object.assign(v.cell, {
+        lock: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args },
+        lockName: 'Default Lock',
+        ownerAddress: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args }),
+      });
+    summary();
+    expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+      /into a Default Lock that still holds it\./
+    );
+  });
+});
+
 describe('.bit Cell summary when the term has ended', () => {
   it('reads "The name\'s term ended on …"', () => {
     const protocol = structuredClone(bitCellProtocolProducer) as IdentityProtocol;

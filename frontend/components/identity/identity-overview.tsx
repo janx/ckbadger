@@ -1,9 +1,10 @@
 import type { ReactNode } from 'react';
+import { PartReadError, readPart } from '@/components/read-failure';
 import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
-import { cellOwnerLockPart } from '@/components/ui/lock-kind';
+import { cellLockSentence, cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
@@ -449,23 +450,39 @@ export function IdentitySummary({
         protocol.versions.map((v) => v.cell),
         (c) => c.ownerLockHash
       );
-      const wallet = mint.lockName
-        ? `a ${mint.lockName} wallet`
-        : 'a wallet whose lock is not named';
+      // the locks it was minted into and is held under now, in the one decision's sentence form
+      // (lane P2's follow-up, item 6); a refusal says so in its place (ruling D7)
+      const lockOf = (cell: typeof mint) => {
+        const read = readPart(() => cellLockSentence(cell, 'row'));
+        return read.error === undefined ? (
+          read.value
+        ) : (
+          <PartReadError
+            what="the lock"
+            where={`cell ${cell.txHash}:${cell.outputIndex}`}
+            error={read.error}
+          />
+        );
+      };
       body = (
         <>
           Minted on{' '}
           <B>
             <NoBreak>{formatUtc8Date(mint.timestamp)}</NoBreak>
           </B>{' '}
-          into <B>{wallet}</B>
+          into <B>{lockOf(mint)}</B>
           {/* R8: that the cell is no longer live, or outlives its account, is the page's lede */}
           {unitNode(
-            !isLive
-              ? '. '
-              : owners.changes === 0
-                ? ' that still holds it. '
-                : `; since ${formatUtc8Date(owners.since.timestamp)} ${lockPhrase(owners.since.lockName)} holds it. `
+            !isLive ? (
+              '. '
+            ) : owners.changes === 0 ? (
+              ' that still holds it. '
+            ) : (
+              <>
+                ; since {formatUtc8Date(owners.since.timestamp)} {lockOf(owners.since)} holds
+                it.{' '}
+              </>
+            )
           )}
           {term.kind === 'term' && (
             <>

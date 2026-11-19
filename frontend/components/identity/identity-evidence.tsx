@@ -1,4 +1,6 @@
 'use client';
+import { cellLockWords, lockWordsText } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -398,6 +400,9 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
     enabled: !ZERO_ID.test(d.nextId),
     retry: retryTransientOnly,
   });
+  // the name cell's lock in the one decision's words (lane P2's follow-up, item 6): a lock the
+  // registry does not name by its code hash; a refusal says so in the row, the section drawn
+  const lock = readPart(() => lockWordsText(cellLockWords(v.cell), 'row'));
   return (
     <>
       {d.records.length === 0 ? (
@@ -431,8 +436,15 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               </>,
             ],
             [
-              `Lock · ${v.cell.lockName ?? 'not named'}`,
+              lock.error === undefined ? `Lock · ${lock.value}` : 'Lock',
               <>
+                {lock.error !== undefined && (
+                  <PartReadError
+                    what="the lock's words"
+                    where={`cell ${v.cell.txHash}:${v.cell.outputIndex}`}
+                    error={lock.error}
+                  />
+                )}
                 <AppLink look="inline" href={`/address/${v.cell.ownerAddress}`}>
                   <Hash
                     hash={v.cell.ownerAddress}
