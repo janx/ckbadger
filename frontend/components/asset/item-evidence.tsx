@@ -30,13 +30,18 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
   const { cell } = version;
   return (
     <section aria-label="Raw item evidence" className="min-w-0 space-y-5">
-      {/* the controls board's select, after its label; the well no wider than the column */}
+      {/* the controls board's select, after its label; the well no wider than the column. A
+          native select is as wide as its widest option and clips its value where its well is
+          narrower, so an option is the version's number, its block and "current", no word the
+          label says: "12 · #21,016,901 · current", 26 glyphs, 202.8 px at 13 px, the pair 304.4 px
+          with the label "version" (54.6), the gap (10), the well's border (2) and the select's
+          padding (35), inside a 360 px phone's 328 px line up to a five-digit version */}
       <Select
-        label="cell version"
+        label="version"
         value={`${cell.txHash}:${cell.outputIndex}`}
         options={protocol.versions.map((v, i) => ({
           value: `${v.cell.txHash}:${v.cell.outputIndex}`,
-          label: `Version ${i + 1} · block ${formatBlockNumber(v.cell.blockNumber)}${v.cell.isLive ? ' · current' : ''}`,
+          label: `${i + 1} · ${formatBlockNumber(v.cell.blockNumber)}${v.cell.isLive ? ' · current' : ''}`,
         }))}
         onChange={setSelected}
         className="max-w-full"
