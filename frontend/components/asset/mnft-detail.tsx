@@ -1,13 +1,13 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { api, isNotFoundApiError } from '@/lib/api';
+import { api, isNotFoundApiError, type ItemCellVersion } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { NotFoundPage } from '@/components/not-found-page';
-import { ReadFailure } from '@/components/read-failure';
+import { PartReadError, ReadFailure, readPart } from '@/components/read-failure';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetCount } from '@/components/asset/inventory-table';
@@ -31,12 +31,11 @@ import {
   cellLifeSentence,
   ckbText,
   ItemLife,
-  lockFootnote,
-  lockPhrase,
+  LockFootnote,
 } from '@/components/asset/object-hero';
 import { formatCount, countNoun } from '@/lib/format-count';
 import { Utc8Date } from '@/components/ui/utc8-date';
-import { cellOwnerLockPart } from '@/components/ui/lock-kind';
+import { cellLockSentence, cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -343,7 +342,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                   <AppLink look="inline" href={`/blocks/${first.blockNumber}`}>
                     {formatBlockNumber(first.blockNumber)}
                   </AppLink>{' '}
-                  · to {lockPhrase(first.lockName)}
+                  · to <IssuedTo cell={first} />
                 </>
               ) : undefined,
             },
@@ -498,11 +497,12 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               )
             }
           />
-          {lockFootnote(history.data, 'token') && (
-            <p className="text-text-dim text-small max-w-measure">
-              {lockFootnote(history.data, 'token')}
-            </p>
-          )}
+          <LockFootnote
+            versions={history.data}
+            noun="token"
+            // a statement of the token's lock: the reading ink (R3)
+            className="text-text text-small max-w-measure"
+          />
         </div>
       )}
       <section aria-label={`In ${className}`} className="space-y-3">
@@ -573,4 +573,17 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       </section>
     </AssetDetailShell>
   );
+}
+
+/**
+ * The lock the token was issued to, in the Issued fact's note: the one decision's sentence form
+ * (lane P2's follow-up, item 6), a refusal failing the note's part in place (ruling D7).
+ */
+function IssuedTo({ cell }: { cell: ItemCellVersion }) {
+  const read = readPart(() => cellLockSentence(cell, 'row'));
+  if (read.error !== undefined)
+    return (
+      <PartReadError what="the lock it was issued to" where="the Issued fact" error={read.error} />
+    );
+  return <>{read.value}</>;
 }

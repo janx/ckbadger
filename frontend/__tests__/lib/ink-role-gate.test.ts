@@ -266,10 +266,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'the configure bits sentence',
   },
   'components/asset/mnft-detail.tsx': {
+    // prose 4 → 3 (lane P2's follow-up, items 4 and 6): the lock footnote, a statement, is drawn
+    // by object-hero's LockFootnote in the reading ink
     family: 'assets',
-    sites: { prose: 4 },
-    reason:
-      'the renderer URL, the class and set counts and the composition and lock notes in the quiet ink',
+    sites: { prose: 3 },
+    reason: 'the renderer URL, the class and set counts and the composition note in the quiet ink',
   },
   'components/asset/object-hero.tsx': {
     family: 'assets',

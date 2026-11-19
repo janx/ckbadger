@@ -3,6 +3,7 @@
 // (OB-C6), a gel caption clipped at 16 lanes, tier-2 headings in tier-1 style, "bytes 32–32",
 // an m-NFT lock footnote saying "at minting", occupied changes wrapping in the lock-column grid,
 // and Newest rows five lines tall at 390.
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { AlleleGel } from '@/components/ui/allele-gel';
@@ -80,9 +81,18 @@ it('styles tier-2 evidence headings as tier 2 and names one byte as "byte N"', (
 
 it('says "at issue" for an m-NFT token’s lock footnote', () => {
   const v = sporeCellVersionsProducer.data[0];
+  // re-pinned on purpose (lane P2's follow-up, item 6): the footnote reads each lock through the
+  // one decision, which refuses an owner address that spells another lock, so the second version's
+  // owner is the address of its own args (it kept the first version's)
+  const args = '0x' + '02'.repeat(20);
   const versions = [
     { ...v, lockName: 'UniPass', isLive: false },
-    { ...v, lockName: 'PW Lock', lock: { ...v.lock, args: '0x' + '02'.repeat(20) } },
+    {
+      ...v,
+      lockName: 'PW Lock',
+      lock: { ...v.lock, args },
+      ownerAddress: ckbAddress({ codeHash: v.lock.codeHash, args }),
+    },
   ];
   expect(lockFootnote(versions, 'token')).toBe(
     'Lock: UniPass with 20-byte args at issue → PW Lock with 20-byte args now. Type and data never changed.'

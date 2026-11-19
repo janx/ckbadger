@@ -169,11 +169,12 @@ describe('MnftItemDetailPage', () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
     const metrics = screen.getByRole('region', { name: 'Metrics' });
-    await waitFor(() =>
-      expect(within(metrics).getByRole('alert')).toHaveTextContent(
-        new RegExp(`address ${joy} spells the lock`)
-      )
-    );
+    // re-pinned on purpose (lane P2's follow-up, item 6): the Issued fact's note says the lock the
+    // token was issued to through the same decision, so it fails in its place too (one alert was
+    // the owner's note); each says the refusal, and the page is drawn
+    await waitFor(() => expect(within(metrics).getAllByRole('alert')).toHaveLength(2));
+    for (const alert of within(metrics).getAllByRole('alert'))
+      expect(alert).toHaveTextContent(new RegExp(`address ${joy} spells the lock`));
   });
 
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
