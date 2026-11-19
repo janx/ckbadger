@@ -2,7 +2,11 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
-import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
+import {
+  ActivitiesStreamExplorer,
+  dayGroups,
+  drawnAnchors,
+} from '@/components/activities-stream-explorer';
 import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
@@ -1017,5 +1021,44 @@ describe('ActivitiesStreamExplorer filter in the URL (D11)', () => {
       await router.navigate('/mainnet/activities');
     });
     expect(chip('all')).toHaveAttribute('aria-checked', 'true');
+  });
+});
+
+// The P3 follow-up's 2e: the day groups' anchors were kept for every row a live feed had ever
+// drawn, for the feed's whole life. They are what the next render's groups read to keep their
+// keys, so they are bound to the rows drawn now.
+describe('the stream day groups anchors', () => {
+  const rows = (prefix: string, n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      makeActivity({
+        txHash: `0x${prefix}${i}`,
+        timestamp: String(1_700_000_000_000 - i * 1000),
+        participants: [makeParticipant()],
+      })
+    );
+  const now = 1_700_000_100_000;
+
+  it('holds none of the rows a feed drew and dropped', () => {
+    const first = rows('a', 30);
+    let anchors = drawnAnchors(dayGroups(first, now, new Map()), new Map());
+    expect(anchors.size).toBe(30);
+    const later = rows('b', 5);
+    anchors = drawnAnchors(dayGroups(later, now, anchors), anchors);
+    expect([...anchors.keys()]).toEqual(later.map((row) => row.txHash));
+    expect(first.some((row) => anchors.has(row.txHash))).toBe(false);
+  });
+
+  it('keeps a drawn row on the group key it was first drawn in', () => {
+    const page = rows('a', 3);
+    const anchors = drawnAnchors(dayGroups(page, now, new Map()), new Map());
+    const firstKey = anchors.get('0xa0');
+    // a newer row arrives on top of the same day: the group keeps its key
+    const fresh = rows('c', 1).map((row) => ({ ...row, timestamp: String(1_700_000_050_000) }));
+    const groups = dayGroups([...fresh, ...page], now, anchors);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].key).toBe(firstKey);
+    const next = drawnAnchors(groups, anchors);
+    expect(next.get('0xa0')).toBe(firstKey);
+    expect(next.get('0xc0')).toBe(firstKey);
   });
 });

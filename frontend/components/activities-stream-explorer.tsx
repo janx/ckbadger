@@ -145,7 +145,7 @@ function getActivityDayLabel(timestamp: string, now: number): string {
  * block's time may be earlier than its parent's, so near midnight a day can come again after the
  * next) leave every drawn group's key as it was, and no group is remounted under the reader.
  */
-function dayGroups(
+export function dayGroups(
   items: readonly GlobalActivity[],
   now: number,
   anchors: ReadonlyMap<string, string>
@@ -168,6 +168,21 @@ function dayGroups(
     taken.add(key);
     return { key, label, items: rows };
   });
+}
+
+/**
+ * The anchors the next render's `dayGroups` reads: each row drawn now and the group key it was first
+ * drawn in (a row new to the page takes its group's). A row the feed no longer draws is not kept, so
+ * a live feed holds anchors for the rows on the page, never for every row it ever drew.
+ */
+export function drawnAnchors(
+  groups: readonly { key: string; items: readonly GlobalActivity[] }[],
+  previous: ReadonlyMap<string, string>
+): Map<string, string> {
+  const next = new Map<string, string>();
+  for (const group of groups)
+    for (const row of group.items) next.set(itemKey(row), previous.get(itemKey(row)) ?? group.key);
+  return next;
 }
 
 function mergeUniqueActivities(
@@ -504,14 +519,11 @@ export function ActivitiesStreamExplorer({
   };
 
   // each drawn row's day group key, as first drawn (`dayGroups`): a prepend or an older page never
-  // re-keys a group that already holds a drawn row
-  const groupAnchors = useRef(new Map<string, string>());
+  // re-keys a group that already holds a drawn row; only the rows drawn now are kept (`drawnAnchors`)
+  const groupAnchors = useRef<ReadonlyMap<string, string>>(new Map());
   const groups = dayGroups(visibleItems, now, groupAnchors.current);
   useEffect(() => {
-    for (const group of groups)
-      for (const row of group.items)
-        if (!groupAnchors.current.has(itemKey(row)))
-          groupAnchors.current.set(itemKey(row), group.key);
+    groupAnchors.current = drawnAnchors(groups, groupAnchors.current);
   });
 
   const initialError = !awaited && !!error && visibleItems.length === 0;
