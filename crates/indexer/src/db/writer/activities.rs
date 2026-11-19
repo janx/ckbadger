@@ -9,8 +9,8 @@ use std::sync::OnceLock;
 
 use ckbadger_store::types::{
     IdentityStandard, ItemDelta, ItemKind, LockCallEntry, ParticipantDelta, ParticipantId,
-    ProtocolAction, TxActions, TypeCallEntry, TAG_CELLBASE, TAG_DAO, TAG_LOCK_CALL, TAG_PROTOCOL,
-    TAG_TYPE_CALL,
+    ProtocolAction, TxActions, TypeCallEntry, TAG_CELLBASE, TAG_DAO, TAG_INPUT, TAG_LOCK_CALL,
+    TAG_PROTOCOL, TAG_TYPE_CALL,
 };
 
 use crate::parser::{
@@ -292,9 +292,9 @@ pub struct NamedParticipant {
 
 /// Whether a participant holds an input / output cell in this transaction.
 ///
-/// Never persisted: it is what the row emitter needs to pick an `AddrTxValue`
-/// tx_type, and it travels beside `TxActions.participants` rather than inside
-/// each `ParticipantDelta`.
+/// What the row emitter needs to pick an `AddrTxValue` tx_type; it travels
+/// beside `TxActions.participants`. The inputs' side is also kept in the row,
+/// as the participant's [`TAG_INPUT`] bit, set from the same field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParticipantIo {
     pub has_inputs: bool,
@@ -506,6 +506,11 @@ pub struct OwnerAccum<'a> {
     pub(crate) lock_args: Option<&'a [u8]>,
     pub(crate) input_capacity: i128,
     pub(crate) output_capacity: i128,
+    /// This owner's lock is the lock of at least one input: it sent. Decided
+    /// by the input being there, not by its capacity ([`TAG_INPUT`]).
+    pub(crate) has_input: bool,
+    /// This owner's lock is the lock of at least one output.
+    pub(crate) has_output: bool,
     pub(crate) input_used: i64,
     pub(crate) output_used: i64,
     /// UDT: type_script_hash -> (input_amount, output_amount). u128 amounts (per the
@@ -622,6 +627,7 @@ fn build_tx_actions<'a>(
             input.lock_args,
         )?;
         accum.involved_scripts.insert(input.lock_code_hash);
+        accum.has_input = true;
         accum.input_capacity += input.capacity as i128;
         accum.input_used += input.occupied_capacity;
 
@@ -654,6 +660,7 @@ fn build_tx_actions<'a>(
             cell.lock_args,
         )?;
         accum.involved_scripts.insert(cell.lock_code_hash);
+        accum.has_output = true;
         accum.output_capacity += cell.capacity as i128;
 
         // Compute occupied for output
@@ -967,6 +974,11 @@ fn build_tx_actions<'a>(
         if !accum.unrecognized_lock_calls.is_empty() {
             tags |= TAG_LOCK_CALL;
         }
+        // The senders bit: this lock holds at least one of the transaction's
+        // inputs. The one place it is set, for live sync and bulk build alike.
+        if accum.has_input {
+            tags |= TAG_INPUT;
+        }
 
         // A named party that IS this cell owner contributes its item deltas and
         // roles here rather than becoming a second participant for one person.
@@ -985,12 +997,13 @@ fn build_tx_actions<'a>(
             tags,
             roles,
         });
-        // Cell capacities are always >= 61 CKB, so a non-zero capacity sum is
-        // exactly "this participant had a cell on that side". Cellbase has no
-        // inputs, which reads as `has_inputs: false` on its own.
+        // Which sides this participant had a cell on, by the cells being there
+        // (the senders bit above is the inputs' side, from the same field).
+        // Cellbase has no inputs, which reads as `has_inputs: false` on its
+        // own.
         participant_io.push(ParticipantIo {
-            has_inputs: accum.input_capacity > 0,
-            has_outputs: accum.output_capacity > 0,
+            has_inputs: accum.has_input,
+            has_outputs: accum.has_output,
         });
     }
 
@@ -3655,6 +3668,119 @@ mod tests {
             "production entry point must run the production detectors; got {:?}",
             actions_list[0].protocol_actions
         );
+    }
+
+    // ---- The senders bit (TAG_INPUT) ----
+
+    /// A participant carries `TAG_INPUT` exactly when its lock is the lock of
+    /// at least one of the transaction's inputs: the payer of a transfer, a
+    /// self transfer's one lock, each of two payers; never a payee holding no
+    /// input, never a cellbase's party. The addr_txs side (`has_inputs`) says
+    /// the same, from the same field.
+    #[test]
+    fn senders_bit_marks_exactly_the_locks_of_the_inputs() {
+        for owned in legacy_fixture_txs() {
+            let tx = owned.view();
+            let input_locks: std::collections::BTreeSet<&[u8]> =
+                tx.inputs.iter().map(|i| i.lock_script_hash).collect();
+            let built = build_tx_actions_for_block_with_io(std::slice::from_ref(&tx), &[])
+                .unwrap()
+                .remove(0);
+            for (p, io) in built.actions.participants.iter().zip(&built.participant_io) {
+                let holds = input_locks.contains(p.id.as_bytes());
+                assert_eq!(
+                    p.sent(),
+                    holds,
+                    "{}: participant 0x{} tags {:#b}",
+                    owned.name,
+                    hex::encode(p.id.as_bytes()),
+                    p.tags
+                );
+                assert_eq!(io.has_inputs, holds, "{}", owned.name);
+            }
+            if owned.is_cellbase {
+                assert!(
+                    built.actions.participants.iter().all(|p| !p.sent()),
+                    "a cellbase has no sender"
+                );
+            }
+        }
+    }
+
+    /// The edge the rule decides: an input of zero capacity is still an input
+    /// ("its lock is the lock of at least one input", not "its inputs' capacity
+    /// is above zero"), and an output of zero capacity still an output. The
+    /// chain holds no such cell (every cell's capacity covers its occupied
+    /// bytes), so the rule and the capacity test agree on chain; the builder
+    /// decides by the cell being there.
+    #[test]
+    fn a_zero_capacity_input_still_makes_its_lock_a_sender() {
+        let input = make_input(0x11, 0, 0);
+        let output = make_output(0x22, 0, None, None, None, vec![]);
+        let tx = one_transfer_tx(&input, &output);
+        let built = build_tx_actions_for_block_with_io(&[tx], &[])
+            .unwrap()
+            .remove(0);
+        let payer = find_participant(&built.actions, 0x11);
+        let payee = find_participant(&built.actions, 0x22);
+        assert!(payer.sent(), "tags {:#b}", payer.tags);
+        assert!(!payee.sent(), "tags {:#b}", payee.tags);
+        let io = |id: &ParticipantDelta| {
+            let at = built
+                .actions
+                .participants
+                .iter()
+                .position(|p| p.id == id.id)
+                .unwrap();
+            built.participant_io[at]
+        };
+        assert_eq!(
+            io(payer),
+            ParticipantIo {
+                has_inputs: true,
+                has_outputs: false
+            }
+        );
+        assert_eq!(
+            io(payee),
+            ParticipantIo {
+                has_inputs: false,
+                has_outputs: true
+            }
+        );
+    }
+
+    /// A party a protocol names and whose lock holds no cell in the
+    /// transaction did not send; a named party that IS a cell owner who spent
+    /// keeps that owner's bit.
+    #[test]
+    fn a_named_party_sends_only_as_the_cell_owner_it_is() {
+        let input = make_input(0x11, 1000, 61);
+        let output = make_output(0x11, 990, None, None, None, vec![]);
+        for (named, sent) in [
+            (ParticipantId::LockPrefix([0x77; 20]), false),
+            (ParticipantId::LockPrefix([0x11; 20]), true),
+        ] {
+            let detectors: Vec<Box<dyn ProtocolDetector>> =
+                vec![Box::new(test_detectors::NamingDetector {
+                    id: named,
+                    delta_negative: false,
+                    roles: participant_roles::OWNER_TO,
+                })];
+            let built =
+                build_tx_actions_for_block_with_io(&[one_transfer_tx(&input, &output)], &detectors)
+                    .unwrap()
+                    .remove(0);
+            let owner = find_participant(&built.actions, 0x11);
+            assert!(owner.sent(), "the spending owner sent");
+            let party = built
+                .actions
+                .participants
+                .iter()
+                .find(|p| p.id == named || (sent && p.id == ParticipantId::Lock([0x11; 32])))
+                .unwrap();
+            assert_eq!(party.sent(), sent, "{named:?}");
+        }
     }
 
     // ---- Phase 1a: protocol-named participants ----

@@ -235,6 +235,13 @@ byte outside `0..=4` fails when the row is decoded, naming the byte, and every r
 that error with its lock/block/tx context — a corrupt byte is never rendered as some default
 label. The stored bytes of every valid row are unchanged.
 
+**The senders bit** (resync/int): `ParticipantDelta.tags` bit 8 (`TAG_INPUT`, `0x100`) says the
+participant's lock is the lock of at least one input of the transaction. It lives in the
+`tx_actions` row and, through `AddrTxValue.tags`, in the `addr_txs` / `addr_txs_by_prefix` rows:
+domain store only, `CF_CELLS` untouched, and no value changes size (`tags` was already a `u16`).
+A rollback deletes the rows of the blocks it removes, and the bit with them. A store built before
+the bit holds rows without it, which read as "nobody sent": re-sync from genesis.
+
 **`addr_balance.cellbase_txs_count`** (W5) counts the cellbase transactions among `txs_count`.
 Both forward paths increment it through `AddressBalance::cellbase_tx_increment` — bulk inside the
 address reducer's existing row update, live in the parser's `fold_tx_address_deltas` — and a

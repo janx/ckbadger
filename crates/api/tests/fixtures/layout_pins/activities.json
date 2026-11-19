@@ -15,7 +15,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 0,
+          "tags": 256,
           "usedDelta": "-6100000000"
         },
         {
@@ -51,7 +51,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 0,
+          "tags": 256,
           "usedDelta": "-6100000000"
         },
         {
@@ -100,7 +100,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 4,
+          "tags": 260,
           "usedDelta": "-12900000000"
         },
         {
@@ -162,7 +162,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 2,
+          "tags": 258,
           "usedDelta": "-20200000000"
         },
         {
@@ -217,7 +217,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 0,
+          "tags": 256,
           "usedDelta": "0"
         },
         {
@@ -290,7 +290,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 0,
+          "tags": 256,
           "usedDelta": "0"
         }
       ],
@@ -315,7 +315,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 0,
+          "tags": 256,
           "usedDelta": "0"
         },
         {
@@ -381,7 +381,7 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "roles": [],
-          "tags": 0,
+          "tags": 256,
           "usedDelta": "0"
         }
       ],

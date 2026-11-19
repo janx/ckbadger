@@ -180,9 +180,12 @@ pub const TAG_PROTOCOL: u16  = 1 << 4;  // 0x10 — TX has protocol_actions
 pub const TAG_CELLBASE: u16  = 1 << 5;  // 0x20 — cellbase transaction
 pub const TAG_TYPE_CALL: u16 = 1 << 6;  // 0x40 — TX has unrecognized type scripts
 pub const TAG_LOCK_CALL: u16 = 1 << 7;  // 0x80 — TX has non-standard lock scripts
+pub const TAG_INPUT: u16     = 1 << 8;  // 0x100 — this party's lock is an input's lock: it sent
 ```
 
 Tags are set during the build phase and stored on each `ParticipantDelta`. A single participant can have multiple tags set simultaneously (e.g., `TAG_TOKEN | TAG_PROTOCOL`).
+
+`TAG_INPUT` (resync/int) records who sent: the participant's lock is the lock of at least one input of the transaction, decided by the input being there, whatever its capacity. The one activity builder (`build_tx_actions_for_block_with_io`) sets it for live sync and bulk build alike, from the same field that gives the addr_txs row its side (`ParticipantIo.has_inputs`). A cellbase and a party a protocol names but whose lock holds no cell never carry it. It is no kind: no filter and no classification reads it. It reaches `AddrTxValue.tags` with the other bits.
 
 ### TypeCallEntry — Unrecognized Type Script
 
