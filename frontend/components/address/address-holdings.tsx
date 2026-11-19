@@ -73,14 +73,14 @@ export function AddressLoadState({
         ? `${label} unavailable.`
         : null;
   if (sentence === null) return null;
-  // a failed read is a statement, the reading ink; the loading and unavailable line is quiet, a
-  // transient or empty line (R3; lane P1 follow-up)
+  // a failed read is a statement, the reading ink, and so are the loading and the unavailable
+  // line: sentences, none of the quiet roles (lane P1, the ink and size roles; they were quiet)
   return error ? (
     <p className="text-text text-small max-w-measure py-3" role="alert">
       {sentence}
     </p>
   ) : (
-    <p className="text-text-dim text-small max-w-measure py-3" role="status">
+    <p className="text-text text-small max-w-measure py-3" role="status">
       {sentence}
     </p>
   );
@@ -205,8 +205,8 @@ function ExactParts({ shannons }: { shannons: bigint }) {
  * (`DetailFacts`). The parts are the route's three, each true by its name, that make the balance
  * exactly (lane P1, third round; the lead's ruling on review p-logic-chain MUST 3 and SHOULD 3):
  * "in Nervos DAO cells" (their whole capacity, as "Deposited" says it), "occupied" (what pays for
- * the bytes of its other cells) and "free" (the rest of those), with one quiet line saying what
- * "free" is. None is "spendable" (it was: said of the genesis burn cell's 8.4 billion and a
+ * the bytes of its other cells) and "free" (the rest of those), with one line saying what "free"
+ * is (a sentence, the reading ink; lane P1, the ink and size roles: it was quiet). None is "spendable" (it was: said of the genesis burn cell's 8.4 billion and a
  * miner's immature rewards), and a part with nothing in it is not drawn.
  */
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
@@ -328,7 +328,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                         value: (
                           <>
                             <ExactParts shannons={daoCells} />{' '}
-                            <span className="text-text-dim">{daoCellsNote(holdings)}</span>
+                            <span className="text-text">{daoCellsNote(holdings)}</span>
                           </>
                         ),
                       },
@@ -341,7 +341,7 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                         value: (
                           <>
                             <ExactParts shannons={occupied} />{' '}
-                            <span className="text-text-dim">pays for the bytes of {cells}</span>
+                            <span className="text-text">pays for the bytes of {cells}</span>
                           </>
                         ),
                       },
@@ -352,11 +352,11 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                   : []),
               ]}
             />
-            {/* what "free" is, said once in a quiet line (the lead's ruling): no part is called
+            {/* what "free" is, said once in a line of its own (the lead's ruling): no part is called
                 spendable, since the page cannot know what a lock, a since or a cellbase's
                 maturity allows */}
             {free > BigInt(0) && (
-              <div data-testid="free-note" className="text-text-dim max-w-measure mt-1.5">
+              <div data-testid="free-note" className="text-text max-w-measure mt-1.5">
                 Free is the CKB {cells} hold beyond what their bytes occupy; their locks, any since
                 on them and a cellbase reward’s maturity decide whether it can be spent.
               </div>
@@ -516,7 +516,7 @@ function HoldingSection({
           <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
         </h3>
-        <span className="text-text-dim text-small max-w-full">{summary}</span>
+        <span className="text-text text-small max-w-full">{summary}</span>
       </div>
       {children}
     </section>
@@ -722,13 +722,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                 )}
               </button>
             ))}
-          {/* Lane A follow-up (C14): the classes it does not hold are one quiet line, their zero
-              figures in its title. */}
+          {/* Lane A follow-up (C14): the classes it does not hold are one line, their zero figures
+              in its title (a sentence, the reading ink: lane P1, the ink and size roles) */}
           {spaceOrder(holdings).some(
             (c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0)
           ) && (
             <span
-              className="text-text-dim sm:col-span-2"
+              className="text-text sm:col-span-2"
               title={spaceOrder(holdings)
                 .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0))
                 .map((c) => `${c.label} 0 B`)
@@ -879,8 +879,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       </Link>{' '}
                       <span className="text-text-dim">{formatStandard(t.standard)}</span>
                       {sharedNames(tokens.data.data).has(tokenName(t) ?? '') && (
-                        <span data-type-hash className="text-meta ml-2">
-                          <Hash hash={t.typeScriptHash} size="row" className="text-meta" />
+                        <span data-type-hash className="ml-2">
+                          <Hash hash={t.typeScriptHash} size="row" className="text-small" />
                         </span>
                       )}
                     </span>
@@ -1088,7 +1088,7 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
           </div>
         );
       })}
-      <p className="text-text-dim text-small max-w-measure mt-3.5">
+      <p className="text-text text-small max-w-measure mt-3.5">
         Open a collection to list its objects here; every object is one live cell of this address.
       </p>
     </div>
@@ -1170,7 +1170,7 @@ function AddressCollectionObjects({
                   </span>
                   <span role="cell" className="min-w-0">
                     {d.compositionTier === null ? (
-                      <span className="text-text-dim">Composition unavailable</span>
+                      <span className="text-text">Composition unavailable</span>
                     ) : (
                       <CompositionBadge tier={d.compositionTier} size="sm" />
                     )}

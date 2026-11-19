@@ -215,13 +215,17 @@ export function BalanceChanges({
                 role="row"
                 data-testid="tx-balance-net"
                 style={BALANCE_TRACKS}
-                className={cn(BALANCE_GRID, 'text-text-dim items-baseline py-2')}
+                className={cn(BALANCE_GRID, 'text-text items-baseline py-2')}
               >
                 {readable(activity.txHash, () => {
                   const n = net();
                   return (
                     <>
-                      <span role="cell">Net</span>
+                      {/* the net row's figures and its note in the reading ink, its name quiet
+                          (lane P1, the ink and size roles: the whole row was quiet) */}
+                      <span role="cell" className="text-text-dim">
+                        Net
+                      </span>
                       <span role="cell" className="text-right">
                         <CkbAmount form="column" shannons={n.ckb} tone="plain" />
                       </span>
@@ -324,14 +328,16 @@ export function BalanceChanges({
               })}
               <li
                 data-testid="tx-balance-net"
-                className="border-row-rule text-text-dim text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t pt-2.5"
+                className="border-row-rule text-text text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t pt-2.5"
               >
                 {readable(activity.txHash, () => {
                   const n = net();
                   return (
                     <>
                       <span>
-                        Net <CkbAmount form="summary" shannons={n.ckb} tone="plain" /> · occupied{' '}
+                        <span className="text-text-dim">Net</span>{' '}
+                        <CkbAmount form="summary" shannons={n.ckb} tone="plain" />{' '}
+                        <span className="text-text-dim">· occupied</span>{' '}
                         <span className="text-text whitespace-nowrap tabular-nums">
                           {formatOccupiedDelta(
                             n.occupied.toString(),

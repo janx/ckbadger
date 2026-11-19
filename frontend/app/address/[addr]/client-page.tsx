@@ -325,7 +325,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       })}
                     />
                   ) : (
-                    <p className="text-text-dim text-small">Script unavailable</p>
+                    <p className="text-text text-small">Script unavailable</p>
                   )}
                 </DetailSection>
                 <ScriptNames lockHash={a.lockScriptHash} address={a.address ?? null} />
@@ -534,7 +534,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           more={activities.data.hasMore}
                         />
                       ) : (
-                        <p className="text-text-dim text-small max-w-measure py-6">
+                        <p className="text-text text-small max-w-measure py-6">
                           {filter === 'all'
                             ? 'No activities.'
                             : `No ${activityFilters.find((f) => f[0] === filter)![1]} activities on this page.`}

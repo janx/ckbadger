@@ -5,6 +5,7 @@ import { BLOCK_TILE_HEIGHT, BlockPosition } from '@/components/blocks/block-posi
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { rects, roundedRects } from '@/__tests__/utils/square-corners';
 import { fullText } from '@/__tests__/utils/full-text';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 import {
   allTextLines,
   expectApart,
@@ -92,6 +93,23 @@ describe('BlockPosition', () => {
     expect(
       screen.getByText(/Incoming relationships cover transaction page 2 only/)
     ).toBeInTheDocument();
+  });
+  // lane P1, the ink and size roles: the line saying the origins are being read is a sentence,
+  // the reading ink (it was quiet); an uncle row's "Uncle parent → included uncle" names the two
+  // links under it, a label, quiet
+  it('says the proposal origins being read in the reading ink, the uncle row’s label quiet', () => {
+    render(
+      <BlockPosition
+        block={block}
+        transactions={undefined}
+        proposals={[outgoing]}
+        page={1}
+        hasMore={false}
+      />
+    );
+    expect(inkOf(screen.getByText('Reading transaction proposal origins…'))).toBe(READING);
+    for (const label of screen.getAllByText('Uncle parent → included uncle'))
+      expect(inkOf(label)).toBe(QUIET);
   });
   it('does not fabricate a next canonical block at the tip or an origin for cellbase', () => {
     render(

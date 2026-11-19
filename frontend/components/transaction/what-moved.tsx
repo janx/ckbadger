@@ -292,12 +292,13 @@ function Plate({
         )}
       </span>
       {asset.kind === 'object' && (
-        <Link look="inline" href={getObjectDetailHref(asset.item.objectId)} className="text-meta">
+        // the object's id is a link, at the plate's 13 px (lane P1, the ink and size roles: 12)
+        <Link look="inline" href={getObjectDetailHref(asset.item.objectId)}>
           <ShortId value={asset.item.objectId} kind="hash" size={size} />
         </Link>
       )}
       {showTotal && (
-        <span className="text-meta" data-flow-total>
+        <span data-flow-total>
           <Amount asset={asset} amount={flow.total} size={size} />{' '}
           <span className="text-text-dim">in all</span>
         </span>

@@ -13,6 +13,8 @@ import { CELL_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { color, inkOnFill, type PaletteKey } from '@/lib/palette';
 import { HEX_BOX_INSET_PX, hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const cell = {
   txHash: `0x${'01'.repeat(32)}`,
@@ -516,6 +518,35 @@ describe('cell microscope field detail rail (old issue B)', () => {
   // Lane P1 (the F1 follow-up in the page-lane notes): an ELF region's words stood in the page
   // ground's ink (`text-base-bg`) on the region's tone at 35 %, 2.04 : 1 by night and 1.72 by day.
   // They take the fill-ink rule's ink for that fill (`inkOnFill`), which reads at text grade.
+  // lane P1, the ink and size roles: the line saying how many ELF fields the index leaves to the
+  // line under their bytes is a sentence, the reading ink at 13 px (it was quiet, 12 px); a cell
+  // with no data says so in the reading ink (it was quiet)
+  it('says the fields it leaves out of the index, and a cell with no data, in the reading ink', () => {
+    const { unmount } = render(<CellMicroscope cell={elfCell} />);
+    const more = screen.getByText(/^\+ \d+ more ELF header fields and program headers/);
+    expect(inkOf(more)).toBe(READING);
+    expect(typeStepOf(more)).toBe('small');
+    unmount();
+    render(
+      <CellMicroscope
+        cell={
+          {
+            ...cell,
+            data: '0x',
+            dataSize: 0,
+            dataAnalysis: undefined,
+            // the fixture's CellOutput occupies 2 of its 6 bytes; with no data, 2 in all
+            commonKnowledgeSizeBreakdown: {
+              ...cell.commonKnowledgeSizeBreakdown!,
+              dataBytes: 0,
+              totalBytes: 2,
+            },
+          } as Cell
+        }
+      />
+    );
+    expect(inkOf(screen.getByText('No data: the cell carries 0 bytes.'))).toBe(READING);
+  });
   it('writes an ELF region’s words in the ink its fill reads in (P1)', () => {
     render(<CellMicroscope cell={elfCell} />);
     const map = screen.getByRole('group', { name: 'ELF binary map' });

@@ -78,7 +78,7 @@ function readTransaction(
   if (isAwaited(transaction) || (dependencies !== null && isAwaited(dependencies)))
     return {
       node: (
-        <p className="text-text-dim text-small max-w-measure">
+        <p className="text-text text-small max-w-measure">
           Loading {label.toLowerCase()} transaction {what}…
         </p>
       ),
@@ -281,7 +281,7 @@ function NotSpentYet({
           </span>
         )}
       </div>
-      <div className="text-text-dim">
+      <div className="text-text">
         {replaced
           ? 'The transaction that replaces or destroys it will run:'
           : 'The transaction that spends it will run:'}
@@ -300,7 +300,7 @@ function NotSpentYet({
                   <ShortId value={requirement.referenceHash} kind="hash" size="row" />
                 )}
               </Link>
-              <span className="text-text-dim">
+              <span className="text-text">
                 {' '}
                 ·{' '}
                 {requirement.resolution === 'builtin'
@@ -330,7 +330,8 @@ function NotSpentYet({
           </div>
         ))}
       </div>
-      <p className="text-text-dim text-meta">
+      {/* a sentence, the reading ink at 13 px (lane P1, the ink and size roles: quiet, 12 px) */}
+      <p className="text-text text-small">
         Current code cells at the indexed tip; the spender picks its own cell deps.
       </p>
     </div>

@@ -249,8 +249,11 @@ export function ScriptGroupMatrix({
                   onMouseLeave={() => onHover?.(null)}
                   onFocus={() => onHover?.({ t: 'cell', id: c.id })}
                   onBlur={() => onHover?.(null)}
+                  // the cell's name links to the cell, at 13 px (lane P1, the ink and size roles: it
+                  // took the head row's 12): "out #9999", 9 glyphs at 7.8 px, 70.2 px of CELL_W 72;
+                  // its side above and its capacity below stay the head's 12 px labels
                   className={cn(
-                    'flex flex-col items-center text-center transition-opacity',
+                    'text-small flex flex-col items-center text-center transition-opacity',
                     lit?.cells.has(c.id) ? 'text-text-bright' : 'text-text',
                     dim(lit?.cells.has(c.id) ?? false) && 'opacity-25'
                   )}
@@ -466,13 +469,14 @@ function GroupList({
                   {g.ran ? '' : ' of the outputs'}
                 </span>
               </span>
-              <span className="text-meta whitespace-nowrap">
+              <span className="whitespace-nowrap">
                 {g.ran || g.status ? cyclesLine(g, 'cycles not available') : 'not run'}
               </span>
             </div>
             {/* what the group runs on or guards: a statement in the reading ink, for a group only
-                attached as for one that ran (R3; lane P1 follow-up) */}
-            <p data-line="runs" className="text-text text-meta max-w-measure">
+                attached as for one that ran (R3; lane P1 follow-up), at the list's 13 px (lane P1,
+                the ink and size roles: it was 12, as were the cycles and the evidence line) */}
+            <p data-line="runs" className="text-text max-w-measure">
               <span
                 aria-hidden="true"
                 data-dot={g.ran ? 'ran' : 'attached'}
@@ -512,10 +516,7 @@ function GroupList({
                 </>
               )}
             </p>
-            <div
-              data-line="evidence"
-              className="text-text-dim text-meta flex flex-wrap gap-x-3 gap-y-0.5"
-            >
+            <div data-line="evidence" className="text-text-dim flex flex-wrap gap-x-3 gap-y-0.5">
               <span className="min-w-0 [overflow-wrap:anywhere]">{unitNode(g.sub('tight'))}</span>
               {g.code('tight') !== null && (
                 <span className="min-w-0 [overflow-wrap:anywhere]">{g.code('tight')}</span>

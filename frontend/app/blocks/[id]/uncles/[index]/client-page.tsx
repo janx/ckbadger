@@ -221,7 +221,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
                 ))}
               </ul>
             ) : (
-              <p className="text-text-dim text-small">This uncle proposed nothing.</p>
+              <p className="text-text text-small">This uncle proposed nothing.</p>
             )}
           </DetailSection>
           <DetailSection title="Header">

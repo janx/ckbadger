@@ -26,6 +26,8 @@ import { formatUtc8Date } from '@/lib/utils';
 import { factsOf } from '@/__tests__/utils/facts';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 describe('Address v3 components', () => {
   it('keeps the balance hero once and preserves a single shannon in the partition', () => {
@@ -146,7 +148,11 @@ describe('Address v3 components', () => {
       expect(screen.getByTestId('free-note')).toHaveTextContent(
         'Free is the CKB its cells hold beyond what their bytes occupy; their locks, any since on them and a cellbase reward’s maturity decide whether it can be spent.'
       );
-      expect(screen.getByTestId('free-note')).toHaveClass('text-text-dim');
+      // re-pinned on purpose (lane P1, the ink and size roles, item 3: a note that is a sentence
+      // takes the reading ink wherever it is drawn; it was the quiet ink)
+      expect(inkOf(screen.getByTestId('free-note'))).toBe(READING);
+      // the clause after a part's figure finishes its sentence: the reading ink (it was quiet)
+      expect(inkOf(screen.getByText('pays for the bytes of its cells'))).toBe(READING);
     });
 
     it('keeps a share that cannot fit inside its part in the part title, never cut', () => {
@@ -178,6 +184,9 @@ describe('Address v3 components', () => {
         ['occupied', '6,607 CKB pays for the bytes of its other cells'],
         ['free', '54,571.35338057 CKB'],
       ]);
+      // lane P1, the ink and size roles: "in 5 deposits" finishes the DAO part's sentence, the
+      // reading ink (it was quiet)
+      expect(inkOf(screen.getByText('in 5 deposits'))).toBe(READING);
       // re-pinned on purpose (the third read's Lb NOTE 2): a lock is not all that holds free CKB;
       // a since and a cellbase reward's maturity hold it too (it read "their locks decide")
       expect(screen.getByTestId('free-note')).toHaveTextContent(
@@ -369,11 +378,33 @@ describe('Address v3 components', () => {
     // a phone row's summary form (R5, re-pinned on purpose: was "1,000.00000000 CKB")
     expect(lines[0].right).toBe('1,000 CKB');
     expect(lines[2].left).toMatch(/^occupied .+ CKB · created #[\d,]+$/);
+    // lane P1, the ink and size roles: the figures are values, in the line's reading ink, their
+    // names quiet labels; the line's size is the phone row's quiet line (it set the quiet ink and
+    // the meta step over both)
+    const figures = row.querySelector('[data-line="figures"]')!;
+    expect(inkOf(within(figures as HTMLElement).getByText('occupied'))).toBe(QUIET);
+    expect(inkOf(within(figures as HTMLElement).getByText('created'))).toBe(QUIET);
+    expect(inkOf(figures.querySelector('[data-ckb-amount]')!)).toBe(READING);
     expect(
       screen
         .getByRole('list', { name: 'Live cells, compact' })
         .querySelector('a[href*="hashType=data1&kind=type"]')
     ).not.toBeNull();
+  });
+  // lane P1, the ink and size roles: on a wide phone row the figures end the contents line, at
+  // its 13 px (they set the meta step on themselves, 12 px inside a 13 px line)
+  it('sets the live cell’s figures at the contents line’s size on a wide phone row', () => {
+    atContainerWidth(600);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    render(<AddressLiveCells rows={addressProducerCells.data} />);
+    const [row] = screen.getAllByTestId('address-cell-row-mobile');
+    expect(phoneLines(row).map((l) => l.key)).toEqual(['cell', 'contains']);
+    const contains = row.querySelector('[data-line="contains"]')!;
+    expect(typeStepOf(contains.querySelector('[data-ckb-amount]')!)).toBe('small');
+    expect(inkOf(within(contains as HTMLElement).getByText('occupied'))).toBe(QUIET);
   });
   // The seals by kind (C3 for the address's cells, lane C4): every live cell leads with its own
   // 30 px row seal, in force (pressed: a live cell); no owner's stone (every cell here is the page

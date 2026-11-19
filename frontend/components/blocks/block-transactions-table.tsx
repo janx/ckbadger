@@ -103,7 +103,9 @@ const BLOCK_TX_PHONE_HEAD_PX = phoneHead(
 
 /**
  * The BlockTxs board: one raw row per transaction of a block, cellbase first and set back
- * ("cellbase", 0 → 1, a grey size bar), size and cycles on the block's own round scales.
+ * ("cellbase", 0 → 1, a grey size bar), size and cycles on the block's own round scales. It is set
+ * back by those marks, not by its ink: a table cell's content reads in the reading ink, the
+ * cellbase's as every other's (lane P1, the ink and size roles; the whole row was quiet).
  */
 export function BlockTransactionsTable({
   transactions,
@@ -130,15 +132,15 @@ export function BlockTransactionsTable({
   );
   const proposedIn = (tx: Transaction) =>
     blockNumber === 0 ? (
-      <span className="text-text-dim">genesis</span>
+      <span className="text-text">genesis</span>
     ) : tx.isCellbase ? (
-      <span className="text-text-dim">cellbase</span>
+      <span className="text-text">cellbase</span>
     ) : (
       <span className="whitespace-nowrap">
         <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`} look="inline">
           {formatBlockNumber(tx.proposalOrigin!.blockNumber)}
         </Link>
-        <span className="text-text-dim">
+        <span className="text-text">
           {' '}
           +{tx.proposalOrigin!.distance}
           {tx.proposalOrigin!.uncle ? ' · uncle' : ''}
@@ -271,7 +273,9 @@ export function BlockTransactionsTable({
       className: 'whitespace-nowrap',
       render: (tx) =>
         tx.cycles === null ? (
-          <span className="text-text-dim">
+          // words, which may break between them in the column's nowrap (the cell rule: "Replay
+          // failed", 101.4 px at 13 px, holds the column's 143.8 on one line)
+          <span className="text-text whitespace-normal">
             {tx.cyclesStatus === 'failed' ? 'Replay failed' : 'Not yet run'}
           </span>
         ) : (
@@ -290,7 +294,6 @@ export function BlockTransactionsTable({
       rows={transactions}
       columns={columns}
       rowKey={(tx) => tx.hash}
-      rowClassName={(tx) => (tx.isCellbase ? 'text-text-dim' : '')}
       empty="No transactions."
       // The phone-rows board's row: the hash and its output; where it was proposed; quiet, its
       // index, its cells and its fee (the cards from 560 px keep its bytes and cycles there too).

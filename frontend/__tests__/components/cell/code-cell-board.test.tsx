@@ -4,6 +4,8 @@ import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { elfParts } from '@/lib/cell-parts';
 import type { Cell } from '@/lib/api';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const txA = `0x${'11'.repeat(32)}`;
 const txB = `0x${'22'.repeat(32)}`;
@@ -196,6 +198,17 @@ describe('CodeCellBoard', () => {
       `/mainnet/script/${reference}?hashType=type`
     );
     expect(screen.getByText(/· 11 live cells/)).toBeInTheDocument();
+    // lane P1, the ink and size roles: the reference's link and its count at 13 px (they were 12)
+    expect(typeStepOf(screen.getByRole('link', { name: `type · ${reference}` }))).toBe('small');
+  });
+  // lane P1, the ink and size roles: an empty line is a sentence, the reading ink (it was quiet)
+  it('says a binary with no Type ID version history in the reading ink', () => {
+    render(
+      <CodeCellBoard cell={{ ...cell, codeCell: { ...cell.codeCell!, typeIdVersions: [] } }} />
+    );
+    expect(inkOf(screen.getByText('No registered Type ID version history for this binary.'))).toBe(
+      READING
+    );
   });
   it('does not label non-ELF payloads as code cells', () => {
     const { container } = render(<CodeCellBoard cell={{ ...cell, elf: undefined } as Cell} />);
