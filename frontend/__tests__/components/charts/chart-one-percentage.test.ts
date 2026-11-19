@@ -71,6 +71,28 @@ describe('one form of a percentage on a chart page: cut (item 1)', () => {
   });
 });
 
+describe('a histogram’s bucket labels are cut, as the route writes them (the ruling)', () => {
+  it('reads an epoch-duration bucket by its cut label and fills its empty minutes cut', () => {
+    // a minute in hours at two decimals, cut, as the route writes it: 181 minutes is 3.01 (half up
+    // it was 3.02), 184 is 3.06 (was 3.07); one minute is 1.67 hundredths, so no two share a label
+    const hours = (minutes: number) =>
+      `${Math.floor(minutes / 60)}.${String(Math.floor(((minutes % 60) * 100) / 60)).padStart(2, '0')}`;
+    expect([180, 181, 182, 183, 184].map(hours)).toEqual(['3.00', '3.01', '3.03', '3.05', '3.06']);
+    // the route sends the minutes some epoch took: 3 to 4 hours, but 183 minutes
+    const minutes = Array.from({ length: 61 }, (_, i) => 180 + i).filter((m) => m !== 183);
+    const model = chartModel(definition('epoch-time-distribution'), {
+      title: 'Epoch Time Distribution',
+      yAxisLabel: 'Epochs',
+      data: minutes.map((m) => ({ date: hours(m), value: '1' })),
+    } as never);
+    // every minute of the run, the empty one drawn as its 0 under its own cut label
+    expect(model.points.map((point) => point.label)).toEqual(
+      Array.from({ length: 61 }, (_, i) => hours(180 + i))
+    );
+    expect(model.points[3]).toMatchObject({ label: '3.05', values: { primary: '0' } });
+  });
+});
+
 describe('a whole a chart page states is the API’s figure (item 2)', () => {
   it('divides knowledge by kind by the day’s knowledge size the route sends', () => {
     const payload = fixture<StackedFixture>('getCommonKnowledgeCompositionChart');

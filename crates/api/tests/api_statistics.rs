@@ -1061,6 +1061,40 @@ async fn test_tx_stats_reads_from_derived_store() {
     assert!(!json["dailyData"].as_array().unwrap().is_empty());
 }
 
+/// An epoch-duration bucket's label is a stated figure, its minute in hours at two decimals, cut and
+/// never rounded (the D1 hand-back): 181 minutes is 3.0166… hours, "3.01" (half up it read "3.02").
+/// One minute is 1.67 hundredths of an hour, so no two minutes cut to one label.
+#[tokio::test]
+async fn test_epoch_time_distribution_labels_cut_never_round() {
+    let store = test_store();
+    for (minutes, epochs) in [(180, 1), (181, 2), (182, 3), (184, 4)] {
+        store.put_epoch_time_dist(minutes, epochs).unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/epoch-time-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let labels: Vec<(String, String)> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| {
+            (
+                point["date"].as_str().unwrap().to_string(),
+                point["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    let pairs = |rows: &[(&str, &str)]| {
+        rows.iter()
+            .map(|(a, b)| (a.to_string(), b.to_string()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        labels,
+        pairs(&[("3.00", "1"), ("3.01", "2"), ("3.03", "3"), ("3.06", "4")])
+    );
+}
+
 #[tokio::test]
 async fn test_epoch_time_charts_read_from_derived_store() {
     let core_store = test_store();

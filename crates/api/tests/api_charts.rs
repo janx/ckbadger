@@ -1285,6 +1285,57 @@ async fn test_charts_block_time_distribution_with_data() {
     assert_eq!(point_2s["value"], "50.000");
 }
 
+/// A block-interval share is a percentage a chart page states, cut at its three decimals and never
+/// rounded (the D1 hand-back, item 1): two of three intervals of 1 s is 66.666…%, "66.666" (half up
+/// it read "66.667").
+#[tokio::test]
+async fn test_charts_block_time_distribution_cuts_its_shares() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    // epoch 0 complete (intervals 1 s, 1 s, 2 s); the tip in epoch 1
+    for (number, ts_ms, epoch) in [
+        (0i64, 0i64, 0i64),
+        (1, 1_000, 0),
+        (2, 2_000, 0),
+        (3, 4_000, 0),
+        (4, 5_000, 1),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                timestamp: ts_ms,
+                epoch_number: epoch,
+                epoch_index: 0,
+                epoch_length: 4,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: ts_ms,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/block-time-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let value = |date: &str| {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|point| point["date"] == date)
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(value("1.0"), "66.666");
+    assert_eq!(value("2.0"), "33.333");
+}
+
 /// Regression: every date-keyed chart emits ONE canonical date format
 /// (`YYYY-MM-DD`). Five endpoints used to leak the raw RocksDB `YYYYMMDD` day
 /// key because their formatter only replaced `-` with `/`, which is a no-op on
