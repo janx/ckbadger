@@ -199,12 +199,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the code cell’s “Type ID lineage of these bytes”, an inner disclosure with no rule (a form the component lacks)',
   },
-  'components/scripts/script-family-page.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason:
-      '“Each reference in full”, an inner disclosure at the body step (a form the component lacks)',
-  },
   // ---- shell ----
   'components/crash-page.tsx': {
     lane: 'shell',
@@ -245,7 +239,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 12 (an m-NFT issuer's raw metadata is SectionDisclosure's inner form)
 // → 11 (an object's media dependencies are SectionDisclosure's inner form)
 // → 10 (a custody's committed key hashes are SectionDisclosure's inner form)
-const TOLERATED_TOTAL = 10;
+// → 9 (a family's every reference in full is SectionDisclosure's inner form; the p-assets sites are all the library's, the p-chain ones wait for the exactness lane)
+const TOLERATED_TOTAL = 9;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
