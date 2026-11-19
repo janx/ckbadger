@@ -70,8 +70,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/blocks/[id]/uncles/[index]/client-page.tsx': {
     lane: 'p-chain',
-    sites: { look: 6 },
-    reason: '6 without a look',
+    // look 6 → 5 (lane D2): the facts' canonical-hash link is the status strip's, its look stated
+    sites: { look: 5 },
+    reason: '5 without a look',
   },
   'app/cell/[outpoint]/client-page.tsx': {
     lane: 'p-chain',
@@ -527,10 +528,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-// 610 → 601 (lane D2): the transaction page's facts rail and its block link went (1), the block
+// 610 → 600 (lane D2): the transaction page's facts rail and its block link went (1), the block
 // page's facts aside and its two links (2), the cell page's Created block link (2: look, ink), the
-// address page's kind-line lock link and its Lock metric's (4: two looks, two inks)
-const TOLERATED_TOTAL = 601;
+// address page's kind-line lock link and its Lock metric's (4: two looks, two inks), the uncle
+// page's canonical-hash link (1)
+const TOLERATED_TOTAL = 600;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

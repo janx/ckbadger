@@ -83,7 +83,9 @@ describe('Uncle detail page', () => {
     // readability R3 / R4 (lane B7): the uncle's sentence and the DAO field note stand on the
     // measure (they ran 158 and 148 characters a line at 1280); the note explains, so it reads in
     // the reading ink at the body step (it was the quiet ink at the raw data's small step)
-    expect(sentence).toHaveClass('max-w-measure');
+    // re-pinned on purpose (lane D2): the sentence is the head's lede now, set on the measure by
+    // the lede's one holder (the paragraph carried the measure itself in the page's content)
+    expect(sentence.closest('[data-detail-lede]')).toHaveClass('max-w-measure');
     const note = within(decoded).getByText(/^S counts the burnt share/);
     expect(note).toHaveClass('text-text', 'text-body', 'max-w-measure');
     expect(note).not.toHaveClass('text-text-dim');
