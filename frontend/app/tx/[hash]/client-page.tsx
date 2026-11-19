@@ -17,6 +17,7 @@ import { HeadId } from '@/components/ui/head-id';
 import { SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
+import { Pager } from '@/components/ui/pager';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -33,6 +34,7 @@ import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
 import {
   FOLD_HEAD,
+  FoldBack,
   TxStructure,
   continuityColor,
   type TxSealId,
@@ -571,6 +573,79 @@ function DepRow({
   );
 }
 
+/** A witness drawn as its row, or a run of empty witnesses drawn as one line. */
+type WitnessItem =
+  | { kind: 'witness'; w: TransactionWitness }
+  | { kind: 'run'; from: number; to: number; count: number };
+
+/**
+ * The witness list as the developer tier draws it (lane D3; the board's "#1 to #157 are empty"):
+ * every witness in order, a run of two or more empty ones (0 bytes) that `folds` lets go — no
+ * group reads them, the page has not selected one — as one item; a lone empty witness keeps its
+ * row, and a witness with bytes is always written whole.
+ */
+function witnessItems(
+  witnesses: readonly TransactionWitness[],
+  folds: (w: TransactionWitness) => boolean
+): WitnessItem[] {
+  const out: WitnessItem[] = [];
+  let run: TransactionWitness[] = [];
+  const close = () => {
+    if (run.length > 1)
+      out.push({
+        kind: 'run',
+        from: run[0].index,
+        to: run[run.length - 1].index,
+        count: run.length,
+      });
+    else for (const w of run) out.push({ kind: 'witness', w });
+    run = [];
+  };
+  for (const w of witnesses) {
+    if (w.kind === 'empty' && w.size === 0 && folds(w)) run.push(w);
+    else {
+      close();
+      out.push({ kind: 'witness', w });
+    }
+  }
+  close();
+  return out;
+}
+
+/**
+ * A run of empty witnesses on one line (the board's dashed line): which they are, by counting,
+ * "#1 to #157 are empty: 157 witnesses of 0 B", and the way to every row, the Pager's short-list
+ * form ("all 158 witnesses ↓").
+ */
+function EmptyWitnesses({
+  run,
+  total,
+  onShow,
+}: {
+  run: Extract<WitnessItem, { kind: 'run' }>;
+  total: number;
+  onShow: () => void;
+}) {
+  return (
+    <div
+      data-testid={`tx-witness-run-${run.from}`}
+      className="border-text-dim/60 text-small my-2 flex flex-wrap items-center gap-x-3 gap-y-1 border border-dashed px-3 py-1.5"
+    >
+      <span data-run-words="" className="text-text min-w-0">
+        {unitText(
+          `#${run.from} to #${run.to} are empty: ${formatCount(run.count, 'witness', 'witnesses')} of ${formatCount(0, 'B', 'B')}`
+        )}
+      </span>
+      <div className="sm:ml-auto">
+        <Pager
+          mode="more"
+          all={{ count: total, singular: 'witness', plural: 'witnesses', onShow }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   return (
     <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
@@ -651,6 +726,8 @@ export default function TransactionDetailPage() {
   );
   const [hover, setHover] = useState<TxHover | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(searchParams.get('wg'));
+  // the developer tier's runs of empty witnesses, each one line until opened (lane D3)
+  const [allWitnesses, setAllWitnesses] = useState(false);
   useEffect(() => {
     setSelectedWitness(indexParam(searchParams.get('witness')));
     setSelectedGroup(searchParams.get('wg'));
@@ -1350,31 +1427,58 @@ export default function TransactionDetailPage() {
                 <p className="text-text-dim py-3">Witness bytes are unavailable</p>
               ) : (
                 <>
-                  {witnesses.map((w) => (
-                    <WitnessRow
-                      key={w.index}
-                      tx={tx}
-                      w={w}
-                      readers={readersOf(w.index)}
-                      scale={witnessScale}
-                      selected={selectedWitness === w.index}
-                      lit={lit}
-                      lookup={lookup}
-                      groupNameByHash={groupNameByHash}
-                      minerMessage={
-                        cellbaseBlock
-                          ? {
-                              raw: cellbaseBlock.minerMessage,
-                              text: cellbaseBlock.minerMessageText,
-                            }
-                          : undefined
-                      }
-                      onSelect={() =>
-                        selectedWitness === w.index ? select(null, null) : select(w.index, null)
-                      }
-                      onHover={setHover}
-                    />
-                  ))}
+                  {witnessItems(
+                    witnesses,
+                    // a run folds the empty witnesses no group reads and the page did not select
+                    (w) =>
+                      !allWitnesses &&
+                      readersOf(w.index).length === 0 &&
+                      w.index !== selectedWitness
+                  ).map((item) =>
+                    item.kind === 'run' ? (
+                      <EmptyWitnesses
+                        key={`run-${item.from}`}
+                        run={item}
+                        total={witnesses.length}
+                        onShow={() => setAllWitnesses(true)}
+                      />
+                    ) : (
+                      <WitnessRow
+                        key={item.w.index}
+                        tx={tx}
+                        w={item.w}
+                        readers={readersOf(item.w.index)}
+                        scale={witnessScale}
+                        selected={selectedWitness === item.w.index}
+                        lit={lit}
+                        lookup={lookup}
+                        groupNameByHash={groupNameByHash}
+                        minerMessage={
+                          cellbaseBlock
+                            ? {
+                                raw: cellbaseBlock.minerMessage,
+                                text: cellbaseBlock.minerMessageText,
+                              }
+                            : undefined
+                        }
+                        onSelect={() =>
+                          selectedWitness === item.w.index
+                            ? select(null, null)
+                            : select(item.w.index, null)
+                        }
+                        onHover={setHover}
+                      />
+                    )
+                  )}
+                  {/* opened, the way back after the last witness, where a run had stood */}
+                  {allWitnesses &&
+                    witnessItems(witnesses, (w) => readersOf(w.index).length === 0).some(
+                      (item) => item.kind === 'run'
+                    ) && (
+                      <div className="mt-2">
+                        <FoldBack onFold={() => setAllWitnesses(false)} />
+                      </div>
+                    )}
                   {chosenWitness ? (
                     <WitnessInspector tx={tx} witness={chosenWitness} />
                   ) : (

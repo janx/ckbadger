@@ -588,6 +588,24 @@ function foldSheets(
 }
 
 /**
+ * The way back from an opened fold of the transaction's lists (lane D3: a sheet's cells, the
+ * developer tier's empty witnesses), in the rows' fold's words, "fewer ↑", set as the Pager's
+ * short-list part it answers ("all 158 cells ↓"): the Pager has no way back of its own.
+ */
+export function FoldBack({ onFold }: { onFold: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-expanded={true}
+      onClick={onFold}
+      className="text-jade text-small inline-flex h-8 items-center underline-offset-4 hover:underline sm:h-7"
+    >
+      fewer ↑
+    </button>
+  );
+}
+
+/**
  * The fold row (lane D3; the board's dashed row): what the sheet folds, by counting — "152 more
  * cells from ckb1…sqylvfrs" when every folded cell has one lock (the same lock, not the same
  * shortened address), else "152 more cells consumed"; where the sheet draws none of its cells and
@@ -651,14 +669,7 @@ function FoldRow({
           {folded.length > 0 ? (
             <Pager mode="more" all={{ count, singular: 'cell', onShow: () => onToggle(true) }} />
           ) : (
-            <button
-              type="button"
-              aria-expanded={true}
-              onClick={() => onToggle(false)}
-              className="text-jade text-small inline-flex h-8 items-center underline-offset-4 hover:underline sm:h-7"
-            >
-              fewer ↑
-            </button>
+            <FoldBack onFold={() => onToggle(false)} />
           )}
         </div>
       )}
