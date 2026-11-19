@@ -25,6 +25,7 @@ const daily = Array.from({ length: 29 }, (_, i) => ({
   date: date(i),
   capacity: String((1000 + i * 10) * 1e8),
   occupiedCapacity: String(600 * 1e8),
+  freeCapacity: String((400 + i * 10) * 1e8),
   supply: String((19_000_000 + i * 50_000) * 1e6),
 }));
 

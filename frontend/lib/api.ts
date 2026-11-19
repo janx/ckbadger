@@ -1590,7 +1590,14 @@ export interface TokenHistory {
   source: 'indexed_chain_time';
   completeThrough: string;
   anchor: { blockNumber: number; blockHash: string };
-  daily: { date: string; supply: string; capacity: string; occupiedCapacity: string }[];
+  /** Each day's held capacity, its occupied part and its free part (`capacity - occupied`). */
+  daily: {
+    date: string;
+    supply: string;
+    capacity: string;
+    occupiedCapacity: string;
+    freeCapacity: string;
+  }[];
   /** Transactions (not transfer legs) per complete Monday-start week. */
   weeklyTransactions: { weekStart: string; transactionsCount: number }[];
   mintCount: number;

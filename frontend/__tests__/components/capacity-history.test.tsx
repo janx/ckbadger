@@ -92,6 +92,35 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
       />
     )
   ).toThrow('Broken 2023-11-01: capacity');
+  // Lane P2's third round (item 13): the day's free part is the route's `unused`, read beside the
+  // other two (it was capacity − occupied, in the page): a day without it fails, and parts that do
+  // not make the whole are refused
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Broken"
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { used: '1', capacity: '2' } }],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow('Broken 2023-11-01: free');
+  expect(() =>
+    render(
+      <CapacityHistory
+        assetClass="objects"
+        subject="Broken"
+        history={{
+          ...history,
+          data: [{ date: '2023-11-01', values: { used: '1', unused: '2', capacity: '2' } }],
+        }}
+        weekly={[]}
+      />
+    )
+  ).toThrow('2023-11-01: occupied 1 and free 2 do not make the capacity 2');
   log.mockRestore();
 });
 

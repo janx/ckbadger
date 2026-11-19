@@ -8,13 +8,31 @@ import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { yTickLabels, plotLeftOf } from '@/__tests__/utils/y-ticks';
 import { factsOf } from '@/__tests__/utils/facts';
 const daily = [
-  { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
-  { date: '2024-01-08', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
+  {
+    date: '2024-01-01',
+    capacity: '10000000001',
+    occupiedCapacity: '6100000000',
+    freeCapacity: '3900000001',
+    supply: '13',
+  },
+  {
+    date: '2024-01-08',
+    capacity: '20000000001',
+    occupiedCapacity: '6100000000',
+    freeCapacity: '13900000001',
+    supply: '26',
+  },
 ];
 /** Three days and two complete weeks: a weekly series a chart draws (one week is said in words). */
 const dailyOfTwoWeeks = [
   ...daily,
-  { date: '2024-01-15', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
+  {
+    date: '2024-01-15',
+    capacity: '20000000001',
+    occupiedCapacity: '6100000000',
+    freeCapacity: '13900000001',
+    supply: '26',
+  },
 ];
 /** A supply event's party address in the fixture below: its seed spelled from its index. */
 const eventAddress = (i: number, codeHash: string) => seededAddress(String(i).repeat(6), codeHash);
@@ -712,6 +730,7 @@ describe('Asset history', () => {
               date: '2024-01-15',
               capacity: '20000000001',
               occupiedCapacity: '6100000000',
+              freeCapacity: '13900000001',
               supply: '26',
             },
           ]}
@@ -777,6 +796,21 @@ describe('Asset history', () => {
         />
       )
     ).toThrow('occupied exceeds held capacity');
+    // Lane P2's third round (item 13): the free part is the route's, read, never capacity −
+    // occupied here; parts that do not make the whole are refused, never repaired
+    expect(() =>
+      render(
+        <AssetHistory
+          assetClass="objects"
+          weeklyNoun="transfers"
+          daily={[{ ...daily[0], freeCapacity: '3900000000' }]}
+          weekly={[]}
+          completeThrough="2024-01-08"
+        />
+      )
+    ).toThrow(
+      '2024-01-01: occupied 6100000000 and free 3900000000 do not make the capacity 10000000001'
+    );
     error.mockRestore();
   });
 });

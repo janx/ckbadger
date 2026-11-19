@@ -26,8 +26,8 @@ it('reads the latest complete week by default instead of "No completed weekly to
     <AssetHistory
       assetClass="objects"
       daily={[
-        { date: '2026-10-27', capacity: '100', occupiedCapacity: '60' },
-        { date: '2026-10-29', capacity: '100', occupiedCapacity: '60' },
+        { date: '2026-10-27', capacity: '100', occupiedCapacity: '60', freeCapacity: '40' },
+        { date: '2026-10-29', capacity: '100', occupiedCapacity: '60', freeCapacity: '40' },
       ]}
       weekly={[{ weekStart: '2026-10-19', count: 5 }]}
       weeklyNoun="transfers"

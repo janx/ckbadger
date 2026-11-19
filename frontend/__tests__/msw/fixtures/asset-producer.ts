@@ -2,7 +2,9 @@
  * Captured 2026-10-27. Synthetic persisted fixtures establish producer-consumer shape;
  * these are not observations of a running mainnet store. U-15 (lane A4b): the issuer, holder and
  * supply-event rows gain `lockCodeHash` as the producer now writes it (null: the fixture indexes
- * no lock script, so its addresses are null too). */
+ * no lock script, so its addresses are null too). Lane P2's third round (item 13): the history's
+ * days gain `freeCapacity` as the producer now writes it (capacity − occupied, stated by the
+ * route). */
 import type {
   Token,
   TokenHistory,
@@ -217,66 +219,77 @@ export const tokenProducer = {
       {
         capacity: '1000',
         date: '2026-10-01',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-02',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-03',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-04',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-05',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-06',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-07',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '100',
       },
       {
         capacity: '1000',
         date: '2026-10-08',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
       {
         capacity: '1000',
         date: '2026-10-09',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
       {
         capacity: '1000',
         date: '2026-10-10',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
       {
         capacity: '1000',
         date: '2026-10-11',
+        freeCapacity: '400',
         occupiedCapacity: '600',
         supply: '90',
       },
