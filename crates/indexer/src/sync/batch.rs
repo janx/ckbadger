@@ -13192,6 +13192,125 @@ mod tests {
                 "live and bulk append-only cell payload counts must agree"
             );
         }
+
+        /// The lead's ruling, both sync paths (lane rd/api-lock-names): a
+        /// generic (non Type ID) type reference is counted in a family by the
+        /// binaries its live code cells hold. Block 101 deploys a registered
+        /// family's binary under a generic type script and locks a cell by
+        /// that reference; block 102, in the second chain only, consumes the
+        /// code cell. Bulk finalize and the live per-block rollup write the
+        /// same script rows, the user cell counted in the family while the
+        /// code is live and in none once it is gone.
+        #[tokio::test]
+        async fn bulk_and_live_count_a_generic_type_reference_by_its_live_code_cells() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let family_id = "family/parity-generic";
+            let binary = ScriptParser::compute_data_hash(b"\x7fELF\x05");
+            let version = ckbadger_store::ScriptVersionInfo {
+                version_hash: binary.to_vec(),
+                family_id: Some(family_id.to_string()),
+                name: Some("Parity Generic".to_string()),
+                registered_references: vec![(binary.to_vec(), 2)],
+                ..Default::default()
+            };
+            let family = ckbadger_store::ScriptFamilyInfo {
+                family_id: family_id.to_string(),
+                name: "Parity Generic".to_string(),
+                ..Default::default()
+            };
+            let deployment = typed_script(format!("0x{}", hex::encode([0x43; 32])), 0xe1);
+            let reference = ScriptParser::compute_script_hash(&deployment);
+            let user_lock = Script {
+                code_hash: format!("0x{}", hex::encode(&reference)),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            };
+            let deploy = tx(
+                0xb1,
+                vec![input(0x90, 0)],
+                vec![
+                    output(800_00000000, lock_script(), Some(deployment)),
+                    output(700_00000000, user_lock, None),
+                    output(3000_00000000, lock_script(), None),
+                ],
+                vec![
+                    "0x7f454c4605".to_string(),
+                    "0x".to_string(),
+                    "0x".to_string(),
+                ],
+            );
+            let retire = tx(
+                0xb2,
+                vec![input(0xb1, 0)],
+                vec![output(790_00000000, lock_script(), None)],
+                vec!["0x".to_string()],
+            );
+            let mut chain = vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0x90, 5000_00000000)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0x91, 100_00000000), deploy],
+                ),
+            ];
+            let mut retired = chain.clone();
+            retired.push(block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0x92, 100_00000000), retire],
+            ));
+            chain.push(block(
+                102,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0x92, 100_00000000)],
+            ));
+
+            for (blocks, counted, case) in [
+                (chain, 1, "the code live: the user cell in the family"),
+                (retired, 0, "the code consumed: in no family"),
+            ] {
+                let bulk =
+                    crate::sync::bulk_build::materialize_bulk_artifacts_with_script_label_for_test(
+                        &blocks, &binary, &version, family_id, &family,
+                    )
+                    .unwrap();
+                let dir = tempfile::tempdir().unwrap();
+                let live = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                live.set_secondary_epoch_reward(61_369_863_013_698).unwrap();
+                live.put_script_version(&binary, &version).unwrap();
+                live.put_script_family_direct(family_id, &family).unwrap();
+                live.put_script_version_by_family_direct(family_id, &binary)
+                    .unwrap();
+                live.insert_script_version_by_label("Parity Generic", &binary)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(live.clone());
+                for block in blocks {
+                    super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                        &indexer,
+                        vec![block],
+                    )
+                    .await
+                    .unwrap();
+                }
+                let live_rows =
+                    crate::sync::bulk_build::collect_script_binding_rows_for_test(live.as_ref())
+                        .unwrap();
+                assert_eq!(live_rows, bulk.script_binding_rows, "{case}");
+                let family_key = (
+                    ckbadger_store::CF_SCRIPT_FAMILIES,
+                    family_id.as_bytes().to_vec(),
+                );
+                for (rows, path) in [(&live_rows, "live"), (&bulk.script_binding_rows, "bulk")] {
+                    let row: ckbadger_store::ScriptFamilyInfo = bincode::deserialize(
+                        rows.get(&family_key)
+                            .unwrap_or_else(|| panic!("{path}: no family row ({case})")),
+                    )
+                    .unwrap();
+                    assert_eq!(row.live_cells_count, counted, "{path}: {case}");
+                }
+            }
+        }
     }
 
     mod live_token_binding {

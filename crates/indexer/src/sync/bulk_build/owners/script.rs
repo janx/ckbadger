@@ -13,8 +13,9 @@ use crate::db::writer::{
     GenericTypeCodes, TypeIdCodeChange,
 };
 use crate::rpc::BlockResponseWithCycles;
-use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
+use crate::sync::bulk_build::facts::{CellFacts, OutPointKey, ResolvedInputFacts, ResolvedTxFacts};
 use crate::sync::bulk_build::interner::IdentityInterner;
+use crate::sync::bulk_build::live_cells::LiveCellSlot;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
@@ -31,7 +32,9 @@ pub(crate) struct ScriptOwner {
     /// Type hash -> binary -> its live code cells under that type script, for
     /// every type script that is not Type ID (lane rd/api-lock-names, the
     /// lead's ruling): what a generic type reference runs, counted by the one
-    /// family rule at finalize. Only code cells enter it.
+    /// family rule at finalize. Settled once at finalize
+    /// ([`Self::settle_generic_type_codes`]) from the code-cell index and the
+    /// run's live set: nothing is tracked per transaction.
     generic_type_live_versions: FxHashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>>,
     type_id_lineage: FxHashMap<(Vec<u8>, Vec<u8>), Vec<i64>>,
     daily_deltas: FxHashMap<(Vec<u8>, u8, bool, u32), ScriptDailyDelta>,
@@ -249,6 +252,73 @@ impl ScriptOwner {
             .collect::<Vec<_>>()
     }
 
+    /// What each generic (non Type ID) type reference runs at the end of the
+    /// run: the binaries of its live code cells (the lead's ruling, lane
+    /// rd/api-lock-names), settled once before [`Self::build_snapshot_rows`].
+    ///
+    /// It rides what the bulk path already keeps, and adds nothing per
+    /// transaction: every code cell of the run is a `cell_by_data_hash` row
+    /// (filed by the block history rows when the cell is created and kept
+    /// when it is consumed), and the run's live set, the one the final
+    /// snapshot writes the live markers from, says whether that cell is
+    /// still live and under which type script (`generic_reference_of`: the
+    /// live cell's type script hash unless it has none or is Type ID,
+    /// [`generic_type_reference_of_slot`]). One scan of the code index (code
+    /// cells only) and one live-set lookup per code cell. Bulk sync starts
+    /// from genesis on a fresh store, so the index and the live set hold
+    /// every code cell and every live cell.
+    pub(crate) fn settle_generic_type_codes(
+        &mut self,
+        domain_store: &CkbadgerStore,
+        mut generic_reference_of: impl FnMut(&OutPointKey) -> Option<Vec<u8>>,
+    ) -> Result<()> {
+        let mut live: FxHashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>> =
+            FxHashMap::default();
+        for row in domain_store.iterator_cf(
+            domain_store.cf_cell_by_data_hash(),
+            rocksdb::IteratorMode::Start,
+        ) {
+            let (key, _) =
+                row.map_err(|e| anyhow!("bulk finalize: read cell_by_data_hash: {e}"))?;
+            if key.len() != keys::CELL_INDEX_KEY_SIZE {
+                bail!(
+                    "bulk finalize: cell_by_data_hash row of {} bytes, expected {}: key=0x{}",
+                    key.len(),
+                    keys::CELL_INDEX_KEY_SIZE,
+                    hex::encode(&key)
+                );
+            }
+            let (binary, outpoint) = (&key[..32], &key[40..]);
+            let (tx_hash, index) = keys::decode_outpoint(outpoint);
+            let tx_hash: [u8; 32] = tx_hash
+                .as_slice()
+                .try_into()
+                .expect("a 74-byte cell index key holds a 32-byte tx hash");
+            let index = u32::try_from(index).map_err(|_| {
+                anyhow!(
+                    "bulk finalize: cell_by_data_hash row with output index {index}: key=0x{}",
+                    hex::encode(&key)
+                )
+            })?;
+            let Some(reference) = generic_reference_of(&OutPointKey::new(tx_hash, index)) else {
+                continue;
+            };
+            let count = live
+                .entry(reference)
+                .or_default()
+                .entry(binary.to_vec())
+                .or_insert(0);
+            *count = count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "generic type reference live code count overflow: binary=0x{}",
+                    hex::encode(binary)
+                )
+            })?;
+        }
+        self.generic_type_live_versions = live;
+        Ok(())
+    }
+
     fn build_snapshot_rows(&self, domain_store: &CkbadgerStore) -> Result<Vec<MaterializedRow>> {
         let mut reference_keys: Vec<&(Vec<u8>, u8)> = self.reference_infos.keys().collect();
         reference_keys.sort();
@@ -460,24 +530,6 @@ impl BulkReducer for ScriptOwner {
                 .type_code_hash_id
                 .zip(input.type_hash_type)
                 .is_some_and(|(hash, kind)| is_native_type_id(ctx, hash, kind));
-            // A consumed code cell under a type script that is not Type ID
-            // leaves what that generic type reference runs (its binary is
-            // among the live ones only if it is code).
-            if !native_type_id && !self.generic_type_live_versions.is_empty() {
-                if let (Some(reference), Some(data_hash)) =
-                    (input.type_script_hash_id, input.data_hash)
-                {
-                    let reference = ctx.resolve_identity(reference);
-                    if let Some(live) = self.generic_type_live_versions.get_mut(reference) {
-                        if let Some(count) = live.get_mut(data_hash.as_slice()) {
-                            *count -= 1;
-                            if *count == 0 {
-                                live.remove(data_hash.as_slice());
-                            }
-                        }
-                    }
-                }
-            }
             if native_type_id {
                 let (Some(reference), Some(data_hash)) =
                     (input.type_script_hash_id, input.data_hash)
@@ -505,33 +557,6 @@ impl BulkReducer for ScriptOwner {
                     "type-id output lacks type hash at block {}",
                     tx.block_number
                 );
-            }
-            // A code cell under a type script that is not Type ID: what that
-            // generic type reference runs.
-            if !native_type_id && ckbadger_store::keys::is_code_cell(&cell.data) {
-                if let Some(reference) = cell.type_script_hash_id {
-                    let reference = ctx.resolve_identity(reference);
-                    let data_hash = cell.data_hash.ok_or_else(|| {
-                        anyhow!(
-                            "typed code output lacks data hash: block={} tx=0x{}",
-                            tx.block_number,
-                            hex::encode(tx.tx_hash)
-                        )
-                    })?;
-                    let count = self
-                        .generic_type_live_versions
-                        .entry(reference.to_vec())
-                        .or_default()
-                        .entry(data_hash.to_vec())
-                        .or_insert(0);
-                    *count = count.checked_add(1).ok_or_else(|| {
-                        anyhow!(
-                            "generic type reference live code count overflow: reference=0x{} block={}",
-                            hex::encode(reference),
-                            tx.block_number
-                        )
-                    })?;
-                }
             }
             if native_type_id && ckbadger_store::keys::is_code_cell(&cell.data) {
                 let reference = cell.type_script_hash_id.ok_or_else(|| {
@@ -622,6 +647,21 @@ struct ScriptReferenceDelta {
     type_owned_capacity_delta: i128,
     type_used_capacity_delta: i128,
     type_owned_knowledge_delta: i128,
+}
+
+/// The generic type reference a live cell's code runs under: its type
+/// script's hash, unless it has no type script or its type script is Type
+/// ID (a Type ID cell's code is the lineage's, not a generic reference's).
+pub(crate) fn generic_type_reference_of_slot(
+    ctx: ReducerContext<'_>,
+    slot: &LiveCellSlot,
+) -> Option<Vec<u8>> {
+    let reference = slot.type_script_hash_id?;
+    let native_type_id = slot
+        .type_code_hash_id
+        .zip(slot.type_hash_type)
+        .is_some_and(|(hash, kind)| is_native_type_id(&ctx, hash, kind));
+    (!native_type_id).then(|| ctx.resolve_identity(reference).to_vec())
 }
 
 fn is_native_type_id(
@@ -2046,6 +2086,18 @@ mod tests {
                 }]
                 .into();
                 owner.apply_tx(&usage_tx, &ctx).unwrap();
+                // What finalize reads: the deployment's code-index row (the
+                // block history rows file it) and the run's live set (the
+                // deployment live, under the generic reference).
+                let mut batch = ckbadger_store::batch::StoreBatch::new(&domain_store);
+                batch.put_cell_by_data_hash(&observed_hash, 400, &[0x61; 32], 0);
+                batch.commit().unwrap();
+                owner
+                    .settle_generic_type_codes(&domain_store, |outpoint| {
+                        (*outpoint == OutPointKey::new([0x61; 32], 0))
+                            .then(|| reference_hash.clone())
+                    })
+                    .unwrap();
                 let mut materializer = Materializer::new(&domain_store, &append_store);
                 owner.materialize_final(&mut materializer).unwrap();
                 let _ = materializer.finish();
@@ -2748,6 +2800,19 @@ mod tests {
             };
             let mut owner = ScriptOwner::default();
             owner.apply_tx(&tx, &ctx).unwrap();
+            // What finalize reads: the code-cell index the block history
+            // rows file, and the run's live set (every code cell here live).
+            let mut batch = ckbadger_store::batch::StoreBatch::new(&domain_store);
+            for (index, binary) in binaries.iter().enumerate() {
+                batch.put_cell_by_data_hash(binary, 200, &[0x41; 32], index as i16);
+            }
+            batch.commit().unwrap();
+            owner
+                .settle_generic_type_codes(&domain_store, |outpoint| {
+                    (outpoint.tx_hash == [0x41; 32] && (outpoint.index as usize) < binaries.len())
+                        .then(|| reference.clone())
+                })
+                .unwrap();
             let mut materializer = Materializer::new(&domain_store, &append_store);
             owner.materialize_final(&mut materializer).unwrap();
             let _ = materializer.finish();

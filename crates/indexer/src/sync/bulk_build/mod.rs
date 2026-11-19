@@ -1589,7 +1589,8 @@ fn materialize_finalize_phases(
             tracing::info_span!("bulk_finalize", phase = 5, label = "owners_build").entered();
         perf_stats.record_finalize_step(5, finalize_started.elapsed());
         perf_stats.record_finalize_step(6, finalize_started.elapsed());
-        owners.materialize_all(&mut materializer)?;
+        let identities = interner.snapshot_for_reads();
+        owners.materialize_all(&mut materializer, &sequencer, &identities)?;
     }
 
     // Step 11: metadata (the HODL + cell distribution tracker rows and
@@ -1670,7 +1671,16 @@ impl CoreOwners {
         Ok(address_deltas)
     }
 
-    fn materialize_all(self, materializer: &mut materialize::Materializer<'_>) -> Result<()> {
+    /// Every owner's sealed and final rows. `sequencer` and `identities` are
+    /// the run's live set and interned identities at finalize: the script
+    /// owner settles what each generic type reference runs against them
+    /// (`ScriptOwner::settle_generic_type_codes`) before its final rows.
+    fn materialize_all(
+        self,
+        materializer: &mut materialize::Materializer<'_>,
+        sequencer: &sequencer::BulkSequencer,
+        identities: &interner::FrozenIdentityView,
+    ) -> Result<()> {
         let Self {
             mut address,
             mut script,
@@ -1684,6 +1694,12 @@ impl CoreOwners {
         address.materialize_final(materializer)?;
         drop(address);
 
+        let ctx = owners::ReducerContext::new(identities);
+        script.settle_generic_type_codes(materializer.domain_store(), |outpoint| {
+            sequencer
+                .live_slot(outpoint)
+                .and_then(|slot| owners::script::generic_type_reference_of_slot(ctx, slot))
+        })?;
         script.flush_sealed(materializer)?;
         script.materialize_final(materializer)?;
         drop(script);
@@ -3534,7 +3550,7 @@ impl BulkBuildRuntimeState {
             emit_final_snapshot_rows(&sequencer, &frozen, |row| sink.push(row))
         })?;
 
-        owners.materialize_all(materializer)?;
+        owners.materialize_all(materializer, &sequencer, &frozen)?;
 
         stage_tracker_rows(domain_store, &hodl_tracker, &cell_dist_tracker)?;
         Ok(live_cell_summary)
@@ -8988,7 +9004,7 @@ mod tests {
             .materialize_final_snapshot(&final_snapshot_rows)
             .expect("materialize final snapshot rows");
         owners
-            .materialize_all(&mut materializer)
+            .materialize_all(&mut materializer, &sequencer, &frozen)
             .expect("materialize core owners");
         let _ = materializer.finish();
 

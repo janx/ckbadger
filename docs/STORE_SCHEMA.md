@@ -287,9 +287,11 @@ hash_type`: Zero Lock is `(0x00…00, data)`, Type ID is `(0x…545950455f4944, 
     they belong to two families or any is outside the registry (anyone who can create a cell under
     a permissive type script can stand a second binary beside a registered one; the lookup says
     `ambiguous` either way). None: no family (the indexer binds no generic type reference). The
-    indexer counts it the same way: bulk build tracks the live code cells under every type script
-    that is not Type ID, and the live rollup reads a generic reference's live code cells once per
-    batch and moves them with the batch's code cells, block by block.
+    indexer counts it the same way: bulk build settles it once at finalize, tracking nothing per
+    transaction (each `cell_by_data_hash` row, every code cell of the run, looked up in the run's
+    live set: live and under a type script that is not Type ID, its binary is what that reference
+    runs), and the live rollup reads a generic reference's live code cells once per batch and
+    moves them with the batch's code cells, block by block.
 
   A pair that resolves to no deployment has no name (the API answers "Unknown" or `null`), and
   never borrows the name of the code hash by another hash type. Where the named pair is not
