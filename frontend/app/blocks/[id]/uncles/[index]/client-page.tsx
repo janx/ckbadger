@@ -156,16 +156,17 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
             ],
           },
           // the label names the block (lane P1 follow-up; review chain-a: it wrote a number and
-          // its value was a bare hash): the canonical block at the uncle's height, its sibling
-          // where the two were mined on one parent
+          // its value was a bare hash): the uncle's sibling, the canonical block on the same
+          // parent, or the canonical block at its height on another; a label no wider than
+          // "included by", which the strip's phone grid holds at 320 beside the time
           {
-            label: 'canonical at its height',
+            label: delay ? 'sibling' : 'canonical',
             value: (
               <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
                 <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
               </Link>
             ),
-            note: delay ? 'its sibling' : undefined,
+            note: delay ? 'canonical, same parent' : 'another parent',
           },
           { label: 'epoch', value: epoch },
         ],

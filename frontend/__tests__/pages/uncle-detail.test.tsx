@@ -76,16 +76,16 @@ describe('Uncle detail page', () => {
     const facts = factsOf(strip);
     // Re-pinned on purpose (lane P1 follow-up; review chain-a uncle: the label wrote a number and
     // its value was a bare hash, only the prose said what it was): the label names the block, the
-    // canonical block at the uncle's height, and its note says it is the uncle's sibling
-    expect(facts.map(([label]) => label)).toEqual([
-      'included by',
-      'time',
-      'canonical at its height',
-      'epoch',
-    ]);
+    // uncle's sibling, and its note says it is the canonical block on the same parent. A label no
+    // wider than "included by": below sm the strip is a grid of labels and values, its label column
+    // as wide as its widest label, and at 320 the time ("2026-11-14 13:05:16 UTC+8", 195 px at 13
+    // px) holds the 288 px column beside 11 characters of label (79.2 px at 12 px) and the 12 px
+    // gap; "canonical at its height" (165.6 px) put it 69 px past the column (Chrome, 320)
+    expect(facts.map(([label]) => label)).toEqual(['included by', 'time', 'sibling', 'epoch']);
+    expect(Math.max(...facts.map(([label]) => label.length))).toBe('included by'.length);
     expect(facts[0][1]).toBe('#8,775,638 · uncle 0');
     expect(facts[1][1]).toMatch(/^2026-02-22 07:59:40 UTC\+8 · \S+ ago · 92 ms after its sibling$/);
-    expect(facts[2][1]).toBe(`0x${'bb'.repeat(4)}…${'bb'.repeat(3)} · its sibling`);
+    expect(facts[2][1]).toBe(`0x${'bb'.repeat(4)}…${'bb'.repeat(3)} · canonical, same parent`);
     expect(facts[3][1]).toBe('5,414 · 1 / 1,800');
     // the uncle's state in the dead ink
     expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
