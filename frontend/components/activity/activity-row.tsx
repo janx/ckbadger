@@ -1390,7 +1390,7 @@ export function activityTitleText(
  * A run of rows that did the same thing, folded (readability lane B4; the rule is
  * `lib/activity-runs.ts`, the owner's of Gate B): one row that says what its rows did and called —
  * the title, the scripts by the code they share (no row's args: those differ from row to row) —
- * how many transactions it holds and how many participants they name, and the newest time (the
+ * how many transactions it holds and how many parties of them sent, and the newest time (the
  * first row's: a feed is newest first). It counts and sums nothing: no amount of any row is drawn,
  * and no total; it names no party, since its rows' parties differ. Its toggle is the site's one
  * fold control (`FoldToggle`: "all N transactions ↓", "fewer ↑"): it opens the ordinary rows in
@@ -1398,7 +1398,7 @@ export function activityTitleText(
  */
 export function FoldedActivityRow({
   rows,
-  participants,
+  senders,
   title,
   showScriptDetails,
   age,
@@ -1410,8 +1410,11 @@ export function FoldedActivityRow({
 }: {
   /** The run, newest first: at least two committed rows. */
   rows: readonly ActivityRowData[];
-  /** How many parties its rows name, each once (`runParties`). */
-  participants: number;
+  /**
+   * How many parties of its rows sent, each once (`runSenders`); null for a run of cellbases, which
+   * have no input and so no sender, and are folded with no count of senders.
+   */
+  senders: number | null;
   /** The title its rows draw (`ActivityTitle`). */
   title: ReactNode;
   showScriptDetails: boolean;
@@ -1437,8 +1440,18 @@ export function FoldedActivityRow({
     throw new Error(`transaction ${first?.txHash}: a folded run holds at least two rows`);
   if (first.timestamp === null || first.blockNumber === null)
     throw new Error(`transaction ${first.txHash}: a folded run's rows are committed`);
-  if (participants < 1)
-    throw new Error(`transaction ${first.txHash}: a folded run names no participant`);
+  if (senders === null) {
+    const sending = rows.find((row) => !row.isCellbase);
+    if (sending)
+      throw new Error(
+        `transaction ${sending.txHash}: a folded run with no count of senders holds a transaction that is no cellbase`
+      );
+  } else {
+    if (rows.some((row) => row.isCellbase))
+      throw new Error(`transaction ${first.txHash}: a cellbase in a run that counts senders`);
+    // every committed transaction but a cellbase has an input: "0 senders" cannot be
+    if (senders < 1) throw new Error(`transaction ${first.txHash}: a folded run names no sender`);
+  }
   if (first.itemTypes === null)
     throw new Error(`transaction ${first.txHash}: a folded run's rows state their item types`);
   const [openCalls, setOpenCalls] = useState({ types: false, locks: false });
@@ -1485,12 +1498,13 @@ export function FoldedActivityRow({
       />
       {/* what the run holds, counted: the toggle first, so it stands in one place open or not */}
       <div data-role="run-count" className="text-small leading-row text-text pl-[18px]">
-        {/* "participants": every party its rows name, the count the stores can state today. The
-            owner's word is "senders" (a party one of whose cells the transaction consumed): it
-            becomes that count here once the indexer records, per participant, that its lock holds
-            an input (the per-participant input flag, a re-sync; the route then states it and
-            `runParties` counts the parties that sent). This is the one place that writes it. */}
-        <Dotted parts={[toggle, open && transactions, formatCount(participants, 'participant')]} />
+        {/* "senders": the owner's word, the parties one of whose cells the transaction consumed
+            (the indexer's per-participant input flag, the route's `sent`; `runSenders` counts
+            them, each once). A run of cellbases has none and says no count. This is the one
+            place that writes it. */}
+        <Dotted
+          parts={[toggle, open && transactions, senders !== null && formatCount(senders, 'sender')]}
+        />
       </div>
     </article>
   );

@@ -47,6 +47,7 @@ function party(
     usedDelta: '0',
     itemDeltas,
     tags: itemDeltas.length ? 2 : 0,
+    sent: false,
   };
 }
 const suit = (delta: number): ItemDelta => ({

@@ -31,6 +31,7 @@ function party(seed: string, ckbDelta: string, itemDeltas: ItemDelta[]): Partici
     ckbDelta,
     usedDelta: '0',
     itemDeltas,
+    sent: false,
   };
 }
 

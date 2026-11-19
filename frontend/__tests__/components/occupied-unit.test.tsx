@@ -59,6 +59,7 @@ describe('the participant line says "occupied ±N B"', () => {
       ckbDelta: '-100000000',
       usedDelta: '-6100000000',
       itemDeltas: [],
+      sent: true,
     };
     const { container } = render(
       <ActivityRow

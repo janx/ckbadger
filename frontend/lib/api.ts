@@ -1417,6 +1417,8 @@ interface Activity {
   /** Roles the protocol gave this participant, if any. */
   roles: string[];
   tags: number;
+  /** This participant sent: its lock is the lock of at least one input of the transaction. */
+  sent: boolean;
 }
 
 /** Per-participant data within a global activity response. */
@@ -1435,6 +1437,8 @@ interface ParticipantRef {
   lockHash: string | null;
   lockHashPrefix: string | null;
   roles: string[];
+  /** This party sent: its lock is the lock of at least one input of the transaction. */
+  sent: boolean;
 }
 
 interface ParticipantInfo extends ParticipantRef {

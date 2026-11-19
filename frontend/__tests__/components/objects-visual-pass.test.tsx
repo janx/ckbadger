@@ -126,6 +126,7 @@ it('keeps an occupied change on one line in the lock-column grid', () => {
             ckbDelta: '-267999759670',
             usedDelta: '-266000000000',
             itemDeltas: [],
+            sent: true,
           },
         ],
       }}

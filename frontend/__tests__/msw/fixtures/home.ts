@@ -353,6 +353,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
         usedDelta: '0',
         itemDeltas: [],
         tags: 0,
+        sent: true,
       },
     ],
   };
@@ -394,6 +395,7 @@ function party(
     usedDelta,
     itemDeltas,
     tags: itemDeltas.length > 0 ? 2 : 0,
+    sent: false,
   };
 }
 

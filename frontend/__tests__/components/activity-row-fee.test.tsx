@@ -30,6 +30,8 @@ function party(
     lockKind: 'Default Lock',
     roles: [],
     tags: 0,
+    // a party whose CKB fell held an input
+    sent: ckbDelta.startsWith('-'),
     ckbDelta,
     usedDelta: '0',
     itemDeltas: [],
@@ -157,6 +159,7 @@ describe('on an address page, the row lists this address alone', () => {
       lockHash: `0x${'0e'.repeat(32)}`,
       lockHashPrefix: null,
       roles: [],
+      sent: false,
     };
     const { container } = render(
       <AddressActivity address={addressFixture} activity={{ ...oracle, participants: [other] }} />

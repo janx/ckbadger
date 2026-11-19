@@ -439,6 +439,7 @@ describe('move 5 on the activity row', () => {
     address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
+    sent: false,
     lockKind: 'Default Lock',
     roles: [],
     tags: 0,

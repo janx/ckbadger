@@ -491,6 +491,9 @@ export const itemActivityFeedProducer = pagedRead({
           itemDeltas: [],
           lockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
           lockHashPrefix: null,
+          // the item's holder spends the cell that carried it: it sent (resync/int; the capture
+          // predates the field)
+          sent: true,
           lockKind: null,
           roles: [],
           tags: 0,
@@ -525,6 +528,9 @@ export const itemTransactionsProducer = pagedRead({
             itemDeltas: [],
             lockHash: '0xb3acb1c3ac9785b18ea34b9cdc66dbe1327950280dd4055aee95ac1f40add994',
             lockHashPrefix: null,
+            // the item's holder spends the cell that carried it: it sent (resync/int; the capture
+            // predates the field)
+            sent: true,
             lockKind: null,
             roles: [],
             tags: 0,

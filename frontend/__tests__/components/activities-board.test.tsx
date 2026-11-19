@@ -47,6 +47,7 @@ const activity = (
       usedDelta: '0',
       itemDeltas: [],
       tags: 0,
+      sent: true,
     },
   ],
   ...extra,

@@ -26,6 +26,7 @@ function party(seed: string, ckbDelta: string, usedDelta = '0'): ParticipantInfo
     ckbDelta,
     usedDelta,
     itemDeltas: [],
+    sent: false,
   };
 }
 

@@ -1,7 +1,8 @@
 // Readability 2026-11-18, lane B4 (pG) item 5, with the rule the owner ruled at Gate B (lists lane
 // P3): consecutive rows that did the same thing and called the same script code (not the args, not
 // the parties) become one row that says what they called, how many transactions and how many
-// participants, and the newest time, opened in place. It counts and sums nothing: the folded row
+// senders (resync/int: the parties whose lock is an input's; it said participants), and the newest
+// time, opened in place. It counts and sums nothing: the folded row
 // shows no amount and no total. The rule of "the same" is lib/activity-runs.ts (its own test); this
 // pins how the feeds draw a run.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -39,6 +40,7 @@ class NoopObserver {
 
 const NOW = Date.parse('2026-11-18T08:00:00Z');
 
+/** An oracle's party: it spends its own cell to write the next one, so it sent. */
 function oracleParty(seed: string): ParticipantInfo {
   return {
     address: seededAddress(seed),
@@ -47,6 +49,7 @@ function oracleParty(seed: string): ParticipantInfo {
     lockKind: 'Default Lock',
     roles: [],
     tags: 0,
+    sent: true,
     ckbDelta: '-30000',
     usedDelta: '0',
     itemDeltas: [],
@@ -90,7 +93,7 @@ const transfer: GlobalActivity = {
   itemTypesUnread: null,
   participants: [
     { ...oracleParty('sendr1'), ckbDelta: '-100000000' },
-    { ...oracleParty('recvr1'), ckbDelta: '99970000' },
+    { ...oracleParty('recvr1'), ckbDelta: '99970000', sent: false },
   ],
 };
 
@@ -138,7 +141,7 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     // how many transactions and how many participants, counted; no party named, no amount and no
     // total: nothing is summed
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 3 transactions ↓ · 1 participant$/
+      /^all 3 transactions ↓ · 1 sender$/
     );
     expect(folded).not.toHaveTextContent('ckb1');
     expect(folded.querySelector('[data-ckb-amount]')).toBeNull();
@@ -162,7 +165,7 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     expect(toggle).toHaveTextContent('fewer ↑');
     // open, the counts stay, the transactions said as a fact after the toggle
     expect(document.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^fewer ↑ · 3 transactions · 1 participant$/
+      /^fewer ↑ · 3 transactions · 1 sender$/
     );
     const rows = () =>
       [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
@@ -196,7 +199,7 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '4');
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 4 transactions ↓ · 3 participants$/
+      /^all 4 transactions ↓ · 3 senders$/
     );
     expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });
@@ -229,7 +232,25 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   // The live feeds (re-captured for the P3 follow-up through this lane's API build over the live
   // mainnet stores on 2026-11-19, with itemTypes; the capture is said in the fixture): the first
   // page of /activities, and the token feed's sUDT transfers, whose runs name their standard.
-  const feeds = (live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds;
+  // The live capture (2026-11-19) predates the senders bit: its parties do not say whether they
+  // sent. Until it is re-captured over a re-synced store, these tests mark as senders the parties
+  // whose CKB fell: such a party's inputs carried more than its outputs, so it held an input
+  // (exact that way round; a sender whose CKB did not fall is not marked, so the counts pinned
+  // below are of those parties).
+  const feeds = Object.fromEntries(
+    Object.entries((live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds).map(
+      ([feed, rows]) => [
+        feed,
+        rows.map((a) => ({
+          ...a,
+          participants: a.participants.map((p) => ({
+            ...p,
+            sent: BigInt(p.ckbDelta) < BigInt(0),
+          })),
+        })),
+      ]
+    )
+  );
   const said = (el: Element) =>
     el.getAttribute('data-role') === 'activity-run'
       ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent!.replace(/\s+/g, ' ')}`
@@ -244,22 +265,24 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     );
   };
 
+  // re-pinned on purpose (resync/int): each run counts its senders (here the parties whose CKB
+  // fell, the capture's one evidence of an input), where it counted every party
   it('draws the live feed’s first page, 50 activities, in its runs', async () => {
     expect(await drawnFeed(feeds.all)).toEqual([
-      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 senders',
       'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 10 transactions ↓ · 3 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 10 transactions ↓ · 3 senders',
       'CKB Transfer',
-      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 6 transactions ↓ · 3 senders',
       'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 2 transactions ↓ · 2 senders',
       'CKB Transfer',
       'Script call',
-      'CKB Transfer | all 5 transactions ↓ · 6 participants',
+      'CKB Transfer | all 5 transactions ↓ · 5 senders',
       'Script call',
-      'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 participants',
-      'CKB Transfer | all 2 transactions ↓ · 4 participants',
-      'Script call · .bit Time Index State · .bit Time Info | all 14 transactions ↓ · 3 participants',
+      'Script call · .bit Time Index State · .bit Time Info | all 3 transactions ↓ · 3 senders',
+      'CKB Transfer | all 2 transactions ↓ · 2 senders',
+      'Script call · .bit Time Index State · .bit Time Info | all 14 transactions ↓ · 3 senders',
     ]);
   });
 
@@ -267,10 +290,10 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
   // standard of the tokens they moved ("Simple UDT"), whatever tokens each row moved
   it('names the standard a run of token transfers carries, its tokens apart', async () => {
     expect(await drawnFeed(feeds.token)).toEqual([
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×2 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 48 participants',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×3 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 59 participants',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×4 · lock 0xff022d55…d32733 | all 3 transactions ↓ · 22 participants',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×5 · lock 0xff022d55…d32733 | all 4 transactions ↓ · 32 participants',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×2 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 13 senders',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×3 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 13 senders',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×4 · lock 0xff022d55…d32733 | all 3 transactions ↓ · 5 senders',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×5 · lock 0xff022d55…d32733 | all 4 transactions ↓ · 6 senders',
     ]);
   });
 
@@ -550,14 +573,19 @@ describe('an older page that continues the last run (B4 fix round)', () => {
 
 // Lane B4 fix round (review-rules-logic NOTE 2) showed a folded run's parties by the rows' rule;
 // re-pinned on purpose (Gate B's rule, lane P3): a run's rows name other parties from row to row,
-// so the folded row names none and counts them, each once. A run of 7-party transactions, two
-// parties in common.
-describe('a folded run counts its parties and names none (Gate B)', () => {
-  it('counts every party its rows name, once, and draws no party line', async () => {
+// so the folded row names none and counts them, each once. Re-pinned on purpose (resync/int, the
+// owner's word at Gate B): it counts the parties that SENT, each once (it counted all 12). A run of
+// 7-party transactions, two parties in common, the first three of each the senders.
+describe('a folded run counts its senders and names no party (Gate B)', () => {
+  it('counts every party that sent, once, and draws no party line', async () => {
     const user = userEvent.setup();
     const crowded = (n: number, seeds: string[]): GlobalActivity => ({
       ...oracle(n, 'q3q7ue', '0x00', n * 49),
-      participants: seeds.map((seed, i) => ({ ...oracleParty(seed), ckbDelta: String(i - 3) })),
+      participants: seeds.map((seed, i) => ({
+        ...oracleParty(seed),
+        ckbDelta: String(i - 3),
+        sent: i < 3,
+      })),
     });
     const rows = [
       crowded(1, ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6']),
@@ -576,13 +604,60 @@ describe('a folded run counts its parties and names none (Gate B)', () => {
     );
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 2 transactions ↓ · 12 participants$/
+      // c0, c1, c2 sent in the first; c0, c1, d2 in the second
+      /^all 2 transactions ↓ · 4 senders$/
     );
     expect(folded.querySelectorAll('[data-role="party"]')).toHaveLength(0);
     await user.click(within(folded).getByRole('button', { name: /^all 2\stransactions ↓$/ }));
     // opened, each row draws its own parties by the rows' rule (over six, five and the count)
     const row = document.querySelector(`article[data-feed-row="${rows[1].txHash}"]`)!;
     expect(row).toHaveTextContent('+2 participants');
+  });
+});
+
+// resync/int, step 2: a cellbase has no input, so no party of it sent: a run of cellbases folds with
+// no count of senders; a committed run of transactions no party of which sent cannot be (every
+// transaction but a cellbase has an input), so it is refused in its place, never "0 senders".
+describe('senders and cellbases (resync/int)', () => {
+  const drawn = (rows: GlobalActivity[]) =>
+    render(
+      <ActivityRuns
+        rows={rows.map((a) => ({
+          key: a.txHash,
+          subject: runSubject(a, activityTitleText(a)),
+          activity: a,
+          title: <ActivityTitle activity={a} />,
+          row: <ActivityRow activity={a} />,
+        }))}
+      />
+    );
+
+  it('folds a run of cellbases with no count of senders', () => {
+    const cellbase = (n: number): GlobalActivity => ({
+      ...oracle(n, 'm1ner0', '0x00', n * 8),
+      isCellbase: true,
+      typeCalls: [],
+      participants: [{ ...oracleParty('m1ner0'), ckbDelta: '100000000000', sent: false }],
+    });
+    drawn([cellbase(1), cellbase(2), cellbase(3)]);
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded).toHaveAttribute('data-run-count', '3');
+    expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^all 3 transactions ↓$/
+    );
+  });
+
+  it('refuses in its place a run of transactions no party of which sent', () => {
+    const silent = (n: number): GlobalActivity => ({
+      ...oracle(n, 'q3q7ue', '0x00', n * 49),
+      participants: [{ ...oracleParty('q3q7ue'), sent: false }],
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    drawn([silent(1), silent(2)]);
+    expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
+    expect(screen.getByTestId('activity-read-error')).toHaveTextContent(
+      `Cannot read tx ${silent(1).txHash}: transaction ${silent(1).txHash}: a committed transaction with no party that sent (every transaction but a cellbase has an input)`
+    );
   });
 });
 

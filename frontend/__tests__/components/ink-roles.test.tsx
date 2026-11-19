@@ -386,6 +386,7 @@ describe('ParticipantRefView: a party is a link, its roles and "unresolved" are 
     lockHash: p.lockHash ?? null,
     lockHashPrefix: p.lockHashPrefix ?? null,
     roles: ['owner'],
+    sent: false,
   });
 
   it('reads a party linked by its lock hash in the reading ink, in a row or alone', () => {

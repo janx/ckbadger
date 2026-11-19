@@ -113,6 +113,7 @@ export const genesisTransactions: Transaction[] = [
           usedDelta: '-6100000000',
           itemDeltas: [],
           tags: 128,
+          sent: true,
         },
         {
           address: 'ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d',
@@ -124,6 +125,7 @@ export const genesisTransactions: Transaction[] = [
           usedDelta: '23400000000',
           itemDeltas: [],
           tags: 0,
+          sent: false,
         },
       ],
     },
@@ -190,6 +192,7 @@ export const genesisActivities: GlobalActivity[] = [
         usedDelta: '6100000000',
         itemDeltas: [],
         tags: 32,
+        sent: false,
       },
       {
         address:
@@ -202,6 +205,7 @@ export const genesisActivities: GlobalActivity[] = [
         usedDelta: '6100000000',
         itemDeltas: [],
         tags: 32,
+        sent: false,
       },
       {
         address:
@@ -214,6 +218,7 @@ export const genesisActivities: GlobalActivity[] = [
         usedDelta: '6900000000',
         itemDeltas: [],
         tags: 32,
+        sent: false,
       },
     ],
   },
@@ -250,6 +255,7 @@ export const genesisActivities: GlobalActivity[] = [
         usedDelta: '-6100000000',
         itemDeltas: [],
         tags: 128,
+        sent: true,
       },
       {
         address: 'ckb1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq4maw7d',
@@ -261,6 +267,7 @@ export const genesisActivities: GlobalActivity[] = [
         usedDelta: '23400000000',
         itemDeltas: [],
         tags: 0,
+        sent: false,
       },
     ],
   },

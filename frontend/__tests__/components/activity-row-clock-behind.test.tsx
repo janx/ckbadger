@@ -66,6 +66,7 @@ function row(over: Partial<ActivityRowData> = {}): ActivityRowData {
         ckbDelta: '-30000',
         usedDelta: '0',
         itemDeltas: [],
+        sent: true,
       },
     ],
     ...over,

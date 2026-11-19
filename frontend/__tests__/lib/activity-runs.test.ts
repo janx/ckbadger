@@ -5,15 +5,17 @@
 // scripts with their args and the parties with their roles, which left the live feed unfolded,
 // 100 activities 99 rows).
 import { describe, expect, it } from 'vitest';
-import { foldRuns, runKey, runParties, type RunSubject } from '@/lib/activity-runs';
+import { foldRuns, runKey, runSenders, type RunSubject } from '@/lib/activity-runs';
 import live from '@/__tests__/fixtures/activities-live-mainnet.json';
 import type { GlobalActivity } from '@/lib/api';
 import { activityTitleText } from '@/components/activity/activity-row';
 
-const party = (id: string) => ({
+/** A party by its lock hash; `sent` says whether its lock is an input's (the API's `sent`). */
+const party = (id: string, sent = true) => ({
   lockHash: `0x${id.padStart(64, '0')}`,
   lockHashPrefix: null,
   address: `ckb1${id}`,
+  sent,
 });
 const typeCall = (code: string, hashType = 'type') => ({
   typeCodeHash: `0x${code.padStart(64, '0')}`,
@@ -34,6 +36,7 @@ function oracle(over: Partial<RunSubject> = {}): RunSubject {
     title: 'Script call',
     txHash: `0x${'aa'.repeat(32)}`,
     blockNumber: 21047791,
+    isCellbase: false,
     protocolActions: [],
     typeCalls: [typeCall('3a'), typeCall('9e')],
     lockCalls: [],
@@ -174,19 +177,61 @@ describe('runKey: the code an item carries', () => {
   });
 });
 
-describe('runParties: how many parties a run names', () => {
-  it('counts each party once across the run, by its lock hash, else its prefix, else its address', () => {
-    expect(runParties([oracle(), oracle(), oracle({ parties: [party('02')] })])).toBe(2);
-    expect(runParties([oracle({ parties: [party('01'), party('02')] }), oracle()])).toBe(2);
-    const prefixed = { lockHash: null, lockHashPrefix: '0x1234', address: null };
-    const addressed = { lockHash: null, lockHashPrefix: null, address: 'ckb1only' };
-    expect(runParties([oracle({ parties: [prefixed, addressed] }), oracle()])).toBe(3);
+// Re-pinned on purpose (resync/int, step 2: the owner's word at Gate B): a run counts its SENDERS,
+// the parties whose lock is an input's (the API's `sent`), each once; it counted every party
+// (`runParties`) while the stores did not say who sent.
+describe('runSenders: how many parties of a run sent', () => {
+  it('counts each sender once across the run, by its lock hash, else its prefix, else its address', () => {
+    expect(runSenders([oracle(), oracle(), oracle({ parties: [party('02')] })])).toBe(2);
+    expect(runSenders([oracle({ parties: [party('01'), party('02')] }), oracle()])).toBe(2);
+    const addressed = { lockHash: null, lockHashPrefix: null, address: 'ckb1only', sent: true };
+    expect(runSenders([oracle({ parties: [party('01'), addressed] }), oracle()])).toBe(2);
+  });
+
+  it('counts no party that did not send: a payee, a party a protocol only named', () => {
+    const named = { lockHash: null, lockHashPrefix: '0x1234', address: null, sent: false };
+    expect(
+      runSenders([
+        oracle({ parties: [party('01'), party('02', false), named] }),
+        oracle({ parties: [party('03', false), party('01')] }),
+      ])
+    ).toBe(1);
   });
 
   it('refuses a party it cannot name, with the transaction', () => {
-    const nobody = { lockHash: null, lockHashPrefix: null, address: null };
-    expect(() => runParties([oracle({ parties: [nobody] })])).toThrow(
+    const nobody = { lockHash: null, lockHashPrefix: null, address: null, sent: true };
+    expect(() => runSenders([oracle({ parties: [nobody] })])).toThrow(
       `transaction 0x${'aa'.repeat(32)}: a party with no lock hash, prefix or address`
+    );
+  });
+
+  it('refuses a committed transaction no party of which sent, never counting it as none', () => {
+    expect(() => runSenders([oracle(), oracle({ parties: [party('02', false)] })])).toThrow(
+      `transaction 0x${'aa'.repeat(32)}: a committed transaction with no party that sent (every transaction but a cellbase has an input)`
+    );
+  });
+
+  it('refuses a party that does not say whether it sent: an API older than the page', () => {
+    const older = { lockHash: `0x${'01'.padStart(64, '0')}`, lockHashPrefix: null, address: null };
+    expect(() =>
+      runSenders([oracle({ parties: [older as unknown as RunSubject['parties'][number]] })])
+    ).toThrow(
+      `transaction 0x${'aa'.repeat(32)}: party 0x${'01'.padStart(64, '0')} does not say whether it sent: the API is older than this page`
+    );
+  });
+
+  it('has no sender to count in a cellbase', () => {
+    expect(() => runSenders([oracle({ isCellbase: true, parties: [party('c0', false)] })])).toThrow(
+      `transaction 0x${'aa'.repeat(32)}: a cellbase has no sender to count`
+    );
+  });
+});
+
+describe('runKey: a cellbase folds with cellbases only', () => {
+  it('never gives a cellbase and a transaction one key, whatever else they share', () => {
+    expect(runKey(oracle({ isCellbase: true }))).not.toBe(runKey(oracle()));
+    expect(runKey(oracle({ isCellbase: true }))).toBe(
+      runKey(oracle({ isCellbase: true, txHash: `0x${'bb'.repeat(32)}` }))
     );
   });
 });
@@ -250,6 +295,7 @@ describe('the rule on the live feeds', () => {
       title: activityTitleText(a),
       txHash: a.txHash,
       blockNumber: a.blockNumber,
+      isCellbase: a.isCellbase,
       protocolActions: a.protocolActions,
       typeCalls: a.typeCalls,
       lockCalls: a.lockCalls,

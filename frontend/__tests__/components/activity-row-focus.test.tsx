@@ -18,6 +18,7 @@ function party(tail: string, over: Partial<ParticipantInfo> = {}): ParticipantIn
     address: seededAddress(tail),
     lockHash: `0x${tail.padStart(64, '0')}`,
     lockHashPrefix: null,
+    sent: false,
     lockKind: 'Default Lock',
     roles: [],
     tags: 0,

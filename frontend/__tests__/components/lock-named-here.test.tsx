@@ -51,6 +51,8 @@ function party(address: string | null, lockKind: string | null, n: string, ckbDe
     lockKind,
     roles: [],
     tags: 0,
+    // a party whose CKB fell held an input
+    sent: ckbDelta.startsWith('-'),
     ckbDelta,
     usedDelta: '0',
     itemDeltas: [],

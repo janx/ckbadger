@@ -50,6 +50,7 @@ describe('a refused lock fails its part, in its place', () => {
           ckbDelta: String(-n),
           usedDelta: '0',
           itemDeltas: [],
+          sent: false,
         },
       ],
     });
@@ -98,6 +99,7 @@ describe('a refused lock fails its part, in its place', () => {
           ckbDelta: '-1',
           usedDelta: '0',
           itemDeltas: [],
+          sent: true,
         },
       ],
     });

@@ -54,6 +54,7 @@ function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantI
     usedDelta: overrides.usedDelta ?? '0',
     itemDeltas: overrides.itemDeltas ?? [],
     tags: overrides.tags ?? 0,
+    sent: overrides.sent ?? true,
   };
 }
 
