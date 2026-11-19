@@ -11,7 +11,7 @@ import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { expectPrompt, promptNote } from '@/__tests__/utils/prompt-heading';
 import { CELL_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { color, inkOnFill, type PaletteKey } from '@/lib/palette';
-import { hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
+import { HEX_BOX_INSET_PX, hexRowBytes, hexRowWidth } from '@/lib/cell-byte-layout';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
 
 const cell = {
@@ -132,7 +132,8 @@ describe('cell microscope', () => {
     expect(box).not.toHaveClass('neon-edge-top');
     expect(box).not.toHaveClass('border-base-border-subtle');
     const dump = box.querySelector('.overflow-x-auto') as HTMLElement;
-    expect(dump).toHaveClass('px-4', 'py-3');
+    // re-pinned (lane P1 follow-up, item 5): px-2.5, the padding hexRowBytes measures by (px-4)
+    expect(dump).toHaveClass('px-2.5', 'py-3');
     // material pass v2 (move 2): the dump itself is a well inside the glass
     expect(dump).toHaveClass('well', 'm-2');
     expect(dump).toContainElement(box.querySelector('[data-byte="data:2"]') as HTMLElement);
@@ -394,14 +395,20 @@ describe('cell microscope at phone width (responsive review A#10, A#11)', () => 
     },
   } as Cell;
 
-  it('lays the hex dump out 8 bytes a row in a 358 px box, its headers wrapping as wholes', () => {
+  // Re-pinned on purpose (lane P1 follow-up, item 5; renamed, it was "… 8 bytes a row in a 358
+  // px box …"): the 8-byte row, 329.2 px, ran 23 px out of the 306 px well a 390 phone's 358 px
+  // box leaves and scrolled it (Chrome, the integration preview); a 4-byte row, 211.6 px, is drawn
+  // whole, its bytes at full size (a byte map is drawn to scale: fewer bytes a row, never smaller)
+  it('lays the hex dump out 4 bytes a row in a 358 px box, its headers wrapping as wholes', () => {
     stubChartWidth(358);
     render(<CellMicroscope cell={wide} />);
     const data = screen.getByLabelText('CellData byte map');
     const offsets = within(data)
       .getAllByText(/^0x[0-9a-f]{4}$/)
       .map((n) => n.textContent);
-    expect(offsets).toEqual(['0x0000', '0x0008', '0x0010', '0x0018', '0x0020']);
+    expect(offsets).toEqual(
+      Array.from({ length: 10 }, (_, i) => `0x${(4 * i).toString(16).padStart(4, '0')}`)
+    );
     // Each header is one wrapping row of two parts, never two ragged columns.
     for (const block of ['CellOutput byte map', 'CellData byte map'])
       expect(screen.getByLabelText(block).firstElementChild).toHaveClass('flex-wrap');
@@ -547,8 +554,12 @@ describe('cell microscope field detail rail (old issue B)', () => {
     // 1024 − the container's 2 × 24 px gutter = 976; the grid's gap-6 is 24
     const bytes = 976 - 24 - rail;
     expect(bytes).toBe(632);
-    // the dump's frame: the panel's 1 px border, its well's m-2, the well's 1 px border and px-4
-    const frame = 2 * (1 + 8 + 1 + 16);
+    // the dump's frame: the panel's 1 px border, its well's m-2, the well's 1 px border and its
+    // px-2.5 (re-pinned, lane P1 follow-up: px-4), the frame hexRowBytes measures by
+    const frame = 2 * (1 + 8 + 1 + 10);
+    expect(HEX_BOX_INSET_PX).toBe(frame);
+    const well = screen.getByLabelText('Cell bytes').querySelector('.well')!;
+    expect(well).toHaveClass('m-2', 'px-2.5');
     for (const digits of [4, 5] as const) {
       expect(hexRowBytes(bytes, digits)).toBe(16);
       expect(hexRowWidth(16, digits) + frame).toBeLessThanOrEqual(bytes);

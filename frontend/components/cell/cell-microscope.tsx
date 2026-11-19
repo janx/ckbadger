@@ -738,8 +738,11 @@ export function CellMicroscope({ cell, lockLabel, typeName }: CellMicroscopeProp
               onClick={onTap}
               onMouseLeave={() => setActive(null)}
             >
-              {/* The dump itself is a well inside the glass (material pass v2, move 2). */}
-              <TerminalPanelContent padding="none" className="well m-2 overflow-x-auto px-4 py-3">
+              {/* The dump itself is a well inside the glass (material pass v2, move 2). Its frame,
+                  the panel's border, m-2, the well's border and px-2.5, is the one hexRowBytes
+                  measures by (HEX_BOX_INSET_PX): a row is chosen whole inside it (lane P1
+                  follow-up; px-4 left the 8-byte row 23 px too wide at 390) */}
+              <TerminalPanelContent padding="none" className="well m-2 overflow-x-auto px-2.5 py-3">
                 {molecule && (
                   <div aria-label="CellOutput byte map">
                     <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
