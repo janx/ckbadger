@@ -17,6 +17,7 @@ import { useDocumentTitle } from '@/lib/use-document-title';
 import { formatCount } from '@/lib/format-count';
 import { isAwaited } from '@/lib/query-state';
 import { unitNode } from '@/components/ui/units';
+import { fontPx, textPx } from '@/lib/type-metrics';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -35,6 +36,27 @@ const RFC_TEXT: Record<string, string> = {
   '0048': 'the block header version field is no longer reserved',
   '0049': 'CKB-VM version 2',
 };
+
+/*
+ * A consensus row (readability plan P4; the review: nine "RFC 0029 / epoch 0" cells without titles):
+ * the RFC, the epoch it switches on at and its one line, at the small step. The RFC and the epoch
+ * stand in columns as wide as their widest ("RFC 0000", 62.4 px; "not activated", 101.4 px), 10 px
+ * apart; the line takes the rest of the row where it has room for 32 characters (249.6 px) and
+ * goes under them where it has not (a 390 phone's 358 px leaves it 174.2 px beside them: 22
+ * characters a line, three lines for the longest; under them 45). The list is as wide as its
+ * widest row, every line on one (62.4 + 10 + 101.4 + 10 + 63 × 7.8 = 675.2 px), so its rules end
+ * where its words do.
+ */
+const RFC_GAP = 10;
+const RFC_COLUMN = textPx('RFC 0000'.length, fontPx('small'));
+const EPOCH_COLUMN = textPx('not activated'.length, fontPx('small'));
+const RFC_LINE_MIN = textPx(32, fontPx('small'));
+const CONSENSUS_WIDTH =
+  RFC_COLUMN +
+  RFC_GAP +
+  EPOCH_COLUMN +
+  RFC_GAP +
+  textPx(Math.max(...Object.values(RFC_TEXT).map((line) => line.length)), fontPx('small'));
 
 const DAY_MS = 86_400_000;
 
@@ -75,7 +97,7 @@ function editionStory(event: Edition, timeline: Timeline, tipMs: number | null):
   }
   if (event.id === 'meepo-2024') {
     if (data2.knownVersions > 0)
-      return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. ${data2.knownVersions.toLocaleString()} known script version${data2.knownVersions === 1 ? '' : 's'} use data2.${notReached}`;
+      return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. ${data2.knownVersions.toLocaleString('en-US')} known script version${data2.knownVersions === 1 ? '' : 's'} use data2.${notReached}`;
     // reached: the tip is at or past the activation epoch, so the days on are the tip's
     const daysOn = reached && tipMs !== null ? wholeDaysAfter(since, tipMs) : null;
     return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. No script CKBadger knows uses data2 yet${
@@ -126,11 +148,13 @@ function EditionCard({
         args={event.status}
         className="text-section self-start font-medium"
       />
-      <p className="text-text-dim text-meta max-w-measure self-start">
-        epoch {event.activationEpoch.toLocaleString()} ·{' '}
+      {/* The edition's epoch, block and day are values: the reading ink at the small step
+          (readability R3, R4; they were the quiet ink at 12 px), the block a link inside the line. */}
+      <p className="text-text text-small max-w-measure self-start">
+        epoch {event.activationEpoch.toLocaleString('en-US')} ·{' '}
         {event.activationBlock !== null && (
           <>
-            <Link href={`/blocks/${event.activationBlock}`} className="hover:text-jade">
+            <Link href={`/blocks/${event.activationBlock}`} look="inline">
               block {formatBlockNumber(event.activationBlock)}
             </Link>{' '}
             ·{' '}
@@ -154,22 +178,16 @@ function EditionCard({
           ))}
         </div>
       )}
-      {/* Every one leaves the site, so every one says so (U-20): ` ↗`, a new tab. */}
-      <div className="text-small flex flex-wrap gap-x-5 gap-y-1">
+      {/* Every one leaves the site, so every one says so (U-20): ` ↗`, a new tab. Links inside
+          the line, in its reading ink (R11: no coloured words in this page's tier 1). */}
+      <div className="text-text text-small flex flex-wrap gap-x-5 gap-y-1">
         {overview && (
-          <ExternalLink
-            href={overview.url}
-            className="text-text hover:text-text-bright hover:underline"
-          >
+          <ExternalLink href={overview.url} look="inline">
             {overview.label} overview
           </ExternalLink>
         )}
         {resources.map((resource) => (
-          <ExternalLink
-            key={resource.url}
-            href={resource.url}
-            className="text-text hover:text-text-bright hover:underline"
-          >
+          <ExternalLink key={resource.url} href={resource.url} look="inline">
             {resource.label}
           </ExternalLink>
         ))}
@@ -257,8 +275,8 @@ function HowHashTypePicksAVm({
           {/* Moved from the edition cards (H3): what each edition did to type-hash scripts. */}
           <p className="text-text text-body">
             Scripts named by type hash moved to VM1 at {vm1.shortName}&apos;s epoch,{' '}
-            {vm1.activationEpoch.toLocaleString()}, and to VM2 at {vm2.shortName}&apos;s,{' '}
-            {vm2.activationEpoch.toLocaleString()}. {vm2.shortName}&apos;s Spawn syscalls let
+            {vm1.activationEpoch.toLocaleString('en-US')}, and to VM2 at {vm2.shortName}&apos;s,{' '}
+            {vm2.activationEpoch.toLocaleString('en-US')}. {vm2.shortName}&apos;s Spawn syscalls let
             scripts start and talk to other scripts.
           </p>
         </div>
@@ -272,6 +290,21 @@ function HowHashTypePicksAVm({
           and {formatExactDecimal(lanes[3].liveReferences, 'data live references')} by data.
         </p>
       </div>
+    </DetailSection>
+  );
+}
+
+/**
+ * Tier 2: where the consensus rows come from (the review: the section's subtitle was the RPC's
+ * method name, "get_consensus · hardfork_features · mainnet", in tier 1).
+ */
+function WhereConsensusComesFrom({ network }: { network: string }) {
+  return (
+    <DetailSection title="Where the consensus rows come from">
+      <p className="text-text text-body max-w-measure">
+        The consensus rows are what this node’s get_consensus RPC answers as its hardfork_features
+        on {network}: each RFC and the epoch it switches on at.
+      </p>
     </DetailSection>
   );
 }
@@ -326,7 +359,7 @@ export default function HardforksPage() {
                 status={
                   data && (
                     <span className="text-text-dim text-small">
-                      {data.network} · tip epoch {data.tipEpoch.toLocaleString()}
+                      {data.network} · tip epoch {data.tipEpoch.toLocaleString('en-US')}
                     </span>
                   )
                 }
@@ -359,11 +392,11 @@ export default function HardforksPage() {
               {ready && (
                 <div className="mt-8 min-w-0">
                   {ready.span.genesisMs === null || ready.span.tipMs === null ? (
-                    <p className="text-text-dim text-small">
+                    <p className="text-text text-small">
                       The index holds no block header yet; the timeline draws once it does.
                     </p>
                   ) : ready.span.tipMs <= dayStartMs(ready.meepo.activationDate) ? (
-                    <p className="text-text-dim text-small max-w-measure">
+                    <p className="text-text text-small max-w-measure">
                       The index has not reached the latest edition yet; the timeline draws once it
                       has.
                     </p>
@@ -385,12 +418,10 @@ export default function HardforksPage() {
               <p className="text-text text-body max-w-measure mt-3.5">
                 A script named by its type hash follows every upgrade; one named by its data hash
                 stays on the VM its hash type pins.{' '}
-                <a
-                  href={`#${HOW_ID}`}
-                  className="text-text-dim hover:text-text-bright hover:underline"
-                >
-                  How it works<span className="whitespace-nowrap"> ↓</span>
-                </a>
+                {/* A way onward, down this page: the look writes its ↓ (components/ui/link.tsx). */}
+                <Link href={`#${HOW_ID}`} look="onward">
+                  How it works
+                </Link>
               </p>
             )}
             {/* Rhythm (R6): the hero's caption, the editions 64 px under it, the consensus 72. */}
@@ -411,21 +442,35 @@ export default function HardforksPage() {
               // as the title row writes them.
               <Section
                 title="consensus"
-                args={`${ready.data.network} · epoch ${ready.data.tipEpoch.toLocaleString()}`}
+                args={`${ready.data.network} · epoch ${ready.data.tipEpoch.toLocaleString('en-US')}`}
                 className="mt-[72px]"
               >
-                <p className="text-text-dim text-small max-w-measure mb-3 w-fit">
-                  get_consensus · hardfork_features · {ready.data.network}
-                </p>
-                <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
+                {/* One row per RFC: its number, its epoch and its one line (RFC_TEXT, the
+                    page's one wording of an RFC, the edition cards'); RFC 0038 keeps its number
+                    alone, its title never verified. The RPC they come from is said in tier 2. */}
+                <dl className="text-small" style={{ maxWidth: CONSENSUS_WIDTH }}>
                   {ready.data.consensusFeatures.map((feature) => (
-                    <div key={feature.rfc} className="border-row-rule text-small border-t py-2">
-                      <dt className="text-text-bright">RFC {feature.rfc}</dt>
-                      <dd className="text-text-dim">
+                    <div
+                      key={feature.rfc}
+                      className="border-row-rule flex flex-wrap border-t py-1.5"
+                      style={{ columnGap: RFC_GAP }}
+                    >
+                      <dt className="text-text-bright shrink-0" style={{ width: RFC_COLUMN }}>
+                        RFC {feature.rfc}
+                      </dt>
+                      <dd className="text-text shrink-0" style={{ width: EPOCH_COLUMN }}>
                         {feature.activationEpoch === null
                           ? 'not activated'
-                          : 'epoch ' + feature.activationEpoch.toLocaleString()}
+                          : `epoch ${feature.activationEpoch.toLocaleString('en-US')}`}
                       </dd>
+                      {RFC_TEXT[feature.rfc] && (
+                        <dd
+                          className="text-text min-w-0 flex-1"
+                          style={{ flexBasis: RFC_LINE_MIN }}
+                        >
+                          {RFC_TEXT[feature.rfc]}
+                        </dd>
+                      )}
                     </div>
                   ))}
                 </dl>
@@ -444,6 +489,7 @@ export default function HardforksPage() {
             <div id={HOW_ID} className="scroll-mt-4">
               <DetailTier2>
                 <HowHashTypePicksAVm lanes={ready.lanes} editions={[ready.mirana, ready.meepo]} />
+                <WhereConsensusComesFrom network={ready.data.network} />
               </DetailTier2>
             </div>
           )}

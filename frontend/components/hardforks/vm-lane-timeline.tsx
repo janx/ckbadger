@@ -1,6 +1,8 @@
 'use client';
 
+import { useState } from 'react';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { Pager } from '@/components/ui/pager';
 import {
   DOT_HIT_PX,
   DeploymentEvidence,
@@ -13,6 +15,7 @@ import { color, inkOnFill } from '@/lib/palette';
 import { useTheme } from '@/hooks/useTheme';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCount, countNoun } from '@/lib/format-count';
+import { unitNode } from '@/components/ui/units';
 import { formatUtc8Date } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2, HardforkScriptDeployment } from '@/lib/api';
 import { SVG_TEXT, lineAscentPx, wrapWords } from '@/lib/chart-type';
@@ -63,11 +66,15 @@ const LANE_HEAD_CLEAR = 4;
 /** A glyph of an edition block's sub-line (the note size), for keeping labels apart. */
 export const CHAR_PX = advancePx(SVG_TEXT.note);
 /**
- * The plot's name, inside it at the top-left (hierarchy v3, R13): the page's former section title
- * and its hint line. It wraps after the title where one line does not fit (a phone).
+ * The plot's name, inside it at the top-left (hierarchy v3, R13): the page's former section title.
+ * What a dot and a dash are is the key's over the figure (readability plan P4: a key a tier-1
+ * figure needs is a drawn legend, not a hint in its name); the name was "… · dots: when each
+ * known script version was deployed". 33 characters, 237.6 px at 12 px: one line on a 360 phone.
  */
 const PLOT_TITLE = 'which VM runs a script, over time';
-const PLOT_HINT = 'dots: when each known script version was deployed';
+/** A lane's dot (r 3, the well's fill in a bright ring) and its not-yet-valid dash (2 on, 4 off). */
+const DOT = { r: 3, fill: 'var(--c-base-bg)', stroke: 'var(--c-text-bright)' } as const;
+const NOT_YET = { stroke: 'var(--c-text-ghost)', dash: '2 4' } as const;
 /*
  * The figure's words stand in tight lines of their roles (lib/chart-type.ts), so its bands and
  * baselines follow from the roles (readability plan 2026-11-18, lane F3).
@@ -218,10 +225,9 @@ export function VmLaneTimeline({
   // The name takes one line where it fits; else the title over the hint, each broken between words
   // where it does not fit the plot either (the hint at 12 px is 352.8 px: a 360 phone's 328 px
   // plot takes it on two lines).
-  const nameOneLine = `${PLOT_TITLE} · ${PLOT_HINT}`.length * NAME_CHAR_PX <= w;
-  const nameLines = nameOneLine
-    ? [`${PLOT_TITLE} · ${PLOT_HINT}`]
-    : [...wrapWords(PLOT_TITLE, NAME_PX, w), ...wrapWords(PLOT_HINT, NAME_PX, w)];
+  // The name takes one line where it fits (237.6 px), else breaks between words.
+  const nameOneLine = PLOT_TITLE.length * NAME_CHAR_PX <= w;
+  const nameLines = nameOneLine ? [PLOT_TITLE] : wrapWords(PLOT_TITLE, NAME_PX, w);
   const band = PLOT_NAME_PAD + nameLines.length * PLOT_NAME_LINE + PLOT_NAME_GAP;
   const top =
     band +
@@ -289,11 +295,13 @@ export function VmLaneTimeline({
     (a, b) => a.timestampMs - b.timestampMs || a.versionHash.localeCompare(b.versionHash)
   );
   const unregistered = byTime.filter((deployment) => deployment.hashTypes!.length === 0);
+  // The versions under no hash type are a count under the lanes; their strip opens on demand.
   const selected = deployments.find((d) => d.versionHash === readout.active) ?? null;
   // A reading names a version on the timeline: one the deployments no longer hold lets go.
   if (readout.active !== null && selected === null) readout.clear();
   return (
     <div ref={ref} className="min-w-0">
+      <LanesKey />
       {width !== null && width > left + right && (
         <svg
           role="img"
@@ -399,7 +407,7 @@ export function VmLaneTimeline({
             // data2's note sits between the editions, clear of the Mirana line.
             const noteFrom = hashType === 'data2' ? t1 : genesisMs;
             const live = formatExactDecimal(lane.liveReferences, `${hashType} live references`);
-            const versions = `${lane.knownVersions.toLocaleString()} known ${countNoun(lane.knownVersions, 'version')}`;
+            const versions = `${lane.knownVersions.toLocaleString('en-US')} known ${countNoun(lane.knownVersions, 'version')}`;
             const dots = byTime.filter((deployment) => deployment.hashTypes!.includes(hashType));
             const rows = laneDotRows(dots.map((deployment) => x(deployment.timestampMs)));
             return (
@@ -480,8 +488,8 @@ export function VmLaneTimeline({
                       x2={x(pinnedFrom)}
                       y1={y + bar.y + bar.h / 2}
                       y2={y + bar.y + bar.h / 2}
-                      stroke="var(--c-text-ghost)"
-                      strokeDasharray="2 4"
+                      stroke={NOT_YET.stroke}
+                      strokeDasharray={NOT_YET.dash}
                     />
                     {!narrow && (
                       <text
@@ -544,9 +552,9 @@ export function VmLaneTimeline({
                       <circle
                         cx={x(deployment.timestampMs)}
                         cy={y + bar.dots[rows[k]]}
-                        r="3"
-                        fill={active ? DATA_COLOR : 'var(--c-base-bg)'}
-                        stroke={active ? DATA_COLOR : 'var(--c-text-bright)'}
+                        r={DOT.r}
+                        fill={active ? DATA_COLOR : DOT.fill}
+                        stroke={active ? DATA_COLOR : DOT.stroke}
                         strokeWidth="1"
                       />
                     </g>
@@ -581,21 +589,99 @@ export function VmLaneTimeline({
         </svg>
       )}
       {unregistered.length > 0 && (
-        <div className="mt-2">
-          <ScriptDeploymentTimeline
-            deployments={unregistered}
-            domain={[genesisMs, tipMs]}
-            inset={{ left, right }}
-            label={`no registered reference · ${unregistered.length.toLocaleString()}`}
-            readout={readout}
-            hideEvidence
-          />
-        </div>
+        <Unplaced
+          deployments={unregistered}
+          domain={[genesisMs, tipMs]}
+          inset={{ left, right }}
+          readout={readout}
+        />
       )}
       <DeploymentEvidence
         selected={selected}
         pinned={selected !== null && readout.isPinned(selected.versionHash)}
       />
+    </div>
+  );
+}
+
+/**
+ * The key to the lanes (readability plan P4: a key a tier-1 figure needs is a drawn legend in tier
+ * 1, not prose in tier 2 or a hint in its name): the figure's own marks, each with its words, over
+ * the figure. The dot is a lane's version mark; the dash is a hash type before the edition that
+ * brought it, which a phone draws with no words of its own. The words at the small step in the
+ * reading ink (a key's words, as the network map's); a row wraps under its glyph on a phone.
+ */
+function LanesKey() {
+  return (
+    <ul
+      aria-label="Key to the lanes"
+      className="text-small text-text mb-3 flex flex-wrap gap-x-6 gap-y-1"
+    >
+      <li className="flex items-start gap-2">
+        <svg width="10" height="10" aria-hidden="true" className="mt-1 shrink-0">
+          <circle cx="5" cy="5" r={DOT.r} fill={DOT.fill} stroke={DOT.stroke} strokeWidth="1" />
+        </svg>
+        a known script version, when its code was first deployed
+      </li>
+      <li className="flex items-start gap-2">
+        <svg width="18" height="10" aria-hidden="true" className="mt-1 shrink-0">
+          <line
+            x1="0"
+            x2="18"
+            y1="5"
+            y2="5"
+            stroke={NOT_YET.stroke}
+            strokeDasharray={NOT_YET.dash}
+          />
+        </svg>
+        not valid yet: before the edition that brought the hash type
+      </li>
+    </ul>
+  );
+}
+
+/**
+ * The known script versions registered under no hash type (the review: "no registered reference ·
+ * 174", a heap of hollow dots stacked by the strip's columns, the heaviest mass on the screen and
+ * the least explained; its height said only how many fell in a column): one count in a sentence
+ * under the lanes, the API's list's length; their strip, every one at its deployment, opens on
+ * demand in the short list's own form (the Pager's `more`: "all 174 versions ↓").
+ */
+function Unplaced({
+  deployments,
+  domain,
+  inset,
+  readout,
+}: {
+  deployments: HardforkScriptDeployment[];
+  domain: readonly [number, number];
+  inset: { left: number; right: number };
+  readout: ReturnType<typeof useDeploymentReadout>;
+}) {
+  const [open, setOpen] = useState(false);
+  const n = deployments.length;
+  return (
+    <div className="mt-2 min-w-0">
+      <p className="text-text text-body max-w-measure">
+        {unitNode(formatCount(n, 'known script version'))} {countNoun(n, 'is', 'are')} registered
+        under no hash type, so no lane holds {countNoun(n, 'it', 'them')}.
+      </p>
+      {open ? (
+        <div className="mt-2">
+          <ScriptDeploymentTimeline
+            deployments={deployments}
+            domain={domain}
+            inset={inset}
+            label={`no hash type · ${n.toLocaleString('en-US')}`}
+            readout={readout}
+            hideEvidence
+          />
+        </div>
+      ) : (
+        <div className="mt-1">
+          <Pager mode="more" all={{ count: n, singular: 'version', onShow: () => setOpen(true) }} />
+        </div>
+      )}
     </div>
   );
 }

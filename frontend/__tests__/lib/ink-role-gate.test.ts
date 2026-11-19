@@ -422,10 +422,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'app/hardforks/page.tsx': {
     family: 'topics',
     // prose 10 → 5 (B7): the lede, the two editions paragraphs, the hash-type paragraph and the
-    // RFC note explain, in the reading ink
-    sites: { link: 2, prose: 5 },
-    reason:
-      'the epoch and block lines, the loading and not-reached lines, the consensus line and the how link in the quiet ink',
+    // RFC note explain, in the reading ink; link 2 → 0, prose 5 → 1 (page lane P4): an edition's
+    // epoch, block and day line reads in the reading ink, its block a link inside the line; "How
+    // it works" is a way onward; the no-header and not-reached states read; the consensus line
+    // (the RPC's name) went to tier 2
+    sites: { prose: 1 },
+    reason: 'the loading line, a transient note while the timeline is read',
   },
   'app/network/advertisement-graph.tsx': {
     family: 'topics',
@@ -495,12 +497,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'topics',
     sites: { link: 2, prose: 1 },
     reason: "a pair's party links in its readout and the empty-graph sentence",
-  },
-  'components/hardforks/script-deployment-timeline.tsx': {
-    family: 'topics',
-    // prose 2 → 1 (B7): the earliest-creation sentence explains, in the reading ink
-    sites: { prose: 1 },
-    reason: 'the empty sentence in the quiet ink',
   },
   // ---- shared ----
   'components/activity/activity-row.tsx': {

@@ -128,7 +128,9 @@ describe('VmLaneTimeline', () => {
       Number(meepo.getAttribute('x')) + 12 * 6.5 <= 358 ||
         meepo.getAttribute('text-anchor') === 'end'
     ).toBe(true);
-    // Versions with no registered reference sit on the strip, sharing the plot's insets.
+    // Versions with no registered reference sit on the strip, sharing the plot's insets
+    // (re-pinned, readability plan P4: the strip opens on demand under its count).
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
     const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
     expect(strip).toHaveStyle({ left: '8px', right: '8px' });
     expect(within(strip).getAllByRole('button')).toHaveLength(2);
@@ -191,10 +193,21 @@ describe('VmLaneTimeline', () => {
     expect(onLane('data1')).toEqual(['Omni Lock', 'xUDT']);
     expect(onLane('data')).toEqual(['Old Lock']);
     expect(onLane('data2')).toEqual([]);
-    // Only the unregistered version stays on the strip below.
+    // Only the unregistered version stays off the lanes: re-pinned (readability plan P4), it is
+    // one count under them, its strip on demand (the strip's label was "no registered reference ·
+    // 1"; the count is a sentence now, the strip's label "no hash type · 1").
+    expect(
+      screen.getByText(
+        (_, el) =>
+          el?.tagName === 'P' &&
+          el.textContent!.replace(/\u00a0/g, ' ') ===
+            '1 known script version is registered under no hash type, so no lane holds it.'
+      )
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
     const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
     expect(within(strip).getAllByRole('button')).toHaveLength(1);
-    expect(screen.getByText(/no registered reference · 1/)).toBeInTheDocument();
+    expect(screen.getByText('no hash type · 1')).toBeInTheDocument();
     // A lane dot and a strip dot share one evidence panel.
     fireEvent.focus(svg.querySelector('[data-lane-dot="data1"]')!);
     const evidence = screen.getByRole('complementary', {
@@ -247,6 +260,10 @@ describe('VmLaneTimeline', () => {
     fireEvent.click(xudt);
     expect(readout).toHaveTextContent(/^selected xUDT · xUDT/);
     expect(xudt).toHaveAttribute('aria-pressed', 'true');
+    // re-pinned (readability plan P4): the strip of the versions under no hash type opens on
+    // demand; opening it keeps the pin
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
+    expect(readout).toHaveTextContent(/^selected xUDT · xUDT/);
     const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
     const unregistered = within(strip).getByRole('button');
     fireEvent.mouseEnter(unregistered);
@@ -276,9 +293,9 @@ describe('VmLaneTimeline', () => {
     // The page's display element (no defining number): at least 280 px tall.
     expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
     const name = svg.querySelector('[data-role="chart-name"]')!;
-    expect(name).toHaveTextContent(
-      /^which VM runs a script, over time · dots: when each known script version was deployed$/
-    );
+    // re-pinned (readability plan P4): the name is the plot's title; what a dot is, it said as a
+    // hint ("… · dots: when each known script version was deployed"), is the key's first row
+    expect(name).toHaveTextContent(/^which VM runs a script, over time$/);
     expect(name.querySelectorAll('tspan')).toHaveLength(0);
     expect(name.getAttribute('x')).toBe('0');
     // re-pinned (readability R4): the label role is 12 px (was 11)
@@ -297,7 +314,10 @@ describe('VmLaneTimeline', () => {
       expect(Number(rule.getAttribute('y1'))).toBeGreaterThanOrEqual(nameY + 8);
   });
 
-  it('wraps the in-plot name into two lines at phone width, both inside the plot', () => {
+  // Re-pinned (readability plan P4; it was "wraps the in-plot name into two lines at phone width,
+  // both inside the plot"): the name lost its hint to the key over the figure, and its title alone,
+  // 33 characters, 237.6 px at 12 px, is one line on a 390 phone's 358 px and a 360 phone's 326.
+  it('keeps the in-plot name on one line at phone width, inside the plot', () => {
     stubChartWidth(358);
     render(
       <VmLaneTimeline
@@ -312,15 +332,11 @@ describe('VmLaneTimeline', () => {
     const svg = screen.getByRole('img');
     expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
     const name = svg.querySelector('[data-role="chart-name"]')!;
-    const lines = [...name.querySelectorAll('tspan')];
-    expect(lines.map((t) => t.textContent)).toEqual([
-      'which VM runs a script, over time',
-      'dots: when each known script version was deployed',
-    ]);
-    // re-pinned (readability R4, the one advance model): 12 px at 0.6 em (was 11 px at an
-    // observed 0.64 em): each line fits the 358 px plot.
-    for (const line of lines) expect(line.textContent!.length * 12 * 0.6).toBeLessThanOrEqual(358);
-    const lastY = Number(name.getAttribute('y')) + Number(lines[1].getAttribute('dy'));
+    expect(name.querySelectorAll('tspan')).toHaveLength(0);
+    expect(name.textContent).toBe('which VM runs a script, over time');
+    // 12 px at 0.6 em: the line fits the 358 px plot (237.6 px) and a 360 phone's 326
+    expect(name.textContent!.length * 12 * 0.6).toBeLessThanOrEqual(326);
+    const lastY = Number(name.getAttribute('y'));
     const genesis = [...svg.querySelectorAll('text')].find((t) => t.textContent === 'genesis')!;
     expect(Number(genesis.getAttribute('y')) - 13.5).toBeGreaterThanOrEqual(lastY + 8);
   });

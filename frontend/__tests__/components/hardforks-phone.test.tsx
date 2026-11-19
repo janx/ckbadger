@@ -131,6 +131,9 @@ describe.each([358, 1200])('the version dots at %i px (PB-02)', (width) => {
   it('reads the strip of unregistered versions from a hit area at least 24 px tall', () => {
     mount(width);
     const readout = screen.getByRole('status', { name: 'Script version readout' });
+    // re-pinned (readability plan P4): the versions under no hash type are a count; their strip
+    // opens on demand ("all 2 versions ↓")
+    fireEvent.click(screen.getByRole('button', { name: /^all \d+\s+versions? ↓$/ }));
     const hit = document.querySelector('[data-dot-hit="strip"]') as HTMLElement;
     expect(hit).not.toBeNull();
     expect(Number.parseFloat(hit.style.height)).toBeGreaterThanOrEqual(24);

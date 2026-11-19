@@ -172,6 +172,9 @@ describe('HardforksPage', () => {
     });
     render(<HardforksPage />);
 
+    // re-pinned (readability plan P4): versions under no hash type are a count under the lanes,
+    // their strip opened on demand
+    fireEvent.click(await screen.findByRole('button', { name: /^all 2\s+versions ↓$/ }));
     const mark = await screen.findByRole('button', { name: /Known Lock v2.*block #10/i });
     fireEvent.focus(mark);
     expect(
@@ -307,6 +310,8 @@ describe('HardforksPage', () => {
       })),
     });
     render(<HardforksPage />);
+    // re-pinned (readability plan P4): the strip opens on demand under its count
+    fireEvent.click(await screen.findByRole('button', { name: /^all 2\s+versions ↓$/ }));
     const marks = await screen.findByRole('list', {
       name: 'Known script-version deployment timeline',
     });
@@ -527,8 +532,10 @@ describe('HardforksPage', () => {
     expect(screen.queryByRole('heading', { name: 'Which VM runs a script, over time' })).toBeNull();
     expect(Number(timeline.getAttribute('height'))).toBeGreaterThanOrEqual(280);
     // Its name and its hint line are inside the plot, top-left; no figcaption.
+    // re-pinned (readability plan P4): the name is the title alone; its hint is the key's first
+    // row, over the figure (it was "… · dots: when each known script version was deployed")
     expect(timeline.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-      'which VM runs a script, over time · dots: when each known script version was deployed'
+      /^which VM runs a script, over time$/
     );
     expect(tier1.querySelector('figcaption')).toBeNull();
     // "tap or hover" once in the hero (R14): the readout row's.
@@ -580,9 +587,13 @@ describe('HardforksPage', () => {
     // re-pinned with readability R4 (lane B7): on the measure, 76 characters (was max-w-[640px])
     expect(caption).toHaveClass('text-body', 'text-text', 'max-w-measure');
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
-    // The way down to the whole explanation.
-    const how = within(caption).getByRole('link', { name: 'How it works ↓' });
+    // The way down to the whole explanation. Re-pinned (the link-look gate, P4): a way onward in
+    // the onward look, whose ↓ the link writes, glued to its last word and out of its name (it was
+    // a raw <a> with a typed " ↓", named 'How it works ↓')
+    const how = within(caption).getByRole('link', { name: 'How it works' });
     expect(how).toHaveAttribute('href', '#how-hash-type-picks-a-vm');
+    expect(how.textContent).toBe('How it works\u00a0↓');
+    expect(how).toHaveClass('text-jade');
     const target = container.querySelector('#how-hash-type-picks-a-vm') as HTMLElement;
     expect(target).toContainElement(container.querySelector('[data-tier="2"]') as HTMLElement);
     // The 4-line paragraph left tier 1 whole and reads in full in tier 2.
@@ -623,12 +634,12 @@ describe('HardforksPage', () => {
       expect(title.firstElementChild).toHaveAttribute('aria-hidden', 'true');
       expect(title.lastElementChild).toHaveTextContent(/^activated$/);
       expect(card.firstElementChild).toBe(title);
-      // The date line is meta; the status beside the title is plain ink, not jade (R11).
-      expect(within(card).getByText(/^epoch [\d,]+ ·/)).toHaveClass(
-        'text-meta',
-        'text-text-dim',
-        'self-start'
-      );
+      // The status beside the title is plain ink, not jade (R11). Re-pinned (readability R3, R4,
+      // page lane P4): the date line's epoch, block and day are values, the reading ink at the
+      // small step (it was the quiet ink at the meta step), the block a link inside the line.
+      const dated = within(card).getByText(/^epoch [\d,]+ ·/);
+      expect(dated).toHaveClass('text-small', 'text-text', 'self-start');
+      expect(within(dated).getByRole('link')).toHaveClass('underline');
       expect(within(card).getByText('activated')).toHaveClass('text-text-dim');
       expect(card).not.toHaveTextContent(/Scripts named by type hash moved/);
     }
@@ -636,7 +647,11 @@ describe('HardforksPage', () => {
     expect(meepo).toHaveTextContent('RFC 0049CKB-VM version 2');
     const overview = within(meepo).getByRole('link', { name: 'CKB2023 overview ↗' });
     expect(overview).toHaveAttribute('href', 'https://example.com/ckb2023');
-    expect(overview).toHaveClass('text-text');
+    // re-pinned (the link-look gate, P4): a link inside its line, the line's reading ink (R11) and
+    // the inline look's underline (it wrote text-text by hand)
+    expect(overview.parentElement).toHaveClass('text-text');
+    expect(overview).not.toHaveClass('text-jade');
+    expect(overview).toHaveClass('underline');
     // What left the cards reads in tier 2, after the paragraph on editions it continues.
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     const moved = within(tier2).getByText(
@@ -645,7 +660,10 @@ describe('HardforksPage', () => {
     expect(moved.previousElementSibling).toHaveTextContent(/^CKB changes its rules in editions\./);
   });
 
-  it('keeps the consensus grid as it is, its closing sentence at the body step, sections 64 and 72 px apart (H3, R6; B7)', async () => {
+  // Re-pinned (readability plan P4; the test was "keeps the consensus grid as it is, …"): the nine
+  // cells are rows that carry their RFC's line, and the RPC's name left tier 1 for tier 2 (the
+  // rows' words are pinned by "titles every consensus RFC in one line and says the RPC in tier 2").
+  it('sets the consensus as titled rows, its closing sentence at the body step, sections 64 and 72 px apart (H3, R6; B7; P4)', async () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     getHardforksMock.mockResolvedValue(mockTimeline);
     render(<HardforksPage />);
@@ -663,14 +681,13 @@ describe('HardforksPage', () => {
     expect(screen.getByText('mainnet · tip epoch 13,000')).toBeInTheDocument();
     expect(h2.parentElement).toHaveClass('flex', 'mb-[18px]');
     expect(h2.parentElement!.parentElement).toBe(consensus);
-    // One-line source label: as wide as its words.
-    expect(within(consensus).getByText('get_consensus · hardfork_features · mainnet')).toHaveClass(
-      'text-small',
-      'w-fit'
-    );
+    // The RPC's name is not tier 1's (it is said in tier 2).
+    expect(consensus).not.toHaveTextContent(/get_consensus/);
     const cells = consensus.querySelectorAll('dl > div');
     expect(cells).toHaveLength(9);
-    expect(cells[0]).toHaveTextContent('RFC 0028epoch 5,414');
+    expect(cells[0]).toHaveTextContent(
+      'RFC 0028epoch 5,414relative since by timestamp uses the median time of past blocks'
+    );
     expect(
       within(consensus).getByText(
         "Today's node applies RFC 0029, 0030, 0031, 0036 and 0038 from epoch 0, so they do not show as switching on with an edition."
@@ -704,7 +721,9 @@ describe('HardforksPage', () => {
       })),
     });
     const { container } = render(<HardforksPage />);
-    // A focused dot opens its evidence links in tier 1: they too are plain ink.
+    // A focused dot opens its evidence links in tier 1: they too are plain ink (re-pinned, P4:
+    // the strip of versions under no hash type opens on demand first).
+    fireEvent.click(await screen.findByRole('button', { name: /^all 2\s+versions ↓$/ }));
     fireEvent.focus(await screen.findByRole('button', { name: /Known Lock v2.*block #10/i }));
     expect(screen.getByRole('link', { name: 'Block #10' })).toBeInTheDocument();
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
@@ -716,7 +735,12 @@ describe('HardforksPage', () => {
         .split(/\s+/)
         .some((c) => COLOURED.test(c))
     );
-    expect(coloured.map((el) => `${el.tagName} ${el.textContent}`)).toEqual([]);
+    // Re-pinned (the link-look gate, P4; it was []): the one coloured thing in tier 1 is the way
+    // onward down the page, "How it works ↓", whose celadon is its look's (components/ui/link.tsx,
+    // the one owner of a link's look), not a coloured word; every other word is plain ink.
+    expect(coloured.map((el) => `${el.tagName} ${el.textContent}`)).toEqual([
+      'A How it works\u00a0↓',
+    ]);
     for (const t of Array.from(tier1.querySelectorAll('svg text, svg tspan')))
       expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(
         /var(--c-jade)|var(--c-gold)|var(--c-rouge)/
@@ -782,9 +806,12 @@ describe('HardforksPage', () => {
     });
     render(<HardforksPage />);
     const timeline = await screen.findByRole('img', { name: /which VM each hash type runs/i });
+    // the sentence whole; its count and noun one unit (a span, no-break spaces read as spaces)
     const count = screen.getByText(
-      // the count and its noun one unit (no-break spaces; the matcher reads them as spaces)
-      '2 known script versions are registered under no hash type, so no lane holds them.'
+      (_, el) =>
+        el?.tagName === 'P' &&
+        el.textContent!.replace(/\u00a0/g, ' ') ===
+          '2 known script versions are registered under no hash type, so no lane holds them.'
     );
     expect(count.tagName).toBe('P');
     expect(count).toHaveClass('text-text');
