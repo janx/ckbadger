@@ -60,7 +60,9 @@ it('passes the whole-collection trait predicate before cursor pagination', async
       traits: { Face: 'Blue' },
     })
   );
-  fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
+  // re-pinned (lane c2-assets): the list is newest first, so the controls board's pager goes
+  // "older →" (was "Next")
+  fireEvent.click(await screen.findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith('collection', {
       limit: 20,
@@ -299,8 +301,12 @@ it('puts a many-gene gel above the table at full width, a few-gene gel beside it
   );
 });
 
-// Consistency round C11: the objects table pages with the one pager wording — "Showing a–b of N
-// objects · 20 per page" and "Page x of y" — not its own "N objects, 20 per page" line.
+// Consistency round C11: the objects table pages with the one pager wording, not its own
+// "N objects, 20 per page" line. Re-pinned (lane c2-assets): the one wording is the controls
+// board's pager, and a list newest first is a list in time — its order, "← newer", "page 1 of 65",
+// "older →" (was "Showing 1–20 of 1,298 objects · 20 per page" and "Page 1 of 65"); the count
+// stays the list's own line. The page states the page size it served, 20, as the API echoes the
+// request (the fixture said 50).
 it('pages the objects with the shared pager wording (C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue({
@@ -311,14 +317,18 @@ it('pages the objects with the shared pager wording (C11)', async () => {
         number: String(i + 1),
       }))
     ),
+    limit: 20,
     total: 1298,
     hasMore: true,
     nextCursor: 'older',
   });
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   await screen.findByRole('table', { name: 'Newest objects' });
-  expect(screen.getByText('Showing 1–20 of 1,298 objects · 20 per page')).toBeInTheDocument();
-  expect(screen.getByText('Page 1 of 65')).toBeInTheDocument();
+  const pager = screen.getByRole('navigation', { name: 'objects' });
+  expect(pager).toHaveTextContent(/^newest first← newerpage 1 of 65older →$/);
+  expect(within(pager).queryByRole('button', { name: '← newer' })).toBeNull();
+  expect(within(pager).getByRole('button', { name: 'older →' })).toBeInTheDocument();
+  expect(screen.getByRole('region', { name: 'Objects' })).toHaveTextContent('1,298 objects');
   expect(screen.queryByText(/objects, 20 per page/)).toBeNull();
 });
 

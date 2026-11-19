@@ -113,7 +113,10 @@ it('applies exact whole-collection trait filtering before pagination and resets 
   });
   const { container } = render(<ClusterPage clusterId={id} />);
   const objects = await screen.findByRole('region', { name: 'Objects' });
-  fireEvent.click(await within(objects).findByRole('button', { name: 'Next' }));
+  // re-pinned (lane c2-assets): the objects are newest first, so the controls board's pager goes
+  // "older →" and an end it cannot take is quiet words, no control (was "Next" and a disabled
+  // "Previous")
+  fireEvent.click(await within(objects).findByRole('button', { name: 'older →' }));
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith(
       id,
@@ -129,7 +132,10 @@ it('applies exact whole-collection trait filtering before pagination and resets 
       traits: { Face: 'Blue' },
     })
   );
-  expect(within(objects).getByRole('button', { name: 'Previous' })).toBeDisabled();
+  expect(within(objects).queryByRole('button', { name: '← newer' })).toBeNull();
+  expect(within(objects).getByRole('navigation', { name: 'objects' })).toHaveTextContent(
+    'page 1 of 4'
+  );
   fireEvent.click(within(objects).getByRole('button', { name: 'Clear Face = Blue' }));
   await waitFor(() =>
     expect(container.querySelector('[data-allele="Blue"]')).not.toHaveAttribute('stroke')

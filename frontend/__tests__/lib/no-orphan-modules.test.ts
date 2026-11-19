@@ -45,8 +45,6 @@ const ALLOWLIST: Record<string, string> = {
   // module is first imported by a page (this test then fails until it does).
   'components/ui/tabs.tsx':
     'the controls library’s tab row (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
-  'components/ui/pager.tsx':
-    'the controls library’s pager (lane C1): placed by the C2 lanes in the place of CursorPagination, mounted meanwhile by proof/controls.tsx',
   'components/ui/copy-button.tsx':
     'the controls library’s copy button (lane C1): placed by the C2 lanes, mounted meanwhile by proof/controls.tsx',
 };

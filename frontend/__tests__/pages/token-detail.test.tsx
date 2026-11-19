@@ -515,13 +515,21 @@ describe('TokenDetailPage', () => {
   });
   it('shows source errors instead of empty history and supports all-holder cursor paging', async () => {
     vi.mocked(api.getTokenHistory).mockRejectedValue(new Error('History read failed'));
+    // Re-pinned (lane c2-assets): the pager reads its pages from the response, so the pages agree
+    // with it: 21 holders, a full first page of 20 and one on the second (it was one holder a page
+    // of 20 with more after it, a count of 2); the way on is the board's "next →" (was "Next").
+    const holder = (i: number) => ({
+      lockScriptHash: '0x' + i.toString(16).padStart(64, '0'),
+      address: null,
+      balance: '1',
+      lockCodeHash: null,
+      lockKind: null,
+    });
     vi.mocked(api.getTokenHolders).mockImplementation(async (_, p) => ({
       ...empty,
-      data: [
-        { lockScriptHash: hash, address: null, balance: '1', lockCodeHash: null, lockKind: null },
-      ],
-      total: 2,
-      totalSupply: '2',
+      data: p?.cursor ? [holder(21)] : Array.from({ length: 20 }, (_, i) => holder(i + 1)),
+      total: 21,
+      totalSupply: '21',
       anchor: null,
       hasMore: !p?.cursor,
       nextCursor: p?.cursor ? null : 'page2',
@@ -530,12 +538,9 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('History read failed');
     fireEvent.click(screen.getByRole('button', { name: /All .*holders/ }));
     await screen.findByRole('table', { name: 'All holders' });
-    fireEvent.click(
-      within(screen.getByRole('table', { name: 'All holders' }).closest('section')!).getByRole(
-        'button',
-        { name: 'Next' }
-      )
-    );
+    const pager = screen.getByRole('navigation', { name: 'holders' });
+    expect(pager).toHaveTextContent('1–20 of 21');
+    fireEvent.click(within(pager).getByRole('button', { name: 'next →' }));
     await waitFor(() =>
       expect(api.getTokenHolders).toHaveBeenCalledWith(hash, { limit: 20, cursor: 'page2' })
     );
