@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { formatCompactSigned } from '@/lib/chart-ticks';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { alphaOf, declaration, inTheme, ruleOf, stopsOf } from '@/__tests__/utils/css-paint';
@@ -236,6 +237,8 @@ describe('the scan cut into a fill (readability R1)', () => {
       label: `10/${18 + i}`,
       value,
       readout: { value: `${value} CKB`, text: `${value} CKB` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
     render(<SignedBarChart points={changes} ariaLabel="Change" />);
     const svg = screen.getByRole('img', { name: /^Change/ });
@@ -250,9 +253,8 @@ describe('the scan cut into a fill (readability R1)', () => {
     setTheme('dark');
     render(
       <LineChart
-        points={[1, 2, 3].map((value, i) => ({ label: `d${i}`, value }))}
+        points={[1, 2, 3].map((value, i) => ({ label: `d${i}`, value, display: String(value) }))}
         ariaLabel="Block time"
-        formatValue={String}
       />
     );
     expect(

@@ -35,6 +35,27 @@ function createBulkSyncStatus(overrides?: Record<string, unknown>) {
 }
 
 describe('SyncBanner', () => {
+  // lane exactness, part B3: the progress and the rates are cut, never rounded: 99.96 % read
+  // "100.0%" while the sync still ran, and 1,299.9 blocks a second "1.3k"
+  it('cuts its progress and its rates', () => {
+    render(
+      <SyncBanner
+        stats={createNetworkResponse(
+          createBulkSyncStatus({
+            progress: 99.96,
+            emaBlocksPerSecond: 1299.9,
+            emaTxsPerSecond: 999.99,
+          })
+        )}
+      />
+    );
+    const banner = screen.getByTestId('sync-banner');
+    expect(banner).toHaveTextContent('99.9% (');
+    expect(banner).not.toHaveTextContent('100.0%');
+    expect(screen.getByText('1.2k')).toBeInTheDocument();
+    expect(screen.getByText('999')).toBeInTheDocument();
+  });
+
   it('shows bulk sync progress details when available', () => {
     render(
       <SyncBanner

@@ -15,6 +15,8 @@ import {
   blockTip,
   cellbaseTip,
   chipTip,
+  fmtBytes,
+  fmtCycles,
   nextTip,
   predictedFacts,
   predictedTip,
@@ -324,5 +326,29 @@ describe('predictedFacts: what a predicted tx is, for its tip and its readout', 
     expect(listed.rows.slice(2).map(([k]) => k)).toEqual(['proposal in', 'fee rate']);
     const outside = predictedTip({ hash: `0x${'ab'.repeat(32)}`, size: 900 }, null, snapshot);
     expect(outside.rows).toEqual(predictedFacts({ size: 900 }, snapshot));
+  });
+});
+
+// lane exactness, part B3: a transaction's size, its cycles and a pending one's wait are cut in
+// the unit the value reaches, never rounded (1,999,999 bytes read 2.00 MB)
+describe('the tooltip’s sizes, cycles and wait are cut', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('cuts a size and a count of cycles in their unit', () => {
+    expect(fmtBytes(1_999_999)).toBe('1.99 MB');
+    expect(fmtBytes(1_999)).toBe('1.9 KB');
+    expect(fmtBytes(999)).toBe('999 B');
+    expect(fmtCycles(1_999_999_999)).toBe('1.99 B');
+    expect(fmtCycles(1_999_999)).toBe('1.9 M');
+    expect(fmtCycles(999_999)).toBe('999,999');
+  });
+
+  it('cuts a pending transaction’s wait at a tenth of a second', () => {
+    vi.useFakeTimers({ now: T0 });
+    const pool = snapshot.pool as NonNullable<PipelineSnapshot['pool']>;
+    const tip = renderTip(
+      txTip({ kind: 'pending', tx: { ...pool.pending[0], arrivedAt: T0 - 20_960 } }, snapshot)
+    );
+    expect(within(tip).getByText('waiting').nextElementSibling!.textContent).toBe('20.9 s');
   });
 });

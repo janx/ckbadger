@@ -71,7 +71,11 @@ export function formatPercent(part: bigint, total: bigint, decimals = 2): string
   return cutScaledInteger(part * BigInt(100), total, decimals);
 }
 
-/** Whole bytes (1 CKB of capacity = 1 byte) in decimal units with one decimal: `151.1 MB`. */
+/**
+ * Whole bytes (1 CKB of capacity = 1 byte) in decimal units with one decimal: `151.1 MB`, in the
+ * unit the exact value reaches and cut in it (lane exactness, part B3: it chose the unit at
+ * unit − unit / 20,000 and rounded half up, so 999,950 bytes read 1.0 MB).
+ */
 export function formatDecimalBytes(bytes: bigint): string {
   if (bytes < BigInt(0)) throw new Error(`formatDecimalBytes: ${bytes} is negative`);
   const units: [bigint, string][] = [
@@ -81,10 +85,7 @@ export function formatDecimalBytes(bytes: bigint): string {
     [BigInt(1e3), 'kB'],
   ];
   for (const [div, suffix] of units) {
-    if (bytes >= div - div / BigInt(20000)) {
-      const tenths = (bytes * BigInt(10) + div / BigInt(2)) / div;
-      return `${tenths / BigInt(10)}.${tenths % BigInt(10)} ${suffix}`;
-    }
+    if (bytes >= div) return `${cutScaledInteger(bytes, div, 1)} ${suffix}`;
   }
   return `${bytes} B`;
 }

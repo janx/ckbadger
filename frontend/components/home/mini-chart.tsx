@@ -442,8 +442,12 @@ const signatureOf = (items: { label: string; value: number }[]) =>
 export interface SeriesPoint {
   label: string;
   value: number;
-  /** Exact formatted value for the caption; value remains SVG geometry only. */
-  display?: string;
+  /**
+   * The exact figure the caption writes, the route's; `value` is SVG geometry only. A line writes
+   * every point from it, one path (lane exactness, part B3: it wrote a point without one through
+   * its caller's formatValue, a float rounded at two places, a path no caller reached).
+   */
+  display: string;
 }
 
 interface LineChartProps {
@@ -451,8 +455,6 @@ interface LineChartProps {
   ariaLabel: string;
   /** A dashed reference line (a consensus target); its value is placed on a tick. */
   reference?: number;
-  /** A value as the caption shows it. */
-  formatValue: (v: number) => string;
 }
 
 function lineXs(width: number, n: number, left: number): number[] {
@@ -462,8 +464,11 @@ function lineXs(width: number, n: number, left: number): number[] {
   );
 }
 
-export function LineChart({ points, ariaLabel, reference, formatValue }: LineChartProps) {
+export function LineChart({ points, ariaLabel, reference }: LineChartProps) {
   if (points.length === 0) throw new Error('LineChart needs at least one point');
+  for (const p of points)
+    if (typeof p.display !== 'string')
+      throw new Error(`LineChart: the point ${p.label} has no exact display`);
   const values = points.map((p) => p.value);
   const lo = Math.min(...values, ...(reference === undefined ? [] : [reference]));
   const hi = Math.max(...values, ...(reference === undefined ? [] : [reference]));
@@ -479,7 +484,7 @@ export function LineChart({ points, ariaLabel, reference, formatValue }: LineCha
       ariaLabel={ariaLabel}
       xsFor={(w) => lineXs(w, n, left)}
       readoutOf={(i) => {
-        const text = points[i].display ?? formatValue(points[i].value);
+        const text = points[i].display;
         return { value: text, text, label: points[i].label };
       }}
       signature={signatureOf(points)}
@@ -782,6 +787,8 @@ export interface SignedPoint {
   value: number;
   /** The exact change, as the caption reads it out. */
   readout: ReadoutValue;
+  /** The exact change, compact and cut (`formatCompactSigned`): a clipped bar's label. */
+  compact: string;
 }
 
 interface SignedBarChartProps {
@@ -810,7 +817,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
   const half = PLOT_H / 2;
   const yOf = (v: number) => zero - (v / cap) * half;
   const clipped = bars.flatMap((b, i) =>
-    b.clipped ? [`${formatCompactSigned(b.value)} on ${points[i].label}`] : []
+    b.clipped ? [`${points[i].compact} on ${points[i].label}`] : []
   );
   const label =
     clipped.length === 0
@@ -879,7 +886,7 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
                       bw={bw}
                       up={up}
                       color={color}
-                      text={formatCompactSigned(b.value)}
+                      text={points[i].compact}
                       right={right}
                     />
                   )}

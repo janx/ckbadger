@@ -492,8 +492,9 @@ interface ChangeView {
   points: SignedPoint[];
   first: string;
   last: { label: string; delta: bigint };
-  min: number;
-  max: number;
+  /** The smallest and the largest change, exact (lane exactness, part B3: floats, rounded). */
+  min: bigint;
+  max: bigint;
 }
 
 /** An exact signed change for the caption: whole CKB bright, the 8 decimals dim. */
@@ -519,15 +520,15 @@ export function changeView(chart: ChartResponse): ChangeView | null {
     label: dayLabel(d.date),
     value: shannonsToCkbNumber(d.delta),
     readout: exactSignedReadout(d.delta),
+    compact: formatCompactSigned(d.delta),
   }));
-  const values = points.map((p) => p.value);
   const last = deltas[deltas.length - 1];
   return {
     points,
     first: points[0].label,
     last: { label: dayLabel(last.date), delta: last.delta },
-    min: Math.min(...values),
-    max: Math.max(...values),
+    min: deltas.reduce((m, d) => (d.delta < m ? d.delta : m), deltas[0].delta),
+    max: deltas.reduce((m, d) => (d.delta > m ? d.delta : m), deltas[0].delta),
   };
 }
 
