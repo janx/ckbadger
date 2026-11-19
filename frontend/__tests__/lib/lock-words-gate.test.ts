@@ -331,9 +331,10 @@ const KNOWN: Reads = {
   // follow-up; known writer 12): the cellbase witness's miner lock and a lock group are named by
   // the decision, their reads feed it
   // 13, found when the gate learned `lockScriptName` (lane cd-fixes-controls), for the topic page
-  // lane (p-topics): the Fiber graph's party row writes the registry's name of its lock before
-  // "lock hash", outside lockWords
-  'components/fiber/fiber-network-graph.tsx': { 'api name': 2 },
+  // lane (p-topics): the Fiber graph's party row wrote the registry's name of its lock before
+  // "lock hash", outside lockWords. It left (the lead's final round, item 7): the row writes
+  // `partyLockWordsText`, the decision fed the lock its address encodes with the route's name (the
+  // route reads both from one stored lock script, so a party with no address has no name)
   // 14–20, found when the gate learned the identity parties' lock name (lane P2's third round,
   // item 12, the test review's MUST-1): a .cell / .bit party's `scriptName`, renamed on the wire
   // `lockScriptName`, and a called lock's `scriptName` on an activity's lock call. Then the .cell
@@ -503,11 +504,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "… the known writers 2
   // files and 3 reads"): the AI view's called lock feeds the decision: the known writers 1 file,
   // the Fiber graph's, and 2 reads; 22 reads in 16 files in all
-  it('pins the totals: 22 reads in 16 files, the known writers 1 file and 2 reads', () => {
+  // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "22 reads in 16 files,
+  // the known writers 1 file and 2 reads"): the Fiber graph's party row writes the decision's
+  // words, its two reads gone: KNOWN is empty, 20 reads in 15 files in all
+  it('pins the totals: 20 reads in 15 files, and no known writer', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(16);
-    expect(total(all)).toBe(22);
-    expect(Object.keys(KNOWN)).toHaveLength(1);
-    expect(total(KNOWN)).toBe(2);
+    expect(Object.keys(all)).toHaveLength(15);
+    expect(total(all)).toBe(20);
+    expect(Object.keys(KNOWN)).toHaveLength(0);
+    expect(total(KNOWN)).toBe(0);
   });
 });

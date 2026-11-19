@@ -31,6 +31,7 @@ import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
 import { SVG_TEXT, centreShift, lineAscentPx } from '@/lib/chart-type';
 import { descentPx, tightLinePx } from '@/lib/type-metrics';
+import { partyLockWordsText } from '@/lib/lock-words';
 
 /** A party (node) or a pair (edge) of the graph: what a hover shows and a tap pins. */
 export type FiberGraphTarget = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
@@ -144,7 +145,10 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
         <PartyLink party={party} look="key" />
       </div>
       <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
-        {party.lockScriptName ? `${party.lockScriptName} · ` : ''}lock hash{' '}
+        {/* the party's lock by the one decision (the lead's final round, item 7): the lock its
+            address encodes with the registry's name the route sends for it; the route reads both
+            from one stored lock script, so a party with no address has no name: not indexed */}
+        {partyLockWordsText(party, 'row')} · lock hash{' '}
         <ShortId value={party.lockScriptHash} kind="hash" size="row" />
       </div>
       <Rows
