@@ -16,6 +16,7 @@ import { expectOnePageSeal } from '@/__tests__/utils/seals';
 import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 import type { SealState } from '@/lib/seal/stones';
 import { fullText } from '@/__tests__/utils/full-text';
+import { factsOf } from '@/__tests__/utils/facts';
 
 /** No seal on the page. */
 function expectNoSeal() {
@@ -471,7 +472,7 @@ describe('TransactionDetailPage', () => {
       )
     ).toEqual([
       '1\u00a0cell became 1.',
-      '0.00064119 ckb to the miner.',
+      // re-pinned on purpose (lane D2, "said once"): no fee line; the fee is in the status strip
       'common knowledge unchanged.',
     ]);
   });
@@ -541,10 +542,13 @@ describe('TransactionDetailPage', () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-02-20T17:46:12Z'));
     render(<TransactionDetailPage />);
-    const time = await screen.findByRole('time');
-    expect(time).toHaveTextContent('2026-02-21 00:46:12 UTC+8');
-    expect(time).toHaveTextContent(/1h ago$/);
-    expect(time.textContent).not.toMatch(/Z/);
+    // re-pinned on purpose (lane D2): the time is the status strip's fact, the date-time and its
+    // age two units of the site's clock (Utc8DateTime, Utc8Age); the rail's one <time> held both
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    const [time, age] = within(strip).getAllByRole('time');
+    expect(time).toHaveTextContent(/^2026-02-21 00:46:12 UTC\+8$/);
+    expect(age).toHaveTextContent(/^1h ago$/);
+    for (const t of [time, age]) expect(t.textContent).not.toMatch(/Z/);
   });
 
   // Review 45fd finding 3 (ruling D4): the node's clock 2 s ahead of this browser's is two
@@ -557,19 +561,22 @@ describe('TransactionDetailPage', () => {
     expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(
       'Waiting in the pool'
     );
-    const row = screen.getByText('Pending since').parentElement!;
+    // re-pinned on purpose (lane D2): the strip's fact, its label lowercase (the rail's "Pending
+    // since")
+    const row = screen.getByText('pending since').parentElement!;
     expect(row).toHaveTextContent('2026-03-12 20:00:00 UTC+8');
     expect(row).toHaveTextContent(/0s ago$/);
   });
 
   // Lane E4: the facts' ages (the commit time's, a pool transaction's pending-since) read the
   // page's one clock, so they move with no data change; they were written once at render. The
-  // clock stops with the page.
+  // clock stops with the page. Re-pinned on purpose (lane D2): the facts are the status strip's,
+  // their labels lowercase ("time", "pending since"; the rail's were "Time", "Pending since").
   it.each([
-    ['the commit time', 'Time', { timestamp: new Date(T0 - 20_000).toISOString() }],
+    ['the commit time', 'time', { timestamp: new Date(T0 - 20_000).toISOString() }],
     [
       'the pending-since time',
-      'Pending since',
+      'pending since',
       { ...createPendingTransactionDetail(), pendingSince: new Date(T0 - 20_000).toISOString() },
     ],
   ])(
@@ -657,14 +664,14 @@ describe('TransactionDetailPage', () => {
     expect(net).toHaveTextContent('no fee: nothing paid to the miner');
     expect(net).not.toHaveTextContent(/fee, paid|genesis|issued/);
     expect(screen.queryByText(/issued in the genesis block/)).toBeNull();
-    // Its comment: not a cellbase, so a fee line, the rail's zero (T4).
+    // Its comment (re-pinned on purpose, lane D2, "said once"): no fee line, the zero fee is the
+    // status strip's (it was the comment's second line, "0 ckb to the miner.")
     expect(
       Array.from(document.querySelectorAll('.comment [data-comment-line]')).map(
         (l) => l.textContent
       )
     ).toEqual([
       '1\u00a0cell became 2.',
-      '0 ckb to the miner.',
       // 61 occupied bytes in, 117 + 117 out
       'common knowledge grew by 173\u00a0bytes.',
     ]);
@@ -716,9 +723,10 @@ describe('TransactionDetailPage', () => {
         `Cannot read tx ${TX_HASH}: SyntaxError: Cannot convert abc to a BigInt`
       );
       expect(within(balance).queryByRole('table')).toBeNull();
-      // The sections that do not read the activity render as always.
-      const facts = screen.getByRole('complementary', { name: 'Transaction facts' });
-      expect(within(facts).getByText('Fee')).toBeInTheDocument();
+      // The sections that do not read the activity render as always (re-pinned on purpose, lane
+      // D2: the fee is the status strip's fact, its label lowercase; it was the rail's "Fee").
+      const facts = screen.getByRole('group', { name: 'Transaction status' });
+      expect(within(facts).getByText('fee')).toBeInTheDocument();
       expect(screen.getByTestId('tx-io-input-0')).toBeInTheDocument();
       expect(screen.getByTestId('tx-io-output-0')).toBeInTheDocument();
       expect(screen.getByTestId('tx-capacity-equation')).toBeInTheDocument();
@@ -733,7 +741,9 @@ describe('TransactionDetailPage', () => {
 
     render(<TransactionDetailPage />);
 
-    expect((await screen.findAllByText('Pending')).length).toBeGreaterThan(0);
+    // re-pinned on purpose (lane D2): the status is the strip's word, lowercase as the board
+    // writes it (the rail's "Pending"); the evidence still says "pending…" where a figure waits
+    expect((await screen.findAllByText('pending')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Cell deps' })).toBeInTheDocument();
     expect(screen.getByText('Cell graph')).toBeInTheDocument();
@@ -759,9 +769,15 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
 
     // The committing block is known and shown; the block time and the
-    // confirmation count are not known yet and are shown as pending.
+    // confirmation count are not known yet and are shown as pending. Re-pinned on purpose (lane
+    // D2): the status strip says "confirming", lowercase (the rail's "Confirming"), and passes no
+    // fact it does not know, so the block time is not in it at all (the rail said "pending…"
+    // there); the evidence tier still says "pending…" where a figure waits.
     expect((await screen.findAllByRole('link', { name: '#123' })).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Confirming').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('confirming').length).toBeGreaterThan(0);
+    expect(
+      factsOf(screen.getByRole('group', { name: 'Transaction status' })).map(([label]) => label)
+    ).toEqual(['status', 'block', 'fee']);
     expect(screen.getAllByText('pending…').length).toBeGreaterThan(0);
     expect(screen.queryByText(/confirmations?$/i)).not.toBeInTheDocument();
     expect(api.getTransactionDetail).toHaveBeenCalledTimes(1);
@@ -778,7 +794,7 @@ describe('TransactionDetailPage', () => {
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(3));
     expect(await screen.findByText(fullText(/4\s+confirmations/))).toBeInTheDocument();
-    expect(screen.queryByText('Confirming')).not.toBeInTheDocument();
+    expect(screen.queryByText('confirming')).not.toBeInTheDocument();
     // Indexed: the same stone, pressed, and pressed again across its cells (C11: its two halves,
     // one on each sheet).
     expectHeadStone('pressed');
@@ -810,7 +826,8 @@ describe('TransactionDetailPage', () => {
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
 
-    expect(await screen.findByText('Pending since')).toBeInTheDocument();
+    // re-pinned on purpose (lane D2): the strip's label, lowercase (the rail's "Pending since")
+    expect(await screen.findByText('pending since')).toBeInTheDocument();
     expect(screen.queryByTestId('tx-inputs-not-yet-resolvable')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
     // Then the pool transaction: its stone, dashed.
@@ -825,11 +842,12 @@ describe('TransactionDetailPage', () => {
       .mockResolvedValue(createPendingTransactionDetail());
 
     render(<TransactionDetailPage />);
-    expect(await screen.findByText('Pending since')).toBeInTheDocument();
+    // re-pinned on purpose (lane D2): the strip's label, lowercase (the rail's "Pending since")
+    expect(await screen.findByText('pending since')).toBeInTheDocument();
 
     await act(() => vi.advanceTimersByTimeAsync(3000));
     await waitFor(() => expect(api.getTransactionDetail).toHaveBeenCalledTimes(2));
-    expect(screen.getByText('Pending since')).toBeInTheDocument();
+    expect(screen.getByText('pending since')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
 
     // Still polling after the 503.

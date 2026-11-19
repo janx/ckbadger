@@ -503,6 +503,114 @@ async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     assert_eq!(capacity_data[0]["values"]["others"], "0");
 }
 
+/// The chart page draws a ranked history as its five largest and one band for the rest (the
+/// chart-hero board, lane D1). That band is a new figure: this route computes it per day from the
+/// exact shannons (the day's total less the five largest), so the page never sums twenty series.
+/// Seven scripts here: the rest is ranks six and seven and the API's own remainder.
+#[tokio::test]
+async fn test_most_utilized_scripts_chart_draws_five_largest_and_the_rest() {
+    let store = test_store();
+    seed_tip_block_on_utc8_day(&store, 2, "2024-01-02");
+    // knowledge 700, 600, …, 100; capacity 1,000 more than its knowledge
+    let scripts: Vec<(Vec<u8>, i128)> = (0..7u8)
+        .map(|i| (vec![0x40 + i; 32], 700 - 100 * i128::from(i)))
+        .collect();
+    for (i, (code_hash, knowledge)) in scripts.iter().enumerate() {
+        store
+            .put_script_info_direct(
+                code_hash,
+                &ScriptInfo {
+                    code_hash: code_hash.clone(),
+                    name: Some(format!("Script {}", i + 1)),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_reference_info_direct(
+                1,
+                code_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: code_hash.clone(),
+                    hash_type: 1,
+                    lock_cells_count: 1,
+                    lock_live_cells_count: 1,
+                    lock_owned_capacity_sum: knowledge + 1_000,
+                    lock_owned_knowledge_sum: *knowledge,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_daily_delta(
+                code_hash,
+                1,
+                false,
+                20240101,
+                &ScriptDailyDelta {
+                    owned_capacity_delta: knowledge + 1_000,
+                    owned_knowledge_delta: *knowledge,
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/most-utilized-scripts")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    for (scope, rest) in [("usedShare", "300"), ("capacityShare", "2300")] {
+        let chart = &json[scope];
+        let bands: Vec<(String, Vec<String>)> = chart["bands"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{scope} has no bands"))
+            .iter()
+            .map(|band| {
+                (
+                    band["key"].as_str().unwrap().to_string(),
+                    band["members"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|m| m.as_str().unwrap().to_string())
+                        .collect(),
+                )
+            })
+            .collect();
+        let one = |key: &str| (key.to_string(), vec![key.to_string()]);
+        assert_eq!(
+            bands,
+            vec![
+                one("top0"),
+                one("top1"),
+                one("top2"),
+                one("top3"),
+                one("top4"),
+                (
+                    "rest".to_string(),
+                    vec!["top5".to_string(), "top6".to_string(), "others".to_string()]
+                ),
+            ],
+            "{scope}"
+        );
+        // the rest band is named like the API's own remainder
+        assert_eq!(chart["bands"][5]["label"], "Others", "{scope}");
+        assert_eq!(chart["bands"][0]["label"], "Script 1 (type)", "{scope}");
+        // ranks six and seven (200 + 100, or 1,200 + 1,100) and the API's remainder (0)
+        assert_eq!(chart["data"][0]["values"]["rest"], rest, "{scope}");
+        assert_eq!(chart["series"].as_array().unwrap().len(), 8, "{scope}");
+    }
+}
+
 #[tokio::test]
 async fn test_most_utilized_scripts_chart_groups_family_members_like_usage() {
     // Entity grouping must follow the same family resolution the usage

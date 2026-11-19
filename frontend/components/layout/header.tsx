@@ -149,7 +149,8 @@ export function Header() {
               form === 'nav' ? 'gap-8' : 'gap-2'
             )}
           >
-            <Wordmark />
+            {/* the home page's h1 is the wordmark's line (lane D2, U-11) */}
+            <Wordmark heading={pathname === '/'} />
 
             <nav
               aria-label="Main"

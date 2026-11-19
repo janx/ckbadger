@@ -67,8 +67,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     queryFn: () => api.getTokenHistory(typeHash),
   });
   // F2 objects (IV-27): the supply events are paged at the source, 50 at a time.
-  const supplyPages = useCursorPagination();
   const supplyPageSize = usePageSize(ENTITY_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const supplyPages = useCursorPagination(supplyPageSize);
   const supplyEvents = useQuery({
     queryKey: ['token-supply-events', typeHash, supplyPages.cursor, supplyPageSize],
     queryFn: () =>
@@ -173,7 +174,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           {/* C7: the type hash the rail listed names the token under its title, as an id does;
               the head's full id on a line of its own (A4 Chrome F3): one line from 435.6 px
               (66 characters at 11 px), else the two halves */}
-          <HeadId value={t.typeScriptHash} kind="hash" copyable />
+          <HeadId value={t.typeScriptHash} kind="hash" copy="copy type hash" />
         </>
       }
       intro={

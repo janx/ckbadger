@@ -1,13 +1,14 @@
 'use client';
 
 import { Fragment, useLayoutEffect, useRef, useState, type RefObject } from 'react';
+import { CopyButton } from '@/components/ui/copy-button';
 import { NoBreak } from '@/components/ui/no-break';
-import { useCopy } from '@/hooks/useCopy';
 import { cn } from '@/lib/utils';
 import { MONO_ADVANCE_EM } from '@/lib/type-metrics';
 
 const HEX_ID = /^0x[0-9a-fA-F]+$/;
 const ADDRESS = /^ck[bt]1[02-9ac-hj-np-z]+$/;
+const DID = /^did:ckb:[a-z2-7]+$/;
 
 /**
  * The lines a full id is set in at `perLine` characters a line: the id alone when it fits;
@@ -77,47 +78,49 @@ function useCharactersPerLine(): [RefObject<HTMLSpanElement | null>, number | nu
  * own (the head's line does: 12 px is 7.2 px a character, 11 px 6.6). It is the one-line form
  * until measured: the measure is a layout effect, which re-renders before the browser's first
  * paint, so the one-line form is never painted where it does not fit; unmeasured (no layout, a
- * hidden page) it stays one line. The text and the title give the whole id once; `copyable`
- * copies it whole through the one copy path, the tick standing over the id while the id keeps
- * its lines, so a head of several lines does not shut for the moment and move the page.
+ * hidden page) it stays one line. The text and the title give the whole id once.
+ *
+ * Copy has one form (lane c2-finish, item 4; the controls board): the id is a value, text in its
+ * line's ink, and `copy` (the button's name, `copy block hash`) puts the library's CopyButton after
+ * it, 8 px apart, at its first line; it copies the id whole and answers in words beside its icon.
+ * The id then measures the line the button leaves it: its box (24 px from 640, 32 below), the 8 px
+ * gap and the 6 px before its answer, 38 px or 46. A hash at 13 px keeps the lines it had alone:
+ * one at 640 (570 of 608 px holds 514.8) and from md beside a stone, two halves at 390 (312 holds
+ * a half's 265.2). A did:ckb (kind `did`) is set as an address is, in equal lines with no prefix.
  */
 export function HeadId({
   value,
   kind,
-  copyable = false,
+  copy,
 }: {
   value: string;
-  kind: 'hash' | 'address';
-  copyable?: boolean;
+  kind: 'hash' | 'address' | 'did';
+  /** The copy button's name, which puts it after the id (`copy block hash`); none, no copy. */
+  copy?: string;
 }) {
   if (kind === 'hash' && !HEX_ID.test(value)) throw new Error(`HeadId: ${value} is not a hex id`);
   if (kind === 'address' && !ADDRESS.test(value))
     throw new Error(`HeadId: ${value} is not an address`);
+  if (kind === 'did' && !DID.test(value)) throw new Error(`HeadId: ${value} is not a did:ckb`);
   const [ref, perLine] = useCharactersPerLine();
-  const { copied, copy } = useCopy(value);
   const lines = headLines(value, kind === 'hash', perLine ?? value.length);
+  const id = (
+    <span ref={ref} data-head-id="" title={value} className="block min-w-0 flex-1 font-mono">
+      {lines.map((line, i) => (
+        <Fragment key={i}>
+          {i > 0 && <br />}
+          <NoBreak data-head-line="" className={cn(i > 0 && kind === 'hash' && 'pl-[2ch]')}>
+            {line}
+          </NoBreak>
+        </Fragment>
+      ))}
+    </span>
+  );
+  if (copy === undefined) return id;
   return (
-    <span
-      ref={ref}
-      data-head-id=""
-      title={value}
-      onClick={copyable ? copy : undefined}
-      className={cn(
-        'relative block min-w-0 flex-1 font-mono',
-        copyable && 'hover-lit cursor-pointer transition-colors'
-      )}
-    >
-      <span className={cn(copied && 'invisible')}>
-        {lines.map((line, i) => (
-          <Fragment key={i}>
-            {i > 0 && <br />}
-            <NoBreak data-head-line="" className={cn(i > 0 && kind === 'hash' && 'pl-[2ch]')}>
-              {line}
-            </NoBreak>
-          </Fragment>
-        ))}
-      </span>
-      {copied && <span className="absolute left-0 top-0">✓</span>}
+    <span className="flex min-w-0 items-start gap-2">
+      {id}
+      <CopyButton value={value} label={copy} className="shrink-0" />
     </span>
   );
 }

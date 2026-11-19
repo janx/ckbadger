@@ -1,7 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan';
 
 /**
  * Gate for the controls (UI review 2026-11-14, phase C, lane C1; the controls board the owner
@@ -40,21 +41,43 @@ import { describe, expect, it } from 'vitest';
  * read as its default only (the prop's other values are its callers'); an `<input>` of another
  * text type (`email`, `number`, …) and a `<textarea>` (the site has none) are not counted.
  *
- * The sites tolerated today are listed per file with their count per kind, the C2 lane that takes
- * them and a reason: this is the work list of the four placement lanes (c2-lists, c2-chain,
- * c2-assets, c2-topics) and of the shell's two fields. A new site fails (its file's count is
- * exceeded, or the file is not listed), and so does a site that went (its count must be lowered),
- * so the list only shrinks; its total is pinned too.
+ * Three more kinds it reads since lane c2-finish (item 5), so "one component per control" is held
+ * here, not in a brief:
+ *
+ * - `choice`: an element that says it is pressed (`aria-pressed`: a toggle; a group of them is a
+ *   filter or a range), or the role `radiogroup` or `radio` (the filter chips' own form);
+ * - `clipboard`: a clipboard write by hand, `navigator.clipboard` or a call of the one copy path's
+ *   `useCopy` (the copy button is the library's; hooks/useCopy.ts is its own path);
+ * - `range`: an `<input type="range">`, or a button whose words are a span of time (`24 h`, `14 d`,
+ *   `1 y`, `90 days`: the RangeSelect's choices).
+ *
+ * Their limits: a toggle that says nothing of its state (no `aria-pressed`: a fold, an expander, an
+ * action such as "Retry") is no choice to it, and a range whose words come from a variable
+ * (`{label}`) is read as a choice only where it says it is pressed.
+ *
+ * The sites tolerated today are listed per file with their count per kind, the lane that takes
+ * them and a reason: the work list. A new site fails (its file's count is exceeded, or the file is
+ * not listed), and so does a site that went (its count must be lowered), so the list only shrinks;
+ * its total is pinned too. The sites kept by decision are NAMED apart, each with its reason, and
+ * pinned the same way: parts of a figure or a fold, not controls, and the shell's two comboboxes.
  */
 
-type Kind = 'select' | 'text-input' | 'tab' | 'pager';
-const KINDS: readonly Kind[] = ['select', 'text-input', 'tab', 'pager'];
+type Kind = 'select' | 'text-input' | 'tab' | 'pager' | 'choice' | 'clipboard' | 'range';
+const KINDS: readonly Kind[] = [
+  'select',
+  'text-input',
+  'tab',
+  'pager',
+  'choice',
+  'clipboard',
+  'range',
+];
 
 /**
  * The placement lane a file's sites go to (UI plan, phase C), the shell's own fields (the header's
  * search field and the command palette: no C2 lane names them), or `shared`: the old pager itself.
  */
-type Lane = 'c2-lists' | 'c2-chain' | 'c2-assets' | 'c2-topics' | 'shell' | 'shared';
+type Lane = 'c2-lists' | 'c2-chain' | 'c2-assets' | 'c2-topics' | 'd1-charts' | 'shell' | 'shared';
 
 interface Tolerated {
   lane: Lane;
@@ -76,6 +99,9 @@ const CONTROL_FILES = [
   'components/ui/help-mark.tsx',
 ] as const;
 
+/** What the scan leaves to the library: its controls, and the one copy path the copy button uses. */
+const LIBRARY_FILES = [...CONTROL_FILES, 'hooks/useCopy.ts'] as const;
+
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
   // ---- c2-chain: block, transaction, cell, address, script pages ----
@@ -85,40 +111,84 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'the newest cells’ “All N cells ↓”: the short list’s form, or a way onward',
   },
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
-  'components/asset/collection-gallery.tsx': {
-    lane: 'c2-assets',
-    sites: { pager: 1 },
-    reason:
-      'a collection’s items pager: a list in id order whose search pages carry no total, which no mode of the Pager draws (pages needs the count; time says newer / older; more appends)',
-  },
-  // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
-  // ---- shell: the header's search field and the command palette ----
-  // The two named exceptions (lane c2-topics): comboboxes with their own behaviour, not
-  // TextFields; each stands in the well of every field, WELL_MATERIAL of components/ui/text-field.tsx.
-  'components/command-palette.tsx': {
-    lane: 'shell',
-    sites: { 'text-input': 1 },
-    reason:
-      'the palette’s query field: a combobox of its own (its commands, its keys), in WELL_MATERIAL',
-  },
-  'components/search-bar.tsx': {
-    lane: 'shell',
-    sites: { 'text-input': 1 },
-    reason:
-      'the header’s search field: a combobox with its own cursor and list, the well TextField copies (WELL_MATERIAL)',
-  },
-  // ---- shared: the old pager ----
-  'components/ui/cursor-pagination.tsx': {
+  // ---- c2-topics: dao, forks, fiber, network, hardforks, home: replaced at its merge ----
+  // ---- d1-charts: the chart pages' range and scale are the library's RangeSelect and FilterChips (lane D1) ----
+  // ---- shared: the old pager (components/ui/cursor-pagination.tsx) went with its last use ----
+  // The click-to-copy of an id (`copyable`, lane c2-finish item 4's third kind), awaiting its
+  // ruling: the proposal is no copy (an id in a row or a sentence is the row's key or a link).
+  'components/ui/hex-code.tsx': {
     lane: 'shared',
-    sites: { pager: 2 },
-    reason: 'the old pager’s previous / next buttons: it goes with its last use (the orphan gate)',
+    sites: { clipboard: 1 },
+    reason:
+      'HexCode’s click-to-copy (`copyable`, its default): no call site reaches it today, every Hash and HexCode says copyable={false}',
+  },
+  'components/ui/hex-display.tsx': {
+    lane: 'shared',
+    sites: { clipboard: 1 },
+    reason:
+      'HexDisplay’s click-to-copy (`copyable`, its default): the .cell party’s lock hash reaches it, an id inside a link to its address',
   },
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 6;
+const TOLERATED_TOTAL = 3;
 
-const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
+/**
+ * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
+ * menu, not a filter, a range or a field of the page; and the shell's two comboboxes. Each says
+ * why; the list and its total are pinned, so a new one is a decision written here.
+ */
+const NAMED: Readonly<Record<string, Tolerated>> = {
+  'components/search-bar.tsx': {
+    lane: 'shell',
+    sites: { 'text-input': 1 },
+    reason:
+      'the header’s search field: a combobox of its own (its cursor and its list), not a TextField; it stands in WELL_MATERIAL, the well every field reads',
+  },
+  'components/command-palette.tsx': {
+    lane: 'shell',
+    sites: { 'text-input': 1 },
+    reason:
+      'the palette’s query field: a combobox of its own (its commands and its keys), not a TextField; it stands in WELL_MATERIAL, the well every field reads',
+  },
+  'components/layout/theme-switcher.tsx': {
+    lane: 'shell',
+    sites: { choice: 2 },
+    reason:
+      'the theme menu: a preference of the reader, its radio items in the shell’s own menu, not a filter of a page',
+  },
+  'app/tx/[hash]/client-page.tsx': {
+    lane: 'c2-chain',
+    sites: { choice: 1 },
+    reason:
+      'the witness picker: a witness of the figure pressed to light its bytes, a part of the figure',
+  },
+  'components/scripts/script-code-evidence.tsx': {
+    lane: 'c2-chain',
+    sites: { choice: 1 },
+    reason: 'the code evidence’s event chips: each lights its events in the figure beside it',
+  },
+  'components/ui/allele-gel.tsx': {
+    lane: 'c2-assets',
+    sites: { choice: 1 },
+    reason: 'the allele gel’s bands: a band pressed to read it, a part of the figure',
+  },
+  'components/ui/hex-map.tsx': {
+    lane: 'c2-chain',
+    sites: { choice: 3 },
+    reason:
+      'the hex map’s fields and bytes: one pressed to light it in the map, a part of the figure',
+  },
+  'components/ui/composition-set.tsx': {
+    lane: 'c2-lists',
+    sites: { choice: 2 },
+    reason:
+      'the composition legend’s tiers: the inventory’s tier filter keeps its own form, the owner’s first-class rule for composition',
+  },
+};
+
+/** The pinned total of NAMED's sites. */
+const NAMED_TOTAL = 12;
 
 interface Site {
   kind: Kind;
@@ -145,27 +215,11 @@ const PAGER_WORDS: readonly RegExp[] = [
 /** The elements a pager's words make a hand-built pager: a button or a link. */
 const PAGER_TAGS = new Set(['button', 'a', 'Link', 'AppLink']);
 
+/** A span of time as a range's choice writes it (`24 h`, `14 d`, `1y`, `90 days`): a button's words. */
+const SPAN_WORDS = /^\d+ ?(h|d|w|m|y|mo|hours?|days?|weeks?|months?|years?)$/i;
+
 /** At most this many readings of one element's text (a `?:` in each of several children). */
 const TEXT_READINGS = 32;
-
-/** What a name of the file is bound to: a value it may hold, a component, or a prop. */
-type Binding =
-  | { kind: 'value'; values: ts.Expression[] }
-  | { kind: 'component' }
-  | { kind: 'prop'; defaults: ts.Expression[] };
-
-const unwrap = (e: ts.Expression): ts.Expression => {
-  let x = e;
-  while (
-    ts.isParenthesizedExpression(x) ||
-    ts.isAsExpression(x) ||
-    ts.isSatisfiesExpression(x) ||
-    ts.isTypeAssertionExpression(x) ||
-    ts.isNonNullExpression(x)
-  )
-    x = x.expression;
-  return x;
-};
 
 /** The controls a source writes by hand, and what it could not read. */
 function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TSX): Scan {
@@ -359,6 +413,11 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
     if (tags.includes('select'))
       sites.push({ kind: 'select', line: lineOf(node), what: `<${shown}>` });
 
+    // a choice of one of several by hand: a toggle that says it is pressed (a group of them is a
+    // filter or a range), and the radio group the filter chips draw
+    if (attr('aria-pressed'))
+      sites.push({ kind: 'choice', line: lineOf(node), what: `<${shown} aria-pressed>` });
+
     if (tags.includes('input')) {
       const type = attr('type');
       const lastSpread = attrs.reduce((at, a, i) => (ts.isJsxSpreadAttribute(a) ? i : at), -1);
@@ -375,6 +434,8 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
             line: lineOf(node),
             what: `<${shown} type="${types.join('|')}">`,
           });
+        else if (types.includes('range'))
+          sites.push({ kind: 'range', line: lineOf(node), what: `<${shown} type="range">` });
       }
     }
 
@@ -390,6 +451,9 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
           tab = true;
           sites.push({ kind: 'tab', line: lineOf(node), what: `<${shown} role="${named}">` });
         }
+        const radio = roles.find((r) => r === 'radiogroup' || r === 'radio');
+        if (radio)
+          sites.push({ kind: 'choice', line: lineOf(node), what: `<${shown} role="${radio}">` });
       }
     }
     const cls = attr('className');
@@ -400,6 +464,13 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
       classTokens(clsValue).some((t) => t.split(':').pop()!.replace(/^!/, '') === 'border-b-2')
     )
       sites.push({ kind: 'tab', line: lineOf(node), what: `<${shown} class="border-b-2">` });
+
+    // a range by hand: a button whose words are a span of time (the RangeSelect writes them)
+    if (children && tags.includes('button')) {
+      const span = textsOf(children).find((t) => SPAN_WORDS.test(t));
+      if (span !== undefined)
+        sites.push({ kind: 'range', line: lineOf(node), what: `<${shown}>${span}</${shown}>` });
+    }
 
     if (name === 'CursorPagination')
       sites.push({ kind: 'pager', line: lineOf(node), what: '<CursorPagination>' });
@@ -413,7 +484,22 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
   const visit = (node: ts.Node) => {
     if (ts.isJsxElement(node)) visitElement(node.openingElement, node.children);
     else if (ts.isJsxSelfClosingElement(node)) visitElement(node, null);
-    else if (ts.isCallExpression(node)) {
+    // a clipboard write by hand: the clipboard itself, or the one copy path's hook
+    else if (
+      ts.isPropertyAccessExpression(node) &&
+      node.name.text === 'clipboard' &&
+      ((ts.isIdentifier(node.expression) && node.expression.text === 'navigator') ||
+        (ts.isPropertyAccessExpression(node.expression) &&
+          node.expression.name.text === 'navigator'))
+    )
+      sites.push({ kind: 'clipboard', line: lineOf(node), what: 'navigator.clipboard' });
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'useCopy'
+    )
+      sites.push({ kind: 'clipboard', line: lineOf(node), what: 'useCopy(…)' });
+    if (ts.isCallExpression(node)) {
       const callee = node.expression;
       const named =
         (ts.isIdentifier(callee) && callee.text === 'createElement') ||
@@ -448,31 +534,24 @@ function scanControls(code: string, scriptKind: ts.ScriptKind = ts.ScriptKind.TS
   return { sites, refused };
 }
 
-function sourceFiles(root: string): string[] {
-  const files: string[] = [];
-  const walk = (dir: string) => {
-    for (const name of readdirSync(dir)) {
-      const path = join(dir, name);
-      if (statSync(path).isDirectory()) walk(path);
-      else if (/\.tsx?$/.test(name) && !name.endsWith('.d.ts')) files.push(path);
-    }
-  };
-  for (const dir of SCAN_DIRS) walk(join(root, dir));
-  return files;
-}
-
-/** The scan's count against the list: every file's count per kind must equal its tolerated one. */
+/**
+ * The scan's count against the lists: every file's count per kind must equal its tolerated one
+ * and its named one together.
+ */
 function toleratedFailures(
   found: ReadonlyMap<string, readonly Site[]>,
-  tolerated: Readonly<Record<string, Tolerated>>
+  tolerated: Readonly<Record<string, Tolerated>>,
+  named: Readonly<Record<string, Tolerated>> = {}
 ): string[] {
   const out: string[] = [];
-  for (const path of [...new Set([...found.keys(), ...Object.keys(tolerated)])].sort()) {
+  const paths = new Set([...found.keys(), ...Object.keys(tolerated), ...Object.keys(named)]);
+  for (const path of [...paths].sort()) {
     const sites = found.get(path) ?? [];
     const entry = tolerated[path];
+    const kept = named[path];
     for (const kind of KINDS) {
       const of = sites.filter((s) => s.kind === kind);
-      const allowed = entry?.sites[kind] ?? 0;
+      const allowed = (entry?.sites[kind] ?? 0) + (kept?.sites[kind] ?? 0);
       if (of.length > allowed)
         out.push(
           `${path}: ${of.length} raw ${kind} site(s), ${allowed} tolerated — a new one: ${of
@@ -484,8 +563,9 @@ function toleratedFailures(
           `${path}: ${of.length} raw ${kind} site(s), ${allowed} tolerated — lower its count to ${of.length}`
         );
     }
-    if (entry && entry.reason.trim().length <= 10)
-      out.push(`${path}: a reason too short to say why: "${entry.reason}"`);
+    for (const listed of [entry, kept])
+      if (listed && listed.reason.trim().length <= 10)
+        out.push(`${path}: a reason too short to say why: "${listed.reason}"`);
   }
   return out;
 }
@@ -524,7 +604,9 @@ describe('the controls scan finds what it must, and only that', () => {
             <input {...{ id: 'a' }} type="hidden" />
           </div>
         );`)
-    ).toEqual([]);
+      // re-pinned (lane c2-finish, item 5): a range input is a range choice by hand now (it passed
+      // as an input of another type); the checkbox, the hidden and the number still pass
+    ).toEqual(['range <input type="range">']);
     expect(
       kinds(`
         const KIND = 'search';
@@ -628,6 +710,66 @@ describe('the controls scan finds what it must, and only that', () => {
     ]);
   });
 
+  // Lane c2-finish, item 5: what the scan could not read before, so a brief had to hold it.
+  it('finds a choice by hand: an aria-pressed button, a radiogroup, a radio', () => {
+    expect(
+      kinds(`
+        export const A = ({ on }: { on: boolean }) => (
+          <div>
+            <button aria-pressed={on}>tokens</button>
+            <span role="radiogroup" aria-label="status">
+              <button role="radio" aria-checked={on}>all</button>
+            </span>
+            <button aria-expanded={on}>filters</button>
+            <button>plain</button>
+          </div>
+        );`)
+    ).toEqual([
+      'choice <button aria-pressed>',
+      'choice <span role="radiogroup">',
+      'choice <button role="radio">',
+    ]);
+  });
+
+  it('finds a clipboard write: navigator.clipboard, and a use of useCopy', () => {
+    expect(
+      kinds(`
+        export function A({ v }: { v: string }) {
+          const { copy } = useCopy(v);
+          const write = () => navigator.clipboard.writeText(v);
+          const other = () => window.navigator.clipboard?.writeText(v);
+          return <button onClick={copy}>x</button>;
+        }`)
+    ).toEqual([
+      'clipboard useCopy(…)',
+      'clipboard navigator.clipboard',
+      'clipboard navigator.clipboard',
+    ]);
+  });
+
+  it('finds a range choice by hand: a range input, a button whose words are a span of time', () => {
+    expect(
+      kinds(`
+        export const A = ({ d }: { d: number }) => (
+          <div>
+            <input type="range" min={0} max={9} />
+            <button>24 h</button>
+            <button>{'14 d'}</button>
+            <button>1y</button>
+            <button>90 days</button>
+            <button>24 h activity</button>
+            <button>{d} d</button>
+          </div>
+        );`)
+    ).toEqual([
+      'range <input type="range">',
+      'range <button>24 h</button>',
+      'range <button>14 d</button>',
+      'range <button>1y</button>',
+      'range <button>90 days</button>',
+    ]);
+  });
+
   it('counts createElement of a select or a typed input', () => {
     expect(
       kinds(`
@@ -673,6 +815,34 @@ describe('the tolerated list keys a file by its count per kind, so it only shrin
       'app/a.tsx: 1 raw select site(s), 2 tolerated — lower its count to 1',
     ]);
   });
+
+  // Lane c2-finish, item 5: a site kept by decision is named with its reason, counted the same way
+  it('passes a named site, fails one more, and fails a named site that went', () => {
+    const named: Record<string, Tolerated> = {
+      'app/b.tsx': { lane: 'c2-chain', sites: { choice: 1 }, reason: 'a part of the figure' },
+    };
+    const choice = (line: number): Site => ({
+      kind: 'choice',
+      line,
+      what: '<button aria-pressed>',
+    });
+    expect(toleratedFailures(new Map([['app/b.tsx', [choice(4)]]]), {}, named)).toEqual([]);
+    expect(toleratedFailures(new Map([['app/b.tsx', [choice(4), choice(9)]]]), {}, named)).toEqual([
+      expect.stringMatching(/^app\/b\.tsx: 2 raw choice site\(s\), 1 tolerated — a new one: /),
+    ]);
+    expect(toleratedFailures(new Map(), {}, named)).toEqual([
+      'app/b.tsx: 0 raw choice site(s), 1 tolerated — lower its count to 0',
+    ]);
+    expect(
+      toleratedFailures(
+        new Map([['app/b.tsx', [choice(4)]]]),
+        {},
+        {
+          'app/b.tsx': { ...named['app/b.tsx'], reason: 'kept' },
+        }
+      )
+    ).toEqual(['app/b.tsx: a reason too short to say why: "kept"']);
+  });
 });
 
 describe('no raw control outside the control components (lane C1)', () => {
@@ -683,7 +853,7 @@ describe('no raw control outside the control components (lane C1)', () => {
   const refused: string[] = [];
   for (const file of files) {
     const path = rel(file);
-    if ((CONTROL_FILES as readonly string[]).includes(path)) continue;
+    if ((LIBRARY_FILES as readonly string[]).includes(path)) continue;
     const scan = scanControls(
       readFileSync(file, 'utf8'),
       file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS
@@ -701,16 +871,22 @@ describe('no raw control outside the control components (lane C1)', () => {
     expect(refused).toEqual([]);
   });
 
-  it('writes no raw control but the tolerated list’s', () => {
-    expect(toleratedFailures(found, TOLERATED)).toEqual([]);
+  it('writes no raw control but the tolerated list’s and the named list’s', () => {
+    expect(toleratedFailures(found, TOLERATED, NAMED)).toEqual([]);
   });
 
-  it(`tolerates ${TOLERATED_TOTAL} sites in all: the pinned total, which only falls`, () => {
-    const total = Object.values(TOLERATED).reduce(
+  const totalOf = (list: Readonly<Record<string, Tolerated>>) =>
+    Object.values(list).reduce(
       (sum, entry) => sum + Object.values(entry.sites).reduce((a, n) => a + (n ?? 0), 0),
       0
     );
-    expect(total).toBe(TOLERATED_TOTAL);
+
+  it(`tolerates ${TOLERATED_TOTAL} sites in all: the pinned total, which only falls`, () => {
+    expect(totalOf(TOLERATED)).toBe(TOLERATED_TOTAL);
+  });
+
+  it(`names ${NAMED_TOTAL} sites kept by decision, each with its reason: the pinned total`, () => {
+    expect(totalOf(NAMED)).toBe(NAMED_TOTAL);
   });
 });
 

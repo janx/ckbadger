@@ -32,12 +32,12 @@ import { ReadFailure } from '@/components/read-failure';
 import { isEditableElement } from '@/lib/search-focus';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatCompactInteger } from '@/lib/exact-integer';
-import { formatTimeAgo, formatUtc8Time } from '@/lib/utils';
+import { formatUtc8Time } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epoch';
 import { ShortId } from '@/components/ui/short-id';
-import { ClockText, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { HeadId } from '@/components/ui/head-id';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
@@ -53,9 +53,10 @@ export default function BlockDetailPage() {
   const { id } = useParams();
   const router = useRouter();
   const [view, setView] = useState<'activities' | 'transactions'>('activities');
-  const pagination = useCursorPagination();
-  const activityPagination = useCursorPagination();
   const pageSize = usePageSize(100);
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const pagination = useCursorPagination(pageSize);
+  const activityPagination = useCursorPagination(pageSize);
   const read = useQuery({
     queryKey: ['block', id],
     queryFn: () => api.getBlock(id as string),
@@ -222,20 +223,13 @@ export default function BlockDetailPage() {
   // the proposals read itself.
   const ownProposals = proposals?.filter((p) => p.uncle === null);
   const activityRows = activities.data?.data;
-  // Both lists are read in tx order and counted of the block's transactions (one activity row per
-  // transaction, the block feed's contract): the pager's pages mode, null for one page.
+  // Both lists are read in tx order: the pager's pages mode, null for one page, counted only where
+  // a page's own response counts its rows (lane c2-finish, 1c: the block's transaction count is
+  // another read, at its own tip; the tab heading states it).
   const activitiesAt =
-    activities.data &&
-    rankedPageAt('activities', activityPagination.page, {
-      ...activities.data,
-      total: block.transactionsCount,
-    });
+    activities.data && rankedPageAt('activities', activityPagination.page, activities.data);
   const transactionsAt =
-    transactions.data &&
-    rankedPageAt('transactions', pagination.page, {
-      ...transactions.data,
-      total: block.transactionsCount,
-    });
+    transactions.data && rankedPageAt('transactions', pagination.page, transactions.data);
   const parentElapsedMs =
     block.parentTimestamp === null
       ? null
@@ -279,16 +273,76 @@ export default function BlockDetailPage() {
               </span>
             </span>
           }
-          // The id line: the full hash alone (the kind line says "Block"), in the plate's quiet
-          // voice (C10 round 2), click to copy as before; one line or two halves, never a
-          // scroller (the lead's ruling a).
-          identity={<HeadId value={block.hash} kind="hash" copyable />}
+          // The id line: the full hash alone (the kind line says "Block"), in the plate's voice
+          // (C10 round 2), the copy button after it (copy has one form: lane c2-finish, item 4);
+          // one line or two halves, never a scroller (the lead's ruling a).
+          identity={<HeadId value={block.hash} kind="hash" copy="copy block hash" />}
           // The block's stone (seals by kind, §0: 104 px, 80 below md), beside its name plate: its
           // hash, and the transactions it holds in rods. A count the API did not serve is refused
           // (the summary below reads it first), never filled in.
           seal={{
             id: { kind: 'block', hash: block.hash, txs: block.transactionsCount },
             kind: 'Block',
+          }}
+          // The status strip under the id line (lane D2, PA-13: these facts stood in an aside beside
+          // the block's contents): its state, its time, who mined it and its reward. Its fees stand
+          // in the evidence tier's facts, the paying cellbase in the reward breakdown's head.
+          strip={{
+            label: 'Block status',
+            facts: [
+              {
+                label: 'status',
+                value: 'canonical',
+                dot: 'jade',
+                note: unitNode(formatCount(block.confirmations, 'confirmation')),
+              },
+              {
+                label: 'time',
+                value: <Utc8DateTime timestamp={block.timestamp} />,
+                note: [
+                  <Utc8Age key="age" timestamp={block.timestamp} />,
+                  parentElapsedMs !== null && `${parentElapsedMs / 1000} s after its parent`,
+                ],
+              },
+              {
+                label: 'miner',
+                value: block.minerAddress ? (
+                  <MinerLink
+                    address={block.minerAddress}
+                    pool={block.minerPool}
+                    size="row"
+                    unnamed={<Address address={block.minerAddress} size="row" />}
+                  />
+                ) : (
+                  'Genesis'
+                ),
+              },
+              {
+                label: 'reward',
+                // genesis is mined by no one: its reward is not pending, there is none
+                value:
+                  block.miningReward !== null ? (
+                    <CkbAmount
+                      form="exact"
+                      shannons={parseShannons(block.miningReward, `block ${block.number} reward`)}
+                      signed={false}
+                      tone="inherit"
+                    />
+                  ) : block.number === 0 ? (
+                    'None: genesis has no miner'
+                  ) : (
+                    'Not finalized yet'
+                  ),
+                note: block.rewardPaidAtBlock !== null && (
+                  <>
+                    paid in{' '}
+                    <Link look="inline" href={`/blocks/${block.rewardPaidAtBlock}`}>
+                      {formatBlockNumber(block.rewardPaidAtBlock)}
+                    </Link>
+                  </>
+                ),
+              },
+            ],
           }}
           // The summary is the head's last line (phase 5, Gate 3 note), under the stone and the
           // plate from the page's left edge, where the tab row and the sections start (C10).
@@ -426,6 +480,13 @@ export default function BlockDetailPage() {
                   {client.decoded && (
                     <dd className="text-text-dim">decoded from the cellbase message</dd>
                   )}
+                </div>
+                {/* The fees its transactions paid (lane D2): a fact of the facts aside, which the
+                    status strip replaced; the strip takes the four a reader checks first, and the
+                    fees stand here, beside the block's size and cycles. */}
+                <div>
+                  <dt className="text-text-dim mb-1">Fees</dt>
+                  <dd className="text-text-bright">{amount(block.totalFees, 'fees')}</dd>
                 </div>
               </dl>
               <DetailSection title="Position in the chain">
@@ -634,162 +695,101 @@ export default function BlockDetailPage() {
               </div>
             </section>
           )}
-          <div className="grid min-w-0 gap-10 lg:grid-cols-[minmax(0,1fr)_240px]">
-            <div className="min-w-0">
-              {/* The block's contents open on their command line, the tab row (the controls
+          {/* The block's contents across the whole measure (lane D2): the facts that stood in an
+                aside beside them are the head's status strip. */}
+          <div className="min-w-0">
+            {/* The block's contents open on their command line, the tab row (the controls
                   board); the section keeps its name for the outline. */}
-              <h2 className="sr-only">Block contents</h2>
-              <Tabs
-                label="block contents"
-                command
-                // One activity row per transaction of the block (the block feed's contract).
-                tabs={[
-                  { key: 'activities', label: 'activities', count: block.transactionsCount },
-                  { key: 'transactions', label: 'transactions', count: block.transactionsCount },
-                ]}
-                value={view}
-                onChange={setView}
-              >
-                <div className="pt-4">
-                  {transactions.data && !transactions.data.hasMore && !pagination.hasPrevious && (
-                    <CommittedFrom transactions={transactions.data.data} block={block} />
-                  )}
-                  {view === 'activities' ? (
-                    <>
-                      {isAwaited(activities) && <p role="status">Loading activities…</p>}
-                      {activities.error && (
-                        <p className="max-w-measure" role="alert">
-                          Unable to read activities: {activities.error.message}
-                        </p>
-                      )}
-                      {activities.data && activityRows && (
-                        <>
-                          {activityRows.map((activity) => (
-                            <ActivityRow
-                              key={activity.txHash}
-                              activity={activity}
-                              headline={
-                                activity.isCellbase ? <CellbaseHeadline block={block} /> : undefined
-                              }
-                              evidence={
-                                <>
-                                  #{activity.txIndex} ·{' '}
-                                  <Link
-                                    href={`/tx/${activity.txHash}`}
-                                    className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
-                                  >
-                                    <ShortId value={activity.txHash} kind="hash" size="row" />
-                                  </Link>
-                                </>
-                              }
-                            />
-                          ))}
-                          {activityRows.length === 0 && (
-                            <p className="text-text-dim text-small">No activities in this block.</p>
-                          )}
-                          {activitiesAt && (
-                            <Pager
-                              mode="pages"
-                              label="activities"
-                              {...activitiesAt}
-                              onPrevious={activityPagination.goToPrevious}
-                              onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
-                            />
-                          )}
-                        </>
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      {isAwaited(transactions) && <p role="status">Loading transactions…</p>}
-                      {transactions.error && (
-                        <p className="max-w-measure" role="alert">
-                          Unable to read transactions: {transactions.error.message}
-                        </p>
-                      )}
-                      {transactions.data && (
-                        <>
-                          <BlockTransactionsTable
-                            transactions={transactions.data.data}
-                            blockNumber={block.number}
+            <h2 className="sr-only">Block contents</h2>
+            <Tabs
+              label="block contents"
+              command
+              // One activity row per transaction of the block (the block feed's contract).
+              tabs={[
+                { key: 'activities', label: 'activities', count: block.transactionsCount },
+                { key: 'transactions', label: 'transactions', count: block.transactionsCount },
+              ]}
+              value={view}
+              onChange={setView}
+            >
+              <div className="pt-4">
+                {transactions.data && !transactions.data.hasMore && !pagination.hasPrevious && (
+                  <CommittedFrom transactions={transactions.data.data} block={block} />
+                )}
+                {view === 'activities' ? (
+                  <>
+                    {isAwaited(activities) && <p role="status">Loading activities…</p>}
+                    {activities.error && (
+                      <p className="max-w-measure" role="alert">
+                        Unable to read activities: {activities.error.message}
+                      </p>
+                    )}
+                    {activities.data && activityRows && (
+                      <>
+                        {activityRows.map((activity) => (
+                          <ActivityRow
+                            key={activity.txHash}
+                            activity={activity}
+                            headline={
+                              activity.isCellbase ? <CellbaseHeadline block={block} /> : undefined
+                            }
+                            evidence={
+                              <>
+                                #{activity.txIndex} ·{' '}
+                                <Link
+                                  href={`/tx/${activity.txHash}`}
+                                  className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
+                                >
+                                  <ShortId value={activity.txHash} kind="hash" size="row" />
+                                </Link>
+                              </>
+                            }
                           />
-                          {transactionsAt && (
-                            <Pager
-                              mode="pages"
-                              label="transactions"
-                              {...transactionsAt}
-                              onPrevious={pagination.goToPrevious}
-                              onNext={() => pagination.goToNext(transactions.data.nextCursor)}
-                            />
-                          )}
-                        </>
-                      )}
-                    </>
-                  )}
-                </div>
-              </Tabs>
-            </div>
-            <aside aria-label="Block facts" className="text-small min-w-0">
-              <p className="text-jade max-w-measure mb-5">
-                Canonical · {block.confirmations.toLocaleString('en-US')} confirmations
-              </p>
-              <dl className="space-y-5">
-                <div>
-                  <dt className="text-text-dim mb-1">Time</dt>
-                  <dd>
-                    <Utc8DateTime timestamp={block.timestamp} />
-                  </dd>
-                  <dd className="text-text-dim mt-1">
-                    <ClockText text={(now) => formatTimeAgo(block.timestamp, now)} />
-                    {parentElapsedMs !== null && (
-                      <> · {parentElapsedMs / 1000} s after its parent</>
+                        ))}
+                        {activityRows.length === 0 && (
+                          <p className="text-text-dim text-small">No activities in this block.</p>
+                        )}
+                        {activitiesAt && (
+                          <Pager
+                            mode="pages"
+                            label="activities"
+                            {...activitiesAt}
+                            onPrevious={activityPagination.goToPrevious}
+                            onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
+                          />
+                        )}
+                      </>
                     )}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-text-dim mb-1">Miner</dt>
-                  <dd>
-                    {block.minerAddress ? (
-                      <MinerLink
-                        address={block.minerAddress}
-                        pool={block.minerPool}
-                        size="row"
-                        unnamed={<Address address={block.minerAddress} size="row" />}
-                      />
-                    ) : (
-                      'Genesis'
+                  </>
+                ) : (
+                  <>
+                    {isAwaited(transactions) && <p role="status">Loading transactions…</p>}
+                    {transactions.error && (
+                      <p className="max-w-measure" role="alert">
+                        Unable to read transactions: {transactions.error.message}
+                      </p>
                     )}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-text-dim mb-1">Miner reward</dt>
-                  <dd>
-                    {/* genesis is mined by no one: its reward is not pending, there is none */}
-                    {block.miningReward !== null
-                      ? amount(block.miningReward, 'reward')
-                      : block.number === 0
-                        ? 'None: genesis has no miner'
-                        : 'Not finalized yet'}
-                  </dd>
-                  {block.rewardPaidAtBlock !== null && (
-                    <dd className="text-text-dim mt-1">
-                      <Link href={`/blocks/${block.rewardPaidAtBlock}`}>
-                        Paid in {formatBlockNumber(block.rewardPaidAtBlock)}
-                      </Link>
-                    </dd>
-                  )}
-                  {block.miningRewardTxHash && (
-                    <dd className="text-text-dim mt-1">
-                      <Link href={`/tx/${block.miningRewardTxHash}`}>Paying cellbase →</Link>
-                    </dd>
-                  )}
-                </div>
-                <div>
-                  <dt className="text-text-dim mb-1">Fees</dt>
-                  <dd>{amount(block.totalFees, 'fees')}</dd>
-                </div>
-              </dl>
-            </aside>
+                    {transactions.data && (
+                      <>
+                        <BlockTransactionsTable
+                          transactions={transactions.data.data}
+                          blockNumber={block.number}
+                        />
+                        {transactionsAt && (
+                          <Pager
+                            mode="pages"
+                            label="transactions"
+                            {...transactionsAt}
+                            onPrevious={pagination.goToPrevious}
+                            onNext={() => pagination.goToNext(transactions.data.nextCursor)}
+                          />
+                        )}
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            </Tabs>
           </div>
         </DetailLayout>
       </main>

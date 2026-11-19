@@ -1411,7 +1411,9 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     const classes = main.attributes.properties
       .find((a) => ts.isJsxAttribute(a) && a.name.getText(source) === 'className')!
       .getText(source);
-    expect(classes).toBe('className="container mx-auto pb-16 pt-6"');
+    // re-pinned on purpose (lane D2, U-11): the DAO page opens its main 32 px under the header, as
+    // every topic and list page does, so its h1 stands at the one line position (it was pt-6)
+    expect(classes).toBe('className="container mx-auto pb-16 pt-8"');
     // Re-pinned on purpose (review fb-tests SHOULD-2, lane rd/fb-fixes-2 T2): tailwind-box read
     // `container` as no class at all, so this held "no inset" only because the container's own
     // gutters were not read. It reads them now (16 px a side, 24 from lg); the page adds none of

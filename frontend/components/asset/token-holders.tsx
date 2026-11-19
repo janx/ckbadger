@@ -312,8 +312,7 @@ export interface TokenHoldersProps {
  */
 export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) {
   const distributionSource = `holder distribution from /tokens/${typeHash}/distribution`;
-  const [all, setAll] = useState(false),
-    pagination = useCursorPagination();
+  const [all, setAll] = useState(false);
   // The phone row is drawn wherever the holders' column is narrower than the table's 552 px: on a
   // phone, and in a desktop column (the 3fr beside the balance bands from 1280 is within a few px
   // of it): tight only below sm (R9).
@@ -325,6 +324,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   // "All holders" pages by the list size (R2: twenty below md); the top ten stay ten.
   const allPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const limit = all ? allPageSize : 10;
+  // a change of page size (at md, or the top ten opened to all) starts the walk again (lane
+  // c2-finish, 1d)
+  const pagination = useCursorPagination(limit);
   const holders = useQuery({
     queryKey: ['token-holders', typeHash, all, pagination.cursor, limit],
     queryFn: () => api.getTokenHolders(typeHash, { limit, cursor: pagination.cursor }),

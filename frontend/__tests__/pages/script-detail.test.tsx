@@ -754,12 +754,14 @@ describe('ScriptDetailPage', () => {
     expect(within(cells).getByText('Also guarded by')).toBeInTheDocument();
     expect(within(cells).getByText('Occupied')).toBeInTheDocument();
     // re-pinned on purpose (lane c2-chain): the library's pager writes its range as the board does,
-    // `1–1 of 8 · 5 a page` (was "Showing 1–1 of 8 cells · 5 per page"), still of the family total
+    // `1–1 of 8 · 5 a page` (was "Showing 1–1 of 8 cells · 5 per page"), still of the family total.
+    // Re-pinned again (lane c2-finish, 1c): the family's 8 live cells are another read, at another
+    // tip than the merged page, which counts no rows; the pager draws `1–1 · 5 a page` and
+    // `page 1`, and the 8 stands where the page states the family's live cells.
     await waitFor(() =>
-      expect(screen.getByRole('navigation', { name: 'cells' })).toHaveTextContent(
-        /^1–1 of 8 · 5 a page/
-      )
+      expect(screen.getByRole('navigation', { name: 'cells' })).toHaveTextContent(/^1–1 · 5 a page/)
     );
+    expect(screen.getByRole('navigation', { name: 'cells' })).not.toHaveTextContent(/ of 8/);
     for (const [codeHash, hashType] of [
       [sharedVersionCodeHash, 'type'],
       [sharedObservedData1Reference, 'data1'],

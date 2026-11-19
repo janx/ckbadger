@@ -6,6 +6,7 @@ import { useFromSm } from '@/hooks/useFromMd';
 import { rovingTarget } from '@/lib/roving-focus';
 import { groupCount } from '@/lib/format-count';
 import { tabRowShowsCounts, type TabRowItem } from '@/lib/control-row-fit';
+import Link from '@/components/ui/link';
 import { cn } from '@/lib/utils';
 
 /** One tab: its key, the name it writes and its count where it has one. */
@@ -30,6 +31,31 @@ interface TabsProps<K extends string> {
   /** The current tab's panel. */
   children: ReactNode;
   className?: string;
+}
+
+/**
+ * A tab's box, the same for a tab and a tab that is its own address (`TabLinks`): the name at the
+ * body step below sm and the section step from it, a 32 px target standing on the row's rule, the
+ * 2 px line under it (its colour the caller's: celadon for the current one).
+ */
+const TAB_BOX =
+  'text-body sm:text-section -mb-px inline-flex h-8 items-end whitespace-nowrap border-b-2 pb-1.5 transition-colors sm:pb-[7px]';
+
+/** The row under its 1 px rule, one line, a gap of 16 px between tabs (22 from sm). */
+const TAB_ROW = 'border-row-rule flex min-w-0 items-baseline gap-4 border-b sm:gap-[22px]';
+
+/** The prompt square before the first name of a command line, pulled toward it. */
+const TAB_SQUARE = 'section-mark -mr-2 self-center sm:-mr-3';
+
+/** A count after its tab's name: 12 px in the quiet ink, at every state of its tab. */
+function TabCount({ count }: { count: TabRowItem['count'] }) {
+  if (count === undefined || count === null) return null;
+  return (
+    <>
+      <span className="sr-only"> </span>
+      <span className="text-meta text-text-dim ml-1.5 font-normal">{groupCount(count)}</span>
+    </>
+  );
 }
 
 /**
@@ -80,9 +106,9 @@ export function Tabs<K extends string>({
         role="tablist"
         aria-label={label}
         onKeyDown={onKeyDown}
-        className="border-row-rule flex min-w-0 items-baseline gap-4 border-b sm:gap-[22px]"
+        className={TAB_ROW}
       >
-        {command && <span aria-hidden="true" className="section-mark -mr-2 self-center sm:-mr-3" />}
+        {command && <span aria-hidden="true" className={TAB_SQUARE} />}
         {tabs.map((tab, i) => {
           const selected = i === index;
           return (
@@ -99,7 +125,7 @@ export function Tabs<K extends string>({
               tabIndex={selected ? 0 : -1}
               onClick={() => onChange(tab.key)}
               className={cn(
-                'text-body sm:text-section -mb-px inline-flex h-8 items-end whitespace-nowrap border-b-2 pb-1.5 transition-colors sm:pb-[7px]',
+                TAB_BOX,
                 command && 'lowercase',
                 selected
                   ? 'border-jade text-text-bright font-semibold'
@@ -111,15 +137,7 @@ export function Tabs<K extends string>({
             >
               <span>
                 {tab.label}
-                {counts && tab.count !== undefined && tab.count !== null && (
-                  <>
-                    <span className="sr-only"> </span>
-                    {/* a count: 12 px in the quiet ink, at every state of its tab */}
-                    <span className="text-meta text-text-dim ml-1.5 font-normal">
-                      {groupCount(tab.count)}
-                    </span>
-                  </>
-                )}
+                {counts && <TabCount count={tab.count} />}
               </span>
             </button>
           );
@@ -129,5 +147,86 @@ export function Tabs<K extends string>({
         {children}
       </div>
     </div>
+  );
+}
+
+/** One tab that is its own address: its key, its name, its count where it has one, its address. */
+export interface TabLink<K extends string> extends Tab<K> {
+  href: string;
+}
+
+interface TabLinksProps<K extends string> {
+  /** The row's name for a screen reader: what its links go between. */
+  label: string;
+  tabs: readonly TabLink<K>[];
+  /** The link of the page this is. */
+  current: K;
+  /** A tier-1 section's command line, as a tab row's (`TabsProps.command`). */
+  command?: boolean;
+  className?: string;
+}
+
+/**
+ * A tab row whose tabs are each their own address (lane c2-finish, item 3): the inventory's
+ * classes, three routes. As tabs a class could not be opened in a new tab, and an arrow key changed
+ * the route, remounting the page and losing the focus. So the row is a `nav` of links (WAI-ARIA:
+ * navigation, not a tablist), the current one `aria-current="page"`, each link a stop of the tab
+ * order and the arrows the page's; tabs that choose a view of one page (its query state) stay
+ * `Tabs`. The look is the tab row's, box for box (`TAB_ROW`, `TAB_BOX`, the count, the phone rule
+ * by `tabRowShowsCounts`).
+ *
+ * Each link is `look="block"` (components/ui/link.tsx): a block whose content draws its inks, as a
+ * tab's name does (the reading ink, the current one bright, a zero's quiet), here on the name's
+ * span, whose hover and focus follow the link into the celadon (`group-hover`, `group-focus-visible`,
+ * the one rule of app/globals.css). Not `nav`, the shell's own design; not `key` or `onward`, whose
+ * one ink each would leave the current tab no brighter than the others.
+ */
+export function TabLinks<K extends string>({
+  label,
+  tabs,
+  current,
+  command = false,
+  className,
+}: TabLinksProps<K>) {
+  const fromSm = useFromSm();
+  const [lineRef, linePx] = useElementWidth<HTMLElement>();
+  const index = tabs.findIndex((tab) => tab.key === current);
+  if (index < 0) throw new Error(`TabLinks "${label}": no link ${current}`);
+  const counts = tabRowShowsCounts(tabs, fromSm ? 'section' : 'body', command, linePx);
+  return (
+    <nav ref={lineRef} aria-label={label} className={cn(TAB_ROW, className)}>
+      {command && <span aria-hidden="true" className={TAB_SQUARE} />}
+      {tabs.map((tab, i) => {
+        const selected = i === index;
+        return (
+          <Link
+            key={tab.key}
+            href={tab.href}
+            look="block"
+            aria-current={selected ? 'page' : undefined}
+            className={cn(
+              TAB_BOX,
+              'group',
+              command && 'lowercase',
+              selected ? 'border-jade font-semibold' : 'border-transparent font-normal'
+            )}
+          >
+            <span
+              className={
+                selected
+                  ? 'text-text-bright'
+                  : cn(
+                      'group-hover:text-jade group-focus-visible:text-jade',
+                      tab.count === 0 ? 'text-text-dim' : 'text-text'
+                    )
+              }
+            >
+              {tab.label}
+              {counts && <TabCount count={tab.count} />}
+            </span>
+          </Link>
+        );
+      })}
+    </nav>
   );
 }

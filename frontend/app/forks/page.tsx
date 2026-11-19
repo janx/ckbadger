@@ -381,8 +381,9 @@ function ShapeKey() {
 }
 
 export default function ForksPage() {
-  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination(limit);
   const pin = useForkDaysPin();
   const [expanded, setExpanded] = useState(false);
   const overview = useQuery({
@@ -421,7 +422,7 @@ export default function ForksPage() {
   const switchesAt = events.data ? timePageAt('branch switches', page, events.data) : null;
   return (
     <div className="min-h-screen">
-      <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
+      <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-8">
         {/* Hierarchy v3 (R13): the uncle rate and the days under it are the hero; the concept,
             the chart's long caption and the list's record note are tier 2. */}
         <div data-tier="1" className="min-w-0">

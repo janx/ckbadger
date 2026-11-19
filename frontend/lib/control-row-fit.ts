@@ -1,5 +1,5 @@
 import { groupCount } from '@/lib/format-count';
-import { fontPx, textPx } from '@/lib/type-metrics';
+import { fontPx, foreignTextPx, textPx } from '@/lib/type-metrics';
 
 /**
  * What a tab row holds at its width (UI review 2026-11-14, phase C, lane C1; the controls board the
@@ -153,4 +153,66 @@ export function chipRowPx(items: readonly ChipRowItem[]): number {
  */
 export function chipRowFits(items: readonly ChipRowItem[]): boolean {
   return chipRowPx(items) <= NARROWEST_LINE_PX;
+}
+
+/**
+ * A select (components/ui/select.tsx): its label at the small step (`text-small`, 13 px), the gap
+ * after it (`gap-2.5`), and its well: the field's 1 px frame each side (FIELD_WELL, its own padding
+ * taken off: `px-0`), the select's 10 px before its value (`pl-2.5`) and 25 px after it, where the
+ * chevron stands (`pr-[25px]`), the value at the small step.
+ */
+const SELECT_TEXT_PX = fontPx('small');
+const SELECT_GAP_PX = 10;
+const SELECT_WELL_INSET_PX = 2 * 1 + 10 + 25;
+
+/** The widths of a select's pair: its label, its well with its widest option, and the two. */
+export interface SelectPairWidths {
+  label: number;
+  well: number;
+  /** The label, the gap and the well on one line. */
+  pair: number;
+}
+
+/**
+ * The width a select's label and well take on one line. A native select is as wide as its widest
+ * option, which an option's words set: measured as text that is not ours (lib/type-metrics.ts
+ * `foreignTextPx`: a name may hold any script), exactly the served advance for a Latin one.
+ */
+export function selectPairPx(label: string, options: readonly string[]): SelectPairWidths {
+  if (options.length === 0) throw new Error(`select "${label}": no option to measure`);
+  const labelPx = textPx([...label].length, SELECT_TEXT_PX);
+  const widest = Math.max(...options.map((option) => foreignTextPx(option, SELECT_TEXT_PX)));
+  const well = widest + SELECT_WELL_INSET_PX;
+  return {
+    label: hundredth(labelPx),
+    well: hundredth(well),
+    pair: hundredth(labelPx + SELECT_GAP_PX + well),
+  };
+}
+
+/**
+ * Whether a select's well goes under its label in a line `linePx` wide (lane c2-finish, item 2: a
+ * select never cuts its value): when its pair is wider than the line; before the line is measured
+ * (`null`) the pair stands on one line. The well never shrinks, so a native select never clips its
+ * chosen value; an option that makes the well wider than the narrowest line (a 360 px window's
+ * 328 px) even alone is a naming fault its caller must see, so this throws for it at every width.
+ * The cases: the object page's `version` · `12 · #21,016,901 · current` is 304.4 px, on one line
+ * at 360; with the label `cell version` it is 343.4 px, under it at 360 and on one line at 390.
+ */
+export function selectWellUnderLabel(
+  label: string,
+  options: readonly string[],
+  linePx: number | null
+): boolean {
+  const widths = selectPairPx(label, options);
+  if (widths.well > NARROWEST_LINE_PX) {
+    const widest = options.reduce((a, b) =>
+      foreignTextPx(b, SELECT_TEXT_PX) > foreignTextPx(a, SELECT_TEXT_PX) ? b : a
+    );
+    throw new Error(
+      `select "${label}": its option "${widest}" makes a well ${widths.well} px wide, wider than the ${NARROWEST_LINE_PX} px line of a 360 px window`
+    );
+  }
+  if (linePx === null) return false;
+  return widths.pair > linePx;
 }

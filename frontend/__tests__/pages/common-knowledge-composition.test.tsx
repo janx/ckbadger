@@ -30,7 +30,8 @@ describe('CommonKnowledgeCompositionPage', () => {
     render(<CommonKnowledgeCompositionPage />);
     expect(await screen.findByText('Knowledge by kind')).toBeInTheDocument();
     // F2 charts (CH-26): a breadcrumb to the chart's own section replaces "← All charts".
-    expect(screen.getByRole('link', { name: 'Charts / Common knowledge' })).toHaveAttribute(
+    // re-pinned for lane D1: the board's crumb, its section a link of its own
+    expect(screen.getByRole('link', { name: 'common knowledge' })).toHaveAttribute(
       'href',
       '/mainnet/charts#common-knowledge'
     );

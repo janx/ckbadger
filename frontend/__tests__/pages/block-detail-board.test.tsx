@@ -381,6 +381,9 @@ describe('Block board · first tier', () => {
 
   // The review's item E: the plate's id is the block's copy control; a click writes the WHOLE hash
   // to the clipboard (the test of its class and "Click to copy" title went with the old id line)
+  // Re-pinned (lane c2-finish, item 4: copy has one form): the id is text; the copy button after
+  // it, in the id line, copies the whole hash (the id itself was the click target, its tick over
+  // it).
   it('copies the whole block hash when the plate’s id is clicked', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
@@ -388,6 +391,10 @@ describe('Block board · first tier', () => {
     await screen.findByRole('heading', { level: 1 });
     const id = container.querySelector('[data-sealed-id] [data-head-id]') as HTMLElement;
     fireEvent.click(id);
+    expect(writeText).not.toHaveBeenCalled();
+    const copy = screen.getByRole('button', { name: 'copy block hash' });
+    expect(container.querySelector('[data-sealed-id]')).toContainElement(copy);
+    fireEvent.click(copy);
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(block.hash));
     expect(writeText).toHaveBeenCalledTimes(1);
   });
@@ -426,8 +433,11 @@ describe('Block board · first tier', () => {
     expect(plate).not.toContainElement(summary);
     // re-pinned with readability R4 (lane B7): the summary stands in the lede's one holder, which
     // sets it on the measure (it was below's own child, at no width of its own)
-    expect(below!.children).toHaveLength(1);
-    const holder = below!.firstElementChild!;
+    // re-pinned on purpose (lane D2): the status strip stands first under the stone and the plate,
+    // the lede's holder after it (the holder was below's one child)
+    expect(below!.children).toHaveLength(2);
+    expect(below!.firstElementChild).toBe(screen.getByRole('group', { name: 'Block status' }));
+    const holder = below!.lastElementChild!;
     expect(holder).toHaveAttribute('data-detail-lede');
     expect(holder).toHaveClass('max-w-measure');
     expect(holder.children).toHaveLength(1);

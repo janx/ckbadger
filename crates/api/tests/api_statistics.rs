@@ -2244,6 +2244,89 @@ async fn test_hodl_wave_chart_with_data() {
     assert_eq!(json["series"].as_array().unwrap().len(), 8);
 }
 
+/// The chart page draws five bands (the chart-hero board, lane D1): the eight age bands with their
+/// young neighbours merged, oldest first. A merged band is a new figure, so it is computed here from
+/// the bands' exact capacities, never summed by the page from the rounded percentages: 1 to 6
+/// months is 400 + 500 of 3,600 (25.00), under 1 month 100 + 200 + 300 of 3,600 (16.666…, half up
+/// 16.67, as every percentage of this route). Rounded parts can miss a merged band by a hundredth
+/// (three thirds round to 33.33 each, 99.99 together, where the whole is 100.00).
+#[tokio::test]
+async fn test_hodl_wave_chart_draws_five_bands_merged_from_exact_capacities() {
+    let store = test_store();
+    store
+        .put_hodl_wave(
+            "20240115",
+            &ckbadger_store::types::DailyHodlWave {
+                band_24h: 100_00000000,
+                band_1d_1w: 200_00000000,
+                band_1w_1m: 300_00000000,
+                band_1m_3m: 400_00000000,
+                band_3m_6m: 500_00000000,
+                band_6m_1y: 600_00000000,
+                band_1y_3y: 700_00000000,
+                band_gt_3y: 800_00000000,
+                holder_count: 42_000,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/charts/hodl-wave")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+    let bands = json["bands"].as_array().expect("bands");
+    let shape: Vec<(String, String, Vec<String>)> = bands
+        .iter()
+        .map(|band| {
+            (
+                band["key"].as_str().unwrap().to_string(),
+                band["label"].as_str().unwrap().to_string(),
+                band["members"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|m| m.as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect();
+    let owned = |key: &str, label: &str, members: &[&str]| {
+        (
+            key.to_string(),
+            label.to_string(),
+            members.iter().map(|m| m.to_string()).collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        shape,
+        vec![
+            owned("gt3y", "3 years or more", &["gt3y"]),
+            owned("1y3y", "1 to 3 years", &["1y3y"]),
+            owned("6m1y", "6 to 12 months", &["6m1y"]),
+            owned("1m6m", "1 to 6 months", &["3m6m", "1m3m"]),
+            owned("lt1m", "under 1 month", &["1w1m", "1d1w", "24h"]),
+        ]
+    );
+    let values = &json["data"][0]["values"];
+    assert_eq!(values["gt3y"], "22.22");
+    assert_eq!(values["1y3y"], "19.44");
+    assert_eq!(values["6m1y"], "16.67");
+    assert_eq!(values["1m6m"], "25.00");
+    assert_eq!(values["lt1m"], "16.67");
+    assert_eq!(values["24h"], "2.78");
+    // the eight bands stay, for the table under the chart
+    assert_eq!(json["series"].as_array().unwrap().len(), 8);
+}
+
 #[tokio::test]
 async fn test_asset_ecosystem_returns_expected_structure() {
     let store = test_store();

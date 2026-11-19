@@ -40,6 +40,9 @@ const day = (date: string) => ({
     '6m1y': '15.00',
     '1y3y': '20.00',
     gt3y: '15.00',
+    // lane D1: the API's merged bands
+    '1m6m': '20.00',
+    lt1m: '30.00',
     holderCount: '1000',
   },
 });
@@ -53,6 +56,13 @@ describe('chart page hints (C10)', () => {
       title: 'CKB HODL Wave',
       data: [day('2024-01-01'), day('2024-01-02')],
       series: bands,
+      bands: [
+        { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+        { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+        { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+        { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+        { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
+      ],
     });
     const { container } = render(<ChartDetail slug="hodl-wave" />);
     const readouts = await screen.findAllByRole('status', { name: /readout$/ });

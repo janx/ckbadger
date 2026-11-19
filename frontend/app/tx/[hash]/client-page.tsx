@@ -8,7 +8,6 @@ import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { HeadId } from '@/components/ui/head-id';
-import { CopyButton } from '@/components/ui/copy-button';
 import { SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
@@ -49,11 +48,9 @@ import {
   type CellDep,
   type ItemDelta,
   type ParticipantInfo,
-  type TransactionFeePayer,
 } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { exactCkbText } from '@/lib/ckb-decimal';
 import { txComment } from '@/lib/tx-comment';
 import {
   getScriptDetailHref,
@@ -61,9 +58,8 @@ import {
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
-import { cn, formatUtc8DateTime } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
-import { formatAgeTwoUnits } from '@/lib/format-age';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import {
@@ -84,7 +80,8 @@ import type { SealState } from '@/lib/seal/stones';
 import { NoBreak } from '@/components/ui/no-break';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
-import { ClockText, Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
+import type { StripFact } from '@/components/ui/status-strip';
 import { unitNode, unitText } from '@/components/ui/units';
 import { cellLockFacts, lockWords, lockWordsText } from '@/components/ui/lock-kind';
 
@@ -204,10 +201,6 @@ function ItemName({ item }: { item: ItemDelta }) {
   }
 }
 
-/**
- * The plain summary under the headline (TX-11): what moved from whom to whom, read off the
- * participants' signed changes, or the protocol action's own facts; then the fee.
- */
 /** `A`, `A and B`, `A, B and C`. */
 function listWords(words: readonly string[]): string {
   return words.length <= 1
@@ -215,42 +208,15 @@ function listWords(words: readonly string[]): string {
     : `${words.slice(0, -1).join(', ')} and ${words[words.length - 1]}`;
 }
 
-/** Who paid the fee, from the API's `feePaidBy`: the sender when it is the one party that sent. */
-function FeePayer({
-  payers,
-  sender,
-}: {
-  payers: readonly TransactionFeePayer[];
-  sender: ParticipantInfo | null;
-}) {
-  if (payers.length !== 1) return <>The transaction</>;
-  if (sender && sender.lockHash === payers[0].lockHash) return <>The sender</>;
-  return (
-    <ParticipantRefView
-      participant={{
-        address: payers[0].address,
-        lockHash: payers[0].lockHash,
-        lockHashPrefix: null,
-        roles: [],
-      }}
-      size="row"
-      compact
-      quiet
-    />
-  );
-}
-
-function TxSummary({
-  activity,
-  fee,
-  feePaidBy,
-}: {
-  activity: GlobalActivity;
-  fee: string;
-  feePaidBy: readonly TransactionFeePayer[];
-}) {
+/**
+ * The plain summary under the headline (TX-11): what moved from whom to whom, read off the
+ * participants' signed changes, or the protocol action's own facts, or the scripts it ran. The fee
+ * is said once, in the status strip (lane D2, gate D0′): the sentence that repeated it ("The sender
+ * paid a 0.00064119 CKB fee.") is gone, and a transaction that said nothing else (one party, CKB
+ * alone, no script run) has no summary until the lede is written for it (lane P1).
+ */
+function TxSummary({ activity }: { activity: GlobalActivity }) {
   const moves = txMovements(activity);
-  const feeShannons = exactUnsignedInteger(fee, `${activity.txHash}: fee`);
   const mark = activityClassMark(activity);
   const ran =
     moves.length === 0 && activity.protocolActions.length === 0
@@ -262,7 +228,7 @@ function TxSummary({
           ),
         ]
       : [];
-  const sender = moves.length > 0 && moves[0].from.length === 1 ? moves[0].from[0] : null;
+  if (moves.length === 0 && ran.length === 0 && activity.protocolActions.length === 0) return null;
   return (
     <p data-testid="tx-summary" className="text-text text-body max-w-measure">
       {moves.length === 0 && mark && <ClassMark kind={mark} size={12} className="mr-1.5" />}
@@ -311,12 +277,6 @@ function TxSummary({
             })}
           </Fragment>
         ))}
-      {feeShannons > BigInt(0) && (
-        <>
-          <FeePayer payers={feePaidBy} sender={sender} /> paid a{' '}
-          <CkbAmount form="column" shannons={feeShannons} signed={false} tone="plain" /> fee.
-        </>
-      )}
     </p>
   );
 }
@@ -747,14 +707,18 @@ export default function TransactionDetailPage() {
     },
     state: isProvisional ? 'unpressed' : undefined,
   };
-  const status =
+  // The status word in the strip, lowercase as the board writes it, and its dot: committed in the
+  // jade, proposed in the gold, waiting (in the pool, or committed and not yet indexed) in the aqua.
+  const status = (
     tx.poolStatus === 'committed_awaiting_index'
       ? poolStatusLabel(tx.poolStatus)
       : tx.status === 'pending'
         ? 'Pending'
         : tx.status === 'proposed'
           ? 'Proposed'
-          : 'Committed';
+          : 'Committed'
+  ).toLowerCase();
+  const statusDot = tx.status === 'proposed' ? 'gold' : isProvisional ? 'aqua' : ('jade' as const);
   // The API serves script groups and witnesses for an uncommitted transaction too (TX-37).
   const groups = required(tx.scriptGroups, hash, 'scriptGroups');
   const witnesses = required(tx.witnessDetails, hash, 'witnessDetails');
@@ -1026,7 +990,7 @@ export default function TransactionDetailPage() {
       Transaction {hash} has no indexed activity.
     </p>
   ) : (
-    readable(hash, () => <TxSummary activity={activity} fee={tx.fee} feePaidBy={feePaidBy} />)
+    readable(hash, () => <TxSummary activity={activity} />)
   );
 
   // ---- capacity (TX-19, TX-33) ----
@@ -1099,19 +1063,85 @@ export default function TransactionDetailPage() {
     occupiedIn !== null && occupiedOut !== null ? occupiedOut - occupiedIn : null;
   const feeShannons = exactUnsignedInteger(tx.fee, `${hash}: fee`);
   // The comment (rubbing × Song print, phase 5, the Transaction board): written only when every
-  // figure it states is known, from the counts the cells heading draws, the fee as the facts rail
-  // prints it and the common-knowledge delta of the evidence tier. A pool transaction has no tiles
-  // and no occupied bytes yet, so it has no comment.
+  // figure it states is known, from the counts the cells heading draws and the common-knowledge
+  // delta of the evidence tier. A pool transaction has no tiles and no occupied bytes yet, so it
+  // has no comment. The fee is said once, in the status strip (lane D2, gate D0′'s "said once").
   const comment =
     tiles && knowledgeDelta !== null
       ? txComment({
           inputs: tiles.inputs.length,
           outputs: tiles.outputs.length,
           isCellbase: tx.isCellbase,
-          feeCkb: tx.isCellbase ? null : exactCkbText(feeShannons, false),
           knowledgeDeltaBytes: knowledgeDelta,
         })
       : null;
+  // The status strip (lane D2, the transaction board passed at gate D0′): status, time, block and
+  // fee under the id line. A fact the page does not know is not passed: a transaction waiting in
+  // the pool has no block and no block time yet, and says how long it has waited instead.
+  const stripFacts: StripFact[] = [
+    {
+      label: 'status',
+      value: status,
+      dot: statusDot,
+      note: isProvisional
+        ? undefined
+        : unitNode(formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')),
+    },
+    ...(isProvisional
+      ? tx.pendingSince
+        ? [
+            {
+              label: 'pending since',
+              value: <Utc8DateTime timestamp={tx.pendingSince} />,
+              note: <Utc8Age timestamp={tx.pendingSince} />,
+            },
+          ]
+        : []
+      : [
+          {
+            label: 'time',
+            value: <Utc8DateTime timestamp={required(tx.timestamp, hash, 'timestamp')} />,
+            note: <Utc8Age timestamp={required(tx.timestamp, hash, 'timestamp')} />,
+          },
+        ]),
+    ...(tx.blockNumber !== undefined
+      ? [
+          {
+            label: 'block',
+            value: (
+              <Link look="inline" href={`/blocks/${tx.blockNumber}`}>
+                {formatBlockNumber(tx.blockNumber)}
+              </Link>
+            ),
+          },
+        ]
+      : []),
+    {
+      label: 'fee',
+      // the fee exact, its trailing zeros dropped (the board's form), in the strip's bright ink
+      value: <CkbAmount form="exact" shannons={feeShannons} signed={false} tone="inherit" />,
+      note:
+        feePaidBy.length > 0 ? (
+          <>
+            paid by{' '}
+            <ParticipantRefView
+              participant={{
+                address: feePaidBy[0].address,
+                lockHash: feePaidBy[0].lockHash,
+                lockHashPrefix: null,
+                roles: [],
+              }}
+              size="row"
+              compact
+              quiet
+            />
+            {unitNode(
+              feePaidBy.length > 1 && ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`
+            )}
+          </>
+        ) : undefined,
+    },
+  ];
 
   const inflow =
     tiles && tx.isCellbase
@@ -1228,32 +1258,26 @@ export default function TransactionDetailPage() {
           Unable to refresh transaction: {error.message}. Showing previously loaded data.
         </p>
       )}
-      {/* Tier 1: what happened, to whom, for how much, and which cells changed hands. The facts
-          rail follows the hash in reading order, so a one-column page states status, time, block
-          and fee before the balances and the cells; from lg up it is the right-hand column. */}
-      <div
-        data-tier="1"
-        className="grid grid-cols-[minmax(0,1fr)] items-start gap-y-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:grid-rows-[auto_auto_1fr] lg:gap-x-14"
-      >
-        <header className="min-w-0 lg:col-start-1">
+      {/* Tier 1: what happened, to whom, for how much, and which cells changed hands, across the
+          whole measure (U-13, gate D0′): the status, time, block and fee stand in the head's status
+          strip under the hash, so no column is kept beside the sections for them. */}
+      <div data-tier="1" className="grid grid-cols-[minmax(0,1fr)] items-start gap-y-8">
+        <header className="min-w-0">
           <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
           {/* The one corner (Transaction board): the transaction's long stone pressed beside its
               name plate (seals by kind, C10) — the kind line, the action, the hash and its copy —
-              with the summary and the board's comment under both, from the page's left edge;
-              from lg its seam seal is pressed again between the cells below. The action is one
-              type step smaller below md, as every name plate's name. */}
+              then the status strip, the summary and the board's comment under both, from the
+              page's left edge; from lg its seam seal is pressed again between the cells below.
+              The action is one type step smaller below md, as every name plate's name. */}
           <SealedHead
             id={seal.id}
             state={seal.state}
             kind="Transaction"
-            // the id line, in the plate's quiet voice (the plate sets it); the copy is the
-            // library's CopyButton, its icon after the hash and its answer in words beside it
-            identity={
-              <div className="flex min-w-0 items-center gap-0.5">
-                <HeadId value={tx.hash} kind="hash" />
-                <CopyButton value={tx.hash} label="copy transaction hash" className="shrink-0" />
-              </div>
-            }
+            // the id line, in the plate's voice (the plate sets it); the copy is the library's
+            // CopyButton, its icon after the hash and its answer in words beside it, the head id's
+            // one form (lane c2-finish, item 4: 8 px after the id, at its first line)
+            identity={<HeadId value={tx.hash} kind="hash" copy="copy transaction hash" />}
+            strip={{ label: 'Transaction status', facts: stripFacts }}
             below={
               <>
                 {summary}
@@ -1266,110 +1290,8 @@ export default function TransactionDetailPage() {
             </h1>
           </SealedHead>
         </header>
-        <aside
-          aria-label="Transaction facts"
-          className="flex min-w-0 flex-col gap-4 sm:max-w-[340px] lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:pt-6"
-        >
-          <div className="flex flex-col gap-0.5">
-            <span className="text-text-bright flex items-center gap-2">
-              <span
-                aria-hidden="true"
-                className={cn(
-                  'h-2 w-2 rounded-full',
-                  tx.status === 'proposed' ? 'bg-gold' : isProvisional ? 'bg-info' : 'bg-jade'
-                )}
-              />
-              {status}
-            </span>
-            {!isProvisional && (
-              <span className="text-text-dim text-small">
-                {unitNode(
-                  formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')
-                )}
-              </span>
-            )}
-          </div>
-          <dl className="flex flex-col gap-4">
-            <div className="flex flex-col gap-0.5">
-              <dt className="text-text-dim text-small">Time</dt>
-              <dd className="text-text-bright">
-                {isProvisional ? (
-                  <PendingValue />
-                ) : (
-                  <time
-                    dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}
-                  >
-                    <NoBreak>
-                      {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
-                    </NoBreak>
-                    <span className="text-text-dim text-small block">
-                      <ClockText
-                        text={(now) =>
-                          formatAgeTwoUnits(required(tx.timestamp, hash, 'timestamp'), now)
-                        }
-                      />
-                    </span>
-                  </time>
-                )}
-              </dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="text-text-dim text-small">Block</dt>
-              <dd className="text-text-bright">
-                {tx.blockNumber !== undefined ? (
-                  <Link href={`/blocks/${tx.blockNumber}`}>
-                    {formatBlockNumber(tx.blockNumber)}
-                  </Link>
-                ) : (
-                  <PendingValue />
-                )}
-              </dd>
-            </div>
-            <div className="flex flex-col gap-0.5">
-              <dt className="text-text-dim text-small">Fee</dt>
-              <dd className="text-body">
-                <CkbAmount form="column" shannons={feeShannons} signed={false} tone="plain" />
-              </dd>
-              {feePaidBy.length > 0 && (
-                <dd className="text-text-dim text-small">
-                  paid by{' '}
-                  <ParticipantRefView
-                    participant={{
-                      address: feePaidBy[0].address,
-                      lockHash: feePaidBy[0].lockHash,
-                      lockHashPrefix: null,
-                      roles: [],
-                    }}
-                    size="row"
-                    compact
-                    quiet
-                  />
-                  {unitNode(
-                    feePaidBy.length > 1 &&
-                      ` and ${formatCount(feePaidBy.length - 1, 'other lock')}`
-                  )}
-                </dd>
-              )}
-            </div>
-            {isProvisional && tx.pendingSince && (
-              <div className="flex flex-col gap-0.5">
-                <dt className="text-text-dim text-small">Pending since</dt>
-                <dd>
-                  <Utc8DateTime timestamp={tx.pendingSince} />
-                  <span className="text-text-dim text-small block">
-                    <ClockText
-                      text={(now) =>
-                        formatAgeTwoUnits(required(tx.pendingSince, hash, 'pendingSince'), now)
-                      }
-                    />
-                  </span>
-                </dd>
-              </div>
-            )}
-          </dl>
-        </aside>
         {activity && (
-          <div className="min-w-0 lg:col-start-1">
+          <div className="min-w-0">
             {/* What moved (review 2026-11-03 v2): the asset flows, from the left to the right,
                 before the ledger; an activity whose flows do not conserve reads as an error here
                 instead of taking the page down. */}
@@ -1387,12 +1309,12 @@ export default function TransactionDetailPage() {
           </div>
         )}
         {activity && (
-          <div className="min-w-0 lg:col-start-1">
+          <div className="min-w-0">
             <BalanceChanges activity={activity} fee={tx.fee} compensation={compensation ?? null} />
           </div>
         )}
         {tilesRead?.error !== undefined && (
-          <div className="min-w-0 lg:col-start-1">
+          <div className="min-w-0">
             <DetailSection title="Cells">
               <PartReadError
                 what="the cells"
@@ -1403,7 +1325,7 @@ export default function TransactionDetailPage() {
           </div>
         )}
         {tiles && (
-          <div className="min-w-0 lg:col-start-1">
+          <div className="min-w-0">
             {/* The command and what it runs on (rubbing × Song print, phase 5, the Transaction
                 board): `cells 3 in → 2 out`; the legend stays the row's right end. */}
             <DetailSection

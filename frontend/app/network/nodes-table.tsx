@@ -653,9 +653,10 @@ export function PeersTable() {
             )}
           >
             {/* The controls board's select after its label and its text field in the well; each
-                filter starts the list again from its first five. On a phone the select, its
-                label and its well shrink to the panel's line (every box min-w-0): the label 18
-                characters at 13 px (140.4 px) and 10 px, the well what is left of 296 px at 360. */}
+                filter starts the list again from its first five. A select's well never shrinks
+                (components/ui/select.tsx): where the pair is wider than the panel's line its well
+                goes under its label, as on a phone ('crawler dial state', 140.4 px, 10 and a
+                310 px well: 460.4 px, past the 296 px a 360 px phone leaves the panel). */}
             <Select
               label="crawler dial state"
               value={filters.state ?? ''}

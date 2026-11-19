@@ -173,16 +173,18 @@ describe('Inventory class tabs across widths', () => {
     atViewportWidth(360);
     stubChartWidth(containerContentPx(360));
     render(<ObjectsPage />);
-    const list = await screen.findByRole('tablist', { name: 'Inventory classes' });
+    // re-pinned (lane c2-finish, item 3): the classes are the tab row's links, each its own
+    // address (were tabs of a tablist); the look and the phone rule are the tab row's
+    const list = await screen.findByRole('navigation', { name: 'Inventory classes' });
     await waitFor(() => expect(list).toHaveTextContent('5,653'));
     expect(
       within(list)
-        .getAllByRole('tab')
+        .getAllByRole('link')
         .map((t) => t.textContent)
     ).toEqual(['tokens 727', 'objects 5,653', 'identities 4']);
-    expect(within(list).getByRole('tab', { name: 'objects 5,653' })).toHaveAttribute(
-      'aria-selected',
-      'true'
+    expect(within(list).getByRole('link', { name: 'objects 5,653' })).toHaveAttribute(
+      'aria-current',
+      'page'
     );
     expect(Math.round(contentPx(list, 360) * 100) / 100).toBe(324);
   });

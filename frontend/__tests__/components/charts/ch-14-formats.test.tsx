@@ -59,10 +59,16 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
       '845.69 PH/s'
     );
     expect(await card('average-block-time', line(['2026-11-13'], ['10.43']))).toBe('10.43 s');
-    expect(await card('epoch-time-length', line(['15204'], ['3.95']))).toBe('3.95 h');
-    expect(await card('transaction-count', line(['2026-11-13'], ['16826']))).toBe(
-      '16,826 transactions'
-    );
+    // the API's consensus target travels with the epoch lengths (the page's sentence reads it)
+    expect(
+      await card('epoch-time-length', {
+        ...line(['15204'], ['3.95']),
+        target: { seconds: 14400, hours: '4.00' },
+      })
+    ).toBe('3.95 h');
+    // Re-pinned for lane D1 (rule 9): a count stands bare under its noun, the card's title
+    // ("Transactions 16,826"; was "16,826 transactions", the noun twice on one line)
+    expect(await card('transaction-count', line(['2026-11-13'], ['16826']))).toBe('16,826');
     expect(
       await card('uncle-rate', {
         ...line(['2026-11-13'], ['0.0255']),
@@ -78,8 +84,8 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
       line(['2026-11-12', '2026-11-13'], ['10.1', '10.43'])
     );
     render(<ChartDetail slug="average-block-time" />);
-    const readings = await screen.findByRole('group', { name: 'Block time readings' });
-    expect(readings).toHaveTextContent('2026-11-1310.43 s');
+    // re-pinned for lane D1: the head's one figure (was the readings group)
+    expect(await screen.findByTestId('figure-value')).toHaveTextContent('10.43 s');
     expect(document.body).not.toHaveTextContent(/\d (seconds|hours)\b/);
   });
 
@@ -123,8 +129,11 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
       orphanRateTarget: { numerator: 1, denominator: 40 },
     });
     render(<ChartDetail slug="uncle-rate" />);
-    const readings = await screen.findByRole('group', { name: 'Uncle rate readings' });
-    expect(readings).toHaveTextContent('2026-11-132.55%');
-    expect(screen.getByText('Last change').nextElementSibling).toHaveTextContent('+0.05%');
+    // Re-pinned for lane D1 (rule 2): the figure, then the sentence against the target (was the
+    // readings group and "Last change +0.05%")
+    expect(await screen.findByTestId('figure-value')).toHaveTextContent('2.55%');
+    expect(document.querySelector('[data-role="sentence-words"]')).toHaveTextContent(
+      'Over the 2.50% target on 1 of the last 2 days.'
+    );
   });
 });

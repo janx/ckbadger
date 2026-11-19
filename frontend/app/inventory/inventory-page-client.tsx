@@ -8,7 +8,7 @@ import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
 import { HMulHelpPopover } from '@/components/ui/hmul-info';
 import { Pager } from '@/components/ui/pager';
 import { Select } from '@/components/ui/select';
-import { Tabs } from '@/components/ui/tabs';
+import { TabLinks } from '@/components/ui/tabs';
 import { TextField } from '@/components/ui/text-field';
 import { InventorySummaryNotice, ObjectComposition } from '@/components/asset/inventory-summary';
 import { InventoryRows } from '@/components/asset/inventory-table';
@@ -101,7 +101,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
   const router = useRouter(),
     pathname = usePathname(),
     params = useSearchParams();
-  const pagination = useCursorPagination();
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const pagination = useCursorPagination(pageSize);
   const resetPage = pagination.reset;
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string>();
@@ -129,7 +131,6 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
-  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   const assets = useQuery({
     queryKey: [
       'assets',
@@ -156,11 +157,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
       }),
   });
   const classLabel = INVENTORY_CLASSES.find((c) => c.key === assetType)!.label;
-  // the shown page's figures (lib/pagination.ts); nothing for one page, nor for an empty one
-  const assetsAt =
-    assets.data && assets.data.data.length > 0
-      ? rankedPageAt(classLabel, pagination.page, assets.data)
-      : null;
+  // the shown page's figures (lib/pagination.ts); nothing for one page, an empty page past the
+  // end its place and a way back (lane c2-finish, 1b)
+  const assetsAt = assets.data ? rankedPageAt(classLabel, pagination.page, assets.data) : null;
   const filter = (key: 'standard' | 'compositionTier', value: string) => {
     const next = value || undefined;
     if (key === 'standard') setStandard(next);
@@ -180,103 +179,101 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
           documentTitle={[INVENTORY_VIEW_TITLE[assetType], 'Inventory']}
           identity="Everything people hold on CKB besides plain CKB"
         >
-          {/* The controls board's inventory head: the classes are the command line (each its own
-              address, a step of history), then the filter with the search at its right, then the
-              sort after "sorted by". */}
-          <Tabs
+          {/* The controls board's inventory head: the classes are the command line, then the
+              filter with the search at its right, then the sort after "sorted by". Each class is
+              its own address, so the row is the tab row's links (a step of history, a class opens
+              in a new tab; lane c2-finish, item 3). */}
+          <TabLinks
             label="Inventory classes"
             command
             tabs={INVENTORY_CLASSES.map(({ key, label }) => ({
               key,
               label,
               count: summary.data?.counts[key],
+              href: `/inventory/${label}`,
             }))}
-            value={assetType}
-            onChange={(next) =>
-              router.push(`/inventory/${INVENTORY_CLASSES.find((c) => c.key === next)!.label}`)
-            }
-          >
-            <div className="mt-8 space-y-8">
-              <AddressStaleNotice error={summary.error} label="inventory totals" />
-              {assetType === 'object' && summary.data && (
-                <ObjectComposition
-                  summary={summary.data}
-                  selected={compositionTier}
-                  onSelect={(tier) => filter('compositionTier', tier)}
+            current={assetType}
+          />
+          <div className="mt-8 space-y-8">
+            <AddressStaleNotice error={summary.error} label="inventory totals" />
+            {assetType === 'object' && summary.data && (
+              <ObjectComposition
+                summary={summary.data}
+                selected={compositionTier}
+                onSelect={(tier) => filter('compositionTier', tier)}
+              />
+            )}
+            <div className="flex flex-wrap items-center gap-2.5">
+              {assetType === 'token' && summary.data && (
+                <FilterChips
+                  label="standard"
+                  values={standardValues(summary.data, standard)}
+                  value={standard ?? ALL_STANDARDS}
+                  onChange={(next) => filter('standard', next)}
                 />
               )}
-              <div className="flex flex-wrap items-center gap-2.5">
-                {assetType === 'token' && summary.data && (
-                  <FilterChips
-                    label="standard"
-                    values={standardValues(summary.data, standard)}
-                    value={standard ?? ALL_STANDARDS}
-                    onChange={(next) => filter('standard', next)}
+              <TextField
+                label="Search the inventory"
+                search
+                id="inventory-search"
+                placeholder="search by name"
+                value={searchInput}
+                onChange={setSearchInput}
+                className="min-w-[160px] flex-1 sm:ml-auto sm:w-40 sm:flex-none"
+              />
+            </div>
+            <div
+              data-testid="inventory-controls"
+              className="text-text-dim text-meta sm:text-small flex flex-wrap items-center gap-x-1.5 gap-y-1 sm:gap-x-2"
+            >
+              <Select
+                label="sorted by"
+                value={sortKey}
+                options={SORTS}
+                onChange={(next) => {
+                  setSortKey(next);
+                  pagination.reset();
+                }}
+              />
+              <button
+                type="button"
+                aria-label="Reverse sort direction"
+                className="text-text hover:text-text-bright whitespace-nowrap"
+                onClick={() => {
+                  setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc');
+                  pagination.reset();
+                }}
+              >
+                {sortDirection === 'desc' ? '↓' : '↑'}
+                <span className="hidden sm:inline">
+                  {sortDirection === 'desc' ? ' largest first' : ' smallest first'}
+                </span>
+              </button>
+              {assetType !== 'identity' && <HMulHelpPopover />}
+            </div>
+            {summary.data ? (
+              <InventorySummaryNotice summary={summary.data} assetType={assetType} />
+            ) : (
+              <AddressLoadState error={summary.error} read={summary} label="inventory totals" />
+            )}
+            {assets.data ? (
+              <>
+                <AddressStaleNotice error={assets.error} label="inventory" />
+                <InventoryRows rows={assets.data.data} assetType={assetType} />
+                {assetsAt && (
+                  <Pager
+                    mode="pages"
+                    label={classLabel}
+                    {...assetsAt}
+                    onPrevious={pagination.goToPrevious}
+                    onNext={() => pagination.goToNext(assets.data.nextCursor)}
                   />
                 )}
-                <TextField
-                  label="Search the inventory"
-                  search
-                  id="inventory-search"
-                  placeholder="search by name"
-                  value={searchInput}
-                  onChange={setSearchInput}
-                  className="min-w-[160px] flex-1 sm:ml-auto sm:w-40 sm:flex-none"
-                />
-              </div>
-              <div
-                data-testid="inventory-controls"
-                className="text-text-dim text-meta sm:text-small flex flex-wrap items-center gap-x-1.5 gap-y-1 sm:gap-x-2"
-              >
-                <Select
-                  label="sorted by"
-                  value={sortKey}
-                  options={SORTS}
-                  onChange={(next) => {
-                    setSortKey(next);
-                    pagination.reset();
-                  }}
-                />
-                <button
-                  type="button"
-                  aria-label="Reverse sort direction"
-                  className="text-text hover:text-text-bright whitespace-nowrap"
-                  onClick={() => {
-                    setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc');
-                    pagination.reset();
-                  }}
-                >
-                  {sortDirection === 'desc' ? '↓' : '↑'}
-                  <span className="hidden sm:inline">
-                    {sortDirection === 'desc' ? ' largest first' : ' smallest first'}
-                  </span>
-                </button>
-                {assetType !== 'identity' && <HMulHelpPopover />}
-              </div>
-              {summary.data ? (
-                <InventorySummaryNotice summary={summary.data} assetType={assetType} />
-              ) : (
-                <AddressLoadState error={summary.error} read={summary} label="inventory totals" />
-              )}
-              {assets.data ? (
-                <>
-                  <AddressStaleNotice error={assets.error} label="inventory" />
-                  <InventoryRows rows={assets.data.data} assetType={assetType} />
-                  {assetsAt && (
-                    <Pager
-                      mode="pages"
-                      label={classLabel}
-                      {...assetsAt}
-                      onPrevious={pagination.goToPrevious}
-                      onNext={() => pagination.goToNext(assets.data.nextCursor)}
-                    />
-                  )}
-                </>
-              ) : (
-                <AddressLoadState error={assets.error} read={assets} label="inventory" />
-              )}
-            </div>
-          </Tabs>
+              </>
+            ) : (
+              <AddressLoadState error={assets.error} read={assets} label="inventory" />
+            )}
+          </div>
         </DetailLayout>
         <TopicCharts topic="/inventory" />
       </main>

@@ -1902,6 +1902,7 @@ fn build_capacity_history_chart_with_initial(
             },
         ],
         title,
+        bands: None,
     })
 }
 
@@ -4644,6 +4645,7 @@ mod tests {
             }],
             series: vec![],
             title: "test".to_string(),
+            bands: None,
         };
         assert!(latest_capacity_from_chart(&chart).is_err());
     }

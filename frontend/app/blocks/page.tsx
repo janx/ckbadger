@@ -66,8 +66,9 @@ const SIZE_TRACK = COUNT_TRACK_PX;
 const CYCLES_TRACK = COUNT_TRACK_PX;
 
 export default function BlocksPage() {
-  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d)
+  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination(limit);
   // PA-02: the legend explains the wide table's Contents glyphs and size bar, which the 608 px
   // table and the phone rows write in figures; it is drawn with the form the list chose.
   const [form, setForm] = useState<ListTableForm | null>(null);

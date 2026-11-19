@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { shrinksAt } from '@/__tests__/utils/tailwind-box';
 import { NetworkClientPage } from '@/app/network/client-page';
 import { layoutCountryClusters } from '@/app/network/network-map';
 import { NetworkMapView } from '@/__tests__/utils/network-map-view';
@@ -553,16 +554,22 @@ describe('Network board (F2 charts)', () => {
   });
 
   it('lets the peer filters shrink to a phone width (visual pass: 390 overflowed to 448)', async () => {
+    // the panel's line on a 360 px phone: 328 less its 16 px padding each side
+    stubChartWidth(296);
     render(wrap(<PeersTable />));
     // re-pinned (lane C2 topics): the filters are the controls board's selects, each after its
-    // label in the field's well; every box from the filter row's item down to the native select
-    // may shrink (min-w-0), so the well takes what the label leaves of the line (they were bare
-    // selects named "Filter by …", capped at the line by max-w-full)
+    // label in the field's well (they were bare selects named "Filter by …", capped at the line by
+    // max-w-full). Re-pinned again (lane c2-finish, item 2): every box down to the native select
+    // shrank (min-w-0), so the well took what the label left of the line and a native select
+    // clipped its chosen value without a mark; now the well and the select never shrink, and the
+    // well goes under its label where the pair does not fit the panel's line (on a phone: 'crawler
+    // dial state' 140.4 + 10 + a 310 px well, 460.4 px, past 296)
     for (const name of ['address observation', 'crawler dial state']) {
       const select = await screen.findByLabelText(name);
       const well = select.parentElement!;
       const item = well.parentElement!;
-      for (const box of [select, well, item]) expect(box, name).toHaveClass('min-w-0');
+      for (const box of [select, well]) expect(shrinksAt(box, 390), name).toBe(false);
+      expect(item, name).toHaveAttribute('data-well', 'under');
     }
   });
 });

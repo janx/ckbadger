@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
@@ -185,18 +185,20 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
  * can repeat or be missing — accepted by J2).
  */
 export default function DaoDepositorsPage() {
-  const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
-  const cursor = cursors[cursors.length - 1];
   const pageSize = usePageSize(PAGE);
+  // the one cursor walk (hooks/useCursorPagination): a change of page size at md starts it again,
+  // and a next cursor it already stands on is taken once (lane c2-finish, 1d and 1e)
+  const walk = useCursorPagination(pageSize);
+  const cursor = walk.cursor;
   const query = useQuery({
     queryKey: ['dao-depositors', cursor, pageSize],
     queryFn: () => api.getDaoDepositors({ limit: pageSize, cursor }),
     retry: retryTransientOnly,
   });
   const page = query.data;
-  // a page past the end of the ranking holds no row to count from: no pager
-  const depositorsAt =
-    page && page.data.length > 0 ? rankedPageAt('depositors', cursors.length, page) : null;
+  // a page past the end of the ranking holds no row to count from: its place and a way back
+  // (lane c2-finish, 1b)
+  const depositorsAt = page ? rankedPageAt('depositors', walk.page, page) : null;
   const client = useQueryClient();
   const first = client.getQueryData<RankedPage>(['dao-depositors', undefined, pageSize]);
   const moved =
@@ -291,9 +293,9 @@ export default function DaoDepositorsPage() {
                         throw new Error(
                           'DAO depositors: a page with more ranks has no next cursor'
                         );
-                      setCursors((c) => [...c, page.nextCursor!]);
+                      walk.goToNext(page.nextCursor);
                     }}
-                    onPrevious={() => setCursors((c) => c.slice(0, -1))}
+                    onPrevious={walk.goToPrevious}
                   />
                 </div>
               )}

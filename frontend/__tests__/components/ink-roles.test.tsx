@@ -15,7 +15,6 @@ import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { HexCode } from '@/components/ui/hex-code';
 import { Hash } from '@/components/ui/hash';
 import { TintedJson } from '@/components/ui/tinted-json';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Header } from '@/components/layout/header';
 import { SealedHead } from '@/components/ui/page-seal';
 import { DetailLayout } from '@/components/ui/detail-layout';
@@ -469,39 +468,6 @@ describe('ReadFailure: a failed read says why, in a sentence', () => {
   it('reads the sentence in the reading ink', () => {
     render(<ReadFailure what="block" error={new Error('the API is down')} />);
     expect(inkOf(screen.getByRole('alert'))).toBe(READING);
-  });
-});
-
-describe('CursorPagination: the counts are numbers', () => {
-  it('reads the range sentence and the page in the reading ink', () => {
-    render(
-      <CursorPagination
-        hasMore
-        hasPrevious
-        onNext={vi.fn()}
-        onPrevious={vi.fn()}
-        total={100}
-        totalLabel="transactions"
-        page={2}
-        pageSize={20}
-        currentCount={20}
-      />
-    );
-    expect(inkOf(screen.getByText(/^Showing 21–40 of 100 transactions/))).toBe(READING);
-    expect(inkOf(screen.getByText('Page 2 of 5'))).toBe(READING);
-  });
-
-  it('reads a list’s own range sentence in the reading ink', () => {
-    render(
-      <CursorPagination
-        hasMore
-        hasPrevious={false}
-        onNext={vi.fn()}
-        onPrevious={vi.fn()}
-        summary="50 newest of 20,876,569"
-      />
-    );
-    expect(inkOf(screen.getByText('50 newest of 20,876,569'))).toBe(READING);
   });
 });
 

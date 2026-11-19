@@ -1,7 +1,8 @@
 'use client';
 
-import { useId } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { FIELD_WELL } from '@/components/ui/text-field';
+import { selectWellUnderLabel } from '@/lib/control-row-fit';
 import { cn } from '@/lib/utils';
 
 /** One choice of a select: the value it answers and the words it shows. */
@@ -20,10 +21,36 @@ interface SelectProps<V extends string> {
 }
 
 /**
+ * The width of the line an element stands in: its parent's content box, measured with a
+ * ResizeObserver (which reports it when it starts observing and on every change); null until the
+ * line has a width.
+ */
+function useLineWidth(ref: RefObject<HTMLElement | null>): number | null {
+  const [width, setWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const line = ref.current?.parentElement;
+    if (!line) return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[entries.length - 1].contentRect.width;
+      setWidth((prev) => (w <= 0 || (prev !== null && Math.abs(prev - w) < 0.5) ? prev : w));
+    });
+    ro.observe(line);
+    return () => ro.disconnect();
+  }, [ref]);
+  return width;
+}
+
+/**
  * A select (the controls board, gate D0′; UI review 2026-11-14, phase C): a real `<select>` in
  * the field's well (components/ui/text-field.tsx `FIELD_WELL`), 13 px, its chosen value in the
  * reading ink, the board's chevron after it in the quiet ink; it always stands after its label,
  * which is quiet and names it (`<label for>`). The list it opens is the browser's own.
+ *
+ * It never cuts its value (lane c2-finish, item 2): a native select is as wide as its widest
+ * option and clips its chosen one, with no mark, where its well is narrower, so the well never
+ * shrinks. The pair stands on one line where it fits the line it stands in and the well goes under
+ * its label where it does not, by measurement (lib/control-row-fit.ts `selectWellUnderLabel`); an
+ * option wider than a 360 px window's line even alone throws, a name for its caller to shorten.
  */
 export function Select<V extends string>({
   label,
@@ -33,21 +60,35 @@ export function Select<V extends string>({
   className,
 }: SelectProps<V>) {
   const id = useId();
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const linePx = useLineWidth(rootRef);
   if (label.trim() === '')
     throw new Error('Select: a select stands after its label, and this one has none');
   if (!options.some((option) => option.value === value))
     throw new Error(`Select "${label}": no option ${value}`);
+  const under = selectWellUnderLabel(
+    label,
+    options.map((option) => option.label),
+    linePx
+  );
   return (
-    <span className={cn('inline-flex min-w-0 items-center gap-2.5', className)}>
+    <span
+      ref={rootRef}
+      data-well={under ? 'under' : 'after'}
+      className={cn(
+        under ? 'flex flex-col items-start gap-1.5' : 'inline-flex items-center gap-2.5',
+        className
+      )}
+    >
       <label htmlFor={id} className="text-small text-text-dim whitespace-nowrap">
         {label}
       </label>
-      <span className={cn(FIELD_WELL, 'relative px-0')}>
+      <span className={cn(FIELD_WELL, 'relative shrink-0 px-0')}>
         <select
           id={id}
           value={value}
           onChange={(event) => onChange(event.target.value as V)}
-          className="text-small text-text h-full min-w-0 appearance-none bg-transparent pl-2.5 pr-[25px] font-mono focus-visible:outline-none"
+          className="text-small text-text h-full shrink-0 appearance-none bg-transparent pl-2.5 pr-[25px] font-mono focus-visible:outline-none"
         >
           {options.map((option) => (
             <option key={option.value} value={option.value} className="bg-base-void text-text">

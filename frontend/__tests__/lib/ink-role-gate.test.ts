@@ -70,7 +70,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/blocks/[id]/client-page.tsx': {
     family: 'chain',
-    sites: { link: 13, prose: 7 },
+    // link 13 → 11 (lane D2): the facts aside's "Paid in" and "Paying cellbase" links went with it
+    sites: { link: 11, prose: 7 },
     reason:
       'block heights, hashes and the hardfork link in quiet facts and proposal rows; empty and loading lines; the proposal notes',
   },
@@ -392,11 +393,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: 'the cellbase reward, the cells count and the cycles state quiet in table cells',
   },
   // ---- topics ----
-  'app/charts/page.tsx': {
-    family: 'topics',
-    sites: { link: 1, prose: 1 },
-    reason: 'the section index links and the charts page note in the quiet ink',
-  },
   'app/dao/depositors/page.tsx': {
     family: 'topics',
     sites: { link: 2, td: 1, prose: 1 },
@@ -465,16 +461,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { td: 1, prose: 4 },
     reason: 'a bucket count in a table cell; the loading, empty and round lines',
   },
-  'components/charts/chart-detail.tsx': {
-    family: 'topics',
-    sites: { link: 1, prose: 5 },
-    reason: 'the section link, the chart notes, the reading note and the empty lines (with D1)',
-  },
-  'components/charts/chart-small-multiple.tsx': {
-    family: 'topics',
-    sites: { prose: 1 },
-    reason: "a tile's empty line (with D1)",
-  },
   'components/dao/dao-board.tsx': {
     family: 'topics',
     // link 6 → 3, prose 3 → 1 (B7): the lede and the AR explanation, with their links, read in
@@ -541,11 +527,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 3 },
     reason:
       "the gel's two reading notes and its not-drawn note: notes under a figure, quiet by rule",
-  },
-  'components/ui/chart.tsx': {
-    family: 'shared',
-    sites: { link: 1, prose: 1 },
-    reason: "D1 charts: the empty-range sentence and the marker legend's links",
   },
   'components/ui/detail-layout.tsx': {
     family: 'shared',

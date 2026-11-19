@@ -38,6 +38,11 @@ const share = (label: string) => ({
     { key: 'others', label: 'Others', color: '#000' },
   ],
   data: dates.map((date) => ({ date, values: { top0: '5900000000000000', others: '100000000' } })),
+  // lane D1: the API names the bands a history is drawn in; one named rank, its own band
+  bands: [
+    { key: 'top0', label, members: ['top0'] },
+    { key: 'others', label: 'Others', members: ['others'] },
+  ],
 });
 
 describe('history chart captions (CH-04)', () => {

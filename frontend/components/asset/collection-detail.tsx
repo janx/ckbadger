@@ -55,7 +55,6 @@ import { IdentityPositioning, type IdentityStandard } from '@/components/identit
 import { retryTransientOnly } from '@/lib/query-client';
 import { Dotted } from '@/components/ui/phone-row';
 import { NoBreak } from '@/components/ui/no-break';
-import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
@@ -147,23 +146,41 @@ function permanence(counts: CompositionCounts): string | null {
   if (counts.pure_ckb > 0) return 'permanent and verifiable, as long as CKB (and Bitcoin) exist';
   return null;
 }
-/** The page's one figure (R13): the live objects, with the CKB their cells hold beside it. */
+/**
+ * The words of a collection's figure by what it collects: an object collection's are the feed's
+ * (C12: "burned" for every kind, Spore's own word in the title); an identity collection's are the
+ * ones its metrics row wrote (a name may be created as well as minted, and inactive as well as
+ * burned).
+ */
+const FIGURE_WORDS = {
+  objects: { live: 'objects live', minted: 'minted', gone: 'burned' },
+  identities: { live: 'identities live', minted: 'minted / created', gone: 'inactive / burned' },
+} as const;
+
+/**
+ * The page's one figure (R13): the live objects or identities, with the CKB their cells hold
+ * beside it. An identity collection is headed by it too (lane D2, PB-13), as a cluster or a class
+ * is.
+ */
 function CollectionFigure({
   live,
   total,
   held,
   spore,
+  collects,
 }: {
   live: number;
   total: number;
   held: bigint | null;
   spore: boolean;
+  collects: keyof typeof FIGURE_WORDS;
 }) {
   const burned = total - live;
+  const words = FIGURE_WORDS[collects];
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
       <div data-role="figure" className="min-w-0">
-        <div className="eyebrow text-text-dim text-meta mb-1.5">objects live</div>
+        <div className="eyebrow text-text-dim text-meta mb-1.5">{words.live}</div>
         <div className="text-index sm:text-display text-text-bright tabular-nums">
           {live.toLocaleString('en-US')}{' '}
           {/* C12: the feed's word, "burned", for every kind; Spore's own word stays in the title. */}
@@ -172,8 +189,8 @@ function CollectionFigure({
             title={spore ? 'melted, in Spore’s words' : undefined}
           >
             {burned === 0
-              ? 'all live · none burned'
-              : `of ${total.toLocaleString('en-US')} minted · ${burned.toLocaleString('en-US')} burned`}
+              ? `all live · none ${words.gone}`
+              : `of ${total.toLocaleString('en-US')} ${words.minted} · ${burned.toLocaleString('en-US')} ${words.gone}`}
           </span>
         </div>
       </div>
@@ -388,30 +405,14 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         ]
       : []),
   ];
+  // Lane D2 (PB-13): the live count and the CKB held are the head's figure and bar, said once; the
+  // metrics row keeps the standard, the holders and the activities.
   const identityMetrics: AssetMetric[] = [
     { label: 'Standard', size: 'body', value: formatStandard(data.standard) },
-    {
-      label: 'Live',
-      value: data.liveCount.toLocaleString('en-US'),
-      note: `of ${data.totalCount.toLocaleString('en-US')} minted / created · ${(data.totalCount - data.liveCount).toLocaleString('en-US')} inactive / burned`,
-    },
     { label: 'Holders', value: data.holdersCount.toLocaleString('en-US') },
     ...(data.activitiesCount === null
       ? []
       : [{ label: 'Activities', value: data.activitiesCount.toLocaleString('en-US') }]),
-    {
-      label: 'CKB held',
-      value:
-        held !== null ? (
-          <CkbAmount form="summary" shannons={held} signed={false} tone="plain" />
-        ) : (
-          'Not recorded'
-        ),
-      note:
-        held !== null && occupied !== null && held > BigInt(0)
-          ? `${percentOf(occupied, held)} occupied`
-          : undefined,
-    },
   ];
   const counts = object?.composition ? compositionCountsFromCollection(object.composition) : null;
   const description =
@@ -492,9 +493,22 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       // F2 identities (round 2, ID-COL-5): an identity collection's id is a route alias, and it
       // has no description to record; it opens with what the standard is instead. A cluster or
       // class is named by its id under the title; its kind leads the lede.
-      identity={kind === 'identity' ? undefined : <HeadId value={id} kind="hash" copyable />}
-      lede={
+      identity={
         kind === 'identity' ? undefined : (
+          <HeadId
+            value={id}
+            kind="hash"
+            copy={kind === 'spore' ? 'copy cluster id' : 'copy class id'}
+          />
+        )
+      }
+      // Lane D2 (PB-13): an identity collection's opening, what the standard is, is the lede its
+      // hero follows, as a cluster's or a class's lede is (it was the shell's intro, after a head
+      // with no figure)
+      lede={
+        kind === 'identity' ? (
+          <IdentityPositioning standard={identityStandard(data.standard)} scope="collection" />
+        ) : (
           <div className="space-y-2.5">
             <CollectionLede
               kind={kind}
@@ -530,20 +544,40 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               total={data.totalCount}
               held={held}
               spore={kind === 'spore'}
+              collects="objects"
             />
             {counts && (
               <CompositionSet counts={counts} total={data.liveCount} caption={permanence(counts)} />
             )}
             {history}
           </div>
-        ) : undefined
+        ) : (
+          // Lane D2 (PB-13): an identity collection is headed as a cluster or a class is — the
+          // eyebrow and the figure with the CKB its cells hold, then the bar of what that CKB is,
+          // occupied and free (its partition, which states no total: the figure said it)
+          <div className="space-y-[22px]">
+            <CollectionFigure
+              live={data.liveCount}
+              total={data.totalCount}
+              held={held}
+              spore={false}
+              collects="identities"
+            />
+            {held !== null && occupied !== null ? (
+              <CapacityPartition
+                subject={title}
+                total={held.toString()}
+                occupied={occupied.toString()}
+                free={(held - occupied).toString()}
+                showTotal={false}
+              />
+            ) : (
+              <p className="text-text-dim text-meta">Collection capacity is not recorded.</p>
+            )}
+          </div>
+        )
       }
       metrics={<AssetMetrics items={objectsKind ? objectMetrics : identityMetrics} />}
-      intro={
-        kind === 'identity' ? (
-          <IdentityPositioning standard={identityStandard(data.standard)} scope="collection" />
-        ) : undefined
-      }
       // Main.dc.html screen 3: who holds it beside the recent activity — the shell's feed slot,
       // after the tier-1 body (lists of rows follow the domain, as on every asset page).
       feed={
@@ -661,17 +695,6 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           read={cluster}
         />
       )}
-      {kind === 'identity' &&
-        (held !== null && occupied !== null ? (
-          <CapacityPartition
-            subject={title}
-            total={held.toString()}
-            occupied={occupied.toString()}
-            free={(held - occupied).toString()}
-          />
-        ) : (
-          <p className="text-text-dim text-meta">Collection capacity is not recorded.</p>
-        ))}
       {/* Main.dc.html: Objects (the genes that vary and the objects), then who holds it beside the
           recent activity. */}
       {kind === 'spore' &&

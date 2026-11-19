@@ -11,6 +11,22 @@ import { fullText } from '@/__tests__/utils/full-text';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 afterEach(() => vi.restoreAllMocks());
+// Lane D2 (PB-22): the four identity pages take one section order — the term, then the records,
+// then the roles, then the CKB the cell holds — as the .bit page already did (the .cell page read
+// records, roles, then the term).
+it('reads its term, then its records, then its roles (lane D2, PB-22)', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  const tier1 = (await screen.findByRole('heading', { name: /^Term/ })).closest(
+    '[data-tier="1"]'
+  ) as HTMLElement;
+  const term = within(tier1).getByRole('heading', { name: /^Term/ });
+  const records = within(tier1).getByRole('heading', { name: /^Records/ });
+  const roles = within(tier1).getByRole('heading', { name: /^Roles/ });
+  const follows = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  expect(follows(term, records)).toBe(true);
+  expect(follows(records, roles)).toBe(true);
+});
 it('routes only an actual name 404 to exact endpoint evidence', async () => {
   vi.mocked(api.getDotCellItemDetail).mockRejectedValue(
     new ApiRequestError(404, 'not_found', 'name absent')

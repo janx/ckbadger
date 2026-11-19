@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { SealedHead, type SealedHeadOf } from '@/components/ui/page-seal';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { StatusStrip, type StatusStripProps } from '@/components/ui/status-strip';
 import { cn } from '@/lib/utils';
 import {
   documentTitleParts,
@@ -110,6 +111,11 @@ interface DetailLayoutBaseProps {
    * (`max-w-measure`, readability R4): what the page gives carries no width of its own.
    */
   lede?: ReactNode;
+  /**
+   * An entity page's status strip (lane D2): the facts a reader checks first, under the id line
+   * and before the lede, in one placement on the five entity pages and at every width.
+   */
+  strip?: StatusStripProps;
   status?: ReactNode;
   facts?: readonly DetailFact[];
   children: ReactNode;
@@ -144,6 +150,7 @@ export function DetailLayout({
   identity,
   seal,
   lede,
+  strip,
   status,
   actions,
   facts,
@@ -179,6 +186,7 @@ export function DetailLayout({
       {...seal}
       status={status}
       identity={identity}
+      strip={strip}
       below={
         lede === undefined ? undefined : (
           <div data-detail-lede="" className="max-w-measure min-w-0">
@@ -203,9 +211,15 @@ export function DetailLayout({
       {identity && (
         <div className="text-text text-small mt-2 min-w-0 [overflow-wrap:anywhere]">{identity}</div>
       )}
+      {/* the status strip under the id line, 20 px down (the transaction board), the lede 18 px
+          under its rule (lane D2) */}
+      {strip && <StatusStrip {...strip} className="mt-5" />}
       {/* the page's opening sentences, on the measure (readability R4, lane B7) */}
       {lede && (
-        <div data-detail-lede="" className="max-w-measure mt-4 min-w-0">
+        <div
+          data-detail-lede=""
+          className={strip ? 'max-w-measure mt-[18px] min-w-0' : 'max-w-measure mt-4 min-w-0'}
+        >
           {lede}
         </div>
       )}

@@ -3,8 +3,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen } from '@testing-library/react';
 import { Select } from '@/components/ui/select';
+import { selectPairPx } from '@/lib/control-row-fit';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
-import { targetHeightPx } from '@/__tests__/utils/tailwind-box';
+import {
+  flexColumnAt,
+  gapPx,
+  insetsPx,
+  shrinksAt,
+  targetHeightPx,
+  textRunPx,
+} from '@/__tests__/utils/tailwind-box';
 
 /**
  * The select of the controls board (gate D0′): a real <select> in the text field's well, 28 px
@@ -77,5 +86,100 @@ describe('Select', () => {
     expect(() =>
       render(<Select label=" " value="capacity" options={SORTS} onChange={() => {}} />)
     ).toThrow('Select: a select stands after its label, and this one has none');
+  });
+});
+
+/**
+ * Lane c2-finish, item 2: a select never cuts its value. A native select is as wide as its widest
+ * option and clips the chosen one, with no mark, where its well is narrower; so the well never
+ * shrinks, the pair stands on one line where it fits the line it stands in and the well goes under
+ * its label where it does not (lib/control-row-fit.ts `selectWellUnderLabel`), and an option
+ * wider than a 360 px window's line even alone throws.
+ */
+describe('Select: never a cut value', () => {
+  const VERSION = [
+    { value: 'a', label: '1 · #15,064,087' },
+    { value: 'b', label: '12 · #21,016,901 · current' },
+  ] as const;
+  const Version = ({ label = 'version' }: { label?: string }) => (
+    <div data-testid="line">
+      <Select label={label} value="b" options={VERSION} onChange={() => {}} />
+    </div>
+  );
+  const pairOf = () => {
+    const select = screen.getByRole('combobox');
+    const well = select.parentElement!;
+    return { select, well, root: well.parentElement!, label: screen.getByText(/version$/) };
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('keeps its well whole at every width: it never shrinks below its widest option', () => {
+    render(<Version />);
+    const { select, well } = pairOf();
+    for (const w of [1280, 640, 390, 360]) {
+      expect(shrinksAt(well, w)).toBe(false);
+      expect(shrinksAt(select, w)).toBe(false);
+    }
+    expect(select).not.toHaveClass('min-w-0');
+  });
+
+  it('draws the pair the fit measures: label, gap, frame, padding and the widest option', () => {
+    render(<Version />);
+    const { select, well, root, label } = pairOf();
+    for (const w of [1280, 390]) {
+      const drawn =
+        textRunPx(label.textContent!, label, w) +
+        gapPx(root, w) +
+        insetsPx(well, w).box +
+        insetsPx(select, w).box +
+        textRunPx('12 · #21,016,901 · current', select, w);
+      expect(Math.round(drawn * 100) / 100).toBe(
+        selectPairPx(
+          'version',
+          VERSION.map((o) => o.label)
+        ).pair
+      );
+    }
+  });
+
+  it('stands on one line where its pair fits the line it stands in', () => {
+    // version: the pair 304.4 px in a 360 px window's 328
+    stubChartWidth(328);
+    render(<Version />);
+    const { root } = pairOf();
+    expect(root).toHaveAttribute('data-well', 'after');
+    expect(flexColumnAt(root, 360)).toBe(false);
+  });
+
+  it('puts its well under its label where the pair is wider than its line', () => {
+    // cell version: the pair 343.4 px, past 328, so the well goes under the label; in 358 it stays
+    stubChartWidth(328);
+    const { unmount } = render(<Version label="cell version" />);
+    expect(pairOf().root).toHaveAttribute('data-well', 'under');
+    expect(flexColumnAt(pairOf().root, 360)).toBe(true);
+    unmount();
+    stubChartWidth(358);
+    render(<Version label="cell version" />);
+    expect(pairOf().root).toHaveAttribute('data-well', 'after');
+  });
+
+  it('throws for an option wider than the narrowest line even alone', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const over = 'x'.repeat(38);
+    expect(() =>
+      render(
+        <Select
+          label="state"
+          value="a"
+          options={[
+            { value: 'a', label: 'all' },
+            { value: 'b', label: over },
+          ]}
+          onChange={() => {}}
+        />
+      )
+    ).toThrow(
+      `select "state": its option "${over}" makes a well 333.4 px wide, wider than the 328 px line of a 360 px window`
+    );
   });
 });

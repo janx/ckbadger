@@ -20,7 +20,7 @@ import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
 import { formatDurationMs } from '@/lib/utils';
 import { shortenOutpoint } from '@/lib/shorten';
-import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
+import { BOARD_INKS, CELL_COLORS, DATA_COLOR, DATA_KEY, inkStyle } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
@@ -29,7 +29,8 @@ import { titleHash } from '@/lib/use-document-title';
 import { cellPageSeal } from '@/lib/cell-seal';
 import { ShortId } from '@/components/ui/short-id';
 import { TitleId } from '@/components/ui/title-id';
-import { Utc8DateTime } from '@/components/ui/utc8-date';
+import { Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
+import type { StripFact } from '@/components/ui/status-strip';
 
 /** What `outpointParts` accepts, as the not-an-id page states it. */
 const OUTPOINT_RULE =
@@ -227,9 +228,8 @@ function CellFacts({
       aria-label="Cell facts"
       className="border-base-border text-small flex flex-wrap gap-x-10 gap-y-3.5 border-y py-3.5"
     >
-      <Fact label="Capacity">
-        <CkbAmount form="column" shannons={capacity} signed={false} tone="plain" />
-      </Fact>
+      {/* The capacity, the time and the block it was created in are the status strip's (lane D2):
+          these are the cell's other facts, none deleted. */}
       <Fact label="Occupied">
         <span style={{ color: DATA_COLOR }}>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
         <span className="text-text-dim text-small">
@@ -262,28 +262,15 @@ function CellFacts({
       >
         <span style={{ color: CELL_COLORS.data }}>{cell.dataSize.toLocaleString('en-US')} B</span>
       </Fact>
-      <Fact
-        label="Created"
-        sub={
-          <>
-            {cell.createdTimestamp && (
-              <Utc8DateTime timestamp={cell.createdTimestamp} dateTime={cell.createdTimestamp} />
-            )}
-            {cell.createdEpoch ? (
-              <span className="block">
-                {`epoch ${cell.createdEpoch.number.toLocaleString('en-US')} · ${cell.createdEpoch.index}/${cell.createdEpoch.length}`}
-              </span>
-            ) : (
-              <span role="alert" className="text-rouge block">
-                Cell {cell.txHash}:{cell.outputIndex} has no createdEpoch
-              </span>
-            )}
-          </>
-        }
-      >
-        <Link href={`/blocks/${cell.createdAtBlock}`} className="text-text-bright">
-          {formatBlockNumber(cell.createdAtBlock)}
-        </Link>
+      {/* the epoch it was created in (the strip states its block and time) */}
+      <Fact label="Epoch">
+        {cell.createdEpoch ? (
+          `${cell.createdEpoch.number.toLocaleString('en-US')} · ${cell.createdEpoch.index}/${cell.createdEpoch.length}`
+        ) : (
+          <span role="alert" className="text-rouge">
+            Cell {cell.txHash}:{cell.outputIndex} has no createdEpoch
+          </span>
+        )}
       </Fact>
       {cell.status === 'dead' ? (
         <Fact
@@ -394,6 +381,53 @@ function CellOrigin({ cell }: { cell: Cell }) {
   );
 }
 
+/**
+ * The cell's status strip (lane D2, PA-13; gate D0′'s strip with the cell's own four facts): its
+ * state, live (the data's celadon dot) or spent (the dead ink's), the time it was created on the
+ * site's clock with its age, the block that created it and its capacity, exact. A time the API did
+ * not send is not passed.
+ */
+function cellStripFacts(cell: Cell): StripFact[] {
+  return [
+    {
+      label: 'status',
+      value: cell.status === 'live' ? 'live' : 'spent',
+      dot: cell.status === 'live' ? DATA_KEY : 'text-dim',
+    },
+    ...(cell.createdTimestamp
+      ? [
+          {
+            label: 'created',
+            value: <Utc8DateTime timestamp={cell.createdTimestamp} />,
+            note: <Utc8Age timestamp={cell.createdTimestamp} />,
+          },
+        ]
+      : []),
+    {
+      label: 'block',
+      value: (
+        <Link look="inline" href={`/blocks/${cell.createdAtBlock}`}>
+          {formatBlockNumber(cell.createdAtBlock)}
+        </Link>
+      ),
+    },
+    {
+      label: 'capacity',
+      value: (
+        <CkbAmount
+          form="exact"
+          shannons={parseShannons(
+            cell.capacity,
+            `cell ${cell.txHash}:${cell.outputIndex} capacity`
+          )}
+          signed={false}
+          tone="inherit"
+        />
+      ),
+    },
+  ];
+}
+
 function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | null }) {
   const names = useScriptNames(cell);
   const outpoint = `${cell.txHash}:${cell.outputIndex}`;
@@ -419,23 +453,12 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // The cell's own page seal: its transaction's rim and border, its index in rods, its
         // owner's stone, a bead for each digit of its capacity, its type's class and glyph.
         seal={{ ...seal, kind: 'Cell' }}
-        // on the kind line, after "Cell"
-        status={
-          <span className="flex flex-wrap items-center gap-3">
-            <span
-              className="text-small inline-flex items-center gap-1.5"
-              style={{ color: cell.status === 'live' ? DATA_COLOR : EXPIRED_COLOR }}
-            >
-              <span
-                aria-hidden="true"
-                className="inline-block h-[7px] w-[7px] rounded-full"
-                style={{ backgroundColor: cell.status === 'live' ? DATA_COLOR : EXPIRED_COLOR }}
-              />
-              {cell.status === 'live' ? 'live' : 'spent'}
-            </span>
-            <CodeCellOf cell={cell} />
-          </span>
-        }
+        // on the kind line, after "Cell": the scripts it is code for (its state, live or spent,
+        // is the status strip's first fact, said once)
+        status={<CodeCellOf cell={cell} />}
+        // The status strip under the id line (lane D2, PA-13): its state, when it was created, the
+        // block that created it and its capacity; its other facts stay in "Cell facts" below.
+        strip={{ label: 'Cell status', facts: cellStripFacts(cell) }}
         // The id line: the full out point and its copy, in the plate's quiet voice (C10 round 2:
         // it was text-body in the bright ink, competing with the h1 above it), its colon in the
         // same ink; it wraps anywhere, as the line does.

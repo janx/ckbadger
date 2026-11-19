@@ -8,13 +8,12 @@ import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
 import { HeadId } from '@/components/ui/head-id';
 import Link from '@/components/ui/link';
-import { CopyButton } from '@/components/ui/copy-button';
 import { FilterChips } from '@/components/ui/filter-chips';
 import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
 import {
   AddressBalance,
-  AddressMetrics,
+  addressStripFacts,
   AddressHoldingsSection,
   AddressLoadState,
   AddressStaleNotice,
@@ -29,7 +28,7 @@ import {
 import { PoolTruncatedNotice, PoolUnavailableNotice } from '@/components/ui/pool-status';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, isNotFoundApiError, type AddressCellClass, type AddressHoldings } from '@/lib/api';
+import { api, isNotFoundApiError, type AddressCellClass } from '@/lib/api';
 import { isBadRequestApiError } from '@/lib/api-errors';
 import { ReadFailure } from '@/components/read-failure';
 import { useParams } from '@/src/navigation';
@@ -45,7 +44,6 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { titleAddress, titleHash } from '@/lib/use-document-title';
 import { ScriptByteMap, ScriptNames } from '@/components/ui/script-byte-map';
-import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
 
 const activityFilters = [
@@ -86,26 +84,6 @@ const ACTIVITY_MARKS: Partial<Record<ActivityFilter, PaletteKey>> = {
   identity: CLASS_KEYS.identities,
   dao: CLASS_KEYS.dao,
 };
-/**
- * The live cells a page of the list is counted of: the API's total of the unfiltered list, or
- * the holdings read's count of the class chosen (a class's page carries no total of its own; the
- * class filter is offered once the holdings have answered).
- */
-function liveCellsTotal(
-  total: number | undefined,
-  cellClass: AddressCellClass | undefined,
-  holdings: AddressHoldings | undefined,
-  addr: string
-): number {
-  const count = cellClass ? holdings?.classes[cellClass].cellCount : total;
-  if (count === undefined)
-    throw new Error(
-      cellClass
-        ? `address ${addr}: the ${cellClass} cells are listed before the holdings that count them`
-        : `address ${addr}: an unfiltered live cells page carries no total`
-    );
-  return count;
-}
 /** One address activity page; the list and the tab count share it, so they share its cache entry. */
 const activityPageQuery = (
   lockHash: string | undefined,
@@ -135,14 +113,11 @@ export default function AddressDetailPage() {
  */
 function AddressIdentity({ value, kind }: { value: string; kind: 'address' | 'hash' }) {
   return (
-    <span className="flex min-w-0 items-start gap-2">
-      <HeadId value={value} kind={kind} />
-      <CopyButton
-        value={value}
-        label={kind === 'address' ? 'copy address' : 'copy lock script hash'}
-        className="shrink-0"
-      />
-    </span>
+    <HeadId
+      value={value}
+      kind={kind}
+      copy={kind === 'address' ? 'copy address' : 'copy lock script hash'}
+    />
   );
 }
 function AddressDetailPageContent({ addr }: { addr: string }) {
@@ -151,9 +126,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
   const pageSize = usePageSize(ENTITY_PAGE_SIZE);
-  const activityPage = useCursorPagination(),
-    txPage = useCursorPagination(),
-    cellPage = useCursorPagination();
+  // a change of page size at md starts each walk again (lane c2-finish, 1d)
+  const activityPage = useCursorPagination(pageSize),
+    txPage = useCursorPagination(pageSize),
+    cellPage = useCursorPagination(pageSize);
   const historyId = useId();
   const address = useQuery({
     queryKey: ['address', addr],
@@ -283,43 +259,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             // one) of the lock script's hash, which the address read already carries; nothing else
             // is fetched for the seal. Its name plate (seals by kind, C10) opens on "Address".
             seal={{ id: { kind: 'script', hash: a.lockScriptHash }, kind: 'Address' }}
-            // on the kind line, after "Address"
-            status={
-              <span className="text-text-dim text-small flex flex-wrap items-center gap-x-4 gap-y-1">
-                {a.lockScript && (
-                  <span>
-                    lock{' '}
-                    <Link
-                      href={getScriptDetailHref({
-                        name: a.lockScriptInfo?.name,
-                        codeHash: a.lockScript.codeHash,
-                        hashType: a.lockScript.hashType,
-                        scriptKind: 'lock',
-                      })}
-                      className="text-text-bright"
-                    >
-                      {a.lockScriptInfo?.name ?? (
-                        <Hash
-                          hash={a.lockScript.codeHash}
-                          size="row"
-                          className="text-small"
-                          copyable={false}
-                        />
-                      )}
-                    </Link>
-                  </span>
-                )}
-                {a.lockScriptInfo?.deprecated && <span className="text-negative">Deprecated</span>}
-                <span>
-                  {unitNode(
-                    holdings.data
-                      ? `${formatCount(holdings.data.liveCellsCount, 'live cell')} · `
-                      : ''
-                  )}
-                  {unitNode(formatCount(a.transactionsCount, 'transaction'))}
-                </span>
-              </span>
-            }
+            // The status strip under the id line (lane D2, PA-13): the lock, the live cells, the
+            // transactions and the holdings, said once (they stood on the kind line and again in
+            // the metrics row under the balance)
+            strip={{ label: 'Address status', facts: addressStripFacts(a, holdings.data) }}
             tier2={
               // Lane E (C6, Address board tier 2): the lock script as its bytes, then its two names.
               <div className="grid min-w-0 items-start gap-x-16 gap-y-10 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
@@ -365,11 +308,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {a && <AddressStaleNotice error={address.error} label="address metadata" />}
             {holdings.data && <AddressStaleNotice error={holdings.error} label="holdings" />}
             {holdings.data ? (
-              <>
-                {/* Lane P (Address.dc.html): the balance hero, then the four metrics. */}
-                <AddressBalance holdings={holdings.data} />
-                <AddressMetrics holdings={holdings.data} address={a} />
-              </>
+              // Lane P (Address.dc.html): the balance hero (its four metrics are the head's status
+              // strip since lane D2)
+              <AddressBalance holdings={holdings.data} />
             ) : (
               <AddressLoadState
                 label="holdings and balance partition"
@@ -613,12 +554,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   (cells.data ? (
                     <>
                       <AddressLiveCells rows={cells.data.data} />
+                      {/* counted where the page's own response counts its cells; a class
+                          filter's count is the holdings' read, stated by the class's chip
+                          (lane c2-finish, 1c) */}
                       <AddressPagination
                         pagination={cellPage}
-                        read={{
-                          ...cells.data,
-                          total: liveCellsTotal(cells.data.total, cellClass, holdings.data, addr),
-                        }}
+                        read={cells.data}
                         label="live cells"
                       />
                     </>

@@ -25,7 +25,7 @@ export function TopicCharts({ topic }: { topic: ChartTopic }) {
     >
       <span className="text-text-dim">Charts</span>
       {charts.map((chart) => (
-        <Link key={chart.slug} href={`/charts/${chart.slug}`} className="text-text hover:text-jade">
+        <Link key={chart.slug} href={`/charts/${chart.slug}`} look="inline">
           {chart.title}
         </Link>
       ))}

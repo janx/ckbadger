@@ -7,10 +7,11 @@ export const COPIED_MS = 1500;
 
 /**
  * The one copy path (A4 review 3): the controls that copy a value and show it for a moment copy
- * through it (HexCode, HexDisplay, a head's HeadId, and the controls library's CopyButton, which
- * the address, transaction, cell and crash pages draw). The protocol evidence's copy, which says a
- * failure in words of its own, keeps its handler for its placement lane. `copy()` writes `text`
- * and resolves whether it did; `copied` is true for COPIED_MS after a copy that worked, and a
+ * through it: the controls library's CopyButton, which every head's id (HeadId's `copy`), a full
+ * id on its own line in tier 2, the cell page and the crash page draw (lane c2-finish, item 4:
+ * copy has one form), and the click-to-copy of HexCode and HexDisplay (`copyable`), which only the
+ * .cell party's lock hash still reaches, an id inside a link, awaiting its ruling. `copy()` writes
+ * `text` and resolves whether it did; `copied` is true for COPIED_MS after a copy that worked, and a
  * second copy starts that over.
  *
  * A copy that cannot work claims nothing: where there is no clipboard (a page served over plain

@@ -19,6 +19,8 @@ describe('EpochTimeLengthPage', () => {
   it('places activated hardforks on their exact epoch observations', async () => {
     chartMock.mockClear();
     vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
+      // the API's consensus target (the page's sentence reads it)
+      target: { seconds: 14400, hours: '4.00' },
       title: 'Epoch Time Length',
       yAxisLabel: 'hours',
       data: [

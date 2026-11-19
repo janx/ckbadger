@@ -45,49 +45,80 @@ const read = (rows: number, more: boolean, total?: number | null): CursorPageRea
 // The controls lane (C2): the pager computes no figure; the figures of a cursor page come from its
 // response (the rows, the page size it served, the count) and the cursor's page, in one place.
 describe('where a page of a cursor-paged list stands', () => {
+  // Re-pinned on purpose (lane c2-finish, item 1): a ranked page is the response's rows (or none,
+  // past the end), its page size, its "more" flag and, where the response counts the rows, the
+  // count and the pages; it was a flat from / to / total / pages that a list with no count or a
+  // shrunk list could not give.
   it('gives a ranked list’s page its rows, the count and the pages, from the response', () => {
     expect(rankedPageAt('holders', 1, read(20, true, 727))).toEqual({
-      from: 1,
-      to: 20,
-      total: 727,
-      pageSize: 20,
       page: 1,
-      pages: 37,
+      pageSize: 20,
+      hasMore: true,
+      rows: { from: 1, to: 20 },
+      count: { total: 727, pages: 37 },
     });
     expect(rankedPageAt('holders', 37, read(7, false, 727))).toEqual({
-      from: 721,
-      to: 727,
-      total: 727,
-      pageSize: 20,
       page: 37,
-      pages: 37,
+      pageSize: 20,
+      hasMore: false,
+      rows: { from: 721, to: 727 },
+      count: { total: 727, pages: 37 },
     });
   });
 
   it('reads the page size the response served, not one of its own', () => {
     expect(rankedPageAt('events', 2, { ...read(1, false, 3), limit: 2 })).toMatchObject({
-      from: 3,
-      to: 3,
+      rows: { from: 3, to: 3 },
       pageSize: 2,
-      pages: 2,
+      count: { total: 3, pages: 2 },
     });
   });
 
   it('draws nothing for a list on one page, an empty one too', () => {
     expect(rankedPageAt('holders', 1, read(8, false, 8))).toBeNull();
     expect(rankedPageAt('holders', 1, read(0, false, 0))).toBeNull();
+    expect(rankedPageAt('objects', 1, read(8, false))).toBeNull();
     expect(timePageAt('transactions', 1, read(3, false, 3))).toBeNull();
     expect(timePageAt('transactions', 1, read(0, false, null))).toBeNull();
   });
 
-  it('refuses a ranked page that counts no rows, and a page size or a count that is not one', () => {
-    expect(() => rankedPageAt('holders', 2, read(20, true))).toThrow(
-      'holders: page 2 of a ranked list states no total'
-    );
-    expect(() => rankedPageAt('holders', 2, read(20, true, null))).toThrow(/states no total/);
+  // Item 1a: an ordered list whose response counts no rows (the gallery's search) is paged by its
+  // own "more" flag, its rows and its page; no count, no pages. Re-pinned: it was refused.
+  it('pages an ordered list with no count by its rows and its own “more”', () => {
+    expect(rankedPageAt('objects', 2, read(20, true))).toEqual({
+      page: 2,
+      pageSize: 20,
+      hasMore: true,
+      rows: { from: 21, to: 40 },
+      count: null,
+    });
+    expect(rankedPageAt('objects', 3, read(4, false, null))).toEqual({
+      page: 3,
+      pageSize: 20,
+      hasMore: false,
+      rows: { from: 41, to: 44 },
+      count: null,
+    });
+  });
+
+  // Item 1b: the list shrank under a reader on page 2 (a re-read on focus): the response is an
+  // empty page with a smaller count. It is a state: where it stands and a way back, no rows.
+  it('gives an empty page past the first its place and no rows, whatever the count says', () => {
+    expect(rankedPageAt('holders', 2, read(0, false, 18))).toEqual({
+      page: 2,
+      pageSize: 20,
+      hasMore: false,
+      rows: null,
+      count: null,
+    });
+    expect(rankedPageAt('objects', 4, read(0, false))).toMatchObject({ page: 4, rows: null });
+  });
+
+  it('refuses a page size or a count that is not one', () => {
     expect(() => rankedPageAt('holders', 1, { ...read(20, true, 40), limit: 0 })).toThrow(
       'holders: a page size of 0 rows'
     );
+    expect(() => rankedPageAt('holders', 2, read(20, true, -1))).toThrow('holders: -1 rows in all');
     expect(() => timePageAt('objects', 1, read(20, true, -1))).toThrow('objects: -1 rows in all');
   });
 
