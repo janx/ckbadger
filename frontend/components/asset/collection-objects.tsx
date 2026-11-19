@@ -6,6 +6,7 @@
 // that vary get lanes (C9), the gel and the object table sit side by side, the table names the
 // varying genes as columns with each object's composition, twenty a page (C11), and the filter is
 // in the URL (C15).
+import { SaidOnce, onEveryRow } from '@/components/asset/said-once';
 import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useInRouterContext } from 'react-router-dom';
@@ -39,7 +40,7 @@ import { shortenHash, type ShortSize } from '@/lib/shorten';
 import { ALLELE_GEL } from '@/lib/allele-gel-layout';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
-import { cn, formatUtc8DateTime } from '@/lib/utils';
+import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { DroppedGenesCaption } from '@/components/asset/dropped-genes-caption';
 import { TraitText } from '@/components/asset/trait-text';
 import { LockWordsView, lockWordsText, rowLock, type LockWords } from '@/components/ui/lock-kind';
@@ -165,12 +166,33 @@ type GalleryItem = NonNullable<
 function ClusterObjectPhoneRow({
   item,
   lanes,
+  shared,
 }: {
   item: GalleryItem;
   lanes: readonly AlleleLane[];
+  /** What every row of the page says alike, said once over the list (lane P2's follow-up, 3). */
+  shared: { owner: boolean; minted: boolean };
 }) {
   const tier = item.mediaProfile?.tier ?? null;
   const words = item.ownerLockHash ? ownerLock(item) : null;
+  const made = tier ? (
+    <CompositionBadge tier={tier} size="sm" />
+  ) : (
+    <span className="text-text-dim">not recorded</span>
+  );
+  const genes = lanes.flatMap((lane) => {
+    const own = item.traits.find((t) => t.name === lane.gene);
+    return own
+      ? [
+          <Labelled key={lane.gene} label={geneLabel(lane.gene)} words>
+            {/* a value anyone can mint: it breaks anywhere, never past the line */}
+            <span className="[overflow-wrap:anywhere]">
+              <TraitText text={geneCellText(own.value)} />
+            </span>
+          </Labelled>,
+        ]
+      : [];
+  });
   return (
     <PhoneRow
       testId="cluster-object-row-mobile"
@@ -189,68 +211,62 @@ function ClusterObjectPhoneRow({
             </>
           ),
         },
-        {
-          key: 'holder',
-          tone: 'body',
-          hold: true,
-          left: item.ownerLockHash ? (
-            <>
-              <Labelled label="held by">
-                <Address
-                  address={item.ownerAddress ?? item.ownerLockHash}
-                  size="row"
-                  look="inline"
-                />
-              </Labelled>
-              {words && (
+        shared.owner
+          ? { key: 'holder', tone: 'body' as const, left: made }
+          : {
+              key: 'holder',
+              tone: 'body' as const,
+              hold: true,
+              left: item.ownerLockHash ? (
                 <>
-                  {' '}
-                  <LockWordsView words={words} size="row" />
-                </>
-              )}
-            </>
-          ) : (
-            <span className="text-text-dim">No live owner</span>
-          ),
-          right: tier ? (
-            <CompositionBadge tier={tier} size="sm" />
-          ) : (
-            <span className="text-text-dim">not recorded</span>
-          ),
-        },
-        {
-          key: 'minted',
-          tone: 'quiet',
-          left: (
-            <Dotted
-              parts={[
-                ...lanes.map((lane) => {
-                  const own = item.traits.find((t) => t.name === lane.gene);
-                  return (
-                    own && (
-                      <Labelled key={lane.gene} label={geneLabel(lane.gene)} words>
-                        {/* a value anyone can mint: it breaks anywhere, never past the line */}
-                        <span className="[overflow-wrap:anywhere]">
-                          <TraitText text={geneCellText(own.value)} />
-                        </span>
-                      </Labelled>
-                    )
-                  );
-                }),
-                <span key="minted" className="whitespace-nowrap">
-                  <Labelled label="minted at">
-                    <AppLink href={`/blocks/${item.createdAtBlock}`} look="inline">
-                      {formatBlockNumber(item.createdAtBlock)}
-                    </AppLink>
-                  </Labelled>{' '}
-                  <Labelled label="on">
-                    <Utc8Date timestamp={item.chainTime} />
+                  <Labelled label="held by">
+                    <Address
+                      address={item.ownerAddress ?? item.ownerLockHash}
+                      size="row"
+                      look="inline"
+                    />
                   </Labelled>
-                </span>,
-              ]}
-            />
-          ),
-        },
+                  {words && (
+                    <>
+                      {' '}
+                      <LockWordsView words={words} size="row" />
+                    </>
+                  )}
+                </>
+              ) : (
+                <span className="text-text-dim">No live owner</span>
+              ),
+              right: made,
+            },
+        ...(genes.length > 0 || !shared.minted
+          ? [
+              {
+                key: 'minted',
+                tone: 'quiet' as const,
+                left: (
+                  <Dotted
+                    parts={[
+                      ...genes,
+                      ...(shared.minted
+                        ? []
+                        : [
+                            <span key="minted" className="whitespace-nowrap">
+                              <Labelled label="minted at">
+                                <AppLink href={`/blocks/${item.createdAtBlock}`} look="inline">
+                                  {formatBlockNumber(item.createdAtBlock)}
+                                </AppLink>
+                              </Labelled>{' '}
+                              <Labelled label="on">
+                                <Utc8Date timestamp={item.chainTime} />
+                              </Labelled>
+                            </span>,
+                          ]),
+                    ]}
+                  />
+                ),
+              },
+            ]
+          : []),
       ]}
     />
   );
@@ -348,12 +364,19 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   // changing).
   const geneOf = (item: (typeof items)[number], lane: AlleleLane) =>
     item.traits.find((t) => t.name === lane.gene)?.value ?? null;
-  const onEveryRow = (lane: AlleleLane) =>
-    items.length > 1 && items.every((item) => geneOf(item, lane) === geneOf(items[0], lane));
-  const columns = (lanes ?? []).slice(0, 2).filter((lane) => !onEveryRow(lane));
+  const sameGene = (lane: AlleleLane) => onEveryRow(items, (item) => geneOf(item, lane));
+  const columns = (lanes ?? []).slice(0, 2).filter((lane) => !sameGene(lane));
   const saidOnce = (lanes ?? [])
     .slice(0, 2)
-    .filter((lane) => onEveryRow(lane) && geneOf(items[0], lane) !== null);
+    .filter((lane) => sameGene(lane) && geneOf(items[0], lane) !== null);
+  // Lane P2's follow-up (item 3): the owner and the minting day the same on every row of the page
+  // are no columns either (a batch minted to one holder listed twenty times); said once with the
+  // genes, by the one helper (`SaidOnce`)
+  const shared = {
+    // the owner as its cell writes it: its address, else its lock hash, else none
+    owner: onEveryRow(items, (item) => item.ownerAddress ?? item.ownerLockHash),
+    minted: onEveryRow(items, (item) => formatUtc8Date(item.chainTime)),
+  };
   const total = genetics.eligibleItems;
   // Each gene column is at least as wide as its widest cell (lane A follow-up); the object and
   // owner columns share the rest.
@@ -361,8 +384,8 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
     'minmax(0,1.3fr)',
     ...columns.map((lane, i) => `minmax(${geneColumnCh(lane)}ch,${i === 0 ? 1.1 : 0.8}fr)`),
     '88px',
-    'minmax(0,1.6fr)',
-    '88px',
+    ...(shared.owner ? [] : ['minmax(0,1.6fr)']),
+    ...(shared.minted ? [] : ['88px']),
   ].join(' ');
   // One line per object from md up (the share text needs the room); below it the cells pair up.
   const grid = cn(ROW_GRID, 'md:grid-cols-[var(--object-cols)]');
@@ -448,37 +471,63 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               </span>
             )}
           </div>
-          {saidOnce.length > 0 && (
-            <p data-role="said-once" className="text-text text-small max-w-measure">
-              <Dotted
-                parts={[
-                  <span key="all" className="text-text-dim">
-                    {unitText(`every one of the ${formatCount(items.length, 'object')} listed`)}
-                  </span>,
-                  ...saidOnce.map((lane) => {
-                    const value = geneOf(items[0], lane)!;
-                    const band = lane.bands.find((b) => b.value === value);
-                    return (
-                      <span key={lane.gene} className="[overflow-wrap:anywhere]">
-                        <span className="text-text-dim">{geneLabel(lane.gene)}</span>{' '}
-                        <TraitText text={geneCellText(value)} />
-                        {band && (
-                          <span className="text-text-dim">
+          <SaidOnce
+            count={items.length}
+            singular="object"
+            parts={[
+              ...saidOnce.map((lane) => {
+                const value = geneOf(items[0], lane)!;
+                const band = lane.bands.find((b) => b.value === value);
+                return (
+                  <span key={lane.gene} className="[overflow-wrap:anywhere]">
+                    <span className="text-text-dim">{geneLabel(lane.gene)}</span>{' '}
+                    <TraitText text={geneCellText(value)} />
+                    {band && (
+                      <span className="text-text-dim">
+                        {' '}
+                        (
+                        {unitText(
+                          `${band.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`
+                        )}
+                        )
+                      </span>
+                    )}
+                  </span>
+                );
+              }),
+              ...(shared.owner
+                ? [
+                    items[0].ownerLockHash ? (
+                      <span key="owner" className="whitespace-nowrap">
+                        <span className="text-text-dim">held by</span>{' '}
+                        <Address
+                          look="inline"
+                          address={items[0].ownerAddress ?? items[0].ownerLockHash}
+                          size="row"
+                          className="text-small"
+                        />
+                        {ownerLock(items[0]) && (
+                          <>
                             {' '}
-                            (
-                            {unitText(
-                              `${band.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`
-                            )}
-                            )
-                          </span>
+                            <LockWordsView words={ownerLock(items[0])!} size="row" />
+                          </>
                         )}
                       </span>
-                    );
-                  }),
-                ]}
-              />
-            </p>
-          )}
+                    ) : (
+                      <span key="owner">no live owner</span>
+                    ),
+                  ]
+                : []),
+              ...(shared.minted
+                ? [
+                    <span key="minted" className="whitespace-nowrap">
+                      <span className="text-text-dim">minted on</span>{' '}
+                      <Utc8Date timestamp={items[0].chainTime} />
+                    </span>,
+                  ]
+                : []),
+            ]}
+          />
           {gallery.data ? (
             <>
               <AssetReadState label="newest objects" error={gallery.error} retained />
@@ -499,7 +548,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                           onBlur={() => setRow(null)}
                           className="border-row-rule border-b py-2.5"
                         >
-                          <ClusterObjectPhoneRow item={item} lanes={columns} />
+                          <ClusterObjectPhoneRow item={item} lanes={columns} shared={shared} />
                         </div>
                       ))}
                     </div>
@@ -525,10 +574,12 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                           </span>
                         ))}
                         <span role="columnheader">Made of</span>
-                        <span role="columnheader">Owner</span>
-                        <span role="columnheader" className="text-right">
-                          Minted
-                        </span>
+                        {!shared.owner && <span role="columnheader">Owner</span>}
+                        {!shared.minted && (
+                          <span role="columnheader" className="text-right">
+                            Minted
+                          </span>
+                        )}
                       </div>
                       {items.map((item) => {
                         const name = objectName(item.number, item.sporeId, 'row');
@@ -641,41 +692,48 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                                 <span className="text-text-dim">not recorded</span>
                               )}
                             </span>
-                            <span role="cell" className="min-w-0 truncate">
-                              {item.ownerLockHash ? (
-                                <>
-                                  <Address
-                                    look="inline"
-                                    address={item.ownerAddress ?? item.ownerLockHash}
-                                    size="row"
-                                    className="text-small"
-                                  />
-                                  {/* no space and no tag where the row names no lock (B4) */}
-                                  {ownerLock(item) && (
-                                    <>
-                                      {' '}
-                                      <LockWordsView
-                                        words={ownerLock(item)!}
-                                        size="row"
-                                        className={rowTagClass()}
-                                      />
-                                    </>
-                                  )}
-                                </>
-                              ) : (
-                                <span className="text-text-dim">No live owner</span>
-                              )}
-                            </span>
-                            <span role="cell" className="text-text-dim tabular-nums md:text-right">
-                              {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
-                              <AppLink
-                                look="inline"
-                                href={`/blocks/${item.createdAtBlock}`}
-                                title={`${formatBlockNumber(item.createdAtBlock)} · ${formatUtc8DateTime(item.chainTime)}`}
+                            {!shared.owner && (
+                              <span role="cell" className="min-w-0 truncate">
+                                {item.ownerLockHash ? (
+                                  <>
+                                    <Address
+                                      look="inline"
+                                      address={item.ownerAddress ?? item.ownerLockHash}
+                                      size="row"
+                                      className="text-small"
+                                    />
+                                    {/* no space and no tag where the row names no lock (B4) */}
+                                    {ownerLock(item) && (
+                                      <>
+                                        {' '}
+                                        <LockWordsView
+                                          words={ownerLock(item)!}
+                                          size="row"
+                                          className={rowTagClass()}
+                                        />
+                                      </>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-text-dim">No live owner</span>
+                                )}
+                              </span>
+                            )}
+                            {!shared.minted && (
+                              <span
+                                role="cell"
+                                className="text-text-dim tabular-nums md:text-right"
                               >
-                                <Utc8Date timestamp={item.chainTime} />
-                              </AppLink>
-                            </span>
+                                {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
+                                <AppLink
+                                  look="inline"
+                                  href={`/blocks/${item.createdAtBlock}`}
+                                  title={`${formatBlockNumber(item.createdAtBlock)} · ${formatUtc8DateTime(item.chainTime)}`}
+                                >
+                                  <Utc8Date timestamp={item.chainTime} />
+                                </AppLink>
+                              </span>
+                            )}
                           </div>
                         );
                       })}

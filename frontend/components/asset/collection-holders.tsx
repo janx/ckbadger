@@ -1,7 +1,15 @@
 'use client';
 
 import { useId, useState } from 'react';
-import { LockKind, LockWordsView, lockWordsText, rowLock } from '@/components/ui/lock-kind';
+import {
+  LockKind,
+  LockWordsView,
+  lockWordsText,
+  namedLockWords,
+  rowLock,
+  rowLockFacts,
+} from '@/components/ui/lock-kind';
+import { SaidOnce, onEveryRow } from '@/components/asset/said-once';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -215,7 +223,7 @@ function ScopedCollectionHolders({
         holder.lockScriptHash ??
         `${holder.ownerHashPrefix ?? holderKey(holder)} (unresolved)`,
       // what its Lock cell says, from the one decision (B4)
-      lockWordsText(rowLock(holder, 'column')!, 'row'),
+      lockText(holder),
       `${holder.itemCount.toLocaleString('en-US')} ${countNoun(holder.itemCount, 'item', 'items')}`,
     ].join(' · ');
   const listed = holders.data?.data ?? [];
@@ -223,7 +231,14 @@ function ScopedCollectionHolders({
   const holdersAt =
     all && allHolders.data ? rankedPageAt('holders', allHolders.data, pagination) : null;
   // the holders' columns, built while their table is drawn (inside its part)
-  const columnsOf = (): ListColumn<CollectionHolder>[] => [
+  // what a holder's Lock cell says, from the one decision (B4)
+  const lockText = (holder: CollectionHolder) => lockWordsText(rowLock(holder, 'column')!, 'row');
+  /**
+   * The holders' columns; `sameLock` (lane P2's follow-up, item 3): a lock the same on every row of
+   * the page (an identity collection's holders, every one ".bit Lock") is no column, said once over
+   * the list, and the holder takes what the container gives beyond the sum.
+   */
+  const columnsOf = (sameLock: boolean): ListColumn<CollectionHolder>[] => [
     {
       key: 'rank',
       label: '#',
@@ -247,32 +262,10 @@ function ScopedCollectionHolders({
           2 * 1 +
           CELL_GAP_PX
       ),
+      ...(sameLock ? { width: 'auto' as const } : {}),
       render: (holder) => party(holder, 'row'),
     },
-    {
-      key: 'lock',
-      label: 'Lock',
-      // The flexible column (readability F3-e): 12 characters of the lock's name at the cells'
-      // 13 px (93.6) and the gap at its minimum, and what the container gives beyond the sum; a
-      // longer name ends in the one ellipsis. It was 115, a tag of 12 characters at 12 px with its
-      // 5 px sides and 1 px border (98.4).
-      minWidth: columnPx(cell(12) + CELL_GAP_PX),
-      width: 'auto',
-      render: (holder) => (
-        <span className="flex min-w-0">
-          {/* a column headed "Lock" is never empty: the default lock by its name (B4); a lock is
-              plain words, no chip (lane p-assets; D5 as the readability plan changed it) */}
-          <LockKind
-            lockKind={holder.lockKind}
-            lockCodeHash={holder.lockCodeHash}
-            address={holder.address}
-            size="row"
-            place="column"
-            className="text-text text-small min-w-0 truncate"
-          />
-        </span>
-      ),
-    },
+    ...(sameLock ? [] : [lockColumn]),
     countColumn(
       'items',
       'Items',
@@ -283,6 +276,30 @@ function ScopedCollectionHolders({
       true
     ),
   ];
+  const lockColumn: ListColumn<CollectionHolder> = {
+    key: 'lock',
+    label: 'Lock',
+    // The flexible column (readability F3-e): 12 characters of the lock's name at the cells'
+    // 13 px (93.6) and the gap at its minimum, and what the container gives beyond the sum; a
+    // longer name ends in the one ellipsis. It was 115, a tag of 12 characters at 12 px with its
+    // 5 px sides and 1 px border (98.4).
+    minWidth: columnPx(cell(12) + CELL_GAP_PX),
+    width: 'auto',
+    render: (holder) => (
+      <span className="flex min-w-0">
+        {/* a column headed "Lock" is never empty: the default lock by its name (B4); a lock is
+              plain words, no chip (lane p-assets; D5 as the readability plan changed it) */}
+        <LockKind
+          lockKind={holder.lockKind}
+          lockCodeHash={holder.lockCodeHash}
+          address={holder.address}
+          size="row"
+          place="column"
+          className="text-text text-small min-w-0 truncate"
+        />
+      </span>
+    ),
+  };
   // the distribution's columns, built while its column is drawn (inside its part)
   const bucketColumnsOf = (): ListColumn<
     NonNullable<CollectionHoldersProps['distribution']>[number]
@@ -343,47 +360,66 @@ function ScopedCollectionHolders({
                       holderKey(holder);
                       count(holder.itemCount, 'holder item count');
                     }
+                    const rows = holders.data!.data;
+                    const sameLock = onEveryRow(rows, lockText);
                     return (
-                      <ListTable
-                        label={all ? 'All collection holders' : 'Top 10 collection holders'}
-                        columns={wordHeads(columnsOf())}
-                        rows={holders.data.data}
-                        rowKey={holderKey}
-                        empty="No current holders."
-                        density="row"
-                        rowTitle={holderTitle}
-                        mobileRow={(holder, wide) => {
-                          // R7: the table's scale for its Items bars — the page's rounded maximum.
-                          const scale = resourceScale(listed.map((h) => h.itemCount));
-                          return (
-                            <HolderPhoneRow
-                              rank={rank(holder)}
-                              party={party(holder, phoneSize)}
-                              lock={(() => {
-                                // no part where the row names no lock (B4)
-                                const words = rowLock(holder, 'inline');
-                                return words && <LockWordsView words={words} size={phoneSize} />;
-                              })()}
-                              amount={
-                                <span className="whitespace-nowrap">
-                                  <AssetCount value={holder.itemCount} />{' '}
-                                  <span className="text-text-dim text-small">
-                                    {countNoun(holder.itemCount, 'item', 'items')}
+                      <>
+                        {sameLock && (
+                          <SaidOnce
+                            count={rows.length}
+                            singular="holder"
+                            parts={[
+                              <LockWordsView
+                                key="lock"
+                                words={namedLockWords(rowLockFacts(rows[0]), 'sentence')}
+                                size="row"
+                                className="text-text"
+                              />,
+                            ]}
+                          />
+                        )}
+                        <ListTable
+                          label={all ? 'All collection holders' : 'Top 10 collection holders'}
+                          columns={wordHeads(columnsOf(sameLock))}
+                          rows={holders.data.data}
+                          rowKey={holderKey}
+                          empty="No current holders."
+                          density="row"
+                          rowTitle={holderTitle}
+                          mobileRow={(holder, wide) => {
+                            // R7: the table's scale for its Items bars — the page's rounded maximum.
+                            const scale = resourceScale(listed.map((h) => h.itemCount));
+                            return (
+                              <HolderPhoneRow
+                                rank={rank(holder)}
+                                party={party(holder, phoneSize)}
+                                lock={(() => {
+                                  // no part where the row names no lock (B4), nor where every row
+                                  // of the page names the same, said once over the list
+                                  const words = sameLock ? null : rowLock(holder, 'inline');
+                                  return words && <LockWordsView words={words} size={phoneSize} />;
+                                })()}
+                                amount={
+                                  <span className="whitespace-nowrap">
+                                    <AssetCount value={holder.itemCount} />{' '}
+                                    <span className="text-text-dim text-small">
+                                      {countNoun(holder.itemCount, 'item', 'items')}
+                                    </span>
                                   </span>
-                                </span>
-                              }
-                              bar={{
-                                value: holder.itemCount,
-                                scale,
-                                color: CLASS_COLORS[assetClass],
-                              }}
-                              axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
-                              head={COLLECTION_HOLDER_PHONE_HEAD_PX}
-                              wide={wide}
-                            />
-                          );
-                        }}
-                      />
+                                }
+                                bar={{
+                                  value: holder.itemCount,
+                                  scale,
+                                  color: CLASS_COLORS[assetClass],
+                                }}
+                                axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
+                                head={COLLECTION_HOLDER_PHONE_HEAD_PX}
+                                wide={wide}
+                              />
+                            );
+                          }}
+                        />
+                      </>
                     );
                   }}
                 />

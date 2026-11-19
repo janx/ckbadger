@@ -1,4 +1,5 @@
-import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
+import { JOYID_CODE_HASH, namedLockCodeHash, seededAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -333,6 +334,80 @@ describe('Collection holders', () => {
 
 // Table-rows round, lane L2-4: the collection holder tables on the row rules — one 41 px line,
 // the holder bright, the lock a chip, the item count as an 8 px bar on the table's scale.
+// Lane P2's follow-up (item 3): a lock the same on every row of the page (an identity collection's
+// holders, every one ".bit Lock") is no column and no phone part: said once over the list, by the
+// one helper the objects list uses (SaidOnce), and the holder takes the table's flexible width.
+describe('Collection holders say a lock the same on every row once', () => {
+  const bitLock = namedLockCodeHash('.bit Lock');
+  const holder = (seed: string, itemCount: number) => {
+    const address = seededAddress(seed, bitLock);
+    return {
+      lockScriptHash: '0x' + seed.charCodeAt(0).toString(16).padStart(2, '0').repeat(32),
+      address,
+      itemCount,
+      lockCodeHash: bitLock,
+      lockKind: '.bit Lock',
+    };
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('drops the Lock column and says ".bit Lock" once over the table', async () => {
+    atContainerWidth(1232);
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), holder('b', 2)]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="bit" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).not.toContain('Lock');
+    expect(table).not.toHaveTextContent('.bit Lock');
+    const once = document.querySelector<HTMLElement>('[data-role="said-once"]')!;
+    expect(once).toHaveTextContent(/^every one of the 2\sholders listed · \.bit Lock$/);
+    expect(once.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // the holder is the flexible column now
+    const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
+    expect(cols[1].width).toBe('auto');
+    // each row's title still names its lock
+    expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain('.bit Lock');
+  });
+
+  it('leaves the lock out of each phone row', async () => {
+    atContainerWidth(358);
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), holder('b', 2)]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="bit-phone" />);
+    await waitFor(() =>
+      expect(document.querySelector('[data-role="said-once"]')).toHaveTextContent(
+        /^every one of the 2\sholders listed · \.bit Lock$/
+      )
+    );
+    expect(document.querySelectorAll('[data-lock-kind]')).toHaveLength(1);
+    expect(document.querySelector('[data-role="said-once"] [data-lock-kind]')).toBeInTheDocument();
+  });
+
+  it('keeps the column where the rows’ locks differ', async () => {
+    atContainerWidth(1232);
+    const other = {
+      ...holder('c', 1),
+      address: seededAddress('c'),
+      lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+      lockKind: 'Default Lock',
+    };
+    const load = vi.fn().mockResolvedValue(page([holder('a', 3), other]));
+    render(<CollectionHolders assetClass="identities" load={load} queryKey="mixed" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toContain('Lock');
+    expect(document.querySelector('[data-role="said-once"]')).toBeNull();
+  });
+});
+
 describe('Collection holders on the row rules (table-rows L2-4)', () => {
   const joyid = {
     ...resolved,
