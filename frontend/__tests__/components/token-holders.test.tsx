@@ -656,9 +656,11 @@ describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
   };
 
   // Re-pinned on purpose (lane p-assets, review of C and D logic SHOULD 4; renamed, it was "…, whatever
-  // its length"): the bar and its share are 202.4 px that cannot wrap; a lock beside them on a 328 px
-  // line holds the right edge up to 113.6 px of words, and a longer one ("UTXOSwap Proxy Lock",
-  // 148.2 px) goes under the bar at the right edge, where it was drawn under the share figure
+  // its length"): the bar and its share are 206.6 px that cannot wrap (202.4 with the share at 12
+  // px, before the ink and size roles round); a lock beside them on a 328 px line holds the right
+  // edge up to 109.4 px of words (113.6), 14 glyphs at 13 px either way, and a longer one
+  // ("UTXOSwap Proxy Lock", 148.2 px) goes under the bar at the right edge, where it was drawn under
+  // the share figure
   it('keeps the balance on line 1 and the lock at the bar line’s right where it fits, else under the bar', async () => {
     atContainerWidth(358);
     atViewportWidth(390);
@@ -680,6 +682,9 @@ describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
     );
     expect(share).toHaveClass('text-text');
     expect(share).not.toHaveClass('text-text-dim');
+    // the ink and size roles round: the share is a value, at 13 px (it was 12, text-meta)
+    expect(share).toHaveClass('text-small');
+    expect(share).not.toHaveClass('text-meta');
     // the bar's line holds its right part where it fits beside the bar, by the row's own rule
     for (const row of [named, unnamed])
       expect(row.querySelector('[data-line="share"] > [data-part="left"]')).toHaveClass(
