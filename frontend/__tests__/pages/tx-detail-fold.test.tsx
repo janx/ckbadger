@@ -4,7 +4,7 @@
 // state is one URL parameter (`cells`), pushed so that back walks it; a cell the URL points at by
 // its out point (`#<tx hash>-<index>`, the anchor the cell page links with) is never folded.
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -137,6 +137,27 @@ describe('the transaction page folds a long sheet (lane D3)', () => {
       `/tx/${LONG_TX_HASH}?witness=0&cells=all#${LONG_TX_PREV}-57`,
       { scroll: false }
     );
+  });
+
+  // Lane P1 (lane D3's note): the cell page's link opens the transaction at its cell; the page drew
+  // that tile under the fold but left the reader at the top, the tile out of sight below.
+  it('brings the cell the URL points at into view, once it is drawn (P1)', async () => {
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      mockHash = `#${LONG_TX_PREV}-57`;
+      render(<TransactionDetailPage />);
+      await sheets();
+      await waitFor(() => expect(scroll).toHaveBeenCalled());
+      const target = scroll.mock.contexts[0] as HTMLElement;
+      expect(target.dataset.cellId).toBe('in:57');
+      expect(scroll).toHaveBeenCalledWith({ block: 'center' });
+      // once, not on every render
+      expect(scroll).toHaveBeenCalledTimes(1);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 
   it('never folds the cell the URL points at by its out point', async () => {
