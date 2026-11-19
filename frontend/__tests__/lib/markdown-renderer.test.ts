@@ -16,6 +16,8 @@ vi.mock('@/lib/api', () => ({
     getTransactionLifecycle: vi.fn(),
     getTransactionCellDeps: vi.fn(),
     getMinerAddressDistributionChart: vi.fn(),
+    getAverageBlockTimeChart: vi.fn(),
+    getEpochTimeLengthChart: vi.fn(),
     getDotbitItemDetail: vi.fn(),
     getDotbitItemActivities: vi.fn(),
     getDidCkbItemDetail: vi.fn(),
@@ -32,6 +34,8 @@ vi.mock('@/lib/api', () => ({
     getBlockUncle: vi.fn(),
     // F2 group dao (DAO-12)
     getDaoDepositors: vi.fn(),
+    getDaoStatistics: vi.fn(),
+    getDaoDeposits: vi.fn(),
   },
 }));
 
@@ -510,6 +514,67 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Chart miner-address-distribution');
     expect(result.body).toContain('ExampleMiner');
     expect(result.body).toContain('Total blocks: 100');
+  });
+
+  // lane exactness, part A2 (the routes review's N8): a chart's columns are named with its axes, so the two duration
+  // charts, which the routes send in whole ms, say so (a reader got 14418000 under "value")
+  // lane exactness, part A2 (the routes review's S2): the DAO's live cells are one figure under one name, its two
+  // parts beside it, as the DAO page states them (the view wrote the legacy activeDeposits, which
+  // counts the withdrawal requests too)
+  it('states the DAO’s live cells once, as deposits and withdrawal requests', async () => {
+    vi.mocked(api.getDaoStatistics).mockResolvedValue({
+      totalDeposited: '1300000000000',
+      totalDepositedCkb: '13000',
+      totalDepositors: 3,
+      activeDeposits: 13,
+      depositCellsCount: 9,
+      withdrawalRequestCellsCount: 4,
+      liveCellsCount: 13,
+      totalCompensationPaid: '0',
+      totalCompensationPaidCkb: '0',
+      unclaimedCompensation: '0',
+      unclaimedCompensationCkb: '0',
+      averageDepositDays: null,
+      estimatedApc: '2.10',
+    } as never);
+    vi.mocked(api.getDaoDeposits).mockResolvedValue({ data: [], nextCursor: null } as never);
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/dao'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('| depositCellsCount | 9 |');
+    expect(result.body).toContain('| withdrawalRequestCellsCount | 4 |');
+    expect(result.body).toContain('| liveCellsCount | 13 |');
+    expect(result.body).not.toContain('activeDeposits');
+  });
+
+  it('names a chart’s columns by its axes: the durations in milliseconds', async () => {
+    vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
+      title: 'Epoch Time Length',
+      yAxisLabel: 'Milliseconds',
+      y2AxisLabel: 'Blocks',
+      data: [{ date: '12000', value: '14418000', value2: '1800' }],
+    } as never);
+    vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue({
+      title: 'Average Block Time',
+      yAxisLabel: 'Milliseconds',
+      data: [{ date: '2026-11-18', value: '9955' }],
+    } as never);
+    const epochs = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/charts/epoch-time-length'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(epochs.body).toContain('| date | value (Milliseconds) | value2 (Blocks) |');
+    expect(epochs.body).toContain('| 12000 | 14418000 | 1800 |');
+    const blocks = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/charts/average-block-time'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(blocks.body).toContain('| date | value (Milliseconds) | value2 |');
   });
 
   it('renders scripts list markdown with family-level columns', async () => {

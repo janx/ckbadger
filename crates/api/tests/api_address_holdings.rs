@@ -428,12 +428,29 @@ async fn address_holdings_counts_all_four_classes_and_exact_capacity_partition()
     assert_eq!(json["depositCellsCount"], 1);
     assert_eq!(json["withdrawalRequestCellsCount"], 1);
     let number = |v: &serde_json::Value| v.as_str().unwrap().parse::<i128>().unwrap();
+    // The balance in three parts, each true by its name (the lead's ruling, readability lane P1's
+    // third round; review p-logic-chain MUST 3 and SHOULD 3): the whole capacity of its Nervos DAO
+    // cells, what pays for the bytes of its other cells, and the rest of its other cells. The two
+    // DAO cells are 1,000 CKB each and occupy 102 bytes each (8 capacity, a 53-byte lock, the DAO
+    // type's 33 and its 8 bytes of data); the nine others are 1,000 CKB each.
+    let dao_cells = 2 * 100_000_000_000i128;
+    let dao_occupied = 2 * 102 * 100_000_000i128;
+    let other_occupied = f.occupied - dao_occupied;
+    assert_eq!(number(&json["daoCellsCapacity"]), dao_cells);
+    assert_eq!(number(&json["otherCellsOccupiedCapacity"]), other_occupied);
     assert_eq!(
-        number(&json["occupiedCapacity"])
-            + number(&json["freeCapacity"])
-            + number(&json["daoFreeCapacity"]),
+        number(&json["otherCellsFreeCapacity"]),
+        9 * 100_000_000_000 - other_occupied
+    );
+    assert_eq!(
+        number(&json["daoCellsCapacity"])
+            + number(&json["otherCellsOccupiedCapacity"])
+            + number(&json["otherCellsFreeCapacity"]),
         f.balance
     );
+    // the old parts named a DAO cell's free part "DAO free" and the rest "free": gone
+    assert!(json.get("freeCapacity").is_none(), "{json}");
+    assert!(json.get("daoFreeCapacity").is_none(), "{json}");
     for (class, count) in [
         ("dao", 2),
         ("token", 2),

@@ -13,7 +13,8 @@ use super::dao_epoch::{next_phase0_boundary, nominal_day_bucket, phase1_ready_ep
 use crate::derived::require_derived;
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::utils::address::{compute_script_hash, resolve_lock_address};
-use crate::utils::exact_ratio::format_percent;
+// every percentage of the DAO evidence is cut at its places, never rounded (lane exactness, part A2, S5)
+use crate::utils::exact_ratio::format_percent_cut as format_percent;
 use crate::utils::script_to_address;
 use crate::AppState;
 
@@ -724,4 +725,17 @@ pub(super) async fn get_depositors(
     .map_err(|error| ApiError::internal(format!("DAO depositors task failed: {error}")))?
     .map_err(|error| ApiError::internal(format!("DAO depositors read failed: {error:#}")))?;
     ok(page?)
+}
+
+#[cfg(test)]
+mod exact_figure_tests {
+    use super::share;
+
+    /// lane exactness, part A2, S5: the DAO evidence's shares are cut at the places the DAO page shows: 2 of 3 is
+    /// 66.66 % (half up 66.67).
+    #[test]
+    fn a_share_is_cut() {
+        assert_eq!(share(2, 3).unwrap().as_deref(), Some("66.66"));
+        assert_eq!(share(1, 0).unwrap(), None);
+    }
 }

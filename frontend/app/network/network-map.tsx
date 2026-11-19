@@ -200,20 +200,43 @@ export function layoutCountryClusters(
   return { dots, labels, listed };
 }
 
-/** The map's counts, one derivation for the key, the reading row and the notes. */
+/**
+ * The name both routes give a located node whose GeoIP record names no country (lane exactness, part A2, the pages
+ * review's NOTE 3: the map sent "", the distributions "Unknown").
+ */
+const NO_COUNTRY = 'Unknown';
+
+/**
+ * The map's counts, one derivation for the key, the reading row and the notes. A located node with
+ * no country is in none: it is not counted as a country, and `noCountry` says how many there are.
+ */
 export function mapCounts(map: NetworkMap): {
   reachable: number;
   before: number;
   ringed: number;
   countries: number;
+  noCountry: number;
 } {
   const reachable = map.points.filter((point) => point.reachable).length;
+  const groups = byCountry(map.points);
   return {
     reachable,
     before: map.points.length - reachable,
     ringed: map.points.filter((point) => point.localSessionObserved).length,
-    countries: byCountry(map.points).size,
+    countries: [...groups.keys()].filter((country) => country !== NO_COUNTRY).length,
+    noCountry: groups.get(NO_COUNTRY)?.length ?? 0,
   };
+}
+
+/**
+ * The located nodes and their countries in words, one sentence for the reading row and the notes
+ * ("4 verified nodes in 2 countries"; ", 2 with no country known" where there are such).
+ */
+function locatedWords(map: NetworkMap): string {
+  const { countries, noCountry } = mapCounts(map);
+  return `${map.located.toLocaleString('en-US')} verified nodes in ${countries.toLocaleString('en-US')} countries${
+    noCountry ? `, ${noCountry.toLocaleString('en-US')} with no country known` : ''
+  }`;
 }
 
 /**
@@ -627,11 +650,7 @@ export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
   const perRow = Math.max(8, Math.floor(width / 14));
   return (
     <div className="mt-3 flex min-w-0 flex-col gap-3">
-      <ReadoutRow
-        label="Node readout"
-        pinned={readout.showingPin}
-        idle={`${ready.located.toLocaleString('en-US')} verified nodes in ${mapCounts(ready).countries.toLocaleString('en-US')} countries`}
-      >
+      <ReadoutRow label="Node readout" pinned={readout.showingPin} idle={locatedWords(ready)}>
         {selected ? peerLine(selected) : null}
       </ReadoutRow>
       {neverVerified > 0 && (
@@ -692,14 +711,13 @@ export function NetworkMapNotes() {
   // Set in the page's tier-2 Prose (HowTheCrawlerSees): the paragraph carries no classes of its own.
   return (
     <p>
-      {data.located.toLocaleString('en-US')} verified nodes in {counts.countries} countries ·
-      ringed: the {counts.ringed} this node had a session with in the latest round.{' '}
-      {data.located.toLocaleString('en-US')} of {data.verifiedRetained.toLocaleString('en-US')}{' '}
-      retained verified peers have approximate GeoIP coordinates;{' '}
-      {data.locationUnavailable.toLocaleString('en-US')} locations are unavailable. Dots with close
-      coordinates are displaced to keep them selectable. There is no centre: every node keeps a
-      handful of connections of its own, and that mesh cannot be observed from outside, so no links
-      are drawn, not even this node&apos;s, which would make it look like a centre.
+      {locatedWords(data)} · ringed: the {counts.ringed} this node had a session with in the latest
+      round. {data.located.toLocaleString('en-US')} of{' '}
+      {data.verifiedRetained.toLocaleString('en-US')} retained verified peers have approximate GeoIP
+      coordinates; {data.locationUnavailable.toLocaleString('en-US')} locations are unavailable.
+      Dots with close coordinates are displaced to keep them selectable. There is no centre: every
+      node keeps a handful of connections of its own, and that mesh cannot be observed from outside,
+      so no links are drawn, not even this node&apos;s, which would make it look like a centre.
     </p>
   );
 }

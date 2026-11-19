@@ -108,6 +108,25 @@ function netNote(note: ReturnType<typeof balanceNet>['note']): string {
   }
 }
 
+/**
+ * The order a reader needs (lane P1 follow-up; third round, review p-logic-chain NOTE 4): who gave,
+ * then who got, then who neither gave nor got; each group in the feed's order, the largest CKB
+ * change first (`orderParticipants`). A party gave if its CKB or any item left it: a party that gave
+ * only a token stood last, ordered by CKB alone. A party that gave CKB and got an item gave.
+ */
+function balanceOrder(participants: ParticipantInfo[]): ParticipantInfo[] {
+  const gave = (p: ParticipantInfo) =>
+    BigInt(p.ckbDelta) < BigInt(0) || p.itemDeltas.some((i) => BigInt(String(i.delta)) < BigInt(0));
+  const got = (p: ParticipantInfo) =>
+    BigInt(p.ckbDelta) > BigInt(0) || p.itemDeltas.some((i) => BigInt(String(i.delta)) > BigInt(0));
+  const ordered = orderParticipants(participants);
+  return [
+    ...ordered.filter(gave),
+    ...ordered.filter((p) => !gave(p) && got(p)),
+    ...ordered.filter((p) => !gave(p) && !got(p)),
+  ];
+}
+
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address}:${i}`;
 }
@@ -133,7 +152,7 @@ export function BalanceChanges({
   // the order a reader needs (lane P1 follow-up; review chain-b): who gave, then who got, each
   // the largest first, as the feed and What moved order them; the Net row, with the fee, last. Read
   // in the section's boundary, so a value it cannot read fails the section in place.
-  const parties = () => orderParticipants(activity.participants);
+  const parties = () => balanceOrder(activity.participants);
   const net = () =>
     balanceNet({
       hash: activity.txHash,

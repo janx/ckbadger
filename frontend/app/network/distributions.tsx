@@ -202,14 +202,15 @@ export function HostingBar() {
   const shown = hosting.organisations.map((org) => [org.label, org.count] as const);
   const segments = hosting.rest > 0 ? [...shown, ['other networks', hosting.rest] as const] : shown;
   const leader = shown.find(([org]) => org !== 'Unknown');
-  const countries = data.countries.filter((country) => country.label !== 'Unknown').length;
+  // the countries are counted once, on the map, of its located nodes (lane exactness, part A2, the pages review's
+  // NOTE 3: this said "across C countries" of every verified node, beside the map's own count)
   return (
     <HostingSection
       segments={segments}
       total={total}
       caption={
         leader &&
-        `${leader[1].toLocaleString('en-US')} of the ${total.toLocaleString('en-US')} verified nodes run on ${leader[0]}, across ${countries.toLocaleString('en-US')} countries.`
+        `${leader[1].toLocaleString('en-US')} of the ${total.toLocaleString('en-US')} verified nodes run on ${leader[0]}.`
       }
     />
   );

@@ -236,6 +236,8 @@ describe('axis ticks (CH-12)', () => {
       epochs: 42,
       intervals: 75_000,
       beyondRange: 0,
+      // each bucket's count, the route's (lane exactness, part A2, N5)
+      bucketCounts: Array.from({ length: 501 }, () => 149),
     });
     render(<ChartDetail slug="block-time-distribution" />);
     await screen.findByRole('img', { name: 'Block intervals' });

@@ -141,6 +141,9 @@ function sinceSentence(
   const now = value(last);
   const previous = points.at(-2);
   if (!previous) return 'The first day on record.';
+  // a series whose every day equals the newest is no record, and a day of nothing is never "the
+  // most" (lane exactness, part A2, S3: two days of 0 read "The same as the day before, the most in a day on record.")
+  if (points.every((point) => compare(value(point), now) === 0)) return sameEveryDay(model);
   // the newest point stands at the record where no point of the series is above it; the peak, the
   // route's, is named only where it does not
   const atRecord = points.every((point) => compare(value(point), now) <= 0);
@@ -165,6 +168,17 @@ function sinceSentence(
 }
 
 /**
+ * A series whose every day equals the newest: "The same every day on record.", a percentage with its
+ * figure (lane exactness, part A2, S3).
+ */
+function sameEveryDay(model: ChartModel): string {
+  const last = model.points.at(-1)!;
+  return model.unit === '%'
+    ? `The same ${stated(last.values[model.series[0].key], model.unit)} every day on record.`
+    : 'The same every day on record.';
+}
+
+/**
  * A level that moves slowly against its peak (the board's hash rate): how far under the peak it is,
  * as a share of the peak, and its change on the day before. A percentage states its peak, its
  * figure and the day before's, and says up, down or the same by the figures it shows (S9: never a
@@ -176,12 +190,20 @@ function peakSentence(model: ChartModel): string {
   const key = model.series[0].key;
   const last = points.at(-1)!;
   const previous = points.at(-2);
-  const peak = model.peak;
-  if (peak && compare(ratio(peak.raw, 'head peak'), at(last, key)) < 0)
+  const routePeak = model.peak;
+  if (routePeak && compare(ratio(routePeak.raw, 'head peak'), at(last, key)) < 0)
     throw new Error(
-      `${model.title}: peak ${peak.raw} on ${peak.label} is under the newest point, ${last.values[key]} on ${last.label}`
+      `${model.title}: peak ${routePeak.raw} on ${routePeak.label} is under the newest point, ${last.values[key]} on ${last.label}`
     );
   const percent = unit === '%';
+  // a flat level is the same every day; a peak of zero is no peak (lane exactness, part A2, S3: two days of 0 read "At
+  // its peak, unchanged from the day before.")
+  const figure = (point: ChartPoint): Ratio =>
+    percent ? shown(point.values[key]) : at(point, key);
+  if (previous && points.every((point) => compare(figure(point), figure(last)) === 0))
+    return sameEveryDay(model);
+  const peak =
+    model.peak && ratio(model.peak.raw, 'head peak')[0] !== BigInt(0) ? model.peak : null;
   if (percent) {
     const peakText = peak ? `Its peak was ${stated(peak.raw, unit)} on ${peak.label}` : '';
     if (!previous) return peak ? `${peakText}.` : 'The first day on record.';
@@ -258,10 +280,17 @@ function dayBefore(earlier: string, later: string): boolean {
 
 const capitalise = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
 
-/** The keys of a point's two largest values among `keys`, largest first (exact; ties keep order). */
-function largestTwo(point: ChartPoint, keys: readonly string[]): [string, string] {
+/**
+ * The keys of a point's largest value among `keys`, every one tied at it, in `keys`' order, and the
+ * largest after them (exact; lane exactness, part A2, N9: a tie at the top named one kind "the largest").
+ */
+function largestKinds(
+  point: ChartPoint,
+  keys: readonly string[]
+): { top: string[]; next: string | null } {
   const sorted = [...keys].sort((a, b) => compare(at(point, b), at(point, a)));
-  return [sorted[0], sorted[1]];
+  const top = sorted.filter((key) => compare(at(point, key), at(point, sorted[0])) === 0);
+  return { top, next: sorted[top.length] ?? null };
 }
 
 /** Activity kinds and knowledge kinds in a sentence's words. */
@@ -373,6 +402,9 @@ function msAt(point: ChartPoint, context: string): string {
 }
 
 /** Labels in a list: "1.3 s", "1.3 s and 1.4 s", "1.3 s, 1.4 s and 1.5 s". */
+/** A tie at a histogram's top is listed up to this many, else counted (lane exactness, part A2, S4: it listed 500). */
+const TIES_LISTED = 3;
+
 function listed(items: readonly string[]): string {
   return items.length < 2
     ? (items[0] ?? '')
@@ -401,16 +433,19 @@ const HEADS: Record<string, HeadOf> = {
         figure: null,
         sentence: 'No activity of any kind on the day.',
       };
-    const [first, second] = largestTwo(last, keys);
+    const { top, next } = largestKinds(last, keys);
+    const first = top[0];
+    const names = listed(top.map((key) => word(KIND_WORDS, key)));
+    const tied = top.length > 1;
     return {
-      eyebrow: `${word(KIND_WORDS, first)}, the largest kind in a day`,
+      eyebrow: `${names}, the largest kind${tied ? 's' : ''} in a day`,
       at: last.label,
       figure: {
         raw: last.values[first],
         display: formatChartHead(last.values[first], m.unit),
         unit: m.unit,
       },
-      sentence: `${capitalise(word(KIND_WORDS, first))} were ${cutShare(last.values[first], whole, 'activities')} of the day's ${ACTIVITY_COUNT_WORDS.noun}, ${word(KIND_WORDS, second)} ${cutShare(last.values[second], whole, 'activities')}.`,
+      sentence: `${capitalise(names)} were ${cutShare(last.values[first], whole, 'activities')}${tied ? ' each' : ''} of the day's ${ACTIVITY_COUNT_WORDS.noun}${next ? `, ${word(KIND_WORDS, next)} ${cutShare(last.values[next], whole, 'activities')}` : ''}.`,
     };
   },
   'cell-count': (_, m) => dated(m, 'live', peakSentence),
@@ -440,7 +475,7 @@ const HEADS: Record<string, HeadOf> = {
     const circulating = m.latest.raw;
     return {
       ...head,
-      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(circulating, whole, 'supply')} circulates, ${cutShare(last.values.daoDeposited, circulating, 'supply')} of it in the Nervos DAO; ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
+      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(circulating, whole, 'supply')} circulates, ${cutShare(last.values.daoDeposited, circulating, 'supply')} of it deposited in the Nervos DAO; ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
     };
   },
   'total-deposit': (_, m) => dated(m, 'deposited in the Nervos DAO', peakSentence),
@@ -492,20 +527,25 @@ const HEADS: Record<string, HeadOf> = {
     const head = dated(m, 'the largest kind', () => '');
     if (!last) return head;
     const keys = m.series.map((entry) => entry.key);
-    const [first, second] = largestTwo(last, keys);
+    const { top, next } = largestKinds(last, keys);
+    const first = top[0];
     const whole = wholeAt(last, 'knowledge whole');
-    const one = KNOWLEDGE_WORDS[first];
-    const two = KNOWLEDGE_WORDS[second];
-    if (!one || !two) throw new Error(`chart head: no words for ${first} or ${second}`);
+    const words = (key: string) => {
+      const found = KNOWLEDGE_WORDS[key];
+      if (!found) throw new Error(`chart head: no words for ${key}`);
+      return found;
+    };
+    const names = listed(top.map((key) => words(key).name));
+    const tied = top.length > 1;
     return {
-      eyebrow: `${one.name}, the largest kind`,
+      eyebrow: `${names}, the largest kind${tied ? 's' : ''}`,
       at: last.label,
       figure: {
         raw: last.values[first],
         display: formatChartHead(last.values[first], 'CKB'),
         unit: 'CKB',
       },
-      sentence: `${capitalise(one.name)} ${one.one ? 'holds' : 'hold'} ${cutShare(last.values[first], whole, 'knowledge')} of occupied CKB, ${two.name} ${cutShare(last.values[second], whole, 'knowledge')}.`,
+      sentence: `${capitalise(names)} ${!tied && words(first).one ? 'holds' : 'hold'} ${cutShare(last.values[first], whole, 'knowledge')}${tied ? ' each' : ''} of occupied CKB${next ? `, ${words(next).name} ${cutShare(last.values[next], whole, 'knowledge')}` : ''}.`,
     };
   },
   'most-utilized-scripts': rankedHead('script'),
@@ -619,18 +659,28 @@ const HEADS: Record<string, HeadOf> = {
     // the window the route counted: its epochs, every interval, those past the drawn 50 s (S4)
     const window = m.intervalWindow;
     if (!window) throw new Error('block intervals: no window from the route');
-    // every bucket tied with the most common one is named (S5)
+    // every bucket tied with the most common one is named (S5), a long tie counted (lane exactness, part A2, S4)
     const ties = m.readingTies ?? [];
     const beyond = window.beyondRange
       ? `; ${formatCount(window.beyondRange, 'block')} came more than 50 s after it`
       : '';
+    const tied =
+      ties.length === 0
+        ? ', more than at any other tenth of a second'
+        : ties.length <= TIES_LISTED
+          ? `, as many as ${listed(ties.map((tie) => `${tie} s`))} after it, more than at any other tenth of a second`
+          : `, as many as at ${ties.length} other tenths of a second, more than at any of the rest`;
     return {
       eyebrow: 'the most common interval',
-      at: `last ${formatCount(window.epochs, 'epoch')}`,
+      // no window of 0 epochs on a chain in its first (lane exactness, part A2, N4)
+      at: window.epochs ? `last ${formatCount(window.epochs, 'epoch')}` : null,
       figure: mode ? { raw: mode.label, display: mode.label, unit: 's' } : null,
       sentence: mode
-        ? `${percentText(mode.values.primary)} of blocks came ${mode.label} s after their parent${ties.length ? `, as many as ${listed(ties.map((tie) => `${tie} s`))} after it` : ''}, more than at any other tenth of a second${beyond}.`
-        : 'No blocks in the window yet.',
+        ? `${percentText(mode.values.primary)} of blocks came ${mode.label} s after their parent${tied}${beyond}.`
+        : window.intervals
+          ? // every interval past the drawn range: no most common one under it, no figure (S4)
+            `No interval under 50 s; ${formatCount(window.beyondRange, 'block')} came more than 50 s after their parent.`
+          : 'No blocks in the window yet.',
     };
   },
   'epoch-time-distribution': (_, m) => {
@@ -644,9 +694,12 @@ const HEADS: Record<string, HeadOf> = {
       figure: mode ? { raw: mode.label, display: mode.label, unit: 'h' } : null,
       sentence: taken.length
         ? `The shortest epoch took ${taken[0].label} h and the longest ${taken.at(-1)!.label} h${
-            // every duration tied with the most common one is named (S5)
+            // every duration tied with the most common one is named (S5), a long tie counted
+            // (lane exactness, part A2, S4)
             mode && m.readingTies?.length
-              ? `; as many took ${listed(m.readingTies.map((tie) => `${tie} h`))} as ${mode.label} h`
+              ? m.readingTies.length <= TIES_LISTED
+                ? `; as many took ${listed(m.readingTies.map((tie) => `${tie} h`))} as ${mode.label} h`
+                : `; as many took each of ${m.readingTies.length} other durations as ${mode.label} h`
               : ''
           }.`
         : 'No completed epochs yet.',

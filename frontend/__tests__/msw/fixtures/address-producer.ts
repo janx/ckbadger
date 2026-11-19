@@ -369,11 +369,14 @@ export const addressProducerHoldings = {
       occupiedCapacity: '28400000000',
     },
   },
-  daoFreeCapacity: '179600000000',
   daoUnclaimedCompensation: '2694000000',
   depositCellsCount: 1,
   estimatedApc: '3.70',
-  freeCapacity: '773100000000',
+  // the route's three parts since lane P1's third round (it sent freeCapacity 773100000000 and
+  // daoFreeCapacity 179600000000): its two DAO cells whole, its other cells' bytes and the rest
+  daoCellsCapacity: '200000000000',
+  otherCellsFreeCapacity: '773100000000',
+  otherCellsOccupiedCapacity: '126900000000',
   holdings: {
     dao: 2,
     identity: 3,

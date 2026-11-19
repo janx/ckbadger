@@ -1200,8 +1200,14 @@ export interface AddressHoldings {
   balance: string;
   occupiedCapacity: string;
   /** Ordinary free capacity; DAO free is a disjoint partition. */
-  freeCapacity: string;
-  daoFreeCapacity: string;
+  /**
+   * The balance in three parts that make it exactly (lane P1, third round): the whole capacity of
+   * its Nervos DAO cells, what pays for the bytes of its other cells, and the rest of those. None
+   * is "spendable": a lock, a since or a cellbase's maturity decides that.
+   */
+  daoCellsCapacity: string;
+  otherCellsOccupiedCapacity: string;
+  otherCellsFreeCapacity: string;
   liveCellsCount: number;
   holdings: { dao: number; token: number; object: number; identity: number };
   classes: Record<AddressCellClass, AddressClassTotals>;
@@ -2201,6 +2207,11 @@ interface DaoStatistics {
   totalDeposited: string;
   totalDepositedCkb: string;
   totalDepositors: number;
+  /**
+   * The live DAO cells under a legacy name: `liveCellsCount`, which the route checks it equals (a
+   * withdrawal request is no active deposit). Its last reader is the home page's card; it goes when
+   * that reads `liveCellsCount` (lane exactness, part A2, S2; part B).
+   */
   activeDeposits: number;
   depositCellsCount: number;
   withdrawalRequestCellsCount: number;
@@ -2909,6 +2920,11 @@ export interface BlockTimeDistributionChartResponse extends ChartResponse {
   intervals: number;
   /** The intervals past the drawn range, more than 50 s after their parent. */
   beyondRange: number;
+  /**
+   * Each bucket's intervals, one per point of `data` (lane exactness, part A2, N5): the most common
+   * interval and a tie are read from these, not from the cut shares.
+   */
+  bucketCounts: number[];
 }
 
 /** Cell size: the histogram and the two wholes its page divides by (lane D1). */
