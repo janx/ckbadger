@@ -692,7 +692,12 @@ describe('BlockDetailPage', () => {
       expect(age()).toBe('59s ago');
       tick(1000);
       expect(age()).toBe('1m ago');
-      expect(facts()).toHaveTextContent(/1m ago · [\d,.]+ s after its parent/);
+      // re-pinned on purpose (lane D2b): the age is the time's one note; the interval to the
+      // parent is the evidence tier's fact (it followed the age here)
+      expect(facts()).not.toHaveTextContent('after its parent');
+      expect(screen.getByTestId('block-tier2-facts')).toHaveTextContent(
+        /[\d,.]+ s after its parent/
+      );
       unmount();
       expect(vi.getTimerCount()).toBe(0);
     } finally {

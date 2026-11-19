@@ -39,6 +39,7 @@ import { checkHeaderEpoch, formatEpochPosition, isGenesisEpoch } from '@/lib/epo
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8Age, Utc8Date, Utc8DateTime } from '@/components/ui/utc8-date';
 import { HeadId } from '@/components/ui/head-id';
+import { RowSeal } from '@/components/ui/row-seal';
 import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
 
@@ -297,12 +298,11 @@ export default function BlockDetailPage() {
                 note: unitNode(formatCount(block.confirmations, 'confirmation')),
               },
               {
+                // its age alone: the interval to its parent is an evidence fact (lane D2b), so
+                // the strip stands in one row at 1280
                 label: 'time',
                 value: <Utc8DateTime timestamp={block.timestamp} />,
-                note: [
-                  <Utc8Age key="age" timestamp={block.timestamp} />,
-                  parentElapsedMs !== null && `${parentElapsedMs / 1000} s after its parent`,
-                ],
+                note: <Utc8Age timestamp={block.timestamp} />,
               },
               {
                 label: 'miner',
@@ -488,6 +488,16 @@ export default function BlockDetailPage() {
                   <dt className="text-text-dim mb-1">Fees</dt>
                   <dd className="text-text-bright">{amount(block.totalFees, 'fees')}</dd>
                 </div>
+                {/* The time from its parent (lane D2b): the strip's time note before, here so the
+                    strip stands in one row at 1280; genesis has no parent and no interval. */}
+                {parentElapsedMs !== null && (
+                  <div>
+                    <dt className="text-text-dim mb-1">Interval</dt>
+                    <dd className="text-text-bright">
+                      {parentElapsedMs / 1000} s after its parent
+                    </dd>
+                  </div>
+                )}
               </dl>
               <DetailSection title="Position in the chain">
                 <BlockPosition
@@ -940,49 +950,57 @@ function UncleRow({
       `Uncle ${index} of block ${formatBlockNumber(blockNumber)}: sibling facts disagree`
     );
   return (
-    <article className="border-row-rule text-small flex flex-col gap-0.5 border-b py-2.5">
-      <span className="flex flex-wrap items-baseline gap-x-2">
-        <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
-          {formatBlockNumber(uncle.number)}
-        </Link>
-        <span className="text-text-dim">uncle</span>
-        <Link href={getUncleDetailHref(blockNumber, index)}>
-          <Hash hash={uncle.hash} size="row" className="text-small" />
-        </Link>
-      </span>
-      <span className="text-text-dim">
-        {error ? (
-          `sibling facts unavailable: ${error.message}`
-        ) : !detail ? (
-          'reading its sibling…'
-        ) : detail.sameParentAs === null ? (
-          <>
-            the canonical{' '}
-            <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-              {formatBlockNumber(detail.canonicalAtHeight.number)}
-            </Link>{' '}
-            has another parent
-          </>
-        ) : (
-          <>
-            sibling of{' '}
-            <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-              {formatBlockNumber(detail.sameParentAs)}
-            </Link>{' '}
-            <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
-              <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
-            </Link>
-            , same parent{' '}
-            <Link href={`/blocks/${uncle.parentHash}`}>{formatBlockNumber(uncle.number - 1)}</Link>
-          </>
-        )}
-      </span>
-      <span className="text-text-dim">
-        {unitNode(formatUtc8Time(uncle.timestamp))}
-        {detail?.msAfterSibling != null &&
-          `, ${detail.msAfterSibling >= 0 ? `${detail.msAfterSibling.toLocaleString('en-US')} ms after` : `${(-detail.msAfterSibling).toLocaleString('en-US')} ms before`} its sibling`}{' '}
-        · {unitNode(formatCount(uncle.proposalIds.length, 'proposal'))}
-      </span>
+    // The row leads with the uncle's row stone (lane D2b; U-03, R8): the block stone without rods,
+    // the chain keeping no transactions for an uncle, in the dead ink, as the fork page's dropped
+    // block's; its three lines beside it
+    <article className="border-row-rule text-small flex items-start border-b py-2.5">
+      <RowSeal id={{ kind: 'block', hash: uncle.hash, txs: 'not kept' }} state="ink" />
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="flex flex-wrap items-baseline gap-x-2">
+          <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
+            {formatBlockNumber(uncle.number)}
+          </Link>
+          <span className="text-text-dim">uncle</span>
+          <Link href={getUncleDetailHref(blockNumber, index)}>
+            <Hash hash={uncle.hash} size="row" className="text-small" />
+          </Link>
+        </span>
+        <span className="text-text-dim">
+          {error ? (
+            `sibling facts unavailable: ${error.message}`
+          ) : !detail ? (
+            'reading its sibling…'
+          ) : detail.sameParentAs === null ? (
+            <>
+              the canonical{' '}
+              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                {formatBlockNumber(detail.canonicalAtHeight.number)}
+              </Link>{' '}
+              has another parent
+            </>
+          ) : (
+            <>
+              sibling of{' '}
+              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                {formatBlockNumber(detail.sameParentAs)}
+              </Link>{' '}
+              <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+                <Hash hash={detail.canonicalAtHeight.hash} size="row" className="text-small" />
+              </Link>
+              , same parent{' '}
+              <Link href={`/blocks/${uncle.parentHash}`}>
+                {formatBlockNumber(uncle.number - 1)}
+              </Link>
+            </>
+          )}
+        </span>
+        <span className="text-text-dim">
+          {unitNode(formatUtc8Time(uncle.timestamp))}
+          {detail?.msAfterSibling != null &&
+            `, ${detail.msAfterSibling >= 0 ? `${detail.msAfterSibling.toLocaleString('en-US')} ms after` : `${(-detail.msAfterSibling).toLocaleString('en-US')} ms before`} its sibling`}{' '}
+          · {unitNode(formatCount(uncle.proposalIds.length, 'proposal'))}
+        </span>
+      </div>
     </article>
   );
 }
