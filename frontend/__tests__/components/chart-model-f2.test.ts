@@ -317,6 +317,7 @@ describe('Charts index encodings (F2 charts)', () => {
       title: 'Miners',
       windowDays: 7,
       totalBlocks: 67791,
+      restBlocks: 0,
       fromDate: '2026-10-23',
       toDate: '2026-10-29',
       data: [
@@ -383,6 +384,8 @@ describe('Charts index encodings (F2 charts)', () => {
       yAxisLabel: 'Uncle rate',
       data: [{ date: '2026-10-29', value: '0.0257' }],
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      // the day's operands, the route's (lane exactness, part A, A2): 257 of 10,000
+      counts: [{ date: '2026-10-29', uncles: 257, blocks: 10_000 }],
     });
     // Re-pinned for CH-14 (UI review 2026-11-14): one percent form, no space before the sign.
     expect(uncle.referenceLines).toEqual([{ value: 2.5, label: 'target 2.50%' }]);

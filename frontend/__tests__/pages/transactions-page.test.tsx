@@ -20,7 +20,10 @@ import TransactionsPage, { TRANSACTIONS_FORM_PX } from '@/app/transactions/page'
 import { api } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
-import { TRANSACTION_LIST_MIN_PX } from '@/components/transaction/transaction-list-table';
+import {
+  CELLBASE_LIST_MIN_PX,
+  TRANSACTION_LIST_MIN_PX,
+} from '@/components/transaction/transaction-list-table';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
 
@@ -117,7 +120,12 @@ describe('TransactionsPage', () => {
     ).not.toBeInTheDocument();
 
     await waitFor(() => {
-      expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+      // re-pinned on purpose (lists lane P3, plan §7.6): the page opens on the user transactions
+      expect(api.getTransactions).toHaveBeenCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'user',
+      });
     });
 
     await waitFor(() => {
@@ -134,8 +142,13 @@ describe('TransactionsPage', () => {
     expect(screen.getAllByTitle(hash)).toHaveLength(1);
     // Table-rows T5: the hash is the row's key, 13 px bright on an 18 px line (it read in neutral
     // 12 px ink); still no colour of its own.
+    // Re-pinned on purpose (lists lane P3, the link-look gate): the bright ink is the key look's,
+    // on the link; the hash inherits it (it wrote text-text-bright itself, a link ink on a child)
     for (const hashDisplay of screen.getAllByTitle(hash)) {
-      expect(hashDisplay).toHaveClass('text-text-bright', 'text-body', 'leading-row');
+      expect(hashDisplay).toHaveClass('text-body', 'leading-row');
+      expect(hashDisplay).not.toHaveClass('text-text');
+      expect(hashDisplay).not.toHaveClass('text-text-bright');
+      expect(hashDisplay.closest('a')).toHaveClass('text-text-bright');
       expect(hashDisplay).not.toHaveClass('text-small');
       expect(hashDisplay.children).toHaveLength(0);
       expect(hashDisplay.closest('a')).toHaveAttribute('href', `/mainnet/tx/${hash}`);
@@ -145,7 +158,8 @@ describe('TransactionsPage', () => {
     // F2-tx (TX-25 / TX-26): the board's columns, newest first with cellbase rows set back.
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     expect(table).toHaveTextContent('What it did');
-    expect(screen.getByText('newest first · cellbase rows set back')).toBeInTheDocument();
+    // re-pinned on purpose (lists lane P3): the cellbases are a tab of their own, no row set back
+    expect(screen.getByText('committed · newest first')).toBeInTheDocument();
     // Re-pinned on purpose (readability B5): this fixture is one page (no older, no newer), and
     // one page draws no pager (it drew a disabled "Older →"). Controls lane C2: the board's
     // pager, whose way older is "older →".
@@ -502,7 +516,10 @@ describe('Transactions pool view', () => {
   // What it did keeps the 1 px between them (renamed: "keeps 17 px"). Re-pinned on purpose
   // (readability R6): the smaller transaction stone takes 16 px from both lists' Transaction
   // column, 1,211 and 1,212, and What it did keeps the same 1 px.
-  it('changes both lists’ form at the larger sum: the committed What it did keeps 1 px', async () => {
+  // Re-pinned on purpose (lists lane P3): the user transactions' list is 898 px on its own (the
+  // size and the cycles bars left it), the cellbases' 804, the pool's 1,212 the largest: What it
+  // did keeps 314 px beyond its 204 (renamed: "keeps 1 px").
+  it('changes the lists’ form at the largest sum: the committed What it did keeps 314 px', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
         {
@@ -530,7 +547,7 @@ describe('Transactions pool view', () => {
     const table = await screen.findByRole('table', { name: 'Committed transactions' });
     expect(Number.parseFloat(table.style.minWidth)).toBe(TRANSACTIONS_FORM_PX);
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
-    expect(Number.parseFloat(cols[2].minWidth)).toBe(204 + 1);
+    expect(Number.parseFloat(cols[2].minWidth)).toBe(204 + 314);
   });
 
   // Readability F3-e: every pool column budgeted from the widest value its formatter writes
@@ -573,6 +590,7 @@ describe('Transactions pool view', () => {
     expect(TRANSACTIONS_FORM_PX).toBe(
       Math.max(
         TRANSACTION_LIST_MIN_PX,
+        CELLBASE_LIST_MIN_PX,
         budgets.reduce((sum, w) => sum + w, 0)
       )
     );
@@ -580,8 +598,10 @@ describe('Transactions pool view', () => {
     // the committed list's own sum is 1,203, the pool's 1,220 the larger, so both change form at
     // the pool's (the committed What it did keeps the 17 px between them); re-pinned on purpose
     // (reviews fb-tests 6, fb-logic 6): 1,227 and 1,228, What it did keeps 1 px; re-pinned on
-    // purpose (readability R6): 1,211 and 1,212, What it did keeps 1 px
-    expect(TRANSACTION_LIST_MIN_PX).toBe(1211);
+    // purpose (readability R6): 1,211 and 1,212, What it did keeps 1 px; re-pinned on purpose
+    // (lists lane P3): the user transactions 898, the cellbases 804, the pool's 1,212 the largest
+    expect(TRANSACTION_LIST_MIN_PX).toBe(898);
+    expect(CELLBASE_LIST_MIN_PX).toBe(804);
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       limit: 50,
@@ -835,8 +855,13 @@ describe('Transactions pool view', () => {
     expect(pool).not.toHaveTextContent('Seen');
     // Table-rows T5: the hash is the pool row's key, at body and bright on an 18 px line (it read
     // in neutral 12 px ink); still no status colour on it.
+    // Re-pinned on purpose (lists lane P3, the link-look gate): the bright ink is the key look's,
+    // on the link; the hash inherits it (it wrote text-text-bright itself, a link ink on a child)
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
-      expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-row');
+      expect(hash).toHaveClass('text-body', 'leading-row');
+      expect(hash).not.toHaveClass('text-text');
+      expect(hash).not.toHaveClass('text-text-bright');
+      expect(hash.closest('a')).toHaveClass('text-text-bright');
       expect(hash).not.toHaveClass('text-small');
       // the table's 17 characters, the row size (U-09: see the width budget above)
       expect(hash).toHaveTextContent(/^0xabababab…ababab$/);
@@ -919,6 +944,8 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
       daoDepositCount: 2,
       daoWithdrawRequestCount: 1,
       daoWithdrawCompleteCount: 0,
+      // the API's count of the DAO actions (lists lane P3: the page sums none)
+      daoCount: 3,
     },
   ]);
   vi.mocked(api.getTxStats).mockResolvedValue({
@@ -940,13 +967,19 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
   // (they were the aria-pressed buttons All / Nervos DAO / Tokens / Cellbase and the group
   // "Transaction views").
   expect(await screen.findByRole('radio', { name: /^all/ })).toBeInTheDocument();
+  // re-pinned on purpose (lists lane P3): "all" counts the user transactions, yesterday's 20
+  // transactions less its 3 cellbases (it counted the 20); the cellbases are a tab, no chip
   await waitFor(() =>
-    expect(screen.getByRole('radio', { name: /^all/ })).toHaveTextContent('all 20')
+    expect(screen.getByRole('radio', { name: /^all/ })).toHaveTextContent('all 17')
   );
   expect(screen.getByRole('radio', { name: /^nervos dao/ })).toHaveTextContent(/^nervos dao 3$/);
   expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
   expect(screen.getByRole('radio', { name: /^tokens/ })).toHaveTextContent('11');
-  expect(screen.getByRole('radio', { name: /^cellbase/ })).toHaveTextContent('3');
+  expect(screen.queryByRole('radio', { name: /^cellbase/ })).toBeNull();
+  // what the page says first: the day's user transactions and its cellbases, apart
+  expect(document.querySelector('[data-role="lede"]')).toHaveTextContent(
+    /^17 user transactions and 3 cellbases yesterday \(UTC\+8\)\.$/
+  );
   expect(
     screen
       .getByTestId('pool-banner')
@@ -961,7 +994,9 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
       activityType: 'token',
     })
   );
-  fireEvent.click(screen.getByRole('button', { name: 'Open the pool →' }));
+  // re-pinned on purpose (lists lane P3, the placement lane's note): it opens the pool's tab on
+  // this page, so "↓", not a link's "→"
+  fireEvent.click(screen.getByRole('button', { name: 'Open the pool ↓' }));
   await waitFor(() =>
     expect(api.getPoolTransactions).toHaveBeenCalledWith({
       cursor: undefined,
@@ -969,7 +1004,8 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
       activityType: 'token',
     })
   );
-  expect(screen.getByRole('link', { name: 'Activities →' })).toHaveAttribute(
+  // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+  expect(screen.getByRole('link', { name: /^Activities/ })).toHaveAttribute(
     'href',
     '/mainnet/activities'
   );
@@ -1034,9 +1070,11 @@ it('draws awaiting-index pool squares hollow, apart from pending (cyan) and prop
   const awaiting = banner.querySelector('[data-pool-status="committed_awaiting_index"]');
   expect(awaiting).toHaveClass('border', 'border-text-dim');
   expect(awaiting).not.toHaveClass('bg-info');
-  // the views' tab, lowercase, its count after its name (controls lane C2; it was the button
-  // "In the pool2")
-  expect(screen.getByRole('tab', { name: /^in the pool/ })).toHaveTextContent('in the pool 2');
+  // the views' tab, lowercase (controls lane C2; it was the button "In the pool2"). Re-pinned on
+  // purpose (lists lane P3): no count after its name, which summed pending and proposed in the
+  // page; the pool's line above states each ("1 pending · 1 proposed · 1 awaiting index")
+  expect(screen.getByRole('tab', { name: /^in the pool/ })).toHaveTextContent(/^in the pool$/);
+  expect(banner).toHaveTextContent('1 pending · 1 proposed · 1 awaiting index');
 });
 
 // L4 (responsive plan, board L2): below sm the chrome is one control line, and a phone reads
@@ -1155,15 +1193,16 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
       within(select)
         .getAllByRole('option')
         .map((o) => o.getAttribute('value'))
-    ).toEqual(['all', 'ckb', 'script', 'cellbase', 'dao', 'token', 'object', 'identity']);
+      // re-pinned on purpose (lists lane P3): the cellbases are a tab of their own, no kind
+    ).toEqual(['all', 'ckb', 'script', 'dao', 'token', 'object', 'identity']);
     expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^all/);
     expect(screen.queryByRole('radiogroup', { name: 'kind' })).toBeNull();
     // Re-pinned on purpose (lane D4, PA-20): the pool's strip keeps its figures below sm (it was
-    // hidden there whole, `hidden sm:flex`); its "Open the pool →" stays from sm, and the views'
+    // hidden there whole, `hidden sm:flex`); its "Open the pool ↓" (it was "→") stays from sm, and the views'
     // tab row is drawn at every width.
     expect(screen.getByTestId('pool-banner')).not.toHaveClass('hidden');
     expect(
-      within(screen.getByTestId('pool-banner')).getByRole('button', { name: 'Open the pool →' })
+      within(screen.getByTestId('pool-banner')).getByRole('button', { name: 'Open the pool ↓' })
     ).toHaveClass('hidden', 'sm:inline-flex');
     expect(screen.getByRole('tablist', { name: 'Transaction views' })).toBeInTheDocument();
     fireEvent.change(select, { target: { value: 'token' } });
@@ -1176,7 +1215,9 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
         activityType: 'token',
       })
     );
-    const pool = screen.getByRole('tab', { name: 'in the pool 5' });
+    // re-pinned on purpose (lists lane P3): the tab names the list and counts nothing (its count
+    // summed pending and proposed in the page; the pool's line states each)
+    const pool = screen.getByRole('tab', { name: 'in the pool' });
     expect(pool).toHaveAttribute('aria-selected', 'false');
     fireEvent.click(pool);
     expect(pool).toHaveAttribute('aria-selected', 'true');
@@ -1194,9 +1235,18 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
     });
     render(<TransactionsPage />);
     await waitFor(() =>
-      expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 20 })
+      expect(api.getTransactions).toHaveBeenCalledWith({
+        cursor: undefined,
+        limit: 20,
+        // re-pinned on purpose (lists lane P3): the user transactions
+        activityType: 'user',
+      })
     );
-    expect(api.getTransactions).not.toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+    expect(api.getTransactions).not.toHaveBeenCalledWith({
+      cursor: undefined,
+      limit: 50,
+      activityType: 'user',
+    });
   });
 });
 
@@ -1244,7 +1294,11 @@ describe('Transactions kind in the URL (D11)', () => {
         activityType: 'dao',
       })
     );
-    expect(api.getTransactions).not.toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+    expect(api.getTransactions).not.toHaveBeenCalledWith({
+      cursor: undefined,
+      limit: 50,
+      activityType: 'user',
+    });
   });
 
   it.each(['?kind=interest', ''])(
@@ -1253,7 +1307,12 @@ describe('Transactions kind in the URL (D11)', () => {
       renderAt(`/mainnet/transactions${search}`);
       expect(chip('all')).toHaveAttribute('aria-checked', 'true');
       await waitFor(() =>
-        expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 50 })
+        expect(api.getTransactions).toHaveBeenCalledWith({
+          cursor: undefined,
+          limit: 50,
+          // re-pinned on purpose (lists lane P3): the user transactions
+          activityType: 'user',
+        })
       );
     }
   );
@@ -1333,7 +1392,12 @@ describe('Transactions paging and kind (what the controls ask for)', () => {
     expect(await block(900)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /^older/i }));
     await waitFor(() =>
-      expect(api.getTransactions).toHaveBeenLastCalledWith({ cursor: 'c2', limit: 50 })
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: 'c2',
+        limit: 50,
+        // re-pinned on purpose (lists lane P3): the user transactions
+        activityType: 'user',
+      })
     );
     expect(await block(500)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /newer$/i }));
@@ -1425,7 +1489,7 @@ describe('TransactionsPage while its read is paused', () => {
 // quiet, the cells, the value and the fee with its rate, each figure after its name (PA-09). Bytes
 // and cycles leave the phone row (the transaction's page, the table, the cards from 560 px). And
 // the strip above the list keeps its figures on a phone (PA-20: below sm it was hidden whole and
-// the page said nothing of the pool but its tab's count); its "Open the pool →" stays from sm, as
+// the page said nothing of the pool but its tab's count); its "Open the pool ↓" (it was "→") stays from sm, as
 // the views' tab row opens the pool at every width.
 describe('the pool on a phone (lane D4, PA-20)', () => {
   afterEach(() => {
@@ -1522,7 +1586,7 @@ describe('the pool on a phone (lane D4, PA-20)', () => {
     expect(banner).toHaveTextContent('0 pending · 1 proposed · 0 awaiting index');
     expect(within(banner).getAllByRole('link', { name: /^Pool transaction / })).toHaveLength(1);
     // its way into the pool stays from sm: below it the views' tab row is that way
-    expect(within(banner).getByRole('button', { name: 'Open the pool →' })).toHaveClass(
+    expect(within(banner).getByRole('button', { name: 'Open the pool ↓' })).toHaveClass(
       'hidden',
       'sm:inline-flex'
     );
@@ -1534,5 +1598,69 @@ describe('the pool on a phone (lane D4, PA-20)', () => {
       'fee 0.00012345 CKB',
       'fee rate 54,623 shannon/KB',
     ]);
+  });
+});
+
+// The lists lane P3 (plan §7.6): the page opens on the user transactions, the cellbases one tab
+// away, a list of their own with their own words; a kind chosen there is a kind of the user
+// transactions, so the page shows them.
+describe('Transactions: the cellbases, one tab away (lists lane P3)', () => {
+  const cellbase = {
+    hash: `0x${'c8'.repeat(32)}`,
+    blockNumber: 21054100,
+    blockHash: `0x${'bb'.repeat(32)}`,
+    index: 0,
+    inputsCount: 1,
+    outputsCount: 1,
+    fee: '0',
+    value: '0',
+    outputCapacity: '56136576541',
+    txSize: 360,
+    cycles: 0,
+    cyclesStatus: 'complete' as const,
+    activity: null,
+    isCellbase: true,
+    timestamp: '2026-11-19T00:00:00Z',
+    pays: { number: 21054089, hash: `0x${'89'.repeat(32)}` },
+  };
+
+  it('asks for the cellbases on their tab, lists them in their own words, and back on a kind', async () => {
+    vi.mocked(api.getTransactions).mockImplementation(async (params = {}) => ({
+      data: params.activityType === 'cellbase' ? [cellbase] : [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    }));
+    render(<TransactionsPage />);
+    expect(screen.getByRole('tab', { name: 'transactions' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'cellbases' }));
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'cellbase',
+      })
+    );
+    const table = await screen.findByRole('table', { name: 'Cellbases' });
+    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('reward for #21,054,089');
+    expect(screen.getByText('one in every block · newest first')).toBeInTheDocument();
+    // a kind is of the user transactions: chosen here, the page shows them
+    fireEvent.click(screen.getByRole('radio', { name: /^tokens/ }));
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: 'transactions' })).toHaveAttribute(
+        'aria-selected',
+        'true'
+      )
+    );
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'token',
+      })
+    );
   });
 });

@@ -139,11 +139,19 @@ export const SEGMENT_LABEL_PX = fontPx('small');
 const SEGMENT_LABEL_PAD = 10;
 
 /**
- * "Who can change the code" as the Scripts index's picture (hierarchy v3, C1, R12, R15): a 28 px
- * bar of the CKB under lock scripts by code class, each segment's name and share written inside it
- * where they fit (never an exact amount). Nothing is drawn while no lock script holds CKB.
+ * "Who can change the code" as a picture (hierarchy v3, C1, R12, R15): a bar of the CKB under lock
+ * scripts by code class. As a figure (`size="figure"`, 28 px), each segment's name and share are
+ * written inside it where they fit (never an exact amount); as a line (`size="line"`, 12 px: the
+ * Scripts list's first screen, readability P3), no words are inside, its legend row names every
+ * segment. Nothing is drawn while no lock script holds CKB.
  */
-export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeClassTotalApi[] }) {
+export function ScriptCodeClassBar({
+  classes,
+  size = 'figure',
+}: {
+  classes: readonly ScriptCodeClassTotalApi[];
+  size?: 'figure' | 'line';
+}) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const { resolved: theme } = useTheme();
   const { held, total } = codeClassTotals(classes);
@@ -158,6 +166,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
   const words = (row: ScriptCodeClassTotalApi) =>
     `${scriptClassLabel(row.class)} ${percentOf(BigInt(row.lockOwnedCapacitySum), total)}`;
   const fits = (text: string, i: number) =>
+    size === 'figure' &&
     width !== null &&
     (width * spans[i].width) / 100 >= textPx(text.length, SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
   return (
@@ -165,7 +174,11 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
       ref={ref}
       role="img"
       aria-label="CKB under lock scripts by who can change their code"
-      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden tabular-nums"
+      data-bar-size={size}
+      className={cn(
+        'text-small flex w-full min-w-0 gap-[2px] overflow-hidden tabular-nums',
+        size === 'figure' ? 'h-[28px]' : 'h-3'
+      )}
     >
       {held.map((row, i) => {
         const inside = fits(words(row), i) ? words(row) : '';

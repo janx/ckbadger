@@ -153,9 +153,11 @@ fn list_identity_holders_ranked_cached(
     mem_cache: &InMemoryCache,
     collection_id_bytes: &[u8],
 ) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
+    // keyed by the read view's tip, so the ranking and the total beside it are one view (lane exactness, part A, A3)
     let cache_key = format!(
-        "assets:identity_collection_holders_ranked:0x{}",
-        hex::encode(collection_id_bytes)
+        "assets:identity_collection_holders_ranked:0x{}:{}",
+        hex::encode(collection_id_bytes),
+        super::assets::view_tip_key(store)?
     );
     if let Some(cached) = mem_cache.get::<Vec<(Vec<u8>, i64)>>(&cache_key) {
         return Ok(cached);
@@ -195,7 +197,7 @@ async fn list_identity_collection_holders(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
     Query(params): Query<IdentityCollectionHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<CollectionHolderResponse>> {
+) -> ApiResult<crate::response::RankedPage<CollectionHolderResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_identity_collection_id(&collection_id)?;
     let cursor = params
@@ -290,12 +292,11 @@ async fn list_identity_collection_holders(
         }
     }
 
-    ok(CursorPaginatedResponse::new(
-        rows,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(crate::response::RankedPage {
+        page: CursorPaginatedResponse::new(rows, total, limit as i64, next_cursor),
+        // the cursor's position in the ranking read in this request's view, plus one (lane exactness, part A, A3)
+        first_rank: start_idx as u64 + 1,
+    })
 }
 
 // -- Activities endpoint --

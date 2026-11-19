@@ -95,11 +95,8 @@ export function CrashPage({ message, contextSafe = false, standalone = false }: 
         >
           <span className="whitespace-nowrap">↻ </span>try again
         </button>
-        <Link
-          href={recovery.href}
-          className="text-text hover:text-jade focus-visible:outline-jade focus-visible:outline"
-        >
-          <span className="whitespace-nowrap">← </span>
+        {/* a way onward, its arrow the look's (no typed "←") */}
+        <Link href={recovery.href} look="onward">
           {recovery.label}
         </Link>
       </div>

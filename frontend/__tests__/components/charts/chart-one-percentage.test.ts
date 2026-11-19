@@ -178,6 +178,21 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
     expect(labels.indexOf('Zeta')).toBeLessThan(labels.indexOf('Alpha'));
   });
 
+  // lane exactness, part A (A1): the miners card's "Others" is the route's restBlocks, the window's blocks found
+  // by every miner after the five largest (the page subtracted the five from the total); a
+  // figure that differs from that difference shows which one the card states
+  it('writes the miners card’s "Others" as the route’s restBlocks', () => {
+    const payload = fixture<{ restBlocks?: number }>('getMinerAddressDistributionChart');
+    payload.restBlocks = 6_058;
+    const model = chartModel(definition('miner-address-distribution'), payload as never);
+    // 6,058 of 60,583 blocks
+    expect(model.rankedPreview!.rows.at(-1)).toMatchObject({ title: 'Others', share: '9.99%' });
+    delete payload.restBlocks;
+    expect(() => chartModel(definition('miner-address-distribution'), payload as never)).toThrow(
+      'miner-address-distribution: the API sends no restBlocks: it is older than this page'
+    );
+  });
+
   it('divides cell size by the live cells and the occupied CKB the route counts', () => {
     const payload = fixture<{ liveCells: string; occupiedCapacity: string }>(
       'getCellSizeDistributionChart'

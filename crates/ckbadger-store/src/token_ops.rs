@@ -906,6 +906,44 @@ impl CkbadgerStore {
         Ok(results)
     }
 
+    /// How many holders of `type_hash` sort at or before `(balance, lock_hash)` in
+    /// `CF_TOKEN_HOLDERS_BY_BALANCE` (balance DESC, lock hash ASC): the rank of that holder where
+    /// it is one, so the page after it starts at this count plus one (lane exactness, part A, A3). A range scan of
+    /// the keys before the cursor's, in the store's read view.
+    pub fn count_token_holders_through(
+        &self,
+        type_hash: &[u8],
+        balance: &TokenBalance,
+        lock_hash: &[u8],
+    ) -> anyhow::Result<u64> {
+        if type_hash.len() != 32 || lock_hash.len() != 32 {
+            anyhow::bail!(
+                "count_token_holders_through expects 32-byte hashes, got type_hash {} and lock_hash {} bytes",
+                type_hash.len(),
+                lock_hash.len()
+            );
+        }
+        let end = keys::encode_token_holder_balance_seek_after_key(type_hash, balance, lock_hash);
+        let iter = self.iterator_cf(
+            self.cf_token_holders_by_balance(),
+            IteratorMode::From(type_hash, rocksdb::Direction::Forward),
+        );
+        let mut count = 0u64;
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate token_holders_by_balance in count_token_holders_through: {}",
+                    e
+                )
+            })?;
+            if !key.starts_with(type_hash) || key.as_ref() >= end.as_slice() {
+                break;
+            }
+            count += 1;
+        }
+        Ok(count)
+    }
+
     /// List tokens held by an address ordered by balance DESC, type_hash ASC.
     ///
     /// Optionally start after the given `(balance, type_hash)` cursor.
@@ -992,6 +1030,61 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         (dir, store)
+    }
+
+    /// Lane exactness, part A (A3): the holders at or before a cursor, in the by-balance order
+    /// (balance DESC, lock ASC), of the cursor's token only: the rank of the cursor's holder.
+    #[test]
+    fn count_token_holders_through_ranks_a_cursor_within_its_token() {
+        let (_dir, store) = test_store();
+        let token = vec![0x50u8; 32];
+        let mut batch = StoreBatch::new(&store);
+        for (lock, balance) in [(0x01u8, 300u128), (0x02, 100), (0x03, 100), (0x04, 50)] {
+            batch.put_token_holder_by_balance(&token, &[lock; 32], balance);
+        }
+        // the neighbouring tokens' holders sort before and after this token's: never counted
+        batch.put_token_holder_by_balance(&[0x4f; 32], &[0x09; 32], 999u128);
+        batch.put_token_holder_by_balance(&[0x51; 32], &[0x09; 32], 1u128);
+        batch.commit().unwrap();
+        let rank = |lock: u8, balance: u128| {
+            store
+                .count_token_holders_through(&token, &TokenBalance::from(balance), &[lock; 32])
+                .unwrap()
+        };
+        assert_eq!(rank(0x01, 300), 1);
+        assert_eq!(rank(0x02, 100), 2);
+        assert_eq!(rank(0x03, 100), 3);
+        assert_eq!(rank(0x04, 50), 4);
+        // a cursor whose holder has left: the holders that sort before its place
+        assert_eq!(rank(0x05, 200), 1);
+    }
+
+    /// Lane exactness, part A (A3): the cost of a deep rank, 10,000 keys read from an SST (the
+    /// memtables flushed), printed for the hand-back (`-- --nocapture`); the count is pinned.
+    #[test]
+    fn count_token_holders_through_ranks_the_ten_thousandth_holder() {
+        let (_dir, store) = test_store();
+        let token = vec![0x60u8; 32];
+        let lock = |i: u32| {
+            let mut lock = [0u8; 32];
+            lock[..4].copy_from_slice(&i.to_be_bytes());
+            lock
+        };
+        let mut batch = StoreBatch::new(&store);
+        for i in 0..12_000u32 {
+            batch.put_token_holder_by_balance(&token, &lock(i), u128::from(12_000 - i));
+        }
+        batch.commit().unwrap();
+        store.flush_all_memtables().unwrap();
+        let started = std::time::Instant::now();
+        let rank = store
+            .count_token_holders_through(&token, &TokenBalance::from(2_001u128), &lock(9_999))
+            .unwrap();
+        let elapsed = started.elapsed();
+        assert_eq!(rank, 10_000);
+        eprintln!(
+            "count_token_holders_through at rank 10,000 of 12,000 (from an SST): {elapsed:?}"
+        );
     }
 
     #[test]

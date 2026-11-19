@@ -159,11 +159,15 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       unmount();
     }
   });
-  it('a section CTA outside every row keeps its aqua (text-interactive) — untouched', () => {
+  // Re-pinned on purpose (lists lane P3, the link-look gate: a link's ink is its look's): the
+  // section's call to action is a way onward, celadon, its arrow the look's; it kept the aqua
+  // text-interactive by hand (renamed: "… keeps its aqua (text-interactive) — untouched")
+  it('a section CTA outside every row is a way onward, celadon — no row link', () => {
     stubChartWidth(560);
     render(<ActivityStats />);
-    const cta = screen.getByRole('link', { name: 'charts →' });
-    expect(cta).toHaveClass('text-interactive', 'hover:text-jade');
+    const cta = screen.getByRole('link', { name: /^charts/ });
+    expect(cta).toHaveClass('text-jade');
+    expect(cta).not.toHaveClass('text-interactive', 'hover:text-jade');
     expect(cta).not.toHaveClass('underline', 'decoration-aqua/35');
     expect(cta.closest('table, [role="row"], [data-feed-row]')).toBeNull();
   });

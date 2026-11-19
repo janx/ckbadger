@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
+import { formatSpan } from '@/lib/format-age';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/network/distributions';
 import { NetworkShareHistory, NetworkTrendNotes, NetworkTrends } from '@/app/network/trends';
@@ -162,8 +163,10 @@ function Metric({ label, children, note }: { label: string; children: ReactNode;
  * no alarm red, because "not reachable now" is not "gone" (CH-53). Reachable now is the hero's figure.
  */
 function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
-  const minutes = Math.round((lastRound.finishedAt - lastRound.startedAt) / 60);
-  if (!(minutes >= 0)) throw new Error(`crawler round #${lastRound.roundId} ends before it starts`);
+  // the round's seconds in the site's one span form, cut (lane exactness, part A, A8: it was its
+  // minutes rounded, so a round of 869 s read 14 and one of 870 s read 15)
+  const seconds = lastRound.finishedAt - lastRound.startedAt;
+  if (!(seconds >= 0)) throw new Error(`crawler round #${lastRound.roundId} ends before it starts`);
   return (
     <dl
       role="group"
@@ -181,7 +184,7 @@ function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
       </Metric>
       <Metric
         label="Latest round"
-        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${minutes} min · ${lastRound.addressAttempts.toLocaleString('en-US')} dials`}
+        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${formatSpan(seconds)} · ${lastRound.addressAttempts.toLocaleString('en-US')} dials`}
       >
         #{lastRound.roundId}
       </Metric>

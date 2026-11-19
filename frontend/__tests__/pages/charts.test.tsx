@@ -124,6 +124,7 @@ const mockMinerDistributionResponse = {
     },
   ],
   totalBlocks: 200,
+  restBlocks: 100,
   windowDays: 7,
   fromDate: '2026-07-23',
   toDate: '2026-07-29',
@@ -260,6 +261,11 @@ describe('ChartsPage', () => {
     vi.mocked(api.getUncleRateChart).mockResolvedValue({
       ...mockChartResponse,
       orphanRateTarget: { numerator: 1, denominator: 40 },
+      counts: mockChartResponse.data.map((point) => ({
+        date: point.date,
+        uncles: 1,
+        blocks: 40,
+      })),
     });
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue(
       mockMinerDistributionResponse

@@ -356,7 +356,21 @@ const CLAIMABLE_FILL = 0.45;
 /** The capacity-use bar's segments sit 3 px apart. */
 const BAR_GAP_PX = 3;
 
-/** The parts of secondary issuance since genesis, exact, checked to partition the whole. */
+/** A figure the DAO statistics route states for this page; an API older than it sends none. */
+function stated<K extends 'liveCellsCount' | 'secondaryIssuance'>(
+  statistics: DaoStatistics,
+  field: K
+): DaoStatistics[K] {
+  const value = (statistics as Partial<DaoStatistics>)[field];
+  if (value === undefined)
+    throw new Error(`DAO statistics send no ${field}: the API is older than this page`);
+  return value as DaoStatistics[K];
+}
+
+/**
+ * The parts of secondary issuance since genesis, exact, and their whole and the live cells as the
+ * route states them (lane exactness, part A, A5 ii: the page summed both); the parts are checked to make the whole.
+ */
 function issuanceParts(statistics: DaoStatistics) {
   const mining = parseShannons(statistics.miningReward, 'miningReward');
   const compensation = parseShannons(statistics.depositCompensation, 'depositCompensation');
@@ -365,17 +379,20 @@ function issuanceParts(statistics: DaoStatistics) {
   const unclaimed = parseShannons(statistics.unclaimedCompensation, 'unclaimedCompensation');
   if (claimed + unclaimed !== compensation)
     throw new Error('DAO compensation parts do not equal total compensation');
-  const liveCells = (
-    statistics.depositCellsCount + statistics.withdrawalRequestCellsCount
-  ).toLocaleString('en-US');
+  const liveCellsCount = stated(statistics, 'liveCellsCount');
+  const total = parseShannons(stated(statistics, 'secondaryIssuance'), 'secondaryIssuance');
+  if (mining + compensation + burnt !== total)
+    throw new Error(
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: secondary issuance ${total} is not miners ${mining} + compensation ${compensation} + burnt ${burnt}`
+    );
   return {
     mining,
     compensation,
     burnt,
     claimed,
     unclaimed,
-    total: mining + compensation + burnt,
-    liveCells,
+    total,
+    liveCells: formatCount(liveCellsCount, 'live cell'),
   };
 }
 
@@ -426,21 +443,23 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             opacity: 1,
             boxLabel: { name: 'depositors', share: share(compensation) },
             children: [
+              // claimed and unclaimed, the words the Supply and secondary-issuance charts use for
+              // these two amounts (lane exactness, part A, A7: they were "paid out" and "still owed")
               {
                 key: 'paid',
-                label: 'paid out',
+                label: 'claimed',
                 value: claimed,
                 tone: 'dao',
                 opacity: 1,
-                boxLabel: { name: 'paid out', share: ofCompensation(claimed) },
+                boxLabel: { name: 'claimed', share: ofCompensation(claimed) },
               },
               {
                 key: 'owed',
-                label: 'still owed',
+                label: 'unclaimed',
                 value: unclaimed,
                 tone: 'dao',
                 opacity: 0.4,
-                boxLabel: { name: 'still owed', share: ofCompensation(unclaimed) },
+                boxLabel: { name: 'unclaimed', share: ofCompensation(unclaimed) },
               },
             ],
           },
@@ -476,7 +495,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             // and share fit, else on a line of its own under the icicle, at its box
             <IciclePartition
               root={root}
-              label="Secondary issuance since genesis, split three ways: to miners, compensation for depositors, burnt; the compensation is paid out or still owed to live deposits"
+              label="Secondary issuance since genesis, split three ways: to miners, compensation for depositors, burnt; the compensation is claimed, or unclaimed in live deposits"
               formatValue={(v) => ckbAmountText(v, 'summary')}
               width={width}
               rows={ICICLE_ROWS}
@@ -497,11 +516,11 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             {' '}
             <span className="text-text-dim">· for depositors</span>{' '}
             <Amount form="summary" value={compensation.toString()} />{' '}
-            <span className="text-text-dim">(paid out</span>{' '}
+            <span className="text-text-dim">(claimed</span>{' '}
             <Amount form="summary" value={claimed.toString()} />{' '}
-            <span className="text-text-dim">· still owed</span>{' '}
+            <span className="text-text-dim">· unclaimed</span>{' '}
             <Amount form="summary" value={unclaimed.toString()} />{' '}
-            <span className="text-text-dim">to {liveCells} live cells)</span>
+            <span className="text-text-dim">in {liveCells})</span>
           </span>
           <span>
             {' '}
@@ -561,7 +580,7 @@ function IssuanceSplit() {
         </li>
         <li className="flex">
           <MechanismTile title="depositors">
-            the deposits&apos; share, compensation accrued via AR, paid out at withdrawal
+            the deposits&apos; share, compensation accrued via AR, claimed at withdrawal
           </MechanismTile>
         </li>
         <li className="flex">
@@ -1149,7 +1168,7 @@ function statisticsAnchor(statistics: DaoStatistics): DaoStatistics['anchor'] {
 
 /**
  * Tier 2 (board V63): the header's DAO field read in CKB with AR as its exact rate, and the DAO
- * script's rules. S = still owed + burnt is stated only when the statistics and the header are the
+ * script's rules. S = unclaimed + burnt is stated only when the statistics and the header are the
  * same block; across two blocks it would compare two different states (DAO-16).
  */
 function RawEvidence({
@@ -1160,7 +1179,7 @@ function RawEvidence({
   statistics: DaoStatistics;
 }) {
   const header = evidence.header;
-  // DAO-16 (R2b-a 44): S, still owed and burnt from ONE statistics row at ONE block, so the
+  // DAO-16 (R2b-a 44): S, unclaimed and burnt from ONE statistics row at ONE block, so the
   // identity is stated whatever block the header table below comes from; contracts W5-3: that
   // block, number and hash, is the row's own `anchor`.
   const anchor = statisticsAnchor(statistics);
@@ -1169,7 +1188,7 @@ function RawEvidence({
   const burnt = parseShannons(statistics.burnt, 'burnt');
   if (owed + burnt !== statsS)
     throw new Error(
-      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: S ${statsS} is not still owed + burnt ${owed + burnt}`
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: S ${statsS} is not unclaimed + burnt ${owed + burnt}`
     );
   const fields = [
     {
@@ -1191,8 +1210,8 @@ function RawEvidence({
       bytes: '16..24',
       value: (
         <>
-          <Amount form="exact" value={header.s} /> CKB: compensation still owed to live deposits +
-          the burnt share, which no cell can ever claim
+          <Amount form="exact" value={header.s} /> CKB: the compensation live deposits have not
+          claimed + the burnt share, which no cell can ever claim
         </>
       ),
     },
@@ -1216,14 +1235,21 @@ function RawEvidence({
       }
     >
       <div className="text-small">
+        {/* lane exactness, part A (A6): an exact amount does not break and is never cut to fit, so below sm a
+            field's value stands under its label on the row's whole line (at 320 px the three
+            columns left it 124 px of 288, and C, 23 glyphs at 13 px, is 179.4); from sm it stands
+            beside its label */}
         {fields.map((field) => (
           <div
             key={field.key}
-            className="border-row-rule grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
+            data-dao-field={field.key}
+            className="border-row-rule grid grid-cols-[44px_96px] gap-x-3 gap-y-0.5 border-t py-1.5 sm:grid-cols-[44px_96px_minmax(0,1fr)]"
           >
             <span className="text-text-bright">{field.key}</span>
             <span className="text-text-dim">bytes {field.bytes}</span>
-            <span className="min-w-0">{field.value}</span>
+            <span data-role="field-value" className="col-span-2 min-w-0 sm:col-span-1">
+              {field.value}
+            </span>
           </div>
         ))}
       </div>
@@ -1248,11 +1274,11 @@ function RawEvidence({
           <ShortId value={anchor.blockHash} kind="hash" size="row" />
         </span>
         ), S (
-        <Amount form="exact" value={statsS.toString()} /> CKB) equals the compensation still owed (
+        <Amount form="exact" value={statsS.toString()} /> CKB) equals the unclaimed compensation (
         <Amount form="exact" value={owed.toString()} />) plus the burnt share (
         <Amount form="exact" value={burnt.toString()} />) to the shannon: S only counts the burnt
-        share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’
-        share.
+        share, it does not hold it for anyone. Claimed + unclaimed compensation equals the
+        depositors’ share.
       </p>
       {evidence.ar.year365 && (
         <div className="text-text-dim text-meta max-w-measure mt-2 font-mono">
@@ -1379,7 +1405,7 @@ function HowItWorks({
           Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real
           occupied size of live cells. The miners&apos; share is s × U ÷ C of each block&apos;s
           secondary issuance s, paid in cellbases; the depositors&apos; share accrues via AR and is
-          paid out at withdrawals. No cell can ever claim the burnt share. A hardfork could only put
+          claimed at withdrawals. No cell can ever claim the burnt share. A hardfork could only put
           future secondary issuance to use; what is burnt stays burnt.
         </p>
         <p>

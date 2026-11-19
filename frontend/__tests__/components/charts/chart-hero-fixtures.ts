@@ -374,6 +374,12 @@ export const CHART_FIXTURES: Record<string, unknown> = {
       Array.from({ length: 40 }, (_, i) => (i >= 10 && i < 22 ? '0.030000' : '0.020000'))
     ),
     orphanRateTarget: { numerator: 1, denominator: 40 },
+    // each day's operands, the route's (lane exactness, part A, A2): 300 or 200 uncles of 10,000 blocks
+    counts: days(40).map((date, i) => ({
+      date,
+      uncles: i >= 10 && i < 22 ? 300 : 200,
+      blocks: 10_000,
+    })),
   },
   getMinerAddressDistributionChart: {
     title: 'Miner Distribution',
@@ -381,6 +387,8 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     fromDate: '2026-11-12',
     toDate: '2026-11-18',
     totalBlocks: 60_583,
+    // the window's blocks past the five largest, the route's (lane exactness, part A, A1): 60,583 − 59,816
+    restBlocks: 767,
     data: [
       ['F2Pool', 41_816],
       [null, 9_000],

@@ -218,23 +218,28 @@ function peakSentence(model: ChartModel): string {
 }
 
 /**
- * Over a target on how many of the newest points (a consensus target, CH-12), counted exactly (M1):
- * a duration by its whole ms against the target's (an epoch 17 s over 4 h is over it); a share by
- * the figure it shows (S9: the route cuts the share; what a reader sees at 2.50% is not over a
- * 2.50% target).
+ * Over a target on how many of the newest points (a consensus target, CH-12), counted exactly on
+ * the route's integers: a duration by its whole ms against the target's (M1: an epoch 17 s over 4 h
+ * is over it); the uncle rate by each day's uncles and blocks against the target's fraction (lane
+ * exactness, part A, A2: a day shown at 2.50 % can be over one in forty; it compared the shown
+ * share). A target with neither is the route's fault.
  */
 function targetSentence(model: ChartModel, window: number, noun: string, peakToo: boolean): string {
   const target = model.target;
   if (!target) throw new Error(`${model.title}: a target sentence with no target`);
-  const key = model.series[0].key;
   const recent = model.points.slice(-window);
   const isOver = (point: ChartPoint): boolean => {
     if (target.ms !== undefined) {
       return BigInt(msAt(point, model.title)) > target.ms;
     }
-    if (model.unit !== '%')
-      throw new Error(`${model.title}: a target compared neither in ms nor as a share`);
-    return compare(shown(point.values[key]), target.ratio) > 0;
+    if (target.fraction !== undefined) {
+      const { uncles, blocks } = point.values;
+      if (uncles === undefined || blocks === undefined)
+        throw new Error(`${model.title}: no uncles or blocks at ${point.label}`);
+      const [numerator, denominator] = target.fraction;
+      return BigInt(uncles) * denominator > BigInt(blocks) * numerator;
+    }
+    throw new Error(`${model.title}: a target compared neither in ms nor in uncles and blocks`);
   };
   const over = recent.filter(isOver).length;
   const peak =

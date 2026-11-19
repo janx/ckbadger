@@ -499,7 +499,8 @@ describe('transaction and activity foundations', () => {
     render(<CrashPage message="block 12: invalid DAO field" />);
     expect(screen.getByRole('alert')).toHaveTextContent('block 12: invalid DAO field');
     expect(screen.getByRole('button', { name: '↻ try again' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
+    // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+    expect(screen.getByRole('link', { name: /^back to the explorer/ })).toHaveAttribute(
       'href',
       '/mainnet'
     );

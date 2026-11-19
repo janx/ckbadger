@@ -1,3 +1,6 @@
+// Re-pinned on purpose (lists lane P3: the three DAO figures of the home page each say what they
+// count): the allocation's DAO part is "DAO free", the DAO cells' free CKB, beside "in all DAO
+// cells" (it was "Nervos DAO" and "locked"); the DAO block's figure is "in deposit cells".
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { act, fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
@@ -160,7 +163,7 @@ describe('CkbytesSection', () => {
     expect(body.children).toHaveLength(3);
     expect(allocation).toContainElement(screen.getByTestId('ckbytes-circulating'));
     expect(allocation).toContainElement(screen.getByRole('img', { name: /^Knowledge/ }));
-    expect(allocation).toContainElement(screen.getByRole('button', { name: /^Nervos DAO/ }));
+    expect(allocation).toContainElement(screen.getByRole('button', { name: /^DAO free/ }));
     expect(allocation).toHaveClass('lg:col-start-1', 'lg:row-start-1');
     expect(note).toBe(screen.getByRole('complementary', { name: 'Note' }));
     expect(note.tagName).toBe('ASIDE');
@@ -198,7 +201,7 @@ describe('CkbytesSection', () => {
   it('draws the three served parts, which partition circulation exactly', async () => {
     render(<CkbytesSection />);
     const bar = await screen.findByRole('img', {
-      name: 'Knowledge 0.30 percent, free 83.22 percent, Nervos DAO 16.48 percent',
+      name: 'Knowledge 0.30 percent, free 83.22 percent, DAO free 16.48 percent',
     });
     expect(bar.querySelector('[data-segment="knowledge"]')).toHaveClass('bg-jade');
     expect(bar.querySelector('[data-segment="knowledge"]')).not.toHaveClass('min-w-[3px]');
@@ -234,9 +237,9 @@ describe('CkbytesSection', () => {
       'Free41.49B CKB83.22%'
     );
     // The DAO part is the DAO cells' free capacity; their whole capacity is context only.
-    expect(document.querySelector('[data-legend="Nervos DAO"]')).toHaveTextContent(
+    expect(document.querySelector('[data-legend="DAO free"]')).toHaveTextContent(
       // compact, cut (R5, re-pinned on purpose: the DAO's free part was 8.22B, rounded up)
-      'Nervos DAO8.21B CKB16.48% · 8.22B locked'
+      'DAO free8.21B CKB16.48% · 8.22B in all DAO cells'
     );
   });
 
@@ -257,7 +260,7 @@ describe('CkbytesSection', () => {
     expect(Number.parseFloat(knowledge.style.width)).toBeLessThan(0.01);
     expect(Number.parseFloat(free.style.width)).toBeGreaterThan(99.99);
     expect(bar.querySelector('[data-segment="dao"]')).toBeNull();
-    expect(bar).toHaveAccessibleName(/Nervos DAO 0\.00 percent/);
+    expect(bar).toHaveAccessibleName(/DAO free 0\.00 percent/);
   });
 
   it('uses the served free part, never a remainder of its own', async () => {
@@ -285,7 +288,7 @@ describe('CkbytesSection', () => {
     expect(comment).not.toHaveTextContent('#20,820,045');
     // it sits with the allocation it describes, after the legend: the first thing of the note
     // that follows the allocation (phase 5, H3: the note is the board's aside)
-    const legend = document.querySelector('[data-legend="Nervos DAO"]')!.parentElement!;
+    const legend = document.querySelector('[data-legend="DAO free"]')!.parentElement!;
     expect(legend.nextElementSibling).toBeNull();
     const note = legend.parentElement!.nextElementSibling as HTMLElement;
     expect(note).toHaveAttribute('aria-label', 'Note');
@@ -391,7 +394,11 @@ describe('CkbytesSection', () => {
     expect(change).toHaveClass('text-negative');
     expect(change).toHaveAttribute('title', `${MINUS}2,578,825.48689593 CKB`);
     expect(dao).not.toHaveTextContent(/Avg deposit/i);
-    expect(within(dao).getByRole('link', { name: 'DAO details →' })).toHaveAttribute(
+    // the readability plan's P3: the figure says what it counts, the deposit cells (requests under
+    // way apart; the allocation's "DAO free" and "in all DAO cells" are the other two)
+    expect(dao).toHaveTextContent(/^Nervos DAOin deposit cells/);
+    // re-pinned on purpose (lists lane P3, the link-look gate): a way onward, its arrow the look's
+    expect(within(dao).getByRole('link', { name: /^DAO details/ })).toHaveAttribute(
       'href',
       '/mainnet/dao'
     );
@@ -463,10 +470,12 @@ describe('CkbytesSection allocation highlight', () => {
 
   it('highlights the segment of a hovered legend item', async () => {
     const { seg } = await renderBar();
-    const dao = legend(/^Nervos DAO/);
+    const dao = legend(/^DAO free/);
     fireEvent.pointerEnter(dao);
     expectHighlighted(seg, 'dao');
-    expect(dao).toHaveTextContent('Nervos DAO8,218,243,616.43799700 CKB16.48% · 8.22B locked');
+    expect(dao).toHaveTextContent(
+      'DAO free8,218,243,616.43799700 CKB16.48% · 8.22B in all DAO cells'
+    );
     fireEvent.pointerLeave(dao);
     expectNoHighlight(seg);
   });

@@ -284,7 +284,11 @@ function WhatMoved({
  * A force-closed channel that waits (review fiber-channel-open: "the live commitment is the key
  * fact, set out like every other card"): the commitment cell that holds the channel now, by its
  * out point, what it holds and when it can pay out, first in tier 1. How the CKB inside it splits
- * between the two parties is not in the API's evidence, so it is not said here.
+ * between the two parties is not on chain while the cell is live (lane exactness, part A, A5 iv):
+ * a commitment lock of the 57- or 58-byte layouts holds a 20-byte hash of the settlement, the split
+ * both last signed, and the settlement transaction that spends the cell reveals it and pays it
+ * out; the older layouts hold not even that. So no field can state it, and the page says what the
+ * chain holds instead.
  */
 function LiveCommitment({
   channel,
@@ -305,10 +309,13 @@ function LiveCommitment({
         <ShortId value={commitment.txHash} kind="hash" size="row" />
         <OutpointIndex index={commitment.outputIndex} />
       </Link>{' '}
-      holds {summary(commitment.capacity)}, the last split both signed;{' '}
+      holds {summary(commitment.capacity)}. How it divides between the two is not on chain:{' '}
+      {commitment.settlementHash
+        ? 'the lock holds only a 20-byte hash of the split both last signed, and the settlement that spends this cell shows the amounts.'
+        : 'the settlement that spends this cell shows the amounts.'}{' '}
       {commitment.readyEpoch
-        ? `the payout can be spent from epoch ${stageEpoch(commitment.readyEpoch, commitment.blockNumber)}.`
-        : `the payout waits ${epochDelayWords(delay)}${delay.relative ? ' after it' : ''}.`}
+        ? `The payout can be spent from epoch ${stageEpoch(commitment.readyEpoch, commitment.blockNumber)}.`
+        : `The payout waits ${epochDelayWords(delay)}${delay.relative ? ' after the commitment' : ''}.`}
     </p>
   );
 }

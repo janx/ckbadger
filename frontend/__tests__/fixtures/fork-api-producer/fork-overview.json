@@ -24,6 +24,7 @@
   "scope": "complete UTC+8 days; uncles use indexed chain time, node switches use this indexer's detection wall time",
   "throughDate": "2026-10-22",
   "unclesInWindow": 5,
+  "canonicalBlocksInWindow": 2,
   "nodeRecord": {
     "observedSince": "2025-07-31T20:00:00+00:00",
     "observedSinceBlock": 9,

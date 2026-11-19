@@ -1486,10 +1486,22 @@ describe('Address board · F2 blocks', () => {
   it('draws every activity as the shared ActivityRow, this address first and once (C3)', async () => {
     // B4 (re-pinned): the second transaction has another party, so the two rows do not say the
     // same thing and are not folded into one run (they were two transfers of this address alone)
+    // Re-pinned on purpose (Gate B's rule, lists lane P3: a run is what was done and the script
+    // code, not the parties): the second transaction calls a type script, so the two rows do not
+    // fold (another party alone no longer keeps them apart)
     const second = {
       ...addressActivitiesFixture[0],
       txHash: fixtureHash(801),
       ckbDelta: '-5',
+      typeCalls: [
+        {
+          typeCodeHash: fixtureHash(803),
+          typeHashType: 'type',
+          typeArgs: '0x',
+          scriptHash: fixtureHash(804),
+          scriptName: 'Some Type',
+        },
+      ],
       participants: [
         { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [] },
       ],

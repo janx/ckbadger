@@ -21,7 +21,7 @@ use std::time::Duration;
 use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
 use crate::cache::InMemoryCache;
 use crate::response::{
-    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
+    default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse, RankedPage,
 };
 use crate::utils::hash::parse_fixed_hex;
 use crate::utils::{
@@ -3984,14 +3984,31 @@ fn list_object_collection_holders_ranked(
     Ok(holders)
 }
 
+/// The read view's tip, number and hash, as a part of a cache key (lane exactness, part A, A3): a value cached
+/// under it was read at that block, so a request at another block reads its own.
+pub(crate) fn view_tip_key(store: &CkbadgerStore) -> Result<String, ApiRouteError> {
+    Ok(
+        match store
+            .get_sync_tip_block()
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            Some((number, header)) => format!("{number}:{}", hex::encode(header.hash)),
+            None => "no-tip".to_string(),
+        },
+    )
+}
+
 fn list_object_collection_holders_ranked_cached(
     store: &CkbadgerStore,
     mem_cache: &InMemoryCache,
     collection_id_bytes: &[u8],
 ) -> Result<Vec<(Vec<u8>, i64)>, ApiRouteError> {
+    // keyed by the read view's tip, so the ranking a page is cut from and the total beside it are
+    // read in one view (lane exactness, part A, A3: a 30 s entry could serve the ranking of an older block)
     let cache_key = format!(
-        "assets:nft_collection_holders_ranked:0x{}",
-        hex::encode(collection_id_bytes)
+        "assets:nft_collection_holders_ranked:0x{}:{}",
+        hex::encode(collection_id_bytes),
+        view_tip_key(store)?
     );
     if let Some(cached) = mem_cache.get::<Vec<(Vec<u8>, i64)>>(&cache_key) {
         return Ok(cached);
@@ -4006,7 +4023,7 @@ async fn list_object_collection_holders(
     State(state): State<Arc<AppState>>,
     Path(collection_id): Path<String>,
     Query(params): Query<CollectionHoldersParams>,
-) -> ApiResult<CursorPaginatedResponse<CollectionHolderResponse>> {
+) -> ApiResult<RankedPage<CollectionHolderResponse>> {
     let limit = params.limit.clamp(1, 100) as usize;
     let collection_id_bytes = decode_object_collection_id(&collection_id)?;
     let cursor = params
@@ -4062,12 +4079,11 @@ async fn list_object_collection_holders(
         })
         .collect::<Result<_, ApiRouteError>>()?;
 
-    ok(CursorPaginatedResponse::new(
-        rows,
-        total,
-        limit as i64,
-        next_cursor,
-    ))
+    ok(RankedPage {
+        page: CursorPaginatedResponse::new(rows, total, limit as i64, next_cursor),
+        // the cursor's position in the ranking read in this request's view, plus one
+        first_rank: start_idx as u64 + 1,
+    })
 }
 
 async fn list_object_collection_activities(

@@ -46,14 +46,28 @@ const activity = {
     },
   ],
 };
-// B4 (re-pinned): three requests by three depositors; the same request by the same parties three
-// times running is one run, folded (they were three copies of one transaction's parties)
-const three = Array.from({ length: 3 }, (_, i) => ({
+// B4 (re-pinned): three requests by three depositors. Re-pinned on purpose (Gate B's rule, lists
+// lane P3): rows that did the same thing and called the same code fold whoever the parties are, so
+// three requests running are one run; the newest three here are a request, a deposit and a
+// request, which do not (the run is pinned below)
+const request = (i: number) => ({
   ...activity,
   txHash: '0x' + String(i + 1).repeat(64),
   blockNumber: 123 - i,
   participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
-}));
+});
+const deposit = (i: number) => ({
+  ...request(i),
+  protocolActions: [
+    {
+      protocol: 'dao',
+      protocolName: 'Nervos DAO',
+      action: 'deposit',
+      metadata: { capacity: '2605000000000' },
+    },
+  ],
+});
+const three = [request(0), deposit(1), request(2)];
 
 describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
   beforeEach(() => {
@@ -103,6 +117,29 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     expect(screen.queryByRole('button', { name: /older/i })).toBeNull();
     expect(screen.queryByRole('table')).toBeNull();
     expect(api.getTransactions).not.toHaveBeenCalled();
+  });
+
+  it('folds three requests running into one run, whoever made them (Gate B)', async () => {
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [request(0), request(1), request(2)],
+      limit: 3,
+      total: null,
+      hasMore: true,
+      nextCursor: 'next',
+    } as any);
+    render(<DaoSources />);
+    const section = screen.getByRole('region', { name: 'Recent DAO activity' });
+    await waitFor(() =>
+      expect(section.querySelector('[data-role="activity-run"]')).toHaveAttribute(
+        'data-run-count',
+        '3'
+      )
+    );
+    // three depositors, and the two parties every request shares
+    expect(section.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^all 3 transactions ↓ · 5 participants$/
+    );
+    expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });
 
   it('links all DAO activity and DAO transactions on their list pages', () => {

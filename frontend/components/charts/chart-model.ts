@@ -178,7 +178,13 @@ export interface ChartModel {
   /** Lane D1: every series of a stack whose bands were merged, at the last point, for its table. */
   table?: { name: string; value: string }[];
   /** Lane D1: the consensus target, exactly, in the chart's unit (uncle rate, epoch length). */
-  target?: { ratio: readonly [bigint, bigint]; text: string; ms?: bigint };
+  target?: {
+    ratio: readonly [bigint, bigint];
+    text: string;
+    ms?: bigint;
+    /** Uncles over blocks as numerator and denominator (the uncle rate's target). */
+    fraction?: readonly [bigint, bigint];
+  };
   /** Lane D1, third round (S5): the buckets tied with the reading, by label. */
   readingTies?: string[];
   /** Block intervals' window, the route's (S4). */
@@ -362,6 +368,8 @@ function singleChart(
     peak?: { date: string; value: string } | null;
     peak2?: { date: string; value: string } | null;
     target?: { seconds: number; hours: string };
+    /** The uncle rate's operands, one per point in its order, the route's (lane exactness, part A, A2). */
+    counts?: { date: string; uncles: number; blocks: number }[];
     /** Block intervals' window, the route's (S4). */
     epochs?: number;
     intervals?: number;
@@ -386,7 +394,15 @@ function singleChart(
   // Cell size names its buckets in the axis' words (CH-12); every other label is the API's own.
   const pointLabel = (date: string) =>
     definition.slug === 'cell-size-distribution' ? cellSizeBucketLabel(date) : date;
-  const returned: ChartPoint[] = payload.data.map((point) => {
+  // the uncle rate counts "over the target" on its operands, the route's (lane exactness, part A, A2)
+  const counts = definition.slug === 'uncle-rate' ? payload.counts : undefined;
+  if (definition.slug === 'uncle-rate' && counts === undefined)
+    throw new Error(`${definition.slug}: the API sends no counts: it is older than this page`);
+  if (counts && counts.length !== payload.data.length)
+    throw new Error(
+      `${definition.slug}: ${counts.length} days of counts for ${payload.data.length} points`
+    );
+  const returned: ChartPoint[] = payload.data.map((point, index) => {
     const primary = point[primaryField];
     if (primary === undefined || primary === null)
       throw new Error(`${definition.slug}: missing ${primaryField} at ${point.date}`);
@@ -395,6 +411,20 @@ function singleChart(
     };
     // the duration's exact ms, for the target count and the figure's title (M1); not drawn
     if (definition.scale === 'ms-hours') values.ms = primary;
+    // the day's uncles and blocks, for the target count; not drawn
+    if (counts) {
+      const day = counts[index];
+      if (day.date !== point.date)
+        throw new Error(`${definition.slug}: counts of ${day.date} at the point of ${point.date}`);
+      for (const [key, n] of [
+        ['uncles', day.uncles],
+        ['blocks', day.blocks],
+      ] as const) {
+        if (!Number.isSafeInteger(n) || n < 0)
+          throw new Error(`${definition.slug}: invalid ${key} ${n} on ${point.date}`);
+        values[key] = String(n);
+      }
+    }
     if (hasSecond && !definition.secondary) {
       const companion = point[companionField];
       if (companion === undefined || companion === null)
@@ -1239,6 +1269,8 @@ function minerRows(
       percentage: string;
     }[];
     totalBlocks: number;
+    /** The window's blocks found by every miner after the five largest, the route's (lane exactness, part A). */
+    restBlocks?: number;
     fromDate: string;
     toDate: string;
     title: string;
@@ -1246,6 +1278,12 @@ function minerRows(
 ): ChartModel {
   if (!Number.isSafeInteger(payload.totalBlocks) || payload.totalBlocks < 0)
     throw new Error(`${definition.slug}: invalid totalBlocks`);
+  // the card's "Others": the route's figure (lane exactness, part A, A1; the page subtracted the five)
+  const restBlocks = payload.restBlocks;
+  if (restBlocks === undefined)
+    throw new Error(`${definition.slug}: the API sends no restBlocks: it is older than this page`);
+  if (!Number.isSafeInteger(restBlocks) || restBlocks < 0)
+    throw new Error(`${definition.slug}: invalid restBlocks ${restBlocks}`);
   if (payload.data.length > 0 && payload.totalBlocks === 0)
     throw new Error(`${definition.slug}: ${payload.data.length} miners in a window of no blocks`);
   // A row's share and the remainder's, from the exact block counts, cut (the D1 hand-back).
@@ -1310,10 +1348,7 @@ function minerRows(
           href: miner.row.href,
         })),
         BigInt(payload.totalBlocks),
-        // no route figure states the window's other miners: their blocks are the window's less
-        // the five (the third round's hand-back names it)
-        BigInt(payload.totalBlocks) -
-          miners.slice(0, PREVIEW_RANKS).reduce((sum, miner) => sum + miner.blocks, BigInt(0)),
+        BigInt(restBlocks),
         percent2,
         definition.slug
       ),
@@ -1371,6 +1406,8 @@ export function chartModel(definition: ChartDefinition, payload: ChartPayload): 
     model.target = {
       ratio: [BigInt(numerator) * BigInt(100), BigInt(denominator)],
       text: withUnit(percent, '%'),
+      // the target as a fraction of blocks, for the count on each day's operands (lane exactness, part A, A2)
+      fraction: [BigInt(numerator), BigInt(denominator)],
     };
   }
   return model;

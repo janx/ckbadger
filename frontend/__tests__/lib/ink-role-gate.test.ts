@@ -86,7 +86,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'app/blocks/page.tsx': {
     family: 'chain',
     // td 5 → 4 (readability F3-e): the 608 px table's age is the first line of its "Age · txs" cell
-    sites: { link: 3, td: 4, prose: 2 },
+    // link 3 → 1 (lane P3): the hardfork links read in their line's ink, the inline look's
+    sites: { link: 1, td: 4, prose: 2 },
     reason:
       'ages, reward-finality heights, cycles states and HF links quiet in table cells and rows; the loading and error lines',
   },
@@ -170,11 +171,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the CKBytes formula under the figure (a note under a figure, or a reading: P1 decides)',
   },
-  'components/home/ranked-bars.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: "the ranked list's title link in the quiet ink",
-  },
+  // 'components/home/ranked-bars.tsx' left the list (lane P3: link 1 → 0; the ranked list's title
+  // link is its key, the key look's ink)
   'components/transaction/script-group-matrix.tsx': {
     family: 'chain',
     // link 1 → 0 (lane P1): a group only attached names its script in the reading ink
@@ -299,8 +297,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- lists ----
   'app/activities/page.tsx': {
     family: 'lists',
-    sites: { link: 1, prose: 2 },
-    reason: 'the transactions link and the statistics error and empty sentences in the quiet ink',
+    // link 1 → 0 (lane P3): the transactions link is a way onward, its look's ink
+    sites: { prose: 2 },
+    reason: 'the statistics error and empty sentences in the quiet ink',
   },
   'app/inventory/inventory-page-client.tsx': {
     family: 'lists',
@@ -315,17 +314,15 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'notes in table cells: 2 (custody and evidence unavailable); prose by kind: 2 loading (cells, capacity history), 2 empty (no code-cell deployments, no capacity history)',
   },
-  'app/scripts/page.tsx': {
-    family: 'lists',
-    // link 1 → 0, prose 2 → 1 (B7): the lede and its link read in the reading ink
-    sites: { prose: 1 },
-    reason: "the code-class bar's caption in the quiet ink",
-  },
+  // 'app/scripts/page.tsx' left the list (lane P3: prose 1 → 0; the code-class bar is named by
+  // the summary sentence, in the reading ink, no quiet label over it)
   'app/transactions/page.tsx': {
     family: 'lists',
-    sites: { link: 1, td: 2, prose: 11 },
-    reason:
-      'interpretation states in table cells; the activities link; the statistics, pool and list sentences and notes',
+    // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);
+    // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
+    // reading ink, one of them new; the yesterday line is the lede, in the reading ink
+    sites: { td: 2, prose: 9 },
+    reason: 'interpretation states in table cells; the statistics, pool and list notes and states',
   },
   'components/activities-stream-explorer.tsx': {
     family: 'lists',
@@ -366,11 +363,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 1 },
     reason: 'prose by kind: 1 loading (the newest cells)',
   },
-  'components/transaction/transaction-list-table.tsx': {
-    family: 'lists',
-    sites: { td: 3 },
-    reason: 'the cellbase reward, the cells count and the cycles state quiet in table cells',
-  },
+  // components/transaction/transaction-list-table.tsx left the list (lane P3: td 3 → 0; the
+  // cellbase reward left with the cellbases' own list, the cycles state with the cycles column, the
+  // cells count reads in the reading ink)
   // ---- topics ----
   'app/dao/depositors/page.tsx': {
     family: 'topics',
@@ -457,11 +452,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: "the step's loading line, a transient note in the quiet ink",
   },
   // ---- shared ----
-  'components/activity/activity-row.tsx': {
-    family: 'shared',
-    sites: { link: 3 },
-    reason: "B4 rows: the row's block and tx links and a type-call link in the quiet ink",
-  },
+  // 'components/activity/activity-row.tsx' left the list (lane P3: link 3 → 0; its links take the
+  // inline look and the ink of the line they stand in, the evidence's and the detail run's, a note)
   'components/command-palette.tsx': {
     family: 'shared',
     sites: { prose: 1 },
