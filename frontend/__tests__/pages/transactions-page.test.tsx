@@ -1,4 +1,5 @@
 import { CHARTS } from '@/components/charts/chart-catalogue';
+import { chooseView } from '@/__tests__/utils/tab-row';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { atViewportWidth, stubViewportFromMd } from '@/__tests__/utils/viewport';
@@ -641,7 +642,9 @@ describe('Transactions pool view', () => {
     };
     vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
     const { unmount } = render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    // the view through the row's form on this line: a stubbed 358 px line under a viewport from
+    // 640 holds no 388.4 px command row, its Select (the lead's final round, item 4)
+    await chooseView(/^in the pool/);
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     const cols = Array.from(table.querySelectorAll('col')).map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
@@ -662,7 +665,8 @@ describe('Transactions pool view', () => {
       vi.mocked(api.getPoolTransactions).mockResolvedValue(poolPage);
       atContainerWidth(width);
       const shown = render(<TransactionsPage />);
-      fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+      // the row's form on this line (the lead's final round, item 4): a tab or its Select
+      await chooseView(/^in the pool/);
       const list = await screen.findByRole(form === 'table' ? 'table' : 'list', {
         name: form === 'table' ? 'Transactions in the pool' : 'Transactions in the pool, compact',
       });
@@ -727,7 +731,9 @@ describe('Transactions pool view', () => {
       { kind: 'tx', hash: cellbaseHash, consumed: 0, created: 1 },
     ] as const;
     const { unmount } = render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    // the view through the row's form on this line: a stubbed 358 px line under a viewport from
+    // 640 holds no 388.4 px command row, its Select (the lead's final round, item 4)
+    await chooseView(/^in the pool/);
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     const rows = Array.from(table.querySelectorAll('tbody tr'));
     expect(rows).toHaveLength(2);
@@ -749,7 +755,8 @@ describe('Transactions pool view', () => {
       vi.restoreAllMocks();
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    // the row's form on this line (the lead's final round, item 4): a tab or its Select
+    await chooseView(/^in the pool/);
     const cards = await screen.findAllByTestId('pool-row-mobile');
     expect(cards).toHaveLength(2);
     cards.forEach((card, i) => {
@@ -931,7 +938,9 @@ describe('Transactions pool view', () => {
       lastPolledAt: '2026-10-25T00:00:00Z',
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    // the view through the row's form on this line: a stubbed 358 px line under a viewport from
+    // 640 holds no 388.4 px command row, its Select (the lead's final round, item 4)
+    await chooseView(/^in the pool/);
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     expect(screen.queryByRole('table', { name: 'Transactions in the pool' })).toBeNull();
     // Re-pinned on purpose (lane D4, the phone-rows board): the value leaves the right of what it
@@ -1599,7 +1608,9 @@ describe('the pool on a phone (lane D4, PA-20)', () => {
     );
     vi.mocked(api.getPoolTransactions).mockResolvedValue(pool('76729874184'));
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    // the view through the row's form on this line: a stubbed 358 px line under a viewport from
+    // 640 holds no 388.4 px command row, its Select (the lead's final round, item 4)
+    await chooseView(/^in the pool/);
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0xabab…abab', expect.stringMatching(/^Proposed· .+ ago$/)],

@@ -109,6 +109,30 @@ export function tabRowShowsCounts(
   return tabRowPx(items, step, command).withCounts <= linePx;
 }
 
+/** What a tab row draws on its line: its tabs with their counts, its tabs alone, or the Select. */
+export type TabRowForm = 'counts' | 'names' | 'select';
+
+/**
+ * A tab row's form on a line `linePx` wide at `step` (the lead's final round, item 4): its tabs with
+ * their counts while the row with them holds the line; its tabs alone (the counts leave first, the
+ * owner's phone rule) while its names do; else its narrow form, the library's Select, which never
+ * clips, wraps or scrolls a row. Decided from its labels (and its counts, which leave first), as a
+ * filter's chips are (`chipFormFits`). Before the line is measured (`null`) the row with its
+ * counts. The cases: the transactions and address rows, 316.8 px without counts at the body step,
+ * are the Select in a 320 px window's 288 px line and tabs in a 360 px window's 328.
+ */
+export function tabRowForm(
+  items: readonly TabRowItem[],
+  step: TabRowStep,
+  command: boolean,
+  linePx: number | null
+): TabRowForm {
+  if (linePx === null) return 'counts';
+  const row = tabRowPx(items, step, command);
+  if (row.withCounts <= linePx) return 'counts';
+  return row.bare <= linePx ? 'names' : 'select';
+}
+
 /** A filter chip as the row writes it: its label, its count and its mark where it has them. */
 export interface ChipRowItem {
   label: string;

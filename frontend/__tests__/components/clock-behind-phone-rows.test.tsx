@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen } from '@testing-library/react';
+import { chooseView } from '@/__tests__/utils/tab-row';
+import { screen } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { containerContentPx } from '@/__tests__/utils/tailwind-box';
@@ -165,7 +166,9 @@ describe('"this device\'s clock is behind" breaks between its words in a phone r
     const line = containerContentPx(viewport) - ROW_SEAL.tx.footprint;
     atContainerWidth(containerContentPx(viewport));
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    // the view through the row's form on this line: a stubbed 358 or 328 px line under a viewport
+    // from 640 holds no 388.4 px command row, its Select (the lead's final round, item 4)
+    await chooseView(/^in the pool/);
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     const right = identityRight(row);
     expect(right).toHaveTextContent(`Confirming· ${CLOCK_BEHIND}`);

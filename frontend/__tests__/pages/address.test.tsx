@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { chooseView } from '@/__tests__/utils/tab-row';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
@@ -129,9 +130,10 @@ const namedRight = {
   name: 'support.cell',
   expiredAt: 1821507678,
 };
-// re-pinned (lane c2-chain): the history's views are the library's tab row (were pressed buttons)
-const tab = async (name: string) =>
-  fireEvent.click(await screen.findByRole('tab', { name: new RegExp(`^${name}`, 'i') }));
+// re-pinned (lane c2-chain): the history's views are the library's tab row (were pressed buttons);
+// re-pinned on purpose (the lead's final round, item 4): through the row's form on its line, a tab
+// or, on a stubbed line that cannot hold the names, the row's Select
+const tab = async (name: string) => chooseView(new RegExp(`^${name}`, 'i'));
 // Phase 5 (A21): the holdings heading runs on the address's live cells (U-16, re-pinned: the count
 // and its noun are one unit, a no-break space between them).
 const loaded = () => screen.findByRole('heading', { name: /^Holdings [\d,]+\scells?$/ });

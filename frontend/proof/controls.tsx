@@ -96,6 +96,21 @@ function TabRows() {
           section’s heading: 17 px from 640)
         </Note>
       </Tabs>
+      {/* the narrow form (the lead's final round, item 4): a 320 px window's 288 px line */}
+      <div className="w-[288px]">
+        <Tabs
+          label="address, narrow"
+          command
+          tabs={ADDRESS_TABS}
+          value={address}
+          onChange={setAddress}
+        >
+          <Note>
+            the same row on a 288 px line, a 320 px window’s: its names are 316.8 px, so it is the
+            Select after “showing”
+          </Note>
+        </Tabs>
+      </div>
     </Item>
   );
 }
