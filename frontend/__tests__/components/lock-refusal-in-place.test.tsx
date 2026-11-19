@@ -5,7 +5,7 @@
 // row: the activity rows, the token and collection holders, the supply events, the newest objects
 // and the token's issuer note.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
@@ -69,6 +69,53 @@ describe('a refused lock fails its part, in its place', () => {
     );
   });
 
+  // third round (the coordinator's item 4): a row's boundary starts again when its data changes
+  // (a transaction in the pool that commits), rather than standing in its error for good
+  it('an activity row: its part starts again when its transaction changes', () => {
+    const tx = `0x${'31'.repeat(32)}`;
+    const at = (blockNumber: number | null, address: string): GlobalActivity => ({
+      txHash: tx,
+      blockNumber: blockNumber as number,
+      txIndex: 0,
+      timestamp: (blockNumber === null ? null : String(Date.now() - 60_000)) as string,
+      isCellbase: false,
+      protocolActions: [],
+      typeCalls: [],
+      lockCalls: [],
+      participants: [
+        {
+          address,
+          lockHash: `0x${'32'.repeat(32)}`,
+          lockHashPrefix: null,
+          lockKind: null,
+          roles: [],
+          tags: 0,
+          ckbDelta: '-1',
+          usedDelta: '0',
+          itemDeltas: [],
+        },
+      ],
+    });
+    const runsOf = (a: GlobalActivity) => (
+      <ActivityRuns
+        rows={[
+          {
+            key: a.txHash,
+            subject: null,
+            activity: a,
+            title: <ActivityTitle activity={a} />,
+            row: <ActivityRow activity={a} />,
+          },
+        ]}
+      />
+    );
+    const { rerender } = render(runsOf(at(null, 'ckb1qzda0b')));
+    expect(screen.getByRole('alert')).toHaveTextContent(`Cannot read tx ${tx}`);
+    rerender(runsOf(at(100, seededAddress('good31'))));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(document.querySelector(`article[data-feed-row="${tx}"]`)).not.toBeNull();
+  });
+
   it('the token holders: the section says it cannot read its holders, the page stands', async () => {
     atContainerWidth(1248);
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
@@ -95,10 +142,34 @@ describe('a refused lock fails its part, in its place', () => {
         <TokenHolders typeHash="0xabc" symbol="T" decimals={0} />
       </main>
     );
-    const alert = await screen.findByText(/^Could not read the holders: /);
+    // third round (the coordinator's item 4): said where (the token, the view) in the error's
+    // own words, under the section's heading, which stays with its button
+    const alert = await screen.findByText(/^Could not draw the holders \(token 0xabc, top 10\): /);
     expect(alert).toHaveAttribute('role', 'alert');
     expect(alert).toHaveTextContent(refusal);
     expect(screen.getByRole('heading', { name: 'The token page' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^Who holds it/ })).toBeInTheDocument();
+    // another view of the holders draws again: the part starts again when its data changes
+    vi.mocked(api.getTokenHolders).mockResolvedValue({
+      data: [
+        {
+          lockScriptHash: `0x${'22'.repeat(32)}`,
+          address: seededAddress('good22'),
+          balance: '100',
+          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+          lockKind: 'Default Lock',
+        },
+      ],
+      total: 1,
+      limit: 10,
+      hasMore: false,
+      nextCursor: null,
+      totalSupply: '100',
+      anchor: null,
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^All .*→$/ }));
+    expect(await screen.findByRole('table', { name: 'All holders' })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('the collection holders: the section says it cannot read its holders', async () => {
