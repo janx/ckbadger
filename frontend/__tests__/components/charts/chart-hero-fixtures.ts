@@ -427,14 +427,16 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     y2AxisLabel: null,
     data: [
       { date: '2.05', value: '1', value2: null },
-      ...['3.90', '3.95', '4.00', '4.02', '4.05', '4.10'].map((date) => ({
+      // minutes 234, 237, 240, 241, 243 and 246 in hours, cut as the API writes them (241 read 4.02
+      // half up)
+      ...['3.90', '3.95', '4.00', '4.01', '4.05', '4.10'].map((date) => ({
         date,
-        value: date === '4.02' ? '628' : '300',
+        value: date === '4.01' ? '628' : '300',
         value2: null,
       })),
       { date: '50.50', value: '1', value2: null },
     ],
-    peak: { date: '4.02', value: '628' },
+    peak: { date: '4.01', value: '628' },
     peak2: null,
   },
 };

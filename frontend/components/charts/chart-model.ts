@@ -1731,9 +1731,10 @@ function numericBucketTicks(
 
 /**
  * The bucket grid of a numeric histogram, as its API labels it: `perUnit` buckets to one unit of
- * the axis, each labelled at `decimals` places, half up (the API's `format_ratio`). Block intervals
- * are every 0.1 s of 0–50 s; Epoch durations every minute, the indexer counting an epoch at its
- * duration rounded to the minute, labelled in hours.
+ * the axis, each labelled at `decimals` places, cut (the API's `format_ratio_cut`; it rounded half
+ * up before the coordinator's ruling of 2026-11-19). Block intervals are every 0.1 s of 0–50 s,
+ * each label exact; Epoch durations every minute, the indexer counting an epoch at its duration
+ * rounded to the minute, labelled in hours (181 minutes is 3.01).
  */
 const BUCKET_GRIDS: Readonly<Record<string, { perUnit: number; decimals: number }>> = {
   'block-time-distribution': { perUnit: 10, decimals: 1 },
@@ -1769,7 +1770,8 @@ function fillBucketRun(
       `${slug}: a filled histogram has one series; an empty bucket has no other value`
     );
   const perUnit = BigInt(grid.perUnit);
-  // the grid bucket a label names: label × perUnit, half up, exact; it must write the label back
+  // the grid bucket a label names, the one nearest label × perUnit (a cut label is under its
+  // bucket by less than half a bucket), exact; that bucket must write the label back
   const bucketOf = (label: string): bigint => {
     if (!NUMERIC_BUCKET.test(label)) throw new Error(`${slug}: bucket ${label} is not a number`);
     const [whole, fraction = ''] = label.split('.');

@@ -227,7 +227,8 @@ describe('29 chart variants', () => {
     expect(formatChartReadout('622', 'epochs')).toBe('622');
     // A whole count under 100,000 reads exactly, grouped, as charts.json does ("16,826"; F2 charts).
     expect(formatChartReadout('1234', 'transactions')).toBe('1,234');
-    expect(formatChartReadout('123456', 'transactions')).toBe('123.46k');
+    // re-pinned for the coordinator's ruling of 2026-11-19, a shortened figure is cut (was half up, 123.46k)
+    expect(formatChartReadout('123456', 'transactions')).toBe('123.45k');
     // A CKB amount is cut, never rounded (readability R5, re-pinned on purpose: was 9.01B).
     expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.00B');
     // A negative takes the minus sign (re-pinned for CH-21: was the hyphen).

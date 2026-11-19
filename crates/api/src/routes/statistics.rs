@@ -2435,7 +2435,8 @@ async fn get_address_cohort_retention_chart(
 async fn get_block_time_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:block-time-distribution:v2";
+    // v3: every share cut, never rounded (the D1 hand-back)
+    let cache_key = CACHE_KEY_BLOCK_TIME_DISTRIBUTION;
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         if block_time_dist_has_data(&cached) {
             return ok(cached);
@@ -2452,6 +2453,12 @@ async fn get_block_time_distribution_chart(
 
     ok(response)
 }
+
+/// The block-intervals chart's cache key, the route's and the warmup's (v3: its shares cut).
+pub(crate) const CACHE_KEY_BLOCK_TIME_DISTRIBUTION: &str = "chart:block-time-distribution:v3";
+
+/// The epoch-durations chart's cache key (v2: its bucket labels cut).
+pub(crate) const CACHE_KEY_EPOCH_TIME_DISTRIBUTION: &str = "chart:epoch-time-distribution:v2";
 
 /// Number of complete epochs to include in the block-time distribution.
 /// ~1 week at ~4 h/epoch. CKB adjusts difficulty per epoch, so aligning
@@ -2494,7 +2501,8 @@ fn build_block_time_distribution_data(
     }
     (0..BLOCK_TIME_DIST_BUCKET_COUNT)
         .map(|idx| {
-            let ratio = crate::utils::exact_ratio::format_ratio(
+            // a share a chart page states, cut at its three decimals, never rounded
+            let ratio = crate::utils::exact_ratio::format_ratio_cut(
                 bucket_counts[idx] as i128 * 100,
                 total_blocks as i128,
                 3,
@@ -2604,7 +2612,7 @@ pub(crate) fn build_block_time_distribution_response(
 async fn get_epoch_time_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:epoch-time-distribution";
+    let cache_key = CACHE_KEY_EPOCH_TIME_DISTRIBUTION;
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
@@ -2615,23 +2623,26 @@ async fn get_epoch_time_distribution_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data: Vec<ChartDataPoint> =
-        dist.into_iter()
-            .map(|(bucket_minutes, count)| {
-                let hours_decimal =
-                    crate::utils::exact_ratio::format_ratio(bucket_minutes as i128, 60, 2)
-                        .map_err(|e| {
-                            ApiError::internal(format!(
-                                "epoch time bucket {bucket_minutes} minutes: {e}"
-                            ))
-                        })?;
-                Ok(ChartDataPoint {
-                    date: hours_decimal,
-                    value: count.to_string(),
-                    value2: None,
-                })
+    let data: Vec<ChartDataPoint> = dist
+        .into_iter()
+        .map(|(bucket_minutes, count)| {
+            // A bucket is one minute, labelled in hours, the axis' unit, at two decimals cut and
+            // never rounded (181 minutes is 3.01): one minute is 1.67 hundredths of an hour, so
+            // no two minutes share a label and the page reads the minute back from it exactly.
+            let hours_decimal =
+                crate::utils::exact_ratio::format_ratio_cut(bucket_minutes as i128, 60, 2)
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "epoch time bucket {bucket_minutes} minutes: {e}"
+                        ))
+                    })?;
+            Ok(ChartDataPoint {
+                date: hours_decimal,
+                value: count.to_string(),
+                value2: None,
             })
-            .collect::<Result<Vec<_>, ApiRouteError>>()?;
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let response = ChartResponse {
         data,

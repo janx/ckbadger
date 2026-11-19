@@ -183,7 +183,8 @@ const EXPECT: Record<string, Expect> = {
   },
   'epoch-time-distribution': {
     eyebrow: 'the most common duration',
-    figure: '4.02 h',
+    // re-pinned for the ruling of 2026-11-19: minute 241 is 4.01 h, cut (was half up, 4.02)
+    figure: '4.01 h',
     sentence: 'The shortest epoch took 2.05 h and the longest 50.50 h.',
   },
 };

@@ -357,8 +357,9 @@ describe('shared chart detail', () => {
       title: 'Epoch durations',
       yAxisLabel: 'Epochs',
       data: [
+        // minute 241 in hours, cut as the API writes it (re-pinned: half up it was 4.02)
         { date: '3.98', value: '10' },
-        { date: '4.02', value: '622' },
+        { date: '4.01', value: '622' },
         { date: '50.50', value: '1' },
       ],
     });
@@ -372,7 +373,7 @@ describe('shared chart detail', () => {
     expect(screen.queryByRole('heading', { name: /^Distribution|^Full history/ })).toBeNull();
     const props = lastChart('Epoch durations');
     expect(props.plotName).toBe('epochs, by hours taken · 3\u00a0buckets');
-    expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
+    expect(props.reading).toEqual({ label: '4.01', values: { primary: '622' } });
     expect(props.subtitle).toBe('Completed epochs by hours taken · 3\u00a0buckets');
     expect(props.slotBars).toBe(true);
   });
