@@ -141,36 +141,38 @@ function getActivityDayLabel(timestamp: string, now: number): string {
 
 /**
  * The stream's rows by day, in order: consecutive rows of one UTC+8 date are one group under one
- * divider. A group is keyed by what it is, that date and which time the date comes in the stream
- * (a block's time may be earlier than its parent's, so near midnight a day can come again after
- * the next); its label ("Today", "Yesterday", "Nov 13") is the reader's, relative to `now`, and
- * is no part of its key. A row arriving at the top, an older page at the bottom and the turn of
- * the day leave every key as it was, so no group is remounted under the reader (lane B4 fix
- * rounds).
+ * divider. A group is keyed by the rows it was first drawn with (lane B4 fix rounds): a row keeps
+ * the key of the group it was first drawn in (`anchors`, the stream remembers them), and a group
+ * takes the key of the first of its rows that has one; a group none of whose rows was drawn yet is
+ * keyed by its date and its first row. Its label ("Today", "Yesterday", "Nov 13") is the
+ * reader's, relative to `now`, and is no part of its key. So a row arriving at the top, an older
+ * page at the bottom, the turn of the day, and a new row whose date already stands lower (a
+ * block's time may be earlier than its parent's, so near midnight a day can come again after the
+ * next) leave every drawn group's key as it was, and no group is remounted under the reader.
  */
 function dayGroups(
   items: readonly GlobalActivity[],
-  now: number
+  now: number,
+  anchors: ReadonlyMap<string, string>
 ): { key: string; label: string; items: GlobalActivity[] }[] {
-  const groups: { key: string; date: string; label: string; items: GlobalActivity[] }[] = [];
-  const seen = new Map<string, number>();
+  const groups: { date: string; label: string; items: GlobalActivity[] }[] = [];
   for (const activity of items) {
     const date = formatUtc8Date(toActivityDate(activity.timestamp).getTime());
     const last = groups[groups.length - 1];
-    if (last && last.date === date) {
-      last.items.push(activity);
-      continue;
-    }
-    const time = seen.get(date) ?? 0;
-    seen.set(date, time + 1);
-    groups.push({
-      key: `${date}#${time}`,
-      date,
-      label: getActivityDayLabel(activity.timestamp, now),
-      items: [activity],
-    });
+    if (last && last.date === date) last.items.push(activity);
+    else
+      groups.push({ date, label: getActivityDayLabel(activity.timestamp, now), items: [activity] });
   }
-  return groups;
+  const taken = new Set<string>();
+  return groups.map(({ date, label, items: rows }) => {
+    const key =
+      rows
+        .map((row) => anchors.get(itemKey(row)))
+        .find((anchor) => anchor !== undefined && !taken.has(anchor)) ??
+      `${date}:${itemKey(rows[0])}`;
+    taken.add(key);
+    return { key, label, items: rows };
+  });
 }
 
 function mergeUniqueActivities(
@@ -530,6 +532,17 @@ export function ActivitiesStreamExplorer({
     safeScrollIntoView(topAnchorRef.current, { behavior: 'smooth', block: 'start' });
   };
 
+  // each drawn row's day group key, as first drawn (`dayGroups`): a prepend or an older page never
+  // re-keys a group that already holds a drawn row
+  const groupAnchors = useRef(new Map<string, string>());
+  const groups = dayGroups(visibleItems, now, groupAnchors.current);
+  useEffect(() => {
+    for (const group of groups)
+      for (const row of group.items)
+        if (!groupAnchors.current.has(itemKey(row)))
+          groupAnchors.current.set(itemKey(row), group.key);
+  });
+
   const initialError = !awaited && !!error && visibleItems.length === 0;
   const emptyState = !awaited && !error && visibleItems.length === 0;
   const hasPending = pendingNewItems.length > 0;
@@ -600,7 +613,7 @@ export function ActivitiesStreamExplorer({
           <div>
             {/* Readability B4: each day's rows, under its divider, with their runs folded; a run
                 folds within its day and across the older pages appended to it. */}
-            {dayGroups(visibleItems, now).map(({ key, label, items }) => (
+            {groups.map(({ key, label, items }) => (
               // under the filter too: another filter shows another set of rows, and its runs'
               // state starts anew (a run the reader never opened under it is never drawn open)
               <div key={`${selectedFilter}:${key}`}>
