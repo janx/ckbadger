@@ -813,6 +813,42 @@ describe('Block board · R2b-a fields', () => {
     ).toEqual([0, 1, 2, 3].map((i) => activity(i).txHash));
   });
 
+  // Lane c2-chain, written before the block's tabs and pagers became the library's: what they do,
+  // whatever draws them — a block longer than a page pages its activities and its transactions
+  // forward from the API's cursors, each view its own walk.
+  it('pages a long block’s activities and transactions forward from the API’s cursors', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...block, transactionsCount: 150 });
+    vi.mocked(api.getGlobalActivities).mockImplementation(async (p) =>
+      p?.cursor
+        ? { data: [4].map(activity), limit: 100, hasMore: false, nextCursor: null }
+        : { data: [0, 1, 2, 3].map(activity), limit: 100, hasMore: true, nextCursor: 'acts-on' }
+    );
+    vi.mocked(api.getTransactions).mockImplementation(async (p) =>
+      p?.cursor
+        ? { data: [3].map(tx), limit: 100, hasMore: false, nextCursor: null }
+        : { data: [0, 1, 2].map(tx), limit: 100, hasMore: true, nextCursor: 'txs-on' }
+    );
+    // a view by its name, a tab or a pressed button
+    const view = (name: RegExp) =>
+      screen.queryByRole('tab', { name }) ?? screen.getByRole('button', { name });
+    render(<BlockDetailPage />);
+    await screen.findByText('Cellbase');
+    fireEvent.click(screen.getByRole('button', { name: /^next( →)?$/i }));
+    await waitFor(() =>
+      expect(api.getGlobalActivities).toHaveBeenLastCalledWith(
+        expect.objectContaining({ blockNumber: N, cursor: 'acts-on', order: 'asc' })
+      )
+    );
+    fireEvent.click(view(/^transactions/i));
+    await screen.findByRole('table', { name: 'Transactions in this block' });
+    fireEvent.click(screen.getByRole('button', { name: /^next( →)?$/i }));
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith(
+        expect.objectContaining({ blockNumber: N, cursor: 'txs-on' })
+      )
+    );
+  });
+
   it('shows no pager for a block that fits one page, in either view', async () => {
     render(<BlockDetailPage />);
     await screen.findByText('Cellbase');
