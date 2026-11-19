@@ -696,11 +696,11 @@ function EmptyWitnesses({ run }: { run: Extract<WitnessItem, { kind: 'run' }> })
   );
 }
 
-function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
+function EvidenceHeading({ title, note }: { title: string; note?: ReactNode }) {
   return (
     <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
       <h2 className="text-body text-text font-medium">{title}</h2>
-      <span className="text-text-dim text-small">{note}</span>
+      {note && <span className="text-text-dim text-small">{note}</span>}
     </div>
   );
 }
@@ -1475,16 +1475,10 @@ export default function TransactionDetailPage() {
       <DetailTier2 className="text-small">
         <section className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] gap-x-12 gap-y-7">
           <div className="min-w-0">
+            {/* the witnesses counted, each row its own size: the API states no total of their
+                sizes, and the page adds none (lane P1, lane D3's note) */}
             <EvidenceHeading
               title={`Witnesses${tx.witnessesAvailable ? ` · ${witnesses.length}` : ' · unavailable'}`}
-              note={
-                tx.witnessesAvailable
-                  ? formatCount(
-                      witnesses.reduce((sum, w) => sum + w.size, 0),
-                      'byte'
-                    )
-                  : null
-              }
             />
             <div data-testid="tx-witness-tab">
               {!tx.witnessesAvailable ? (

@@ -1123,8 +1123,8 @@ describe('Transaction variants (D4)', () => {
     const head = witnesses.parentElement!;
     expect(head).not.toHaveTextContent(/byte/);
     // each row its own size, the API's
-    expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent('22 B');
-    expect(screen.getByTestId('tx-witness-item-1')).toHaveTextContent('7 B');
+    expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent('22 B');
+    expect(screen.getByTestId('tx-witness-item-1')).toHaveTextContent('7 B');
   });
 
   // Review 2026-11-03: the evidence tier reads the witnesses and the cell deps first, then the
