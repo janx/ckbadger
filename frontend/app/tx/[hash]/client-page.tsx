@@ -1422,7 +1422,11 @@ export default function TransactionDetailPage() {
         {tilesRead?.error !== undefined && (
           <div className="min-w-0 lg:col-start-1">
             <DetailSection title="Cells">
-              <PartReadError what="the cells" error={tilesRead.error} />
+              <PartReadError
+                what="the cells"
+                where={`transaction ${hash}`}
+                error={tilesRead.error}
+              />
             </DetailSection>
           </div>
         )}
@@ -1791,7 +1795,11 @@ export default function TransactionDetailPage() {
                 )
               );
               return read.error !== undefined ? (
-                <PartReadError what={`the lock of output ${at}`} error={read.error} />
+                <PartReadError
+                  what={`the lock of output ${at}`}
+                  where={`transaction ${tx.hash}`}
+                  error={read.error}
+                />
               ) : (
                 read.value
               );

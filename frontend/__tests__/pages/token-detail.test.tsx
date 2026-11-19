@@ -181,8 +181,9 @@ describe('TokenDetailPage', () => {
     await screen.findByRole('heading', { level: 1 });
     const metrics = screen.getByRole('region', { name: 'Metrics' });
     const alert = within(metrics).getByRole('alert');
+    // third round (re-pinned on purpose, the coordinator's item 4): said where (the issuer)
     expect(alert).toHaveTextContent(
-      `Could not read the issuer’s lock: address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`
+      `Could not draw the issuer’s lock (issuer ${other}): address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`
     );
     expect(metrics).toHaveTextContent('owner lock proven by token script');
   });

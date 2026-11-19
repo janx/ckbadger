@@ -42,7 +42,9 @@ const distribution: TokenDistribution = {
 };
 describe('Token distribution', () => {
   it('uses exact same-response totals and keeps raw bucket boundaries honest', () => {
-    const { rerender } = render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    const { rerender } = render(
+      <TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />
+    );
     // Table-rows L2-4: a bound prints its exact value without trailing zeros ("1", not
     // "1.00000000"), so a range stays on one line.
     expect(screen.getByRole('table', { name: 'Holders by balance' })).toHaveTextContent(
@@ -52,6 +54,7 @@ describe('Token distribution', () => {
     expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder >99\.99%/);
     rerender(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={{ ...distribution, unit: 'raw', decimals: null }}
         symbol="T"
       />
@@ -84,7 +87,7 @@ describe('Token distribution', () => {
     ] as const) {
       atContainerWidth(width);
       const { container, unmount } = render(
-        <TokenDistributionView distribution={distribution} symbol="T" />
+        <TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />
       );
       const list = container.querySelector('[data-list-form]')!;
       expect(list).toHaveAttribute('data-list-form', form);
@@ -101,7 +104,7 @@ describe('Token distribution', () => {
   });
 
   it('keeps each range on one line so a number never breaks mid-digits (IV-13, L2-4)', () => {
-    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    render(<TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />);
     const table = screen.getByRole('table', { name: 'Holders by balance' });
     const range = within(table).getByText('Under 1');
     expect(range).toHaveClass('whitespace-nowrap');
@@ -110,6 +113,7 @@ describe('Token distribution', () => {
   it('draws holders per range as an 8 px token-blue bar on the table’s scale (L2-4)', () => {
     render(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={{
           ...distribution,
           holdersCount: 41,
@@ -153,6 +157,7 @@ describe('Token distribution', () => {
     // It used to print "Under " with no bound after it.
     render(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={{
           ...distribution,
           holdersCount: 1,
@@ -174,6 +179,7 @@ describe('Token distribution', () => {
   it('keeps the holders and the balance bands apart: a gutter with a rule between them (B5)', () => {
     render(
       <TokenDistributionView
+        where="token 0xabc"
         distribution={distribution}
         symbol="T"
         holders={<div data-testid="holders" />}
@@ -191,7 +197,7 @@ describe('Token distribution', () => {
   // Readability B5: a head stands over what it names; in a column of a bar and its figure, the
   // figure (the name ends where the figure ends, the ticks stay over the track).
   it('stands each bar column’s name over its figure (B5)', async () => {
-    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    render(<TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />);
     const table = screen.getByRole('table', { name: 'Holders by balance' });
     const head = within(table).getAllByRole('columnheader')[1];
     const name = within(head).getByText('Holders');
@@ -204,22 +210,36 @@ describe('Token distribution', () => {
     );
   });
 
+  // B4 third round (re-pinned on purpose, the coordinator's item 4, ruling D7): a distribution
+  // that breaks its invariants fails in its place, said with its token, and the holders beside it
+  // stand; it threw, and took the holders' table and their pager with it
   it('rejects missing holders and mismatched aggregate supply', () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect(() =>
-      render(
-        <TokenDistributionView distribution={{ ...distribution, holdersCount: 3 }} symbol="T" />
-      )
-    ).toThrow('buckets do not equal totals');
-    expect(() =>
-      render(
-        <TokenDistributionView
-          distribution={{ ...distribution, remainingBalance: '1' }}
-          symbol="T"
-        />
-      )
-    ).toThrow('concentration does not equal supply');
-    error.mockRestore();
+    const { rerender } = render(
+      <TokenDistributionView
+        where="token 0xabc"
+        distribution={{ ...distribution, holdersCount: 3 }}
+        symbol="T"
+        holders={<div data-testid="holders" />}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /^Could not draw the holder distribution \(token 0xabc\): Token distribution buckets do not equal totals$/
+    );
+    expect(screen.getByTestId('holders')).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Holders by balance' })).toBeNull();
+    rerender(
+      <TokenDistributionView
+        where="token 0xabc"
+        distribution={{ ...distribution, remainingBalance: '1' }}
+        symbol="T"
+        holders={<div data-testid="holders" />}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      /^Could not draw the holder distribution \(token 0xabc\): Token distribution concentration does not equal supply$/
+    );
+    expect(screen.getByTestId('holders')).toBeInTheDocument();
+    expect(screen.queryByRole('img')).toBeNull();
   });
 });
 
@@ -674,7 +694,7 @@ describe('Holders by balance phone row', () => {
   });
   it('folds a range into two lines where its three columns do not fit', () => {
     atContainerWidth(300);
-    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    render(<TokenDistributionView where="token 0xabc" distribution={distribution} symbol="T" />);
     const rows = screen.getAllByTestId('holder-bucket-row-mobile');
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['range', '1 and above', '1 holder'],

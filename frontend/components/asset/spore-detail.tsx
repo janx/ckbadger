@@ -153,6 +153,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
         ) : last === undefined ? (
           <PartReadError
             what="the owner’s lock"
+            where={`object ${id}`}
             error={new Error(`${id}: owner ${object.ownerLockHash} but no cell versions`)}
           />
         ) : (

@@ -169,7 +169,7 @@ describe('a refused lock fails its part, in its place', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^All .*→$/ }));
     expect(await screen.findByRole('table', { name: 'All holders' })).toBeInTheDocument();
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/^Could not draw the holders/)).toBeNull();
   });
 
   it('the collection holders: the section says it cannot read its holders', async () => {
@@ -195,9 +195,14 @@ describe('a refused lock fails its part, in its place', () => {
         <CollectionHolders assetClass="objects" load={load} queryKey="refused" />
       </main>
     );
-    const alert = await screen.findByText(/^Could not read the collection holders: /);
+    // third round (re-pinned on purpose, the coordinator's item 4): said where (the collection,
+    // the view), the section's heading standing over it
+    const alert = await screen.findByText(
+      /^Could not draw the collection holders \(collection refused, top 10\): /
+    );
     expect(alert).toHaveTextContent(refusal);
     expect(screen.getByRole('heading', { name: 'The collection page' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /^Who holds it/ })).toBeInTheDocument();
   });
 
   it('the supply events: the table says it cannot read them, the history stands', () => {
@@ -237,7 +242,14 @@ describe('a refused lock fails its part, in its place', () => {
         }}
       />
     );
-    const alert = screen.getByText(/^Could not read the changes to the supply: /);
+    // third round (re-pinned on purpose, the coordinator's item 4): said where (the page of
+    // events it was drawing, by its first and last)
+    const event = `0x${'12'.repeat(32)}:0`;
+    const alert = screen.getByText(
+      `Could not draw the changes to the supply (events ${event} to ${event}):`,
+      { exact: false }
+    );
+    expect(alert.textContent!.startsWith('Could not draw the changes to the supply')).toBe(true);
     expect(alert).toHaveTextContent(refusal);
     expect(within(alert.closest('details')!).queryByRole('table')).toBeNull();
   });

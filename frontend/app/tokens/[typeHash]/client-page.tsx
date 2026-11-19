@@ -299,7 +299,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               note: t.issuer
                 ? [
                     issuerLock?.error !== undefined ? (
-                      <PartReadError what="the issuer’s lock" error={issuerLock.error} />
+                      <PartReadError
+                        what="the issuer’s lock"
+                        where={`issuer ${t.issuer!.lockHash}`}
+                        error={issuerLock.error}
+                      />
                     ) : (
                       issuerLock?.value && (
                         <LockWordsView

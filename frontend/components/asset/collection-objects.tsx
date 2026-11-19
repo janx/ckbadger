@@ -135,12 +135,7 @@ export interface CollectionObjectsProps {
 }
 
 export function CollectionObjects(props: CollectionObjectsProps) {
-  // a refusal while the objects are drawn fails this section in its place (D7)
-  return (
-    <PartReadBoundary key={props.id} what="the newest objects">
-      <ScopedCollectionObjects {...props} />
-    </PartReadBoundary>
-  );
+  return <ScopedCollectionObjects key={props.id} {...props} />;
 }
 
 function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObjectsProps) {
@@ -318,174 +313,185 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
           {gallery.data ? (
             <>
               <AssetReadState label="newest objects" error={gallery.error} retained />
-              <div
-                role="table"
-                aria-label="Newest objects"
-                className="text-small min-w-0"
-                style={{ '--object-cols': objectCols } as CSSProperties}
-              >
-                <div role="row" className={cn(grid, 'text-text-dim text-meta hidden h-7 md:grid')}>
-                  <span role="columnheader">Object</span>
-                  {columns.map((lane) => (
-                    <span
-                      key={lane.gene}
-                      role="columnheader"
-                      title={`${lane.gene} · beside each value, how many of the ${formatCount(total, 'object')} carry it`}
-                    >
-                      {geneLabel(lane.gene)}
-                    </span>
-                  ))}
-                  <span role="columnheader">Made of</span>
-                  <span role="columnheader">Owner</span>
-                  <span role="columnheader" className="text-right">
-                    Minted
-                  </span>
-                </div>
-                {items.map((item) => {
-                  const name = objectName(item.number, item.sporeId, 'row');
-                  const lit = row === item.sporeId;
-                  const itemTier = item.mediaProfile?.tier ?? null;
-                  // Table-rows L2-4 / C11: one line per object; what does not fit it (its id, the
-                  // genes past the columns, its DNA, the full owner) is the row's title.
-                  // the owner's lock as the row's tag writes it, from the one decision (B4)
-                  const ownerWords = item.ownerLockHash ? ownerLock(item) : null;
-                  const owner = item.ownerLockHash
-                    ? `owner ${item.ownerAddress ?? item.ownerLockHash}${ownerWords ? ` · ${lockWordsText(ownerWords, 'row')}` : ''}`
-                    : 'no live owner';
-                  const genes = (lanes ?? []).flatMap((lane) => {
-                    const own = item.traits.find((t) => t.name === lane.gene);
-                    return own ? [`${geneLabel(lane.gene)} ${traitDisplay(own.value)}`] : [];
-                  });
-                  return (
+              {/* a refusal while the objects are drawn fails their table in its place (D7); it
+                  starts again on another page or filter */}
+              <PartReadBoundary
+                what="the newest objects"
+                where={`collection ${id}, page ${pages.page}${filtered ? `, ${JSON.stringify(traits)}` : ''}`}
+                render={() => (
+                  <div
+                    role="table"
+                    aria-label="Newest objects"
+                    className="text-small min-w-0"
+                    style={{ '--object-cols': objectCols } as CSSProperties}
+                  >
                     <div
-                      key={item.sporeId}
                       role="row"
-                      title={[
-                        `${title} ${name}`,
-                        item.sporeId,
-                        ...genes,
-                        owner,
-                        `minted ${formatUtc8DateTime(item.chainTime)} in block ${formatBlockNumber(item.createdAtBlock)}`,
-                        ...(item.dnaHex === null ? [] : [`DNA ${item.dnaHex}`]),
-                      ].join(' · ')}
-                      data-active={lit ? 'true' : undefined}
-                      onMouseEnter={() => setRow(item.sporeId)}
-                      onMouseLeave={() => setRow(null)}
-                      onFocus={() => setRow(item.sporeId)}
-                      onBlur={() => setRow(null)}
-                      className={cn(
-                        grid,
-                        'border-row-rule min-h-[41px] border-t py-1 transition-colors',
-                        lit && 'bg-base-surface'
-                      )}
+                      className={cn(grid, 'text-text-dim text-meta hidden h-7 md:grid')}
                     >
-                      <span role="cell" className="flex min-w-0 items-center gap-2">
-                        <ClassMark kind="objects" size={12} />
-                        <AppLink
-                          href={`/objects/${item.sporeId}`}
-                          className="text-body text-text-bright leading-row min-w-0 truncate"
+                      <span role="columnheader">Object</span>
+                      {columns.map((lane) => (
+                        <span
+                          key={lane.gene}
+                          role="columnheader"
+                          title={`${lane.gene} · beside each value, how many of the ${formatCount(total, 'object')} carry it`}
                         >
-                          {name}
-                        </AppLink>
+                          {geneLabel(lane.gene)}
+                        </span>
+                      ))}
+                      <span role="columnheader">Made of</span>
+                      <span role="columnheader">Owner</span>
+                      <span role="columnheader" className="text-right">
+                        Minted
                       </span>
-                      {columns.map((lane) => {
+                    </div>
+                    {items.map((item) => {
+                      const name = objectName(item.number, item.sporeId, 'row');
+                      const lit = row === item.sporeId;
+                      const itemTier = item.mediaProfile?.tier ?? null;
+                      // Table-rows L2-4 / C11: one line per object; what does not fit it (its id, the
+                      // genes past the columns, its DNA, the full owner) is the row's title.
+                      // the owner's lock as the row's tag writes it, from the one decision (B4)
+                      const ownerWords = item.ownerLockHash ? ownerLock(item) : null;
+                      const owner = item.ownerLockHash
+                        ? `owner ${item.ownerAddress ?? item.ownerLockHash}${ownerWords ? ` · ${lockWordsText(ownerWords, 'row')}` : ''}`
+                        : 'no live owner';
+                      const genes = (lanes ?? []).flatMap((lane) => {
                         const own = item.traits.find((t) => t.name === lane.gene);
-                        const band = own ? lane.bands.find((b) => b.value === own.value) : null;
-                        return (
-                          <span
-                            key={lane.gene}
-                            role="cell"
-                            data-gene-cell
-                            className="flex min-w-0 items-center whitespace-nowrap"
-                            title={
-                              own
-                                ? `${geneLabel(lane.gene)} = ${own.value}${band ? ` · ${band.count.toLocaleString('en-US')} of ${formatCount(total, 'object')}` : ''}`
-                                : undefined
-                            }
-                          >
-                            {own ? (
+                        return own ? [`${geneLabel(lane.gene)} ${traitDisplay(own.value)}`] : [];
+                      });
+                      return (
+                        <div
+                          key={item.sporeId}
+                          role="row"
+                          title={[
+                            `${title} ${name}`,
+                            item.sporeId,
+                            ...genes,
+                            owner,
+                            `minted ${formatUtc8DateTime(item.chainTime)} in block ${formatBlockNumber(item.createdAtBlock)}`,
+                            ...(item.dnaHex === null ? [] : [`DNA ${item.dnaHex}`]),
+                          ].join(' · ')}
+                          data-active={lit ? 'true' : undefined}
+                          onMouseEnter={() => setRow(item.sporeId)}
+                          onMouseLeave={() => setRow(null)}
+                          onFocus={() => setRow(item.sporeId)}
+                          onBlur={() => setRow(null)}
+                          className={cn(
+                            grid,
+                            'border-row-rule min-h-[41px] border-t py-1 transition-colors',
+                            lit && 'bg-base-surface'
+                          )}
+                        >
+                          <span role="cell" className="flex min-w-0 items-center gap-2">
+                            <ClassMark kind="objects" size={12} />
+                            <AppLink
+                              href={`/objects/${item.sporeId}`}
+                              className="text-body text-text-bright leading-row min-w-0 truncate"
+                            >
+                              {name}
+                            </AppLink>
+                          </span>
+                          {columns.map((lane) => {
+                            const own = item.traits.find((t) => t.name === lane.gene);
+                            const band = own ? lane.bands.find((b) => b.value === own.value) : null;
+                            return (
+                              <span
+                                key={lane.gene}
+                                role="cell"
+                                data-gene-cell
+                                className="flex min-w-0 items-center whitespace-nowrap"
+                                title={
+                                  own
+                                    ? `${geneLabel(lane.gene)} = ${own.value}${band ? ` · ${band.count.toLocaleString('en-US')} of ${formatCount(total, 'object')}` : ''}`
+                                    : undefined
+                                }
+                              >
+                                {own ? (
+                                  <>
+                                    <i
+                                      aria-hidden="true"
+                                      className="mr-1.5 inline-block h-2.5 w-2.5 shrink-0"
+                                      style={{
+                                        background: band?.colour ?? GEL_INK[ink][1],
+                                        opacity: band?.colour ? 1 : 0.8,
+                                      }}
+                                    />
+                                    {/* Words may be cut; a number and the share never are. */}
+                                    <span
+                                      data-role="gene-value"
+                                      // a cut value carries the whole of it (the lead's finding)
+                                      title={geneCellText(own.value)}
+                                      className={cn(
+                                        'text-text',
+                                        NUMERIC.test(geneCellText(own.value))
+                                          ? 'shrink-0'
+                                          : 'min-w-0 truncate'
+                                      )}
+                                    >
+                                      <TraitText text={geneCellText(own.value)} />
+                                    </span>
+                                    {band && (
+                                      <span
+                                        data-role="gene-share"
+                                        className="text-text-dim shrink-0 whitespace-nowrap"
+                                      >
+                                        {geneShare(band.count)}
+                                      </span>
+                                    )}
+                                  </>
+                                ) : (
+                                  <span className="text-text-dim">—</span>
+                                )}
+                              </span>
+                            );
+                          })}
+                          <span role="cell" className="min-w-0">
+                            {itemTier ? (
+                              <CompositionBadge tier={itemTier} size="sm" />
+                            ) : (
+                              <span className="text-text-dim">not recorded</span>
+                            )}
+                          </span>
+                          <span role="cell" className="min-w-0 truncate">
+                            {item.ownerLockHash ? (
                               <>
-                                <i
-                                  aria-hidden="true"
-                                  className="mr-1.5 inline-block h-2.5 w-2.5 shrink-0"
-                                  style={{
-                                    background: band?.colour ?? GEL_INK[ink][1],
-                                    opacity: band?.colour ? 1 : 0.8,
-                                  }}
+                                <Address
+                                  address={item.ownerAddress ?? item.ownerLockHash}
+                                  size="row"
+                                  className="text-small"
                                 />
-                                {/* Words may be cut; a number and the share never are. */}
-                                <span
-                                  data-role="gene-value"
-                                  // a cut value carries the whole of it (the lead's finding)
-                                  title={geneCellText(own.value)}
-                                  className={cn(
-                                    'text-text',
-                                    NUMERIC.test(geneCellText(own.value))
-                                      ? 'shrink-0'
-                                      : 'min-w-0 truncate'
-                                  )}
-                                >
-                                  <TraitText text={geneCellText(own.value)} />
-                                </span>
-                                {band && (
-                                  <span
-                                    data-role="gene-share"
-                                    className="text-text-dim shrink-0 whitespace-nowrap"
-                                  >
-                                    {geneShare(band.count)}
-                                  </span>
+                                {/* no space and no tag where the row names no lock (B4) */}
+                                {ownerLock(item) && (
+                                  <>
+                                    {' '}
+                                    <LockWordsView
+                                      words={ownerLock(item)!}
+                                      size="row"
+                                      className={rowTagClass()}
+                                    />
+                                  </>
                                 )}
                               </>
                             ) : (
-                              <span className="text-text-dim">—</span>
+                              <span className="text-text-dim">No live owner</span>
                             )}
                           </span>
-                        );
-                      })}
-                      <span role="cell" className="min-w-0">
-                        {itemTier ? (
-                          <CompositionBadge tier={itemTier} size="sm" />
-                        ) : (
-                          <span className="text-text-dim">not recorded</span>
-                        )}
-                      </span>
-                      <span role="cell" className="min-w-0 truncate">
-                        {item.ownerLockHash ? (
-                          <>
-                            <Address
-                              address={item.ownerAddress ?? item.ownerLockHash}
-                              size="row"
-                              className="text-small"
-                            />
-                            {/* no space and no tag where the row names no lock (B4) */}
-                            {ownerLock(item) && (
-                              <>
-                                {' '}
-                                <LockWordsView
-                                  words={ownerLock(item)!}
-                                  size="row"
-                                  className={rowTagClass()}
-                                />
-                              </>
-                            )}
-                          </>
-                        ) : (
-                          <span className="text-text-dim">No live owner</span>
-                        )}
-                      </span>
-                      <span role="cell" className="text-text-dim tabular-nums md:text-right">
-                        {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
-                        <AppLink
-                          href={`/blocks/${item.createdAtBlock}`}
-                          title={`${formatBlockNumber(item.createdAtBlock)} · ${formatUtc8DateTime(item.chainTime)}`}
-                        >
-                          <Utc8Date timestamp={item.chainTime} />
-                        </AppLink>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
+                          <span role="cell" className="text-text-dim tabular-nums md:text-right">
+                            {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
+                            <AppLink
+                              href={`/blocks/${item.createdAtBlock}`}
+                              title={`${formatBlockNumber(item.createdAtBlock)} · ${formatUtc8DateTime(item.chainTime)}`}
+                            >
+                              <Utc8Date timestamp={item.chainTime} />
+                            </AppLink>
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              />
               {items.length === 0 && <p className="text-text-dim">No objects.</p>}
               <CursorPagination
                 total={gallery.data.total}

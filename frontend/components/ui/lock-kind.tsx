@@ -190,7 +190,14 @@ export function cellOwnerLockPart(
   className?: string
 ): ReactNode {
   const read = readPart(() => cellOwnerLock(cell));
-  if (read.error !== undefined) return <PartReadError what="the owner’s lock" error={read.error} />;
+  if (read.error !== undefined)
+    return (
+      <PartReadError
+        what="the owner’s lock"
+        where={`cell ${cell.txHash}:${cell.outputIndex}`}
+        error={read.error}
+      />
+    );
   return read.value && <LockWordsView words={read.value} size="row" className={className} />;
 }
 

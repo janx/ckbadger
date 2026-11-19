@@ -47,11 +47,16 @@ describe('ReadFailure', () => {
 // Error: a render bug is not a read failure with no key), and starts again when what it draws
 // changes (a new page, a new cursor, a new address).
 describe('PartReadBoundary', () => {
-  const Boundary = PartReadBoundary as unknown as (props: {
+  // the part it draws, as its callers hand it
+  const Boundary = ({
+    what,
+    where,
+    children,
+  }: {
     what: string;
     where: string;
     children: ReactNode;
-  }) => ReactNode;
+  }) => <PartReadBoundary what={what} where={where} render={() => children} />;
   function Throws({ error }: { error: Error | null }) {
     if (error) throw error;
     return <p>drawn</p>;

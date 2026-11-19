@@ -9,6 +9,14 @@ import { foldRuns, runKey, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
 import { readable } from '@/components/activity-event-row';
 
+/**
+ * What a row's part draws, by which its boundary starts again (B4 third round): its transaction and
+ * where it stands, so a row in the pool that commits is drawn anew, never left in an old error.
+ */
+function versionOf(r: FeedRow): string {
+  return `${r.key}@${r.activity.blockNumber ?? 'pool'}`;
+}
+
 /** One row of a feed, with what its run is drawn and compared from. */
 export interface FeedRow {
   /** The row's transaction hash: its React key, and its run's when it leads one. */
@@ -122,7 +130,11 @@ export function ActivityRuns({
         // each row, and each run's head, fails in its place (ruling D7): what a row cannot read
         // (a lock the decision refuses) is said where the row stands, the others drawn
         if (head === null)
-          return [<Fragment key={lead.key}>{readable(lead.key, () => lead.row)}</Fragment>];
+          return [
+            <Fragment key={lead.key}>
+              {readable(lead.key, () => lead.row, versionOf(lead))}
+            </Fragment>,
+          ];
         const folded = (
           <FoldedActivityRow
             rows={run.map((r) => r.activity)}
@@ -140,7 +152,9 @@ export function ActivityRuns({
         return isOpen
           ? [
               headed,
-              ...run.map((r) => <Fragment key={r.key}>{readable(r.key, () => r.row)}</Fragment>),
+              ...run.map((r) => (
+                <Fragment key={r.key}>{readable(r.key, () => r.row, versionOf(r))}</Fragment>
+              )),
             ]
           : [headed];
       })}

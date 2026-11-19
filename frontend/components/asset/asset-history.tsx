@@ -79,6 +79,14 @@ function time(date: string) {
 function ckbDecimal(value: string) {
   return formatTokenBalance(value, 8).replace(/,/g, '');
 }
+/** The page of supply events a table draws, by its first and last event. */
+function eventsWhere(rows: readonly { txHash: string; transferSequence: number }[]): string {
+  if (rows.length === 0) return 'no events';
+  const at = (e: { txHash: string; transferSequence: number }) =>
+    `${e.txHash}:${e.transferSequence}`;
+  return `events ${at(rows[0])} to ${at(rows[rows.length - 1])}`;
+}
+
 export function AssetHistory({
   daily,
   weekly: weeklySource,
@@ -544,86 +552,95 @@ export function AssetHistory({
             Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
             which preserves time through backward block timestamps.
           </p>
-          {/* a refusal while the events are drawn fails this table in its place (D7) */}
-          <PartReadBoundary what="the changes to the supply">
-            <ListTable
-              label="Mints and burns"
-              columns={eventColumns}
-              rows={supplyEvents.rows}
-              rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
-              empty="No supply changes."
-              mobileRow={(e, wide) => {
-                const change = (
-                  <span className="whitespace-nowrap">
-                    {eventColumns[1].render(e)} {e.kind === 'mint' ? '+' : '−'}
-                    <TokenAmount form="summary" amount={e.amount} decimals={token.decimals} />
-                  </span>
-                );
-                const after = (
-                  <span>
-                    supply after{' '}
-                    <TokenAmount form="summary" amount={e.supplyAfter} decimals={token.decimals} />
-                  </span>
-                );
-                const where = [
-                  <AppLink key="b" href={`/blocks/${e.blockNumber}`}>
-                    {formatBlockNumber(e.blockNumber)}
-                  </AppLink>,
-                  <AppLink key="t" href={`/tx/${e.txHash}`} className="whitespace-nowrap">
-                    tx {e.txIndex} · sequence {e.transferSequence}
-                  </AppLink>,
-                ];
-                // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
-                // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
-                // below sm (R9).
-                const party = (
-                  <span>
-                    {e.kind === 'mint' ? 'to ' : 'from '}
-                    <AppLink href={`/address/${e.address ?? e.lockHash}`}>
-                      <Hash
-                        hash={e.address ?? e.lockHash}
-                        kind={e.address ? 'address' : 'hash'}
-                        size={phoneSize}
-                        copyable={false}
-                        className="text-meta"
+          {/* a refusal while the events are drawn fails this table in its place (D7); it starts
+              again on another page of events */}
+          <PartReadBoundary
+            what="the changes to the supply"
+            where={eventsWhere(supplyEvents.rows)}
+            render={() => (
+              <ListTable
+                label="Mints and burns"
+                columns={eventColumns}
+                rows={supplyEvents.rows}
+                rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
+                empty="No supply changes."
+                mobileRow={(e, wide) => {
+                  const change = (
+                    <span className="whitespace-nowrap">
+                      {eventColumns[1].render(e)} {e.kind === 'mint' ? '+' : '−'}
+                      <TokenAmount form="summary" amount={e.amount} decimals={token.decimals} />
+                    </span>
+                  );
+                  const after = (
+                    <span>
+                      supply after{' '}
+                      <TokenAmount
+                        form="summary"
+                        amount={e.supplyAfter}
+                        decimals={token.decimals}
                       />
-                    </AppLink>
-                    {/* no space and no part where the row names no lock (B4) */}
-                    {rowLock(e, 'inline') && (
-                      <>
-                        {' '}
-                        <LockWordsView
-                          words={rowLock(e, 'inline')!}
+                    </span>
+                  );
+                  const where = [
+                    <AppLink key="b" href={`/blocks/${e.blockNumber}`}>
+                      {formatBlockNumber(e.blockNumber)}
+                    </AppLink>,
+                    <AppLink key="t" href={`/tx/${e.txHash}`} className="whitespace-nowrap">
+                      tx {e.txIndex} · sequence {e.transferSequence}
+                    </AppLink>,
+                  ];
+                  // the address is the unit (Hash, shortened); the lock name is words (A4 Chrome
+                  // sweep). The rows are drawn at 1024 too, beside the holders' table: tight only
+                  // below sm (R9).
+                  const party = (
+                    <span>
+                      {e.kind === 'mint' ? 'to ' : 'from '}
+                      <AppLink href={`/address/${e.address ?? e.lockHash}`}>
+                        <Hash
+                          hash={e.address ?? e.lockHash}
+                          kind={e.address ? 'address' : 'hash'}
                           size={phoneSize}
-                          className="text-text-dim text-meta"
+                          copyable={false}
+                          className="text-meta"
                         />
-                      </>
-                    )}
-                  </span>
-                );
-                return (
-                  <PhoneRow
-                    testId="supply-event-row-mobile"
-                    lines={[
-                      {
-                        key: 'change',
-                        tone: 'head',
-                        left: change,
-                        right: formatUtc8Date(e.timestamp),
-                      },
-                      !wide && { key: 'after', tone: 'body', left: after },
-                      {
-                        key: 'evidence',
-                        tone: 'quiet',
-                        left: <Dotted parts={wide ? [after, ...where] : where} />,
-                        right: party,
-                      },
-                    ]}
-                  />
-                );
-              }}
-            />
-          </PartReadBoundary>
+                      </AppLink>
+                      {/* no space and no part where the row names no lock (B4) */}
+                      {rowLock(e, 'inline') && (
+                        <>
+                          {' '}
+                          <LockWordsView
+                            words={rowLock(e, 'inline')!}
+                            size={phoneSize}
+                            className="text-text-dim text-meta"
+                          />
+                        </>
+                      )}
+                    </span>
+                  );
+                  return (
+                    <PhoneRow
+                      testId="supply-event-row-mobile"
+                      lines={[
+                        {
+                          key: 'change',
+                          tone: 'head',
+                          left: change,
+                          right: formatUtc8Date(e.timestamp),
+                        },
+                        !wide && { key: 'after', tone: 'body', left: after },
+                        {
+                          key: 'evidence',
+                          tone: 'quiet',
+                          left: <Dotted parts={wide ? [after, ...where] : where} />,
+                          right: party,
+                        },
+                      ]}
+                    />
+                  );
+                }}
+              />
+            )}
+          />
           {supplyPager}
         </details>
       )}
