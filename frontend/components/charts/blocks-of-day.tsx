@@ -42,7 +42,9 @@ export function BlocksOfDay({ date }: { date: string }) {
       <Link href={`/blocks/${last.hash}`} look="key">
         {formatBlockNumber(last.number)}
       </Link>
-      <span className="text-text-dim">
+      {/* the count and what it is, a value and a statement: the reading ink (the ink and size
+          roles, finished) */}
+      <span>
         {' '}
         · {blocksCount.toLocaleString('en-US')} {countNoun(blocksCount, 'block', 'blocks')}
         {complete ? '' : ', so far: the day is not over'}

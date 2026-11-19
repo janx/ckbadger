@@ -42,6 +42,8 @@ import {
   PLOT_NAME_BAND,
   PLOT_NAME_Y,
   PLOT_TOP,
+  PLOT_UNIT_BAND,
+  PLOT_UNIT_Y,
   REFERENCE_KEY_BAND,
   REFERENCE_KEY_Y,
   X_AXIS_BAND,
@@ -139,17 +141,22 @@ const BUDGETS: [file: string, name: string, ruled: number, drawn: number][] = [
   // a node of the tx page's ribbon: two row lines and 4 px, and its pitch, 10 px more
   ['components/transaction/what-moved.tsx', 'NODE_H', 44, NODE_H],
   ['components/transaction/what-moved.tsx', 'PITCH', 54, PITCH],
-  // the chart renderer's bands and baselines: the plot's name a tight label line, 12 + 3, its
-  // band two of them; the plot's top a tick and its 6 px gap; the x axis 5 + 12 + 11; the x
-  // labels a tight tick line; the reference key on a tick, its band 4 px more; an in-plot tick
-  // label 1 px under a label; the hover head a label and 5 px, its lines a tight reading, 14 + 3
-  ['components/ui/chart.tsx', 'PLOT_NAME_Y', 15, PLOT_NAME_Y],
-  ['components/ui/chart.tsx', 'PLOT_NAME_BAND', 30, PLOT_NAME_BAND],
+  // the chart renderer's bands and baselines: the plot's name line, a sentence, a tight line at
+  // the sentence size, 13 + 3, its band two of them (re-pinned, the ink and size roles, finished:
+  // 15 and 30 at the label size); a plot's unit alone a tight label line, 12 + 3, its band two of
+  // them; the plot's top a tick and its 6 px gap; the x axis 5 + 12 + 11; the x labels a tight
+  // tick line; the reference key a name and its value at the head size, 13, its band 4 px more
+  // (12 and 16 at the tick size); an in-plot tick label 1 px under a label; the hover head a label
+  // and 5 px, its lines a tight reading, 14 + 3
+  ['components/ui/chart.tsx', 'PLOT_NAME_Y', 16, PLOT_NAME_Y],
+  ['components/ui/chart.tsx', 'PLOT_NAME_BAND', 32, PLOT_NAME_BAND],
+  ['components/ui/chart.tsx', 'PLOT_UNIT_Y', 15, PLOT_UNIT_Y],
+  ['components/ui/chart.tsx', 'PLOT_UNIT_BAND', 30, PLOT_UNIT_BAND],
   ['components/ui/chart.tsx', 'PLOT_TOP', 18, PLOT_TOP],
   ['components/ui/chart.tsx', 'X_AXIS_BAND', 28, X_AXIS_BAND],
   ['components/ui/chart.tsx', 'X_LABEL_ROW', 15, X_LABEL_ROW],
-  ['components/ui/chart.tsx', 'REFERENCE_KEY_Y', 12, REFERENCE_KEY_Y],
-  ['components/ui/chart.tsx', 'REFERENCE_KEY_BAND', 16, REFERENCE_KEY_BAND],
+  ['components/ui/chart.tsx', 'REFERENCE_KEY_Y', 13, REFERENCE_KEY_Y],
+  ['components/ui/chart.tsx', 'REFERENCE_KEY_BAND', 17, REFERENCE_KEY_BAND],
   ['components/ui/chart.tsx', 'INSIDE_TICK_ROOM', 13, INSIDE_TICK_ROOM],
   ['components/ui/chart.tsx', 'HOVER_HEAD_Y', 17, HOVER_HEAD_Y],
   ['components/ui/chart.tsx', 'HOVER_LINE', 17, HOVER_LINE],

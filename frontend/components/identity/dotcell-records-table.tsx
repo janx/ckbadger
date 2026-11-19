@@ -14,7 +14,7 @@ interface Props {
  */
 export function DotCellRecordsTable({ records }: Props) {
   if (records.length === 0) {
-    return <div className="text-text-dim text-body p-4 font-mono">No records.</div>;
+    return <div className="text-text text-body p-4 font-mono">No records.</div>;
   }
   return (
     <div className="overflow-x-auto">

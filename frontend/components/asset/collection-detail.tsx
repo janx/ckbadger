@@ -444,7 +444,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         <AssetReadState label="capacity history" error={chart.error} read={chart} />
       )}
       {kind !== 'identity' && mints !== undefined && transfers !== undefined && (
-        <div className="text-text-dim text-small">
+        // counts with their nouns, figures: the reading ink (ink roles; it stood quiet)
+        <div className="text-text text-small">
           {/* PA-25: one separated list, each count with its noun */}
           <Dotted
             parts={[
@@ -532,7 +533,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 {description}
               </blockquote>
             ) : (
-              <p className="text-text-dim text-small">No collection description recorded.</p>
+              <p className="text-text text-small">No collection description recorded.</p>
             )}
           </div>
         )
@@ -572,7 +573,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 showTotal={false}
               />
             ) : (
-              <p className="text-text-dim text-meta">Collection capacity is not recorded.</p>
+              <p className="text-text text-small">Collection capacity is not recorded.</p>
             )}
           </div>
         )
@@ -653,7 +654,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                     <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
                   ) : (
                     protocol.data && (
-                      <p className="text-text-dim text-meta">
+                      <p className="text-text text-small">
                         No current cell carries this cluster type.
                       </p>
                     )
@@ -733,7 +734,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           {pds.data ? (
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
-              <p className="text-text text-meta max-w-measure">
+              <p className="text-text text-small max-w-measure">
                 {unitNode(
                   formatCount(pds.data.totalLiveIdentities, 'live identity', 'live identities')
                 )}{' '}

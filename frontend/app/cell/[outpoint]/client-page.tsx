@@ -154,7 +154,7 @@ function ScriptFact({
   if (!script)
     return (
       <Fact label={label}>
-        <span className="text-text-dim">none</span>
+        <span className="text-text">none</span>
       </Fact>
     );
   const href =
@@ -235,7 +235,7 @@ function CellFacts({
           these are the cell's other facts, none deleted. */}
       <Fact label="Occupied">
         <span>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
-        <span className="text-text-dim text-small">
+        <span className="text-text text-small">
           · {/* no free CKB with its unit too (lane P1, third round; NOTE 5: it read "0 free") */}
           <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" /> free
         </span>
@@ -288,7 +288,7 @@ function CellFacts({
               {formatBlockNumber(cell.consumedAtBlock)}
             </Link>
           ) : (
-            <span className="text-text-dim">block unavailable</span>
+            <span className="text-text">block unavailable</span>
           )}
         </Fact>
       ) : (

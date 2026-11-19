@@ -69,7 +69,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
             <span className="text-text">none</span>
           )}
           {handleFrom > 0 && (
-            <span className="text-text-dim text-small">
+            <span className="text-text text-small">
               was{' '}
               <span className="text-text">
                 {docs[handleFrom - 1].handles.length
@@ -93,7 +93,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
             >
               {s.endpoint} ↗
             </a>
-            <span className="text-text-dim text-small">
+            <span className="text-text text-small">
               {s.type}
               {s.type === 'AtprotoPersonalDataServer'
                 ? ' · where its posts and data are kept, off chain'
@@ -110,7 +110,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
               field={`verificationMethods.${k.name}`}
             >
               <span className="text-text-bright [overflow-wrap:anywhere]">{k.key}</span>
-              <span className="text-text-dim text-small">
+              <span className="text-text text-small">
                 {unitNode(
                   from === 0
                     ? 'unchanged since creation'

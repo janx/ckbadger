@@ -69,8 +69,10 @@ export function HolderPhoneRow({
     </>
   );
   const figure = <span className="text-text-bright text-body">{amount}</span>;
+  // the share is a value: 13 px (the ink and size roles round; it was 12), in the head line of the
+  // wide form and the bar's line of the narrow one alike; 7 ch at 13 px, 54.6 px
   const shareText = share !== undefined && share !== null && (
-    <span className={`text-text text-meta ${SHARE_TEXT}`}>{share}</span>
+    <span className={`text-text text-small ${SHARE_TEXT}`}>{share}</span>
   );
   if (wide)
     return (
@@ -85,7 +87,8 @@ export function HolderPhoneRow({
             right: (
               <span className="inline-flex items-center gap-3">
                 <ShareAxis max={axis} track={WIDE_SHARE_TRACK} />
-                {shareText && <span className={SHARE_TEXT} />}
+                {/* the share's width, at the share's size, so the axis ends where the bar does */}
+                {shareText && <span className={`text-small ${SHARE_TEXT}`} />}
               </span>
             ),
           },

@@ -102,7 +102,7 @@ function objectHeadline(
         node: (
           <>
             {movement}
-            <span className="text-text-dim font-normal"> · {collection}</span>
+            <span className="text-text font-normal"> · {collection}</span>
           </>
         ),
         text: `${movement} · ${collection}`,
@@ -232,7 +232,7 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
             {formatBlockNumber(tx.blockNumber)}
           </Link>
           {tx.timestamp !== null && (
-            <span className="text-text-dim">
+            <span className="text-text">
               <Utc8Date timestamp={tx.timestamp} />
             </span>
           )}
@@ -250,10 +250,10 @@ function TxHash({ tx, size }: { tx: AddressTransaction; size: ShortSize }) {
       </Link>
       <PoolInterpretationNotice
         interpretation={tx.interpretation}
-        className="text-warning text-meta block"
+        className="text-warning text-small block"
       />
       {tx.txType === 'named' && (
-        <span className="text-text-dim text-meta block">Named participant</span>
+        <span className="text-text text-small block">Named participant</span>
       )}
     </span>
   );
@@ -349,7 +349,7 @@ const columns: ListColumn<AddressTransaction>[] = [
     numeric: true,
     render: (tx) =>
       tx.cycles === null ? (
-        <span className="text-text-dim">
+        <span className="text-text">
           {tx.cyclesStatus === 'failed' ? 'Failed' : 'Not computed'}
         </span>
       ) : (
@@ -448,11 +448,11 @@ function AddressTxPhoneRow({ tx, wide }: { tx: AddressTransaction; wide: boolean
       <PoolInterpretationNotice
         key="notice"
         interpretation={tx.interpretation}
-        className="text-warning text-meta"
+        className="text-warning"
       />
     ),
     tx.txType === 'named' && (
-      <span key="named" className="text-text-dim">
+      <span key="named" className="text-text">
         Named participant
       </span>
     ),
@@ -676,14 +676,19 @@ const cellColumns: ListColumn<AddressCell>[] = [
     ),
   },
 ];
-/** A live cell's quiet figures on a phone: "occupied 61 CKB · created #20,000,000". */
+/**
+ * A live cell's developer figures on a phone: "occupied 61 CKB · created #20,000,000". The figures
+ * are values, in their line's reading ink and size (the phone row's quiet line, or the body line's
+ * 13 px beside the contents on a wide row); their names are labels, quiet (lane P1, the ink and size
+ * roles: it set the quiet ink and the meta step over both).
+ */
 function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
   return (
-    <span className="text-text-dim text-meta">
+    <span>
       <Dotted
         parts={[
           <span key="o" className="whitespace-nowrap">
-            occupied{' '}
+            <span className="text-text-dim">occupied</span>{' '}
             <CkbAmount
               form="summary"
               shannons={BigInt(c.occupiedCapacity)}
@@ -692,7 +697,7 @@ function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
             />
           </span>,
           <span key="c" className="whitespace-nowrap">
-            created{' '}
+            <span className="text-text-dim">created</span>{' '}
             <Link look="inline" href={`/blocks/${c.createdAtBlock}`}>
               {formatBlockNumber(c.createdAtBlock)}
             </Link>

@@ -149,7 +149,9 @@ describe('script code evidence', () => {
     expect(two).toHaveClass('text-small', 'text-text-dim');
     const details = one.closest('details')!;
     expect(details).not.toHaveAttribute('open');
-    expect(details.querySelector('ul')).toHaveClass('text-meta', 'text-text-dim');
+    // re-pinned on purpose (the ink and size roles round): the hashes are values, the reading ink at
+    // 13 px (they kept the quiet 12 px of the line around them)
+    expect(details.querySelector('ul')).toHaveClass('text-small', 'text-text');
   });
 
   it('links every code cell each holder owns to its cell page', () => {

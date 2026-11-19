@@ -878,8 +878,8 @@ export function ScriptFamilyPage({
     {
       key: 'deployed',
       label: 'Deployed',
-      // the date, and the block link under it at the cell's 13 px (85.8, the wider), and the gap:
-      // 101.8 (95.2 with the link at 12 px, BRIEF-ink-size-roles item 2: a link is never the meta size)
+      // the date, and the block under it, a link, at 13 px (85.8, the wider; it was 79.2 at 12
+      // px), and the gap
       minWidth: columnPx(
         Math.max(small(formatUtc8Date(0)), small(WIDEST_BLOCK_NUMBER)) + CELL_GAP_PX
       ),
@@ -890,8 +890,7 @@ export function ScriptFamilyPage({
             <span key={outpointKey(d)} className="block">
               <Utc8Date timestamp={d.deployedAt} />
               {d.createdAtBlock !== undefined && (
-                // a link is never the meta size (BRIEF-ink-size-roles item 2)
-                <span className="text-small block">{blockLink(d.createdAtBlock)}</span>
+                <span className="block">{blockLink(d.createdAtBlock)}</span>
               )}
             </span>
           ))
@@ -920,8 +919,8 @@ export function ScriptFamilyPage({
               </span>
             </span>
           ))}
-          {/* an id in a cell, the reading ink at its 13 px (BRIEF-ink-size-roles items 1 and 2) */}
-          <span className="text-small block [overflow-wrap:anywhere]">
+          {/* the version hash the column's head names, a value: the reading ink at 13 px */}
+          <span className="text-text block [overflow-wrap:anywhere]">
             {row.version.versionHash}
           </span>
         </>

@@ -46,7 +46,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
         <span className="text-text">{unitNode(formatCount(value.bytes, 'byte'))}, not text</span>
       );
     case 'empty':
-      return <span className="text-text-dim">set, empty</span>;
+      return <span className="text-text">set, empty</span>;
   }
 }
 

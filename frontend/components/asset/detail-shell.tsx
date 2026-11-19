@@ -310,12 +310,9 @@ export function AssetReadState({
     // proxy's internal URL, and the line breaks anywhere so no long token widens a 390 px page.
     <p
       role={error ? 'alert' : 'status'}
-      // a failure is a statement, the reading ink; the loading and the unavailable lines stay
-      // quiet, transient notes (R3; lane P2's follow-up, item 4)
-      className={cn(
-        error ? 'text-text' : 'text-text-dim',
-        'text-small max-w-measure py-3 [overflow-wrap:anywhere]'
-      )}
+      // a failure, the loading line and the unavailable line are sentences, the reading ink (ink
+      // and size roles; the loading and unavailable lines stood quiet)
+      className="text-text text-small max-w-measure py-3 [overflow-wrap:anywhere]"
     >
       {sentence}
     </p>

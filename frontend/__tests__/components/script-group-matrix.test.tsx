@@ -8,6 +8,7 @@ import {
 import { txLinks } from '@/lib/tx-detail-model';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { TYPE_SCALE, type TypeStep } from '@/lib/type-scale';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const inputs = [
   { id: 'in:0', top: 'CKBFS', label: 'in #0', cap: '195' },
@@ -321,6 +322,12 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
       'pubkey hash 0x55c5…a0b9'
     );
     expect(lock.querySelector('[data-line="evidence"]')).toHaveTextContent('dep group 0x71a7…:0');
+    // lane P1, the ink and size roles: the cycles figure, the runs sentence and the evidence line's
+    // ids and code link take the list's 13 px (each set the meta step, 12 px)
+    for (const line of ['head', 'runs', 'evidence'])
+      for (const el of lock.querySelectorAll(`[data-line="${line}"], [data-line="${line}"] *`))
+        expect(el).not.toHaveClass('text-meta');
+    expect(typeStepOf(within(head as HTMLElement).getByText(/cycles$/))).toBe('small');
   });
 
   it('keeps a group that did not run, dimmer, saying which outputs it guards', () => {
@@ -404,6 +411,12 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
     );
     expect(sizes.length).toBeGreaterThan(0);
     expect(sizes.every((s) => s >= 11)).toBe(true);
+    // lane P1, the ink and size roles: a cell's name in its head (a link to the cell once it is
+    // one) at 13 px (it was the head row's 12); its side and capacity stay the head's 12 px labels
+    const cells = Array.from(header.querySelectorAll('[data-column]'));
+    expect(cells.length).toBeGreaterThan(0);
+    for (const cell of cells)
+      expect(Array.from(cell.children).map(typeStepOf)).toEqual(['meta', 'small', 'meta']);
   });
 });
 

@@ -9,6 +9,8 @@ import spentFixture from '@/__tests__/fixtures/d5/cell-spent.json';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
 import { scriptHash } from '@/__tests__/utils/ckb-hash';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
+import { typeStepOf } from '@/__tests__/utils/type-step-of';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
@@ -240,6 +242,11 @@ describe('CellTransactions', () => {
       '0xcccccccc…cccccc:1'
     );
     expect(screen.getByText(/Built-in Type ID/)).toBeInTheDocument();
+    // lane P1, the ink and size roles: the note under the candidates is a sentence, the reading
+    // ink at 13 px (it was quiet, 12 px)
+    const note = screen.getByText(/^Current code cells at the indexed tip/);
+    expect(inkOf(note)).toBe(READING);
+    expect(typeStepOf(note)).toBe('small');
     expect(screen.queryByText(/Spent transaction/)).not.toBeInTheDocument();
     // Phase 5 (D11): a live cell's transactions are the one that created it.
     expectPrompt(screen.getByRole('heading', { name: 'Transactions 1' }), 'Transactions', '1');

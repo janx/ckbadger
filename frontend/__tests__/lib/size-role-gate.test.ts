@@ -339,76 +339,38 @@ describe('the size scan finds a link or a cell at 12 px, and only that', () => {
  * with these: 28 sites in 18 files).
  */
 const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
-  chain: 3,
-  assets: 13,
+  chain: 0,
+  // assets 13 → 1 (lane P2, the ink and size roles round, at the gate's merge) → 0
+  assets: 0,
   // lists 6 → 5 (the inventory's totals line at 13 px)
   // lists 5 → 4 (the pipeline's pinned readout at 13 px)
   // lists 4 → 0 (the blocks list's links and cells at 13 px)
   lists: 0,
   topics: 2,
-  charts: 1,
+  // charts 1 → 0 (the ink and size round): the index card's ranking writes its rows at 13 px
+  charts: 0,
   shared: 3,
 };
-// 18 → 17 (the inventory's totals line at 13 px)
-// 17 → 16 (the pipeline's pinned readout at 13 px)
-// 16 → 15 (the blocks list's links and cells at 13 px)
-const TOLERATED_FILES = 15;
+// 18 → 17: components/charts/chart-small-multiple.tsx left the list
+// chain 3 → 0, files 17 → 14 (lane P1, the ink and size roles):
+// components/cell/code-cell-board.tsx, components/transaction/script-group-matrix.tsx,
+// components/transaction/what-moved.tsx left the list
+// assets 13 → 0, files 14 → 7 (lane P2, the ink and size roles round, at the merge of the two):
+// six assets files left at the gate's merge, then script-code-evidence
+// lists 6 → 0, files 7 → 4 (lane P3, the ink and size roles, at the merge with P1's and P2's):
+// components/asset/inventory-summary.tsx, components/pipeline/pipeline-panel.tsx and
+// app/blocks/page.tsx left the list
+const TOLERATED_FILES = 4;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
-  'components/cell/code-cell-board.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: `a code cell's script link in its 12 px reference line; ${WORK}`,
-  },
-  'components/transaction/script-group-matrix.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: `a script group's link in a 12 px line; ${WORK}`,
-  },
-  'components/transaction/what-moved.tsx': {
-    family: 'chain',
-    sites: { link: 1 },
-    reason: `a party's link in a 12 px line; ${WORK}`,
-  },
   // ---- assets ----
-  'components/asset/asset-history.tsx': {
-    family: 'assets',
-    sites: { link: 2 },
-    reason: `a block link in a 12 px note and a party's address at the tight size in the supply's phone rows; ${WORK}`,
-  },
-  'components/asset/cell-versions.tsx': {
-    family: 'assets',
-    sites: { link: 2 },
-    reason: `a version's cell link with its id at the tight size and its transaction link at 12 px; ${WORK}`,
-  },
-  'components/asset/genetics.tsx': {
-    family: 'assets',
-    sites: { link: 3 },
-    reason: `the pattern's two source links and a cluster link in 12 px lines; ${WORK}`,
-  },
-  'components/asset/identity-document.tsx': {
-    family: 'assets',
-    sites: { link: 1 },
-    reason: `the document's cell link, its id at the tight size; ${WORK}`,
-  },
-  'components/asset/item-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 3 },
-    reason: `an item's version, transaction and cell links in 12 px lines; ${WORK}`,
-  },
-  'components/identity/identity-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 1 },
-    reason: `an identity's record link in a 12 px line; ${WORK}`,
-  },
-  'components/scripts/script-code-evidence.tsx': {
-    family: 'assets',
-    sites: { link: 1 },
-    reason: `a code cell's link in a 12 px line; ${WORK}`,
-  },
+  // The assets family left the list (lane P2, the ink and size roles round): asset-history 2,
+  // cell-versions 2, genetics 3, identity-document 1, item-evidence 3 and identity-evidence 1 at
+  // the gate's merge; then script-code-evidence 1, a history marker's chip (its day, event and
+  // block, and its code cell's link) 12 → 13 px
   // ---- lists ----
   // 'app/blocks/page.tsx' left the list (BRIEF-ink-size-roles item 2: link 3, td 1 → 0): the\n  // reward's finality line and its block link, and both hardfork links, read at the cell's 13 px; the\n  // hash beside and under the number is an id at 13 px too (the Block column 220 → 226, Age · txs\n  // 122 → 126 with its proposals at 13 px)
   // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles item 2, 588cd09a:\n  // link 1 → 0): the totals line is a sentence at 13 px, its block link with it
@@ -418,12 +380,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'topics',
     sites: { link: 2 },
     reason: `the block links of the capacity-use caption and the 365-day anchor line, 12 px notes; ${WORK}`,
-  },
-  // ---- charts ----
-  'components/charts/chart-small-multiple.tsx': {
-    family: 'charts',
-    sites: { link: 1 },
-    reason: `a small multiple's chart link at 12 px; ${WORK}`,
   },
   // ---- shared ----
   'components/stats-bar.tsx': {

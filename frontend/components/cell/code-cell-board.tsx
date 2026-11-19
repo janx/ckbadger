@@ -104,8 +104,9 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         </div>
       </div>
       {otherReferences.length > 0 && (
-        // the other names of this code and their live cells: values, the reading ink (R3)
-        <ul className="text-text text-meta space-y-1">
+        // the other names of this code and their live cells: values, the reading ink (R3), at
+        // 13 px (lane P1, the ink and size roles: a link and its count were 12)
+        <ul className="text-text text-small space-y-1">
           {otherReferences.map((reference) => (
             <li
               key={`${reference.referenceHash}-${reference.hashType}`}
@@ -149,7 +150,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               </p>
             ))
           ) : (
-            <p className="text-text-dim">No registered Type ID version history for this binary.</p>
+            <p className="text-text">No registered Type ID version history for this binary.</p>
           )}
           {codeCell.upgradeCohort.map((item) => (
             <p

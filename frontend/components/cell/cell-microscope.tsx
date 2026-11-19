@@ -721,7 +721,8 @@ export function CellMicroscope({ cell, lockLabel, typeName }: CellMicroscopeProp
               </div>
             ))}
             {hidden > 0 && (
-              <div className="text-text-dim text-meta max-w-measure sm:pl-20">
+              // a sentence, the reading ink at 13 px (lane P1, the ink and size roles: 12, quiet)
+              <div className="text-text text-small max-w-measure sm:pl-20">
                 + {hidden} more ELF header fields and program headers, named in the line under their
                 bytes
               </div>
@@ -788,7 +789,7 @@ export function CellMicroscope({ cell, lockLabel, typeName }: CellMicroscopeProp
                   {dataBytes.length ? (
                     dataRows
                   ) : (
-                    <p className="text-text-dim py-1">No data: the cell carries 0 bytes.</p>
+                    <p className="text-text py-1">No data: the cell carries 0 bytes.</p>
                   )}
                 </div>
               </TerminalPanelContent>

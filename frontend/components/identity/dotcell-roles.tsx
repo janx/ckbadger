@@ -120,9 +120,9 @@ export function DotcellRoles({
                 step === 'now' ? 'border-identity/60' : 'border-base-border border-dashed'
               )}
             >
-              <span className="text-text-dim text-meta">
+              <span className="text-text text-small">
                 <Utc8Date timestamp={run.since.cell.timestamp} />
-                {step ? ` · ${step}` : ''}
+                {step && <span className="text-text-dim text-meta"> · {step}</span>}
               </span>
               <span
                 className={cn(
