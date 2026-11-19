@@ -143,23 +143,24 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
       sortKey,
       sortDirection,
     ],
-    queryFn: () =>
+    queryFn: pagination.ask((cursor) =>
       api.getAssets({
         type: assetType,
         limit: pageSize,
-        cursor: pagination.cursor,
+        cursor,
         search,
         standard,
         compositionTier:
           assetType === 'object' ? (compositionTier as CompositionTier | undefined) : undefined,
         sortKey,
         sortDirection,
-      }),
+      })
+    ),
   });
   const classLabel = INVENTORY_CLASSES.find((c) => c.key === assetType)!.label;
   // the shown page's figures (lib/pagination.ts); nothing for one page, an empty page past the
   // end its place and a way back (lane c2-finish, 1b)
-  const assetsAt = assets.data ? rankedPageAt(classLabel, pagination.page, assets.data) : null;
+  const assetsAt = assets.data ? rankedPageAt(classLabel, assets.data, pagination) : null;
   const filter = (key: 'standard' | 'compositionTier', value: string) => {
     const next = value || undefined;
     if (key === 'standard') setStandard(next);
@@ -210,6 +211,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   values={standardValues(summary.data, standard)}
                   value={standard ?? ALL_STANDARDS}
                   onChange={(next) => filter('standard', next)}
+                  counted
                 />
               )}
               <TextField
@@ -260,15 +262,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               <>
                 <AddressStaleNotice error={assets.error} label="inventory" />
                 <InventoryRows rows={assets.data.data} assetType={assetType} />
-                {assetsAt && (
-                  <Pager
-                    mode="pages"
-                    label={classLabel}
-                    {...assetsAt}
-                    onPrevious={pagination.goToPrevious}
-                    onNext={() => pagination.goToNext(assets.data.nextCursor)}
-                  />
-                )}
+                {assetsAt && <Pager mode="pages" label={classLabel} {...assetsAt} />}
               </>
             ) : (
               <AddressLoadState error={assets.error} read={assets} label="inventory" />

@@ -46,27 +46,28 @@ describe('section-size tab rows take one type step down below md (PA-17)', () =>
   // phone step by measurement) its file left this list, on purpose: the asset feed's row (lane
   // c2-assets), the scripts list's roles and the transactions list's views (lane c2-lists), the
   // block page's and the address page's rows (lane c2-chain). Five rows to none: no page draws a
-  // section-size tab row by hand any more, and the two tests below hold one that comes back.
+  // section-size tab row by hand any more, and a row that comes back fails here.
   it('finds no hand-built tab row: every one is the library’s Tabs', () => {
     expect([...found.keys()].sort()).toEqual([]);
   });
 
-  it('sets every section-size tab 13 px below md', () => {
-    const offences = [...found].flatMap(([file, tabs]) =>
-      tabs.filter((t) => !/(^|\s)max-md:text-body(\s|['"`])/.test(t)).map((t) => `${file}: ${t}`)
-    );
-    expect(offences).toEqual([]);
-  });
-
-  it('sets every count in those rows 11 px below md, and no count stays 12 px', () => {
-    const offences = [...found.keys()].flatMap((file) => {
-      const code = readFileSync(join(ROOT, file), 'utf8');
-      // A tab's count: the dim, normal-weight figure beside the label.
-      return (code.match(LITERAL) ?? [])
-        .filter((s) => /text-text-dim/.test(s) && /text-small/.test(s) && /font-normal/.test(s))
-        .filter((s) => !/(^|\s)max-md:text-meta(\s|['"`])/.test(s))
-        .map((s) => `${file}: ${s}`);
-    });
-    expect(offences).toEqual([]);
+  // Lane cd-fixes-controls (review-cd-tests NOTE-5): the two tests that stood here, a returning
+  // row's 13 px label and 11 px count below md, iterated `found`, which is empty, so they could not
+  // fail (and a returning row fails the test above). In their place the reader's own test: a
+  // fixture source whose hand-built tab rows it must find, and whose other classes it must pass.
+  it('finds a hand-built section-size tab in a fixture source, and passes what is not one', () => {
+    const fixture = [
+      "const TAB = 'text-section border-b-2 pb-2';",
+      'export const A = ({ on }: { on: boolean }) => (',
+      '  <button className={`text-section max-md:text-body border-b-2 ${on ? "a" : "b"}`}>a</button>',
+      ');',
+      "const HEADING = 'text-section pb-2';",
+      "const RULE = 'text-body border-b-2';",
+      "const LARGER = 'text-section-lg border-b-2';",
+    ].join('\n');
+    expect(sectionTabs(fixture)).toEqual([
+      "'text-section border-b-2 pb-2'",
+      '`text-section max-md:text-body border-b-2 ${on ? "a" : "b"}`',
+    ]);
   });
 });

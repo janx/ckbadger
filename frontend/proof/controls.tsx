@@ -21,6 +21,7 @@ import { HelpPopover } from '@/components/ui/help-popover';
 import Link from '@/components/ui/link';
 import { Pager } from '@/components/ui/pager';
 import { RangeSelect } from '@/components/ui/range-select';
+import { RetryAction } from '@/components/ui/retry-action';
 import { Select } from '@/components/ui/select';
 import { TabLinks, Tabs, type Tab } from '@/components/ui/tabs';
 import { TextField } from '@/components/ui/text-field';
@@ -128,13 +129,21 @@ function Filters() {
   const [addressKind, setAddressKind] = useState<AddressKind>('all');
   return (
     <Item name="filter chips">
-      <FilterChips label="kind" values={KINDS} value={kind} onChange={setKind} />
+      <FilterChips label="kind" values={KINDS} value={kind} onChange={setKind} counted />
       <Note>
-        the six kinds, 783.2 px of chips: chips from 640, the select after its label below it
+        the six kinds, 783.2 px of chips, 876.8 px with room for a count of five glyphs on each:
+        chips from 640, the select after its label below it
       </Note>
-      <FilterChips label="standard" values={STANDARDS} value={standard} onChange={setStandard} />
+      <FilterChips
+        label="standard"
+        values={STANDARDS}
+        value={standard}
+        onChange={setStandard}
+        counted
+      />
       <Note>
-        the inventory’s four standards, 397.6 px, wider than a 360 px phone’s 328 px line: chips
+        the inventory’s four standards, 397.6 px, 476.8 px with room for their counts (308.8 px with
+        none): wider than a 360 px phone’s 328 px line before their counts come and after, chips
         from 640, the select after “standard” below it
       </Note>
       <FilterChips
@@ -142,8 +151,13 @@ function Filters() {
         values={ADDRESS_KINDS}
         value={addressKind}
         onChange={setAddressKind}
+        counted
       />
-      <Note>the address page’s three kinds, 200.8 px: chips at every width</Note>
+      <Note>
+        the address page’s three kinds, 200.8 px, 287.2 px with room for their counts: chips at
+        every width; a count wider than its room that takes the row past 328 px takes the counts off
+        the row on a phone (one line, nothing cut)
+      </Note>
     </Item>
   );
 }
@@ -193,11 +207,10 @@ function Pagers() {
         label="tokens"
         page={page}
         pageSize={20}
-        hasMore={page < 37}
         rows={{ from: (page - 1) * 20 + 1, to: Math.min(page * 20, 727) }}
         count={{ total: 727, pages: 37 }}
-        onPrevious={go(page - 1)}
-        onNext={go(page + 1)}
+        onPrevious={page > 1 ? go(page - 1) : undefined}
+        onNext={page < 37 ? go(page + 1) : undefined}
       />
       <Note>pages: a ranked list (live: prev and next walk its 37 pages)</Note>
       <Pager
@@ -205,7 +218,6 @@ function Pagers() {
         label="objects"
         page={2}
         pageSize={24}
-        hasMore
         rows={{ from: 25, to: 48 }}
         count={null}
         onPrevious={() => {}}
@@ -219,15 +231,25 @@ function Pagers() {
         label="holders"
         page={2}
         pageSize={20}
-        hasMore={false}
+        rows={null}
+        count={null}
+        onPrevious={() => {}}
+      />
+      <Note>
+        a page of a list that moved under the reader (an empty page past the end, rows past the
+        count, a page past the pages): where it is, a way back, and the words that say so
+      </Note>
+      <Pager
+        mode="pages"
+        label="holders read at two tips"
+        page={37}
+        pageSize={20}
         rows={null}
         count={null}
         onPrevious={() => {}}
         onNext={() => {}}
       />
-      <Note>
-        an empty page past the end, the list shrank under the reader: where it is, a way back
-      </Note>
+      <Note>the same with more rows after it: the next by the response’s own “more”</Note>
       <Pager
         mode="time"
         label="blocks"
@@ -245,18 +267,9 @@ function Pagers() {
       <Note>the short list’s own forms</Note>
       <FoldDemo />
       <Note>a fold that opens in place: one button, its words toggling, its focus kept</Note>
-      <Pager
-        mode="pages"
-        label="one page"
-        page={1}
-        pageSize={20}
-        hasMore={false}
-        rows={{ from: 1, to: 8 }}
-        count={{ total: 8, pages: 1 }}
-        onPrevious={() => {}}
-        onNext={() => {}}
-      />
-      <Note>one page: nothing is drawn above this line</Note>
+      <Note>
+        one page: lib/pagination.ts draws nothing for it (rankedPageAt and timePageAt give null)
+      </Note>
     </Item>
   );
 }
@@ -324,6 +337,22 @@ function CopyAndHelp() {
       <Note>
         copied for 1.5 s after a copy; not copied where the clipboard refuses (a page over plain
         HTTP on a LAN address)
+      </Note>
+    </Item>
+  );
+}
+
+function Retry() {
+  const [tries, setTries] = useState(0);
+  return (
+    <Item name="retry">
+      <p role="alert" className="text-negative text-small max-w-measure break-words">
+        Could not refresh Daily transactions: 503 the chart cache is warming.
+        <RetryAction words="Retry" onRetry={() => setTries((n) => n + 1)} className="ml-2" />
+      </p>
+      <Note>
+        the one action after a failed read: a way onward’s ink, no underline, celadon under the
+        pointer and the focus as a link, 28 px from 640 and 32 below; asked again {tries} times
       </Note>
     </Item>
   );
@@ -406,6 +435,7 @@ function Board({ theme }: { theme: string }) {
       <Pagers />
       <Fields />
       <CopyAndHelp />
+      <Retry />
       <Links />
     </section>
   );

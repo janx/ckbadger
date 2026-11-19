@@ -445,9 +445,12 @@ h1.text-index {
    base layer's `:focus-visible`). An underline follows its words into the celadon (a link inside
    a line is underlined in the muted ink at rest): the rule's `a` and its state outrank the one
    class that colours the line. SVG links (the pipeline's cards) keep their own hover and focus
-   design. */
+   design. The library's action after a failed read (components/ui/retry-action.tsx,
+   `.look-action`), a button in a way onward's ink, follows the same rule. */
 a:focus-visible,
-a:hover {
+a:hover,
+.look-action:focus-visible,
+.look-action:hover {
   color: var(--c-jade);
   text-decoration-color: currentColor;
   text-shadow: 0 0 8px rgb(var(--rgb-jade) / calc(0.45 * var(--m-glow)));

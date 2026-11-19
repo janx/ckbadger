@@ -68,13 +68,16 @@ const CYCLES_TRACK = COUNT_TRACK_PX;
 export default function BlocksPage() {
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
   // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination(limit);
+  const walk = useCursorPagination(limit);
+  const { cursor } = walk;
   // PA-02: the legend explains the wide table's Contents glyphs and size bar, which the 608 px
   // table and the phone rows write in figures; it is drawn with the form the list chose.
   const [form, setForm] = useState<ListTableForm | null>(null);
+  // the page as the walk asks for it (lane cd-fixes-controls, item 1), typed before the query
+  const askBlocks = walk.ask((cursor) => api.getBlocks({ cursor, limit }));
   const read = useQuery({
     queryKey: ['blocks', cursor, limit],
-    queryFn: () => api.getBlocks({ cursor, limit }),
+    queryFn: askBlocks,
     staleTime: 30_000,
     placeholderData: keepPreviousData,
     refetchInterval: (query) =>
@@ -83,7 +86,7 @@ export default function BlocksPage() {
   const { data, error } = read;
   // where the list stands in time (lib/pagination.ts): its page and the pages its served total
   // makes at the served page size; nothing for a list on one page, an empty one too
-  const blocksAt = data ? timePageAt('blocks', page, data) : null;
+  const blocksAt = data ? timePageAt('blocks', data, walk) : null;
   const sizeScale = resourceScale(data ? data.data.map((block) => block.size) : []);
   const cyclesScale = resourceScale(
     data ? data.data.flatMap((block) => (block.cycles === null ? [] : [Number(block.cycles)])) : []
@@ -285,16 +288,7 @@ export default function BlocksPage() {
               {/* The controls board's cursor in time: newest first, the page of the pages the
                   served total makes at the served page size. A list with no row has no page to
                   be on, and draws none. */}
-              {blocksAt && (
-                <Pager
-                  mode="time"
-                  label="blocks"
-                  order="newest first"
-                  {...blocksAt}
-                  onNewer={hasPrevious ? goToPrevious : undefined}
-                  onOlder={data.hasMore ? () => goToNext(data.nextCursor) : undefined}
-                />
-              )}
+              {blocksAt && <Pager mode="time" label="blocks" order="newest first" {...blocksAt} />}
             </>
           )}
         </DetailLayout>

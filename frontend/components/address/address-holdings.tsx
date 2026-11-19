@@ -13,7 +13,14 @@ import { formatStandard } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { ENTITY_PAGE_SIZE, rankedPageAt, timePageAt, type CursorPageRead } from '@/lib/pagination';
+import {
+  ENTITY_PAGE_SIZE,
+  rankedPageAt,
+  timePageAt,
+  type Asked,
+  type CursorPageRead,
+  type CursorWalk,
+} from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
@@ -94,42 +101,28 @@ export function AddressPagination({
   label,
   order,
 }: {
-  pagination: ReturnType<typeof useCursorPagination>;
-  read: CursorPageRead & { nextCursor: string | null };
+  pagination: CursorWalk;
+  /** The page as its walk asked for it (lane cd-fixes-controls, item 1). */
+  read: Asked<CursorPageRead>;
   label: string;
   /** A list in time's order in words (`newest first`); a list read from its first has none. */
   order?: string;
 }) {
-  const onNext = () => pagination.goToNext(read.nextCursor);
   if (order !== undefined) {
-    const at = timePageAt(label, pagination.page, read);
+    const at = timePageAt(label, read, pagination);
     return (
       at && (
         <div className="mt-4">
-          <Pager
-            mode="time"
-            label={label}
-            order={order}
-            page={at.page}
-            pages={at.pages}
-            onNewer={pagination.hasPrevious ? pagination.goToPrevious : undefined}
-            onOlder={read.hasMore ? onNext : undefined}
-          />
+          <Pager mode="time" label={label} order={order} {...at} />
         </div>
       )
     );
   }
-  const at = rankedPageAt(label, pagination.page, read);
+  const at = rankedPageAt(label, read, pagination);
   return (
     at && (
       <div className="mt-4">
-        <Pager
-          mode="pages"
-          label={label}
-          {...at}
-          onPrevious={pagination.goToPrevious}
-          onNext={onNext}
-        />
+        <Pager mode="pages" label={label} {...at} />
       </div>
     )
   );
@@ -476,7 +469,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     identitiesPage = useCursorPagination(pageSize);
   const tokens = useQuery({
     queryKey: ['address-tokens', addr, tokensPage.cursor, pageSize],
-    queryFn: () => api.getAddressTokens(addr, { limit: pageSize, cursor: tokensPage.cursor }),
+    queryFn: tokensPage.ask((cursor) => api.getAddressTokens(addr, { limit: pageSize, cursor })),
     enabled: holdings.holdings.token > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
@@ -485,13 +478,14 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const deposits = useQuery({
     queryKey: ['address-holdings-cells', addr, 'dao', daoPage.cursor, pageSize],
     // R2b-a 9 (BA-34): largest deposit first, ordered and paged by the API.
-    queryFn: () =>
+    queryFn: daoPage.ask((cursor) =>
       api.getAddressCells(addr, {
         class: 'dao',
         order: 'capacity',
         limit: pageSize,
-        cursor: daoPage.cursor,
-      }),
+        cursor,
+      })
+    ),
     enabled: holdings.holdings.dao > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
@@ -499,12 +493,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   });
   const identities = useQuery({
     queryKey: ['address-holdings-cells', addr, 'identity', identitiesPage.cursor, pageSize],
-    queryFn: () =>
+    queryFn: identitiesPage.ask((cursor) =>
       api.getAddressCells(addr, {
         class: 'identity',
         limit: pageSize,
-        cursor: identitiesPage.cursor,
-      }),
+        cursor,
+      })
+    ),
     enabled: holdings.holdings.identity > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
@@ -1072,13 +1067,14 @@ function AddressCollectionObjects({
   const pages = useCursorPagination();
   const objects = useQuery({
     queryKey: ['address-collection-objects', addr, group.standard, group.id, pages.cursor],
-    queryFn: () =>
+    queryFn: pages.ask((cursor) =>
       api.getAddressCells(addr, {
         class: 'object',
         collection: group.id ?? 'none',
         limit: COLLECTION_PAGE,
-        cursor: pages.cursor,
-      }),
+        cursor,
+      })
+    ),
     placeholderData: keepPreviousData,
   });
   const rows = objects.data?.data ?? [];
@@ -1089,7 +1085,7 @@ function AddressCollectionObjects({
       );
   // ten a page: the pager's pages mode, counted only where the page's own response counts its
   // rows (the collection's count is the holdings' read, stated in the group's row: c2-finish 1c)
-  const objectsAt = objects.data && rankedPageAt(`${label} objects`, pages.page, objects.data);
+  const objectsAt = objects.data && rankedPageAt(`${label} objects`, objects.data, pages);
   return (
     <div className="bg-base-surface pl-7">
       {objects.data ? (
@@ -1152,15 +1148,7 @@ function AddressCollectionObjects({
             })}
           </div>
           <div className="border-row-rule flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t py-2">
-            {objectsAt && (
-              <Pager
-                mode="pages"
-                label={`${label} objects`}
-                {...objectsAt}
-                onPrevious={pages.goToPrevious}
-                onNext={() => pages.goToNext(objects.data!.nextCursor)}
-              />
-            )}
+            {objectsAt && <Pager mode="pages" label={`${label} objects`} {...objectsAt} />}
             {href && (
               <Link look="inline" href={href} className="text-small">
                 All {group.itemCount.toLocaleString('en-US')} in the collection →

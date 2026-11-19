@@ -207,7 +207,11 @@ describe('ExternalLink: the same looks, its ↗ its own', () => {
 
 describe('hover and focus: one rule for every look, by night and by day', () => {
   it('turns a link celadon under the pointer and under the keyboard’s focus', () => {
-    const rule = GLOBALS_CSS.match(/\na:focus-visible,\na:hover\s*\{([^}]*)\}/);
+    // re-pinned on purpose (lane cd-fixes-controls): the one rule also names the library's action
+    // after a failed read (`.look-action`, components/ui/retry-action.tsx)
+    const rule = GLOBALS_CSS.match(
+      /\na:focus-visible,\na:hover,\n\.look-action:focus-visible,\n\.look-action:hover\s*\{([^}]*)\}/
+    );
     expect(rule, 'globals.css: one rule for a:focus-visible and a:hover').not.toBeNull();
     expect(rule![1]).toMatch(/(^|\s)color: var\(--c-jade\);/);
     // the glow is the theme's: none by day (--m-glow is 0)
