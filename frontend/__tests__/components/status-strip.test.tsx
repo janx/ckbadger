@@ -11,7 +11,7 @@ import { StatusStrip, type StripFact } from '@/components/ui/status-strip';
 // nothing its caller did not give.
 
 const FACTS: StripFact[] = [
-  { label: 'status', value: 'committed', note: '36 confirmations', dot: 'jade' },
+  { label: 'status', value: 'committed', note: '36\u00a0confirmations', dot: 'jade' },
   { label: 'time', value: '2026-11-14 12:54:57 UTC+8', note: '4m ago' },
   { label: 'block', value: '#21,008,952' },
   { label: 'fee', value: '0.0015724 CKB', note: 'paid by ckb1…sqylvfrs' },
@@ -48,7 +48,7 @@ describe('StatusStrip', () => {
     const [dt, dd] = Array.from(fact('status').children) as HTMLElement[];
     expect(dt).toHaveClass('text-meta', 'text-text-dim');
     expect(dd).toHaveClass('text-text-bright', 'text-small', 'sm:text-body');
-    const note = within(dd).getByText('36 confirmations');
+    const note = within(dd).getByText('36 confirmations');
     expect(note).toHaveClass('text-small', 'text-text-dim');
     // the value itself carries no ink of its own: the dd's bright
     expect(within(dd).getByText('committed').className).not.toMatch(/text-text/);
@@ -117,7 +117,7 @@ describe('StatusStrip', () => {
   it('states what it is given and nothing else', () => {
     render(<StatusStrip label="Transaction facts" facts={FACTS} />);
     expect(strip()).toHaveTextContent(
-      'statuscommitted · 36 confirmations' +
+      'statuscommitted · 36 confirmations' +
         'time2026-11-14 12:54:57 UTC+8 · 4m ago' +
         'block#21,008,952' +
         'fee0.0015724 CKB · paid by ckb1…sqylvfrs'

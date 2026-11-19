@@ -394,7 +394,9 @@ describe('Transaction board, tier 1', () => {
       // U-09 (re-pinned): the summary under the headline is the lede, its ids at the head size;
       // R9 (re-pinned): an address is `ckb1…` and its last 8 characters
       // R9 (re-pinned): prose takes the row form, the object's id 10…6
-      `Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}. The sender paid a 0.00064119 CKB fee.`
+      // re-pinned on purpose (lane D2, gate D0′'s "said once"): the fee stands in the status strip,
+      // so the summary's last sentence, "The sender paid a 0.00064119 CKB fee.", is gone
+      `Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}.`
     );
     expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     const copy = screen.getByRole('button', { name: 'copy transaction hash' });
@@ -479,14 +481,15 @@ describe('Transaction board, tier 1', () => {
     const copy = screen.getByRole('button', { name: 'copy transaction hash' });
     expect(copy).toHaveClass('text-text-dim', 'hover:text-jade', 'h-8', 'w-8', 'sm:h-6', 'sm:w-6');
     expect(copy.parentElement).toHaveClass('shrink-0');
-    // under both: the summary first
-    expect(below!.firstElementChild).toBe(screen.getByTestId('tx-summary'));
+    // under both: re-pinned on purpose (lane D2, gate D0′): the status strip first, then the
+    // summary (the summary was first; the facts stood in a rail outside the head)
+    const strip = screen.getByRole('group', { name: 'Transaction status' });
+    expect(below!.firstElementChild).toBe(strip);
+    expect(below!.children[1]).toBe(screen.getByTestId('tx-summary'));
     expect(nameBox).not.toContainElement(screen.getByTestId('tx-summary'));
+    expect(nameBox).not.toContainElement(strip);
     expect(head.closest('header')).toContainElement(h1);
     expectBefore(seal, h1);
-    expect(head).not.toContainElement(
-      await screen.findByRole('complementary', { name: 'Transaction facts' })
-    );
     expect(head).not.toContainElement(
       await screen.findByRole('heading', { name: 'Cells 1 in → 1 out' })
     );
@@ -522,22 +525,21 @@ describe('Transaction board, tier 1', () => {
     expect(within(created).getByTestId('tx-fee')).toHaveTextContent(/^fee0\.00064119 CKB$/);
   });
 
-  // Rubbing × Song print, phase 5 (T4): the board's comment, three lines from the figures the page
-  // draws — the cells heading's counts, the rail's fee and the evidence tier's common-knowledge
-  // delta (563 → 589 occupied bytes). The name plate (C10): under the stone and the plate after
-  // the summary, from the page's left edge (it was in the column beside the stone).
-  it('comments on the cells, the fee and common knowledge under the sealed head, before the facts', async () => {
+  // Rubbing × Song print, phase 5 (T4): the board's comment, from the figures the page draws — the
+  // cells heading's counts and the evidence tier's common-knowledge delta (563 → 589 occupied
+  // bytes). The name plate (C10): under the stone and the plate after the summary, from the page's
+  // left edge (it was in the column beside the stone). Re-pinned on purpose (lane D2, gate D0′'s
+  // "said once"; renamed, it was "comments on the cells, the fee and common knowledge under the
+  // sealed head, before the facts"): two lines, its fee line ("0.00064119 ckb to the miner.")
+  // gone, since the fee stands in the status strip; the strip comes before it in the head.
+  it('comments on the cells and common knowledge under the sealed head, after the status strip', async () => {
     const { container } = render(<TransactionDetailPage />);
     const first = await screen.findByText('1 cell became 1.');
     const comment = first.closest('.comment') as HTMLElement;
     expect(comment).not.toBeNull();
     expect(
       Array.from(comment.querySelectorAll('[data-comment-line]')).map((l) => l.textContent)
-    ).toEqual([
-      '1\u00a0cell became 1.',
-      '0.00064119 ckb to the miner.',
-      'common knowledge grew by 26\u00a0bytes.',
-    ]);
+    ).toEqual(['1\u00a0cell became 1.', 'common knowledge grew by 26\u00a0bytes.']);
     // re-pinned with readability R4 (lane B7): the comment's paragraph stands on the measure, which
     // the Comment sets itself (the page gave the comment max-w-[60ch])
     expect(comment).toHaveClass('mt-4');
@@ -551,45 +553,50 @@ describe('Transaction board, tier 1', () => {
     );
     expect(comment.parentElement).toBe(below);
     const summary = await screen.findByTestId('tx-summary');
-    expect(Array.from(below!.children)).toEqual([summary, comment]);
+    const strip = screen.getByRole('group', { name: 'Transaction status' });
+    expect(Array.from(below!.children)).toEqual([strip, summary, comment]);
     expect(head.closest('header')).toContainElement(comment);
-    // reading order: the identity (the hash and its copy button), the summary, the comment, then
-    // the facts
-    expectBefore(screen.getByRole('button', { name: 'copy transaction hash' }), comment);
-    expectBefore(comment, screen.getByRole('complementary', { name: 'Transaction facts' }));
-    // the fee is the one the rail prints, digit for digit
-    expect(screen.getByRole('complementary', { name: 'Transaction facts' })).toHaveTextContent(
-      '0.00064119 CKB'
-    );
+    // reading order: the identity (the hash and its copy button), the strip, the summary, the
+    // comment
+    expectBefore(screen.getByRole('button', { name: 'copy transaction hash' }), strip);
+    expectBefore(strip, comment);
     // the counts are the cells heading's
     expect(screen.getByRole('heading', { name: 'Cells 1 in → 1 out' })).toBeInTheDocument();
   });
 
-  it('keeps the status, time, block and fee in a facts rail (TX-18)', async () => {
+  // Re-pinned on purpose (lane D2, gate D0′; renamed, it was "keeps the status, time, block and
+  // fee in a facts rail (TX-18)"): the same four facts, in the status strip under the id line;
+  // the status word lowercase as the board writes it (it was "Committed"), the fee exact
+  // (0.00064119 has no trailing zero to drop).
+  it('keeps the status, time, block and fee in the status strip (TX-18)', async () => {
     render(<TransactionDetailPage />);
-    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' });
-    expect(rail).toHaveTextContent('Committed');
-    expect(rail).toHaveTextContent('27,369 confirmations');
-    expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
-    expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
-    expect(rail).toHaveTextContent('0.00064119 CKB');
-    expect(rail).toHaveTextContent(`paid by ${row('cjk9lz')}`); // R9 (re-pinned): 4…8
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
+    expect(strip).toHaveTextContent('committed');
+    expect(strip).toHaveTextContent('27,369 confirmations');
+    expect(strip).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
+    expect(within(strip).getByRole('link', { name: '#101' })).toBeInTheDocument();
+    expect(strip).toHaveTextContent('0.00064119 CKB');
+    expect(strip).toHaveTextContent(`paid by ${row('cjk9lz')}`); // R9 (re-pinned): 4…8
   });
 
   it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
     // Responsive review A#17: on a phone the facts rail came after the six cell cards.
     render(<TransactionDetailPage />);
-    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' });
+    // re-pinned on purpose (lane D2): the facts are the status strip (they were the rail)
+    const strip = await screen.findByRole('group', { name: 'Transaction status' });
     const table = await screen.findByRole('table', { name: 'Balance changes by participant' });
     const before = (a: Element, b: Element) =>
       Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
     const hash = screen.getByRole('button', { name: 'copy transaction hash' });
     const cells = screen.getByRole('heading', { name: 'Cells 1 in → 1 out' });
-    expect(before(hash, rail)).toBe(true);
-    expect(before(rail, table)).toBe(true);
-    expect(before(rail, cells)).toBe(true);
-    // From lg up the rail is still the right-hand column beside the tier-1 story.
-    expect(rail).toHaveClass('lg:col-start-2', 'lg:row-start-1');
+    expect(before(hash, strip)).toBe(true);
+    expect(before(strip, table)).toBe(true);
+    expect(before(strip, cells)).toBe(true);
+    // re-pinned on purpose (lane D2, U-13): at every width the strip is in the head, under the
+    // hash, and no column beside the tier-1 story holds facts (from lg the rail was the
+    // right-hand column, lg:col-start-2 lg:row-start-1)
+    expect(strip.closest('header')).not.toBeNull();
+    expect(strip.className).not.toMatch(/col-start|row-start/);
   });
 
   it('names the collection and composition of moved objects, occupied in whole bytes, and a Net row (TX-12, TX-19)', async () => {
@@ -693,7 +700,7 @@ describe('Transaction board, the status strip (lane D2)', () => {
     expect(facts[1][1]).toMatch(/^2026-10-30 16:14:17 UTC\+8 · /);
     expect(facts[2][1]).toBe(`0.00064119 CKB · paid by ${row('cjk9lz')}`);
     expect(strip.querySelector<HTMLElement>('[data-strip-dot]')!.style.backgroundColor).toBe(
-      'var(--c-info)'
+      'var(--c-aqua)'
     );
   });
 });
@@ -1037,13 +1044,17 @@ describe('Transaction variants (D4)', () => {
     expect(screen.queryByText(/0 ran/)).not.toBeInTheDocument();
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
-    expect(screen.getByText('Pending since')).toBeInTheDocument();
+    // re-pinned on purpose (lane D2): the time it entered the pool is the strip's fact, its label
+    // lowercase as the board writes them (it was the rail's "Pending since")
+    expect(screen.getByText('pending since')).toBeInTheDocument();
     // No comment while it waits: its cells and occupied bytes are read once it is indexed (T4).
-    // Under the stone and the plate (C10) stands its summary alone, the sentence that says so.
+    // Under the stone and the plate (C10) stand the status strip and its summary, the sentence
+    // that says so (re-pinned on purpose, lane D2: the summary stood alone there)
     expect(document.querySelector('.comment')).toBeNull();
     const below = document.querySelector('[data-sealed-below]') as HTMLElement;
-    expect(below.children).toHaveLength(1);
-    expect(below).toHaveTextContent(
+    expect(below.children).toHaveLength(2);
+    expect(below.firstElementChild).toBe(screen.getByRole('group', { name: 'Transaction status' }));
+    expect(below.lastElementChild).toHaveTextContent(
       /^Activity and canonical cell structure are available once this transaction is committed and indexed\.$/
     );
     // C2: not in a block yet, so its stone is dashed; its cells are not drawn, so no seam seal.
@@ -1268,9 +1279,12 @@ describe('Transaction board, R2b-a fields', () => {
       ],
     });
     render(<TransactionDetailPage />);
-    expect(await screen.findByTestId('tx-summary')).toHaveTextContent(
-      // R9 (re-pinned): the payer is `ckb1…` and its last 8 characters
-      `It ran .bit Time Index State and .bit Time Info. ${row('cjk9lz')} paid a 0.00064119 CKB fee.`
+    // re-pinned on purpose (lane D2, gate D0′'s "said once"): the fee sentence ("ckb1…xxxxxxxx
+    // paid a 0.00064119 CKB fee.") is gone; the payer and the fee stand in the status strip
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(/^It ran \.bit Time Index State and \.bit Time Info\.$/);
+    expect(screen.getByRole('group', { name: 'Transaction status' })).toHaveTextContent(
+      `0.00064119 CKB · paid by ${row('cjk9lz')}`
     );
   });
 });
