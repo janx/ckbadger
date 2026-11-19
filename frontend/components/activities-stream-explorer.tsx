@@ -1,5 +1,6 @@
 'use client';
 
+import { RetryAction } from '@/components/ui/retry-action';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { ActivityRow, ActivityTitle, activityTitleText } from '@/components/activity/activity-row';
 import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
@@ -627,13 +628,11 @@ export function ActivitiesStreamExplorer({
             {isFetchNextPageError && (
               <div className="border-row-rule border-t px-3 py-3 text-center">
                 <p className="text-text text-small">Could not read older activities</p>
-                <button
-                  type="button"
-                  className="text-jade hover:text-jade-dim text-small mt-1 cursor-pointer underline transition-colors"
-                  onClick={() => void fetchNextPage()}
-                >
-                  Retry
-                </button>
+                <RetryAction
+                  words="Retry"
+                  onRetry={() => void fetchNextPage()}
+                  className="text-small mt-1"
+                />
               </div>
             )}
           </div>
