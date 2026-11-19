@@ -51,7 +51,7 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  *   `1 y`, `90 days`: the RangeSelect's choices).
  *
  * Their limits: a toggle that says nothing of its state (no `aria-pressed`: a fold, an expander, an
- * action such as "Retry") is no choice to it, and a range whose words come from a variable
+ * action) is no choice to it, and a range whose words come from a variable
  * (`{label}`) is read as a choice only where it says it is pressed.
  *
  * What it reads since lane cd-fixes-controls (T SHOULD-2, NOTE-3):
@@ -68,7 +68,10 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * - the role `menuitemradio`, and an `<input type="radio">` or `type="checkbox"`, as a choice;
  * - the pager words `‹ prev`, `next ›`, `next page`, `show more`, `more ↓`, on a button or a link,
  *   on any element that is a control by its attributes, or on a component with a click or a link
- *   (`onClick`, `onGo`, `href`, `to`).
+ *   (`onClick`, `onGo`, `href`, `to`);
+ * - `retry`: an action after a failed read written by hand, its words `Retry`, `try again` or
+ *   `Reload` (a `↻` before them) on the same elements: the library's RetryAction draws it (the
+ *   chart reviewer's N11: four raw buttons, each with its own ink and underline).
  *
  * Its limits: a binder is known by its name, so a hook's binder of a name another function of a
  * file also bears is read as the binder; a spread it cannot follow on an element that is a control
@@ -83,7 +86,16 @@ import { sourceFiles, unwrap, type Binding } from '@/__tests__/utils/source-scan
  * pinned the same way: parts of a figure or a fold, not controls, and the shell's two comboboxes.
  */
 
-type Kind = 'select' | 'text-input' | 'tab' | 'pager' | 'choice' | 'clipboard' | 'range' | 'spread';
+type Kind =
+  | 'select'
+  | 'text-input'
+  | 'tab'
+  | 'pager'
+  | 'choice'
+  | 'clipboard'
+  | 'range'
+  | 'spread'
+  | 'retry';
 const KINDS: readonly Kind[] = [
   'select',
   'text-input',
@@ -93,6 +105,7 @@ const KINDS: readonly Kind[] = [
   'clipboard',
   'range',
   'spread',
+  'retry',
 ];
 
 /**
@@ -119,6 +132,7 @@ const CONTROL_FILES = [
   'components/ui/select.tsx',
   'components/ui/copy-button.tsx',
   'components/ui/help-mark.tsx',
+  'components/ui/retry-action.tsx',
 ] as const;
 
 /** What the scan leaves to the library: its controls, and the one copy path the copy button uses. */
@@ -129,6 +143,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-chain: block, transaction, cell, address, script pages ----
   // components/scripts/script-newest-cells.tsx left the list (lane p-assets): its "All N cells ↓"
   // is a way onward to a place on its page, the onward look's link
+  // ---- shell ----
+  'components/crash-page.tsx': {
+    lane: 'shell',
+    sites: { retry: 1 },
+    reason:
+      'the crash page’s “↻ try again”: it reloads the whole page after a crash, not a failed read; the shell draws it with RetryAction or keeps it as its own (it came to light when the reader learned a retry, lane cd-fixes-controls)',
+  },
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home: replaced at its merge ----
   // ---- d1-charts: the chart pages' range and scale are the library's RangeSelect and FilterChips (lane D1) ----
@@ -137,8 +158,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // rulings round 1: an id inside a link is the link, not a copy target) ----
 };
 
-/** The pinned total of TOLERATED's sites: the list may only shrink (1 → 0, lane p-assets). */
-const TOLERATED_TOTAL = 0;
+/**
+ * The pinned total of TOLERATED's sites: the list may only shrink (1 → 0, lane p-assets). 0 → 1
+ * when the reader learned a retry written by hand (lane cd-fixes-controls): the four Retry buttons
+ * are the library's RetryAction, and the crash page's "↻ try again" came to light, for the shell.
+ */
+const TOLERATED_TOTAL = 1;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference
@@ -289,6 +314,12 @@ const PAGER_WORDS: readonly RegExp[] = [
 
 /** The elements a pager's words make a hand-built pager: a button or a link. */
 const PAGER_TAGS = new Set(['button', 'a', 'Link', 'AppLink']);
+
+/**
+ * A retry's words (lane cd-fixes-controls, the chart reviewer's N11): an action after a failed
+ * read, the library's RetryAction (components/ui/retry-action.tsx).
+ */
+const RETRY_WORDS = /^(↻ ?)?(retry|try again|reload)$/i;
 
 /** The roles of a choice of one of several: the filter chips' radio group and radio, a menu's radio item. */
 const CHOICE_ROLES = new Set(['radiogroup', 'radio', 'menuitemradio']);
@@ -763,6 +794,12 @@ function scanControls(
       PAGER_TAGS.has(name) ||
       (tags.length > 0 && handled) ||
       (tags.length === 0 && PAGER_COMPONENT_PROPS.some((key) => attr(key)));
+    // a retry by hand (lane cd-fixes-controls): its words on the elements that draw a pager
+    if (children && pagerDrawer) {
+      const again = textsOf(children).find((t) => RETRY_WORDS.test(t));
+      if (again !== undefined)
+        sites.push({ kind: 'retry', line: lineOf(node), what: `<${shown}>${again}</${shown}>` });
+    }
     if (name === 'CursorPagination')
       sites.push({ kind: 'pager', line: lineOf(node), what: '<CursorPagination>' });
     else if (children && pagerDrawer) {
@@ -1207,6 +1244,30 @@ describe('the controls scan finds what it must, and only that', () => {
       'pager <button>more ↓</button>',
       'pager <span>older →</span>',
       'pager <TextButton>← newer</TextButton>',
+    ]);
+  });
+
+  // Lane cd-fixes-controls (the chart reviewer's N11): a retry written by hand, which the gate
+  // passed as an action ("Retry" on a raw button with its own ink and underline, in four places)
+  it('finds a retry written by hand: an action after a failed read, by its words', () => {
+    expect(
+      kinds(`
+        export const A = ({ again }: { again: () => void }) => (
+          <div>
+            <button type="button" onClick={again} className="text-jade ml-2 underline">Retry</button>
+            <button onClick={again}><span>↻ </span>try again</button>
+            <span role="button" onClick={again}>Reload</span>
+            <TextButton onClick={again}>retry</TextButton>
+            <p>Retrying automatically.</p>
+            <RetryAction words="Retry" onRetry={again} />
+          </div>
+        );`)
+    ).toEqual([
+      'retry <button>Retry</button>',
+      // each child's words are read trimmed: the glyph's span "↻ " and its words "try again"
+      'retry <button>↻try again</button>',
+      'retry <span>Reload</span>',
+      'retry <TextButton>retry</TextButton>',
     ]);
   });
 
