@@ -152,6 +152,24 @@ describe('the transaction page folds a long sheet (lane D3)', () => {
     );
   });
 
+  // Review of phases C and D, SHOULD 3 (lane P1): an anchor that is no out point keeps nothing, as
+  // a browser goes nowhere for an unknown anchor; a stray "%" (a pasted link) is no out point. The
+  // page read it through decodeURIComponent, which threw "URI malformed" and crashed the page.
+  it.each(['#100%', '#%E0%A4%A', `#${LONG_TX_PREV}-57%`, '#tx-dep-0'])(
+    'keeps no cell for an anchor that is no out point, %s, and stands',
+    async (hash) => {
+      mockHash = hash;
+      render(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <TransactionDetailPage />
+        </ErrorBoundary>
+      );
+      const { consumed } = await sheets();
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(consumed.tiles).toEqual(Array.from({ length: 6 }, (_, i) => `tx-io-input-${i}`));
+    }
+  );
+
   it('refuses a cells parameter it does not know, naming the transaction', async () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
