@@ -4,6 +4,7 @@
 // rest into one row that says what it folds, by counting, and opens in place. It never sums: the
 // sheets' totals stay the API's. A cell a page keeps (the URL's out point, a cell page's own cell)
 // and the continuity partner of a cell it draws are never folded.
+import { useState } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import {
@@ -164,6 +165,49 @@ describe('TxStructure: a sheet folds after six tiles (lane D3)', () => {
     expect(consumed.fold!.querySelector('[data-fold-words]')).toBeNull();
     fireEvent.click(fewer);
     expect(onToggle).toHaveBeenCalledWith('consumed', false);
+  });
+
+  // Review of phases C and D, SHOULD 5 (lane P1): the fold's control is one button, mounted in both
+  // states, so a keyboard reader who presses it keeps the focus; it was the Pager's part swapped
+  // for a second "fewer ↑" button, and the pressed one unmounted under the reader.
+  it('keeps the keyboard’s focus on the one fold control as the sheet opens and folds', () => {
+    function Page() {
+      const [open, setOpen] = useState(closed);
+      return (
+        <TxStructure
+          txHash={TX}
+          inputs={cells('in', 158, OWNER, 'ckb1…sqylvfrs')}
+          outputs={cells('out', 2)}
+          fee="1572400"
+          consumedCapacity="1220006100157240"
+          createdCapacity="1220006100000000"
+          continuityList={false}
+          fold={{
+            head: FOLD_HEAD,
+            keep: [],
+            open,
+            onToggle: (side, next) => setOpen((o) => ({ ...o, [side]: next })),
+          }}
+        />
+      );
+    }
+    const { container } = render(<Page />);
+    const control = within(sheet(container, 'consumed').fold!).getByRole('button', {
+      name: /^all 158\scells ↓$/,
+    });
+    const rows = sheet(container, 'consumed').el.querySelector<HTMLElement>('[data-sheet-rows]')!;
+    expect(control).toHaveAttribute('aria-expanded', 'false');
+    expect(control).toHaveAttribute('aria-controls', rows.id);
+    expect(rows.id).not.toBe('');
+    control.focus();
+    fireEvent.click(control);
+    expect(sheet(container, 'consumed').ids).toHaveLength(158);
+    expect(document.activeElement).toBe(control);
+    expect(control).toHaveTextContent(/^fewer ↑$/);
+    expect(control).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.click(control);
+    expect(sheet(container, 'consumed').ids).toHaveLength(6);
+    expect(document.activeElement).toBe(control);
   });
 
   it('never folds a cell the page keeps, nor the continuity partner of a cell it draws', () => {
