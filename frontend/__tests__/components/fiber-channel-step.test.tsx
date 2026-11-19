@@ -9,10 +9,15 @@ import { canvasLines, seamLines } from '@/__tests__/utils/tx-lines';
 
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 
+// The API's names, by pair (lane rd/api-lock-names, T N7): each of these locks by `type`; the
+// same code hash by another hash type is another script, which the lookup does not name.
 const NAMES: Record<string, string> = {
-  '0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1': 'Fiber Funding Lock',
-  '0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c': 'Fiber Commitment Lock',
-  '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8': 'Default Lock',
+  [scriptLookupKey('0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1', 'type')]:
+    'Fiber Funding Lock',
+  [scriptLookupKey('0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c', 'type')]:
+    'Fiber Commitment Lock',
+  [scriptLookupKey('0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8', 'type')]:
+    'Default Lock',
 };
 function serve() {
   server.use(
@@ -27,7 +32,7 @@ function serve() {
       )
     ),
     http.post('/api/:network/v1/scripts/lookup', async ({ request }) => {
-      // asked by pairs (lane rd/api-lock-names); the fixture's names are by code hash
+      // asked by pairs (lane rd/api-lock-names), answered by pair
       const { scripts } = (await request.json()) as {
         scripts: { codeHash: string; hashType: string }[];
       };
@@ -35,7 +40,7 @@ function serve() {
         Object.fromEntries(
           scripts.map(({ codeHash, hashType }) => [
             scriptLookupKey(codeHash, hashType),
-            { codeHash, name: NAMES[codeHash] ?? 'unknown' },
+            { codeHash, name: NAMES[scriptLookupKey(codeHash, hashType)] ?? 'Unknown' },
           ])
         )
       );
