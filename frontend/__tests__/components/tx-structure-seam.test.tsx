@@ -15,6 +15,7 @@ import { PAGE_SEAL_HEIGHTS, PAGE_SEAL_TILT } from '@/components/ui/page-seal';
 import type { CellTileData } from '@/components/ui/cell-tile';
 import { drawSeal, type SealState } from '@/lib/seal/stones';
 import { parsed, SEAL_INKS, sealHash, sealIdsAt } from '@/__tests__/utils/seals';
+import { textPx } from '@/lib/type-metrics';
 import { sealedTile } from '@/__tests__/utils/cell-tile-seal';
 
 const TX = sealHash('seam');
@@ -170,6 +171,78 @@ describe('TxStructure seam seal: one stone pulled apart by the seam (C11)', () =
     expect(consumed).toHaveClass('lg:pr-6');
     expect(created).toHaveClass('lg:pl-6');
     expect(SHEETS.lane + 24).toBeGreaterThan(SEAM_SEAL.reach);
+  });
+
+  // Lane D3 (PA-07, PA-21; the board's phone): below lg the sheets stack, created under consumed,
+  // and the page lost its seam seal there. The stone is pressed across the 4 px gap between them,
+  // at the right, pulled apart by the gap as it is by the seam from lg: its upper half on the
+  // consumed sheet up to that sheet's edge, its lower half on the created sheet from its edge;
+  // and it lies over nothing a reader can press.
+  it('presses the stone across the gap between the stacked sheets below lg, over no control', () => {
+    const { container } = structure({ id: ID });
+    const seam = container.querySelector<HTMLElement>('[data-seam]')!;
+    // below lg the seam is the 4 px row between the stacked sheets (the sheets keep no gap of
+    // their own); from lg the 4 px column between them
+    expect(seam).toHaveClass('h-1', 'lg:h-auto', 'self-stretch', 'relative');
+    expect(seam.className).not.toMatch(/(^|\s)hidden(\s|$)/);
+    const root = container.querySelector<HTMLElement>('[data-tx-canvas]')!;
+    expect(root.className).not.toMatch(/(^|\s)(lg:)?gap-y-/);
+    expect(2 * 2).toBe(SHEETS.seam);
+    const holder = seam.querySelector<HTMLElement>('[data-seam-seal="stacked"]')!;
+    expect(holder).not.toBeNull();
+    expect(holder).toHaveAttribute('aria-hidden', 'true');
+    expect(holder).toHaveClass(
+      'pointer-events-none',
+      'absolute',
+      'right-[18px]',
+      'top-1/2',
+      '-translate-y-1/2',
+      'z-20',
+      'flex',
+      'lg:hidden'
+    );
+    // the seam seal from lg is the other holder, hidden below it
+    const wide = seam.querySelector<HTMLElement>('[data-seam-seal="side-by-side"]')!;
+    expect(wide).toHaveClass('hidden', 'lg:flex');
+    const halves = Array.from(holder.firstElementChild!.children) as HTMLElement[];
+    expect(halves.map((h) => h.getAttribute('data-seam-half'))).toEqual(['consumed', 'created']);
+    for (const half of halves) {
+      const seal = half.querySelector<HTMLElement>('[data-seal]')!;
+      expect(seal.innerHTML).toBe(stone());
+    }
+    // the upper half clipped at the stone's middle and moved 2 px up, the lower one moved 2 px
+    // down: their cut edges are the sheets' edges, the 4 px of ground between
+    expect(halves[0]).toHaveClass('-translate-y-0.5', '[clip-path:inset(-8px_-8px_50%_-8px)]');
+    expect(halves[1]).toHaveClass(
+      'absolute',
+      'inset-0',
+      'translate-y-0.5',
+      '[clip-path:inset(50%_-8px_-8px_-8px)]'
+    );
+    // over no control: the tilted stone (71.13 px high) reaches half its height and the 2 px it is
+    // moved into each sheet: 37.6 px past the seam's middle, 35.6 past the sheet's edge
+    const a = (Math.abs(PAGE_SEAL_TILT) * Math.PI) / 180;
+    const tall = 104.5 * Math.sin(a) + 64 * Math.cos(a);
+    const across = 104.5 * Math.cos(a) + 64 * Math.sin(a);
+    const reach = tall / 2;
+    expect(reach).toBeCloseTo(35.57, 2);
+    // into the consumed sheet: its 1 px border and its bottom padding, 44 px below lg where the
+    // seal is pressed, hold it clear of the sheet's last row (its fold row and its control)
+    const consumed = container.querySelector<HTMLElement>(
+      '[data-sheet="consumed"] [data-sheet-content]'
+    )!;
+    expect(consumed).toHaveClass('max-lg:pb-11');
+    expect(1 + 44 - reach).toBeGreaterThan(8);
+    // into the created sheet: its 1 px border, 12 px of padding, the eyebrow's 18 px line and the
+    // first 4.6 px of the count's line, at the right, where the stone's left edge stands 18 px +
+    // the stone's width from the sheet's right edge; the head reads from the left below lg and the
+    // widest count, "13,568 cells" at the section step, ends far left of it on a 360 px phone
+    const sheetAt360 = 360 - 2 * 16;
+    const stoneLeft = sheetAt360 - 18 - across;
+    const countRight = 1 + 12 + textPx(`${(13568).toLocaleString('en-US')} cells`.length, 17);
+    expect(stoneLeft - countRight).toBeGreaterThan(60);
+    const created = container.querySelector<HTMLElement>('[data-sheet="created"]')!;
+    expect(created.querySelector('[data-sheet-head] a, [data-sheet-head] button')).toBeNull();
   });
 
   // The band's numbers, from the stone as drawn: 104.5 × 64 for every transaction, tilted −4°.
