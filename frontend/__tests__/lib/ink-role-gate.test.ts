@@ -345,9 +345,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/transactions/page.tsx': {
     family: 'lists',
-    sites: { link: 1, td: 2, prose: 11 },
-    reason:
-      'interpretation states in table cells; the activities link; the statistics, pool and list sentences and notes',
+    // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);
+    // the explanations of the lists (Value, the cellbases, the pool's proposals) read in the
+    // reading ink, one of them new; the yesterday line is the lede, in the reading ink
+    sites: { td: 2, prose: 9 },
+    reason: 'interpretation states in table cells; the statistics, pool and list notes and states',
   },
   'components/activities-stream-explorer.tsx': {
     family: 'lists',
@@ -394,11 +396,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 2 },
     reason: "a cell's tx link, the loading line and the caption in the quiet ink",
   },
-  'components/transaction/transaction-list-table.tsx': {
-    family: 'lists',
-    sites: { td: 3 },
-    reason: 'the cellbase reward, the cells count and the cycles state quiet in table cells',
-  },
+  // components/transaction/transaction-list-table.tsx left the list (lane P3: td 3 → 0; the
+  // cellbase reward left with the cellbases' own list, the cycles state with the cycles column, the
+  // cells count reads in the reading ink)
   // ---- topics ----
   'app/dao/depositors/page.tsx': {
     family: 'topics',

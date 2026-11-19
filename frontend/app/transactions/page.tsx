@@ -16,6 +16,8 @@ import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { activityHeadline } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
+  CELLBASE_LIST_MIN_PX,
+  CellbaseListTable,
   TRANSACTION_LIST_MIN_PX,
   TransactionListTable,
 } from '@/components/transaction/transaction-list-table';
@@ -35,9 +37,10 @@ import {
   activityFilterCounts,
   completedYesterdayActivities,
   completedYesterdayTransactions,
+  nonCellbaseCount,
   previousChainDay,
 } from '@/lib/activity-stats';
-import { formatCount } from '@/lib/format-count';
+import { countNoun, formatCount } from '@/lib/format-count';
 import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
@@ -53,24 +56,16 @@ import {
   shortChars,
 } from '@/lib/list-bounds';
 
-type TransactionKind =
-  | 'all'
-  | 'ckb'
-  | 'script'
-  | 'cellbase'
-  | 'dao'
-  | 'token'
-  | 'object'
-  | 'identity';
+type TransactionKind = 'all' | 'ckb' | 'script' | 'dao' | 'token' | 'object' | 'identity';
 /**
- * The list's kinds, in the board's order: the kind filter's values (lib/kind-filter.ts, the words
- * and marks the activities stream's filter shares, PA-15).
+ * The user transactions' kinds, in the board's order: the kind filter's values (lib/kind-filter.ts,
+ * the words and marks the activities stream's filter shares, PA-15). "all" is every user
+ * transaction; the cellbases are a tab of their own (lists lane P3, plan §7.6), not a kind.
  */
 const TRANSACTION_KINDS: readonly TransactionKind[] = [
   'all',
   'ckb',
   'script',
-  'cellbase',
   'dao',
   'token',
   'object',
@@ -214,7 +209,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
           tone: 'head',
           left: (
             <Link href={`/tx/${tx.hash}`} look="key">
-              <Hash hash={tx.hash} size="tight" className="text-body" />
+              <Hash hash={tx.hash} size="tight" variant="inherit" className="text-body" />
             </Link>
           ),
           // the dot, the status word and the wait stand in one row; "this device's clock is
@@ -261,9 +256,9 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
           {/* the stone stands centred on the key's line (RowSeal) */}
           <RowSeal id={poolSealId(tx)} state="unpressed" />
           <div className="min-w-0 space-y-1">
-            {/* Table-rows T5: the pool row's key, bright on the 20 px row line. */}
-            <Link href={`/tx/${tx.hash}`}>
-              <Hash hash={tx.hash} size="row" className="text-body text-text-bright leading-row" />
+            {/* Table-rows T5: the pool row's key, the key look's bright, on the 20 px row line. */}
+            <Link href={`/tx/${tx.hash}`} look="key">
+              <Hash hash={tx.hash} size="row" variant="inherit" className="text-body leading-row" />
             </Link>
             <PoolInterpretationNotice interpretation={tx.interpretation} />
           </div>
@@ -425,13 +420,18 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
 const POOL_MIN_PX = minimumWidth('Transactions in the pool', poolColumns(0));
 
 /**
- * The width both of the page's lists change form at (they are one page): the larger of their
- * sums, the pool's 1,212 px today (the committed list's own is 1,211). Each list's flexible column
- * keeps what that width is over its own sum: the pool's What it does none, the committed list's
- * What it did 1 px (its `formWidth`). Exported as the one source of that width (review rules-tests
- * NOTE-1): the tests draw both lists at it and compare it with the pool's budgets.
+ * The width the page's three lists change form at (they are one page): the largest of their sums,
+ * the pool's 1,212 px (the user transactions' own is 898, the cellbases' 804). Each list's flexible
+ * column keeps what that width is over its own sum: the pool's What it does none, the user
+ * transactions' What it did 314 px, the cellbases' Pays 408 (their `formWidth`). Exported as the
+ * one source of that width (review rules-tests NOTE-1): the tests draw the lists at it and compare
+ * it with the pool's budgets.
  */
-export const TRANSACTIONS_FORM_PX = Math.max(TRANSACTION_LIST_MIN_PX, POOL_MIN_PX);
+export const TRANSACTIONS_FORM_PX = Math.max(
+  TRANSACTION_LIST_MIN_PX,
+  CELLBASE_LIST_MIN_PX,
+  POOL_MIN_PX
+);
 
 /** The pool list's columns as drawn, changing form at TRANSACTIONS_FORM_PX. */
 export const POOL_COLUMNS = poolColumns(TRANSACTIONS_FORM_PX - POOL_MIN_PX);
@@ -443,11 +443,15 @@ export default function TransactionsPage() {
   const inRouter = useInRouterContext();
   const urlKind = kindFromUrl(searchParams.get('kind'));
   const [kind, setKind] = useState<TransactionKind>(urlKind);
+  // the pool's kind (no pool transaction is a cellbase: "all" asks for every one)
   const activityType = kind === 'all' ? undefined : kind;
-  const [tab, setTab] = useState<'committed' | 'pool'>('committed');
+  // the page opens on the user transactions (plan §7.6): every committed one but the cellbase
+  const committedType = kind === 'all' ? ('user' as const) : kind;
+  const [tab, setTab] = useState<'committed' | 'cellbases' | 'pool'>('committed');
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
   // a change of page size at md starts each walk again (lane c2-finish, 1d)
   const committedPage = useCursorPagination(limit);
+  const cellbasePage = useCursorPagination(limit);
   const poolPage = useCursorPagination(limit);
   const { reset: resetCommitted } = committedPage;
   const { reset: resetPool } = poolPage;
@@ -458,14 +462,18 @@ export default function TransactionsPage() {
     resetPool();
   }, [urlKind, resetCommitted, resetPool]);
   const committed = useQuery({
-    queryKey: ['transactions', committedPage.cursor, limit, activityType],
+    queryKey: ['transactions', committedPage.cursor, limit, committedType],
     queryFn: committedPage.ask((cursor: string | undefined) =>
-      api.getTransactions({
-        cursor,
-        limit,
-        ...(activityType ? { activityType } : {}),
-      })
+      api.getTransactions({ cursor, limit, activityType: committedType })
     ),
+    staleTime: 30_000,
+  });
+  const cellbases = useQuery({
+    queryKey: ['transactions', cellbasePage.cursor, limit, 'cellbase'],
+    queryFn: cellbasePage.ask((cursor: string | undefined) =>
+      api.getTransactions({ cursor, limit, activityType: 'cellbase' })
+    ),
+    enabled: tab === 'cellbases',
     staleTime: 30_000,
   });
   const pool = useQuery({
@@ -500,12 +508,14 @@ export default function TransactionsPage() {
   const yesterday = previousChainDay();
   const day = daily ? completedYesterdayActivities(daily) : undefined;
   const total = txStats ? completedYesterdayTransactions(txStats) : undefined;
+  // yesterday's user transactions: its committed transactions but its cellbases (the one path of
+  // that count, the activities page's too)
+  const users =
+    day && total !== undefined ? nonCellbaseCount(total, day.coinbaseCount, yesterday) : undefined;
   const counts: Partial<Record<TransactionKind, number>> = day
-    ? { ...activityFilterCounts(day, total), cellbase: day.coinbaseCount }
-    : total === undefined
-      ? {}
-      : { all: total };
-  const occurrences = day ? day.kindOccurrences + day.coinbaseCount : 0;
+    ? activityFilterCounts(day, users)
+    : {};
+  const occurrences = day ? day.kindOccurrences : 0;
   const largestPoolSize = poolHead.data?.data.length
     ? Math.max(...poolHead.data.data.map((row) => row.txSize))
     : undefined;
@@ -513,6 +523,8 @@ export default function TransactionsPage() {
     setKind(value);
     committedPage.reset();
     poolPage.reset();
+    // a kind is of the user transactions: chosen over the cellbases, it shows them
+    if (tab === 'cellbases') setTab('committed');
     // D11: the URL names the chosen kind (replace: a filter is not a step of history). Outside a
     // router there is no address to keep in step, and leaving the page would reload it.
     if (inRouter) {
@@ -522,12 +534,13 @@ export default function TransactionsPage() {
       router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
     }
   };
-  const active = tab === 'committed' ? committed : pool;
+  const active = tab === 'committed' ? committed : tab === 'cellbases' ? cellbases : pool;
   // where the committed list stands in time (lib/pagination.ts): its page, and the pages its
   // served total makes where it states one (a kind's list states none); nothing for one page
   const committedAt = committed.data
     ? timePageAt('committed transactions', committed.data, committedPage)
     : null;
+  const cellbasesAt = cellbases.data ? timePageAt('cellbases', cellbases.data, cellbasePage) : null;
   // the pool's pages, a list in time with no count of pages: the pool moves under the reader
   // (every five seconds), so its pages are no fixed number; its "more" is its next cursor
   const poolAt = pool.data
@@ -544,31 +557,25 @@ export default function TransactionsPage() {
           title="Transactions"
           kind="index"
           actions={
-            <Link href="/activities" className="text-text-dim hover:text-jade text-small">
-              Activities →
+            <Link href="/activities" look="onward" className="text-small">
+              Activities
             </Link>
           }
         >
           <section className="space-y-4" aria-label="Yesterday and the pool">
-            <p className="text-text text-body max-w-measure">
-              {total === undefined ? (
-                <span className="text-text-dim">Yesterday’s total unavailable</span>
+            {/* What the page says first (lists lane P3): yesterday's transactions, the users' and the
+                cellbases' apart, as the lists below are; what waits now is the pool's line. */}
+            <p data-role="lede" className="text-text text-body max-w-measure">
+              {users === undefined || !day ? (
+                'Yesterday’s counts are unavailable.'
               ) : (
                 <>
-                  <span className="text-text-bright">{total.toLocaleString('en-US')}</span>{' '}
-                  yesterday (UTC+8)
-                </>
-              )}
-              {poolHead.data && (
-                <>
-                  {' '}
-                  ·{' '}
+                  <span className="text-text-bright">{users.toLocaleString('en-US')}</span> user{' '}
+                  {countNoun(users, 'transaction')} and{' '}
                   <span className="text-text-bright">
-                    {(poolHead.data.totals.pending + poolHead.data.totals.proposed).toLocaleString(
-                      'en-US'
-                    )}
+                    {day.coinbaseCount.toLocaleString('en-US')}
                   </span>{' '}
-                  waiting in the pool now
+                  {countNoun(day.coinbaseCount, 'cellbase')} yesterday (UTC+8).
                 </>
               )}
             </p>
@@ -598,7 +605,8 @@ export default function TransactionsPage() {
             />
             {day && (
               <p className="text-text-dim text-meta max-w-measure">
-                Kind occurrences may overlap; DAO counts actions. “all” counts unique transactions.
+                Yesterday’s counts (UTC+8): kinds may overlap, DAO counts actions, “all” counts each
+                user transaction once.
               </p>
             )}
             {occurrences > 0 && (
@@ -638,6 +646,7 @@ export default function TransactionsPage() {
                   {poolHead.data.data.map((tx) => (
                     <Link
                       key={tx.hash}
+                      look="block"
                       href={`/tx/${tx.hash}`}
                       title={`${tx.hash}: ${formatCount(tx.txSize, 'byte')}, ${tx.feeRate} shannon/KB`}
                       data-pool-status={tx.status}
@@ -667,32 +676,31 @@ export default function TransactionsPage() {
                     </>
                   )}
                 </span>
-                {/* its way into the pool from sm; below it the views' tab row is that way */}
+                {/* its way into the pool from sm; below it the views' tab row is that way. It opens the
+                    pool's tab below, on this page: "↓", not a link's "→" (the placement lane's
+                    note) */}
                 <button
                   type="button"
                   onClick={() => setTab('pool')}
                   className="border-base-border text-text hover:text-text-bright hidden border px-3 py-2 sm:inline-flex"
                 >
-                  Open the pool →
+                  Open the pool ↓
                 </button>
               </div>
             ) : (
               <p className="text-text-dim text-small">Reading the pool…</p>
             )}
           </section>
-          {/* The list's command line (the controls board's tab row): committed or in the pool. */}
+          {/* The list's command line (the controls board's tab row): the user transactions, the
+              cellbases, or the pool. The pool's counts are its line above, each said once (no
+              tab sums pending and proposed in the page). */}
           <Tabs
             label="Transaction views"
             command
             tabs={[
-              { key: 'committed', label: 'committed' },
-              {
-                key: 'pool',
-                label: 'in the pool',
-                count: poolHead.data
-                  ? poolHead.data.totals.pending + poolHead.data.totals.proposed
-                  : undefined,
-              },
+              { key: 'committed', label: 'transactions' },
+              { key: 'cellbases', label: 'cellbases' },
+              { key: 'pool', label: 'in the pool' },
             ]}
             value={tab}
             onChange={setTab}
@@ -700,8 +708,10 @@ export default function TransactionsPage() {
             <div className="mt-3 space-y-8">
               <div className="text-text-dim text-small">
                 {tab === 'committed'
-                  ? 'newest first · cellbase rows set back'
-                  : 'not yet in a block · newest first'}
+                  ? 'committed · newest first'
+                  : tab === 'cellbases'
+                    ? 'one in every block · newest first'
+                    : 'not yet in a block · newest first'}
               </div>
               {isAwaited(active) && (
                 <p role="status" className="text-text-dim">
@@ -715,10 +725,10 @@ export default function TransactionsPage() {
               )}
               {tab === 'committed' && committed.data && (
                 <>
-                  {/* B5: how to read the Value column, above the table, not after its last row. */}
-                  <p className="text-text-dim text-small max-w-measure">
-                    Value is what the participants received. A cellbase row shows, grey, the reward
-                    it pays; no total counts it.
+                  {/* B5: how to read the Value column, above the table, not after its last row; an
+                      explanation, in the reading ink (R3) */}
+                  <p className="text-text text-small max-w-measure">
+                    Value is what the participants received.
                   </p>
                   <TransactionListTable
                     transactions={committed.data.data}
@@ -732,6 +742,22 @@ export default function TransactionsPage() {
                       order="newest first"
                       {...committedAt}
                     />
+                  )}
+                </>
+              )}
+              {tab === 'cellbases' && cellbases.data && (
+                <>
+                  {/* how to read the list, above it: an explanation, in the reading ink (R3) */}
+                  <p className="text-text text-small max-w-measure">
+                    A block’s cellbase pays the miner of an earlier block its reward; block 0’s
+                    issued the first CKB.
+                  </p>
+                  <CellbaseListTable
+                    transactions={cellbases.data.data}
+                    formWidth={TRANSACTIONS_FORM_PX}
+                  />
+                  {cellbasesAt && (
+                    <Pager mode="time" label="cellbases" order="newest first" {...cellbasesAt} />
                   )}
                 </>
               )}
@@ -770,8 +796,9 @@ export default function TransactionsPage() {
                       </dd>
                     </div>
                   </dl>
-                  {/* B5: how to read the list, above it, not after its last row. */}
-                  <p className="text-text-dim text-small max-w-measure">
+                  {/* B5: how to read the list, above it, not after its last row; an explanation,
+                      in the reading ink (R3) */}
+                  <p className="text-text text-small max-w-measure">
                     Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
                     after its proposal.
                   </p>

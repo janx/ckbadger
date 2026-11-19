@@ -94,12 +94,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'an ink on a child of its inline link: the “no readable amount of” span’s text-text-dim',
   },
-  'components/transaction/transaction-list-table.tsx': {
-    lane: 'p-chain',
-    sites: { look: 2, ink: 3 },
-    reason:
-      '2 without a look; inks by hand (hover:text-jade, hover:underline), and one on a child (the Hash’s text-text-bright)',
-  },
+  // 'components/transaction/transaction-list-table.tsx' left the list (lane P3: look 2, ink 3 →
+  // 0; the hash a key's look, the Hash inheriting its ink; the blocks inline)
   // ---- p-assets ----
   // app/scripts/[name]/client-page.tsx left the list (lane p-assets: each link states its look: look 10 → 0, ink 11 → 0, raw 1 → 0)
   // app/tokens/[typeHash]/client-page.tsx left the list (lane p-assets: each link states its look: look 4 → 0, ink 2 → 0, raw 1 → 0)
@@ -179,12 +175,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       '1 without a look; inks by hand (hover:underline, text-text-bright, hover:text-emphasis); 1 raw <a>',
   },
-  'app/transactions/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 3, ink: 2 },
-    reason:
-      '3 without a look; inks by hand (text-text-dim, hover:text-jade), and one on a child (the Hash’s text-text-bright)',
-  },
+  // 'app/transactions/page.tsx' left the list (lane P3: look 3, ink 2 → 0; the activities link
+  // a way onward, the pool's squares blocks, the pool's hash a key whose Hash inherits its ink)
   'components/activity-event-row.tsx': {
     lane: 'p-lists',
     sites: { look: 5, ink: 6 },
@@ -318,8 +310,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // transactions page's and the transaction list's Hash in the bright ink, the activity row's span
 // in the quiet ink, the status line's epoch link's five label, value and position spans, the
 // deep-fork alert's words on its filled button, a transaction cell's "no readable amount of", the
-// block page's step arrow mark; TabLinks' name span is NAMED)
-const TOLERATED_TOTAL = 121;
+// block page's step arrow mark; TabLinks' name span is NAMED) → 111 (lane P3: the transactions
+// page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
+const TOLERATED_TOTAL = 111;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
