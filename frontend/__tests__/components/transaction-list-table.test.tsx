@@ -1056,7 +1056,12 @@ describe('TransactionListTable phone row (board L2)', () => {
     vi.restoreAllMocks();
   });
 
-  it('is three lines at 358 px: who and when, what it did in full, then value · fee and the figures', () => {
+  // Re-pinned on purpose (lane D4, the phone-rows board): line 3 names each figure ("value 0 CKB",
+  // was a bare "0 CKB", PA-09) and keeps the cells, the value and the fee; bytes and cycles left
+  // the phone row (was "3 → 3 cells · 903 B · 1,704,957 cycles" at the right); a cellbase says
+  // what it pays on line 2 and its reward on line 3, and no fee (was "Cellbase pays #20,829,764 ·
+  // reward 559.61 CKB" over "0 → 1 cell · 360 B · fee 0 CKB" and "0 cycles").
+  it('is three lines at 358 px: who and when, what it did in full, then cells · value · fee', () => {
     atContainerWidth(358);
     render(<TransactionListTable transactions={[scriptCall, cellbase]} />);
     expect(screen.queryByRole('table')).toBeNull();
@@ -1080,35 +1085,37 @@ describe('TransactionListTable phone row (board L2)', () => {
       {
         key: 'figures',
         tone: 'quiet',
-        // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB").
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "0.00030000"; below
-        // 1 CKB, exact)
-        left: '0 CKB · fee 0.0003 CKB',
-        right: '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
+        // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB"); readability R5: the
+        // summary form, below 1 CKB exact
+        left: '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB',
+        right: null,
       },
     ]);
     expect(call.querySelector('[data-line="what"] .truncate')).toBeNull();
-    // A cellbase pays its reward on the what line; its fee is a quiet figure.
     expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0xc89d…2cd7', expect.stringMatching(/^#20,829,775 · /)],
-      // a phone row's summary form (readability R5, re-pinned on purpose: was "559.61739927")
-      ['what', 'Cellbase pays #20,829,764 · reward 559.61 CKB', null],
-      ['figures', '0 → 1\u00a0cell · 360 B · fee 0 CKB', '0 cycles'],
+      ['what', 'Cellbase · pays #20,829,764', null],
+      // a phone row's summary form (readability R5: was "559.61739927")
+      ['figures', '0 → 1\u00a0cell · reward 559.61 CKB', null],
     ]);
     expect(base.closest('[role="listitem"]')).toHaveClass('quiet');
   });
 
-  it('is two lines at 608 px: value and fee join what it did, the figures take the right edge', () => {
+  // Re-pinned on purpose (lane D4): the card at 608 px is the phone row's three parts, its quiet
+  // line keeping the bytes and the cycles where no table stands yet (it was two lines, value and
+  // fee after what it did and the figures at the right edge).
+  it('is three lines at 608 px: the quiet line keeps the bytes and the cycles', () => {
     atContainerWidth(608);
     render(<TransactionListTable transactions={[scriptCall]} />);
     const [call] = screen.getAllByTestId('transaction-row-mobile');
     expect(phoneLines(call).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · /)],
+      ['what', 'Script call · .bit Time Index State · .bit Time Info', null],
       [
-        'what',
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "0.00030000")
-        'Script call · .bit Time Index State · .bit Time Info · 0 CKB · fee 0.0003 CKB',
-        '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
+        'figures',
+        // a phone row's summary form (readability R5: was "0.00030000")
+        '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB · 903 B · 1,704,957 cycles',
+        null,
       ],
     ]);
   });

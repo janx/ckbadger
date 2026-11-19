@@ -59,6 +59,13 @@ export const WIDEST_BLOCK_NUMBER = formatBlockNumber(nines(8));
 export const WIDEST_AGE = '10y 364d ago';
 
 /**
+ * Of record: the widest age a live list writes for a time under a year, in its one unit
+ * (`formatAgeOneUnit`): `364d ago`. A phone row whose first line holds this and not WIDEST_AGE says
+ * what an older age does there (lane D4). Source: the age's form, lib/format-age.ts.
+ */
+export const WIDEST_AGE_UNDER_A_YEAR = '364d ago';
+
+/**
  * Consensus: the protocol's limit of a block's serialized size, `max_block_bytes`, 597,000 bytes
  * (mainnet and testnet `get_consensus`).
  */

@@ -124,6 +124,41 @@ export function PhoneRow({
   );
 }
 
+/**
+ * A labelled figure of a phone row (the phone-rows board: never a value without its name): the label
+ * in the quiet ink, the value in its line's ink, one item a line never breaks inside. `after` puts
+ * the label after the value, as a count reads ("11 holders").
+ */
+export function Labelled({
+  label,
+  children,
+  after = false,
+}: {
+  label: string;
+  children: ReactNode;
+  after?: boolean;
+}) {
+  // the label's role is named, so a test reads every figure of a row against its name
+  const name = (
+    <span data-role="figure-label" className="text-text-dim">
+      {label}
+    </span>
+  );
+  return (
+    <span className="whitespace-nowrap">
+      {after ? (
+        <>
+          {children} {name}
+        </>
+      ) : (
+        <>
+          {name} {children}
+        </>
+      )}
+    </span>
+  );
+}
+
 /** Set inside a separated list: a list inside another would break the hanging geometry. */
 const InDotted = createContext(false);
 

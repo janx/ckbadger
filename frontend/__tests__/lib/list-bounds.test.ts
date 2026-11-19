@@ -149,6 +149,7 @@ describe('every bound says its kind (reviews fb-tests 6, fb-logic 6)', () => {
       'of record': [
         'WIDEST_BLOCK_NUMBER',
         'WIDEST_AGE',
+        'WIDEST_AGE_UNDER_A_YEAR',
         'GENESIS_BLOCK_BYTES',
         'LARGEST_TX_BYTES',
         'TX_CYCLES_BOUND',
