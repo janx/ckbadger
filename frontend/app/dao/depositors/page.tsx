@@ -24,8 +24,8 @@ import { ShortId } from '@/components/ui/short-id';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import {
-  WIDEST_COUNT,
   WIDEST_DAO_DEPOSIT,
+  WIDEST_DAO_DEPOSITS,
   WIDEST_DAO_DEPOSIT_SUMMARY,
   WIDEST_RANK,
   shortChars,
@@ -123,12 +123,13 @@ const columns = (rows: readonly DaoDepositorRow[]): ListColumn<DaoDepositorRow>[
   {
     key: 'deposits',
     label: 'Deposits',
-    // Its head, "Deposits" (8 characters at 12 px, 57.6), wider than a count of four digits,
-    // "9,999" (39), and the gap. It was 80.
+    // Its head, "Deposits" (8 characters at 12 px, 57.6), wider than a depositor's deposits
+    // under a million, "999,999" (7 at 13 px, 54.6: WIDEST_DAO_DEPOSITS, its own bound; it read
+    // WIDEST_COUNT, a block's transactions), and the gap. It was 80.
     minWidth: columnPx(
       Math.max(
         textPx('Deposits'.length, fontPx('meta')),
-        textPx(WIDEST_COUNT.length, fontPx('small'))
+        textPx(WIDEST_DAO_DEPOSITS.length, fontPx('small'))
       ) + CELL_GAP_PX
     ),
     numeric: true,

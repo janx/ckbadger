@@ -222,6 +222,14 @@ export const WIDEST_HELD_ITEMS = nines(6).toLocaleString('en-US');
 export const WIDEST_RANK = nines(6).toLocaleString('en-US');
 
 /**
+ * Of record: one depositor's live DAO cells, under a million, `999,999`: no depositor holds more
+ * than the whole DAO, 22,284 live DAO cells on 2026-11-19 (20,617 deposits and 1,667 withdrawal
+ * requests), the most of one depositor among the hundred largest 13. Source: mainnet's
+ * /dao/statistics and /dao/depositors.
+ */
+export const WIDEST_DAO_DEPOSITS = nines(6).toLocaleString('en-US');
+
+/**
  * Of record: CKB held in a list row's cells, whole from 1,000 up (the summary form): under 100
  * billion CKB, the whole issuance (about 45 billion today, 1.3 billion more a year) for decades.
  * Source: the issuance.
