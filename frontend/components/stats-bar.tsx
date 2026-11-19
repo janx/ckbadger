@@ -150,7 +150,7 @@ function Vitals({ stats, form }: { stats: NetworkStats; form: PhoneForm }) {
   return (
     <>
       <Vital
-        label="Block"
+        label="Tip"
         href={`/blocks/${stats.latestBlock}`}
         layout="block"
         value={formatBlockNumber(stats.latestBlock)}
@@ -327,7 +327,7 @@ function VitalsError({ message, form }: { message: string; form: PhoneForm }) {
 
 /** The labels in the places their figures will take. */
 const LOADING_SLOTS = [
-  { label: 'Block', cls: (form: PhoneForm) => cn(INLINE, PLACE[form].block) },
+  { label: 'Tip', cls: (form: PhoneForm) => cn(INLINE, PLACE[form].block) },
   { label: 'Epoch', cls: (form: PhoneForm) => cn(INLINE, PLACE[form].line) },
   { label: 'Block time', cls: (form: PhoneForm) => cn(STACKED, PLACE[form].homeOnly) },
   { label: 'Hash rate', cls: (form: PhoneForm) => cn(STACKED, PLACE[form].homeOnly) },

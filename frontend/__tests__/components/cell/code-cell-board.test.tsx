@@ -220,17 +220,21 @@ describe('CodeCellBoard', () => {
 // variable that a class reads, so the global `a:hover` jade still wins over it (an inline colour
 // would not); no bracket-hex class is left.
 describe('CodeCellBoard inks (V11)', () => {
-  it('draws its cell and script links in the lock blue through --ink, never an inline colour', () => {
+  // Re-pinned on purpose, and renamed (lane P1, the link-look gate's p-chain entries: a link states
+  // its look and writes no ink by hand; it was 'draws its cell and script links in the lock blue
+  // through --ink, never an inline colour'): each is a link inside its line, the line's ink and the
+  // inline look's underline, no colour of its own.
+  it('draws its cell and script links as links inside their lines, no ink of their own', () => {
     render(<CodeCellBoard cell={cell} />);
     const links = [
       screen.getByRole('link', { name: `type · ${reference}` }),
       screen.getByRole('link', { name: `${txB}:1` }),
     ];
     for (const link of links) {
-      expect(link).toHaveClass('text-[color:var(--ink)]');
-      expect(link.style.getPropertyValue('--ink')).toBe('var(--c-cell-lock)');
+      expect(link).toHaveClass('underline', 'decoration-[color:var(--c-ink-muted)]');
+      expect(link.className).not.toMatch(/text-\[color|text-(text|jade|aqua)/);
+      expect(link.style.getPropertyValue('--ink')).toBe('');
       expect(link.style.color).toBe('');
-      expect(link.className).not.toMatch(/\[#/);
     }
     expect(screen.getByTestId('code-built-with')).toHaveClass('border-text-ghost');
   });

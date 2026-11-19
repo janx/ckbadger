@@ -490,6 +490,18 @@ export function color(key: PaletteKey): string {
   return `var(--c-${key})`;
 }
 
+/**
+ * The palette key a `color(key)` names, its inverse: for a figure handed its tones as colours (the
+ * cell microscope's ELF regions) that must read an ink off one (`inkOnFill`). Any other string is
+ * refused, never guessed.
+ */
+export function paletteKeyOf(css: string): PaletteKey {
+  const key = /^var\(--c-([a-z0-9-]+)\)$/.exec(css)?.[1];
+  if (key === undefined || !(key in dark))
+    throw new Error(`palette: ${JSON.stringify(css)} names no palette key`);
+  return key as PaletteKey;
+}
+
 /** A colour key at `alpha` (0–1). */
 export function alpha(key: PaletteKey, a: number): string {
   if (!(a >= 0 && a <= 1)) throw new Error(`palette: alpha ${a} of ${key} is not in 0..1`);

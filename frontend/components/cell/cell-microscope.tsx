@@ -3,9 +3,11 @@ import { memo, useMemo, useState, type ReactNode } from 'react';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { PromptHeading } from '@/components/ui/prompt-heading';
+import { useDetailTier } from '@/components/ui/detail-layout';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
-import { fade } from '@/lib/palette';
+import { color, fade, inkOnFill, paletteKeyOf } from '@/lib/palette';
+import { useTheme } from '@/hooks/useTheme';
 import type { Cell } from '@/lib/api';
 import {
   BOARD_INKS,
@@ -54,6 +56,8 @@ const targetKey = (t: Target) => (t.kind === 'group' ? `group:${t.group}` : `${t
 
 /** A part's tone (a theme reference) at `alpha`, as a background. */
 const rgba = fade;
+/** An ELF region's fill: its tone at this alpha, its words in the ink that reads on it. */
+const REGION_FILL = 0.35;
 
 const alignDown = (n: number) => n - (n % ROW);
 const alignUp = (n: number, max: number) => Math.min(max, n % ROW ? n + ROW - (n % ROW) : n);
@@ -238,6 +242,7 @@ export interface CellMicroscopeProps {
  * bytes, until a second tap on it or Escape (R6).
  */
 export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps) {
+  const { resolved: theme } = useTheme();
   const molecule = cell.cellOutputMolecule;
   const outBytes = useMemo(
     () => (molecule ? hexBytes(molecule.bytes, 'CellOutput') : []),
@@ -551,22 +556,33 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     parts: parts.filter((p) => p.group === group && p.indexed),
   })).filter((g) => g.parts.length);
   const hidden = dataParts.filter((p) => !p.indexed).length;
+  const tier = useDetailTier();
+  const bytesArgs = (
+    <>
+      {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
+      <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span>
+    </>
+  );
+  const roomNote = `room for ${room.toLocaleString('en-US')} more`;
 
   return (
     <section aria-label="Cell byte microscope" className="min-w-0 space-y-3.5">
       <style>{highlightCss(litIds)}</style>
       {/* Rubbing × Song print, phase 5 (A7): the bytes, run on the sum the map draws (its
           occupied total in the data ink); the room left is the right-prompt note. */}
-      <PromptHeading
-        command="Bytes"
-        args={
-          <>
-            {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
-            <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span>
-          </>
-        }
-        note={`room for ${room.toLocaleString('en-US')} more`}
-      />
+      {/* In the developer tier (the cell page's, lane D3) the heading is a tier-2 section's, as
+          every section there is (lane P1, lane D3's note: it was a tier-1 command line there) */}
+      {tier === 2 ? (
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="text-body text-text font-medium">
+            Bytes
+            <span className="text-text-dim ml-2.5 font-normal">{bytesArgs}</span>
+          </h2>
+          <span className="text-text-dim text-meta">{roomNote}</span>
+        </div>
+      ) : (
+        <PromptHeading command="Bytes" args={bytesArgs} note={roomNote} />
+      )}
       {/* A flex row: basis 0, growth by bytes, each part's minimum holds its label. */}
       <div
         role="group"
@@ -618,12 +634,15 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
                 {...handlers({ kind: 'region', id: region.id })}
-                className="text-meta text-base-bg flex items-center justify-center overflow-hidden"
+                className="text-meta flex items-center justify-center overflow-hidden"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
                   minWidth: 3,
-                  backgroundColor: rgba(region.tone, 0.35),
+                  backgroundColor: rgba(region.tone, REGION_FILL),
                   borderTop: `2px solid ${region.tone}`,
+                  // its words in the ink its fill reads in, the fill-ink rule's (lane P1: the page
+                  // ground's ink stood on it at 2.04 : 1 by night)
+                  color: color(inkOnFill(theme, paletteKeyOf(region.tone), REGION_FILL).ink),
                 }}
               >
                 {(region.end - region.start) * 5 > dataBytes.length

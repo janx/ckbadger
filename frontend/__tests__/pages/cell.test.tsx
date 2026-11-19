@@ -305,7 +305,7 @@ describe('CellDetailPage', () => {
     expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('live evidence');
     expect(screen.getByRole('region', { name: 'Cell facts' })).toHaveTextContent(
-      'Occupied61 B · 39.00000000 CKB free'
+      'Occupied61 B · 39 CKB free'
     );
   });
   it('shows exact spent input, timestamps and chain lifetime', async () => {
@@ -327,11 +327,12 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('2024-01-02 08:00:00 UTC+8')).toBeInTheDocument();
     expect(screen.queryByText(/2024-01-02T00:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
-    // Lane U (U3): a spent cell's origin line names the block that spent it.
-    // R9 (re-pinned): the origin line is prose, at the row size (it was the head size)
-    expect(screen.getByTestId('cell-origin')).toHaveTextContent(
-      /^output 0 of transaction 0xabababab…ababab · spent at #125$/
-    );
+    // Lane U (U3): a spent cell's origin line named the block that spent it. Re-pinned on purpose
+    // (lane P1, said once): the origin line is gone; the Spent fact names that block
+    expect(screen.queryByTestId('cell-origin')).toBeNull();
+    expect(
+      within(screen.getByRole('region', { name: 'Cell facts' })).getByRole('link', { name: '#125' })
+    ).toHaveAttribute('href', '/mainnet/blocks/125');
     // Lane L: the "only name" sentence links both blocks of the cell's life.
     const onlyName = screen.getByText(/The out point is the cell's only name/);
     expect(onlyName).toHaveTextContent('existed from block #123 until block #125 spent it.');

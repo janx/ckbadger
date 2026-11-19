@@ -140,6 +140,32 @@ describe('BlockPosition', () => {
       'md:block'
     );
   });
+  // Lane P1 (the plan: "Position in the chain" gets the legend it lacks; review chain-a block-busy:
+  // the diagram's ◆ ▪ ● and its gold arcs have no key): one key line of the marks the diagram
+  // draws, each a swatch of the same mark beside its words, in the order a tile reads.
+  it('keys the marks the diagram draws in one legend (P1)', () => {
+    render(
+      <BlockPosition
+        block={block}
+        transactions={[incoming]}
+        proposals={[outgoing]}
+        page={1}
+        hasMore={false}
+      />
+    );
+    const legend = screen.getByRole('list', { name: 'Chain position legend' });
+    const items = within(legend).getAllByRole('listitem');
+    expect(items.map((item) => item.textContent)).toEqual([
+      'the cellbase',
+      'a transaction, by its size',
+      'a proposal',
+      'proposed, then committed',
+      'an included uncle',
+    ]);
+    // each item leads with its mark, drawn, not typed
+    for (const item of items) expect(item.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  });
+
   it('rejects contradictory proposal distance rather than drawing a repaired relationship', () => {
     expect(() =>
       render(

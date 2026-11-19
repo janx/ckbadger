@@ -524,21 +524,28 @@ describe('the header as drawn is the header its budget counts', () => {
 // 945.2 → 936.8 at 1024, 581.8 → 573.4 at 768; below md 325.2 → 316.8 at 640, 289.2 → 280.8 at
 // 390 and 360, 308.2 → 299.8 with the live dot; at 320 one line of 280.8 where the ninth digit
 // had put the epoch under the block. No line wraps differently from md.
+// Re-pinned on purpose (lane P1, the plan's P1 paragraph: the strip's first label reads "Tip", so a
+// block page's own epoch and difficulty are not read against it): "Tip" is two glyphs fewer than
+// "Block", at the label's step, 7.8 px each from md and 7.2 below it: 1,215.4 → 1,199.8 at 1280,
+// 936.8 → 921.2 at 1024, at 768 the first line 573.4 → 557.8, so the block time joins it (726.6 of
+// 736, the second line 449.2); below md 316.8 → 302.4 at 640, 280.8 → 266.4 at 390, 360 and 320,
+// 299.8 → 285.4 with the live dot. No other line wraps differently.
 describe('the vitals strip per width, at its widest real content', () => {
   it('is one row at 1280 and wraps as before at 1024 and 768, each item whole', () => {
     expect(stripFromMd(1280)).toEqual([
       {
         items: ['block', 'epoch', 'block time', 'hash rate', 'difficulty', 'live'],
-        px: 1215.4,
+        px: 1199.8,
       },
     ]);
     expect(stripFromMd(1024)).toEqual([
-      { items: ['block', 'epoch', 'block time', 'hash rate'], px: 936.8 },
+      { items: ['block', 'epoch', 'block time', 'hash rate'], px: 921.2 },
       { items: ['difficulty', 'live'], px: 254.6 },
     ]);
+    // at 768 the block time now joins the first line (557.8 + 24 + 144.8 = 726.6 of 736)
     expect(stripFromMd(768)).toEqual([
-      { items: ['block', 'epoch'], px: 573.4 },
-      { items: ['block time', 'hash rate', 'difficulty', 'live'], px: 618 },
+      { items: ['block', 'epoch', 'block time'], px: 726.6 },
+      { items: ['hash rate', 'difficulty', 'live'], px: 449.2 },
     ]);
     for (const w of [1280, 1024, 768])
       for (const line of stripFromMd(w)) expect(line.px).toBeLessThanOrEqual(contentPx(w));
@@ -548,15 +555,15 @@ describe('the vitals strip per width, at its widest real content', () => {
     // the widest height the lists budget; the live mark is drawn only where the page holds the
     // realtime socket, which only the home page does, and the home page has its three lines
     const widest = { block: WIDEST.block, live: false };
-    expect(stripLine(640, widest)).toEqual([{ items: ['block', 'epoch'], px: 316.8 }]);
-    expect(stripLine(390, widest)).toEqual([{ items: ['block', 'epoch'], px: 280.8 }]);
-    expect(stripLine(360, widest)).toEqual([{ items: ['block', 'epoch'], px: 280.8 }]);
-    // with the live dot it would be 299.8 of 328 at 360
+    expect(stripLine(640, widest)).toEqual([{ items: ['block', 'epoch'], px: 302.4 }]);
+    expect(stripLine(390, widest)).toEqual([{ items: ['block', 'epoch'], px: 266.4 }]);
+    expect(stripLine(360, widest)).toEqual([{ items: ['block', 'epoch'], px: 266.4 }]);
+    // with the live dot it would be 285.4 of 328 at 360
     expect(stripLine(360, { ...widest, live: true })).toEqual([
-      { items: ['block', 'epoch', 'live'], px: 299.8 },
+      { items: ['block', 'epoch', 'live'], px: 285.4 },
     ]);
-    // at 320 the line holds both (280.8 of 288)
-    expect(stripLine(320, widest)).toEqual([{ items: ['block', 'epoch'], px: 280.8 }]);
+    // at 320 the line holds both (266.4 of 288)
+    expect(stripLine(320, widest)).toEqual([{ items: ['block', 'epoch'], px: 266.4 }]);
   });
 
   it('holds the home page’s three lines below md; the epoch takes two from 360 down', () => {
@@ -692,7 +699,7 @@ describe('the classes and sources the budget reads', () => {
 
   it('reads the strip’s labels at meta (small from md), values at body, their gaps', async () => {
     render(<VitalsStrip />);
-    const block = await screen.findByRole('link', { name: /^Block #/ });
+    const block = await screen.findByRole('link', { name: /^Tip #/ });
     const [label, value] = Array.from(block.children);
     expect(label).toHaveClass('text-meta', 'md:text-small');
     expect(value).toHaveClass('text-body');
