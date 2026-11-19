@@ -70,13 +70,18 @@ describe('formatSignedCount', () => {
 });
 
 describe('formatPercent', () => {
-  it('rounds an exact share half-up', () => {
+  // re-pinned for lane exactness, part B2: one percentage, cut by the one cut function, never rounded (it was half
+  // up: 2 of 3 read 66.67, 5 of 8 at none 63)
+  it('cuts an exact share, never rounds it', () => {
     const total = BigInt('4986878303450933125');
+    // 0.30306…% and 16.30051…%: the same digits cut as rounded
     expect(formatPercent(BigInt('15113424500000000'), total)).toBe('0.30');
     expect(formatPercent(BigInt('812889561643799700'), total)).toBe('16.30');
     expect(formatPercent(BigInt(1), BigInt(8), 1)).toBe('12.5');
     expect(formatPercent(BigInt(1), BigInt(3), 0)).toBe('33');
-    expect(formatPercent(BigInt(2), BigInt(3), 2)).toBe('66.67');
+    // 66.666…% is 66.66 (half up 66.67); 62.5 % at none is 62 (half up 63)
+    expect(formatPercent(BigInt(2), BigInt(3), 2)).toBe('66.66');
+    expect(formatPercent(BigInt(5), BigInt(8), 0)).toBe('62');
   });
 
   it('rejects a non-positive total or a negative part', () => {
