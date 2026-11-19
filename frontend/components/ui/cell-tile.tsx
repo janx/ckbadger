@@ -157,13 +157,13 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
         {/* the bar, its bytes and the state at 12 px on one line (lane D3): the bar's track 40 px
-            (it was 56), so a cell under 1,000,000 bytes, "occupied 999,999 B" (129.6 px), holds
-            40 + 6 + 129.6 + 6 + 57.6 ('consumed') = 239.2 px in the narrowest tile the pages draw,
-            248 px of text at 360 where the sheets stack; and the widest of record
-            (LARGEST_TX_BYTES, genesis's cellbase, "occupied 1,236,271 B", 144 px), 253.6 px, from
-            390 up (278 px stacked; 383 at 1024 and 511 at 1280 on the transaction page, 335 at
-            1024 on the cell page beside its onward bridge). Where it does not fit, the state wraps
-            under the bar at the right */}
+            (it was 56). The widest state is an output's "spent later" (lane P1; 79.2 px), so a
+            cell under 1,000,000 bytes, "occupied 999,999 B" (129.6 px), holds 40 + 6 + 129.6 + 6 +
+            79.2 = 260.8 px from 390 up (278 px stacked; 383 at 1024 and 511 at 1280 on the
+            transaction page, 335 at 1024 on the cell page beside its onward bridge), and so does
+            the widest of record (LARGEST_TX_BYTES, genesis's cellbase, "occupied 1,236,271 B",
+            144 px), 275.2 px; at 360, 248 px of text where the sheets stack, a cell under 10,000
+            bytes (246.4 px). Where it does not fit, the state wraps under the bar at the right */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)

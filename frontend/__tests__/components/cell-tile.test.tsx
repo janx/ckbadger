@@ -6,7 +6,7 @@ import { occupiedBytesText } from '@/lib/occupied';
 import { describe, it, expect, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { CellTile } from '@/components/ui/cell-tile';
-import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
+import { cellTiles, OUTPUT_SPENT } from '@/components/transaction/transaction-cell-tiles';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import type { TransactionDetail, TransactionScriptGroup } from '@/lib/api';
 import { drawSeal } from '@/lib/seal/stones';
@@ -635,7 +635,9 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
   // seam side from lg, where the sheets stand side by side; below lg they stack, the padding on
   // both sides), the tile's 12 px padding and 1 px border on each side, the mark column and its
   // 10 px gap. The line is the bar's track, 6 px, the bytes, 6 px and the state, at the meta step.
-  it('holds the bar, its bytes and the state on one line in every tile the pages draw, for every cell under 1,000,000 bytes', () => {
+  // Renamed on purpose (lane P1; it was "… for every cell under 1,000,000 bytes"): with an output's
+  // "spent later" the claim at 360 is a cell under 10,000 bytes, as the body states.
+  it('holds the bar, its bytes and the state on one line in every tile the pages draw, for every cell under 1,000,000 bytes from 390 and under 10,000 at 360', () => {
     render(
       <CellTile
         cell={sealedTile({
@@ -678,15 +680,28 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
       'stacked 360': 248,
     });
     const meta = fontPx('meta');
+    // Re-pinned on purpose (lane P1, the plan's P1 paragraph): the widest state a tile writes is an
+    // output's "spent later" (11 glyphs, 79.2 px; it was "consumed", 8 glyphs, 57.6 px), so at 360,
+    // where the text column is 248 px, the line holds a cell under 10,000 bytes (40 + 6 + 115.2 +
+    // 6 + 79.2 = 246.4 px) and a cell of 10,000 bytes or more that a later transaction spent drops
+    // its state under the bar, at the right (the row's designed wrap, never an overflow); from 390
+    // up nothing changes.
+    expect(OUTPUT_SPENT).toBe('spent later');
     const lineOf = (bytes: number) =>
       track +
       6 +
       textPx(`occupied ${occupiedBytesText(BigInt(bytes), 'a cell')}`.length, meta) +
       6 +
-      textPx('consumed'.length, meta);
-    // every cell under 1,000,000 bytes (the widest state, "consumed") holds its line in every tile
-    for (const [where, width] of Object.entries(columns))
+      textPx(OUTPUT_SPENT.length, meta);
+    expect(lineOf(9_999)).toBeCloseTo(246.4, 10);
+    expect(lineOf(10_000)).toBeCloseTo(253.6, 10);
+    // every cell under 1,000,000 bytes holds its line in every tile from 390 up, the widest state
+    // ("spent later") beside it
+    for (const [where, width] of Object.entries(columns).filter(([w]) => !w.endsWith('360')))
       expect(lineOf(999_999), where).toBeLessThanOrEqual(width);
+    // at 360, every cell under 10,000 bytes; the next byte count, 10,000, wraps its state
+    expect(lineOf(9_999)).toBeLessThanOrEqual(columns['stacked 360']);
+    expect(lineOf(10_000)).toBeGreaterThan(columns['stacked 360']);
     // the widest of record (genesis's cellbase, LARGEST_TX_BYTES) holds it from 390 up
     for (const [where, width] of Object.entries(columns).filter(([w]) => !w.endsWith('360')))
       expect(lineOf(LARGEST_TX_BYTES), where).toBeLessThanOrEqual(width);
