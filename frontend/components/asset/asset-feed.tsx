@@ -459,7 +459,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       ),
       render: (r) =>
         r.cycles === null ? (
-          <span className="text-text-dim">
+          <span className="text-text">
             {r.cyclesStatus === 'failed' ? 'Calculation failed' : 'Not computed'}
           </span>
         ) : (
@@ -617,7 +617,7 @@ function RecentAssetFeed({
                 )}
               />
             ) : (
-              <p className="text-text-dim text-small py-6">No activities.</p>
+              <p className="text-text text-small py-6">No activities.</p>
             )}
           </>
         ) : (
@@ -792,7 +792,7 @@ function FullAssetFeed({
                   )}
                 />
               ) : (
-                <p className="text-text-dim text-small py-6">No activities.</p>
+                <p className="text-text text-small py-6">No activities.</p>
               )
             ) : (
               <AssetTransactions

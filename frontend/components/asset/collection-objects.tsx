@@ -429,11 +429,9 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               <NotGenesNote traits={outside} />
             </>
           ) : ruled ? null : genetics.eligibleItems === 0 ? (
-            <p className="text-text-dim text-small">
-              This collection has no DOB objects to compare.
-            </p>
+            <p className="text-text text-small">This collection has no DOB objects to compare.</p>
           ) : (
-            <p role="status" className="text-text-dim text-small max-w-measure">
+            <p role="status" className="text-text text-small max-w-measure">
               Allele frequencies and filtering await complete decoding:{' '}
               {genetics.decodedItems.toLocaleString('en-US')} of{' '}
               {genetics.eligibleItems.toLocaleString('en-US')} decoded.
@@ -721,11 +719,9 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                               </span>
                             )}
                             {!shared.minted && (
-                              <span
-                                role="cell"
-                                className="text-text-dim tabular-nums md:text-right"
-                              >
-                                {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
+                              <span role="cell" className="tabular-nums md:text-right">
+                                {/* R-2: the minting block's chain time, on the site's UTC+8 clock;
+                                    a cell's value, its link in the link's look (ink roles) */}
                                 <AppLink
                                   look="inline"
                                   href={`/blocks/${item.createdAtBlock}`}
@@ -742,7 +738,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                   )
                 }
               />
-              {items.length === 0 && <p className="text-text-dim">No objects.</p>}
+              {items.length === 0 && <p className="text-text">No objects.</p>}
               {objectsAt && (
                 // the controls board's pager: a list in time, newest first
                 <div className="pt-2">

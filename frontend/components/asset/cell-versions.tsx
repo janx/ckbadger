@@ -152,11 +152,13 @@ export function CellVersions({
           {/* Lane P2's third round (item 2): the owner where it changes from the version before
               (the first version names it); a version under the same owner says nothing of it */}
           {(i === 0 || history.data[i - 1].ownerAddress !== v.ownerAddress) && (
-            <div className="text-text-dim mt-2 flex flex-wrap gap-x-3 gap-y-1">
+            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+              {/* the label quiet, the address a link in its look at the row's 13 px (ink and
+                  size roles: it was a 12 px link in the label's quiet ink) */}
               <span>
-                {lockAddressLabel}{' '}
+                <span className="text-text-dim">{lockAddressLabel}</span>{' '}
                 <AppLink look="inline" href={`/address/${v.ownerAddress}`}>
-                  <Hash hash={v.ownerAddress} kind="address" size="row" className="text-meta" />
+                  <Hash hash={v.ownerAddress} kind="address" size="row" className="text-small" />
                 </AppLink>
               </span>
               {/* the owner's lock by the one decision (lane B4; lane p-assets: it wrote the
@@ -264,7 +266,7 @@ export function CellVersions({
           )
         )}
         {history.data.length === 0 && (
-          <p className="text-text-dim text-small">No canonical cell versions.</p>
+          <p className="text-text text-small">No canonical cell versions.</p>
         )}
       </div>
     </DetailSection>

@@ -420,7 +420,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           capacity partition and a note of occupied and free said the metric again) */}
       <div role="region" aria-label="History" className="space-y-4">
         {!object.isLive && (
-          <p className="text-text-dim text-meta" title="melted, in Spore’s words">
+          <p className="text-text text-small max-w-measure" title="melted, in Spore’s words">
             No live cell holds capacity for this burned object.
           </p>
         )}

@@ -227,7 +227,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           {item.composition ? (
             <CompositionLine tier={item.composition.tier} lede />
           ) : (
-            <p className="text-text-dim text-meta">Composition unavailable.</p>
+            <p className="text-text text-small">Composition unavailable.</p>
           )}
         </div>
       }

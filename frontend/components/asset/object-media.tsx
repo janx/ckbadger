@@ -177,7 +177,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
           className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 border p-6 text-center"
         >
           <ClassMark kind="objects" size={24} />
-          <p className="text-text-dim text-meta max-w-measure">
+          <p className="text-text text-small max-w-measure">
             {profile?.tier === 'decode_pending'
               ? 'Decode pending · awaiting DOB execution.'
               : 'No renderable media available.'}

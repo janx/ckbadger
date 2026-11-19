@@ -213,7 +213,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   : {activityHeadline(latest.data.data[0])}.
                 </p>
               ) : (
-                <p className="text-text-dim">No recorded token movements.</p>
+                <p className="text-text">No recorded token movements.</p>
               )}
             </>
           ) : (
@@ -221,7 +221,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           )}
           {t.metadata?.conflict && t.metadata.chain && (
             // F2 objects (IV-26): a relabelled token says what the chain calls it.
-            <p className="text-text-dim max-w-measure">
+            <p className="text-text max-w-measure">
               Its name comes from a CKBadger label. On chain it calls itself{' '}
               <span className="text-text-bright">
                 {t.metadata.chain.symbol ?? t.metadata.chain.name ?? 'nothing'}
@@ -230,7 +230,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             </p>
           )}
           {t.sameSymbolTokens === undefined ? (
-            <p className="text-text-dim">Same-symbol comparison unavailable.</p>
+            <p className="text-text">Same-symbol comparison unavailable.</p>
           ) : (
             t.sameSymbolTokens.length > 0 && (
               <p className="border-token/40 max-w-measure border-l-2 pl-3">

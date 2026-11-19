@@ -200,8 +200,7 @@ export function ObjectGeneticsView({
     onActive?.(gene);
   };
   const { dnaHex, cachedVmTraits: cached } = evidence;
-  if (dnaHex === null)
-    return <p className="text-text-dim text-meta">This object has no DOB DNA.</p>;
+  if (dnaHex === null) return <p className="text-text text-small">This object has no DOB DNA.</p>;
   const layout = sequencingGenes(evidence, subject, description);
   const geneNames = [...new Set(layout.genes.map((g) => g.name))];
   const words = dnaWords(evidence, subject, tier, description);
@@ -232,7 +231,7 @@ export function ObjectGeneticsView({
           args={`${formatCount(layout.bytes.length, 'byte')} · ${formatCount(geneNames.length, 'gene')}${evidence.number !== null ? ` · number ${evidence.number}` : ''}`}
         />
         {cached.status === 'pending' && (
-          <p role="status" className="text-text-dim">
+          <p role="status" className="text-text">
             Decode pending · awaiting DOB execution.
           </p>
         )}
@@ -297,7 +296,7 @@ export function ObjectGeneticsView({
                 )}
               </>
             ) : ruled ? null : (
-              <p role="status" className="text-text-dim text-meta">
+              <p role="status" className="text-text text-small">
                 Collection variant frequencies await complete decoding.
               </p>
             )}
@@ -703,7 +702,7 @@ function PatternReading({
   const tier = useDetailTier();
   const readout = usePinnedReadout<string>();
   if (pattern.status === 'notDob')
-    return <p className="text-text-dim text-meta">No DOB blueprint in this collection.</p>;
+    return <p className="text-text text-small">No DOB blueprint in this collection.</p>;
   const genes: PatternGene[] = patternGenes(pattern, description, 'How an object is read');
   const declared = genes.some((g) => g.source === 'description');
   const dna = sample?.dnaHex ? hexBytes(sample.dnaHex, `${sample.id} DNA`) : null;
@@ -873,7 +872,7 @@ function PatternReading({
                 <span className="hidden sm:inline">→</span>
               </span>
             )}
-            <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5 [overflow-wrap:anywhere]">
+            <div className="text-small text-text border-base-border-subtle min-w-0 flex-1 border px-3 py-2.5 [overflow-wrap:anywhere]">
               <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
               {tile.body ??
                 steps.map((step) => (
@@ -1024,17 +1023,23 @@ function PatternReading({
           aria-label="One object, read this way"
           className="border-base-border-subtle min-w-0 border px-3.5 py-3"
         >
-          <div className="text-meta text-text-dim flex flex-wrap items-baseline justify-between gap-x-3">
+          {/* the label and the byte count quiet at 12 px, the object a link in its look at 13 px
+              (ink and size roles: the link stood in the label's quiet ink, at 12 px) */}
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3">
             <span>
-              one object, read this way ·{' '}
-              <AppLink look="inline" href={sample.href} title={sample.id}>
+              <span className="text-meta text-text-dim">one object, read this way ·</span>{' '}
+              <AppLink look="inline" href={sample.href} title={sample.id} className="text-small">
                 <ShortId value={sample.id} kind="hash" size="row" />
               </AppLink>
             </span>
-            {dna && <span>{unitText(formatCount(dna.length, 'byte'))}</span>}
+            {dna && (
+              <span className="text-meta text-text-dim">
+                {unitText(formatCount(dna.length, 'byte'))}
+              </span>
+            )}
           </div>
           {sample.decodeStatus !== 'decoded' ? (
-            <p className="text-text-dim text-small max-w-measure mt-2">
+            <p className="text-text text-small max-w-measure mt-2">
               Not decoded yet ({sample.decodeStatus}); its values appear once the decoder has run.
             </p>
           ) : (

@@ -207,7 +207,7 @@ function ProtocolEvidenceView({
         </span>
       </div>
       {bytes.length === 0 ? (
-        <p className="text-text-dim text-small">Empty cell data (0 bytes).</p>
+        <p className="text-text text-small">Empty cell data (0 bytes).</p>
       ) : (
         <HexMap
           layout="scale"

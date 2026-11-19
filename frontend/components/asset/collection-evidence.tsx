@@ -107,7 +107,7 @@ export function ClusterCellEvidence({
  */
 export function StoredDescription({ description }: { description: string | null }) {
   if (description === null)
-    return <p className="text-text-dim text-meta">No description bytes recorded.</p>;
+    return <p className="text-text text-small">No description bytes recorded.</p>;
   let pretty: string | null = null;
   try {
     pretty = JSON.stringify(JSON.parse(description), null, 2);

@@ -669,7 +669,7 @@ export function AssetHistory({
       ) : (
         <>
           <p
-            className="text-text-dim text-small py-6"
+            className="text-text text-small py-6"
             title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
           >
             No complete daily history in this range.

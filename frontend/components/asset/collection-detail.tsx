@@ -532,7 +532,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 {description}
               </blockquote>
             ) : (
-              <p className="text-text-dim text-small">No collection description recorded.</p>
+              <p className="text-text text-small">No collection description recorded.</p>
             )}
           </div>
         )
@@ -572,7 +572,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 showTotal={false}
               />
             ) : (
-              <p className="text-text-dim text-meta">Collection capacity is not recorded.</p>
+              <p className="text-text text-small">Collection capacity is not recorded.</p>
             )}
           </div>
         )
@@ -653,7 +653,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                     <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
                   ) : (
                     protocol.data && (
-                      <p className="text-text-dim text-meta">
+                      <p className="text-text text-small">
                         No current cell carries this cluster type.
                       </p>
                     )
