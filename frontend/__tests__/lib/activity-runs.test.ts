@@ -59,14 +59,18 @@ describe('runKey: what makes two rows the same', () => {
     );
   });
 
-  it('compares what was done as the API names it: the protocol actions, counted, not their figures', () => {
+  // re-pinned on purpose (the third read's Lb NOTE 1, by the rule of the final round's item 1):
+  // the actions are a SET of (protocol, action): one deposit against three in one batch did one
+  // thing; it was a multiset, which made them two runs
+  it('compares what was done as the API names it: the set of protocol actions, not their count or figures', () => {
     const deposit = { protocol: 'dao', action: 'deposit' };
     const request = { protocol: 'dao', action: 'withdraw_request' };
     const dao = (actions: RunSubject['protocolActions']) =>
       runKey(oracle({ title: 'DAO Deposit', typeCalls: [], protocolActions: actions }));
     expect(dao([deposit, request])).not.toBe(dao([deposit]));
-    expect(dao([deposit, deposit])).not.toBe(dao([deposit]));
+    expect(dao([deposit, deposit, deposit])).toBe(dao([deposit]));
     expect(dao([request, deposit])).toBe(dao([deposit, request]));
+    expect(dao([deposit, request, deposit])).toBe(dao([request, deposit]));
   });
 
   // re-pinned on purpose (the lead's final round, item 1): the code is a SET. The owner's rule is
