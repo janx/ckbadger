@@ -28,7 +28,6 @@ import {
   resourceScale,
 } from '@/components/blocks/block-visual';
 import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
-import { cn } from '@/lib/utils';
 import { Pager } from '@/components/ui/pager';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE, timePageAt } from '@/lib/pagination';
