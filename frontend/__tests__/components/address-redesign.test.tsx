@@ -410,24 +410,27 @@ describe('Address v3 components', () => {
     // minimum; Capacity 196 → 201 and Occupied 178 → 170 with their units at 12 px; Created at
     // 100 → 86), so the table is 965 px (renamed: it said "keeps the table at 992 px").
     // Re-pinned on purpose (readability R6): the cell's row stone 30 → 18 px, its footprint 38 →
-    // 26, Cell 226 → 214, the table 953 px (renamed: "965 px").
-    it('budgets the seal in the Cell column and keeps the table at 953 px', () => {
+    // 26, Cell 226 → 214, the table 953 px (renamed: "965 px"). Re-pinned on purpose (lane P1
+    // follow-up, item 6; renamed, it was "… 953 px"): Occupied is bounded by the largest
+    // transaction's 1,236,271 bytes, 170 → 186, the table 969 px.
+    it('budgets the seal in the Cell column and keeps the table at 969 px', () => {
       render(<AddressLiveCells rows={cells} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const widths = Array.from(table.querySelectorAll('col')).map(
         (c) => (c as HTMLElement).style.minWidth
       );
-      expect(widths).toEqual(['214px', '282px', '201px', '170px', '86px']);
+      expect(widths).toEqual(['214px', '282px', '201px', '186px', '86px']);
       // the out point and its gap, 187.6 rounded up with the stone's footprint
       expect(214 - 188).toBe(ROW_SEAL.cell.footprint);
-      expect(Number.parseFloat(table.style.minWidth)).toBe(953);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(969);
     });
 
     // Re-pinned on purpose (readability F3-e): the table changes form at its 965 px (was 992).
-    // Re-pinned on purpose (readability R6): at its 953 px (was 965).
+    // Re-pinned on purpose (readability R6): at its 953 px (was 965). Re-pinned on purpose (lane
+    // P1 follow-up, item 6): at its 969 px (was 953).
     it.each([
-      [953, 'table'],
-      [952, 'rows'],
+      [969, 'table'],
+      [968, 'rows'],
     ])('changes form where it did: at %i px it is %s', (width, form) => {
       atContainerWidth(width);
       const { container } = render(<AddressLiveCells rows={cells} />);
@@ -449,7 +452,11 @@ describe('Address v3 components', () => {
 
     // re-pinned on purpose (readability R6): the cell's stone footprint 38 → 26, Cell 226 → 214,
     // 953 px (renamed: "965 px")
-    it('the live cells: 953 px, a table from it', () => {
+    // Re-pinned on purpose (lane P1 follow-up, item 6; renamed, it was "… 953 px …"): a cell's
+    // occupied capacity is bounded by the largest transaction, genesis's 1,236,271 bytes
+    // (LARGEST_TX_BYTES, of record), not a block's 597,000: genesis's cells are past the limit
+    // (its secp256k1 data cell alone is 1,048,576 bytes). Occupied 170 → 186, 953 → 969
+    it('the live cells: 969 px, a table from it', () => {
       const budgets = [
         // the stone and its gap, the out point at the row size with a four-digit index
         ceil(ROW_SEAL.cell.footprint + at('0xdce40476…3993e1:9999', 13) + 16),
@@ -457,52 +464,57 @@ describe('Address v3 components', () => {
         ceil(16 + 8 + at('Other scripts', 13) + 8 + at('0x00000000…000000', 13) + 16),
         // under a billion CKB on one line with its unit at 12 px
         ceil(at('999,999,999.99999999', 13) + at(' CKB', 12) + 16),
-        // a cell is at most a block's 597,000 bytes
-        ceil(at('597,000.00000000', 13) + at(' CKB', 12) + 16),
+        // a cell is at most the largest transaction's 1,236,271 bytes, genesis's
+        ceil(at('1,236,271.00000000', 13) + at(' CKB', 12) + 16),
         // "#99,999,999", the last column
         ceil(at('#99,999,999', 13)),
       ];
-      expect(budgets).toEqual([214, 282, 201, 170, 86]);
-      expect(budgets.reduce((s, w) => s + w, 0)).toBe(953);
+      expect(budgets).toEqual([214, 282, 201, 186, 86]);
+      expect(budgets.reduce((s, w) => s + w, 0)).toBe(969);
       render(<AddressLiveCells rows={addressProducerCells.data} />);
       const table = screen.getByRole('table', { name: 'Live cells' });
       const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
       expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
       expect(cols[1].width).toBe('auto');
-      expect(Number.parseFloat(table.style.minWidth)).toBe(953);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(969);
     });
 
-    it('the transactions: 1,006 px, a table from it', () => {
+    // Re-pinned on purpose (lane P1 follow-up, item 6; renamed, it was "… 1,006 px …"): a
+    // transaction's inputs are written grouped (c6f9ea20) and number at most 13,568 (MAX_TX_INPUTS,
+    // consensus: a 44-byte input, floor(597,000 / 44)), not four digits: "13,568 → 9,999", Cells
+    // 110 → 126, 1,006 → 1,022. A size is bounded by the largest transaction, 1,236,271 bytes
+    // (LARGEST_TX_BYTES), narrower than "Unavailable"
+    it('the transactions: 1,022 px, a table from it', () => {
       const budgets = [
         // the hash at the row size
         ceil(at('0x00000000…000000', 13) + 16),
         // a pool transaction's wait on one line, wider than "#99,999,999", a date or its badge
         ceil(at('in pool for 99d', 13) + 16),
-        // four digits a side (the inputs as written, the outputs grouped)
-        ceil(at('9999 → 9,999', 13) + 16),
+        // the inputs at most 13,568, the outputs at most 9,999, both grouped
+        ceil(at('13,568 → 9,999', 13) + 16),
         // a change under a billion CKB with its sign
         ceil(at('+999,999,999.99999999', 13) + 16),
         // a fee under 100 CKB
         ceil(at('99.99999999', 13) + 16),
-        // "Unavailable", wider than a size of "597,000"
+        // "Unavailable", wider than a size of "1,236,271"
         ceil(at('Unavailable', 13) + 16),
         // the cycle limit, "3,500,000,000"
         ceil(at('3,500,000,000', 13) + 16),
         // a script: its 12 px mark, its 6 px gap and 12 characters of its name; the last column
         ceil(12 + 6 + at('x'.repeat(12), 13)),
       ];
-      expect(budgets).toEqual([149, 133, 110, 180, 102, 102, 118, 112]);
-      expect(budgets.reduce((s, w) => s + w, 0)).toBe(1006);
+      expect(budgets).toEqual([149, 133, 126, 180, 102, 102, 118, 112]);
+      expect(budgets.reduce((s, w) => s + w, 0)).toBe(1022);
       render(<AddressTransactions rows={addressTransactionsFixture} />);
       const table = screen.getByRole('table');
       const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
       expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(budgets);
       expect(cols[7].width).toBe('auto');
-      expect(Number.parseFloat(table.style.minWidth)).toBe(1006);
+      expect(Number.parseFloat(table.style.minWidth)).toBe(1022);
       for (const [width, form] of [
         [1232, 'table'],
-        [1006, 'table'],
-        [1005, 'rows'],
+        [1022, 'table'],
+        [1021, 'rows'],
         [608, 'rows'],
         [358, 'rows'],
       ] as const) {
