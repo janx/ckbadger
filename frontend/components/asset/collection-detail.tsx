@@ -573,6 +573,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             scope="This collection"
             collection
             plain={false}
+            // PB-28: a collection page's feed takes one form, the cluster's and the class's — the
+            // last five and the ways onward to the whole feed, opened in place
+            recent={{ rows: 5, transactions: data.activitiesCount }}
             loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
             loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
             context={{

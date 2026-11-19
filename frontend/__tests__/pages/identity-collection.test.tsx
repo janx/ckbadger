@@ -34,7 +34,13 @@ it('shows identities, exact created/live counts, capacity history and parallel r
   expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
     'of 2 minted / created'
   );
-  expect(screen.getByRole('tab', { name: 'activities' })).toHaveAttribute('aria-selected', 'true');
+  // re-pinned (PB-28, lane c2-assets): the two layers open from the last five, in place (the page
+  // opened on them)
+  fireEvent.click(await screen.findByRole('button', { name: 'All activity →' }));
+  expect(await screen.findByRole('tab', { name: 'activities' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
   fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
   expect(api.getCollectionTransactions).toHaveBeenCalledWith(
@@ -129,7 +135,10 @@ it('keeps holders visible independently of the records tabs and handles empty pa
   vi.mocked(api.getIdentityCollectionHolders).mockResolvedValue(emptyPage());
   render(<Page collectionId="dotbit" />);
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('tab', { name: 'transactions' }));
+  // re-pinned (PB-28, lane c2-assets): the layers open from the last five, then the tabs switch
+  // them (the page opened on the tabs)
+  fireEvent.click(await screen.findByRole('button', { name: 'All activity →' }));
+  fireEvent.click(await screen.findByRole('tab', { name: 'transactions' }));
   expect(screen.getByText('No current holders.')).toBeInTheDocument();
 });
 it('uses whole-scope current DID documents for PDS grouping with explicit overlapping endpoints', async () => {
