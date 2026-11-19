@@ -114,11 +114,15 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(metrics).toHaveTextContent('In use since2023-10-07');
     // Lane L: the first deployment's transaction is named, and links to its page.
     const DEPLOY = '0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5';
+    const DEPLOY_INDEX = 0; // the first deployment's code cell, output 0 of its transaction
     // U-09 (re-pinned): a hero tile's note at the tight size (it was 8…6); R9 (re-pinned): the
     // tile is under 200 px only on a phone, and from sm the note takes the row size
     expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0f6f0…f433f5');
     const deployer = within(metrics).getByRole('link', { name: '0xbac0f6f0…f433f5' });
-    expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}`);
+    // re-pinned on purpose (lane P2's third round, item 16): the deploying transaction opens at
+    // the code cell it created (`transactionAtCellHref`), which its page then never folds away (it
+    // linked the transaction bare)
+    expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}#${DEPLOY}-${DEPLOY_INDEX}`);
     expect(deployer).toHaveAttribute('title', DEPLOY);
   });
 

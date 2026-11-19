@@ -179,6 +179,7 @@ describe('HolderTimeline · an unspendable holder', () => {
         requireFirstN: null,
         keyHashes: [],
         verifiedByTx: null,
+        verifiedCodeCell: null,
         witnessState: 'not_applicable' as const,
         owners: [],
       },

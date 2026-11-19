@@ -33,6 +33,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "unavailable"
       },
       "event": "deployed",
@@ -60,6 +61,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "unavailable"
       },
       "event": "deployed",
@@ -91,6 +93,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "not_applicable"
       },
       "hashType": "data1",
@@ -121,6 +124,7 @@
         "requireFirstN": null,
         "threshold": null,
         "verifiedByTx": null,
+        "verifiedCodeCell": null,
         "witnessState": "unavailable"
       },
       "hashType": "type",
@@ -157,6 +161,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "unavailable"
           },
           "dataReferenceHash": "0x3131313131313131313131313131313131313131313131313131313131313131",
@@ -189,6 +194,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "not_applicable"
           },
           "hashType": "data1",
@@ -221,6 +227,7 @@
             "requireFirstN": null,
             "threshold": null,
             "verifiedByTx": null,
+            "verifiedCodeCell": null,
             "witnessState": "unavailable"
           },
           "hashType": "type",

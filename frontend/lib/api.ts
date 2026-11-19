@@ -3075,6 +3075,8 @@ export interface ScriptCustodyApi {
   requireFirstN: number | null;
   keyHashes: string[];
   verifiedByTx: string | null;
+  /** The code cell `verifiedByTx` spent, `0x<tx hash>:<output index>` (with it, or neither). */
+  verifiedCodeCell: string | null;
   witnessState: 'never_signed' | 'verified' | 'unavailable' | 'not_applicable';
   owners: {
     lockCodeHash: string;

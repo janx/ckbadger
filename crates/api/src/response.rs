@@ -369,6 +369,9 @@ pub struct ScriptCustodyResponse {
     pub key_hashes: Vec<String>,
     /// The exact spending transaction that supplied verified multisig config.
     pub verified_by_tx: Option<String>,
+    /// The code cell that transaction spent, `0x<tx hash>:<output index>` (with
+    /// `verified_by_tx`, or neither): a page opens the transaction at it.
+    pub verified_code_cell: Option<String>,
     /// `never_signed`, `verified`, `unavailable`, or `not_applicable`.
     pub witness_state: String,
     /// Every distinct current custodian for a type reference. Multiple
