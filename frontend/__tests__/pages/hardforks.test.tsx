@@ -723,6 +723,114 @@ describe('HardforksPage', () => {
       );
   });
 
+  // Readability plan 2026-11-18, P4: "Keys that a tier-1 figure needs come up from tier 2 as a
+  // legend, not as prose, so the tier-1 prose budget holds (the hardforks dots …)". The review: the
+  // dots were anonymous until hovered; what a dot is stood in the plot's name as a hint
+  // ("dots: when each known script version was deployed"), and a phone's dashed line had no words.
+  // The key is drawn, a glyph and its words a row, in the hero over the timeline; the plot's name
+  // is its title alone.
+  it('keys the lanes’ dots and dashes in tier 1 as a drawn legend, not a sentence (P4)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    const { container } = render(<HardforksPage />);
+    const timeline = await screen.findByRole('img', { name: /which VM each hash type runs/i });
+    const hero = screen.getByRole('region', { name: 'Hardforks' });
+    const key = within(hero).getByRole('list', { name: 'Key to the lanes' });
+    // over the figure, in the hero
+    expect(key.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const rows = within(key).getAllByRole('listitem');
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'a known script version, when its code was first deployed',
+      'not valid yet: before the edition that brought the hash type',
+    ]);
+    // each row's glyph is the figure's own mark, drawn as the lanes draw it
+    const dot = rows[0].querySelector('svg circle')!;
+    const lane = timeline.querySelector('[data-lane-dot] circle');
+    expect(dot).toHaveAttribute('r', '3');
+    expect(dot).toHaveAttribute('fill', 'var(--c-base-bg)');
+    expect(dot).toHaveAttribute('stroke', 'var(--c-text-bright)');
+    expect(rows[0].querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
+    if (lane) expect(lane.getAttribute('stroke')).toBe(dot.getAttribute('stroke'));
+    const dash = rows[1].querySelector('svg line')!;
+    const laneDash = timeline.querySelector('line[stroke-dasharray]')!;
+    expect(dash.getAttribute('stroke-dasharray')).toBe(laneDash.getAttribute('stroke-dasharray'));
+    expect(dash.getAttribute('stroke')).toBe(laneDash.getAttribute('stroke'));
+    // the words read in the reading ink at the small step, a key's words (not a 12 px note)
+    expect(key).toHaveClass('text-small', 'text-text');
+    // the plot's name is its title: the hint it carried is the key's first row now
+    expect(timeline.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      /^which VM runs a script, over time$/
+    );
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
+  });
+
+  // The review (topics.json, hardforks, H): "no registered reference · 174", a heap of hollow dots
+  // stacked by the strip's columns, was the heaviest mass on the screen and the least explained;
+  // its height said only how many fell in one column. The versions registered under no hash type
+  // are one count under the lanes, in a sentence; their strip opens on demand, in the short list's
+  // own form ("all N versions ↓").
+  it('folds the versions under no hash type into one count under the lanes (P4)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue({
+      ...producerDeployments,
+      ...ends,
+      hashTypeLanes: lanes,
+      scriptDeployments: producerDeployments.scriptDeployments.map((d) => ({
+        ...d,
+        hashTypes: [],
+      })),
+    });
+    render(<HardforksPage />);
+    const timeline = await screen.findByRole('img', { name: /which VM each hash type runs/i });
+    const count = screen.getByText(
+      // the count and its noun one unit (no-break spaces; the matcher reads them as spaces)
+      '2 known script versions are registered under no hash type, so no lane holds them.'
+    );
+    expect(count.tagName).toBe('P');
+    expect(count).toHaveClass('text-text');
+    expect(timeline.compareDocumentPosition(count) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // no heap of dots until it is asked for
+    expect(
+      screen.queryByRole('list', { name: 'Known script-version deployment timeline' })
+    ).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^all 2\s+versions ↓$/ }));
+    const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
+    expect(within(strip).getAllByRole('button')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /^all 2/ })).toBeNull();
+  });
+
+  // The review (topics.json, hardforks, M): the consensus section's nine "RFC 0029 / epoch 0"
+  // cells had no titles, and its subtitle was an RPC method name ("get_consensus ·
+  // hardfork_features · mainnet"). Each RFC row carries its one line (the page's one wording of
+  // it, the edition cards'); RFC 0038 keeps its number alone: its title was never verified. The
+  // RPC that answers them is said in tier 2.
+  it('titles every consensus RFC in one line and says the RPC in tier 2 (P4)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    const { container } = render(<HardforksPage />);
+    const consensus = await screen.findByRole('region', { name: 'consensus' });
+    const rows = [...consensus.querySelectorAll('dl > div')];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      'RFC 0028epoch 5,414relative since by timestamp uses the median time of past blocks',
+      'RFC 0029epoch 0several dep cells with identical code may match one reference',
+      'RFC 0030epoch 0since: the epoch index must be less than the epoch length',
+      'RFC 0031epoch 0blocks gain a variable-length extension field',
+      'RFC 0032epoch 5,414scripts choose their VM version through hash_type',
+      'RFC 0036epoch 0header deps no longer need to be mature',
+      'RFC 0038epoch 0',
+      'RFC 0048epoch 12,293the block header version field is no longer reserved',
+      'RFC 0049epoch 12,293CKB-VM version 2',
+    ]);
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1).not.toHaveTextContent(/get_consensus|hardfork_features/);
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(
+      within(tier2).getByText(
+        'The consensus rows are what this node’s get_consensus RPC answers as its hardfork_features on mainnet: each RFC and the epoch it switches on at.'
+      )
+    ).toHaveClass('text-text', 'text-body', 'max-w-measure');
+  });
+
   it('keeps tier 1 within the prose budget: at most three caption-length blocks (§0, §4)', async () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     const base = producerDeployments.scriptDeployments[0];
