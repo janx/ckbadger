@@ -3212,7 +3212,10 @@ impl Indexer {
                 )?;
 
                 for built in &built_list {
-                    let tx_actions = &built.actions;
+                    // The transaction's one classification: its bucket row
+                    // and its activity kind both take this value.
+                    let classified = ckbadger_store::ClassifiedTxActions::classify(&built.actions);
+                    let tx_actions = classified.actions();
                     // addr_txs rows follow the participants — the ONE derivation,
                     // shared with bulk build and the tx-pool mirror. Cellbase is
                     // included: it has participants (its output locks) even though
@@ -3295,7 +3298,7 @@ impl Indexer {
                             parsed.number
                         );
                     }
-                    BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut block_activity)?;
+                    BatchWriter::accumulate_tx_activity_stats(classified, &mut block_activity)?;
 
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
@@ -3316,7 +3319,7 @@ impl Indexer {
                         continue;
                     }
 
-                    put_tx_actions(&mut activity_batch, tx_actions.block_number, tx_actions);
+                    put_tx_actions(&mut activity_batch, tx_actions.block_number, classified);
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
@@ -12124,6 +12127,84 @@ mod tests {
             );
         }
 
+        /// The senders bit through both write paths: lock A spends block 100's
+        /// cellbase output in block 101, lock B is only paid. Live sync and bulk
+        /// build mark A and only A as a sender of that transaction, in its
+        /// `TxActions` row and in its addr_txs row, and write the same rows; no
+        /// party of a cellbase sends.
+        #[tokio::test]
+        async fn live_and_bulk_write_the_same_senders() {
+            use ckbadger_store::types::TAG_INPUT;
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = parity_blocks();
+            let snapshot =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for b in &blocks {
+                write_live_block(&indexer, b.clone()).await.unwrap();
+            }
+
+            let (live, _) = live_rows(&store);
+            assert_eq!(snapshot.addr_txs, live, "bulk and live addr_txs rows");
+            let lock_a: [u8; 32] = crate::parser::ScriptParser::compute_script_hash(&lock_script())
+                .try_into()
+                .unwrap();
+            let lock_b: [u8; 32] =
+                crate::parser::ScriptParser::compute_script_hash(&lock_script_b())
+                    .try_into()
+                    .unwrap();
+            let sent = |lock: [u8; 32], block: i64, tx: i32| {
+                live.get(&(lock, block, tx))
+                    .unwrap_or_else(|| panic!("no addr_txs row {block}:{tx}"))
+                    .tags
+                    & TAG_INPUT
+                    != 0
+            };
+            assert!(sent(lock_a, 101, 1), "A spent its cell in block 101");
+            assert!(!sent(lock_b, 101, 1), "B was only paid");
+            assert!(!sent(lock_a, 100, 0), "no party of a cellbase sends");
+            assert!(!sent(lock_a, 101, 0), "no party of a cellbase sends");
+
+            let transfer = &blocks[1].block.transactions[1];
+            let tx_hash = crate::rpc::parse_hex_to_bytes(&transfer.hash);
+            let live_actions = store
+                .get_tx_actions(101, 1, &tx_hash)
+                .unwrap()
+                .expect("live TxActions row");
+            let bulk_actions = snapshot
+                .tx_actions_map
+                .values()
+                .find(|actions| actions.tx_hash == tx_hash)
+                .expect("bulk TxActions row");
+            assert_eq!(
+                bincode::serialize(&live_actions).unwrap(),
+                bincode::serialize(bulk_actions).unwrap(),
+                "the two sync paths must write the same tx_actions row"
+            );
+            let senders = |actions: &ckbadger_store::types::TxActions| {
+                actions
+                    .participants
+                    .iter()
+                    .map(|p| (p.id, p.sent(), p.tags))
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(senders(bulk_actions), senders(&live_actions));
+            assert_eq!(
+                senders(&live_actions)
+                    .iter()
+                    .filter(|(_, sent, _)| *sent)
+                    .map(|(id, _, _)| *id)
+                    .collect::<Vec<_>>(),
+                vec![ckbadger_store::types::ParticipantId::Lock(lock_a)]
+            );
+        }
+
         /// End-to-end equivalence: with no detector naming anybody, the rows the
         /// live path writes are exactly the rows the old cell-derived writer
         /// produced, and the prefix index stays empty.
@@ -12786,7 +12867,8 @@ mod tests {
             // The fixture exercises what it claims: one day, three hours,
             // the `.bit` counters and the hours' address sets.
             let day = ckbadger_common::stats_bucket::stats_date_key(1_700_002_790_000).unwrap();
-            let daily: ckbadger_store::types::DailyActivityStats = bincode::deserialize(
+            let daily = ckbadger_store::types::DailyActivityStats::decode(
+                &day,
                 &bulk
                     .iter()
                     .find(|(key, _)| {
@@ -14634,7 +14716,9 @@ mod tests {
                 .tx_actions_map
                 .values()
                 .filter_map(|actions| {
-                    ckbadger_store::tx_actions_bucket_key(actions).map(|k| k.to_vec())
+                    ckbadger_store::ClassifiedTxActions::classify(actions)
+                        .bucket_key()
+                        .map(|k| k.to_vec())
                 })
                 .collect();
             expected.sort();

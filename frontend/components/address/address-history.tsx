@@ -114,6 +114,7 @@ function addressRow(activity: Activity, address: Address) {
     itemDeltas: activity.itemDeltas,
     roles: activity.roles,
     tags: activity.tags,
+    sent: activity.sent,
   };
   // The endpoint supplies this participant's deltas only. Other parties remain references;
   // do not invent zero balances for them to construct a cross-user transaction.

@@ -82,6 +82,9 @@ pub struct ParticipantRef {
     /// name; `None` otherwise.
     pub lock_kind_by: Option<String>,
     pub roles: Vec<&'static str>,
+    /// This party sent: its lock is the lock of at least one input of the
+    /// transaction (the indexer's `TAG_INPUT`, [`ParticipantDelta::sent`]).
+    pub sent: bool,
 }
 
 /// The name of a participant's lock (`utils::ScriptNamer`, the one rule: the
@@ -118,6 +121,7 @@ fn participant_ref(
     names: &mut ScriptNameCache<'_>,
 ) -> anyhow::Result<ParticipantRef> {
     let roles = participant_roles::names(participant.roles);
+    let sent = participant.sent();
     match participant.id {
         ParticipantId::Lock(hash) => {
             let address = resolve_party_address(store, network, &hash, pool_record, cache)?;
@@ -129,6 +133,7 @@ fn participant_ref(
                 lock_kind_by: lock_name.as_ref().and_then(|name| name.by()),
                 lock_kind: lock_name.map(|name| name.name),
                 roles,
+                sent,
             })
         }
         // A protocol-named prefix resolves at read time through the chain
@@ -149,6 +154,7 @@ fn participant_ref(
                     lock_kind_by: lock_name.as_ref().and_then(|name| name.by()),
                     lock_kind: lock_name.map(|name| name.name),
                     roles,
+                    sent,
                 })
             }
             None => Ok(ParticipantRef {
@@ -158,6 +164,7 @@ fn participant_ref(
                 lock_kind: None,
                 lock_kind_by: None,
                 roles,
+                sent,
             }),
         },
     }
@@ -228,6 +235,9 @@ pub struct ActivityResponse {
     /// Roles the protocol gave THIS participant, if any.
     pub roles: Vec<&'static str>,
     pub tags: u16,
+    /// THIS participant sent: its lock is the lock of at least one input of
+    /// the transaction ([`ParticipantDelta::sent`]).
+    pub sent: bool,
 }
 
 /// Item delta response — tagged enum keyed on `kind`.
@@ -360,6 +370,9 @@ pub struct ParticipantResponse {
     pub used_delta: String,
     pub item_deltas: Vec<ItemDeltaResponse>,
     pub tags: u16,
+    /// This party sent: its lock is the lock of at least one input of the
+    /// transaction ([`ParticipantDelta::sent`]).
+    pub sent: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1265,6 +1278,7 @@ pub(crate) fn build_activity_response(
         participants,
         roles: participant_roles::names(participant.roles),
         tags: participant.tags,
+        sent: participant.sent(),
     })
 }
 
@@ -1329,6 +1343,7 @@ pub(crate) fn build_global_activity_response_with_pool(
                 used_delta: p.used_delta.to_string(),
                 item_deltas,
                 tags: p.tags,
+                sent: reference.sent,
             })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;

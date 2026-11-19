@@ -2013,6 +2013,110 @@ fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[
     sync_address_tx_counters(store, lock_hash);
 }
 
+/// Every participant states `sent`, the indexer's senders bit (`TAG_INPUT`):
+/// true exactly for a party whose lock is an input's. The global activity's
+/// parties, an address activity's own party (`sent` beside its `tags`) and its
+/// other parties all read it from the one place, `ParticipantDelta::sent`; a
+/// party a protocol only named never sent.
+#[tokio::test]
+async fn every_participant_states_whether_it_sent() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TAG_INPUT, TAG_TOKEN};
+    let store = test_store();
+    let payer = [0x42u8; 32];
+    let payee = [0x11u8; 32];
+    let named = [0x99u8; 20];
+    let tx_hash = vec![0xaa; 32];
+    let party = |id, ckb_delta, tags| ParticipantDelta {
+        id,
+        ckb_delta,
+        used_delta: 0,
+        item_deltas: vec![],
+        tags,
+        roles: 0,
+    };
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbb; 32],
+        block_number: 10,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![
+            party(ParticipantId::Lock(payer), -100, TAG_INPUT),
+            party(ParticipantId::Lock(payee), 100, TAG_TOKEN),
+            party(ParticipantId::LockPrefix(named), 0, 0),
+        ],
+    };
+    seed_named_tx(&store, 10, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        &payer,
+        10,
+        0,
+        &AddrTxValue::new(-100, true, false, TAG_INPUT),
+    );
+    batch.put_addr_tx(
+        &payee,
+        10,
+        0,
+        &AddrTxValue::new(100, false, true, TAG_TOKEN),
+    );
+    batch.commit().unwrap();
+    sync_address_tx_counters(&store, &payer);
+    sync_address_tx_counters(&store, &payee);
+    let app = create_router(test_config(store)).await;
+
+    let (status, json) = get_json(&app, "/activities").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let sent: Vec<_> = json["data"][0]["participants"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["sent"].clone())
+        .collect();
+    assert_eq!(
+        sent,
+        vec![
+            serde_json::json!(true),
+            serde_json::json!(false),
+            serde_json::json!(false)
+        ],
+        "{json}"
+    );
+
+    for (lock, own, others) in [
+        (
+            payer,
+            true,
+            vec![serde_json::json!(false), serde_json::json!(false)],
+        ),
+        (
+            payee,
+            false,
+            vec![serde_json::json!(true), serde_json::json!(false)],
+        ),
+    ] {
+        let (status, json) = get_json(
+            &app,
+            &format!("/addresses/0x{}/activities", hex::encode(lock)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        let row = &json["data"][0];
+        assert_eq!(row["sent"], serde_json::json!(own), "{json}");
+        let other_sent: Vec<_> = row["participants"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["sent"].clone())
+            .collect();
+        assert_eq!(other_sent, others, "{json}");
+    }
+}
+
 /// A party whose lock script the store does not know is reported by its lock
 /// hash with no address — never with the hex lock hash posing as an address.
 #[tokio::test]

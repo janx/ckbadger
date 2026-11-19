@@ -827,6 +827,7 @@ mod status_model_tests {
             "spore_owner_roundtrip",
             "object_asset_collection_consistency",
             "participant_rows_consistency",
+            "participant_sent_matches_input_locks",
             "global_activity_bucket_index_consistency",
             "address_cellbase_count_consistency",
             "token_live_cells_consistency",

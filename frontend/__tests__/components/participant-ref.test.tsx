@@ -8,6 +8,7 @@ function makeRef(overrides: Partial<ParticipantRef> = {}): ParticipantRef {
     lockHash: overrides.lockHash ?? null,
     lockHashPrefix: overrides.lockHashPrefix ?? null,
     roles: overrides.roles ?? [],
+    sent: overrides.sent ?? true,
   };
 }
 

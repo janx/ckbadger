@@ -815,6 +815,7 @@ describe('Block board · R2b-a fields', () => {
                     address: payee,
                     lockHash: h('9a'),
                     lockHashPrefix: null,
+                    sent: false,
                     roles: [],
                     ckbDelta: '55951224916',
                     usedDelta: '6100000000',

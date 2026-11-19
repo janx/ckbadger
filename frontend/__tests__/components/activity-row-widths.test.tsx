@@ -12,6 +12,7 @@ function party(over: Partial<ParticipantInfo> = {}): ParticipantInfo {
   return {
     lockHash: '0x' + '01'.repeat(32),
     lockHashPrefix: null,
+    sent: true,
     address:
       'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfs6k9ygrwtdrn828l4a04ns9fnes960jg3x8k26',
     roles: [],

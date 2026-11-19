@@ -250,15 +250,14 @@ function ActivityStreamToolbar({
   selectedFilter,
   onFilterChange,
   summary,
-  totalCount,
 }: {
   selectedFilter: GlobalActivityFilter;
   onFilterChange: (value: GlobalActivityFilter) => void;
   summary?: DailyActivityStats;
-  totalCount?: number;
 }) {
-  const counts = summary ? activityFilterCounts(summary, totalCount) : null;
-  const occurrences = summary ? summary.kindOccurrences : 0;
+  const counts = summary ? activityFilterCounts(summary) : null;
+  // One kind per activity: the bar is a partition of the day's activities.
+  const activities = summary ? summary.activityCount : 0;
   return (
     <div
       data-testid="activities-stream-toolbar"
@@ -274,15 +273,11 @@ function ActivityStreamToolbar({
       />
       {/* the counts' period, said with them (lists lane P3: they are yesterday's, the list below
           is the latest, which its own line says) */}
-      {summary && (
-        <p className="text-text-dim text-meta mt-2">
-          Yesterday’s counts (UTC+8): kinds may overlap, DAO counts actions.
-        </p>
-      )}
-      {counts && occurrences > 0 && (
+      {summary && <p className="text-text-dim text-meta mt-2">Yesterday’s counts (UTC+8).</p>}
+      {counts && activities > 0 && (
         <div
           role="img"
-          aria-label={`Activity kind occurrences on ${summary!.date}; categories overlap`}
+          aria-label={`Activities by kind on ${summary!.date}`}
           className="mt-3 flex h-2 overflow-hidden"
         >
           {ACTIVITY_KINDS.filter(
@@ -292,7 +287,7 @@ function ActivityStreamToolbar({
               key={kind}
               title={`${kindWords(kind)}: ${counts[kind]}`}
               style={{
-                width: `${(counts[kind]! / occurrences) * 100}%`,
+                width: `${(counts[kind]! / activities) * 100}%`,
                 backgroundColor: kindColor(kind),
               }}
             />
@@ -344,13 +339,7 @@ function SkeletonRows() {
   ));
 }
 
-export function ActivitiesStreamExplorer({
-  summary,
-  totalCount,
-}: {
-  summary?: DailyActivityStats;
-  totalCount?: number;
-}) {
+export function ActivitiesStreamExplorer({ summary }: { summary?: DailyActivityStats }) {
   useEffect(() => ensureKeyframes(), []);
   // "Today" and "Yesterday" move on at UTC+8 midnight: the stream renders again when the date does
   const now = useClockTime((t) => formatUtc8Date(t));
@@ -577,7 +566,6 @@ export function ActivitiesStreamExplorer({
           <ActivityStreamToolbar
             selectedFilter={selectedFilter}
             summary={summary}
-            totalCount={totalCount}
             onFilterChange={handleFilterChange}
           />
         </div>

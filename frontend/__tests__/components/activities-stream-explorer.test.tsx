@@ -54,6 +54,7 @@ function makeParticipant(overrides: Partial<ParticipantInfo> = {}): ParticipantI
     usedDelta: overrides.usedDelta ?? '0',
     itemDeltas: overrides.itemDeltas ?? [],
     tags: overrides.tags ?? 0,
+    sent: overrides.sent ?? true,
   };
 }
 
@@ -140,7 +141,7 @@ describe('ActivitiesStreamExplorer', () => {
     vi.useRealTimers();
   });
 
-  it('shows exact completed-day counts, including zero, and leaves unavailable protocol count unnumbered', async () => {
+  it('shows exact completed-day counts, including zero, a count for every kind and All', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
         data: [],
@@ -152,30 +153,41 @@ describe('ActivitiesStreamExplorer', () => {
     );
     render(
       <ActivitiesStreamExplorer
-        totalCount={100}
         summary={{
           ...dailyActivities[0],
-          transferCount: 12,
-          daoDepositCount: 1,
-          daoWithdrawRequestCount: 2,
-          daoWithdrawCompleteCount: 3,
-          // the API's count of the DAO actions (lists lane P3: the page sums none)
-          daoCount: 6,
-          tokenCount: 0,
-          objectCount: 4,
-          identityCount: 5,
-          scriptCallCount: 6,
+          activityCount: 100,
+          kindCounts: {
+            dao: 6,
+            token: 0,
+            object: 4,
+            identity: 5,
+            protocol: 67,
+            script: 6,
+            ckb: 12,
+          },
+          protocolActionCounts: { 'dao:deposit': 9 },
         }}
       />
     );
     // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, a
     // radio per kind named by its lowercase words and its count (they were the aria-pressed
-    // buttons "All", "Tokens", "Nervos DAO", "Protocols", named by their words alone).
+    // buttons "All", "Tokens", "Nervos DAO", "Protocols", named by their words alone). All is the
+    // day's activities, the summary's activityCount, which the kinds make (F-6).
     expect(screen.getByRole('radio', { name: 'all 100' })).toHaveTextContent('all 100');
     expect(screen.getByRole('radio', { name: 'tokens 0' })).toHaveTextContent('tokens 0');
+    // DAO transactions, not the day's nine deposit actions.
     expect(screen.getByRole('radio', { name: 'nervos dao 6' })).toHaveTextContent('nervos dao 6');
-    expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'protocols' })).toHaveTextContent(/^protocols$/);
+    // F-6, re-pinned on purpose: the protocols are a kind with a count (they had none, being in no
+    // kind's count), and no note says the kinds overlap or the DAO counts actions.
+    expect(screen.getByRole('radio', { name: 'protocols 67' })).toHaveTextContent('protocols 67');
+    expect(screen.queryByText(/overlap|DAO counts actions/)).not.toBeInTheDocument();
+    expect(screen.getByText('Yesterday’s counts (UTC+8).')).toBeInTheDocument();
+    const bar = screen.getByRole('img', {
+      name: `Activities by kind on ${dailyActivities[0].date}`,
+    });
+    // One kind per activity: the bar's widths are shares of All and sum to 100%.
+    const widths = [...bar.querySelectorAll('span')].map((span) => parseFloat(span.style.width));
+    expect(widths.reduce((sum, w) => sum + w, 0)).toBeCloseTo(100, 9);
     expect(
       await screen.findByText('Nothing of this kind in the latest activities.')
     ).toBeInTheDocument();

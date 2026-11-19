@@ -35,12 +35,14 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "lockKindBy": null,
-          "roles": []
+          "roles": [],
+          "sent": false
         }
       ],
       "protocolActions": [],
       "roles": [],
-      "tags": 2,
+      "sent": true,
+      "tags": 258,
       "timestamp": "1790040600000",
       "txHash": "0x7e28b01df5473700f5fa0038acce77cdc5d9a2ccc3862c0c4ecc401efe204970",
       "txIndex": 1,
@@ -82,11 +84,13 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "lockKindBy": null,
-          "roles": []
+          "roles": [],
+          "sent": true
         }
       ],
       "protocolActions": [],
       "roles": [],
+      "sent": false,
       "tags": 2,
       "timestamp": "1790040000000",
       "txHash": "0x7ab75305ec5cadfe5a4bc814f712f8c4dbf6f121dde0419fe394e69b88424c64",
@@ -129,11 +133,13 @@
           "lockHashPrefix": null,
           "lockKind": "Default Lock",
           "lockKindBy": null,
-          "roles": []
+          "roles": [],
+          "sent": true
         }
       ],
       "protocolActions": [],
       "roles": [],
+      "sent": false,
       "tags": 2,
       "timestamp": "1790039400000",
       "txHash": "0x89b28cfe549365ccc3a3caecb9982065bf24b0ae9d27274a02c665a0d3fd19c7",

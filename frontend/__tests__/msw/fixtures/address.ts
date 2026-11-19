@@ -226,6 +226,7 @@ export const addressActivitiesFixture: Activity[] = [
     participants: [],
     roles: [],
     tags: 0,
+    sent: false,
   },
 ];
 export const addressTransactionsFixture: AddressTransaction[] = [

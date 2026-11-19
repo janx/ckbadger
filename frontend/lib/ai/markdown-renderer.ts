@@ -235,18 +235,16 @@ function renderActivitySummary(summary: ActivitySummary24h): string {
     ['field', 'value'],
     [
       ['hoursCovered', summary.hoursCovered],
-      ['transferCount', summary.transferCount],
-      ['daoDepositCount', summary.daoDepositCount],
-      ['daoWithdrawRequestCount', summary.daoWithdrawRequestCount],
-      ['daoWithdrawCompleteCount', summary.daoWithdrawCompleteCount],
-      ['tokenCount', summary.tokenCount],
-      ['objectCount', summary.objectCount],
-      ['identityCount', summary.identityCount],
-      ['scriptCallCount', summary.scriptCallCount],
-      ['unknownCount', summary.unknownCount],
+      ['activityCount', summary.activityCount],
+      // One kind per transaction; they sum to activityCount.
+      ...Object.entries(summary.kindCounts).map(([kind, count]) => [`kindCounts.${kind}`, count]),
       ['coinbaseCount', summary.coinbaseCount],
       ['uniqueAddressCount', summary.uniqueAddressCount],
       ['totalCkbMoved', summary.totalCkbMoved],
+      // Actions, not transactions: the DAO split by action is dao:deposit and the like.
+      ...Object.entries(summary.protocolActionCounts)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([action, count]) => [`protocolActionCounts.${action}`, count]),
     ]
   );
 }

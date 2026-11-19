@@ -298,7 +298,7 @@ describe('a whole of zero (S8)', () => {
       data: [
         {
           date: '2026-11-18',
-          values: { ...Object.fromEntries(kinds.map((key) => [key, '0'])), kindOccurrences: '0' },
+          values: { ...Object.fromEntries(kinds.map((key) => [key, '0'])), activityCount: '0' },
         },
       ],
     } as never);
@@ -321,7 +321,7 @@ describe('a tie of the largest kinds (lane exactness, part A2, N9)', () => {
       object: '0',
       identity: '0',
       scriptCall: '2',
-      kindOccurrences: '8',
+      activityCount: '8',
     };
     const tied = chartHead(
       definition,
@@ -334,7 +334,9 @@ describe('a tie of the largest kinds (lane exactness, part A2, N9)', () => {
     // 3 CKB transfers and 3 token actions of 8: neither is "the largest kind" alone
     expect(tied.eyebrow).toBe('CKB transfers and tokens, the largest kinds in a day');
     expect(tied.sentence).toBe(
-      "CKB transfers and tokens were 37.50% each of the day's kind counts, script calls 25.00%. An activity of two kinds counts under both."
+      // re-pinned on purpose (F-6 merged): "of the day's activities", which the kinds partition, and
+      // no note (it was "of the day's kind counts" and "An activity of two kinds counts under both.")
+      "CKB transfers and tokens were 37.50% each of the day's activities, script calls 25.00%."
     );
   });
 });

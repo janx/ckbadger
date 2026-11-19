@@ -1693,11 +1693,19 @@ impl<'a> StoreBatch<'a> {
     /// its `CF_TX_ACTIONS_BY_BUCKET` row — always together, in this batch, so
     /// the index can never be durable without the row it points at.
     /// The `activities` row of `actions` (keyed by its position, valued by
-    /// what it did: `TxActions::encode_stored`) and its global bucket row.
-    pub fn put_tx_actions(&mut self, actions: &TxActions) {
+    /// what it did: `TxActions::encode_stored`) and its global bucket row,
+    /// from the bucket the transaction was classified into
+    /// ([`crate::ClassifiedTxActions`]): live sync passes the classification
+    /// it already made; a bare `&TxActions` is classified here.
+    pub fn put_tx_actions<'t>(
+        &mut self,
+        actions: impl Into<crate::ClassifiedTxActions<&'t TxActions>>,
+    ) {
+        let classified = actions.into();
+        let actions = classified.actions();
         let key = keys::encode_tx_actions_key(actions.block_number, actions.tx_index);
         self.put_cf(self.store.cf_tx_actions(), key, actions.encode_stored());
-        if let Some(bucket_key) = crate::global_bucket::tx_actions_bucket_key(actions) {
+        if let Some(bucket_key) = classified.bucket_key() {
             self.put_cf(self.store.cf_tx_actions_by_bucket(), bucket_key, b"");
         }
     }

@@ -219,24 +219,19 @@ describe('renderMarkdownPage', () => {
   it('renders activities markdown', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 29,
-      transferCount: 12,
-      daoDepositCount: 3,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 1,
-      tokenCount: 4,
-      objectCount: 2,
-      identityCount: 1,
-      scriptCallCount: 5,
-      unknownCount: 0,
+      kindCounts: { dao: 5, token: 4, object: 2, identity: 1, protocol: 0, script: 5, ckb: 12 },
       coinbaseCount: 1,
       uniqueAddressCount: 9,
       totalCkbMoved: '123000000000',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: {
+        'dao:deposit': 3,
+        'dao:withdraw_complete': 1,
+        'dao:withdraw_request': 1,
+      },
       hoursCovered: 24,
-      kindOccurrences: 29,
-      daoCount: 5,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
@@ -285,7 +280,11 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('# Activities');
     expect(result.body).toContain('## Last 24 Hours');
     expect(result.body).toContain('daoDeposit');
-    expect(result.body).toContain('daoDepositCount');
+    // One kind per transaction, and the DAO split by action from the action counts.
+    expect(result.body).toContain('| kindCounts.dao | 5 |');
+    expect(result.body).toContain('| kindCounts.ckb | 12 |');
+    expect(result.body).toContain('| protocolActionCounts.dao:deposit | 3 |');
+    expect(result.body).not.toContain('unknownCount');
     expect(api.getGlobalActivities).toHaveBeenCalledWith({
       limit: 1,
       cursor: undefined,
@@ -299,26 +298,19 @@ describe('renderMarkdownPage', () => {
   // another hash type") and its markdown view say the same lock: a lock on the Default Lock's code
   // hash by data, which today's API names "Default Lock", is its code hash and "by data".
   it('writes an activity’s called lock as the page’s row does, by the lock decision', async () => {
+    // the 24 h summary as the one-kind API states it (merged with resync/int: its kinds partition
+    // its activities; the per-action counters and kindOccurrences/daoCount are gone)
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       activityCount: 1,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 1,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 1, ckb: 0 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     const byData = {
       lockCodeHash: DEFAULT_LOCK_CODE_HASH,
@@ -373,26 +365,17 @@ describe('renderMarkdownPage', () => {
   it('writes DAO metadata exactly, past 2^53, from the exact strings the API serves', async () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): one activity of
-      // one kind, as its kind counts say (it was 29 activities with one kind occurrence among them)
+      // one kind, as its kind counts say (it was 29 activities with one kind among them)
       activityCount: 1,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 1, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 0 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: { 'dao:withdraw_request': 1 },
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 1,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
@@ -447,24 +430,15 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): one activity of one kind
       activityCount: 1,
-      transferCount: 0,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 1,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 1, ckb: 0 },
       coinbaseCount: 0,
       uniqueAddressCount: 0,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({
@@ -511,24 +485,15 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getActivitySummary24h).mockResolvedValue({
       // re-pinned on purpose (lane cd-fixes-controls, SHOULD-5): one activity of one kind
       activityCount: 1,
-      transferCount: 1,
-      daoDepositCount: 0,
-      daoWithdrawRequestCount: 0,
-      daoWithdrawCompleteCount: 0,
-      tokenCount: 0,
-      objectCount: 0,
-      identityCount: 0,
-      scriptCallCount: 0,
-      unknownCount: 0,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 1 },
       coinbaseCount: 0,
       uniqueAddressCount: 1,
       totalCkbMoved: '0',
       scriptCounts: [],
       scriptCalls: 0,
       scriptRest: null,
+      protocolActionCounts: {},
       hoursCovered: 24,
-      kindOccurrences: 1,
-      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       pagedRead({

@@ -4798,34 +4798,25 @@ async fn get_hodl_wave_chart(
 // Daily Activity Stats
 // ============================================
 
+/// One complete UTC+8 day's activity.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyActivityStatsResponse {
     pub date: String,
-    pub transfer_count: u32,
-    pub dao_deposit_count: u32,
-    pub dao_withdraw_request_count: u32,
-    pub dao_withdraw_complete_count: u32,
-    pub token_count: u32,
-    pub object_count: u32,
-    pub identity_count: u32,
-    pub script_call_count: u32,
-    pub unknown_count: u32,
+    /// The day's non-cellbase transactions: the sum of `kind_counts`.
+    pub activity_count: u64,
+    /// The day's non-cellbase transactions by kind, each in exactly one: the
+    /// kind the global activity filter (`/activities?filter=<kind>`) lists it
+    /// under. Keys are the filter's values.
+    pub kind_counts: ckbadger_store::ActivityKindCounts,
     pub coinbase_count: u32,
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
-    /// The day's activity-kind occurrences: the eight kinds the charts read (transfers, the three
-    /// DAO actions, tokens, objects, identities, script calls), summed here. Kinds overlap — an
-    /// action counts in each kind it is — so this is not a count of distinct activities.
-    pub kind_occurrences: u64,
-    /// The day's Nervos DAO actions, the chart's one DAO band: deposits, withdraw requests and
-    /// completed withdraws summed here, never in the page (lane D1's third round, M2).
-    pub dao_count: u64,
-    /// The day's user transactions: its committed transactions (its chain row) less its cellbases,
-    /// counted here, never in a page (the P3 follow-up's 2b). The activity stream holds exactly
-    /// these, so the Transactions page's "all" and the Activities page's lede state this figure.
-    pub user_transaction_count: u64,
+    /// Protocol actions by `protocol:action` — actions, not transactions (a
+    /// transaction can carry several): the DAO split by action is
+    /// `dao:deposit`, `dao:withdraw_request`, `dao:withdraw_complete`.
+    pub protocol_action_counts: BTreeMap<String, u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4877,31 +4868,24 @@ fn script_count_entries(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ActivitySummary24hResponse {
-    /// Canonical non-cellbase transactions, counted once regardless of category overlap.
+    /// Canonical non-cellbase transactions of the window: the sum of
+    /// `kind_counts`.
     pub activity_count: u64,
-    pub transfer_count: u32,
-    pub dao_deposit_count: u32,
-    pub dao_withdraw_request_count: u32,
-    pub dao_withdraw_complete_count: u32,
-    pub token_count: u32,
-    pub object_count: u32,
-    pub identity_count: u32,
-    pub script_call_count: u32,
-    pub unknown_count: u32,
+    /// The window's non-cellbase transactions by kind, each in exactly one
+    /// (the kind the global activity filter lists it under).
+    pub kind_counts: ckbadger_store::ActivityKindCounts,
     pub coinbase_count: u32,
     /// Exact distinct Lock participants in the rolling chain-time window.
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
+    /// Protocol actions by `protocol:action` (actions, not transactions).
+    pub protocol_action_counts: BTreeMap<String, u32>,
     /// UTC hour buckets containing activity; a rolling 24h window can span 25.
     pub hours_covered: u32,
-    /// The window's activity-kind occurrences, as the daily rows count them (`kind_occurrences`).
-    pub kind_occurrences: u64,
-    /// The window's Nervos DAO actions, as the daily rows count them (`dao_count`).
-    pub dao_count: u64,
     /// Every script call `script_counts` counts, summed here (the P3 follow-up, SHOULD 5): what the
     /// home card's script shares are shares of. One transaction calling two scripts counts twice,
-    /// so this is not `script_call_count` (transactions with a script call).
+    /// so this is not the Script kind's count (`kind_counts.script`, transactions).
     pub script_calls: u64,
     /// The scripts after the [`SCRIPT_TOP`] largest of `script_counts` (ranked by calls, ties by
     /// code hash) and their calls, the home card's "others" row; `None` when there are none.
@@ -4917,61 +4901,6 @@ pub const SCRIPT_TOP: usize = 5;
 pub struct ScriptRest {
     pub scripts: u64,
     pub calls: u64,
-}
-
-/// The eight activity kinds the charts read, summed: kinds overlap, so not distinct activities.
-fn kind_occurrences(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
-    [
-        s.transfer_count,
-        s.dao_deposit_count,
-        s.dao_withdraw_request_count,
-        s.dao_withdraw_complete_count,
-        s.token_count,
-        s.object_count,
-        s.identity_count,
-        s.script_call_count,
-    ]
-    .into_iter()
-    .map(u64::from)
-    .sum()
-}
-
-/// The three Nervos DAO actions, summed: the DAO kind's one count.
-fn dao_count(s: &ckbadger_store::types::DailyActivityStats) -> u64 {
-    [
-        s.dao_deposit_count,
-        s.dao_withdraw_request_count,
-        s.dao_withdraw_complete_count,
-    ]
-    .into_iter()
-    .map(u64::from)
-    .sum()
-}
-
-/// A day's user transactions: its committed transactions less its cellbases. A day without its
-/// chain row, or with more cellbases than transactions, is an indexer fault named by its date.
-fn user_transaction_count(
-    date: &str,
-    chain: Option<&ckbadger_store::types::DailyStats>,
-    activity: &ckbadger_store::types::DailyActivityStats,
-) -> anyhow::Result<u64> {
-    let chain = chain.ok_or_else(|| {
-        anyhow::anyhow!("day {date} has daily activity stats but no daily chain stats")
-    })?;
-    let transactions = u64::try_from(chain.transactions_count).map_err(|_| {
-        anyhow::anyhow!(
-            "day {date} has a negative transaction count {}",
-            chain.transactions_count
-        )
-    })?;
-    transactions
-        .checked_sub(u64::from(activity.coinbase_count))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "day {date} has {} cellbases but only {transactions} transactions",
-                activity.coinbase_count
-            )
-        })
 }
 
 #[derive(Debug, Deserialize)]
@@ -4992,7 +4921,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:v4:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v6:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -5003,18 +4932,10 @@ async fn get_daily_activity_stats(
     }
 
     let store = state.store.clone();
-    let (all_stats, chain_days) = tokio::task::spawn_blocking(move || {
-        Ok::<_, anyhow::Error>((
-            store.list_daily_activity_stats()?,
-            store
-                .list_daily_stats_with_dates()?
-                .into_iter()
-                .collect::<HashMap<_, _>>(),
-        ))
-    })
-    .await
-    .map_err(|e| ApiError::internal(e.to_string()))?
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let all_stats = tokio::task::spawn_blocking(move || store.list_daily_activity_stats())
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     // Complete days only: the tip block's day is still in progress.
     let mut complete_stats = Vec::with_capacity(all_stats.len());
@@ -5045,28 +4966,17 @@ async fn get_daily_activity_stats(
     let result: Vec<DailyActivityStatsResponse> = selected
         .into_iter()
         .map(|(date, s)| {
-            let user_transaction_count = user_transaction_count(&date, chain_days.get(&date), &s)
-                .map_err(|e| ApiError::internal(e.to_string()))?;
             let script_counts = script_count_entries(&mut namer, &s.script_counts)?;
 
             Ok(DailyActivityStatsResponse {
                 date,
-                transfer_count: s.transfer_count,
-                dao_deposit_count: s.dao_deposit_count,
-                dao_withdraw_request_count: s.dao_withdraw_request_count,
-                dao_withdraw_complete_count: s.dao_withdraw_complete_count,
-                token_count: s.token_count,
-                object_count: s.object_count,
-                identity_count: s.identity_count,
-                script_call_count: s.script_call_count,
-                unknown_count: s.unknown_count,
+                activity_count: s.kind_counts.total(),
+                kind_counts: s.kind_counts,
                 coinbase_count: s.coinbase_count,
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),
                 script_counts,
-                kind_occurrences: kind_occurrences(&s),
-                dao_count: dao_count(&s),
-                user_transaction_count,
+                protocol_action_counts: s.protocol_action_counts,
             })
         })
         .collect::<Result<_, ApiRouteError>>()?;
@@ -5098,7 +5008,7 @@ async fn get_activity_summary_24h(
         .map_err(|e| ApiError::internal(format!("failed to read activity 24h tip: {e}")))?;
     let cache_key = tip.as_ref().map(|(_, header)| {
         format!(
-            "stats:activity-summary-24h:v3:tip:{}",
+            "stats:activity-summary-24h:v4:tip:{}",
             hex::encode(&header.hash)
         )
     });
@@ -5110,7 +5020,7 @@ async fn get_activity_summary_24h(
 
     let store = state.store.clone();
     let activity_window = state.activity_window.clone();
-    let (agg, hours_covered, activity_count) =
+    let (agg, hours_covered) =
         tokio::task::spawn_blocking(move || activity_window.summary(&store, tip))
             .await
             .map_err(|e| ApiError::internal(e.to_string()))?
@@ -5130,23 +5040,14 @@ async fn get_activity_summary_24h(
     });
 
     let result = ActivitySummary24hResponse {
-        activity_count,
-        transfer_count: agg.transfer_count,
-        dao_deposit_count: agg.dao_deposit_count,
-        dao_withdraw_request_count: agg.dao_withdraw_request_count,
-        dao_withdraw_complete_count: agg.dao_withdraw_complete_count,
-        token_count: agg.token_count,
-        object_count: agg.object_count,
-        identity_count: agg.identity_count,
-        script_call_count: agg.script_call_count,
-        unknown_count: agg.unknown_count,
+        activity_count: agg.kind_counts.total(),
+        kind_counts: agg.kind_counts,
         coinbase_count: agg.coinbase_count,
         unique_address_count: agg.unique_address_count,
         total_ckb_moved: agg.total_ckb_moved.to_string(),
         script_counts,
+        protocol_action_counts: agg.protocol_action_counts,
         hours_covered,
-        kind_occurrences: kind_occurrences(&agg),
-        dao_count: dao_count(&agg),
         script_calls,
         script_rest,
     };

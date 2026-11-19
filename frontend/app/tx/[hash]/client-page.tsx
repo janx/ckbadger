@@ -1427,6 +1427,8 @@ export default function TransactionDetailPage() {
                 lockHash: feePaidBy[0].lockHash,
                 lockHashPrefix: null,
                 roles: [],
+                // the fee is paid from the inputs: its payer's lock holds one, so it sent
+                sent: true,
               }}
               size="row"
               compact

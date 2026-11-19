@@ -298,7 +298,7 @@ interface HardforkActivation {
 
 type TransactionActivityType =
   /** Every committed transaction but the cellbase (the Transactions page opens on them). */
-  'user' | 'ckb' | 'script' | 'cellbase' | 'dao' | 'token' | 'object' | 'identity';
+  'user' | 'ckb' | 'script' | 'cellbase' | 'dao' | 'token' | 'object' | 'identity' | 'protocol';
 
 interface Transaction {
   value: string;
@@ -1431,6 +1431,8 @@ interface Activity {
   /** Roles the protocol gave this participant, if any. */
   roles: string[];
   tags: number;
+  /** This participant sent: its lock is the lock of at least one input of the transaction. */
+  sent: boolean;
 }
 
 /** Per-participant data within a global activity response. */
@@ -1451,6 +1453,8 @@ interface ParticipantRef {
   lockHash: string | null;
   lockHashPrefix: string | null;
   roles: string[];
+  /** This party sent: its lock is the lock of at least one input of the transaction. */
+  sent: boolean;
 }
 
 interface ParticipantInfo extends ParticipantRef {
@@ -1501,56 +1505,36 @@ interface ScriptCountEntry {
   count: number;
 }
 
+/**
+ * Non-cellbase transactions by kind, each in exactly one: the kind the global activity filter lists
+ * it under, so each count is what that filter lists. Keys are the filter's values.
+ */
+type ActivityKindCounts = Record<Exclude<GlobalActivityFilter, 'all'>, number>;
+
 interface DailyActivityStats {
   date: string;
-  transferCount: number;
-  daoDepositCount: number;
-  daoWithdrawRequestCount: number;
-  daoWithdrawCompleteCount: number;
-  tokenCount: number;
-  objectCount: number;
-  identityCount: number;
-  scriptCallCount: number;
-  unknownCount: number;
+  /** The day's non-cellbase transactions: the sum of `kindCounts`, one number from the API. */
+  activityCount: number;
+  kindCounts: ActivityKindCounts;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
-  /**
-   * The day's activity-kind occurrences, the API's sum of the eight kinds the charts read (lane
-   * D1): kinds overlap, so it is not a count of distinct activities.
-   */
-  kindOccurrences: number;
-  /** The day's Nervos DAO actions, the route's sum of its three DAO counts (lane D1). */
-  daoCount: number;
-  /**
-   * The day's user transactions, the route's count: its committed transactions less its cellbases
-   * (the P3 follow-up's 2b). The activity stream holds exactly these; no page subtracts.
-   */
-  userTransactionCount: number;
+  /** Protocol actions by `protocol:action`: actions, not transactions (the DAO split by action). */
+  protocolActionCounts: Record<string, number>;
 }
 
 interface ActivitySummary24h {
-  /** Non-cellbase transactions, counted once even when activity kinds overlap. */
+  /** The window's non-cellbase transactions: the sum of `kindCounts`. */
   activityCount: number;
-  transferCount: number;
-  daoDepositCount: number;
-  daoWithdrawRequestCount: number;
-  daoWithdrawCompleteCount: number;
-  tokenCount: number;
-  objectCount: number;
-  identityCount: number;
-  scriptCallCount: number;
-  unknownCount: number;
+  kindCounts: ActivityKindCounts;
   coinbaseCount: number;
   uniqueAddressCount: number;
   totalCkbMoved: string;
   scriptCounts: ScriptCountEntry[];
+  /** Protocol actions by `protocol:action`: actions, not transactions. */
+  protocolActionCounts: Record<string, number>;
   hoursCovered: number;
-  /** The window's activity-kind occurrences, the API's count (kinds overlap). */
-  kindOccurrences: number;
-  /** The window's Nervos DAO actions, the API's count. */
-  daoCount: number;
   /** Every call `scriptCounts` counts, the route's sum: what the script shares are shares of. */
   scriptCalls: number;
   /** The scripts after the route's five largest (ranked by calls, ties by code hash), counted. */
@@ -4099,6 +4083,7 @@ export type {
   GlobalActivity,
   GlobalActivityFilter,
   ScriptCountEntry,
+  ActivityKindCounts,
   DailyActivityStats,
   ActivitySummary24h,
   TopTokenEntry,
@@ -4466,13 +4451,23 @@ function cursorReadQuery(params: CursorQueryParams): URLSearchParams {
  * older than the page sends none, and the page refuses it by the field's name (lane D1's third
  * round, N7: it read `invalid decimal "undefined"`).
  */
-function routeCount(day: DailyActivityStats, field: 'kindOccurrences' | 'daoCount'): string {
+function routeCount(day: DailyActivityStats, field: 'activityCount'): string {
   const value = (day as Partial<DailyActivityStats>)[field];
   if (value === undefined)
     throw new Error(
       `daily activities on ${day.date} send no ${field}: the API is older than this page`
     );
   return String(value);
+}
+
+/** The day's transactions by kind as the route states them; an API older than the page sends none. */
+function routeKindCounts(day: DailyActivityStats): ActivityKindCounts {
+  const kinds = (day as Partial<DailyActivityStats>).kindCounts;
+  if (kinds === undefined)
+    throw new Error(
+      `daily activities on ${day.date} send no kindCounts: the API is older than this page`
+    );
+  return kinds;
 }
 
 export const api = {
@@ -5561,8 +5556,8 @@ export const api = {
     return {
       data: stats.map((s) => ({
         date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
-        // the day's kind occurrences, the route's sum of the eight kinds (lane D1)
-        value: routeCount(s, 'kindOccurrences'),
+        // the day's activities, the route's one number (the kinds partition it)
+        value: routeCount(s, 'activityCount'),
       })),
       title: 'Daily Activity Volume',
       yAxisLabel: 'Activities',
@@ -5573,20 +5568,20 @@ export const api = {
     const stats = await api.getDailyActivityStats(0);
     return {
       data: stats.map((s) => {
-        // the whole the page's shares divide by, the route's (lane D1)
-        const kindOccurrences = routeCount(s, 'kindOccurrences');
-        // the day's DAO actions, the route's sum of its three counts (lane D1's third round, M2)
-        const dao = routeCount(s, 'daoCount');
+        const kinds = routeKindCounts(s);
         return {
           date: `${s.date.slice(0, 4)}-${s.date.slice(4, 6)}-${s.date.slice(6, 8)}`,
+          // One kind per transaction: the stack is a partition of the day's activityCount, the
+          // whole the page's shares divide by.
           values: {
-            transfer: String(s.transferCount),
-            dao,
-            token: String(s.tokenCount),
-            object: String(s.objectCount),
-            identity: String(s.identityCount),
-            scriptCall: String(s.scriptCallCount),
-            kindOccurrences,
+            transfer: String(kinds.ckb),
+            dao: String(kinds.dao),
+            token: String(kinds.token),
+            object: String(kinds.object),
+            identity: String(kinds.identity),
+            scriptCall: String(kinds.script),
+            protocol: String(kinds.protocol),
+            activityCount: routeCount(s, 'activityCount'),
           },
         };
       }),
@@ -5597,6 +5592,7 @@ export const api = {
         { key: 'object', label: 'Object', color: color('object') },
         { key: 'identity', label: 'Identity', color: color('identity') },
         { key: 'scriptCall', label: 'Script Call', color: color('amber') },
+        { key: 'protocol', label: 'Protocol', color: color('ink-muted') },
       ],
       title: 'Activity Type Breakdown',
     };

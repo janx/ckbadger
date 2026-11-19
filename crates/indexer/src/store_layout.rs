@@ -92,6 +92,72 @@ pub(crate) mod tests {
         assert_eq!(store.get_store_layout().unwrap(), None);
     }
 
+    /// The re-sync set (resync/all) changes the layout once for all of its
+    /// changes. A store built by rd/script-pair-store alone carries stamp 1
+    /// (scripts by their pair) but its activity rows count a transaction in
+    /// several kinds and its participants carry no senders bit: refused, with
+    /// nothing written.
+    #[test]
+    fn a_store_stamped_by_the_script_pair_branch_alone_is_refused_before_anything_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.set_network_identity("mainnet").unwrap();
+        // that branch's label row: keyed by the pair (code hash ‖ hash type)
+        let mut key = vec![0x9b; 32];
+        key.push(1);
+        let value = bincode::serialize(&ScriptInfo {
+            name: "Default Lock".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        store.put_cf(store.cf_script_info(), &key, &value).unwrap();
+        store.set_store_layout(1).unwrap();
+        let before = domain_rows(&store);
+
+        let error = ensure_store_layout(&store).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let words = error.to_string();
+        assert!(
+            words.contains("store layout 1")
+                && words.contains(&format!("store layout {STORE_LAYOUT}"))
+                && words.contains("delete RocksDB and re-sync from genesis"),
+            "{words}"
+        );
+        assert_eq!(domain_rows(&store), before, "a refusal writes nothing");
+        assert_eq!(store.get_store_layout().unwrap(), Some(1));
+    }
+
+    /// A store built by resync/int (fix/activity-kinds and the senders bit)
+    /// alone carries no stamp: its one-kind activity rows are there, its
+    /// script labels are keyed by the code hash alone. Refused, nothing
+    /// written.
+    #[test]
+    fn a_store_built_by_the_activity_kinds_branch_alone_is_refused_before_anything_is_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        store.set_network_identity("mainnet").unwrap();
+        // that branch's day row: the one-kind layout, its prefix and all
+        store
+            .put_daily_activity_stats(
+                "20261119",
+                &ckbadger_store::types::DailyActivityStats::default(),
+            )
+            .unwrap();
+        let before = domain_rows(&store);
+
+        let error = ensure_store_layout(&store).unwrap_err();
+        assert!(crate::lifecycle::is_rebuild_required(&error), "{error:#}");
+        let words = error.to_string();
+        assert!(
+            words.contains("no store layout stamp")
+                && words.contains(&format!("store layout {STORE_LAYOUT}"))
+                && words.contains("delete RocksDB and re-sync from genesis"),
+            "{words}"
+        );
+        assert_eq!(domain_rows(&store), before, "a refusal writes nothing");
+        assert_eq!(store.get_store_layout().unwrap(), None);
+    }
+
     #[test]
     fn a_store_of_another_layout_is_refused_naming_both() {
         let dir = tempfile::tempdir().unwrap();

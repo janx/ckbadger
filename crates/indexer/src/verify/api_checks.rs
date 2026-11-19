@@ -1,6 +1,6 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
-//! Fast tier (F1-F8): few API calls, seconds.
+//! Fast tier (F1-F10): few API calls, seconds.
 //! Sampling tier (S1-S23): N API calls or chart validation, minutes.
 
 use super::checks::*;
@@ -2525,6 +2525,176 @@ impl Check for ChartTxCountPositive {
         } else {
             Ok(CheckResult::fail(checked, findings))
         }
+    }
+}
+
+/// S39: every complete day's activity kinds — each non-cellbase transaction
+/// counted in exactly one (F-6) — plus its cellbases are the day's
+/// transactions, as the block-level daily stats count them.
+///
+/// The two sides are written by different code from different inputs: the
+/// kinds and the cellbase count by the activity accumulator, one classified
+/// transaction at a time (`/stats/daily-activities`); the transaction count by
+/// the chain stats writer from each block's transaction list
+/// (`DailyStats.transactions_count`, `/charts/transaction-count`). A
+/// transaction counted in no kind (the F-6 fault), or in two, breaks the sum.
+/// The cellbase count comes from the activity rows themselves: the API sends
+/// no independent per-day block count, so a transaction misfiled as a
+/// cellbase would not be caught here.
+pub struct DailyActivityKindsPartitionTransactions;
+
+#[derive(serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct DailyActivityKindRow {
+    date: String,
+    kind_counts: std::collections::BTreeMap<String, u64>,
+    coinbase_count: u64,
+}
+
+impl Check for DailyActivityKindsPartitionTransactions {
+    fn name(&self) -> &'static str {
+        "daily_activity_kinds_partition_transactions"
+    }
+    fn description(&self) -> &'static str {
+        "Each complete day's activity kinds and cellbases sum to its transactions (block-level daily stats)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        // The activity rows are read before and after the independent count:
+        // a day whose row moved between the two reads (a reorg across the
+        // day's end) is not compared, and the result says so.
+        let before: Vec<DailyActivityKindRow> = api_get(ctx, "stats/daily-activities?days=0")?;
+        let chart: ChartWrapper<ChartDataPoint> = api_get(ctx, "charts/transaction-count")?;
+        let after: Vec<DailyActivityKindRow> = api_get(ctx, "stats/daily-activities?days=0")?;
+
+        let kinds: BTreeSet<&str> = ckbadger_store::GlobalBucket::ALL
+            .iter()
+            .map(|kind| kind.as_filter())
+            .collect();
+        let mut transactions = HashMap::new();
+        for point in &chart.data {
+            let date = point.date.replace('-', "");
+            let count: u64 = point.value.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "transaction count chart value on {} is not a count: {:?}: {e}",
+                    point.date,
+                    point.value
+                )
+            })?;
+            if transactions.insert(date, count).is_some() {
+                anyhow::bail!("transaction count chart lists {} twice", point.date);
+            }
+        }
+        let after_by_date: HashMap<&str, &DailyActivityKindRow> =
+            after.iter().map(|row| (row.date.as_str(), row)).collect();
+
+        let mut findings = vec![];
+        let mut moved = vec![];
+        let mut checked = 0u64;
+        for row in &before {
+            let row_kinds: BTreeSet<&str> = row.kind_counts.keys().map(String::as_str).collect();
+            anyhow::ensure!(
+                row_kinds == kinds,
+                "daily activity row {} counts the kinds {row_kinds:?}, expected the global \
+                 activity filter's {kinds:?}",
+                row.date
+            );
+            if after_by_date.get(row.date.as_str()) != Some(&row) {
+                moved.push(row.date.clone());
+                continue;
+            }
+            let Some(&day_transactions) = transactions.get(&row.date) else {
+                findings.push(Finding {
+                    entity: row.date.clone(),
+                    details: vec!["the day has activity counts but no transaction count in \
+                         /charts/transaction-count (daily stats)"
+                        .to_string()],
+                });
+                continue;
+            };
+            checked += 1;
+            let in_kinds: u64 = row.kind_counts.values().sum();
+            let counted = in_kinds + row.coinbase_count;
+            if counted != day_transactions {
+                let kinds_line = row
+                    .kind_counts
+                    .iter()
+                    .map(|(kind, count)| format!("{kind} {count}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let gap = if counted < day_transactions {
+                    format!(
+                        "{} transaction(s) counted in no kind",
+                        day_transactions - counted
+                    )
+                } else {
+                    format!(
+                        "{} transaction(s) counted twice",
+                        counted - day_transactions
+                    )
+                };
+                findings.push(Finding {
+                    entity: row.date.clone(),
+                    details: vec![format!(
+                        "kinds ({kinds_line}) sum to {in_kinds}, plus {} cellbases = \
+                             {counted}, but the day's blocks carry {day_transactions} \
+                             transactions: {gap}",
+                        row.coinbase_count
+                    )],
+                });
+            }
+        }
+        // A day the blocks carry transactions on but the activity rows never
+        // counted (in both reads, so not a day that completed in between).
+        let counted_days: BTreeSet<&str> = before
+            .iter()
+            .chain(after.iter())
+            .map(|row| row.date.as_str())
+            .collect();
+        let mut uncounted: Vec<&String> = transactions
+            .keys()
+            .filter(|date| !counted_days.contains(date.as_str()))
+            .collect();
+        uncounted.sort();
+        for date in uncounted {
+            findings.push(Finding {
+                entity: date.clone(),
+                details: vec![format!(
+                    "the day's blocks carry {} transactions but it has no activity row",
+                    transactions[date]
+                )],
+            });
+        }
+
+        let moved_note = if moved.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "; {} day(s) not compared, their rows moved between reads: {}",
+                moved.len(),
+                moved.join(", ")
+            )
+        };
+        if !findings.is_empty() {
+            let mut result = CheckResult::fail(checked, findings);
+            if !moved_note.is_empty() {
+                result.detail = Some(moved_note.trim_start_matches("; ").to_string());
+            }
+            return Ok(result);
+        }
+        if checked == 0 {
+            return Ok(CheckResult::inconclusive(format!(
+                "no complete day compared{moved_note}"
+            )));
+        }
+        Ok(CheckResult::pass_with_detail(
+            checked,
+            format!(
+                "{checked} complete days: kinds + cellbases = the day's transactions{moved_note}"
+            ),
+        ))
     }
 }
 
@@ -5527,6 +5697,194 @@ impl Check for ParticipantRowsConsistency {
     }
 }
 
+// ── Participant sent matches the input locks ───────────────────────────────
+
+/// Every party of a sampled activity states that it sent (`sent`, the
+/// indexer's senders bit `TAG_INPUT`) exactly when its lock is the lock of at
+/// least one input of the transaction. The inputs are read from ckbadger's own
+/// cells (`/transactions/{hash}`'s inputs: each consumed cell as the domain and
+/// append-only stores hold it, no node), their locks hashed here, so the bit is
+/// checked against an independent record. A party sends with no input of its
+/// lock, holds an input without sending, or an input's lock is no sending
+/// party: a finding naming the transaction and the lock. A store synced before
+/// the bit existed reads as "nobody sent" and fails here.
+pub struct ParticipantSentMatchesInputLocks;
+
+/// How many recent activities the check reads (each costs one transaction read).
+const PARTICIPANT_SENT_ACTIVITY_LIMIT: usize = 50;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SentParticipantRecord {
+    lock_hash: Option<String>,
+    lock_hash_prefix: Option<String>,
+    sent: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SentActivityRecord {
+    tx_hash: String,
+    block_number: i64,
+    participants: Vec<SentParticipantRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InputLockRecord {
+    code_hash: String,
+    hash_type: String,
+    args: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionInputRecord {
+    lock: Option<InputLockRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionInputsRecord {
+    inputs: Vec<TransactionInputRecord>,
+}
+
+/// The lock hash of an input as the API states its lock script.
+fn input_lock_hash(lock: &InputLockRecord) -> anyhow::Result<String> {
+    let hash_type = ckbadger_common::hash_type_from_label(&lock.hash_type)
+        .ok_or_else(|| anyhow::anyhow!("input lock hash type {:?} is unknown", lock.hash_type))?;
+    let code_hash = parse_hex_bytes(&lock.code_hash)
+        .map_err(|e| anyhow::anyhow!("input lock code hash {:?}: {e}", lock.code_hash))?;
+    let args = parse_hex_bytes(&lock.args)
+        .map_err(|e| anyhow::anyhow!("input lock args {:?}: {e}", lock.args))?;
+    Ok(format!(
+        "0x{}",
+        hex::encode(ckbadger_common::script_hash(&code_hash, hash_type, &args))
+    ))
+}
+
+fn parse_hex_bytes(value: &str) -> Result<Vec<u8>, String> {
+    let stripped = value
+        .strip_prefix("0x")
+        .ok_or_else(|| "no 0x prefix".to_string())?;
+    hex::decode(stripped).map_err(|e| e.to_string())
+}
+
+/// The findings of one activity against its inputs' locks: every party's
+/// `sent` must equal "its lock is an input's lock", and every input's lock
+/// must be a party that sent.
+fn participant_sent_findings(
+    activity: &SentActivityRecord,
+    inputs: &TransactionInputsRecord,
+) -> anyhow::Result<Vec<Finding>> {
+    let entity = format!("tx={} (block {})", activity.tx_hash, activity.block_number);
+    let mut details = vec![];
+    let mut input_locks = std::collections::BTreeSet::new();
+    for (index, input) in inputs.inputs.iter().enumerate() {
+        match &input.lock {
+            Some(lock) => {
+                input_locks.insert(normalize_hex_key(
+                    &input_lock_hash(lock)
+                        .map_err(|e| anyhow::anyhow!("{entity}: input {index}: {e}"))?,
+                ));
+            }
+            None => details.push(format!(
+                "input {index} states no lock: its cell is not in the store"
+            )),
+        }
+    }
+    let mut senders = std::collections::BTreeSet::new();
+    for party in &activity.participants {
+        let (name, holds) = match (&party.lock_hash, &party.lock_hash_prefix) {
+            (Some(lock_hash), _) => {
+                let key = normalize_hex_key(lock_hash);
+                let holds = input_locks.contains(&key);
+                if party.sent {
+                    senders.insert(key);
+                }
+                (format!("lock {lock_hash}"), holds)
+            }
+            // A protocol-named party no lock resolves: it holds no cell here.
+            (None, Some(prefix)) => (format!("prefix {prefix}"), false),
+            (None, None) => {
+                details.push("a party carries neither lockHash nor lockHashPrefix".to_string());
+                continue;
+            }
+        };
+        if party.sent != holds {
+            details.push(if party.sent {
+                format!("{name} states sent, but no input of the transaction has its lock")
+            } else {
+                format!("{name} holds an input of the transaction but states it did not send")
+            });
+        }
+    }
+    for lock in input_locks.difference(&senders) {
+        if !activity
+            .participants
+            .iter()
+            .any(|p| p.lock_hash.as_deref().map(normalize_hex_key).as_deref() == Some(lock))
+        {
+            details.push(format!("input lock 0x{lock} is no party of the activity"));
+        }
+    }
+    Ok(if details.is_empty() {
+        vec![]
+    } else {
+        vec![Finding { entity, details }]
+    })
+}
+
+impl Check for ParticipantSentMatchesInputLocks {
+    fn name(&self) -> &'static str {
+        "participant_sent_matches_input_locks"
+    }
+    fn description(&self) -> &'static str {
+        "Each party of a recent activity states it sent exactly when its lock is an input's lock"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    /// The recent-activity sample is sized by `--sample-count`.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(PARTICIPANT_SENT_ACTIVITY_LIMIT) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let limit = ctx.sample_count.min(PARTICIPANT_SENT_ACTIVITY_LIMIT);
+        if limit == 0 {
+            anyhow::bail!(
+                "participant_sent_matches_input_locks was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let page: CursorPage<SentActivityRecord> =
+            api_get(ctx, &format!("activities?limit={limit}"))?;
+        if page.data.is_empty() {
+            anyhow::bail!("/activities lists no activity: there is nothing to check the bit on");
+        }
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        for activity in &page.data {
+            let inputs: TransactionInputsRecord =
+                api_get(ctx, &format!("transactions/{}", activity.tx_hash))?;
+            findings.extend(participant_sent_findings(activity, &inputs)?);
+            checked += 1;
+            progress.inc(1);
+        }
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ── Token live cell count ──────────────────────────────────────────────────
 
 /// A token's persisted live cell count (`cellsCount`: the running sum of its
@@ -7520,7 +7878,7 @@ fn read_code_hash_pairs(
     Ok(readings)
 }
 
-/// S (lane rd/api-lock-names): each script's figures are its own. For every
+/// S41 (lane rd/api-lock-names): each script's figures are its own. For every
 /// code hash used in the last 24 hours of chain time, by each of its four
 /// hash types, the lookup's live cells of the pair (its `script_reference_info`
 /// row, as lock plus as type) equal the live cells the index lists by that
@@ -7703,7 +8061,9 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(IdentityCollectionHolderConsistency),
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
+        Box::new(ParticipantSentMatchesInputLocks),
         Box::new(GlobalActivityBucketIndexConsistency),
+        Box::new(DailyActivityKindsPartitionTransactions),
         Box::new(TokenLiveCellsConsistency),
         Box::new(CollectionDailyActivityConsistency),
         Box::new(AddressCellbaseCountConsistency),
@@ -7913,7 +8273,12 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 47);
+        // 10 fast + 39 sampling: F9 script_names_by_pair and F10
+        // store_layout_matches_build (lane rd/api-lock-names), S39
+        // daily_activity_kinds_partition_transactions, S40
+        // participant_sent_matches_input_locks (resync/int) and S41
+        // script_reference_live_cells_consistency (lane rd/api-lock-names).
+        assert_eq!(checks.len(), 49);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -7942,6 +8307,8 @@ mod tests {
         assert!(names.contains(&"dao_status_index_matches_deposits"));
         assert!(names.contains(&"participant_rows_consistency"));
         assert!(names.contains(&"global_activity_bucket_index_consistency"));
+        assert!(names.contains(&"daily_activity_kinds_partition_transactions"));
+        assert!(names.contains(&"participant_sent_matches_input_locks"));
         assert!(names.contains(&"token_live_cells_consistency"));
         assert!(names.contains(&"collection_daily_activity_consistency"));
         assert!(names.contains(&"address_cellbase_count_consistency"));
@@ -8028,10 +8395,9 @@ mod tests {
             .iter()
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
-        // lane rd/api-lock-names: script_names_by_pair and store_layout_matches_build
-        // (fast), script_reference_live_cells_consistency (sampling)
         assert_eq!(fast_count, 10);
-        assert_eq!(sampling_count, 37);
+        // 39 here; with the entity-history and DAO-cell checks, the 41 of S1-S41.
+        assert_eq!(sampling_count, 39);
     }
 
     #[test]
@@ -11425,6 +11791,286 @@ mod tests {
             "{:?}",
             findings[0].details
         );
+    }
+
+    // ── participant_sent_matches_input_locks ──────────────────────────────
+
+    /// A secp lock as the API states an input's lock script, and its lock hash.
+    fn sent_check_lock(arg: u8) -> (serde_json::Value, String) {
+        let code = "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
+        let args = [arg; 20];
+        let hash = ckbadger_common::script_hash(&hex::decode(code).unwrap(), 1, &args);
+        (
+            json!({
+                "codeHash": format!("0x{code}"),
+                "hashType": "type",
+                "args": format!("0x{}", hex::encode(args)),
+            }),
+            format!("0x{}", hex::encode(hash)),
+        )
+    }
+
+    /// Serves `/activities` as `activities` and each `/transactions/{hash}` as
+    /// its inputs' locks.
+    fn run_sent_check(
+        activities: serde_json::Value,
+        transactions: &[(String, Vec<serde_json::Value>)],
+    ) -> CompletedCheck {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/activities"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": activities, "nextCursor": null, "hasMore": false, "limit": 10
+                })))
+                .mount(&server)
+                .await;
+            for (hash, locks) in transactions {
+                let inputs: Vec<_> = locks.iter().map(|lock| json!({ "lock": lock })).collect();
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/v1/transactions/{hash}")))
+                    .respond_with(
+                        ResponseTemplate::new(200).set_body_json(json!({ "inputs": inputs })),
+                    )
+                    .mount(&server)
+                    .await;
+            }
+        });
+        execute_check(
+            registered_check("participant_sent_matches_input_locks").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    /// One transfer: `payer` spends its cell and pays `payee`, each party
+    /// stating `sent` as given.
+    fn sent_check_transfer(
+        tx: &str,
+        payer: &str,
+        payer_sent: bool,
+        payee: &str,
+        payee_sent: bool,
+    ) -> serde_json::Value {
+        json!({
+            "txHash": tx,
+            "blockNumber": 100,
+            "participants": [
+                { "lockHash": payer, "lockHashPrefix": null, "sent": payer_sent },
+                { "lockHash": payee, "lockHashPrefix": null, "sent": payee_sent },
+            ]
+        })
+    }
+
+    #[test]
+    fn sent_check_passes_when_exactly_the_input_locks_sent() {
+        let (payer_lock, payer) = sent_check_lock(0x01);
+        let (_, payee) = sent_check_lock(0x02);
+        let tx = format!("0x{}", "ab".repeat(32));
+        let named = json!({ "lockHash": null, "lockHashPrefix": "0x1234", "sent": false });
+        let mut activity = sent_check_transfer(&tx, &payer, true, &payee, false);
+        activity["participants"].as_array_mut().unwrap().push(named);
+        let completed = run_sent_check(json!([activity]), &[(tx, vec![payer_lock])]);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    /// A store synced before the senders bit reads as "nobody sent": the
+    /// payer holds the input and states it did not send.
+    #[test]
+    fn sent_check_fails_on_a_store_from_before_the_senders_bit() {
+        let (payer_lock, payer) = sent_check_lock(0x01);
+        let (_, payee) = sent_check_lock(0x02);
+        let tx = format!("0x{}", "ab".repeat(32));
+        let completed = run_sent_check(
+            json!([sent_check_transfer(&tx, &payer, false, &payee, false)]),
+            &[(tx.clone(), vec![payer_lock])],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].entity, format!("tx={tx} (block 100)"));
+        assert_eq!(
+            result.findings[0].details,
+            vec![format!(
+                "lock {payer} holds an input of the transaction but states it did not send"
+            )]
+        );
+    }
+
+    /// A payee that states it sent, and an input whose lock is no party.
+    #[test]
+    fn sent_check_fails_on_a_sender_without_an_input_and_an_input_without_a_party() {
+        let (payer_lock, payer) = sent_check_lock(0x01);
+        let (_, payee) = sent_check_lock(0x02);
+        let (stray_lock, stray) = sent_check_lock(0x03);
+        let tx = format!("0x{}", "cd".repeat(32));
+        let completed = run_sent_check(
+            json!([sent_check_transfer(&tx, &payer, true, &payee, true)]),
+            &[(tx, vec![payer_lock, stray_lock])],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(
+            result.findings[0].details,
+            vec![
+                format!("lock {payee} states sent, but no input of the transaction has its lock"),
+                format!("input lock {stray} is no party of the activity"),
+            ]
+        );
+    }
+
+    // ── daily_activity_kinds_partition_transactions ───────────────────────
+
+    fn activity_day(date: &str, kinds: [u64; 7], coinbase: u64) -> serde_json::Value {
+        let [dao, token, object, identity, protocol, script, ckb] = kinds;
+        json!({
+            "date": date,
+            "activityCount": kinds.iter().sum::<u64>(),
+            "kindCounts": { "dao": dao, "token": token, "object": object, "identity": identity,
+                            "protocol": protocol, "script": script, "ckb": ckb },
+            "coinbaseCount": coinbase,
+            "uniqueAddressCount": 1,
+            "totalCkbMoved": "0",
+            "scriptCounts": [],
+            "protocolActionCounts": {}
+        })
+    }
+
+    /// Serves `/stats/daily-activities` as `first` once and `then` after,
+    /// and `/charts/transaction-count` as `(YYYY-MM-DD, count)` points.
+    fn run_daily_kinds_check(
+        first: serde_json::Value,
+        then: serde_json::Value,
+        transactions: &[(&str, u64)],
+    ) -> CompletedCheck {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let points: Vec<_> = transactions
+            .iter()
+            .map(|(date, count)| json!({ "date": date, "value": count.to_string() }))
+            .collect();
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/stats/daily-activities"))
+                .and(query_param("days", "0"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(first))
+                .up_to_n_times(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/stats/daily-activities"))
+                .and(query_param("days", "0"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(then))
+                .with_priority(2)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/charts/transaction-count"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": points, "title": "Transaction Count", "yAxisLabel": "Transactions"
+                })))
+                .mount(&server)
+                .await;
+        });
+        execute_check(
+            registered_check("daily_activity_kinds_partition_transactions").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    #[test]
+    fn daily_kinds_check_passes_when_kinds_and_cellbases_are_the_days_transactions() {
+        let days = json!([
+            activity_day("20261116", [2, 3, 0, 1, 4, 5, 10], 8_600),
+            activity_day("20261117", [1, 0, 0, 0, 6, 2, 3], 8_700),
+        ]);
+        let completed = run_daily_kinds_check(
+            days.clone(),
+            days,
+            &[("2026-11-16", 8_625), ("2026-11-17", 8_712)],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 2);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("2 complete days"),
+            "{:?}",
+            result.detail
+        );
+    }
+
+    /// F-6 as mainnet showed it on 2026-11-17: six Fiber channel opens and
+    /// closes counted in no kind — "All 7,847" beside kinds summing to 7,841.
+    #[test]
+    fn daily_kinds_check_fails_naming_the_day_whose_transactions_are_in_no_kind() {
+        let days = json!([activity_day(
+            "20261117",
+            [30, 400, 10, 200, 0, 5_000, 2_201],
+            9_000
+        )]);
+        let completed = run_daily_kinds_check(days.clone(), days, &[("2026-11-17", 16_847)]);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(result.findings.len(), 1);
+        assert_eq!(result.findings[0].entity, "20261117");
+        let detail = &result.findings[0].details[0];
+        assert!(
+            detail.contains("sum to 7841, plus 9000 cellbases = 16841")
+                && detail.contains("carry 16847 transactions: 6 transaction(s) counted in no kind"),
+            "{detail}"
+        );
+        // A kind counted twice is the other side of the same fault.
+        let days = json!([activity_day("20261117", [1, 1, 0, 0, 0, 0, 1], 2)]);
+        let completed = run_daily_kinds_check(days.clone(), days, &[("2026-11-17", 4)]);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert!(completed.result.unwrap().findings[0].details[0]
+            .contains("1 transaction(s) counted twice"));
+    }
+
+    /// A day whose row changed between the two reads is not compared (a
+    /// reorg across its end); with nothing left to compare the run is
+    /// inconclusive, never a pass. A row whose kinds are not the filter's is
+    /// an error, and a day the blocks carry but no row counts is a finding.
+    #[test]
+    fn daily_kinds_check_skips_a_moving_day_and_refuses_foreign_kinds() {
+        let completed = run_daily_kinds_check(
+            json!([activity_day("20261117", [0, 0, 0, 0, 0, 0, 5], 1)]),
+            json!([activity_day("20261117", [0, 0, 0, 0, 0, 0, 6], 1)]),
+            &[("2026-11-17", 7)],
+        );
+        assert_eq!(completed.status, CheckStatus::Inconclusive);
+        assert!(
+            completed
+                .status_reason
+                .as_deref()
+                .unwrap_or_default()
+                .contains("rows moved between reads: 20261117"),
+            "{:?}",
+            completed.status_reason
+        );
+
+        let mut foreign = activity_day("20261117", [0, 0, 0, 0, 0, 0, 5], 1);
+        foreign["kindCounts"]["unknown"] = json!(0);
+        let completed = run_daily_kinds_check(json!([foreign.clone()]), json!([foreign]), &[]);
+        assert_eq!(completed.status, CheckStatus::Error);
+
+        let days = json!([activity_day("20261117", [0, 0, 0, 0, 0, 0, 5], 1)]);
+        let completed =
+            run_daily_kinds_check(days.clone(), days, &[("2026-11-16", 3), ("2026-11-17", 6)]);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.unwrap().findings;
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].entity, "20261116");
+        assert!(findings[0].details[0].contains("no activity row"));
     }
 
     // ── collection_daily_activity_consistency ─────────────────────────────

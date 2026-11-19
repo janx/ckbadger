@@ -1702,7 +1702,7 @@ describe('Address board · F2 blocks', () => {
         },
       ],
       participants: [
-        { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [] },
+        { address: null, lockHash: fixtureHash(802), lockHashPrefix: null, roles: [], sent: false },
       ],
     };
     const page = pageFixture([...addressActivitiesFixture, second]);

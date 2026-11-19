@@ -1016,6 +1016,50 @@ mod tests {
         }
     }
 
+    /// The senders bit is not a kind: a party that sent is listed by every
+    /// filter exactly as one that did not (a plain transfer's sender stays
+    /// "ckb").
+    #[test]
+    fn the_senders_bit_decides_no_activity_filter() {
+        let lock = vec![0xAA; 32];
+        for tags in [
+            0,
+            TAG_TOKEN,
+            TAG_OBJECT,
+            TAG_IDENTITY,
+            TAG_DAO,
+            TAG_PROTOCOL,
+            TAG_TYPE_CALL,
+            TAG_LOCK_CALL,
+        ] {
+            for filter in [
+                None,
+                Some("ckb"),
+                Some("token"),
+                Some("object"),
+                Some("identity"),
+                Some("dao"),
+                Some("type_call"),
+                Some("lock_call"),
+                Some("script"),
+            ] {
+                assert_eq!(
+                    tags_pass_filter(tags | TAG_INPUT, filter),
+                    tags_pass_filter(tags, filter),
+                    "tags {tags:#b}, filter {filter:?}"
+                );
+                let mut actions = make_tx_actions(100, 0, 0xAA);
+                actions.participants[0].tags = tags | TAG_INPUT;
+                let sent = CkbadgerStore::matches_activity_filter(&actions, &lock, filter).unwrap();
+                actions.participants[0].tags = tags;
+                let not_sent =
+                    CkbadgerStore::matches_activity_filter(&actions, &lock, filter).unwrap();
+                assert_eq!(sent, not_sent, "tags {tags:#b}, filter {filter:?}");
+            }
+        }
+        assert!(tags_pass_filter(TAG_INPUT, Some("ckb")));
+    }
+
     #[test]
     fn test_matches_activity_filter_script_is_type_or_lock_call() {
         let lock = vec![0xAA; 32];

@@ -250,6 +250,7 @@ Three testing systems: data integrity verification, per-endpoint benchmarking, a
 
 ```bash
 ckbadger verify --depth fast                       # Data integrity (10 checks, seconds)
+ckbadger verify --depth sampling                   # All 77: Fast 10, Sampling 41, Explorer 26
 make bench                                         # Per-endpoint latency baseline
 make stress STRESS_ARGS="--scenario api --auto-ramp"  # Find API breaking point
 ```

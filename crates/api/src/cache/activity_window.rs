@@ -1,9 +1,15 @@
 //! Exact rolling activity, retained only in API memory. Each canonical extension
-//! reads its new transactions once. A changed cached-tip hash rebuilds the window.
+//! reads its new transactions and its new blocks once. A changed cached-tip hash
+//! rebuilds the window.
+//!
+//! A cellbase has no `activities` row, so the window counts the cellbases from
+//! the canonical blocks it holds: one per block, the `tx_index` row at position
+//! 0, which consensus reserves for it. A block leaving the window takes its
+//! cellbase with it; a reorg rebuilds the window, cellbases included.
 use anyhow::{anyhow, ensure, Result};
 use ckbadger_common::stats_bucket::{DAY_MS, HOUR_MS};
 use ckbadger_store::types::ParticipantId;
-use ckbadger_store::{CachedBlockHeader, CkbadgerStore, DailyActivityStats};
+use ckbadger_store::{CachedBlockHeader, CkbadgerStore, ClassifiedTxActions, DailyActivityStats};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Mutex;
 
@@ -15,25 +21,28 @@ struct ActivityWindow {
     tip: Option<(i64, Vec<u8>)>,
     blocks: BTreeMap<i64, BlockActivity>,
     stats: DailyActivityStats,
-    activity_count: u64,
     addresses: HashMap<[u8; 32], u32>,
     hours: HashMap<i64, u32>,
+    /// Every canonical block of the window, number → chain time: one cellbase
+    /// each (`stats.coinbase_count` is their number).
+    cellbase_blocks: BTreeMap<i64, i64>,
 }
 
 struct BlockActivity {
     chain_time_ms: i64,
     stats: DailyActivityStats,
-    activity_count: u64,
     addresses: HashSet<[u8; 32]>,
 }
 
 impl ActivityWindowCache {
-    /// Call in a blocking task while the request's read view is pinned.
+    /// The window's activity and the UTC hours it covers. Call in a blocking
+    /// task while the request's read view is pinned. Its non-cellbase
+    /// transactions are `kind_counts.total()`: each is in exactly one kind.
     pub fn summary(
         &self,
         store: &CkbadgerStore,
         tip: Option<(i64, CachedBlockHeader)>,
-    ) -> Result<(DailyActivityStats, u32, u64)> {
+    ) -> Result<(DailyActivityStats, u32)> {
         let mut slot = self
             .0
             .lock()
@@ -41,7 +50,7 @@ impl ActivityWindowCache {
         // An error discards any partly updated memory; it never serves stale totals.
         let mut window = slot.take().unwrap_or_default();
         let Some((tip_number, tip_header)) = tip else {
-            return Ok((DailyActivityStats::default(), 0, 0));
+            return Ok((DailyActivityStats::default(), 0));
         };
         if let Some((number, hash)) = &window.tip {
             let extends = if *number > tip_number {
@@ -59,11 +68,7 @@ impl ActivityWindowCache {
             }
         }
         window.advance(store, tip_number, &tip_header)?;
-        let answer = (
-            window.stats.clone(),
-            u32::try_from(window.hours.len())?,
-            window.activity_count,
-        );
+        let answer = (window.stats.clone(), u32::try_from(window.hours.len())?);
         *slot = Some(window);
         Ok(answer)
     }
@@ -97,6 +102,8 @@ impl ActivityWindow {
             if page.is_empty() {
                 break;
             }
+            // Cellbases are counted from their blocks below, never from a row.
+            ckbadger_store::ensure_no_cellbase_activity(&page)?;
             for tx in &page {
                 ensure!(
                     tx.block_number <= tip_number,
@@ -119,23 +126,15 @@ impl ActivityWindow {
                     .or_insert_with(|| BlockActivity {
                         chain_time_ms: header.chain_time_ms,
                         stats: DailyActivityStats::default(),
-                        activity_count: 0,
                         addresses: HashSet::new(),
                     });
-                block.stats.accumulate_from_tx_actions(tx)?;
-                if !tx.is_cellbase {
-                    block.activity_count =
-                        block.activity_count.checked_add(1).ok_or_else(|| {
-                            anyhow!(
-                                "activity count overflow: block={} tx=0x{}",
-                                tx.block_number,
-                                hex::encode(&tx.tx_hash)
-                            )
-                        })?;
-                    for participant in &tx.participants {
-                        if let ParticipantId::Lock(hash) = participant.id {
-                            block.addresses.insert(hash);
-                        }
+                // The one classification the filter lists the transaction by.
+                block
+                    .stats
+                    .accumulate_from_tx_actions(ClassifiedTxActions::classify(tx))?;
+                for participant in &tx.participants {
+                    if let ParticipantId::Lock(hash) = participant.id {
+                        block.addresses.insert(hash);
                     }
                 }
             }
@@ -160,20 +159,78 @@ impl ActivityWindow {
             let (_, block) = self.blocks.pop_first().expect("checked nonempty window");
             self.apply(&block, false)?;
         }
+        self.add_cellbase_blocks(store, tip_number, old_tip, cutoff)?;
+        while self
+            .cellbase_blocks
+            .first_key_value()
+            .is_some_and(|(_, chain_time_ms)| *chain_time_ms <= cutoff)
+        {
+            self.cellbase_blocks.pop_first();
+        }
+        self.stats.coinbase_count = u32::try_from(self.cellbase_blocks.len())?;
         self.stats.unique_address_count = u32::try_from(self.addresses.len())?;
         self.tip = Some((tip_number, tip.hash.clone()));
         Ok(())
     }
 
-    fn apply(&mut self, block: &BlockActivity, add: bool) -> Result<()> {
-        self.activity_count = if add {
-            self.activity_count.checked_add(block.activity_count)
-        } else {
-            self.activity_count.checked_sub(block.activity_count)
+    /// The canonical blocks the window gains, `(old_tip, tip]` newest first
+    /// down to the cutoff (every block on a rebuild): each holds one cellbase,
+    /// its `tx_index` row at position 0, read with one `multi_get` a page. A
+    /// block without that row, or whose position 0 is no cellbase, is an
+    /// error naming the block: the window never counts a cellbase it did not
+    /// read.
+    fn add_cellbase_blocks(
+        &mut self,
+        store: &CkbadgerStore,
+        tip_number: i64,
+        old_tip: Option<i64>,
+        cutoff: i64,
+    ) -> Result<()> {
+        const PAGE_SIZE: usize = 2_000;
+        let mut from = Some(tip_number);
+        while let Some(start) = from {
+            let headers = store.list_blocks_desc(Some(start), PAGE_SIZE)?;
+            let gained: Vec<(i64, i64)> = headers
+                .iter()
+                .take_while(|(number, header)| {
+                    old_tip.is_none_or(|old| *number > old) && header.chain_time_ms > cutoff
+                })
+                .map(|(number, header)| (*number, header.chain_time_ms))
+                .collect();
+            let positions: Vec<(i64, i32)> =
+                gained.iter().map(|(number, _)| (*number, 0)).collect();
+            let entries = store.tx_index_entries_at("activity window cellbase", &positions)?;
+            for ((number, chain_time_ms), entry) in gained.iter().zip(entries) {
+                ensure!(
+                    entry.is_cellbase,
+                    "canonical block {number} transaction zero is not a cellbase"
+                );
+                ensure!(
+                    self.cellbase_blocks
+                        .insert(*number, *chain_time_ms)
+                        .is_none(),
+                    "duplicate rolling cellbase block {number}"
+                );
+            }
+            from = match (gained.len() == headers.len(), headers.last()) {
+                (true, Some((last, _))) if *last > 0 && headers.len() == PAGE_SIZE => {
+                    Some(last - 1)
+                }
+                _ => None,
+            };
         }
-        .ok_or_else(|| {
+        Ok(())
+    }
+
+    fn apply(&mut self, block: &BlockActivity, add: bool) -> Result<()> {
+        self.stats.kind_counts = if add {
+            self.stats.kind_counts.checked_add(&block.stats.kind_counts)
+        } else {
+            self.stats.kind_counts.checked_sub(&block.stats.kind_counts)
+        }
+        .map_err(|e| {
             anyhow!(
-                "rolling activity count overflow/underflow: chain_time_ms={}",
+                "rolling activity {e} at chain_time_ms={}",
                 block.chain_time_ms
             )
         })?;
@@ -184,19 +241,7 @@ impl ActivityWindow {
                     .ok_or_else(|| anyhow!("rolling activity {} overflow/underflow at chain_time_ms={}", stringify!($field), block.chain_time_ms))?;
             )+ };
         }
-        counters!(
-            transfer_count,
-            dao_deposit_count,
-            dao_withdraw_request_count,
-            dao_withdraw_complete_count,
-            token_count,
-            object_count,
-            identity_count,
-            script_call_count,
-            unknown_count,
-            coinbase_count,
-            total_ckb_moved
-        );
+        counters!(total_ckb_moved);
         for (key, count) in &block.stats.script_counts {
             update_count(&mut self.stats.script_counts, key.clone(), *count, add)?;
         }
@@ -298,13 +343,17 @@ mod tests {
                     semantic_tags: 0,
                 },
             );
+            if index == 0 {
+                // Production writes no `activities` row for a cellbase.
+                continue;
+            }
             batch.put_tx_actions(&TxActions {
                 block_number: number,
                 block_hash: vec![hash_byte; 32],
                 tx_hash: vec![index as u8; 32],
                 tx_index: index,
                 timestamp: time,
-                is_cellbase: index == 0,
+                is_cellbase: false,
                 protocol_actions: vec![],
                 type_calls: vec![],
                 lock_calls: vec![],
@@ -334,8 +383,8 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         let rebuild_us = started.elapsed().as_micros();
-        assert_eq!(initial.0.transfer_count, 128 * 31);
-        assert_eq!(initial.2, 128 * 31);
+        assert_eq!(initial.0.kind_counts.ckb, 128 * 31);
+        assert_eq!(initial.0.kind_counts.total(), 128 * 31);
         assert_eq!(initial.0.coinbase_count, 128);
         assert_eq!(initial.0.unique_address_count, 3);
         seed(&store, 128, DAY_MS + 128_000, 128, 32);
@@ -344,16 +393,16 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         let extension_us = started.elapsed().as_micros();
-        assert_eq!(extended.0.transfer_count, 129 * 31);
-        assert_eq!(extended.2, 129 * 31);
+        assert_eq!(extended.0.kind_counts.ckb, 129 * 31);
+        assert_eq!(extended.0.kind_counts.total(), 129 * 31);
         eprintln!("activity window synthetic: rebuild 4096 rows={rebuild_us}us; extension 32 rows={extension_us}us");
         // A window jump evicts whole blocks at the exact inclusive lower boundary.
         seed(&store, 129, 2 * DAY_MS + 127_000, 129, 32);
         let evicted = cache
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
-        assert_eq!(evicted.0.transfer_count, 2 * 31);
-        assert_eq!(evicted.2, 2 * 31);
+        assert_eq!(evicted.0.kind_counts.ckb, 2 * 31);
+        assert_eq!(evicted.0.kind_counts.total(), 2 * 31);
         assert_eq!(evicted.0.total_ckb_moved, 2 * 31 * 7);
         assert_eq!(evicted.0.unique_address_count, 2);
         // Same-height reorg changes a participant and lowers time, reopening the window.
@@ -368,10 +417,13 @@ mod tests {
             serde_json::to_value(&reorg).unwrap(),
             serde_json::to_value(&fresh).unwrap()
         );
-        assert_eq!(reorg.0.transfer_count, 130 * 31);
-        assert_eq!(reorg.2, 130 * 31);
+        assert_eq!(reorg.0.kind_counts.ckb, 130 * 31);
+        assert_eq!(reorg.0.kind_counts.total(), 130 * 31);
         assert_eq!(reorg.0.unique_address_count, 3);
-        assert_eq!(cache.summary(&store, None).unwrap().0.transfer_count, 0);
+        assert_eq!(
+            cache.summary(&store, None).unwrap().0.kind_counts.total(),
+            0
+        );
         assert!(cache.0.lock().unwrap().is_none());
     }
 
@@ -393,11 +445,18 @@ mod tests {
             let mut batch = StoreBatch::new(&store);
             batch.put_tx_actions(&tx);
             batch.commit().unwrap();
-            let (stats, _, _) = cache
+            let (stats, _) = cache
                 .summary(&store, store.get_sync_tip_block().unwrap())
                 .unwrap();
             assert_eq!(stats.coinbase_count, 1);
-            assert_eq!(stats.transfer_count, 0);
+            // The window holds this block only; its transaction is a DAO one.
+            assert_eq!(
+                stats.kind_counts,
+                ckbadger_store::ActivityKindCounts {
+                    dao: 1,
+                    ..Default::default()
+                }
+            );
             assert_eq!(stats.total_ckb_moved, 7);
             // re-pinned (lane rd/api-lock-names): a count is one script's,
             // keyed by its pair (`script_count_key`); aa64e305 left this red
@@ -409,9 +468,201 @@ mod tests {
                 stats.protocol_action_counts,
                 BTreeMap::from([(format!("dao:{action}"), 1)])
             );
-            assert_eq!(stats.dao_deposit_count, u32::from(number == 0));
-            assert_eq!(stats.dao_withdraw_request_count, u32::from(number == 1));
         }
+    }
+
+    /// A block as the indexer leaves it: its header with `transactions`
+    /// transactions, a `tx_index` row for each (position 0 the cellbase), and
+    /// an `activities` row for every transaction but the cellbase, which
+    /// production never writes.
+    fn seed_production_block(
+        store: &CkbadgerStore,
+        number: i64,
+        time: i64,
+        hash_byte: u8,
+        transactions: i32,
+    ) {
+        let mut batch = StoreBatch::new(store);
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![hash_byte; 32],
+                timestamp: time,
+                chain_time_ms: time,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: transactions,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+            },
+        );
+        for index in 0..transactions {
+            batch.put_tx_index(
+                number,
+                index,
+                &ckbadger_store::types::TxIndexEntry {
+                    tx_hash: [hash_byte.wrapping_add(index as u8); 32],
+                    is_cellbase: index == 0,
+                    timestamp: time,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 1,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            if index > 0 {
+                batch.put_tx_actions(&TxActions {
+                    block_number: number,
+                    block_hash: vec![hash_byte; 32],
+                    tx_hash: vec![hash_byte.wrapping_add(index as u8); 32],
+                    tx_index: index,
+                    timestamp: time,
+                    is_cellbase: false,
+                    protocol_actions: vec![],
+                    type_calls: vec![],
+                    lock_calls: vec![],
+                    participants: vec![ParticipantDelta {
+                        id: ParticipantId::Lock([hash_byte; 32]),
+                        ckb_delta: 7,
+                        used_delta: 0,
+                        item_deltas: vec![],
+                        tags: 0,
+                        roles: 0,
+                    }],
+                });
+            }
+        }
+        batch.commit().unwrap();
+    }
+
+    /// F-6 follow-up: the window's cellbases. A cellbase has no `activities`
+    /// row, so the window counts it from the canonical block that holds it,
+    /// one per block — blocks with only their cellbase included — and the
+    /// window's kinds plus its cellbases are its blocks' transactions. A
+    /// block leaving the window takes its cellbase with it, and a reorg's
+    /// rebuilt window equals a fresh one.
+    #[test]
+    fn the_window_counts_one_cellbase_per_block_and_kinds_plus_cellbases_are_its_transactions() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let summary = |cache: &ActivityWindowCache| {
+            cache
+                .summary(&store, store.get_sync_tip_block().unwrap())
+                .unwrap()
+                .0
+        };
+        // (block, its transactions with the cellbase); blocks 1 and 3 hold
+        // only their cellbase.
+        let blocks = [(0i64, 3i32), (1, 1), (2, 4), (3, 1), (4, 2), (5, 2)];
+        for (number, transactions) in blocks {
+            seed_production_block(
+                &store,
+                number,
+                DAY_MS + number * 1000,
+                number as u8 * 16,
+                transactions,
+            );
+        }
+        let cache = ActivityWindowCache::default();
+        let window = summary(&cache);
+        assert_eq!(
+            window.coinbase_count, 6,
+            "one cellbase per block of the window"
+        );
+        assert_eq!(
+            window.kind_counts.total() + u64::from(window.coinbase_count),
+            blocks.iter().map(|(_, t)| *t as u64).sum::<u64>(),
+            "kinds plus cellbases are the window's transactions"
+        );
+
+        // Block 6 moves the cutoff past blocks 0..=3: their cellbases leave.
+        seed_production_block(&store, 6, 2 * DAY_MS + 3_500, 0x60, 3);
+        let window = summary(&cache);
+        assert_eq!(window.coinbase_count, 3, "blocks 4, 5 and 6");
+        assert_eq!(
+            window.kind_counts.total() + u64::from(window.coinbase_count),
+            2 + 2 + 3
+        );
+
+        // A same-height reorg: block 6 replaced (a new hash, an earlier time
+        // that reopens the window to block 3): the rebuilt window is a fresh one.
+        seed_production_block(&store, 6, 2 * DAY_MS + 2_500, 0x61, 3);
+        let reorged = summary(&cache);
+        assert_eq!(reorged, summary(&ActivityWindowCache::default()));
+        assert_eq!(reorged.coinbase_count, 4, "blocks 3, 4, 5 and the new 6");
+        assert_eq!(
+            reorged.kind_counts.total() + u64::from(reorged.coinbase_count),
+            1 + 2 + 2 + 3
+        );
+    }
+
+    /// The window counts a cellbase only from its block's position 0: a block
+    /// without that `tx_index` row, or whose position 0 is no cellbase, is an
+    /// error naming the block, and an `activities` row for a cellbase (which
+    /// production never writes) is refused, so nothing is counted twice.
+    #[test]
+    fn the_window_reads_each_cellbase_at_its_blocks_position_zero_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_production_block(&store, 0, DAY_MS, 0x10, 2);
+        store
+            .delete_cf(
+                store.cf_tx_index(),
+                &ckbadger_store::keys::encode_tx_slot_key(0, 0),
+            )
+            .unwrap();
+        let error = ActivityWindowCache::default()
+            .summary(&store, store.get_sync_tip_block().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "activity window cellbase points at block=0, tx_idx=0, which has no tx_index row"
+            ),
+            "{error}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed_production_block(&store, 0, DAY_MS, 0x20, 2);
+        let mut entry = store.get_tx_index(0, 0).unwrap().unwrap();
+        entry.is_cellbase = false;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_index(0, 0, &entry);
+        batch.commit().unwrap();
+        let error = ActivityWindowCache::default()
+            .summary(&store, store.get_sync_tip_block().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("canonical block 0 transaction zero is not a cellbase"),
+            "{error}"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        seed(&store, 0, DAY_MS, 0x30, 2);
+        let mut cellbase_row = store.get_tx_actions(0, 1, &[1; 32]).unwrap().unwrap();
+        cellbase_row.tx_index = 0;
+        cellbase_row.tx_hash = vec![0; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&cellbase_row);
+        batch.commit().unwrap();
+        let error = ActivityWindowCache::default()
+            .summary(&store, store.get_sync_tip_block().unwrap())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("activities holds a cellbase row at block=0, tx_idx=0"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -442,8 +693,13 @@ mod tests {
         );
         assert!(cache.0.lock().unwrap().is_none());
     }
+    /// Each transaction of the window is counted once, in the kind the global
+    /// filter lists it under: a token and object transfer that also calls an
+    /// unrecognized type script is a token transaction; a CKB-only Fiber
+    /// channel open (F-6) is a protocol one. The kinds sum to the window's
+    /// non-cellbase transactions.
     #[test]
-    fn activity_count_counts_overlapping_and_protocol_only_transactions_once() {
+    fn every_window_transaction_is_counted_once_in_its_filter_kind() {
         use ckbadger_store::types::{ProtocolAction, TypeCallEntry, TAG_OBJECT, TAG_TOKEN};
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
@@ -467,9 +723,18 @@ mod tests {
             .summary(&store, store.get_sync_tip_block().unwrap())
             .unwrap();
         assert_eq!(
-            summary.0.token_count + summary.0.object_count + summary.0.script_call_count,
-            3
+            summary.0.kind_counts,
+            ckbadger_store::ActivityKindCounts {
+                token: 1,
+                protocol: 1,
+                ..Default::default()
+            }
         );
-        assert_eq!(serde_json::to_value(summary).unwrap()[2], 2, "two non-cellbase transactions, regardless of category overlap or protocol-only actions");
+        assert_eq!(summary.0.kind_counts.total(), 2);
+        assert_eq!(summary.0.coinbase_count, 1);
+        for tx in [&mixed, &protocol] {
+            let kind = ckbadger_store::classify_global_bucket(tx).unwrap();
+            assert_eq!(summary.0.kind_counts.get(kind), 1, "{}", kind.as_filter());
+        }
     }
 }

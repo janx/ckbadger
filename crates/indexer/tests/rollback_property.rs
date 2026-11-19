@@ -477,6 +477,83 @@ async fn assert_rollback_properties(
 }
 
 // ---------------------------------------------------------------------------
+// The senders bit through a rollback (resync/int, step 2)
+// ---------------------------------------------------------------------------
+
+/// Block `n`'s transfer as the domain store holds it: each party's lock
+/// hash and whether it sent ([`ckbadger_store::types::TAG_INPUT`]).
+fn transfer_senders(store: &CkbadgerStore, n: u64) -> Option<Vec<([u8; 32], bool)>> {
+    let tag = 0x100 + n as u16;
+    store
+        .get_tx_actions(n as i64, 1, &tx_hash(tag))
+        .unwrap()
+        .map(|actions| {
+            actions
+                .participants
+                .iter()
+                .map(|p| match p.id {
+                    ckbadger_store::types::ParticipantId::Lock(hash) => (hash, p.sent()),
+                    other => panic!("block {n}: a transfer party named by {other:?}"),
+                })
+                .collect()
+        })
+}
+
+/// The transfer chain's block `n` (1 ..) spends owner `n % 8 + 1`'s cell and
+/// pays owner `(n % 8 + 1) % 8 + 1`, the change back to the spender: the
+/// spender sent, the payee did not. Each lock hash is found as the one
+/// party whose CKB fell (the spender's: its input less its change).
+fn assert_transfer_senders(store: &CkbadgerStore, n: u64, context: &str) {
+    let parties = transfer_senders(store, n)
+        .unwrap_or_else(|| panic!("{context}: block {n}'s transfer has no TxActions row"));
+    assert_eq!(parties.len(), 2, "{context}: block {n}: {parties:?}");
+    let actions = store
+        .get_tx_actions(n as i64, 1, &tx_hash(0x100 + n as u16))
+        .unwrap()
+        .unwrap();
+    for p in &actions.participants {
+        assert_eq!(
+            p.sent(),
+            p.ckb_delta < 0,
+            "{context}: block {n}: the spender (its CKB fell) and only it sent: {:?}",
+            actions.participants
+        );
+    }
+}
+
+/// The senders bit lives in the `TxActions` and addr_txs rows, which a
+/// rollback deletes for the blocks it removes (`sync/undo.rs`): after rolling
+/// back from 7 to 3 the rows of blocks 1 ..= 3 keep their senders, those of
+/// 4 ..= 7 are gone, and the replay writes them again, senders and all, as the
+/// property's byte comparison (both forms) holds over the bit.
+#[tokio::test]
+async fn a_rollback_keeps_and_restores_the_senders_bit() {
+    let chain = transfer_chain(8);
+    let plan = [0..=2, 3..=5, 6..=7];
+    let stores = open_stores();
+    sync_prefix(&stores, &chain, &plan, 0, 7).await;
+    for n in 1..=7 {
+        assert_transfer_senders(&stores.domain, n, "at tip 7");
+    }
+    reorg_to(&stores.indexer, 3).await.unwrap();
+    for n in 1..=3 {
+        assert_transfer_senders(&stores.domain, n, "rolled back to 3");
+    }
+    for n in 4..=7 {
+        assert_eq!(
+            transfer_senders(&stores.domain, n),
+            None,
+            "block {n} is rolled back"
+        );
+    }
+    sync_prefix(&stores, &chain, &plan, 4, 7).await;
+    for n in 1..=7 {
+        assert_transfer_senders(&stores.domain, n, "replayed to 7");
+    }
+    assert_rollback_property(&chain, &plan, 7, 3).await;
+}
+
+// ---------------------------------------------------------------------------
 // The journal oracle (store refactor lane B, B-2 … B-4)
 // ---------------------------------------------------------------------------
 

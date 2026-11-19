@@ -15,7 +15,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 0,
+        "sent": true,
+        "tags": 256,
         "usedDelta": "-6100000000"
       },
       {
@@ -27,6 +28,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 0,
         "usedDelta": "6100000000"
       }
@@ -53,7 +55,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 0,
+        "sent": true,
+        "tags": 256,
         "usedDelta": "-6100000000"
       },
       {
@@ -65,6 +68,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 0,
         "usedDelta": "6100000000"
       }
@@ -105,7 +109,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 4,
+        "sent": true,
+        "tags": 260,
         "usedDelta": "-12900000000"
       },
       {
@@ -124,6 +129,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 4,
         "usedDelta": "12900000000"
       }
@@ -170,7 +176,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 2,
+        "sent": true,
+        "tags": 258,
         "usedDelta": "-20200000000"
       },
       {
@@ -195,6 +202,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 2,
         "usedDelta": "20200000000"
       }
@@ -228,7 +236,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 0,
+        "sent": true,
+        "tags": 256,
         "usedDelta": "0"
       },
       {
@@ -247,6 +256,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 4,
         "usedDelta": "12900000000"
       }
@@ -293,6 +303,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 2,
         "usedDelta": "20200000000"
       },
@@ -305,7 +316,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 0,
+        "sent": true,
+        "tags": 256,
         "usedDelta": "0"
       }
     ],
@@ -331,7 +343,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 0,
+        "sent": true,
+        "tags": 256,
         "usedDelta": "0"
       },
       {
@@ -343,6 +356,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 0,
         "usedDelta": "6100000000"
       }
@@ -389,6 +403,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 2,
         "usedDelta": "17100000000"
       },
@@ -401,7 +416,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 0,
+        "sent": true,
+        "tags": 256,
         "usedDelta": "0"
       }
     ],

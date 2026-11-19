@@ -101,8 +101,7 @@ and these codes, never their args)
   with their args.
 - `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
   An output's lock does not run: these are not the locks the transaction called. The locks that
-  ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
-  input flag (a re-sync).
+  ran, its inputs', are the parties that sent (`sent`, below).
 
 **Participants**
 
@@ -114,7 +113,8 @@ response shapes describe a party the same way:
   "address": "ckb1q...",
   "lockHash": "0x...",
   "lockHashPrefix": null,
-  "roles": []
+  "roles": [],
+  "sent": true
 }
 ```
 
@@ -130,8 +130,14 @@ response shapes describe a party the same way:
   empty for a plain cell participant.
 - A named party that held no cell has `ckbDelta` and `usedDelta` of exactly `"0"` — that zero is
   what happened, not a missing value — and its `addr_txs` row reports `txType: "named"`.
+- `sent` is `true` exactly when the party's lock is the lock of at least one input of the
+  transaction (one of its cells was consumed): the indexer's per-participant input flag
+  (`TAG_INPUT`, bit 8 of `tags`), set as the activity is built, the same on live sync and bulk
+  build; an input of zero capacity counts. A cellbase has no sender; a party a protocol only named
+  never sent. The folded feed row counts these parties as its "senders". Every participant states
+  it, the global activity's and the address activity's other parties alike.
 - `ActivityResponse.participants` are the OTHER parties; `ActivityResponse.roles` are this
-  participant's own roles.
+  participant's own roles and `ActivityResponse.sent` whether this participant sent.
 
 **Item deltas**
 
@@ -330,11 +336,14 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 **Params**
 
 - `ListParams` — `limit`, `block_number`, `cursor`, `activity_type`: one of `user`, `ckb`,
-  `script`, `cellbase`, `dao`, `token`, `object`, `identity` (none or `all`: every transaction).
-  `user` is every committed transaction but the cellbase, newest first, read from the
-  `activities` rows (which hold no cellbase) with their `tx_index` entries; the Transactions page
-  opens on it. A filtered list states no `total`. `/transactions/pool` takes the same values;
-  there `user` names every pool transaction (none is a cellbase), a partly read one too.
+  `script`, `cellbase`, `dao`, `token`, `object`, `identity`, `protocol` (none or `all`: every
+  transaction; any other value is `400`). Each kind but `user` and `cellbase` is one global activity
+  bucket, the classification the daily `kindCounts` count, so a kind lists what its count counts;
+  `user` is every committed transaction but the cellbase (the kinds together), newest first, read
+  from the `activities` rows (which hold no cellbase) with their `tx_index` entries; the
+  Transactions page opens on it. A filtered list states no `total`. `/transactions/pool` takes the
+  same values; there `user` names every pool transaction (none is a cellbase), a partly read one
+  too.
 - `Path(hash): Path<String>` — tx hash (with or without `0x`)
 
 **Responses**
@@ -606,36 +615,36 @@ status.
 
 ### statistics (crates/api/src/routes/statistics.rs)
 
-| Method | Path                                          | Handler                                  | Purpose                                                                                                    |
-| ------ | --------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status)                         |
-| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                                                    |
-| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                                                   |
-| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                                              |
-| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                                              |
-| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                                              |
-| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                                           |
-| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                                                     |
-| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                                                  |
-| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                                             |
-| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                                                 |
-| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                                                  |
-| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs or fewer) + its window                                   |
-| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                                                   |
-| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (whole ms) + blocks                                                                       |
-| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time (whole ms)                                                                        |
-| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                                                      |
-| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                                                     |
-| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                                                     |
-| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Miner distribution for the last 7 complete UTC+8 days                                                      |
-| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                                               |
-| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                                                 |
-| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown plus exact protocol-total and frozen phase-1 shannon metadata                 |
-| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                                         |
-| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (under 1 day … 3 years or more) + holder_count                                             |
-| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity breakdown by tx-type and script (param: `days`, default 30)                               |
-| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | Rolling 24h activity summary aggregated from hourly buckets                                                |
-| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`) |
+| Method | Path                                          | Handler                                  | Purpose                                                                                                       |
+| ------ | --------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/v1/statistics/network`                  | `get_network_stats`                      | Network stats (tip, hash rate, difficulty, TPS, DAO totals, sync/deep-fork status)                            |
+| GET    | `/api/v1/statistics/tx-stats`                 | `get_tx_stats`                           | Hourly + daily transaction-count timeseries (24h + 14d)                                                       |
+| GET    | `/api/v1/statistics/recent-blocks`            | `get_recent_blocks`                      | Recent 24h blocks (timestamp + tx count)                                                                      |
+| GET    | `/api/v1/charts/transaction-count`            | `get_transaction_count_chart`            | Daily transaction count chart                                                                                 |
+| GET    | `/api/v1/charts/cell-count`                   | `get_cell_count_chart`                   | Cell count chart (all/live/dead stacked area)                                                                 |
+| GET    | `/api/v1/charts/knowledge-size`               | `get_knowledge_size_chart`               | Common-knowledge-size chart with utilization%                                                                 |
+| GET    | `/api/v1/charts/common-knowledge-composition` | `get_common_knowledge_composition_chart` | Stacked area: transfer / DAO / UDT / NFT-Spore / other contracts                                              |
+| GET    | `/api/v1/charts/capacity-turnover-ratio`      | `get_capacity_turnover_ratio_chart`      | Daily + weekly capacity turnover chart                                                                        |
+| GET    | `/api/v1/charts/cell-size-distribution`       | `get_cell_size_distribution_chart`       | Cell-size histogram chart                                                                                     |
+| GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                                                |
+| GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                                                    |
+| GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                                                     |
+| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs or fewer) + its window                                      |
+| GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                                                      |
+| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (whole ms) + blocks                                                                          |
+| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time (whole ms)                                                                           |
+| GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                                                         |
+| GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                                                        |
+| GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                                                        |
+| GET    | `/api/v1/charts/miner-address-distribution`   | `get_miner_address_distribution_chart`   | Miner distribution for the last 7 complete UTC+8 days                                                         |
+| GET    | `/api/v1/charts/total-supply`                 | `get_total_supply_chart`                 | Total supply (circulating / DAO-locked / burnt) stacked area                                                  |
+| GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                                                    |
+| GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown plus exact protocol-total and frozen phase-1 shannon metadata                    |
+| GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                                            |
+| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (under 1 day … 3 years or more) + holder_count                                                |
+| GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity: transactions by kind (one kind each), protocol actions, scripts (param: `days`, default 30) |
+| GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | The same counts over the exact rolling 24h chain-time window                                                  |
+| GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`)    |
 
 **Params**
 
@@ -653,7 +662,20 @@ status.
 - `MinerDistributionResponse` — `data: Vec<MinerDistributionDataPoint>`, explicit
   `windowDays`/`fromDate`/`toDate`; each row exposes the canonical
   `minerLockHash` and an optional resolvable CKB `address`
-- `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`, one entry per script pair: `{codeHash, hashType, name, count}` (`name`: the registry's label of the pair, `null` when none)
+- `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per complete UTC+8 day (`date`) or
+  the 24h window (`hoursCovered`): `activityCount` (non-cellbase transactions, the sum of the kinds),
+  `kindCounts` `{dao, token, object, identity, protocol, script, ckb}` (each transaction in exactly
+  one kind, the one `/activities?filter=<kind>` lists it under, so each count is what that filter
+  lists), `coinbaseCount` (the cellbases: on a day, those the activity rows counted; in the 24h
+  window, one per canonical block it holds, read at the block's `tx_index` position 0),
+  `uniqueAddressCount`, `totalCkbMoved`, `scriptCounts: Vec<ScriptCountEntry>` (one entry per
+  script pair: `{codeHash, hashType, name, nameBy, count}`; `name` is the code the pair runs, by
+  the one naming rule, `null` when it runs no registered family's code; `nameBy` is the pair's hash
+  type where the pair is not the registry's reference for that code) and `protocolActionCounts`
+  (`protocol:action` → count of actions; the DAO split is `dao:deposit` / `dao:withdraw_request` /
+  `dao:withdraw_complete`). The per-layer fields `transferCount`, `daoDepositCount`,
+  `daoWithdrawRequestCount`, `daoWithdrawCompleteCount`, `tokenCount`, `objectCount`,
+  `identityCount`, `scriptCallCount` and `unknownCount` are gone (2026-11-18, F-6)
 - `CellSizeDistributionChartResponse` — the cell-size histogram (`ChartResponse`, flattened) and its two wholes
 - `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened), its window (`epochs`, `intervals`, `beyondRange`) and each bucket's count (`bucketCounts`)
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
@@ -735,26 +757,21 @@ bands it draws and the wholes it divides by, read-only on the store:
   (a percentage, six decimals), `/charts/address-cohort-retention` (a
   percentage, six decimals) and `/dao/charts/circulation-ratio` (a percentage,
   four decimals) cut their shares at their precision, never round.
-- `GET /stats/daily-activities` — each day's `kindOccurrences`: the eight kinds
-  the charts read (transfers, the three DAO actions, tokens, objects,
-  identities, script calls) summed. Kinds overlap, an action counting in each
-  kind it is, so this is not a count of distinct activities; coinbase and
-  unknown transactions are not in it. `daoCount` is the day's three DAO
-  actions (deposits, withdraw requests, completed withdraws) summed, the DAO
-  band of Activity by type. `userTransactionCount` is the day's user
-  transactions: its committed transactions (its `DailyStats` row) less its
-  cellbases (`coinbaseCount`), the figure the Transactions page's lede and
-  "all" chip, the Activities page's lede and the home's daily bars state; a
-  day without its chain row, or with more cellbases than transactions, is a
-  500 naming the date.
-- `GET /stats/activity-summary-24h` — the rolling window's `kindOccurrences`
-  and `daoCount`, counted as the daily rows count them (one helper each in the
-  route); the home page's activity shares divide by `kindOccurrences` and its
-  DAO share is `daoCount`. `scriptCounts` is ranked by calls, ties by code hash;
-  `scriptCalls` is every call it counts (a transaction calling two scripts
-  counts twice, so it is not `scriptCallCount`), and `scriptRest`
-  (`{ scripts, calls } | null`) the scripts after the five largest: the home
-  card's script shares and its "others" row, summed nowhere in the page.
+- `GET /stats/daily-activities` — each day's `activityCount`: its non-cellbase
+  transactions, the sum of its `kindCounts`. Each transaction is in exactly one kind (the one the
+  activity filter lists it under), so the kinds partition the day's activities: Activity by type
+  stacks them to `activityCount`, and `activityCount` is the figure the Transactions page's lede
+  and "all" chip, the Activities page's lede and the home's daily bars state (it is every
+  committed transaction of the day less its cellbases; verify S39 checks it against the day's
+  `DailyStats` transactions). The DAO kind counts DAO transactions; the DAO split by action is
+  `protocolActionCounts`. (`kindOccurrences`, `daoCount` and `userTransactionCount` are gone: the
+  first two carried the kinds' overlap, which F-6 removed, and the third is `activityCount`.)
+- `GET /stats/activity-summary-24h` — the rolling window's `activityCount` and `kindCounts`,
+  counted as the daily rows count them; the home page's activity shares are shares of
+  `activityCount`. `scriptCounts` is ranked by calls, ties by code hash; `scriptCalls` is every
+  call it counts (a transaction calling two scripts counts twice, so it is not the Script kind's
+  count), and `scriptRest` (`{ scripts, calls } | null`) the scripts after the five largest: the
+  home card's script shares and its "others" row, summed nowhere in the page.
 
 **What a page states outside the chart pages (lane exactness, part A)**
 

@@ -12,7 +12,8 @@ vi.mock('@/lib/api', () => ({
 }));
 
 const tx = '0x' + 'a'.repeat(64);
-const party = (n: number, ckbDelta: string, usedDelta: string) => ({
+/** A party; `sent` says whether its lock is an input's (the API's `sent`). */
+const party = (n: number, ckbDelta: string, usedDelta: string, sent: boolean) => ({
   address: seededAddress(`party${n}`),
   lockHash: '0x' + String(n).repeat(64),
   lockHashPrefix: null,
@@ -22,8 +23,12 @@ const party = (n: number, ckbDelta: string, usedDelta: string) => ({
   usedDelta,
   itemDeltas: [],
   tags: 16,
+  sent,
 });
-/** A withdrawal request as the board draws it: the request, the fee payer, and a zero-delta party. */
+/**
+ * A withdrawal request as the board draws it: the request (the depositor spends its deposit cell
+ * into the request cell, so it sent), the fee payer (sent), and a zero-delta party (did not).
+ */
 const activity = {
   txHash: tx,
   txIndex: 2,
@@ -32,9 +37,9 @@ const activity = {
   timestamp: '1793268770452',
   isCellbase: false,
   participants: [
-    party(1, '65296000000', '6100000000'),
-    party(2, '-65296000000', '-6100000000'),
-    party(3, '0', '0'),
+    party(1, '65296000000', '6100000000', true),
+    party(2, '-65296000000', '-6100000000', true),
+    party(3, '0', '0', false),
   ],
   typeCalls: [],
   lockCalls: [],
@@ -64,7 +69,10 @@ const request = (i: number) => ({
   ...activity,
   txHash: '0x' + String(i + 1).repeat(64),
   blockNumber: 123 - i,
-  participants: [party(4 + i, '65296000000', '6100000000'), ...activity.participants.slice(1)],
+  participants: [
+    party(4 + i, '65296000000', '6100000000', true),
+    ...activity.participants.slice(1),
+  ],
 });
 const deposit = (i: number) => ({
   ...request(i),
@@ -149,9 +157,10 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
         '3'
       )
     );
-    // three depositors, and the two parties every request shares
+    // re-pinned on purpose (resync/int: the run counts its senders, it counted 5 participants):
+    // three depositors, and the fee payer every request shares; the zero-delta party did not send
     expect(section.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 3 transactions ↓ · 5 participants$/
+      /^all 3 transactions ↓ · 4 senders$/
     );
     expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });

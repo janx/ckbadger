@@ -110,6 +110,7 @@ const activity: GlobalActivity = {
       ckbDelta: '100000001',
       usedDelta: '0',
       itemDeltas: [{ kind: 'token', typeScriptHash: hash, delta: '100000000000' }],
+      sent: false,
     },
   ],
   typeCalls: [],

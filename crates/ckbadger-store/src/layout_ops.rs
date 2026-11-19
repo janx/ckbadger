@@ -17,21 +17,35 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 /// One number for every layout change that needs a re-sync, raised by the
 /// change that needs it:
 ///
-/// - 1: a script is its pair (code hash, hash type), named by the code it
-///   runs. `script_info` is keyed `code_hash ‖ hash_type` and holds the
-///   labels of the registry's pseudo deployments only (Zero Lock, Type ID),
-///   no usage;
-///   `DailyActivityStats.script_counts` is keyed
-///   `"<code hash hex>:<hash type label>"`; a generic (non Type ID) type
-///   reference is counted in a family by the binaries its live code cells
-///   hold (`ReferenceCode`, the one family rule). A store from before carries no
-///   stamp: its `script_info` rows are keyed by the code hash alone and sum
-///   every hash type's usage.
-pub const STORE_LAYOUT: u32 = 1;
+/// - 1: the script changes alone (rd/script-pair-store, never re-synced on
+///   its own). A store stamped 1 lacks the changes of 2.
+/// - 2: the re-sync set (resync/all), one number for all of its changes:
+///   - pair-keyed script labels: `script_info` is keyed
+///     `code_hash ‖ hash_type` and holds the labels of the registry's pseudo
+///     deployments only (Zero Lock, Type ID), no usage; a script is named by
+///     the code its pair runs, and `DailyActivityStats.script_counts` is
+///     keyed `"<code hash hex>:<hash type label>"`;
+///   - usage counters of generic type references by their live code: a
+///     generic (non Type ID) type reference is counted in a family by the
+///     binaries its live code cells hold (`ReferenceCode`, the one family
+///     rule);
+///   - one-kind activity rows: each daily / hourly activity row counts each
+///     non-cellbase transaction in exactly one kind (`ActivityKindCounts`;
+///     the row's strict decode is [`crate::types::ACTIVITY_STATS_LAYOUT`]);
+///   - the senders bit: a participant's tags carry `TAG_INPUT` when its lock
+///     is the lock of at least one input (`tx_actions`, `addr_txs`,
+///     `addr_txs_by_prefix` values).
+///
+/// A store from before layouts were stamped carries no stamp: its
+/// `script_info` rows are keyed by the code hash alone and sum every hash
+/// type's usage, its activity rows are another layout, its participants
+/// carry no senders bit.
+pub const STORE_LAYOUT: u32 = 2;
 
-/// What [`STORE_LAYOUT`] changed last, for the refusal's words.
-pub const STORE_LAYOUT_CHANGE: &str =
-    "scripts named and counted by their pair (code hash, hash type)";
+/// What [`STORE_LAYOUT`] changed, for the refusal's words.
+pub const STORE_LAYOUT_CHANGE: &str = "scripts labelled, named and counted by their pair (code \
+     hash, hash type), generic type references counted by their live code, each transaction in \
+     one activity kind, the senders bit on participants";
 
 /// A store this build may use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,6 +205,19 @@ mod tests {
                 && words.contains(&format!("store layout {STORE_LAYOUT}"))
                 && words.contains("delete RocksDB and re-sync from genesis"),
             "{words}"
+        );
+    }
+
+    /// Stamp 1 is the script changes alone (rd/script-pair-store): a store
+    /// built by that branch lacks the re-sync set's activity rows and senders
+    /// bit, so this build refuses it.
+    #[test]
+    fn a_store_stamped_with_the_script_changes_alone_is_refused() {
+        let (_dir, store) = store();
+        store.set_store_layout(1).unwrap();
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Err(StoreLayoutMismatch { found: Some(1) })
         );
     }
 

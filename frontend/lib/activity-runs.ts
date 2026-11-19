@@ -27,15 +27,17 @@
  *    - `typeCalls`, the type scripts the indexer does not recognise;
  *    - `lockCalls`, the non-standard locks ATTACHED to the row's outputs. An output's lock does
  *      not run: these are not the locks the transaction ran. The locks that ran, its inputs', are
- *      not stated per activity yet; they wait for the indexer's per-participant input flag (a
- *      re-sync), which also turns a run's "participants" into "senders" (`FoldedActivityRow`);
+ *      the parties that sent (`RunParty.sent`, the indexer's per-participant input flag), which a
+ *      run counts as its "senders" (`FoldedActivityRow`), not compared;
  * 4. **the state**: both committed. A row still in the node's pool never folds (it is its own run):
- *    its status can change before the next read.
+ *    its status can change before the next read;
+ * 5. **a cellbase or not**: a cellbase has no input, so no party of it sent; a run of cellbases
+ *    folds with no count of senders, and never with a transaction that has one.
  *
  * The parties are NOT compared (the owner: "not the args, not the parties"), nor are amounts, items
  * moved, protocol facts and times: they are what the folded rows differ in, and the folded row
- * shows none of them. Nothing is summed: a run counts its rows and its parties (`runParties`), and
- * its newest time is its first row's (a feed is newest first). A run is consecutive by definition:
+ * shows none of them. Nothing is summed: a run counts its rows and the parties that sent
+ * (`runSenders`), and its newest time is its first row's (a feed is newest first). A run is consecutive by definition:
  * it never crosses a row whose key differs, so a row that says something else ends it.
  *
  * A run folds within the rows a feed has loaded. A cursor-paginated feed folds within its page: a
@@ -44,11 +46,13 @@
  * are consecutive on the screen.
  */
 
-/** A party of a row, by what names it. */
+/** A party of a row, by what names it, and whether it sent. */
 export interface RunParty {
   lockHash: string | null;
   lockHashPrefix: string | null;
   address: string | null;
+  /** Its lock is the lock of at least one input of the transaction (the API's `sent`). */
+  sent: boolean;
 }
 
 /** What a feed knows of a row, to compare it with its neighbours. */
@@ -59,6 +63,8 @@ export interface RunSubject {
   txHash: string;
   /** Null while the transaction is in the pool. */
   blockNumber: number | null;
+  /** The block's cellbase: it has no input, so none of its parties sent. */
+  isCellbase: boolean;
   protocolActions: readonly { protocol: string; action: string }[];
   typeCalls: readonly { typeCodeHash: string; typeHashType: string }[];
   lockCalls: readonly { lockCodeHash: string; lockHashType: string }[];
@@ -84,6 +90,7 @@ export function runKey(s: RunSubject): string {
   if (s.blockNumber === null) return JSON.stringify(['pending', s.txHash]);
   return JSON.stringify([
     'committed',
+    s.isCellbase ? 'cellbase' : 'transaction',
     s.title,
     multiset(s.protocolActions.map((a) => `${a.protocol}:${a.action}`)),
     codeSet(s.itemTypes.map((c) => `${c.typeCodeHash}|${c.typeHashType}`)),
@@ -93,12 +100,32 @@ export function runKey(s: RunSubject): string {
 }
 
 /**
- * How many parties a run's rows name, each once (by its full lock hash, else the 20-byte prefix a
- * protocol named it by, else its address): a count, the folded row's "N participants".
+ * How many parties of a run's rows sent, each once (by its full lock hash, else the 20-byte prefix a
+ * protocol named it by, else its address): a count, the folded row's "N senders". Every committed
+ * transaction but a cellbase has an input, so each row of a run of them names at least one sender;
+ * a row that names none, or a party that does not say whether it sent (an API older than this
+ * page), is refused, never counted as no sender. A run of cellbases has no senders to count.
  */
-export function runParties(subjects: readonly RunSubject[]): number {
+export function runSenders(subjects: readonly RunSubject[]): number {
   const ids = new Set<string>();
-  for (const s of subjects) for (const p of s.parties) ids.add(partyId(p, s.txHash));
+  for (const s of subjects) {
+    if (s.isCellbase) throw new Error(`transaction ${s.txHash}: a cellbase has no sender to count`);
+    let sent = false;
+    for (const p of s.parties) {
+      if (typeof p.sent !== 'boolean')
+        throw new Error(
+          `transaction ${s.txHash}: party ${partyId(p, s.txHash)} does not say whether it sent: the API is older than this page`
+        );
+      if (p.sent) {
+        ids.add(partyId(p, s.txHash));
+        sent = true;
+      }
+    }
+    if (!sent)
+      throw new Error(
+        `transaction ${s.txHash}: a committed transaction with no party that sent (every transaction but a cellbase has an input)`
+      );
+  }
   return ids.size;
 }
 

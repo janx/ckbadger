@@ -328,6 +328,7 @@ describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
               decimals: 6,
             },
           ],
+          sent: true,
         },
       ],
     },

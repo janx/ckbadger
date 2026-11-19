@@ -29,6 +29,8 @@ const party = (lock: string, kind: string, delta: string, items: ReturnType<type
   lockHashPrefix: null,
   lockKind: kind,
   tags: 4,
+  // a party whose CKB fell held an input
+  sent: delta.startsWith('-'),
   ckbDelta: delta,
   usedDelta: '0',
   itemDeltas: items,

@@ -32,24 +32,17 @@ it('links every chart drawn from activities (lane L)', async () => {
   );
 });
 
-// Re-pinned on purpose (the P3 follow-up's 2b): the count is the route's, the day's
-// userTransactionCount; the page read the day's transactions (60) from /stats/tx and subtracted
-// its cellbases (10) itself.
-it('uses the exact non-cellbase count instead of overlapping kind occurrences', async () => {
+// Re-pinned on purpose (the P3 follow-up's 2b, then F-6): the count is the route's, the day's
+// activityCount, every transaction but the cellbases in exactly one kind (it was the route's
+// userTransactionCount while the kinds overlapped; before that the page subtracted the cellbases).
+it('states the exact non-cellbase count, the route’s activityCount, which the kinds partition', async () => {
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     {
       ...dailyActivities[0],
       date: '20261025',
-      userTransactionCount: 50,
       coinbaseCount: 10,
-      transferCount: 12,
-      daoDepositCount: 1,
-      daoWithdrawRequestCount: 2,
-      daoWithdrawCompleteCount: 3,
-      tokenCount: 4,
-      objectCount: 5,
-      identityCount: 6,
-      scriptCallCount: 7,
+      activityCount: 50,
+      kindCounts: { dao: 3, token: 4, object: 5, identity: 6, protocol: 13, script: 7, ckb: 12 },
       uniqueAddressCount: 42,
     },
     { ...dailyActivities[0], date: '20261026', uniqueAddressCount: 9999 },
@@ -82,7 +75,12 @@ it('does not silently substitute stale statistics for a missing completed day', 
 it('selects UTC+8 yesterday at the UTC date boundary', async () => {
   vi.setSystemTime(new Date('2026-10-25T17:00:00Z'));
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
-    { ...dailyActivities[0], date: '20261025', userTransactionCount: 50 },
+    {
+      ...dailyActivities[0],
+      date: '20261025',
+      activityCount: 50,
+      kindCounts: { dao: 0, token: 0, object: 0, identity: 0, protocol: 0, script: 0, ckb: 50 },
+    },
   ]);
   render(<ActivitiesPage />);
   expect(await screen.findByText('50')).toBeInTheDocument();

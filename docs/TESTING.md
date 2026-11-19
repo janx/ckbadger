@@ -19,7 +19,7 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 
 ```bash
 ckbadger verify --depth fast              # 10 checks, seconds
-ckbadger verify --depth sampling          # 75 checks, minutes
+ckbadger verify --depth sampling          # 77 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -29,11 +29,11 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 ### Check Tiers
 
-| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| --------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F10)     | 10     | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant, data-hash index files code cells only, every genesis Type ID binary's impossible pairs named by none (scripts named by their pair), the store's layout is this build's (a skipped re-sync)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| **Sampling** (S1-S39) | 39     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards, token live cell counts vs the type index, collection daily activity counts vs activity rows, derived DAO depositor rows vs the DAO lifecycle, derived cluster activity counts vs activity rows, the derived `.bit` → `.bit Cell` index vs `.bit Cell` items, each script pair's live cells (the lookup) vs the cells the index lists by that pair |
-| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| --------------------- | ------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Fast** (F1-F10)     | 10     | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant, data-hash index files code cells only, every genesis Type ID binary's impossible pairs named by none (scripts named by their pair), the store's layout is this build's (a skipped re-sync)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| **Sampling** (S1-S41) | 41     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards, token live cell counts vs the type index, collection daily activity counts vs activity rows, derived DAO depositor rows vs the DAO lifecycle, derived cluster activity counts vs activity rows, the derived `.bit` → `.bit Cell` index vs `.bit Cell` items, each complete day's activity kinds and cellbases vs its transactions, each recent activity's senders vs its inputs' locks, each script pair's live cells (the lookup) vs the cells the index lists by that pair |
+| **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
 frozen DAO interest in treasury while also including it in deposit compensation. The verifier
@@ -105,7 +105,7 @@ wrote carries no stamp (`storeLayout: null`), an API from before the stamp state
 store before they write anything, and the API refuses it at open; this check is what
 `verify --depth fast` says when the re-sync was skipped while old services still run.
 
-`script_reference_live_cells_consistency` (Sampling) holds a script's figures to its own cells. For
+`script_reference_live_cells_consistency` (S41) holds a script's figures to its own cells. For
 every code hash in `/stats/activity-summary-24h` `scriptCounts`, by each of its four hash types, the
 lookup's `liveCellsCount` of the pair (its `script_reference_info` row, as lock plus as type) must
 equal the live cells `/cells/by-script` lists by that pair as lock and as type, walked to the end;
@@ -136,7 +136,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 75 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 77 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 
@@ -378,6 +378,32 @@ page (`--sample-count`): the `.bit` identity a `.bit Cell` names (`blake2b(name)
 in `bitCells` exactly when the `.bit Cell` is live, and every `.bit Cell` that `.bit` identity lists
 is live and names that account. A `.bit Cell` naming an account with no `.bit` identity on this
 chain is reported in the pass detail, not as a finding. It needs no RPC.
+
+### Daily Activity Kinds vs Transactions (S39)
+
+`daily_activity_kinds_partition_transactions` proves the one-kind rule of the daily activity rows
+(F-6, POSTMORTEM STATS-019) against a count written by other code: for every complete day of
+`/stats/daily-activities?days=0`, the sum of its `kindCounts` (each non-cellbase transaction in
+exactly one kind) plus its `coinbaseCount` must equal the day's transactions in
+`/charts/transaction-count`, which the chain stats writer counts from each block's transaction
+list (`DailyStats.transactions_count`). A transaction counted in no kind, or in two, is a finding
+naming the day, the kinds and the gap; so is a day the blocks carry transactions on that has no
+activity row, or the reverse. The activity rows are read before and after the transaction counts,
+and a day whose row moved between the two reads (a reorg across its end) is not compared; with
+no day compared the run is inconclusive. The cellbase count comes from the activity rows
+themselves (the API sends no independent per-day block count), so a transaction misfiled as a
+cellbase is outside this check. It needs no RPC and reads no `--sample-count`.
+
+### Senders vs Input Locks (S40)
+
+`participant_sent_matches_input_locks` proves the indexer's senders bit (`TAG_INPUT`, the API's
+`sent`) against the transaction's inputs as ckbadger's own cells hold them: for up to 50 recent
+activities (`/activities`, `--sample-count`), each `/transactions/{hash}` input's lock script is
+hashed here, and every party must state `sent` exactly when its lock is one of those input locks;
+every input's lock must be a party that sent. A party that sends with no input of its lock, holds
+one without sending, or an input lock that is no party is a finding naming the transaction and the
+lock. A store synced before the bit existed reads as "nobody sent" and fails on every activity.
+It needs no RPC.
 
 ### DAO Lifecycle vs Live DAO Cells (S31)
 

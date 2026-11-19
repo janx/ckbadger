@@ -959,23 +959,68 @@ describe('Transactions pool view', () => {
   });
 });
 
-it('keeps the pool banner above tabs and uses exact day counts even when kinds overlap', async () => {
+// F-6 follow-up: one classification, so the kinds are the user transactions, "all". The protocols
+// are a kind like the others (a count, a share of the bar, a filter), so no user transaction of the
+// day falls outside the kinds; the cellbases are a tab of their own.
+it('counts every user transaction of the day in one kind, Protocols included, so the kinds are all', async () => {
   const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     {
       ...dailyActivities[0],
       date: yesterday,
-      transferCount: 12,
-      tokenCount: 11,
+      activityCount: 17,
+      kindCounts: { dao: 2, token: 5, object: 0, identity: 1, protocol: 4, script: 3, ckb: 2 },
       coinbaseCount: 3,
-      daoDepositCount: 2,
-      daoWithdrawRequestCount: 1,
-      daoWithdrawCompleteCount: 0,
-      // the API's count of the DAO actions (lists lane P3: the page sums none)
-      daoCount: 3,
-      // re-pinned on purpose (the P3 follow-up's 2b): the route's count of the day's user
-      // transactions; the page read the day's 20 transactions from /stats/tx and subtracted 3
-      userTransactionCount: 17,
+      protocolActionCounts: { 'dao:deposit': 2, 'fiber:channel_open': 4 },
+    },
+  ]);
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({
+      data: [],
+      limit: 50,
+      nextCursor: null,
+      hasMore: false,
+      total: 0,
+    })
+  );
+  render(<TransactionsPage />);
+  await waitFor(() =>
+    expect(screen.getByRole('radio', { name: /^all/ })).toHaveTextContent('all 17')
+  );
+  expect(screen.getByRole('radio', { name: /^protocols/ })).toHaveTextContent(/^protocols 4$/);
+  const kinds = within(screen.getByRole('radiogroup', { name: 'kind' }))
+    .getAllByRole('radio')
+    .filter((chip) => !(chip.textContent ?? '').startsWith('all'))
+    .map((chip) => Number((chip.textContent ?? '').replace(/\D/g, '')));
+  expect(kinds.reduce((sum, count) => sum + count, 0)).toBe(17);
+  const bar = screen.getByRole('img', { name: "Yesterday's transactions by kind" });
+  const widths = [...bar.querySelectorAll('span')].map((span) => parseFloat(span.style.width));
+  expect(widths.reduce((sum, w) => sum + w, 0)).toBeCloseTo(100, 9);
+  fireEvent.click(screen.getByRole('radio', { name: /^protocols/ }));
+  await waitFor(() =>
+    expect(api.getTransactions).toHaveBeenLastCalledWith({
+      cursor: undefined,
+      limit: 50,
+      activityType: 'protocol',
+    })
+  );
+});
+
+// Re-pinned on purpose (F-6 merged; it was "… uses exact day counts even when kinds overlap"): the
+// kinds no longer overlap, so the DAO kind counts its two transactions (it counted the day's three
+// DAO actions) and no note says the kinds overlap or the DAO counts actions.
+it('keeps the pool banner above tabs and gives each kind its transactions, one kind each', async () => {
+  const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+  vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+    {
+      ...dailyActivities[0],
+      date: yesterday,
+      // 17 user transactions and 3 cellbases: the 20 of the day.
+      activityCount: 17,
+      kindCounts: { dao: 2, token: 11, object: 0, identity: 0, protocol: 0, script: 0, ckb: 4 },
+      coinbaseCount: 3,
+      // Three DAO actions in the two DAO transactions: the kind counts transactions.
+      protocolActionCounts: { 'dao:deposit': 2, 'dao:withdraw_request': 1 },
     },
   ]);
   vi.mocked(api.getTransactions).mockResolvedValue(
@@ -998,8 +1043,13 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
   await waitFor(() =>
     expect(screen.getByRole('radio', { name: /^all/ })).toHaveTextContent('all 17')
   );
-  expect(screen.getByRole('radio', { name: /^nervos dao/ })).toHaveTextContent(/^nervos dao 3$/);
-  expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
+  expect(screen.getByRole('radio', { name: /^nervos dao/ })).toHaveTextContent(/^nervos dao 2$/);
+  expect(screen.queryByText(/overlap|DAO counts actions/)).not.toBeInTheDocument();
+  expect(screen.getByText('Yesterday’s counts (UTC+8).')).toBeInTheDocument();
+  // The day's bar: every user transaction once, so its widths are shares of the 17.
+  const bar = screen.getByRole('img', { name: "Yesterday's transactions by kind" });
+  const widths = [...bar.querySelectorAll('span')].map((span) => parseFloat(span.style.width));
+  expect(widths.reduce((sum, w) => sum + w, 0)).toBeCloseTo(100, 9);
   expect(screen.getByRole('radio', { name: /^tokens/ })).toHaveTextContent('11');
   expect(screen.queryByRole('radio', { name: /^cellbase/ })).toBeNull();
   // what the page says first: the day's user transactions and its cellbases, apart
@@ -1037,8 +1087,8 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
   );
 });
 // Re-pinned on purpose (the P3 follow-up's 2b): the day's user transactions are its activity row's
-// (userTransactionCount), so a day without a complete row states no count; it was a day whose
-// /stats/tx bucket was incomplete ("No complete transaction count for …").
+// (activityCount since F-6; userTransactionCount before it), so a day without a complete row states
+// no count; it was a day whose /stats/tx bucket was incomplete ("No complete transaction count for …").
 it('does not infer a transaction total from kind counts when yesterday is incomplete', async () => {
   const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
   const before = new Date(Date.now() + 8 * 3600000 - 2 * 86400000).toISOString().slice(0, 10);
@@ -1205,7 +1255,12 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
     atViewportWidth(390);
     const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
     vi.mocked(api.getDailyActivityStats).mockResolvedValue([
-      { ...dailyActivities[0], date: yesterday, tokenCount: 11, coinbaseCount: 3 },
+      {
+        ...dailyActivities[0],
+        date: yesterday,
+        kindCounts: { ...dailyActivities[0].kindCounts, token: 11 },
+        coinbaseCount: 3,
+      },
     ]);
     vi.mocked(api.getTransactions).mockResolvedValue(
       pagedRead({
@@ -1230,8 +1285,9 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
       within(select)
         .getAllByRole('option')
         .map((o) => o.getAttribute('value'))
-      // re-pinned on purpose (lists lane P3): the cellbases are a tab of their own, no kind
-    ).toEqual(['all', 'ckb', 'script', 'dao', 'token', 'object', 'identity']);
+      // re-pinned on purpose (lists lane P3): the cellbases are a tab of their own, no kind; F-6
+      // gave the protocols a kind of their own, last
+    ).toEqual(['all', 'ckb', 'script', 'dao', 'token', 'object', 'identity', 'protocol']);
     expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^all/);
     expect(screen.queryByRole('radiogroup', { name: 'kind' })).toBeNull();
     // Re-pinned on purpose (lane D4, PA-20): the pool's strip keeps its figures below sm (it was

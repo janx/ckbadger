@@ -215,16 +215,16 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
   }),
   'chart-activity-volume': () => ({
     overview:
-      'Counts each complete UTC+8 day’s activities under every kind they are, across transfers, DAO changes, tokens, objects, identities and script calls: an activity of two kinds counts under both, so the series is the day’s kind counts, more than its activities.',
+      'Counts each complete UTC+8 day’s activities: its committed transactions but the cellbases, each in exactly one kind, across CKB transfers, Nervos DAO, tokens, objects, identities, script calls and protocols.',
     formula:
-      'value = kindOccurrences = transferCount + daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount + tokenCount + objectCount + identityCount + scriptCallCount, as the route sums them.',
+      'value = activityCount = the day’s committed transactions − its cellbases = kindCounts.ckb + dao + token + object + identity + script + protocol, one kind each.',
     legendItems: [],
   }),
   'chart-activity-type-breakdown': () => ({
     overview:
-      'Splits each day’s kind counts by kind: a band is the day’s activities of its kind, and the stack, the kinds summed, counts an activity of two kinds under both.',
+      'Splits each complete UTC+8 day’s activities by kind, the one the Activities filter lists each under: each activity is in exactly one kind, so the bands stack to the day’s activities.',
     formula:
-      'transfer = transferCount; dao = daoCount = daoDepositCount + daoWithdrawRequestCount + daoWithdrawCompleteCount, as the route sums them; token = tokenCount; object = objectCount; identity = identityCount; scriptCall = scriptCallCount.',
+      'transfer = kindCounts.ckb; dao = kindCounts.dao; token = kindCounts.token; object = kindCounts.object; identity = kindCounts.identity; scriptCall = kindCounts.script; protocol = kindCounts.protocol; Σ = activityCount.',
     legendItems: [],
   }),
   'chart-active-addresses': () => ({

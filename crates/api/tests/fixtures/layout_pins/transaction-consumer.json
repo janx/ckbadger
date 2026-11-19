@@ -15,7 +15,8 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
-        "tags": 0,
+        "sent": true,
+        "tags": 256,
         "usedDelta": "-6100000000"
       },
       {
@@ -27,6 +28,7 @@
         "lockKind": "Default Lock",
         "lockKindBy": null,
         "roles": [],
+        "sent": false,
         "tags": 0,
         "usedDelta": "6100000000"
       }

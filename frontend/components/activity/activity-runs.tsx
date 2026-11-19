@@ -5,7 +5,7 @@ import {
   rowReadFails,
   type ActivityRowData,
 } from '@/components/activity/activity-row';
-import { foldRuns, runKey, runParties, type RunSubject } from '@/lib/activity-runs';
+import { foldRuns, runKey, runSenders, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
 import { readable } from '@/components/activity-event-row';
 
@@ -68,6 +68,7 @@ export function runSubject(
     title,
     txHash: activity.txHash,
     blockNumber: activity.blockNumber,
+    isCellbase: activity.isCellbase,
     protocolActions: activity.protocolActions,
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
@@ -159,10 +160,13 @@ export function ActivityRuns({
               {readable(lead.key, () => lead.row, versionOf(lead))}
             </Fragment>,
           ];
-        const folded = (
+        // drawn inside the run's boundary, so a run that cannot be counted (no party of a
+        // transaction sent) is refused in its place, as a row is
+        const folded = () => (
           <FoldedActivityRow
             rows={run.map((r) => r.activity)}
-            participants={runParties(run.map(subjectOf))}
+            // a run of cellbases has no sender to count (none of them has an input)
+            senders={lead.activity.isCellbase ? null : runSenders(run.map(subjectOf))}
             title={lead.title}
             showScriptDetails={showScriptDetails}
             age={age}
@@ -173,7 +177,7 @@ export function ActivityRuns({
             onToggle={() => toggle(run, isOpen)}
           />
         );
-        const headed = <Fragment key={`run:${head}`}>{readable(head, () => folded)}</Fragment>;
+        const headed = <Fragment key={`run:${head}`}>{readable(head, folded)}</Fragment>;
         return isOpen
           ? [
               headed,

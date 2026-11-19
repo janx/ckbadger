@@ -17,8 +17,9 @@ export default function ActivitiesPage() {
   });
   const yesterday = previousChainDay();
   const summary = data ? completedYesterdayActivities(data) : undefined;
-  // yesterday's activities: the day's user transactions, the route's count (no page subtracts)
-  const count = summary?.userTransactionCount;
+  // yesterday's activities, the route's count: every transaction but the cellbases, each in one
+  // kind (no page sums)
+  const count = summary?.activityCount;
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
@@ -59,7 +60,7 @@ export default function ActivitiesPage() {
           ) : (
             <div className="bg-base-surface h-5 w-72 animate-pulse" />
           )}
-          <ActivitiesStreamExplorer summary={summary} totalCount={count} />
+          <ActivitiesStreamExplorer summary={summary} />
         </DetailLayout>
         <TopicCharts topic="/activities" />
       </main>

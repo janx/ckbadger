@@ -7,6 +7,7 @@ use ckbadger_common::dao::{calculate_estimated_apc, extract_s_from_dao};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::*;
+use ckbadger_store::ClassifiedTxActions;
 
 use super::BatchWriter;
 
@@ -32,18 +33,16 @@ fn deserialize_stats<T: serde::de::DeserializeOwned>(raw: &[u8], metric: &str) -
     })
 }
 
-/// Accumulate activity stats from a single TxActions into DailyActivityStats.
-///
-/// This is called once per transaction. Stats are accumulated per-tx:
-/// - DAO counts: from tx_actions.protocol_actions (protocol == "dao")
-/// - Token/Object/Identity counts: from participant.tags bitmask
+/// Accumulate one transaction's activity stats into DailyActivityStats,
+/// from the classification its sync path made once
+/// (`DailyActivityStats::accumulate_from_tx_actions`):
+/// - Kind counts: the transaction's global bucket, one kind each
+/// - Coinbase: a cellbase (no bucket), counted in nothing else
 /// - Protocol action counts: from tx_actions.protocol_actions (TX-level)
 /// - Script counts: from tx_actions.type_calls + lock_calls code_hashes (TX-level)
-/// - CKB moved: sum |participant.ckb_delta| for non-cellbase
-/// - Transfer count: participant has no asset/protocol/script flags
-/// - Coinbase: tx_actions.is_cellbase
+/// - CKB moved: the positive participant CKB deltas of a non-cellbase transaction
 fn accumulate_tx_actions_stats(
-    tx_actions: &TxActions,
+    tx_actions: ClassifiedTxActions<&TxActions>,
     stats: &mut DailyActivityStats,
 ) -> anyhow::Result<()> {
     stats.accumulate_from_tx_actions(tx_actions)
@@ -678,9 +677,10 @@ impl BatchWriter {
     }
 
     /// Accumulate activity stats from a TxActions into DailyActivityStats.
-    /// Call once per TxActions from build_tx_actions_for_block().
+    /// Call once per TxActions from build_tx_actions_for_block(), with the
+    /// classification the transaction's bucket row is written from.
     pub fn accumulate_tx_activity_stats(
-        tx_actions: &TxActions,
+        tx_actions: ClassifiedTxActions<&TxActions>,
         stats: &mut DailyActivityStats,
     ) -> anyhow::Result<()> {
         accumulate_tx_actions_stats(tx_actions, stats)
@@ -730,11 +730,17 @@ impl BatchWriter {
             }
         }
         let key = kind.stats_key(bucket)?;
+        // A row of an older layout is a store written before each
+        // transaction counted in one kind: rebuild-required, never misread.
         let existing: Option<DailyActivityStats> = batch
             .get_stats(&key)?
-            .map(|raw| deserialize_stats(&raw, "activity bucket stats"))
+            .map(|raw| DailyActivityStats::decode(bucket, &raw))
             .transpose()
-            .with_context(|| format!("{kind:?} activity bucket {bucket}"))?;
+            .map_err(|e| {
+                anyhow::Error::new(crate::lifecycle::RebuildRequiredError::new(format!(
+                    "{kind:?} activity bucket: {e:#}"
+                )))
+            })?;
         let mut new_addrs = 0u32;
         for lock_hash in block_addrs {
             let row_key = kind.addr_row_key(bucket, lock_hash)?;
@@ -772,7 +778,7 @@ impl BatchWriter {
                 row
             }
         };
-        batch.put_stats(&key, &bincode::serialize(&merged)?);
+        batch.put_stats(&key, &merged.encode());
         Ok(())
     }
 
@@ -3965,9 +3971,9 @@ mod activity_stats_tests {
     use std::sync::Arc;
 
     use ckbadger_store::types::{
-        DailyActivityStats, IdentityStandard, ItemDelta, ItemKind, ParticipantDelta,
-        ProtocolAction, TxActions, TypeCallEntry, TAG_DAO, TAG_IDENTITY, TAG_OBJECT, TAG_TOKEN,
-        TAG_TYPE_CALL,
+        ActivityKindCounts, DailyActivityStats, IdentityStandard, ItemDelta, ItemKind,
+        ParticipantDelta, ProtocolAction, TxActions, TypeCallEntry, TAG_DAO, TAG_IDENTITY,
+        TAG_OBJECT, TAG_TOKEN, TAG_TYPE_CALL,
     };
     use ckbadger_store::CkbadgerStore;
 
@@ -3992,6 +3998,38 @@ mod activity_stats_tests {
         }
     }
 
+    /// The sync paths' order: classify the transaction once, accumulate
+    /// that classification.
+    fn accumulate(actions: &TxActions, stats: &mut DailyActivityStats) {
+        accumulate_tx_actions_stats(ClassifiedTxActions::classify(actions), stats).unwrap();
+    }
+
+    /// The kind counts with exactly one kind at `n`.
+    fn only(kind: ckbadger_store::GlobalBucket, n: u32) -> ActivityKindCounts {
+        let mut counts = ActivityKindCounts::default();
+        for _ in 0..n {
+            counts = counts
+                .checked_add(&kind_unit(kind))
+                .expect("small test counts");
+        }
+        counts
+    }
+
+    fn kind_unit(kind: ckbadger_store::GlobalBucket) -> ActivityKindCounts {
+        use ckbadger_store::GlobalBucket as K;
+        let mut c = ActivityKindCounts::default();
+        match kind {
+            K::Dao => c.dao = 1,
+            K::Token => c.token = 1,
+            K::Object => c.object = 1,
+            K::Identity => c.identity = 1,
+            K::Protocol => c.protocol = 1,
+            K::Script => c.script = 1,
+            K::Ckb => c.ckb = 1,
+        }
+        c
+    }
+
     fn make_participant(ckb_delta: i128, tags: u16) -> ParticipantDelta {
         ParticipantDelta {
             id: ckbadger_store::types::ParticipantId::Lock([0xAA; 32]),
@@ -4012,9 +4050,9 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
+        accumulate(&actions, &mut stats);
         assert_eq!(stats.coinbase_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        assert_eq!(stats.kind_counts, ActivityKindCounts::default());
         assert_eq!(stats.total_ckb_moved, 0);
         assert!(stats.script_counts.is_empty());
     }
@@ -4028,8 +4066,11 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.transfer_count, 1);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Ckb, 1)
+        );
         assert_eq!(stats.coinbase_count, 0);
         assert_eq!(stats.total_ckb_moved, 0);
     }
@@ -4047,9 +4088,12 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.dao_deposit_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Dao, 1)
+        );
+        assert_eq!(stats.protocol_action_counts["dao:deposit"], 1);
     }
 
     #[test]
@@ -4065,9 +4109,12 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.dao_withdraw_request_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Dao, 1)
+        );
+        assert_eq!(stats.protocol_action_counts["dao:withdraw_request"], 1);
     }
 
     #[test]
@@ -4083,9 +4130,12 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.dao_withdraw_complete_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Dao, 1)
+        );
+        assert_eq!(stats.protocol_action_counts["dao:withdraw_complete"], 1);
     }
 
     #[test]
@@ -4106,9 +4156,11 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.token_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Token, 1)
+        );
     }
 
     #[test]
@@ -4129,9 +4181,11 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.object_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Object, 1)
+        );
     }
 
     #[test]
@@ -4152,13 +4206,15 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.identity_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Identity, 1)
+        );
     }
 
     #[test]
-    fn test_mixed_token_and_dao_counts_both() {
+    fn test_mixed_token_and_dao_counts_in_dao_only() {
         let mut stats = DailyActivityStats::default();
         let actions = make_tx_actions(
             false,
@@ -4175,17 +4231,20 @@ mod activity_stats_tests {
             vec![ProtocolAction::new("dao", "deposit", serde_json::json!({}))],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.dao_deposit_count, 1);
-        assert_eq!(stats.token_count, 1);
-        assert_eq!(stats.transfer_count, 0);
+        accumulate(&actions, &mut stats);
+        // One transaction, one kind: the filter lists it under DAO.
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Dao, 1)
+        );
+        assert_eq!(stats.protocol_action_counts["dao:deposit"], 1);
     }
 
     #[test]
     fn test_multiple_txactions_accumulate() {
         let mut stats = DailyActivityStats::default();
         // 2 transfers + 1 coinbase
-        accumulate_tx_actions_stats(
+        accumulate(
             &make_tx_actions(
                 false,
                 vec![make_participant(-50_00000000, 0)],
@@ -4193,9 +4252,8 @@ mod activity_stats_tests {
                 vec![],
             ),
             &mut stats,
-        )
-        .unwrap();
-        accumulate_tx_actions_stats(
+        );
+        accumulate(
             &make_tx_actions(
                 false,
                 vec![make_participant(30_00000000, 0)],
@@ -4203,9 +4261,8 @@ mod activity_stats_tests {
                 vec![],
             ),
             &mut stats,
-        )
-        .unwrap();
-        accumulate_tx_actions_stats(
+        );
+        accumulate(
             &make_tx_actions(
                 true,
                 vec![make_participant(100_00000000, 0)],
@@ -4213,9 +4270,11 @@ mod activity_stats_tests {
                 vec![],
             ),
             &mut stats,
-        )
-        .unwrap();
-        assert_eq!(stats.transfer_count, 2);
+        );
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Ckb, 2)
+        );
         assert_eq!(stats.coinbase_count, 1);
         assert_eq!(stats.total_ckb_moved, 30_00000000);
     }
@@ -4229,7 +4288,7 @@ mod activity_stats_tests {
             vec![],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
+        accumulate(&actions, &mut stats);
         assert_eq!(stats.total_ckb_moved, 0);
     }
 
@@ -4246,10 +4305,76 @@ mod activity_stats_tests {
                 type_args: vec![0xEE; 20],
             }],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
-        assert_eq!(stats.script_call_count, 1);
-        assert_eq!(stats.transfer_count, 0);
-        assert_eq!(stats.unknown_count, 0);
+        accumulate(&actions, &mut stats);
+        assert_eq!(
+            stats.kind_counts,
+            only(ckbadger_store::GlobalBucket::Script, 1)
+        );
+    }
+
+    /// The kinds (global filter names) one transaction's accumulation put it
+    /// in, once per counter that moved.
+    fn counted_kinds(stats: &DailyActivityStats) -> Vec<&'static str> {
+        let mut kinds = Vec::new();
+        for kind in ckbadger_store::GlobalBucket::ALL {
+            kinds.extend(std::iter::repeat_n(
+                kind.as_filter(),
+                stats.kind_counts.get(kind) as usize,
+            ));
+        }
+        kinds
+    }
+
+    /// F-6: every protocol the production detectors know (both networks),
+    /// and the DAO, may act on CKB alone — no item delta, no unrecognized
+    /// type script (a Fiber channel open, a `.bit` renewal, a UTXOSwap
+    /// intent). Each such transaction is counted in exactly one kind: the
+    /// one the global filter lists it under.
+    #[test]
+    fn a_ckb_only_action_of_every_known_protocol_lands_in_its_filter_kind() {
+        let mut protocols: Vec<&'static str> = [true, false]
+            .into_iter()
+            .flat_map(|mainnet| {
+                crate::db::writer::activities::production_detectors(mainnet)
+                    .iter()
+                    .map(|detector| detector.protocol())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        protocols.push("dao");
+        protocols.sort_unstable();
+        protocols.dedup();
+        assert!(protocols.len() >= 7, "{protocols:?}");
+        let mut failures = Vec::new();
+        for protocol in &protocols {
+            let (tags, action) = if *protocol == "dao" {
+                (ckbadger_store::types::TAG_PROTOCOL | TAG_DAO, "deposit")
+            } else {
+                (ckbadger_store::types::TAG_PROTOCOL, "probe")
+            };
+            let actions = make_tx_actions(
+                false,
+                vec![make_participant(-61_00000000, tags)],
+                vec![ProtocolAction::new(
+                    *protocol,
+                    action,
+                    serde_json::json!({}),
+                )],
+                vec![],
+            );
+            let expected = ckbadger_store::classify_global_bucket(&actions)
+                .expect("a non-cellbase transaction has a bucket")
+                .as_filter();
+            let mut stats = DailyActivityStats::default();
+            accumulate(&actions, &mut stats);
+            let got = counted_kinds(&stats);
+            if got != vec![expected] {
+                failures.push(format!(
+                    "{protocol}: filter lists it under {expected}, counted in {got:?}"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
     }
 
     #[test]
@@ -4265,7 +4390,7 @@ mod activity_stats_tests {
             )],
             vec![],
         );
-        accumulate_tx_actions_stats(&actions, &mut stats).unwrap();
+        accumulate(&actions, &mut stats);
         assert_eq!(
             *stats
                 .protocol_action_counts
@@ -4282,7 +4407,10 @@ mod activity_stats_tests {
         let writer = BatchWriter::new(store.clone(), store.clone());
         let mut batch = StoreBatch::new(&store);
         let stats = DailyActivityStats {
-            transfer_count: 5,
+            kind_counts: ActivityKindCounts {
+                ckb: 5,
+                ..Default::default()
+            },
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
@@ -4309,7 +4437,7 @@ mod activity_stats_tests {
             .get_hourly_activity_stats("2026030912")
             .unwrap()
             .unwrap();
-        assert_eq!(got.transfer_count, 5);
+        assert_eq!(got.kind_counts.ckb, 5);
         assert_eq!(got.unique_address_count, 3);
     }
 
@@ -4322,7 +4450,10 @@ mod activity_stats_tests {
         // First write: 3 addresses (bytes 0, 1, 2)
         let mut batch = StoreBatch::new(&store);
         let s1 = DailyActivityStats {
-            transfer_count: 5,
+            kind_counts: ActivityKindCounts {
+                ckb: 5,
+                ..Default::default()
+            },
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
@@ -4348,8 +4479,11 @@ mod activity_stats_tests {
         // Merge write: 7 addresses (bytes 1..8), 2 overlap with first batch
         let mut batch2 = StoreBatch::new(&store);
         let s2 = DailyActivityStats {
-            transfer_count: 10,
-            dao_deposit_count: 2,
+            kind_counts: ActivityKindCounts {
+                ckb: 10,
+                dao: 2,
+                ..Default::default()
+            },
             total_ckb_moved: 100_00000000,
             ..Default::default()
         };
@@ -4376,8 +4510,8 @@ mod activity_stats_tests {
             .get_hourly_activity_stats("2026030912")
             .unwrap()
             .unwrap();
-        assert_eq!(got.transfer_count, 15);
-        assert_eq!(got.dao_deposit_count, 2);
+        assert_eq!(got.kind_counts.ckb, 15);
+        assert_eq!(got.kind_counts.dao, 2);
         assert_eq!(got.total_ckb_moved, 150_00000000);
         // Cross-batch dedup: {0,1,2} ∪ {1,2,3,4,5,6,7} = 8 unique addresses
         assert_eq!(got.unique_address_count, 8);
@@ -4396,7 +4530,10 @@ mod activity_stats_tests {
         addrs: &[[u8; 32]],
     ) -> DailyActivityStats {
         let block_stats = DailyActivityStats {
-            transfer_count: 1,
+            kind_counts: ActivityKindCounts {
+                ckb: 1,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let addrs: BTreeSet<[u8; 32]> = addrs.iter().copied().collect();
@@ -4413,7 +4550,126 @@ mod activity_stats_tests {
         let key = keys::ActivityBucketKind::Daily
             .stats_key("20260309")
             .unwrap();
-        bincode::deserialize(&batch.get_stats(&key).unwrap().unwrap()).unwrap()
+        DailyActivityStats::decode("20260309", &batch.get_stats(&key).unwrap().unwrap()).unwrap()
+    }
+
+    /// F-6, rollback: a rolled-back block takes its transactions back out of
+    /// its day, kind by kind. Block 10 writes a DAO deposit and a CKB-only
+    /// Fiber channel open; block 11 a token transfer, a `.bit` renewal, a
+    /// plain transfer and its cellbase. Rolling back to 10 leaves the row
+    /// block 10 left — every kind, the coinbase count and the DAO action
+    /// split — and rolling back before 10 removes the row it created.
+    #[test]
+    fn a_rolled_back_block_takes_its_kind_counts_back_out() {
+        use ckbadger_store::types::CachedBlockHeader;
+        use ckbadger_store::GlobalBucket as K;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let day = "20261117";
+        let tx = |block: i64, index: i32, tags: u16, protocol: Option<(&str, &str)>| {
+            let mut actions = make_tx_actions(
+                index == 0,
+                vec![make_participant(-61_00000000, tags)],
+                protocol
+                    .map(|(p, a)| vec![ProtocolAction::new(p, a, serde_json::json!({}))])
+                    .unwrap_or_default(),
+                vec![],
+            );
+            actions.block_number = block;
+            actions.tx_index = index;
+            actions
+        };
+        let protocol = ckbadger_store::types::TAG_PROTOCOL;
+        let blocks = [
+            (
+                10,
+                vec![
+                    tx(10, 0, 0, None),
+                    tx(10, 1, protocol | TAG_DAO, Some(("dao", "deposit"))),
+                    tx(10, 2, protocol, Some(("fiber", "channel_open"))),
+                ],
+            ),
+            (
+                11,
+                vec![
+                    tx(11, 0, 0, None),
+                    tx(11, 1, TAG_TOKEN, None),
+                    tx(11, 2, protocol, Some(("dotbit", "renew_account"))),
+                    tx(11, 3, 0, None),
+                ],
+            ),
+        ];
+        let mut rows = Vec::new();
+        for (block, txs) in &blocks {
+            let mut block_stats = DailyActivityStats::default();
+            for actions in txs {
+                accumulate(actions, &mut block_stats);
+            }
+            let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store).unwrap();
+            let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+            {
+                let mut scope = batch.at(*block);
+                scope.put_block_header(
+                    *block,
+                    &CachedBlockHeader {
+                        hash: vec![*block as u8; 32],
+                        timestamp: 1_763_337_600_000 + block * 10_000,
+                        epoch_number: 0,
+                        epoch_index: 0,
+                        epoch_length: 1,
+                        dao: vec![0; 32],
+                        transactions_count: txs.len() as i32,
+                        uncles_count: 0,
+                        proposals_count: 0,
+                        compact_target: 0,
+                        miner_lock_hash: None,
+                        cycles: None,
+                        chain_time_ms: 1_763_337_600_000 + block * 10_000,
+                    },
+                );
+                writer
+                    .update_activity_bucket_stats(
+                        keys::ActivityBucketKind::Daily,
+                        day,
+                        &block_stats,
+                        &BTreeSet::from([addr(*block as u8)]),
+                        None,
+                        &mut scope,
+                    )
+                    .unwrap();
+            }
+            commit_journaled(batch);
+            rows.push(store.get_daily_activity_stats(day).unwrap().unwrap());
+        }
+        let after_11 = &rows[1];
+        assert_eq!(
+            [K::Dao, K::Protocol, K::Token, K::Identity, K::Ckb]
+                .map(|k| after_11.kind_counts.get(k)),
+            [1, 1, 1, 1, 1]
+        );
+        assert_eq!(after_11.kind_counts.total(), 5);
+        assert_eq!(after_11.coinbase_count, 2);
+
+        store.rollback_to_block(10).unwrap();
+        let after_rollback = store.get_daily_activity_stats(day).unwrap().unwrap();
+        assert_eq!(after_rollback, rows[0], "the row block 10 left");
+        assert_eq!(
+            after_rollback.kind_counts,
+            ActivityKindCounts {
+                dao: 1,
+                protocol: 1,
+                ..Default::default()
+            }
+        );
+        assert_eq!(after_rollback.coinbase_count, 1);
+        assert_eq!(after_rollback.protocol_action_counts["dao:deposit"], 1);
+        assert!(!after_rollback
+            .protocol_action_counts
+            .contains_key("dotbit:renew_account"));
+
+        store.rollback_to_block(9).unwrap();
+        assert_eq!(store.get_daily_activity_stats(day).unwrap(), None);
     }
 
     fn commit_journaled(mut batch: StoreBatch) {
@@ -4447,7 +4703,7 @@ mod activity_stats_tests {
         assert_eq!(row.unique_address_count, 2);
         let row = write_block_bucket(&writer, &mut batch, 11, &[addr(2), addr(3)]);
         assert_eq!(row.unique_address_count, 3);
-        assert_eq!(row.transfer_count, 2);
+        assert_eq!(row.kind_counts.ckb, 2);
         commit_journaled(batch);
         assert_eq!(
             bucket_addrs(&store),
@@ -4473,15 +4729,15 @@ mod activity_stats_tests {
                 .unwrap();
         }
         let bulk_row = DailyActivityStats {
-            transfer_count: 7,
+            kind_counts: ActivityKindCounts {
+                ckb: 7,
+                ..Default::default()
+            },
             unique_address_count: 2,
             ..Default::default()
         };
         bulk_store
-            .put_stats_key(
-                &kind.stats_key("20260309").unwrap(),
-                &bincode::serialize(&bulk_row).unwrap(),
-            )
+            .put_stats_key(&kind.stats_key("20260309").unwrap(), &bulk_row.encode())
             .unwrap();
         let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&bulk_store).unwrap();
         let mut batch = StoreBatch::journaled(&bulk_store, &overlay, 0);
@@ -4490,7 +4746,7 @@ mod activity_stats_tests {
             row.unique_address_count, 2,
             "a bulk-written address is not new"
         );
-        assert_eq!(row.transfer_count, 8);
+        assert_eq!(row.kind_counts.ckb, 8);
         let row = write_block_bucket(&bulk_writer, &mut batch, 21, &[addr(1), addr(5)]);
         assert_eq!(row.unique_address_count, 3);
         commit_journaled(batch);
@@ -4585,7 +4841,7 @@ mod activity_stats_tests {
             store
                 .put_stats_key(
                     &kind.stats_key(bucket).unwrap(),
-                    &bincode::serialize(&DailyActivityStats::default()).unwrap(),
+                    &DailyActivityStats::default().encode(),
                 )
                 .unwrap();
         }

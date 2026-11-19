@@ -19,6 +19,8 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     timestamp: String(NOW - n * 49_000),
     ckbDelta: '-30000',
     usedDelta: '0',
+    // the oracle spends its own cell to write the next: this address sent
+    sent: true,
     typeCalls: [
       {
         typeCodeHash: `0x${'3a'.repeat(32)}`,
@@ -32,13 +34,14 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   });
 
   // re-pinned on purpose (Gate B's rule, lane P3): the folded row wrote this address, the one
-  // party of every row; it counts the parties now and names none
-  it('folds its consecutive same rows, counting this address', () => {
+  // party of every row; it counts the parties now and names none. Re-pinned on purpose
+  // (resync/int): it counts the parties that sent, this address among them ("1 participant")
+  it('folds its consecutive same rows, counting this address, which sent', () => {
     render(<AddressActivities rows={[update(1), update(2), update(3)]} address={addressFixture} />);
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '3');
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 3 transactions ↓ · 1 participant$/
+      /^all 3 transactions ↓ · 1 sender$/
     );
     expect(within(folded).queryByTitle(addressFixture.address!)).toBeNull();
     expect(folded.querySelector('[data-ckb-amount]')).toBeNull();
@@ -49,10 +52,23 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   // and received 40 folded into one run that said neither; a CKB row is headed by its direction for
   // this address, as a token's is, and the two directions are two runs.
   it('heads a CKB row by its direction here, and folds received with received only', () => {
+    // a received row's other party paid it (it sent); a sent row's sender is this address
     const transfer = (n: number, ckbDelta: string): Activity => ({
       ...update(n),
       typeCalls: [],
       ckbDelta,
+      sent: ckbDelta.startsWith('-'),
+      participants: ckbDelta.startsWith('-')
+        ? []
+        : [
+            {
+              address: seededAddress('payer0'),
+              lockHash: `0x${'payer0'.padStart(64, '0')}`,
+              lockHashPrefix: null,
+              roles: [],
+              sent: true,
+            },
+          ],
     });
     render(
       <AddressActivities
@@ -76,8 +92,9 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   });
 
   // re-pinned on purpose (Gate B's rule, lane P3): "not the parties": rows whose other parties
-  // differ fold, and the run counts them (it did not fold them by the old rule)
-  it('folds rows whose other parties differ, and counts every party once', () => {
+  // differ fold, and the run counts them (it did not fold them by the old rule). Re-pinned on
+  // purpose (resync/int): it counts the parties that sent, each once
+  it('folds rows whose other parties differ, and counts every sender once', () => {
     const withOther = (n: number, seed: string): Activity => ({
       ...update(n),
       participants: [
@@ -86,6 +103,8 @@ describe('an address page folds its own runs (B4 item 5)', () => {
           lockHash: `0x${seed.padStart(64, '0')}`,
           lockHashPrefix: null,
           roles: [],
+          // each other party spent a cell beside this address's
+          sent: true,
         },
       ],
     });
@@ -97,9 +116,9 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     );
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '2');
-    // this address, and the two others
+    // this address, and the two others, each of which sent
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 2 transactions ↓ · 3 participants$/
+      /^all 2 transactions ↓ · 3 senders$/
     );
   });
 });

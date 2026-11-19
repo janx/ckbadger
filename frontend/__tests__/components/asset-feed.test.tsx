@@ -27,6 +27,7 @@ const activity: GlobalActivity = {
       ckbDelta: '-100000001',
       usedDelta: '0',
       itemDeltas: [{ kind: 'token', typeScriptHash: token, delta: '-13' }],
+      sent: true,
     },
     {
       lockHash: '0x' + '02'.repeat(32),
@@ -40,6 +41,7 @@ const activity: GlobalActivity = {
         { kind: 'token', typeScriptHash: token, delta: '13' },
         { kind: 'token', typeScriptHash: '0x' + 'ef'.repeat(32), delta: '77' },
       ],
+      sent: false,
     },
   ],
   typeCalls: [],

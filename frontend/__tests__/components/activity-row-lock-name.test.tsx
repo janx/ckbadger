@@ -27,6 +27,7 @@ function party(address: string, lockKind: string | null, lockHash: string): Part
     ckbDelta: '-100000000',
     usedDelta: '0',
     itemDeltas: [],
+    sent: true,
   };
 }
 

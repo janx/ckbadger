@@ -95,7 +95,7 @@ requires re-sync from genesis; there is no migration.
 | `addr_fiber_channels`              | lock_hash (32B) + channel_id (32B) = 64B                                     | empty                                                                          | Address-to-Fiber-channels index                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `cluster_agg`                      | cluster_id                                                                   | ClusterAgg                                                                     | Spore cluster aggregate stats                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `script_info`                      | code_hash (32B) ‖ hash_type (1B) = 33B                                       | ScriptInfo                                                                     | The registry's label of one pseudo deployment (Zero Lock, Type ID), by its pair (name, deprecated, category, website, description); every other script is named by the code its pair runs; written only by `label_import`, outside the journal. Usage is not here: it is `script_reference_info`'s                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `stats_chain`                      | prefixed keys                                                                | chain chart snapshots                                                          | Daily/hourly/epoch/miner/block stats (DailyActivityStats includes protocol_action_counts); the activity address rows of a bucket behind the coverage floor may linger until the one-bucket-a-batch prune drains its backlog, so two stores of one chain can differ there for a while (nothing reads them; see [activity address rows](#stats_chain-activity-address-rows))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `stats_chain`                      | prefixed keys                                                                | chain chart snapshots                                                          | Daily/hourly/epoch/miner/block stats (activity rows: [one kind per transaction](#stats_chain-activity-rows-one-kind-per-transaction)); the activity address rows of a bucket behind the coverage floor may linger until the one-bucket-a-batch prune drains its backlog, so two stores of one chain can differ there for a while (nothing reads them; see [activity address rows](#stats_chain-activity-address-rows))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `stats_dao`                        | prefixed keys                                                                | DAO snapshots                                                                  | DAO daily snapshots (including exact unclaimed and frozen phase-1 compensation), plus latest/top summaries; sealed aggregates in bulk build                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `stats_hodl`                       | prefixed keys                                                                | HODL/chart snapshots                                                           | HODL waves, cell distribution, address cohorts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `hodl_capacity_by_date`            | creation day `YYYYMMDD` (8B ASCII, UTC+8)                                    | i128 LE (16B), > 0                                                             | HODL wave tracker: live capacity per cell creation day (a day with no live capacity has no row); scalars in `sync_meta` `hodl_cursor`. Written per block that moves it (B-4)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -175,11 +175,18 @@ global activity filter (`dao`, `token`, `object`, `identity`, `protocol`, `scrip
 enum discriminant is the key's first byte. Precedence: item-action protocols claim their
 class (`dao` actions → Dao, `dotbit` and `dotcell` actions → Identity), then any other protocol action →
 Protocol, then the participants' aggregate tags (DAO, token, object, identity), then type/lock
-script calls → Script, else Ckb. Cellbase has no row (it has no `activities` row either).
+script calls → Script, else Ckb. Cellbase has no row (it has no `activities` row either). The same
+classification is the kind the daily and hourly activity rows count a transaction in
+([`stats_chain` activity rows](#stats_chain-activity-rows-one-kind-per-transaction)). The address
+feed's filter (`matches_activity_filter`) is a different question — what a transaction did for one
+participant, from that participant's tags, so one transaction can match several of an address's
+filters — and keeps its own rule.
 
 - **Write.** `StoreBatch::put_tx_actions` puts the bucket row in the same batch as the
   `activities` row (live sync), and bulk build pushes it beside the `activities` row in
-  `build_history_rows_for_block` (Class A). Both derive the key through `tx_actions_bucket_key`.
+  `build_history_rows_for_block` (Class A). Both classify each transaction once
+  (`ClassifiedTxActions::classify`) and derive the key from that classification
+  (`ClassifiedTxActions::bucket_key`).
 - **Read.** `list_tx_actions_page_by_bucket` seeks the bucket from the cursor and loads the page's
   `activities` rows by their 12-byte keys with one `multi_get`, completed with one `tx_index` and
   one `block_headers` read. A row without `TxActions`, or one whose `TxActions` classifies
@@ -227,6 +234,15 @@ activity rows (`object_collection_activities` / `identity_collection_activities`
 byte outside `0..=4` fails when the row is decoded, naming the byte, and every reader propagates
 that error with its lock/block/tx context — a corrupt byte is never rendered as some default
 label. The stored bytes of every valid row are unchanged.
+
+**The senders bit** (resync/int): `ParticipantDelta.tags` bit 8 (`TAG_INPUT`, `0x100`) says the
+participant's lock is the lock of at least one input of the transaction. It lives in the
+`tx_actions` row and, through `AddrTxValue.tags`, in the `addr_txs` / `addr_txs_by_prefix` rows:
+domain store only, `CF_CELLS` untouched, and no value changes size (`tags` was already a `u16`).
+A rollback deletes the rows of the blocks it removes, and the bit with them. A store built before
+the bit holds rows without it, which would read as "nobody sent": the store layout stamp
+(`STORE_LAYOUT` 2) refuses such a store before any read or write; delete RocksDB and re-sync
+from genesis.
 
 **`addr_balance.cellbase_txs_count`** (W5) counts the cellbase transactions among `txs_count`.
 Both forward paths increment it through `AddressBalance::cellbase_tx_increment` — bulk inside the
@@ -289,8 +305,8 @@ hash_type`: Zero Lock is `(0x00…00, data)`, Type ID is `(0x…545950455f4944, 
 Until lane rd/api-lock-names, `script_info` was keyed by the code hash alone and also carried usage
 counters lumped over every hash type of the code hash (and four deployment fields nothing wrote):
 a lock by `(X, data)` was named and counted as `(X, type)`. The new key, the dropped counters and
-the pseudo-only rows take effect by a genesis re-sync (`STORE_LAYOUT` 1 refuses an older store);
-there is no migration.
+the pseudo-only rows take effect by a genesis re-sync (`STORE_LAYOUT` 2, the re-sync set's one
+stamp, refuses an older store); there is no migration.
 
 The pair is not yet a version: `type` references are current-state dependent and may resolve
 differently across upgrades, and exact version attribution for historical execution must come from
@@ -446,7 +462,10 @@ namespace includes:
   no stamp or another layout (`RebuildRequiredError`, both layouts named, nothing written); the
   API reads the same check at open (`check_store_layout`) and serves no other layout, and
   `/statistics/network` states it (`storeLayout`) for the verify check
-  `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`.
+  `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`. Layout
+  2 is the re-sync set's one number (resync/all): pair-keyed script labels (pseudo deployments
+  only), usage counters of generic type references by their live code, one-kind activity rows,
+  the senders bit; 1 was the script changes alone, never re-synced, and is refused.
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
 - exact live-cell inventory: `live_cell_summary:initialized` (presence marker) and
@@ -702,6 +721,34 @@ meta and the rows in the request's pinned view and serves an aggregate only when
 other field an aggregate feeds (a cluster's `activitiesCount`, a feed's `total`, a `.bit`
 account's `bitCells`) is `null` (unknown) in an otherwise normal response.
 Progress is mirrored to `background_tasks` as `derive:<aggregate>` (TUI, `/pipeline`).
+
+### `stats_chain` activity rows: one kind per transaction
+
+`ACTIVITY_DAILY` (`0x1D` + `%Y%m%d` UTC+8) / `ACTIVITY_HOURLY` (`0x1E` + `%Y%m%d%H` UTC+8) rows
+hold one bucket's `DailyActivityStats`. Value: `DailyActivityStats::encode`, the layout tag
+`ACTIVITY_STATS_LAYOUT` (u32 LE `0xAC710002`) and then, bincode:
+
+| Field                    | Type                                | Meaning                                                                                                                |
+| ------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `kind_counts`            | 7 × u32                             | non-cellbase transactions per global bucket (dao, token, object, identity, protocol, script, ckb), each in exactly one |
+| `coinbase_count`         | u32                                 | cellbase transactions, in no kind                                                                                      |
+| `unique_address_count`   | u32                                 | the bucket's `Lock` participants (the address rows below)                                                              |
+| `total_ckb_moved`        | u128                                | positive participant CKB deltas of non-cellbase transactions                                                           |
+| `script_counts`          | map `code hash hex:hash type` → u32 | one per type / lock call, by the script's pair (`script_count_key`)                                                    |
+| `protocol_action_counts` | map `protocol:action` → u32         | one per protocol action (the DAO split by action)                                                                      |
+
+The kind is the transaction's global bucket, the one classification behind the activity and
+transaction filters ([`tx_actions_by_bucket`](#tx_actions_by_bucket-the-global-activity-filter-index)):
+each sync path classifies a transaction once (`ClassifiedTxActions`) and writes its bucket row and
+its kind count from that value, so a kind's count is what its filter lists and the kinds sum to the
+bucket's non-cellbase transactions (verify `daily_activity_kinds_partition_transactions`, S39).
+Whether a build may read the store at all is the store layout stamp's to say (`STORE_LAYOUT` 2,
+[`sync_meta`](#sync_meta-fixed-keys)): it refuses a store without these rows before any read or write.
+`DailyActivityStats::decode` is the rows' strict decode beside it and refuses a row of any other
+layout — the one before 2026-11-18 began with eleven overlapping per-layer counters
+(`transfer_count`, three DAO action counts, …, `unknown_count`) — with "written by another store
+layout, delete RocksDB and re-sync from genesis": a new binary never misreads an old store. Domain store; live sync merges each block into its day and hour
+(`update_activity_bucket_stats`, journaled), bulk build writes each sealed bucket once.
 
 ### `stats_chain` activity address rows
 

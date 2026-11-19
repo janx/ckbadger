@@ -46,7 +46,9 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     (
         "activities",
         "7fffffffffffffef7ffffffe",
-        "000000000000000000000000000000000000000000000000010000000000000000000000fbc7a8d1837a80f2eaa9a3ccf371c5e84322df75f15d9f26f5c150090f0cc2b1001f0afaffffffffffffffffffffffff00aade7cffffffff0000000000000000000000",
+        // re-pinned on purpose (resync/int, step 2): the one participant spent an input, so its
+        // tags carry TAG_INPUT (0x0100, little-endian 00 01); it was 00 00
+        "000000000000000000000000000000000000000000000000010000000000000000000000fbc7a8d1837a80f2eaa9a3ccf371c5e84322df75f15d9f26f5c150090f0cc2b1001f0afaffffffffffffffffffffffff00aade7cffffffff0000000000000000000100",
     ),
     (
         "addr_balance",
@@ -56,7 +58,9 @@ const EXPECTED: &[(&str, &str, &str)] = &[
     (
         "addr_txs",
         "1e2d62803000d30926bfba76bd85e87cd422e837a7778e89ddc2d28df59eef3d7ffffffffffffff57ffffffe",
-        "003793b1e8ffffff019000",
+        // re-pinned on purpose (resync/int, step 2): this lock sent, so the row's tags gain
+        // TAG_INPUT: 0x0190 (TAG_PROTOCOL | TAG_LOCK_CALL | TAG_INPUT), it was 0x0090
+        "003793b1e8ffffff019001",
     ),
     (
         "addr_txs_by_prefix",

@@ -262,25 +262,29 @@ const SCRIPT_COUNTS = [
   },
 ];
 
+/** One kind per transaction: the kinds sum to activityCount (7,115). */
 export const activitySummary24h: ActivitySummary24h = {
   activityCount: 7115,
-  transferCount: 1302,
-  daoDepositCount: 4,
-  daoWithdrawRequestCount: 3,
-  daoWithdrawCompleteCount: 1,
-  tokenCount: 0,
-  objectCount: 0,
-  identityCount: 10,
-  scriptCallCount: 5795,
-  unknownCount: 0,
+  kindCounts: {
+    dao: 7,
+    token: 0,
+    object: 0,
+    identity: 10,
+    protocol: 1,
+    script: 5795,
+    ckb: 1302,
+  },
   coinbaseCount: 9800,
   uniqueAddressCount: 1497,
   totalCkbMoved: '34628000000000000',
   scriptCounts: SCRIPT_COUNTS,
+  protocolActionCounts: {
+    'dao:deposit': 4,
+    'dao:withdraw_complete': 1,
+    'dao:withdraw_request': 3,
+    'fiber:channel_open': 1,
+  },
   hoursCovered: 24,
-  // the API's counts: the eight kinds (1,302 + 8 + 10 + 5,795) and the three DAO actions
-  kindOccurrences: 7115,
-  daoCount: 8,
   // the route's script calls (5,480 + 5,480 + 294 + 23 + 12 + 6 + 3 + 2) and its rest after five
   scriptCalls: 11300,
   scriptRest: { scripts: 3, calls: 11 },
@@ -291,24 +295,21 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
   const total = i === 28 ? 6691 : 6200 + ((i * 397) % 1500);
   return {
     date: iso.replace(/-/g, ''),
-    transferCount: total - 5000,
-    daoDepositCount: 0,
-    daoWithdrawRequestCount: 0,
-    daoWithdrawCompleteCount: 0,
-    tokenCount: 0,
-    objectCount: 0,
-    identityCount: 0,
-    scriptCallCount: 5000,
-    unknownCount: 3,
+    activityCount: total,
+    kindCounts: {
+      dao: 0,
+      token: 0,
+      object: 0,
+      identity: 0,
+      protocol: 0,
+      script: 5000,
+      ckb: total - 5000,
+    },
     coinbaseCount: 9800,
     uniqueAddressCount: 500,
     totalCkbMoved: '0',
     scriptCounts: [],
-    kindOccurrences: total,
-    daoCount: 0,
-    // the route's count of the day's user transactions (its transactions less its 9,800
-    // cellbases: the transaction-count chart's 9,800 + total)
-    userTransactionCount: total,
+    protocolActionCounts: {},
   };
 });
 
@@ -360,6 +361,7 @@ export const latestActivities: GlobalActivity[] = Array.from({ length: 9 }, (_, 
         usedDelta: '0',
         itemDeltas: [],
         tags: 0,
+        sent: true,
       },
     ],
   };
@@ -401,6 +403,7 @@ function party(
     usedDelta,
     itemDeltas,
     tags: itemDeltas.length > 0 ? 2 : 0,
+    sent: false,
   };
 }
 
