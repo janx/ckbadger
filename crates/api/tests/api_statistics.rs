@@ -2247,9 +2247,10 @@ async fn test_hodl_wave_chart_with_data() {
 /// The chart page draws five bands (the chart-hero board, lane D1): the eight age bands with their
 /// young neighbours merged, oldest first. A merged band is a new figure, so it is computed here from
 /// the bands' exact capacities, never summed by the page from the rounded percentages: 1 to 6
-/// months is 400 + 500 of 3,600 (25.00), under 1 month 100 + 200 + 300 of 3,600 (16.666…, half up
-/// 16.67, as every percentage of this route). Rounded parts can miss a merged band by a hundredth
-/// (three thirds round to 33.33 each, 99.99 together, where the whole is 100.00).
+/// months is 400 + 500 of 3,600 (25.00), under 1 month 100 + 200 + 300 of 3,600 (16.666…, cut
+/// 16.66, as every percentage of this route since the D1 hand-back's item 1; it was half up, 16.67).
+/// Cut parts can miss a merged band by a hundredth (three thirds cut to 33.33 each, 99.99
+/// together, where the whole is 100.00).
 #[tokio::test]
 async fn test_hodl_wave_chart_draws_five_bands_merged_from_exact_capacities() {
     let store = test_store();
@@ -2319,10 +2320,11 @@ async fn test_hodl_wave_chart_draws_five_bands_merged_from_exact_capacities() {
     let values = &json["data"][0]["values"];
     assert_eq!(values["gt3y"], "22.22");
     assert_eq!(values["1y3y"], "19.44");
-    assert_eq!(values["6m1y"], "16.67");
+    // re-pinned for the D1 hand-back, item 1: cut, never rounded (were 16.67, 16.67, 2.78)
+    assert_eq!(values["6m1y"], "16.66");
     assert_eq!(values["1m6m"], "25.00");
-    assert_eq!(values["lt1m"], "16.67");
-    assert_eq!(values["24h"], "2.78");
+    assert_eq!(values["lt1m"], "16.66");
+    assert_eq!(values["24h"], "2.77");
     // the eight bands stay, for the table under the chart
     assert_eq!(json["series"].as_array().unwrap().len(), 8);
 }

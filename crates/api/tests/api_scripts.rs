@@ -4577,16 +4577,26 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
         assert_eq!(json["capacityShare"]["data"][0]["date"], "2024-01-15");
         assert_eq!(json["capacityShare"]["data"][1]["date"], "2024-01-16");
         for (chart, expected) in [("capacityShare", 800), ("usedShare", 500)] {
-            let total: i128 = json[chart]["data"][0]["values"]
-                .as_object()
+            // the series' values (re-pinned for the D1 hand-back: a point also states the day's
+            // `total`, the whole the page divides by, which is not a series)
+            let values = &json[chart]["data"][0]["values"];
+            let total: i128 = json[chart]["series"]
+                .as_array()
                 .unwrap()
-                .values()
-                .map(|value| value.as_str().unwrap().parse::<i128>().unwrap())
+                .iter()
+                .map(|series| {
+                    values[series["key"].as_str().unwrap()]
+                        .as_str()
+                        .unwrap()
+                        .parse::<i128>()
+                        .unwrap()
+                })
                 .sum();
             assert_eq!(
                 total, expected,
                 "retirement must preserve loose reference history: {json}"
             );
+            assert_eq!(values["total"], expected.to_string(), "{json}");
         }
         let series = json["capacityShare"]["series"].as_array().unwrap();
         for (index, family) in families.iter().enumerate() {

@@ -2,7 +2,8 @@ use crate::cache::CacheTtl;
 use crate::response::ChartResponse;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::{
-    build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
+    build_address_cohort_response, build_block_time_distribution_response,
+    build_cell_size_response, CellSizeDistributionChartResponse, CACHE_KEY_CELL_SIZE_DISTRIBUTION,
 };
 use crate::utils::{
     accumulate_owned_capacity, hash_type_to_string, resolve_dob_collection_name,
@@ -1165,7 +1166,7 @@ fn warmup_cell_charts_from_store(state: &AppState) -> Result<(), String> {
     {
         let size_response = build_cell_size_response(&snapshot);
         state.mem_cache.set(
-            "chart:cell-size-distribution:v1",
+            CACHE_KEY_CELL_SIZE_DISTRIBUTION,
             &size_response,
             CacheTtl::CHART,
         );
@@ -1210,11 +1211,11 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
             // Transfer mem_cache entries to the async cache backend
             if let Some(size) = state
                 .mem_cache
-                .get::<ChartResponse>("chart:cell-size-distribution:v1")
+                .get::<CellSizeDistributionChartResponse>(CACHE_KEY_CELL_SIZE_DISTRIBUTION)
             {
                 state
                     .cache
-                    .set("chart:cell-size-distribution:v1", &size, CacheTtl::CHART)
+                    .set(CACHE_KEY_CELL_SIZE_DISTRIBUTION, &size, CacheTtl::CHART)
                     .await;
             }
             if let Some(cohort) = state
