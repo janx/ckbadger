@@ -13,7 +13,7 @@ import {
   COUNT_TRACK_PX,
   ScaleHeader,
 } from '@/components/ui/aligned-bar';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import {
   activityClassMark,
   activityHeadline,
@@ -30,12 +30,13 @@ import { formatCount } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import type { SealId } from '@/lib/seal/stones';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import {
   LARGEST_TX_BYTES,
   MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_AGE,
+  WIDEST_AGE_UNDER_A_YEAR,
   WIDEST_BLOCK_NUMBER,
   WIDEST_BLOCK_REWARD,
   shortChars,
@@ -92,7 +93,7 @@ function paysNote(tx: Transaction): ReactNode {
   return (
     <>
       pays{' '}
-      <Link href={`/blocks/${tx.pays.hash}`} className="hover:text-jade">
+      <Link href={`/blocks/${tx.pays.hash}`} look="inline">
         {formatBlockNumber(tx.pays.number)}
       </Link>
     </>
@@ -122,12 +123,9 @@ function whatNote(activity: GlobalActivity, size: ShortSize): ReactNode[] {
   return [formatCount(activity.participants.length, 'participant')];
 }
 
-/** A count of resources on the quiet line: "3 → 3 cells · 903 B · 1,744,520 cycles". */
-function quietFigures(tx: Transaction): ReactNode[] {
+/** The developer figures a card keeps from 560 px, where no table stands yet: "903 B · 1,744,520 cycles". */
+function resourceFigures(tx: Transaction): ReactNode[] {
   return [
-    <span key="cells" className="whitespace-nowrap">
-      {consumedCells(tx)} → {formatCount(tx.outputsCount, 'cell')}
-    </span>,
     <span key="size" className="whitespace-nowrap">
       {tx.txSize!.toLocaleString('en-US')} B
     </span>,
@@ -142,77 +140,83 @@ function quietFigures(tx: Transaction): ReactNode[] {
 }
 
 /**
- * The phone row of the Transactions board (board L2): who and when, then what it did (wrapping,
- * never truncated), then value and fee with the developer figures quiet at the end. In a wide
- * container (640) the value and fee join what it did and the figures take the right edge.
+ * Line 1 of a transaction's phone row (the phone-rows board's head(): 309 of 328 px there for
+ * "0xccf9…091f" beside "#21,009,135 · 20s ago"): the transaction's stone and its gap
+ * (ROW_SEAL.tx.footprint, 40.3), the tight hash at the key's 14 px (11 characters, 92.4), the 12 px
+ * between the parts and, at 13 px, the widest block with the widest age under a year, "#99,999,999
+ * · 364d ago" (22 characters, 171.6): 316.3 of a 360 px phone's 328 px line. An age of a year or
+ * more, "10y 364d ago" at its widest (WIDEST_AGE; 26 characters, 202.8), makes it 347.5: inside 390's
+ * 358, and at 360 the block and its age drop under the hash, whole and right-aligned (PhoneRow's
+ * rule), on a page a year back or more.
+ */
+const TX_PHONE_HEAD_PX = phoneHead(
+  'transactions',
+  ROW_SEAL.tx.footprint +
+    textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`${WIDEST_BLOCK_NUMBER} · ${WIDEST_AGE_UNDER_A_YEAR}`.length, fontPx('small'))
+);
+
+/**
+ * The phone row of the Transactions list (the phone-rows board, gate D0′): the hash and the block
+ * with its age; what it did, in the reading ink, wrapping between its parts and never cut; then,
+ * quiet, what every reader uses — the cells, the value and the fee, each figure after its name (a
+ * cellbase: the reward it pays, named; it pays no fee). Bytes and cycles are on the transaction's
+ * page and in the table; the cards from 560 px (`wide`, where no table stands until the list's
+ * bound) keep them at the end of the quiet line.
  */
 function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
   const mark = tx.activity ? activityClassMark(tx.activity) : null;
   // What it did, as parts of the line's one separated list (PA-25: no "·" ends or opens a line).
   const what: ReactNode[] = tx.isCellbase
-    ? [
-        <>
-          <span className="text-text-bright">Cellbase</span> {paysNote(tx)}
-        </>,
-        <>
-          reward{' '}
-          <CkbAmount
-            form="summary"
-            shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
-            signed={false}
-            tone="plain"
-          />
-        </>,
-      ]
+    ? ['Cellbase', paysNote(tx)]
     : [
         <>
           {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
-          <span className="text-text-bright">{activityHeadline(tx.activity!)}</span>
+          {activityHeadline(tx.activity!)}
         </>,
-        ...whatNote(tx.activity!, 'tight').map((part, i) => (
-          <span key={i} className="text-text-dim">
-            {part}
-          </span>
-        )),
+        ...whatNote(tx.activity!, 'tight'),
       ];
-  const fee = (
-    <span className="whitespace-nowrap">
-      fee{' '}
-      <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
-        <CkbAmount
-          form="summary"
-          shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
-          signed={false}
-          tone="plain"
-        />
+  const amount = (shannons: string, field: string) => {
+    const value = parseShannons(shannons, `transaction ${tx.hash} ${field}`);
+    return (
+      <Quiet when={value === BigInt(0)}>
+        <CkbAmount form="summary" shannons={value} signed={false} tone="plain" />
       </Quiet>
-    </span>
-  );
-  const value = tx.isCellbase ? null : (
-    <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
-      <CkbAmount
-        form="summary"
-        shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
-        signed={false}
-        tone="plain"
-      />
-    </Quiet>
-  );
-  // A cellbase pays its reward on the what line; its fee joins the quiet figures.
-  const quiet = tx.isCellbase
-    ? [...quietFigures(tx).slice(0, 2), fee, quietFigures(tx)[2]]
-    : quietFigures(tx);
+    );
+  };
+  const figures: ReactNode[] = [
+    <span key="cells" className="whitespace-nowrap">
+      {consumedCells(tx)} → {formatCount(tx.outputsCount, 'cell')}
+    </span>,
+    ...(tx.isCellbase
+      ? [
+          <Labelled key="reward" label="reward">
+            {amount(tx.outputCapacity!, 'reward')}
+          </Labelled>,
+        ]
+      : [
+          <Labelled key="value" label="value">
+            {amount(tx.value, 'value')}
+          </Labelled>,
+          <Labelled key="fee" label="fee">
+            {amount(tx.fee, 'fee')}
+          </Labelled>,
+        ]),
+    ...(wide ? resourceFigures(tx) : []),
+  ];
   return (
     <PhoneRow
       testId="transaction-row-mobile"
+      head={TX_PHONE_HEAD_PX}
       mark={<RowSeal id={txSealId(tx)} />}
       lines={[
         {
           key: 'identity',
           tone: 'head',
           left: (
-            <Link href={`/tx/${tx.hash}`} className="hover:underline">
-              <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
+            <Link href={`/tx/${tx.hash}`} look="key">
+              <Hash hash={tx.hash} size="tight" className="text-body" />
             </Link>
           ),
           // the block and its age are each a unit; "this device's clock is behind" in the age's
@@ -220,44 +224,17 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
           right: (
             <>
               <NoBreak>
-                <Link
-                  href={`/blocks/${tx.blockNumber}`}
-                  className="text-text-bright hover:text-jade"
-                >
+                <Link href={`/blocks/${tx.blockNumber}`} look="inline">
                   {formatBlockNumber(tx.blockNumber)}
                 </Link>
               </NoBreak>
-              <span className="text-text">
-                {' · '}
-                <Utc8Age timestamp={tx.timestamp} />
-              </span>
+              {' · '}
+              <Utc8Age timestamp={tx.timestamp} />
             </>
           ),
         },
-        wide
-          ? {
-              key: 'what',
-              tone: 'body',
-              left: <Dotted parts={tx.isCellbase ? what : [...what, value, fee]} />,
-              right: (
-                <span className="text-text-dim text-meta">
-                  <Dotted parts={quiet} />
-                </span>
-              ),
-            }
-          : { key: 'what', tone: 'body', left: <Dotted parts={what} /> },
-        !wide && {
-          key: 'figures',
-          tone: 'quiet',
-          left: tx.isCellbase ? (
-            <Dotted parts={quiet.slice(0, 3)} />
-          ) : (
-            <span className="text-text">
-              <Dotted parts={[value, fee]} />
-            </span>
-          ),
-          right: <Dotted parts={tx.isCellbase ? quiet.slice(3) : quiet} />,
-        },
+        { key: 'what', tone: 'body', left: <Dotted parts={what} /> },
+        { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
       ]}
     />
   );
@@ -290,12 +267,7 @@ function committedColumns(
         <span className="flex items-start">
           <RowSeal id={txSealId(tx)} />
           <Link href={`/tx/${tx.hash}`} className="hover:underline">
-            <Hash
-              hash={tx.hash}
-              size="row"
-              copyable={false}
-              className="text-body text-text-bright leading-row"
-            />
+            <Hash hash={tx.hash} size="row" className="text-body text-text-bright leading-row" />
           </Link>
         </span>
       ),

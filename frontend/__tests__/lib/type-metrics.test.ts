@@ -10,6 +10,8 @@ import {
   MEASURE_CHARS,
   MONO_ADVANCE_EM,
   MONO_DESCENT_EM,
+  PHONE_LINE_PX,
+  PHONE_PART_GAP_PX,
   ROW_LINE_PX,
   advancePx,
   charPx,
@@ -20,6 +22,7 @@ import {
   foreignGraphemes,
   foreignTextPx,
   lineHeightPx,
+  phoneHead,
   textPx,
   tightLinePx,
 } from '@/lib/type-metrics';
@@ -268,5 +271,26 @@ describe('column budgets', () => {
     expect(columnPx(textPx(20, 12) + 16)).toBe(160); // exactly 160 stays 160
     expect(columnPx(56.5 + textPx(17, 13) + 16, 2)).toBe(208); // 205.1 → 206, and 2 spare
     expect(columnPx(160.00000000000003)).toBe(160); // a sum a hair over a whole pixel is that pixel
+  });
+});
+
+// Lane D4 (the phone-rows board the owner passed at gate D0′): a list states its row's first line
+// against a 360 px phone's line, as the board's head() did, and does not load with a wider one.
+describe('a phone row’s first line', () => {
+  it('stands on a phone’s content line: 328 px at 360, 358 at 390', () => {
+    // the window less its two 16 px gutters (the container's px-4 below sm)
+    expect(PHONE_LINE_PX).toEqual({ 360: 360 - 32, 390: 390 - 32 });
+    expect(PHONE_PART_GAP_PX).toBe(12);
+  });
+
+  it('states a line that fits, to the hundredth, and refuses one a hair wider than 328 px', () => {
+    // the board's blocks head: "#21,009,134" at 14 px beside "1 tx · 20s ago" at 13 px, a 16 px
+    // stone and its gap (238 of 328 there with its 10 px gap; 240 with PhoneRow's 12)
+    expect(phoneHead('blocks', 24 + textPx(11, 14) + 12 + textPx(14, 13))).toBe(237.6);
+    expect(phoneHead('exactly', 328)).toBe(328);
+    expect(() => phoneHead('one glyph over', 328 - textPx(1, 13) + textPx(2, 13))).toThrow(
+      'phone row "one glyph over": its first line is 335.8 px, wider than a 360 px phone\'s 328 px line'
+    );
+    expect(() => phoneHead('not a width', Number.NaN)).toThrow('not a width');
   });
 });

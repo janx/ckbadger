@@ -95,6 +95,7 @@ text grade ("The ghost ink" below).
 | date                     | "2025-01-07", "3 m ago"                                                                                                                              | reading |
 | number                   | a count, a percentage, a size in bytes, where a pager is (`page 3 of 37`) (a zero that is a datum stays quiet: "The ghost ink" below)                | reading |
 | pager                    | where you are (`page 3 of 37`) reading; a way to go (`next →`) jade; the count line (`41–60 of 727`) and an end that cannot be taken quiet           | by part |
+| tab row                  | its names, the current one bright on the celadon line, its counts quiet; 17 px from 640 as its section's heading, else 14 px                         | by part |
 | unit                     | the "CKB" after each amount, "B", a display figure's unit                                                                                            | quiet   |
 | separator                | the "·" between the parts of a line, JSON's braces and commas, "→"                                                                                   | quiet   |
 | note                     | a line under a figure that says how to read it or what it leaves out, a figure's sub-line, a hint ("tap or hover"), the word "selected" before a pin | quiet   |
@@ -108,7 +109,8 @@ section's paragraph, a banner). A link stays a link inside a quiet line: it take
 A link names its job, never its classes (the controls board, item "links"; `look` on `Link`,
 `ExternalLink`, `BlockLink`, `Address`): `key`, `inline`, `onward`, and two that draw no link ink of
 their own, `block` (a tile, a card, a mark) and `nav` (the shell's navigation). A way onward writes
-its own arrow. A link inside a line keeps the line's ink and is underlined, 1 px and 3 px under the
+its own arrow and wraps between its words like any line, its arrow glued to its last word by a
+no-break space, so it never stands alone on a line and a long one never runs out of the page. A link inside a line keeps the line's ink and is underlined, 1 px and 3 px under the
 text, in the muted ink (`ink-muted`, a shape: the ruling of 2026-11-19, the board's `slate-other`
 line being 1.37–1.66 : 1 by night and 1.50–1.84 : 1 by day): 5.40–6.57 : 1 on the four grounds by
 night and 3.84–4.70 : 1 by day, pinned at 3 : 1 in `palette.test.ts`, and quieter than its words.

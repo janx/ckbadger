@@ -37,7 +37,11 @@ const share = (label: string) => ({
     { key: 'top0', label, color: '#000' },
     { key: 'others', label: 'Others', color: '#000' },
   ],
-  data: dates.map((date) => ({ date, values: { top0: '5900000000000000', others: '100000000' } })),
+  // the day's whole, the route's (the D1 hand-back, item 2)
+  data: dates.map((date) => ({
+    date,
+    values: { top0: '5900000000000000', others: '100000000', total: '5900000100000000' },
+  })),
   // lane D1: the API names the bands a history is drawn in; one named rank, its own band
   bands: [
     { key: 'top0', label, members: ['top0'] },

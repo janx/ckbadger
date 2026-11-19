@@ -16,7 +16,13 @@ import { ListTable } from '@/components/ui/list-table';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { scriptLabel } from '@/components/address/address-history';
 import type { Transaction } from '@/lib/api';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
 import { cellFaults } from '@/__tests__/utils/list-table-cells';
 import { containerContentPx, SCREENS } from '@/__tests__/utils/tailwind-box';
 
@@ -386,7 +392,7 @@ describe('BlockTransactionsTable', () => {
     expect(rows[1]).toHaveTextContent('#5 +2');
     expect(rows[0]).toHaveTextContent('cellbase');
   });
-  it('is a three-line phone row at 358 px: index and hash · capacity and fee · the figures', () => {
+  it('is a three-line phone row at 358 px: hash and output · proposal · the quiet figures', () => {
     atContainerWidth(358);
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -400,18 +406,82 @@ describe('BlockTransactionsTable', () => {
     );
     expect(screen.queryByRole('table')).toBeNull();
     const [base, user] = screen.getAllByTestId('block-tx-row-mobile');
+    // Re-pinned on purpose (lane D4, the phone-rows board): the output is named and takes line 1's
+    // right ("output 0.000001 CKB", was bare on line 2), the proposal has line 2, the index, the
+    // cells and the fee are the quiet line; bytes and cycles left the phone row (it was "10x1111…1111"
+    // beside "proposed in #5 +2", "0.000001 CKB" beside "fee 0.0003 CKB", "2 → 1 cell" beside "300 B
+    // · 1,000 cycles"; a cellbase read "proposed in cellbase").
     expect(phoneLines(user).map((l) => [l.key, l.left, l.right])).toEqual([
       // U-09 (re-pinned): the phone row's hash at the tight size
-      ['identity', '10x1111…1111', 'proposed in #5 +2'],
-      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-      // decimals)
-      ['amounts', '0.000001 CKB', 'fee 0.0003 CKB'],
-      ['figures', '2 → 1\u00a0cell', '300 B · 1,000 cycles'],
+      ['identity', '0x1111…1111', 'output 0.000001 CKB'],
+      ['proposal', 'proposed in #5 +2', null],
+      // a phone row is the summary form (readability R5: was padded to 8 decimals)
+      ['figures', 'index 1 · 2 → 1\u00a0cell · fee 0.0003 CKB', null],
     ]);
-    expect(phoneLines(base)[0].right).toBe('proposed in cellbase');
+    expect(phoneLines(base)[1].left).toBe('cellbase');
     expect(base.closest('[role="listitem"]')).toHaveClass('text-text-dim');
   });
-  it('folds the phone row into two lines at 608 px', () => {
+  // Lane D4 (the phone-rows board): a block's transaction on a phone is the row's three parts. Line 1
+  // the hash and, at the right, its output named ("output N CKB"; the table's Output capacity);
+  // line 2 where it was proposed; line 3 quiet, its index in the block, its cells and its fee, each
+  // named (the fee left line 2's right, where a long proposal dropped it under and rows took two
+  // shapes). Bytes and cycles leave the phone row (the transaction's page, the table, the cards
+  // from 560 px). A cellbase says it is one on line 2, and pays no fee. Its first line states the
+  // widest output a transaction makes, WIDEST_TX_OUTPUT's eleven whole digits and the unit at the
+  // meta step: 297 of 328 px.
+  it('is the board’s row at 358 px: hash and output · proposal · index, cells and fee', () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    wrap(
+      <BlockTransactionsTable
+        transactions={[
+          tx(0),
+          tx(1, { cycles: 1000, fee: '30000', inputsCount: 2 }),
+          tx(2, {
+            outputCapacity: '9999999999999999999',
+            proposalOrigin: {
+              blockNumber: 5,
+              distance: 10,
+              uncle: { number: 4, hash: '0x' + '9'.repeat(64) },
+            },
+          }),
+        ]}
+        blockNumber={7}
+      />
+    );
+    const [base, user, widest] = screen.getAllByTestId('block-tx-row-mobile');
+    expect(phoneLines(user).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['identity', 'head', '0x1111…1111', 'output 0.000001 CKB'],
+      ['proposal', 'body', 'proposed in #5 +2', null],
+      ['figures', 'quiet', 'index 1 · 2 → 1\u00a0cell · fee 0.0003 CKB', null],
+    ]);
+    expect(dottedItems(user.querySelector('[data-line="figures"]')!)).toEqual([
+      'index 1',
+      '2 → 1\u00a0cell',
+      'fee 0.0003 CKB',
+    ]);
+    expect(user.textContent).not.toMatch(/300 B|cycles/);
+    expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0x0000…0000', 'output 0.000001 CKB'],
+      ['proposal', 'cellbase', null],
+      ['figures', 'index 0 · 0 → 1\u00a0cell', null],
+    ]);
+    expect(base.closest('[role="listitem"]')).toHaveClass('text-text-dim');
+    // every figure after its name, the name in the quiet ink
+    const labels = Array.from(user.querySelectorAll('[data-role="figure-label"]')).map(
+      (l) => l.textContent
+    );
+    expect(labels).toEqual(['output', 'proposed in', 'index', 'fee']);
+    // the widest output the bound claims, whole CKB from 1,000 up: drawn within the stated line
+    expect(phoneLines(widest)[0].right).toBe('output 99,999,999,999 CKB');
+    expect(phoneLines(widest)[1].left).toBe('proposed in #5 +10 · uncle');
+    expect(statedHeadPx(widest)).toBe(297);
+    expect(phoneHeadPx(widest, 360)).toBe(statedHeadPx(widest));
+  });
+  it('keeps the bytes and the cycles on the quiet line of the 608 px card', () => {
     atContainerWidth(608);
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -419,13 +489,50 @@ describe('BlockTransactionsTable', () => {
     });
     wrap(<BlockTransactionsTable transactions={[tx(1, { cycles: 1000 })]} blockNumber={7} />);
     const [row] = screen.getAllByTestId('block-tx-row-mobile');
+    // Re-pinned on purpose (lane D4): the card at 608 px is the phone row's three parts, its quiet
+    // line keeping the bytes and the cycles where no table stands (it was two lines: "10x1111…1111"
+    // beside a bare "0.000001 CKB", then "proposed in #5 +2 · fee 0 CKB" beside the figures).
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
-      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-      // decimals)
-      ['identity', '10x1111…1111', '0.000001 CKB'],
+      ['identity', '0x1111…1111', 'output 0.000001 CKB'],
+      ['proposal', 'proposed in #5 +2', null],
       // Consistency plan C4: a zero fee is "0 CKB" (was "0.00000000 CKB").
-      ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1\u00a0cell · 300 B · 1,000 cycles'],
+      ['figures', 'index 1 · 1 → 1\u00a0cell · fee 0 CKB · 300 B · 1,000 cycles', null],
     ]);
+  });
+});
+
+// Lane D4 follow-up (the coordinator's note): the block a transaction was proposed in is a link
+// inside a line, on the phone row and in the table alike: the inline look, underlined.
+describe('the block a transaction was proposed in is an inline link (lane D4 follow-up)', () => {
+  it('on the phone row', () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    wrap(
+      <BlockTransactionsTable
+        transactions={[
+          {
+            hash: `0x${'1'.repeat(64)}`,
+            blockNumber: 7,
+            index: 1,
+            inputsCount: 1,
+            outputsCount: 1,
+            fee: '0',
+            txSize: 300,
+            cycles: 0,
+            cyclesStatus: 'complete',
+            outputCapacity: '100',
+            proposalOrigin: { blockNumber: 5, distance: 2, uncle: null },
+            isCellbase: false,
+          } as unknown as Transaction,
+        ]}
+        blockNumber={7}
+      />
+    );
+    const link = screen.getByRole('link', { name: '#5' });
+    expect(link).toHaveClass('underline');
   });
 });
 

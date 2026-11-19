@@ -791,6 +791,9 @@ pub struct SecondaryIssuanceDataPoint {
     pub values: std::collections::HashMap<String, String>,
     pub protocol_total_shannons: String,
     pub phase1_compensation_shannons: String,
+    /// The three destinations' total, in shannons: the whole the page's shares divide by. The
+    /// frozen phase-1 overlap keeps it apart from `protocol_total_shannons`.
+    pub components_total_shannons: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1115,6 +1118,8 @@ fn build_most_utilized_share_chart(
         if top_keys.len() > RANKED_SHARE_DRAWN {
             values.insert("rest".to_string(), (total - drawn_sum).to_string());
         }
+        // the whole the page's shares divide by
+        values.insert("total".to_string(), total.to_string());
 
         data.push(StackedAreaDataPoint {
             date: format_chart_date(&format!("{date:08}"))?,
@@ -1170,7 +1175,7 @@ async fn get_most_utilized_scripts_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedScriptsChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:most-utilized-scripts:v7", chain)?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-scripts:v8", chain)?;
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedScriptsChartResponse>(&cache_key)
@@ -1361,7 +1366,7 @@ async fn get_most_utilized_assets_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<MostUtilizedAssetsChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:most-utilized-assets:v4", chain)?;
+    let cache_key = complete_days_cache_key("chart:most-utilized-assets:v5", chain)?;
     if let Some(cached) = state
         .cache
         .get::<MostUtilizedAssetsChartResponse>(&cache_key)
@@ -1963,7 +1968,7 @@ async fn get_common_knowledge_composition_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:common-knowledge-composition:v1", chain)?;
+    let cache_key = complete_days_cache_key("chart:common-knowledge-composition:v2", chain)?;
     let cache_key = cache_key.as_str();
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         if stacked_chart_response_has_data(&cached) {
@@ -2116,6 +2121,11 @@ async fn get_common_knowledge_composition_chart(
                     "otherContracts".to_string(),
                     shannon_to_ckb_string(other_contracts),
                 ),
+                // the whole the five parts partition, which the page's shares divide by
+                (
+                    "knowledgeSize".to_string(),
+                    shannon_to_ckb_string(knowledge),
+                ),
             ]),
         });
     }
@@ -2166,7 +2176,26 @@ async fn get_common_knowledge_composition_chart(
 }
 
 /// Build the cell-size-distribution chart response from a materialized snapshot.
-pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> ChartResponse {
+/// The cell-size chart's cache key, the route's and the warmup's (v2: the two wholes).
+pub(crate) const CACHE_KEY_CELL_SIZE_DISTRIBUTION: &str = "chart:cell-size-distribution:v2";
+
+/// `/charts/cell-size-distribution`: the histogram and the two wholes its page's shares divide
+/// by, counted from the same snapshot (the D1 hand-back, item 2). Its own type, so no other chart
+/// grows a field only this one fills.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellSizeDistributionChartResponse {
+    #[serde(flatten)]
+    pub chart: ChartResponse,
+    /// The live cells of every bucket.
+    pub live_cells: String,
+    /// The CKB those cells occupy.
+    pub occupied_capacity: String,
+}
+
+pub(crate) fn build_cell_size_response(
+    snapshot: &DailyCellDistribution,
+) -> CellSizeDistributionChartResponse {
     let bucket_labels = [
         "<100 CKB",
         "100-1k CKB",
@@ -2186,20 +2215,33 @@ pub(crate) fn build_cell_size_response(snapshot: &DailyCellDistribution) -> Char
         })
         .collect();
 
-    ChartResponse {
-        data,
-        title: "Cell Size Distribution".to_string(),
-        y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+    CellSizeDistributionChartResponse {
+        chart: ChartResponse {
+            data,
+            title: "Cell Size Distribution".to_string(),
+            y_axis_label: "Live Cells".to_string(),
+            y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+        },
+        live_cells: snapshot
+            .size_bucket_counts
+            .iter()
+            .map(|count| i128::from(*count))
+            .sum::<i128>()
+            .to_string(),
+        occupied_capacity: shannon_to_ckb_string(snapshot.size_bucket_capacities.iter().sum()),
     }
 }
 
-pub(crate) fn empty_cell_size_response() -> ChartResponse {
-    ChartResponse {
-        data: Vec::new(),
-        title: "Cell Size Distribution".to_string(),
-        y_axis_label: "Live Cells".to_string(),
-        y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+pub(crate) fn empty_cell_size_response() -> CellSizeDistributionChartResponse {
+    CellSizeDistributionChartResponse {
+        chart: ChartResponse {
+            data: Vec::new(),
+            title: "Cell Size Distribution".to_string(),
+            y_axis_label: "Live Cells".to_string(),
+            y2_axis_label: Some("Common Knowledge Size (CKB)".to_string()),
+        },
+        live_cells: "0".to_string(),
+        occupied_capacity: "0".to_string(),
     }
 }
 
@@ -2346,9 +2388,13 @@ async fn get_capacity_turnover_ratio_chart(
 
 async fn get_cell_size_distribution_chart(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:cell-size-distribution:v1";
-    if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
+) -> ApiResult<CellSizeDistributionChartResponse> {
+    let cache_key = CACHE_KEY_CELL_SIZE_DISTRIBUTION;
+    if let Some(cached) = state
+        .cache
+        .get::<CellSizeDistributionChartResponse>(cache_key)
+        .await
+    {
         return ok(cached);
     }
 
@@ -2389,7 +2435,8 @@ async fn get_address_cohort_retention_chart(
 async fn get_block_time_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:block-time-distribution:v2";
+    // v3: every share cut, never rounded (the D1 hand-back)
+    let cache_key = CACHE_KEY_BLOCK_TIME_DISTRIBUTION;
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         if block_time_dist_has_data(&cached) {
             return ok(cached);
@@ -2406,6 +2453,12 @@ async fn get_block_time_distribution_chart(
 
     ok(response)
 }
+
+/// The block-intervals chart's cache key, the route's and the warmup's (v3: its shares cut).
+pub(crate) const CACHE_KEY_BLOCK_TIME_DISTRIBUTION: &str = "chart:block-time-distribution:v3";
+
+/// The epoch-durations chart's cache key (v2: its bucket labels cut).
+pub(crate) const CACHE_KEY_EPOCH_TIME_DISTRIBUTION: &str = "chart:epoch-time-distribution:v2";
 
 /// Number of complete epochs to include in the block-time distribution.
 /// ~1 week at ~4 h/epoch. CKB adjusts difficulty per epoch, so aligning
@@ -2448,7 +2501,8 @@ fn build_block_time_distribution_data(
     }
     (0..BLOCK_TIME_DIST_BUCKET_COUNT)
         .map(|idx| {
-            let ratio = crate::utils::exact_ratio::format_ratio(
+            // a share a chart page states, cut at its three decimals, never rounded
+            let ratio = crate::utils::exact_ratio::format_ratio_cut(
                 bucket_counts[idx] as i128 * 100,
                 total_blocks as i128,
                 3,
@@ -2558,7 +2612,7 @@ pub(crate) fn build_block_time_distribution_response(
 async fn get_epoch_time_distribution_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<ChartResponse> {
-    let cache_key = "chart:epoch-time-distribution";
+    let cache_key = CACHE_KEY_EPOCH_TIME_DISTRIBUTION;
     if let Some(cached) = state.cache.get::<ChartResponse>(cache_key).await {
         return ok(cached);
     }
@@ -2569,23 +2623,26 @@ async fn get_epoch_time_distribution_chart(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    let data: Vec<ChartDataPoint> =
-        dist.into_iter()
-            .map(|(bucket_minutes, count)| {
-                let hours_decimal =
-                    crate::utils::exact_ratio::format_ratio(bucket_minutes as i128, 60, 2)
-                        .map_err(|e| {
-                            ApiError::internal(format!(
-                                "epoch time bucket {bucket_minutes} minutes: {e}"
-                            ))
-                        })?;
-                Ok(ChartDataPoint {
-                    date: hours_decimal,
-                    value: count.to_string(),
-                    value2: None,
-                })
+    let data: Vec<ChartDataPoint> = dist
+        .into_iter()
+        .map(|(bucket_minutes, count)| {
+            // A bucket is one minute, labelled in hours, the axis' unit, at two decimals cut and
+            // never rounded (181 minutes is 3.01): one minute is 1.67 hundredths of an hour, so
+            // no two minutes share a label and the page reads the minute back from it exactly.
+            let hours_decimal =
+                crate::utils::exact_ratio::format_ratio_cut(bucket_minutes as i128, 60, 2)
+                    .map_err(|e| {
+                        ApiError::internal(format!(
+                            "epoch time bucket {bucket_minutes} minutes: {e}"
+                        ))
+                    })?;
+            Ok(ChartDataPoint {
+                date: hours_decimal,
+                value: count.to_string(),
+                value2: None,
             })
-            .collect::<Result<Vec<_>, ApiRouteError>>()?;
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     let response = ChartResponse {
         data,
@@ -3681,7 +3738,7 @@ async fn get_total_supply_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:total-supply:v2", chain)?;
+    let cache_key = complete_days_cache_key("chart:total-supply:v3", chain)?;
     if let Some(cached) = state
         .cache
         .get::<StackedAreaChartResponse>(&cache_key)
@@ -3721,6 +3778,12 @@ async fn get_total_supply_chart(
             shannon_to_ckb_string(supply.dao_locked),
         );
         values.insert("burnt".to_string(), shannon_to_ckb_string(supply.burnt));
+        // C, the day's total issuance: the whole the page's sentence states (the bands are what
+        // has left the unissued secondary pool, so they do not sum to it)
+        values.insert(
+            "totalIssuance".to_string(),
+            shannon_to_ckb_string(snapshot.total_issuance),
+        );
         data.push(StackedAreaDataPoint {
             date: snapshot.date.clone(),
             values,
@@ -3932,7 +3995,7 @@ async fn get_secondary_issuance_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<SecondaryIssuanceChartResponse> {
     let chain = load_chain_time(&state.store).await?;
-    let cache_key = complete_days_cache_key("chart:secondary-issuance:v3", chain)?;
+    let cache_key = complete_days_cache_key("chart:secondary-issuance:v4", chain)?;
     if let Some(cached) = state
         .cache
         .get::<SecondaryIssuanceChartResponse>(&cache_key)
@@ -4089,12 +4152,22 @@ fn secondary_issuance_data_point(
         ("mining".to_string(), shannon_to_ckb_string(cum_miner)),
         ("burnt".to_string(), shannon_to_ckb_string(treasury)),
     ]);
+    let components_total = cum_dao
+        .checked_add(cum_miner)
+        .and_then(|sum| sum.checked_add(treasury))
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "secondary issuance components overflow in dao_daily_snapshots for {}",
+                snapshot.date
+            ))
+        })?;
 
     Ok(SecondaryIssuanceDataPoint {
         date: snapshot.date.clone(),
         values,
         protocol_total_shannons: protocol_total.to_string(),
         phase1_compensation_shannons: snapshot.frozen_phase1_compensation.to_string(),
+        components_total_shannons: components_total.to_string(),
     })
 }
 
@@ -4372,8 +4445,8 @@ fn hodl_wave_bands() -> Vec<StackedAreaBand> {
 async fn get_hodl_wave_chart(
     State(state): State<Arc<AppState>>,
 ) -> ApiResult<StackedAreaChartResponse> {
-    // v2 (lane D1): the drawn bands, `bands` and the merged `1m6m` and `lt1m`
-    let cache_key = "chart:hodl-wave:v2";
+    // v3: the drawn bands, `bands` and the merged `1m6m` and `lt1m` (lane D1); every share cut
+    let cache_key = "chart:hodl-wave:v3";
     if let Some(cached) = state.cache.get::<StackedAreaChartResponse>(cache_key).await {
         if hodl_wave_cache_has_holder_count(&cached) {
             return ok(cached);
@@ -4420,7 +4493,9 @@ async fn get_hodl_wave_chart(
                 let scaled = v.checked_mul(100).ok_or_else(|| {
                     ApiError::internal(format!("HODL percentage overflows for {date}"))
                 })?;
-                crate::utils::exact_ratio::format_ratio(scaled, total, 2)
+                // cut, never rounded: a share a page states shows no digit that is not the
+                // exact value's (the D1 hand-back, item 1)
+                crate::utils::exact_ratio::format_ratio_cut(scaled, total, 2)
                     .map_err(|e| ApiError::internal(format!("HODL percentage for {date}: {e}")))
             };
 
@@ -4542,6 +4617,10 @@ pub struct DailyActivityStatsResponse {
     pub unique_address_count: u32,
     pub total_ckb_moved: String,
     pub script_counts: Vec<ScriptCountEntry>,
+    /// The day's activity-kind occurrences: the eight kinds the charts read (transfers, the three
+    /// DAO actions, tokens, objects, identities, script calls), summed here. Kinds overlap — an
+    /// action counts in each kind it is — so this is not a count of distinct activities.
+    pub kind_occurrences: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -4593,7 +4672,7 @@ async fn get_daily_activity_stats(
     let days = params.days;
     let chain = load_chain_time(&state.store).await?;
     let cache_key =
-        complete_days_cache_key(&format!("stats:daily-activity-stats:{}", days), chain)?;
+        complete_days_cache_key(&format!("stats:daily-activity-stats:v2:{}", days), chain)?;
 
     if let Some(cached) = state
         .cache
@@ -4688,6 +4767,19 @@ async fn get_daily_activity_stats(
                 unique_address_count: s.unique_address_count,
                 total_ckb_moved: s.total_ckb_moved.to_string(),
                 script_counts,
+                kind_occurrences: [
+                    s.transfer_count,
+                    s.dao_deposit_count,
+                    s.dao_withdraw_request_count,
+                    s.dao_withdraw_complete_count,
+                    s.token_count,
+                    s.object_count,
+                    s.identity_count,
+                    s.script_call_count,
+                ]
+                .into_iter()
+                .map(u64::from)
+                .sum(),
             }
         })
         .collect();
@@ -6530,26 +6622,29 @@ mod tests {
                 600_00000000,
             ],
         };
+        // the chart in its own type, beside its two wholes (the D1 hand-back, item 2)
         let response = build_cell_size_response(&snapshot);
-        assert_eq!(response.title, "Cell Size Distribution");
-        assert_eq!(response.data.len(), 6);
-        assert_eq!(response.data[0].date, "<100 CKB");
-        assert_eq!(response.data[0].value, "10");
-        assert_eq!(response.data[0].value2.as_deref(), Some("100.5"));
-        assert_eq!(response.data[5].date, ">=1m CKB");
-        assert_eq!(response.data[5].value, "60");
+        assert_eq!(response.chart.title, "Cell Size Distribution");
+        assert_eq!(response.chart.data.len(), 6);
+        assert_eq!(response.chart.data[0].date, "<100 CKB");
+        assert_eq!(response.chart.data[0].value, "10");
+        assert_eq!(response.chart.data[0].value2.as_deref(), Some("100.5"));
+        assert_eq!(response.chart.data[5].date, ">=1m CKB");
+        assert_eq!(response.chart.data[5].value, "60");
+        assert_eq!(response.live_cells, "210");
+        assert_eq!(response.occupied_capacity, "2100.5");
     }
 
     #[test]
     fn test_empty_cell_size_response_has_metadata() {
         let response = empty_cell_size_response();
-        assert_eq!(response.title, "Cell Size Distribution");
-        assert_eq!(response.y_axis_label, "Live Cells");
+        assert_eq!(response.chart.title, "Cell Size Distribution");
+        assert_eq!(response.chart.y_axis_label, "Live Cells");
         assert_eq!(
-            response.y2_axis_label.as_deref(),
+            response.chart.y2_axis_label.as_deref(),
             Some("Common Knowledge Size (CKB)")
         );
-        assert!(response.data.is_empty());
+        assert!(response.chart.data.is_empty());
     }
 
     #[test]

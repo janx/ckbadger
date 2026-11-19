@@ -59,6 +59,13 @@ export const WIDEST_BLOCK_NUMBER = formatBlockNumber(nines(8));
 export const WIDEST_AGE = '10y 364d ago';
 
 /**
+ * Of record: the widest age a live list writes for a time under a year, in its one unit
+ * (`formatAgeOneUnit`): `364d ago`. A phone row whose first line holds this and not WIDEST_AGE says
+ * what an older age does there (lane D4). Source: the age's form, lib/format-age.ts.
+ */
+export const WIDEST_AGE_UNDER_A_YEAR = '364d ago';
+
+/**
  * Consensus: the protocol's limit of a block's serialized size, `max_block_bytes`, 597,000 bytes
  * (mainnet and testnet `get_consensus`).
  */
@@ -157,11 +164,24 @@ export const WIDEST_BLOCK_FEES = ckbAmountText(ckbNines(3), 'column');
 export const WIDEST_TX_VALUE = ckbAmountText(ckbNines(9), 'column');
 
 /**
+ * Of record: WIDEST_TX_VALUE as a phone row writes it, the summary form (whole CKB from 1,000 up):
+ * `999,999,999`; a Fiber channel's capacity holds to it too (its table's Capacity column reads
+ * WIDEST_TX_VALUE). Source: WIDEST_TX_VALUE.
+ */
+export const WIDEST_TX_VALUE_SUMMARY = ckbAmountText(ckbNines(9), 'summary');
+
+/**
  * Of record: the CKB a transaction outputs, every decimal, eleven whole digits (the genesis
  * transactions output the 33.6 billion CKB first issued; all CKB is some 45 billion today). Source:
  * mainnet block 0 and the issuance.
  */
 export const WIDEST_TX_OUTPUT = ckbAmountText(ckbNines(11), 'column');
+
+/**
+ * Of record: WIDEST_TX_OUTPUT as a phone row writes it, the summary form (whole CKB from 1,000 up):
+ * `99,999,999,999`. Source: WIDEST_TX_OUTPUT.
+ */
+export const WIDEST_TX_OUTPUT_SUMMARY = ckbAmountText(ckbNines(11), 'summary');
 
 /** Of record: a transaction's fee under 100 CKB. Source: mainnet's transactions' fees. */
 export const WIDEST_TX_FEE = ckbAmountText(ckbNines(2), 'column');
@@ -184,6 +204,18 @@ export const WIDEST_FEE_RATE = (1_000_000_000).toLocaleString('en-US');
  * mainnet's DAO deposits.
  */
 export const WIDEST_DAO_DEPOSIT = ckbAmountText(ckbNines(10), 'column');
+
+/**
+ * Of record: WIDEST_DAO_DEPOSIT as a phone row writes it, the summary form (whole CKB from 1,000 up):
+ * `9,999,999,999`. Source: WIDEST_DAO_DEPOSIT.
+ */
+export const WIDEST_DAO_DEPOSIT_SUMMARY = ckbAmountText(ckbNines(10), 'summary');
+
+/**
+ * Of record: the live objects one holder holds of one collection, under a million, `999,999` (the
+ * largest collections hold thousands). Source: mainnet's object collections' live counts.
+ */
+export const WIDEST_HELD_ITEMS = nines(6).toLocaleString('en-US');
 
 /** Of record: a depositor's rank, under a million depositors. Source: mainnet's DAO depositors. */
 export const WIDEST_RANK = nines(6).toLocaleString('en-US');

@@ -2,7 +2,6 @@
 
 import { useState, useMemo, memo } from 'react';
 import type { IdShortening } from '@/components/ui/hex-code';
-import { useCopy } from '@/hooks/useCopy';
 import { ELLIPSIS, shortenHash } from '@/lib/shorten';
 import { cn } from '@/lib/utils';
 
@@ -75,7 +74,6 @@ type HexDisplayProps = IdShortening & {
   value: string;
   groupSize?: number;
   showGroupHighlight?: boolean;
-  copyable?: boolean;
   color?: 'aqua' | 'lavender' | 'gold' | 'rouge';
   /** The type step: `sm` is the small step, `md` and `lg` the body step. */
   textSize?: 'sm' | 'md' | 'lg';
@@ -87,7 +85,6 @@ export function HexDisplay({
   value,
   groupSize = 4,
   showGroupHighlight = true,
-  copyable = true,
   color = 'aqua',
   textSize = 'md',
   className,
@@ -95,7 +92,6 @@ export function HexDisplay({
   ...shortening
 }: HexDisplayProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
-  const { copied, copy } = useCopy(value);
   const truncate = shortening.truncate !== false;
 
   // The value at its size (U-09), the `0x` drawn apart in the prefix ink.
@@ -143,22 +139,6 @@ export function HexDisplay({
 
   const allowWrap = !truncate;
 
-  if (copied) {
-    return (
-      <span
-        className={cn(
-          'inline-flex items-center gap-1',
-          allowWrap && 'max-w-full flex-wrap break-all',
-          mono && 'font-mono',
-          sizeClasses[textSize],
-          className
-        )}
-      >
-        <span className="text-jade animate-confirm-fade">Copied</span>
-      </span>
-    );
-  }
-
   return (
     <span
       className={cn(
@@ -166,12 +146,11 @@ export function HexDisplay({
         allowWrap && 'max-w-full flex-wrap break-all',
         mono && 'font-mono',
         sizeClasses[textSize],
-        copyable && 'cursor-pointer hover:opacity-90',
         className
       )}
-      // the one copy path (hooks/useCopy): a copy that cannot work shows nothing
-      onClick={copyable ? copy : undefined}
-      title={copyable ? `Click to copy: ${value}` : value}
+      // an id is a value: its whole in its title; a copy is the copy button's, after an id line
+      // (lane c2-finish, rulings round 1: an id in a row or a link copies nothing on a click)
+      title={value}
     >
       {prefix && <span className={cn('mr-0.5', prefixColorClasses[color])}>{prefix}</span>}
 

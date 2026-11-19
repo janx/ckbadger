@@ -171,10 +171,10 @@ function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
       <Address address={party.address} size="row" look="key" className="text-body" />
     ) : party.lockHash ? (
       <AppLink href={`/address/${party.lockHash}`}>
-        <Hash hash={party.lockHash} kind="hash" size="row" copyable={false} className="text-body" />
+        <Hash hash={party.lockHash} kind="hash" size="row" className="text-body" />
       </AppLink>
     ) : (
-      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
+      <Hash hash={party.hashPrefix} truncate={false} className="text-small" />
     ),
     note: party.lockHash
       ? (party.scriptName ?? 'lock not named')
@@ -194,7 +194,6 @@ export function PartyLine({ party, size }: { party: DotCellPartyRef; size: Short
           hash={party.address ?? party.lockHash}
           kind={party.address ? 'address' : 'hash'}
           size={size}
-          copyable={false}
           className="text-body"
         />
       </AppLink>
@@ -202,7 +201,7 @@ export function PartyLine({ party, size }: { party: DotCellPartyRef; size: Short
     </>
   ) : (
     <>
-      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
+      <Hash hash={party.hashPrefix} truncate={false} className="text-small" />
       <Sub>prefix · no uniquely resolved lock</Sub>
     </>
   );

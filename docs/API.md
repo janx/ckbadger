@@ -580,7 +580,51 @@ status.
   `windowDays`/`fromDate`/`toDate`; each row exposes the canonical
   `minerLockHash` and an optional resolvable CKB `address`
 - `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`
+- `CellSizeDistributionChartResponse` — the cell-size histogram (`ChartResponse`, flattened) and its two wholes
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
+
+**What a chart page states (lane D1)**
+
+A chart page draws at most five bands of a stack and states every share of a
+whole the route sends; it never sums the bands itself. These fields carry the
+bands it draws and the wholes it divides by, read-only on the store:
+
+- `GET /charts/hodl-wave` — `bands: [{ key, label, members }]`, the five bands a
+  page draws, oldest first: `gt3y`, `1y3y`, `6m1y`, `1m6m` (members `3m6m`,
+  `1m3m`) and `lt1m` (members `1w1m`, `1d1w`, `24h`). Each point's `values`
+  carries the merged `1m6m` and `lt1m` beside the eight bands, each computed
+  from the bands' exact capacities. Every percentage of this route, the eight
+  and the two merged, is cut at two decimals, never rounded
+  (`format_ratio_cut`): two of three CKB is `"66.66"`.
+- `GET /charts/most-utilized-scripts` and `/charts/most-utilized-assets` — each
+  of `usedShare` and `capacityShare` has `bands`: the five largest ranks, then
+  `rest` (label `Others`, members every rank after the fifth and `others`) when
+  there are more than five. Each point's `values.rest` (shannons, present with
+  that band) is the day's total less the five drawn; `values.total` (shannons)
+  is the day's total, every rank and `others`, the whole the page's shares
+  divide by.
+- `GET /charts/common-knowledge-composition` — each point's
+  `values.knowledgeSize` (CKB): the day's knowledge size, which the five kinds
+  partition.
+- `GET /charts/total-supply` — each point's `values.totalIssuance` (CKB): C,
+  the total issuance in the day's DAO field. The three bands do not sum to it:
+  what has not left the unissued secondary pool is no band.
+- `GET /charts/secondary-issuance` — each point's `componentsTotalShannons`:
+  compensation, mining and burnt summed, in shannons. It differs from
+  `protocolTotalShannons` by the frozen phase-1 overlap.
+- `GET /charts/cell-size-distribution` — `liveCells` (the cells of every
+  bucket) and `occupiedCapacity` (the CKB they occupy), counted from the same
+  snapshot as the buckets.
+- `GET /charts/epoch-time-distribution` — a bucket is one minute, its `date`
+  the minute in hours at two decimals, cut (181 minutes is `"3.01"`); no two
+  minutes share a label. `GET /charts/block-time-distribution` — each bucket's
+  `date` is its exact 0.1 s edge and its `value`, the share of blocks, is cut
+  at three decimals.
+- `GET /stats/daily-activities` — each day's `kindOccurrences`: the eight kinds
+  the charts read (transfers, the three DAO actions, tokens, objects,
+  identities, script calls) summed. Kinds overlap, an action counting in each
+  kind it is, so this is not a count of distinct activities; coinbase and
+  unknown transactions are not in it.
 
 ---
 

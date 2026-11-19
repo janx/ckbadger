@@ -159,23 +159,12 @@ export function CellVersions({
                   <span>
                     {lockAddressLabel}{' '}
                     <AppLink href={`/address/${v.ownerAddress}`}>
-                      <Hash
-                        hash={v.ownerAddress}
-                        kind="address"
-                        size="row"
-                        copyable={false}
-                        className="text-meta"
-                      />
+                      <Hash hash={v.ownerAddress} kind="address" size="row" className="text-meta" />
                     </AppLink>
                   </span>
                   <AppLink href={getScriptDetailHref({ ...v.lock, scriptKind: 'lock' })}>
                     {v.lockName ?? 'Lock'}{' '}
-                    <Hash
-                      hash={v.lock.codeHash}
-                      size="row"
-                      className="text-meta"
-                      copyable={false}
-                    />
+                    <Hash hash={v.lock.codeHash} size="row" className="text-meta" />
                   </AppLink>
                 </div>
               </div>

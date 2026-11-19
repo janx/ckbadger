@@ -75,7 +75,9 @@ const EXPECT: Record<string, Expect> = {
   'activity-type-breakdown': {
     eyebrow: 'script calls, the largest kind in a day · 2026-11-18',
     figure: '5,425 activities',
-    sentence: "Script calls were 88.47% of the day's activities, CKB transfers 10.25%.",
+    // re-pinned for the D1 hand-back, item 2: the whole is the API's kind occurrences, and kinds
+    // overlap, so the sentence says so (was "… of the day's activities, …")
+    sentence: "Script calls were 88.47% of the day's kind occurrences, CKB transfers 10.25%.",
   },
   'cell-count': { eyebrow: 'live · 2026-11-18', figure: '1,000,020 cells' },
   'hodl-wave': {
@@ -86,8 +88,9 @@ const EXPECT: Record<string, Expect> = {
   'total-supply': {
     eyebrow: 'circulating · 2026-11-18',
     figure: '6,000 CKB',
-    sentence:
-      'Of the 10,000 CKB issued, 29.99% is deposited in the Nervos DAO and 10.00% is burnt.',
+    // re-pinned for the D1 hand-back, item 2: of C, the API's total issuance (it was the page's
+    // sum of the three bands: "Of the 10,000 CKB issued, 29.99% … and 10.00% is burnt.")
+    sentence: 'Of the 12,000 CKB issued, 25.00% is deposited in the Nervos DAO and 8.33% is burnt.',
   },
   'total-deposit': {
     eyebrow: 'deposited in the Nervos DAO · 2026-11-18',
@@ -180,7 +183,8 @@ const EXPECT: Record<string, Expect> = {
   },
   'epoch-time-distribution': {
     eyebrow: 'the most common duration',
-    figure: '4.02 h',
+    // re-pinned for the ruling of 2026-11-19: minute 241 is 4.01 h, cut (was half up, 4.02)
+    figure: '4.01 h',
     sentence: 'The shortest epoch took 2.05 h and the longest 50.50 h.',
   },
 };

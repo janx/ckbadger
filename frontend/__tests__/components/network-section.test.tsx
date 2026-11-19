@@ -126,18 +126,20 @@ describe('NetworkSection', () => {
       )
     );
     render(<NetworkSection />);
+    // re-pinned for the coordinator's ruling of 2026-11-19, a shortened figure is cut: 1.005 reads 1.00 and
+    // the 1.005% target 1% (were half up, 1.01 and 1.01%)
     await waitFor(() =>
-      expect(screen.getByTestId('home-block-time-headline')).toHaveTextContent('1.01')
+      expect(screen.getByTestId('home-block-time-headline')).toHaveTextContent('1.00')
     );
     expect(within(figure('home-block-time')).getByRole('img')).toHaveAccessibleName(
-      /1.01 s on 10\/23/
+      /1.00 s on 10\/23/
     );
     await waitFor(() =>
-      expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('1.01%')
+      expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('1.00%')
     );
-    expect(figure('home-uncle-rate')).toHaveTextContent('NC-Max target 1.01%');
+    expect(figure('home-uncle-rate')).toHaveTextContent('NC-Max target 1%');
     fireEvent.pointerMove(within(figure('home-uncle-rate')).getByRole('img'), { clientX: 268 });
-    expect(screen.getByTestId('home-uncle-rate-readout')).toHaveTextContent('1.01%');
+    expect(screen.getByTestId('home-uncle-rate-readout')).toHaveTextContent('1.00%');
   });
 
   it('reads hash rate in H/s and only divides it into PH/s for display', async () => {
@@ -154,15 +156,16 @@ describe('NetworkSection', () => {
 
   it('draws the uncle rate against the NC-Max target the API reports', async () => {
     render(<NetworkSection />);
+    // re-pinned for the coordinator's ruling of 2026-11-19, a shortened figure is cut (was half up, 2.64%)
     await waitFor(() =>
-      expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('2.64%')
+      expect(screen.getByTestId('home-uncle-rate-headline')).toHaveTextContent('2.63%')
     );
     const fig = figure('home-uncle-rate');
     expect(fig).toHaveTextContent('daily, NC-Max target 2.5%');
     const svg = within(fig).getByRole('img');
     expect(svg.querySelector('[data-role="reference"]')).toHaveAttribute('stroke-dasharray', '4 3');
     expect(svg).toHaveAccessibleName(
-      /around the NC-Max target of 2.5 percent, 2.64 percent on 10\/23/
+      /around the NC-Max target of 2.5 percent, 2.63 percent on 10\/23/
     );
   });
 

@@ -2,7 +2,9 @@ use crate::cache::CacheTtl;
 use crate::response::ChartResponse;
 use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::{
-    build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
+    build_address_cohort_response, build_block_time_distribution_response,
+    build_cell_size_response, CellSizeDistributionChartResponse, CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
+    CACHE_KEY_CELL_SIZE_DISTRIBUTION, CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
 };
 use crate::utils::{
     accumulate_owned_capacity, hash_type_to_string, resolve_dob_collection_name,
@@ -1165,7 +1167,7 @@ fn warmup_cell_charts_from_store(state: &AppState) -> Result<(), String> {
     {
         let size_response = build_cell_size_response(&snapshot);
         state.mem_cache.set(
-            "chart:cell-size-distribution:v1",
+            CACHE_KEY_CELL_SIZE_DISTRIBUTION,
             &size_response,
             CacheTtl::CHART,
         );
@@ -1210,11 +1212,11 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
             // Transfer mem_cache entries to the async cache backend
             if let Some(size) = state
                 .mem_cache
-                .get::<ChartResponse>("chart:cell-size-distribution:v1")
+                .get::<CellSizeDistributionChartResponse>(CACHE_KEY_CELL_SIZE_DISTRIBUTION)
             {
                 state
                     .cache
-                    .set("chart:cell-size-distribution:v1", &size, CacheTtl::CHART)
+                    .set(CACHE_KEY_CELL_SIZE_DISTRIBUTION, &size, CacheTtl::CHART)
                     .await;
             }
             if let Some(cohort) = state
@@ -1262,7 +1264,9 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         "chart:uncle-rate",
         "chart:block-time-distribution",
         "chart:block-time-distribution:v2",
+        CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
         "chart:epoch-time-distribution",
+        CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
         "chart:epoch-time-length",
         "chart:miner-address-distribution",
         "chart:total-supply",
@@ -1292,11 +1296,11 @@ pub async fn warmup_chart_caches(state: Arc<AppState>) {
         run_warmup!("chart:difficulty", warmup_difficulty),
         run_warmup!("chart:uncle-rate", warmup_uncle_rate),
         run_warmup!(
-            "chart:block-time-distribution:v2",
+            CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
             warmup_block_time_distribution
         ),
         run_warmup!(
-            "chart:epoch-time-distribution",
+            CACHE_KEY_EPOCH_TIME_DISTRIBUTION,
             warmup_epoch_time_distribution
         ),
         run_warmup!("chart:epoch-time-length", warmup_epoch_time_length),
@@ -1352,7 +1356,7 @@ async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> 
         state
             .cache
             .set(
-                "chart:block-time-distribution:v2",
+                CACHE_KEY_BLOCK_TIME_DISTRIBUTION,
                 &response,
                 CHART_CACHE_TTL,
             )
@@ -1363,7 +1367,7 @@ async fn warmup_block_time_distribution(state: &AppState) -> Result<(), String> 
 }
 
 async fn warmup_epoch_time_distribution(state: &AppState) -> Result<(), String> {
-    state.cache.delete("chart:epoch-time-distribution").await;
+    state.cache.delete(CACHE_KEY_EPOCH_TIME_DISTRIBUTION).await;
     Ok(())
 }
 

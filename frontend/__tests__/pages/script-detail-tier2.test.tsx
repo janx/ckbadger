@@ -1,7 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
+import {
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+  stubLayoutWidths,
+} from '@/__tests__/utils/phone-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
+import { shortenAddress } from '@/lib/shorten';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
@@ -352,5 +360,64 @@ describe('Script page · the family tables budgeted from what they hold (readabi
       [584, { 'Registered references': 'rows' }],
       [358, { 'Its cells': 'rows', 'Code versions': 'rows', 'Registered references': 'rows' }],
     ]);
+  });
+});
+
+// Lane D4 (the phone-rows board): a script's cells on a phone were five lines (PA-08), the owner and
+// the type joined by a bare "· —" where there is none (PA-09). The row is the board's three parts:
+// the out point and the cell's capacity; who owns it, the type that also guards it and where it was
+// made, each after its name (a cell with no type script says nothing of one); the list's one bar,
+// what the cell holds, with the bytes it occupies named.
+describe('Script page · its cells on a phone (lane D4)', () => {
+  beforeEach(() => {
+    stubLayoutWidths({ chart: 326, list: 358 });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is three parts at 358 px: out point and capacity, owner · type · created, the bar and its bytes', async () => {
+    render(<ScriptDetailPage name="JoyID" />);
+    await screen.findByRole('heading', { name: 'JoyID', level: 1 });
+    const section = document.getElementById('its-cells')!;
+    const rows = await within(section).findAllByTestId('script-cell-row-mobile');
+    const [plain, typed] = fixture.cells.data;
+    expect(phoneLines(rows[0]).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['cell', 'head', '0x44e5…517f:1', '153.99 CKB'],
+      [
+        'held',
+        'body',
+        `owner ${shortenAddress(plain.address, 'tight')} · created #11,141,234`,
+        null,
+      ],
+      ['anatomy', 'quiet', '', '63 B occupied'],
+    ]);
+    expect(dottedItems(rows[1].querySelector('[data-line="held"]')!)).toEqual([
+      `owner ${shortenAddress(typed.address, 'tight')}`,
+      'type COTA',
+      'created #11,286,483',
+    ]);
+    // no bare dash where a cell has no type script (PA-09)
+    expect(rows[0].textContent).not.toContain('—');
+    // every figure after its name, the name in the quiet ink
+    const labels = Array.from(rows[1].querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual(['owner', 'type', 'created', 'occupied']);
+    for (const label of labels) expect(inkOf(label)).toBe('text-text-dim');
+    // the list's one bar stands on line 3 beside the bytes that name it
+    expect(
+      rows[0].querySelector('[data-line="anatomy"] [data-part="left"]')!.children
+    ).toHaveLength(1);
+    // the out point is the row's key, its one bright thing
+    expect(statedHeadPx(rows[0])).toBe(276.6);
+    expect(phoneHeadPx(rows[0], 360)).toBeLessThanOrEqual(statedHeadPx(rows[0]));
   });
 });

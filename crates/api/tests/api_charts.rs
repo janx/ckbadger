@@ -293,6 +293,58 @@ async fn test_removed_cell_age_chart_routes_return_not_found() {
     }
 }
 
+/// CKB as the routes write it, in shannons: "12.5" is 1,250,000,000.
+fn ckb_shannons(text: &str) -> i128 {
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    let fraction = format!("{fraction:0<8}");
+    whole.parse::<i128>().unwrap() * 100_000_000 + fraction.parse::<i128>().unwrap()
+}
+
+/// The wholes the supply pages' sentences state are the routes' (the D1 hand-back, item 2): total
+/// supply sends C, the DAO field's total issuance of each day; secondary issuance sends the total of
+/// its three destinations, in shannons.
+#[tokio::test]
+async fn supply_and_secondary_issuance_state_their_wholes() {
+    let store = test_store();
+    seed_sparse_daily_chart_history(&store);
+    let issued: std::collections::HashMap<String, i128> = store
+        .list_dao_daily_snapshots()
+        .unwrap()
+        .into_iter()
+        .map(|snapshot| (snapshot.date.clone(), snapshot.total_issuance))
+        .collect();
+    let app = create_router(test_config(store)).await;
+
+    let (status, supply) = get_json(&app, "/charts/total-supply").await;
+    assert_eq!(status, StatusCode::OK, "{supply}");
+    let mut checked = 0;
+    for point in supply["data"].as_array().unwrap() {
+        let total = point["values"]["totalIssuance"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no totalIssuance at {point}"));
+        if let Some(c) = issued.get(point["date"].as_str().unwrap()) {
+            assert_eq!(ckb_shannons(total), *c, "{point}");
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "no snapshot day to compare: {supply}");
+
+    let (status, issuance) = get_json(&app, "/charts/secondary-issuance").await;
+    assert_eq!(status, StatusCode::OK, "{issuance}");
+    for point in issuance["data"].as_array().unwrap() {
+        let values = &point["values"];
+        let parts = ["burnt", "compensation", "mining"]
+            .iter()
+            .map(|key| ckb_shannons(values[*key].as_str().unwrap()))
+            .sum::<i128>();
+        assert_eq!(
+            point["componentsTotalShannons"],
+            parts.to_string(),
+            "{point}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_most_utilized_scripts_chart_ranks_by_used_and_capacity() {
     let store = test_store();
@@ -607,6 +659,9 @@ async fn test_most_utilized_scripts_chart_draws_five_largest_and_the_rest() {
         assert_eq!(chart["bands"][0]["label"], "Script 1 (type)", "{scope}");
         // ranks six and seven (200 + 100, or 1,200 + 1,100) and the API's remainder (0)
         assert_eq!(chart["data"][0]["values"]["rest"], rest, "{scope}");
+        // the whole the page's shares divide by: the day's total, the route's own figure
+        let total = if scope == "usedShare" { "2800" } else { "9800" };
+        assert_eq!(chart["data"][0]["values"]["total"], total, "{scope}");
         assert_eq!(chart["series"].as_array().unwrap().len(), 8, "{scope}");
     }
 }
@@ -1228,6 +1283,57 @@ async fn test_charts_block_time_distribution_with_data() {
     let point_2s = data.iter().find(|point| point["date"] == "2.0").unwrap();
     assert_eq!(point_1s["value"], "50.000");
     assert_eq!(point_2s["value"], "50.000");
+}
+
+/// A block-interval share is a percentage a chart page states, cut at its three decimals and never
+/// rounded (the D1 hand-back, item 1): two of three intervals of 1 s is 66.666…%, "66.666" (half up
+/// it read "66.667").
+#[tokio::test]
+async fn test_charts_block_time_distribution_cuts_its_shares() {
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    // epoch 0 complete (intervals 1 s, 1 s, 2 s); the tip in epoch 1
+    for (number, ts_ms, epoch) in [
+        (0i64, 0i64, 0i64),
+        (1, 1_000, 0),
+        (2, 2_000, 0),
+        (3, 4_000, 0),
+        (4, 5_000, 1),
+    ] {
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: vec![number as u8; 32],
+                timestamp: ts_ms,
+                epoch_number: epoch,
+                epoch_index: 0,
+                epoch_length: 4,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: ts_ms,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/block-time-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let value = |date: &str| {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|point| point["date"] == date)
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(value("1.0"), "66.666");
+    assert_eq!(value("2.0"), "33.333");
 }
 
 /// Regression: every date-keyed chart emits ONE canonical date format

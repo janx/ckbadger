@@ -20,11 +20,12 @@ describe('MostUtilizedAssetsPage', () => {
     chartMock.mockClear();
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue({
       title: 'Assets Used & Total CKBytes',
+      // each day's whole, the route's (the D1 hand-back, item 2)
       usedShare: {
         title: 'Top Assets Common Knowledge Share',
         data: [
-          { date: '2024-01-01', values: { top0: '100000001', others: '20' } },
-          { date: '2024-01-02', values: { top0: '200000002', others: '30' } },
+          { date: '2024-01-01', values: { top0: '100000001', others: '20', total: '100000021' } },
+          { date: '2024-01-02', values: { top0: '200000002', others: '30', total: '200000032' } },
         ],
         series: [
           { key: 'top0', label: 'Token A (token)', color: '#00c389' },
@@ -39,8 +40,8 @@ describe('MostUtilizedAssetsPage', () => {
       capacityShare: {
         title: 'Top Assets Capacity Share',
         data: [
-          { date: '2024-01-01', values: { top0: '300000003', others: '40' } },
-          { date: '2024-01-02', values: { top0: '400000004', others: '50' } },
+          { date: '2024-01-01', values: { top0: '300000003', others: '40', total: '300000043' } },
+          { date: '2024-01-02', values: { top0: '400000004', others: '50', total: '400000054' } },
         ],
         series: [
           { key: 'top0', label: 'Cluster A (object)', color: '#00c389' },

@@ -25,6 +25,7 @@ import { drawSeal, type SealId, type SealState } from '@/lib/seal/stones';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -488,16 +489,23 @@ describe('Transaction board, tier 1', () => {
     expect(hash).toHaveAttribute('title', TX_HASH);
     // re-pinned (lane c2-finish, item 4: copy has one form): HeadId draws the copy after the id,
     // the one form of every head (8 px after it, at its first line: was items-center gap-0.5 by
-    // the page's hand); the id no longer positions a tick over itself (was 'relative')
-    expect(hash.className).toBe('block min-w-0 flex-1 font-mono');
+    // the page's hand); the id no longer positions a tick over itself (was 'relative'). Re-pinned
+    // again (lane c2-finish, rulings round 2): the id takes its content's width (it was flex-1 and
+    // filled the row, so its copy stood at the row's far end, 352 to 727 px after the hash at 1280)
+    expect(hash.className).toBe('block min-w-0 font-mono');
     expect(hash.querySelector('.overflow-x-auto')).toBeNull();
     expect(hash.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
     // re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
     // icon in the quiet ink in a 32 px box below 640 and 24 px from it, kept whole beside the
-    // hash (was a 44 px box pulled 12 px into the line, -my-3 h-11 w-11)
+    // hash (was a 44 px box pulled 12 px into the line, -my-3 h-11 w-11). Re-pinned (lane
+    // c2-finish, rulings round 1): its answer took 6 px and its words (43.2 or 72 px) from the
+    // hash's line while it stood; it hangs under the whole id now, out of the line's flow
     const copy = screen.getByRole('button', { name: 'copy transaction hash' });
     expect(copy).toHaveClass('text-text-dim', 'hover:text-jade', 'h-8', 'w-8', 'sm:h-6', 'sm:w-6');
-    expect(copy.parentElement).toHaveClass('shrink-0');
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(copy);
+    expect(copy.parentElement).toHaveClass('shrink-0', 'self-stretch');
     // under both: re-pinned on purpose (lane D2, gate D0′): the status strip first, then the
     // summary (the summary was first; the facts stood in a rail outside the head)
     const strip = screen.getByRole('group', { name: 'Transaction status' });

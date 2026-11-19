@@ -8,16 +8,27 @@ export function exactUnsignedInteger(value: string, context: string): bigint {
   return BigInt(value);
 }
 
-/** Round half-up only at the requested display precision. */
-export function formatScaledInteger(value: bigint, divisor: bigint, decimals: number): string {
+/**
+ * value ÷ divisor CUT at `decimals`, never rounded (the house rule, readability R5: a rounded
+ * figure can show a digit that is not on chain; 1.005 reads 1.00): the one form of a figure that
+ * shortens an exact ratio, the H-multiplier first (lane D4 follow-up).
+ */
+export function cutScaledInteger(value: bigint, divisor: bigint, decimals: number): string {
   if (value < BigInt(0) || divisor <= BigInt(0) || !Number.isInteger(decimals) || decimals < 0) {
     throw new Error('invalid exact integer display scale');
   }
   const scale = BigInt(10) ** BigInt(decimals);
-  const rounded = (value * scale * BigInt(2) + divisor) / (divisor * BigInt(2));
-  if (decimals === 0) return rounded.toString();
-  return `${rounded / scale}.${(rounded % scale).toString().padStart(decimals, '0')}`;
+  const shown = (value * scale) / divisor;
+  if (decimals === 0) return shown.toString();
+  return `${shown / scale}.${(shown % scale).toString().padStart(decimals, '0')}`;
 }
+
+/**
+ * The same cut under its first name, which its callers read (the coordinator's ruling of
+ * 2026-11-19: a shortened figure is never rounded; it rounded half-up, 1.005 read 1.01). No figure
+ * on the site is rounded through it any more, so there is no half-up form.
+ */
+export const formatScaledInteger = cutScaledInteger;
 
 export function formatCompactInteger(value: string, context: string): string {
   const integer = exactUnsignedInteger(value, context);
@@ -29,8 +40,8 @@ export function formatCompactInteger(value: string, context: string): string {
     ['M', BigInt(10) ** BigInt(6)],
     ['k', BigInt(10) ** BigInt(3)],
   ] as const) {
-    if (integer >= divisor - divisor / BigInt(200000))
-      return `${formatScaledInteger(integer, divisor, 2)}${suffix}`;
+    // a unit from where the value reaches it: cut, 999,999 is 999.99k, never a rounded 1.00M
+    if (integer >= divisor) return `${formatScaledInteger(integer, divisor, 2)}${suffix}`;
   }
   return integer.toString();
 }
@@ -59,7 +70,7 @@ export function exactSignedDecimalRatio(value: string, context: string): [bigint
   return [negative ? -numerator : numerator, denominator];
 }
 
-/** Compact amount rounded half-up from an exact decimal rational. */
+/** Compact amount cut, never rounded, from an exact decimal rational. */
 export function formatCompactRatio(numerator: bigint, denominator: bigint): string {
   if (numerator < BigInt(0) || denominator <= BigInt(0)) {
     throw new Error('invalid compact decimal ratio');
@@ -72,7 +83,8 @@ export function formatCompactRatio(numerator: bigint, denominator: bigint): stri
     ['M', BigInt(10) ** BigInt(6)],
     ['k', BigInt(10) ** BigInt(3)],
   ] as const) {
-    if (numerator * BigInt(200000) >= denominator * unit * BigInt(199999)) {
+    // a unit from where the value reaches it (cut: 999,999.99 is 999.99k, never 1.00M)
+    if (numerator >= denominator * unit) {
       return `${formatScaledInteger(numerator, denominator * unit, 2)}${suffix}`;
     }
   }

@@ -1,6 +1,8 @@
 import type { ChartPoint } from '@/components/ui/chart';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
 import {
+  axisOutliers,
+  axisStyle,
   cutDecimal,
   cutRatio,
   cutShare,
@@ -239,16 +241,22 @@ const DURATION = { more: 'longest', less: 'shortest', span: '' };
 
 type HeadOf = (definition: ChartDefinition, model: ChartModel) => HeadDraft;
 
+/**
+ * A point's whole as the route states it, which every share the page states of the point divides
+ * by (the D1 hand-back, item 2; chart-model.ts): never the page's sum of its bands.
+ */
+function wholeAt(point: ChartPoint, context: string): string {
+  if (point.whole === undefined) throw new Error(`${context}: no stated whole at ${point.label}`);
+  return point.whole;
+}
+
 /** The share a ranking's five largest hold of the newest day's whole, from the API's bands. */
 function fiveLargest(model: ChartModel, entity: string): string {
   const history = model.historicalShares?.[0];
   const last = history?.points.at(-1);
   if (!history || !last) return 'No indexed observations yet.';
   const keys = history.series.map((entry) => entry.key);
-  const whole = exactSum(
-    keys.map((key) => last.values[key]),
-    `${model.title} whole`
-  );
+  const whole = wholeAt(last, `${model.title} whole`);
   const rest = keys.find((key) => key === 'rest' || key === 'others');
   const named = keys.filter((key) => key !== rest);
   const held = exactSum(
@@ -281,10 +289,8 @@ const HEADS: Record<string, HeadOf> = {
     if (!last) return dated(m, 'the largest kind in a day', () => '');
     const keys = m.series.map((entry) => entry.key);
     const [first, second] = largestTwo(last, keys);
-    const whole = exactSum(
-      keys.map((key) => last.values[key]),
-      'activities whole'
-    );
+    // the day's kind occurrences, the route's: kinds overlap, so they are no count of activities
+    const whole = wholeAt(last, 'activities whole');
     return {
       eyebrow: `${word(KIND_WORDS, first)}, the largest kind in a day`,
       at: last.label,
@@ -293,7 +299,7 @@ const HEADS: Record<string, HeadOf> = {
         display: formatChartHead(last.values[first], m.unit),
         unit: m.unit,
       },
-      sentence: `${capitalise(word(KIND_WORDS, first))} were ${cutShare(last.values[first], whole, 'activities')} of the day's activities, ${word(KIND_WORDS, second)} ${cutShare(last.values[second], whole, 'activities')}.`,
+      sentence: `${capitalise(word(KIND_WORDS, first))} were ${cutShare(last.values[first], whole, 'activities')} of the day's kind occurrences, ${word(KIND_WORDS, second)} ${cutShare(last.values[second], whole, 'activities')}.`,
     };
   },
   'cell-count': (_, m) => dated(m, 'live', peakSentence),
@@ -316,10 +322,8 @@ const HEADS: Record<string, HeadOf> = {
     const last = m.points.at(-1);
     const head = dated(m, 'circulating', () => '');
     if (!last) return head;
-    const whole = exactSum(
-      m.series.map((entry) => last.values[entry.key]),
-      'supply whole'
-    );
+    // C, the day's total issuance, the route's: its bands do not sum to it
+    const whole = wholeAt(last, 'supply whole');
     return {
       ...head,
       figure: {
@@ -365,10 +369,7 @@ const HEADS: Record<string, HeadOf> = {
   'secondary-issuance': (_, m) =>
     dated(m, 'issued since genesis', (x) => {
       const last = x.points.at(-1)!;
-      const whole = exactSum(
-        x.series.map((entry) => last.values[entry.key]),
-        'issuance whole'
-      );
+      const whole = wholeAt(last, 'issuance whole');
       const share = (key: string) => cutShare(last.values[key], whole, 'issuance');
       return `By destination, ${share('burnt')} is burnt, ${share('compensation')} paid to DAO depositors as compensation and ${share('mining')} to miners.`;
     }),
@@ -381,10 +382,7 @@ const HEADS: Record<string, HeadOf> = {
     if (!last) return head;
     const keys = m.series.map((entry) => entry.key);
     const [first, second] = largestTwo(last, keys);
-    const whole = exactSum(
-      keys.map((key) => last.values[key]),
-      'knowledge whole'
-    );
+    const whole = wholeAt(last, 'knowledge whole');
     const one = KNOWLEDGE_WORDS[first];
     const two = KNOWLEDGE_WORDS[second];
     if (!one || !two) throw new Error(`chart head: no words for ${first} or ${second}`);
@@ -403,10 +401,9 @@ const HEADS: Record<string, HeadOf> = {
   'most-utilized-assets': rankedHead('asset'),
   'cell-size-distribution': (_, m) => {
     const lead = m.reading;
-    const counts = exactSum(
-      m.points.map((point) => point.values.primary),
-      'cells whole'
-    );
+    // the live cells and the CKB they occupy, the route's wholes
+    if (m.whole === undefined) throw new Error('cell size: no stated live cells');
+    const counts = m.whole;
     const ckb = m.secondary?.points ?? [];
     const most = ckb.length
       ? ckb.reduce((best, point) =>
@@ -428,10 +425,11 @@ const HEADS: Record<string, HeadOf> = {
       sentence: most
         ? `The most occupied CKB is in cells of ${most.label}, ${cutShare(
             most.values.secondary,
-            exactSum(
-              ckb.map((point) => point.values.secondary),
-              'cell CKB whole'
-            ),
+            (() => {
+              if (m.secondary?.whole === undefined)
+                throw new Error('cell size: no stated occupied CKB');
+              return m.secondary.whole;
+            })(),
             'cell CKB'
           )} of it.`
         : 'No indexed observations yet.',
@@ -555,12 +553,9 @@ export function capNote(
   noun: string
 ): string {
   const valueAt = (point: ChartPoint) => {
-    // a stack is above the scale by its whole, the day's stack total, exactly
+    // a stack is above the scale by its whole, the day's, as the route states it
     if (model.kind === 'stacked') {
-      const whole = exactSum(
-        model.series.map((entry) => point.values[entry.key]),
-        `${model.title} at ${point.label}`
-      );
+      const whole = wholeAt(point, `${model.title} cap`);
       return { ratio: ratio(whole, 'cap whole'), text: stated(whole, model.unit, true) };
     }
     const key = model.series.reduce((best, entry) =>
@@ -580,4 +575,58 @@ export function capNote(
   return shown.length === 1
     ? `${named}, above this scale`
     : `${formatCount(shown.length, noun)} above this scale; the largest, ${named}`;
+}
+
+/**
+ * How a chart is drawn until its reader changes it (the chart-hero board, CH-08 and rule 6; the D1
+ * hand-back, item 3), for its page and its index card alike: the catalogue's log scale where a line
+ * spans orders of magnitude and every value is above zero, else linear, its outliers left off the
+ * axis and named over the plot. `points` and `series` are the ones drawn (a range, a card's);
+ * `scale` is the reader's choice where the page offers one.
+ */
+export function chartDrawing(
+  definition: ChartDefinition,
+  model: ChartModel,
+  points: readonly ChartPoint[],
+  series: ChartModel['series'],
+  scale?: 'linear' | 'log'
+): {
+  supportsLog: boolean;
+  yScale: 'linear' | 'log';
+  axisCap: { value: number; note: string } | undefined;
+} {
+  const supportsLog =
+    model.kind === 'line' &&
+    model.points.length > 0 &&
+    model.points.every((point) =>
+      model.series.every(
+        (entry) =>
+          exactSignedDecimalRatio(point.values[entry.key], `${definition.slug} log scale`)[0] >
+          BigInt(0)
+      )
+    );
+  const chosen = scale ?? (definition.logScale ? 'log' : 'linear');
+  const yScale = supportsLog && chosen === 'log' ? 'log' : 'linear';
+  const style = axisStyle(definition);
+  // Rule 6: an outlier does not set a linear axis; its value is named over the plot.
+  const outliers =
+    yScale === 'linear' && !model.yDomain && (style === 'date' || style === 'epoch')
+      ? axisOutliers(points, series, model.kind)
+      : null;
+  return {
+    supportsLog,
+    yScale,
+    axisCap: outliers
+      ? {
+          value: outliers.cap,
+          note: capNote(
+            model,
+            points,
+            outliers.indexes,
+            (label) => (style === 'epoch' ? `#${formatEpochLabel(label, definition.slug)}` : label),
+            style === 'epoch' ? 'epoch' : 'day'
+          ),
+        }
+      : undefined,
+  };
 }

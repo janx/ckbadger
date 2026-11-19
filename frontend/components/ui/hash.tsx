@@ -9,26 +9,17 @@ type HashProps = IdShortening & {
   /** An address written where a lock hash could stand (a party): `address`. */
   kind?: IdKind;
   className?: string;
-  copyable?: boolean;
   /** An id is a value: the reading ink, or bright; never quiet (R3, `HexCode`). */
   variant?: 'default' | 'bright';
 };
 
-export function Hash({
-  hash,
-  kind,
-  className,
-  copyable = true,
-  variant = 'default',
-  ...shortening
-}: HashProps) {
+export function Hash({ hash, kind, className, variant = 'default', ...shortening }: HashProps) {
   return (
     <HexCode
       value={hash}
       kind={kind}
       {...shortening}
       className={cn('text-body', className)}
-      copyable={copyable}
       variant={variant}
     />
   );

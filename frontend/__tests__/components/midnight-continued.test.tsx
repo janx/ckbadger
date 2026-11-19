@@ -45,7 +45,9 @@ describe('the rules in globals.css', () => {
       /\na:hover\s*\{\s*color: var\(--c-jade\);\s*text-decoration-color: currentColor;\s*text-shadow: 0 0 8px rgb\(var\(--rgb-jade\) \/ calc\(0\.45 \* var\(--m-glow\)\)\);\s*\}/
     );
     expect(css).toMatch(/svg a:hover\s*\{\s*color: inherit;\s*text-shadow: none;/);
-    expect(css).toMatch(/\.hover-lit:hover\s*\{\s*color: var\(--c-jade\);\s*text-shadow: 0 0 8px/);
+    // re-pinned (lane c2-finish, rulings round 1): `.hover-lit`, a copyable hash's glow, went
+    // with the click-to-copy of an id (an id copies nothing on a click; the copy button does)
+    expect(css).not.toMatch(/\.hover-lit/);
   });
 
   // Rubbing × Song print, phase 2: the three tubes are set flat — a plain 1 px line in the line
@@ -112,13 +114,12 @@ describe('the rules in globals.css', () => {
   });
 });
 
+// 'move 1c on a hash' tested a copyable hash's hover glow alone: it went with the click-to-copy of
+// an id (lane c2-finish, rulings round 1), and a hash glows on hover only inside a link now.
 describe('move 1c on a hash', () => {
-  it('a copyable hash carries the hover glow; a plain one does not', () => {
-    const hash = `0x${'ab'.repeat(32)}`;
-    const { rerender } = render(<Hash hash={hash} size="row" />);
-    expect(screen.getByText(/0xabababab/)).toHaveClass('hover-lit', 'cursor-pointer');
-    rerender(<Hash hash={hash} size="row" copyable={false} />);
-    expect(screen.getByText(/0xabababab/)).not.toHaveClass('hover-lit');
+  it('a hash carries no glow and no pointer of its own: it copies nothing', () => {
+    render(<Hash hash={`0x${'ab'.repeat(32)}`} size="row" />);
+    expect(screen.getByText(/0xabababab/)).not.toHaveClass('hover-lit', 'cursor-pointer');
   });
 });
 

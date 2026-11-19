@@ -2,7 +2,13 @@ import { CHARTS } from '@/components/charts/chart-catalogue';
 import { renderPaused } from '@/__tests__/utils/paused-read';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { atViewportWidth, stubViewportFromMd } from '@/__tests__/utils/viewport';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
@@ -885,17 +891,17 @@ describe('Transactions pool view', () => {
     fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     expect(screen.queryByRole('table', { name: 'Transactions in the pool' })).toBeNull();
+    // Re-pinned on purpose (lane D4, the phone-rows board): the value leaves the right of what it
+    // does for line 3, where every figure stands after its name and the rate is named ("fee rate");
+    // bytes and cycles leave the phone row (it was "fee 0.00012345 CKB" with "54,623 shannon/KB ·
+    // 2 → 3 cells · 226 B · 1,709,221 cycles" at the right, the value bare beside what it does).
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0xabab…abab', expect.stringMatching(/^Proposed· .+ ago$/)],
-      [
-        'what',
-        'Interpretation unavailablepartial: an input is not yet resolvable',
-        'Interpretation partial',
-      ],
+      ['what', 'Interpretation unavailablepartial: an input is not yet resolvable', null],
       [
         'figures',
-        'fee 0.00012345 CKB',
-        '54,623 shannon/KB · 2 → 3\u00a0cells · 226 B · 1,709,221 cycles',
+        '2 → 3\u00a0cells · Interpretation partial · fee 0.00012345 CKB · fee rate 54,623 shannon/KB',
+        null,
       ],
     ]);
   });
@@ -1152,8 +1158,13 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
     ).toEqual(['all', 'ckb', 'script', 'cellbase', 'dao', 'token', 'object', 'identity']);
     expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^all/);
     expect(screen.queryByRole('radiogroup', { name: 'kind' })).toBeNull();
-    // The pool banner stays from sm; the views' tab row is drawn at every width.
-    expect(screen.getByTestId('pool-banner')).toHaveClass('hidden', 'sm:flex');
+    // Re-pinned on purpose (lane D4, PA-20): the pool's strip keeps its figures below sm (it was
+    // hidden there whole, `hidden sm:flex`); its "Open the pool →" stays from sm, and the views'
+    // tab row is drawn at every width.
+    expect(screen.getByTestId('pool-banner')).not.toHaveClass('hidden');
+    expect(
+      within(screen.getByTestId('pool-banner')).getByRole('button', { name: 'Open the pool →' })
+    ).toHaveClass('hidden', 'sm:inline-flex');
     expect(screen.getByRole('tablist', { name: 'Transaction views' })).toBeInTheDocument();
     fireEvent.change(select, { target: { value: 'token' } });
     // a phone's window, so a phone's twenty a page (R2; the test drew the phone line in a
@@ -1406,5 +1417,122 @@ describe('TransactionsPage while its read is paused', () => {
     resume();
     expect(await screen.findByText('No transactions.')).toBeInTheDocument();
     expect(screen.queryByText('Loading transactions…')).toBeNull();
+  });
+});
+
+// Lane D4 (the phone-rows board, built from its transactions pane): a pool transaction's phone row
+// is three parts, as a committed one's: the hash with its status and wait; what it does; then,
+// quiet, the cells, the value and the fee with its rate, each figure after its name (PA-09). Bytes
+// and cycles leave the phone row (the transaction's page, the table, the cards from 560 px). And
+// the strip above the list keeps its figures on a phone (PA-20: below sm it was hidden whole and
+// the page said nothing of the pool but its tab's count); its "Open the pool →" stays from sm, as
+// the views' tab row opens the pool at every width.
+describe('the pool on a phone (lane D4, PA-20)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const pool = (value: string | null) => ({
+    summary: {
+      size: '226',
+      cycles: '1709221',
+      minFeeRate: '54623',
+      maxFeeRate: '54623',
+      newestSeenAt: '1792886400000',
+    },
+    data: [
+      {
+        hash: `0x${'ab'.repeat(32)}`,
+        status: 'proposed' as const,
+        value,
+        fee: '12345',
+        feeRate: '54623',
+        txSize: 226,
+        cycles: '1709221',
+        inputsCount: 2,
+        outputsCount: 3,
+        timestamp: '1792886400000',
+        interpretation:
+          value === null
+            ? { status: 'partial' as const, reasons: [{ code: 'unresolved_input' as const }] }
+            : { status: 'complete' as const, reasons: [] },
+        activity: null,
+      },
+    ],
+    total: 1,
+    limit: 50,
+    nextCursor: null,
+    totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
+    truncated: false,
+    lastPolledAt: '2026-10-25T00:00:00Z',
+  });
+
+  it('is three parts at 358 px: hash and status, what it does, then cells · value · fee · rate', async () => {
+    atContainerWidth(358);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue(pool('76729874184'));
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    const [row] = await screen.findAllByTestId('pool-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0xabab…abab', expect.stringMatching(/^Proposed· .+ ago$/)],
+      ['what', 'Interpretation unavailable', null],
+      [
+        'figures',
+        '2 → 3\u00a0cells · value 767.29 CKB · fee 0.00012345 CKB · fee rate 54,623 shannon/KB',
+        null,
+      ],
+    ]);
+    const figures = row.querySelector('[data-line="figures"]')!;
+    expect(dottedItems(figures)).toEqual([
+      '2 → 3\u00a0cells',
+      'value 767.29 CKB',
+      'fee 0.00012345 CKB',
+      'fee rate 54,623 shannon/KB',
+    ]);
+    for (const label of ['value', 'fee', 'fee rate'])
+      expect(
+        Array.from(figures.querySelectorAll('[data-role="figure-label"]')).map((l) => l.textContent)
+      ).toContain(label);
+    expect(row.textContent).not.toMatch(/226 B|cycles/);
+    // the stone, the tight hash, and the widest status with the widest wait under 100 days
+    expect(statedHeadPx(row)).toBe(311.9);
+    expect(phoneHeadPx(row, 360)).toBeLessThanOrEqual(statedHeadPx(row));
+  });
+
+  it('says a value it cannot read in the value’s place, and the strip keeps its figures', async () => {
+    atViewportWidth(390);
+    atContainerWidth(358);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue(pool(null));
+    render(<TransactionsPage />);
+    const banner = await screen.findByTestId('pool-banner');
+    // drawn below sm: the strip, its squares and its counts
+    expect(banner).not.toHaveClass('hidden');
+    expect(banner).toHaveTextContent('0 pending · 1 proposed · 0 awaiting index');
+    expect(within(banner).getAllByRole('link', { name: /^Pool transaction / })).toHaveLength(1);
+    // its way into the pool stays from sm: below it the views' tab row is that way
+    expect(within(banner).getByRole('button', { name: 'Open the pool →' })).toHaveClass(
+      'hidden',
+      'sm:inline-flex'
+    );
+    fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
+    const [row] = await screen.findAllByTestId('pool-row-mobile');
+    expect(dottedItems(row.querySelector('[data-line="figures"]')!)).toEqual([
+      '2 → 3\u00a0cells',
+      'Interpretation partial',
+      'fee 0.00012345 CKB',
+      'fee rate 54,623 shannon/KB',
+    ]);
   });
 });

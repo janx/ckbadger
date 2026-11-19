@@ -27,6 +27,8 @@ describe('SecondaryIssuancePage', () => {
           values: { mining: '60.00000001', compensation: '29', burnt: '10' },
           protocolTotalShannons: '9900000001',
           phase1CompensationShannons: '100000000',
+          // the three destinations' total, the route's (the D1 hand-back, item 2)
+          componentsTotalShannons: '9900000001',
         },
       ],
       series: [

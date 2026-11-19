@@ -16,3 +16,17 @@ describe('HMultiplierReading (consistency plan C12)', () => {
     expect(screen.getByText('H-multiplier ×1.02')).toHaveAttribute('data-role', 'h-multiplier');
   });
 });
+
+// Lane D4 follow-up (the coordinator's item 3): the H-multiplier is cut at two decimals, never
+// rounded — held ÷ occupied = 1.005 reads ×1.00 (it read ×1.01, a digit not on chain).
+describe('the H-multiplier reading is cut, never rounded', () => {
+  it('reads ×1.00 for a ratio of 1.005 and ×1.99 for 1.999', () => {
+    const { container, rerender } = render(
+      <HMultiplierReading held={BigInt(1005)} occupied={BigInt(1000)} />
+    );
+    const value = () => container.querySelector('[data-role="h-multiplier"]');
+    expect(value()).toHaveTextContent(/^H-multiplier ×1\.00$/);
+    rerender(<HMultiplierReading held={BigInt(1999)} occupied={BigInt(1000)} />);
+    expect(value()).toHaveTextContent(/^H-multiplier ×1\.99$/);
+  });
+});

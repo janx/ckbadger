@@ -43,14 +43,16 @@ function dailyCount(last: readonly number[]): string[] {
   return [...values, ...last.map(String)];
 }
 
-const activityDay = (i: number, n: number) => ({
-  transfer: String(600 + i),
-  dao: String(5),
-  token: String(3),
-  object: String(0),
-  identity: String(70),
-  scriptCall: String(i === n - 1 ? 5425 : 5000),
-});
+/** A day of activity kinds, the newest 5,425 script calls, day 50 a spike; with the API's whole. */
+const activityDay = (i: number, n: number) => {
+  const scriptCall = i === n - 1 ? 5425 : i === 50 ? 1_000_000 : 5000;
+  const kinds = { transfer: 600 + (i % 30), dao: 5, token: 3, object: 0, identity: 70, scriptCall };
+  return {
+    ...Object.fromEntries(Object.entries(kinds).map(([key, count]) => [key, String(count)])),
+    // the day's kind occurrences, the API's sum of the kinds (lane D1, the hand-back's item 2)
+    kindOccurrences: String(Object.values(kinds).reduce((sum, count) => sum + count, 0)),
+  };
+};
 
 function stacked(
   title: string,
@@ -76,6 +78,8 @@ function shareHistory(names: readonly string[], ids: readonly string[]) {
     last.forEach((v, r) => (values[`top${r}`] = ckb(v - k)));
     values.others = ckb(50);
     values.rest = ckb(100 - k + 50 - k + 50);
+    // the day's whole, the API's (the ranks and its remainder)
+    values.total = ckb(last.reduce((sum, v) => sum + v - k, 0) + 50);
     return { date, values };
   };
   return {
@@ -136,7 +140,7 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     dailyCount([300_000_000, 302_594_731]).map((v) => `${v}12345678`)
   ),
   getActivityVolumeChart: line('Activities', dailyCount([7_000, 6_177])),
-  getActivityTypeBreakdownChart: stacked('Activity by type', 30, (i) => activityDay(i, 30), [
+  getActivityTypeBreakdownChart: stacked('Activity by type', 120, (i) => activityDay(i, 120), [
     ['transfer', 'Transfer'],
     ['dao', 'DAO'],
     ['token', 'Token'],
@@ -188,7 +192,13 @@ export const CHART_FIXTURES: Record<string, unknown> = {
   getTotalSupplyChart: stacked(
     'Total Supply',
     2,
-    (i) => ({ circulating: i ? '6000' : '5999', nervosdao: '3000', burnt: '1000.5' }),
+    (i) => ({
+      circulating: i ? '6000' : '5999',
+      nervosdao: '3000',
+      burnt: '1000.5',
+      // C, the day's total issuance: more than the bands, which leave out the unissued pool
+      totalIssuance: '12000',
+    }),
     [
       ['circulating', 'Circulating'],
       ['nervosdao', 'Nervos DAO'],
@@ -249,6 +259,8 @@ export const CHART_FIXTURES: Record<string, unknown> = {
       values: { burnt: '6817.5', compensation: '1700', mining: '900' },
       protocolTotalShannons: '939761189025563741',
       phase1CompensationShannons: '0',
+      // the three destinations' total, the API's: 6,817.5 + 1,700 + 900 CKB
+      componentsTotalShannons: '941750000000',
     })),
     series: [
       { key: 'compensation', label: 'Deposit Compensation', color: '#000000' },
@@ -268,7 +280,14 @@ export const CHART_FIXTURES: Record<string, unknown> = {
   getCommonKnowledgeCompositionChart: stacked(
     'Composition',
     2,
-    () => ({ transfer: '40', nftSpore: '5', dao: '2', udt: '9', otherContracts: '44' }),
+    () => ({
+      transfer: '40',
+      nftSpore: '5',
+      dao: '2',
+      udt: '9',
+      otherContracts: '44',
+      knowledgeSize: '100',
+    }),
     [
       ['transfer', 'CKB Transfer'],
       ['nftSpore', 'NFT'],
@@ -301,6 +320,9 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     ],
     peak: { date: '<100 CKB', value: '911281' },
     peak2: { date: '100k-1m CKB', value: '60000000' },
+    // the two wholes, the API's
+    liveCells: '1011280',
+    occupiedCapacity: '176974574',
   },
   getCapacityTurnoverRatioChart: {
     ...line('Turnover', ['29.516483', '3.085013', '2.5', '2.171181']),
@@ -405,14 +427,16 @@ export const CHART_FIXTURES: Record<string, unknown> = {
     y2AxisLabel: null,
     data: [
       { date: '2.05', value: '1', value2: null },
-      ...['3.90', '3.95', '4.00', '4.02', '4.05', '4.10'].map((date) => ({
+      // minutes 234, 237, 240, 241, 243 and 246 in hours, cut as the API writes them (241 read 4.02
+      // half up)
+      ...['3.90', '3.95', '4.00', '4.01', '4.05', '4.10'].map((date) => ({
         date,
-        value: date === '4.02' ? '628' : '300',
+        value: date === '4.01' ? '628' : '300',
         value2: null,
       })),
       { date: '50.50', value: '1', value2: null },
     ],
-    peak: { date: '4.02', value: '628' },
+    peak: { date: '4.01', value: '628' },
     peak2: null,
   },
 };

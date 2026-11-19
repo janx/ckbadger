@@ -248,7 +248,8 @@ export function CanonicalIdentityDetail({
         kind === 'did' && didDecoded ? (
           // the head's id (a did:ckb), its copy button after it (lane c2-finish, item 4), at the
           // asset heads' id step (the identity line's 12 px; it was 14): 40 × 7.2 = 288 px and the
-          // button's 46 hold a 390 phone's 358 on one line, where 336 + 46 did not
+          // copy's 40 (its gap and box; its answer takes no room) hold a 390 phone's 358 on one
+          // line, where 336 + 40 did not
           <span className="text-text block">
             <HeadId value={didDecoded.did} kind="did" copy="copy DID" />
           </span>

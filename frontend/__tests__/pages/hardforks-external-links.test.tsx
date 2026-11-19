@@ -50,12 +50,14 @@ describe('the hardforks page’s links off the site (U-20)', () => {
       (a) => /^https?:\/\//.test(a.getAttribute('href')!)
     );
     // the two editions' overviews and their further resources, from the payload
+    // re-pinned (lane c2-finish, rulings round 2): the ↗ is glued to the last word by a no-break
+    // space (it was a space), so it never stands alone on a line
     expect(external.map((a) => a.textContent)).toEqual([
-      'CKB2021 overview ↗',
-      'Migration Guide ↗',
-      'CKB2023 overview ↗',
-      'RFC49 VM V2 ↗',
-      'RFC50 Spawn ↗',
+      'CKB2021 overview\u00a0↗',
+      'Migration Guide\u00a0↗',
+      'CKB2023 overview\u00a0↗',
+      'RFC49 VM V2\u00a0↗',
+      'RFC50 Spawn\u00a0↗',
     ]);
     for (const a of external) {
       expect(a, a.textContent!).toHaveAttribute('target', '_blank');

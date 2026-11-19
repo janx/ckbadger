@@ -10,7 +10,14 @@ import {
 } from '@/components/transaction/transaction-list-table';
 import { TRANSACTIONS_FORM_PX } from '@/app/transactions/page';
 import type { Transaction } from '@/lib/api';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
 import {
   expectBefore,
   expectOneRowSeal,
@@ -19,7 +26,7 @@ import {
   sealHash,
 } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
-import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { PHONE_LINE_PX, ROW_LINE_PX } from '@/lib/type-metrics';
 import { drawSeal, type SealId } from '@/lib/seal/stones';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
@@ -1049,7 +1056,12 @@ describe('TransactionListTable phone row (board L2)', () => {
     vi.restoreAllMocks();
   });
 
-  it('is three lines at 358 px: who and when, what it did in full, then value · fee and the figures', () => {
+  // Re-pinned on purpose (lane D4, the phone-rows board): line 3 names each figure ("value 0 CKB",
+  // was a bare "0 CKB", PA-09) and keeps the cells, the value and the fee; bytes and cycles left
+  // the phone row (was "3 → 3 cells · 903 B · 1,704,957 cycles" at the right); a cellbase says
+  // what it pays on line 2 and its reward on line 3, and no fee (was "Cellbase pays #20,829,764 ·
+  // reward 559.61 CKB" over "0 → 1 cell · 360 B · fee 0 CKB" and "0 cycles").
+  it('is three lines at 358 px: who and when, what it did in full, then cells · value · fee', () => {
     atContainerWidth(358);
     render(<TransactionListTable transactions={[scriptCall, cellbase]} />);
     expect(screen.queryByRole('table')).toBeNull();
@@ -1073,36 +1085,149 @@ describe('TransactionListTable phone row (board L2)', () => {
       {
         key: 'figures',
         tone: 'quiet',
-        // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB").
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "0.00030000"; below
-        // 1 CKB, exact)
-        left: '0 CKB · fee 0.0003 CKB',
-        right: '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
+        // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB"); readability R5: the
+        // summary form, below 1 CKB exact
+        left: '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB',
+        right: null,
       },
     ]);
     expect(call.querySelector('[data-line="what"] .truncate')).toBeNull();
-    // A cellbase pays its reward on the what line; its fee is a quiet figure.
     expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0xc89d…2cd7', expect.stringMatching(/^#20,829,775 · /)],
-      // a phone row's summary form (readability R5, re-pinned on purpose: was "559.61739927")
-      ['what', 'Cellbase pays #20,829,764 · reward 559.61 CKB', null],
-      ['figures', '0 → 1\u00a0cell · 360 B · fee 0 CKB', '0 cycles'],
+      ['what', 'Cellbase · pays #20,829,764', null],
+      // a phone row's summary form (readability R5: was "559.61739927")
+      ['figures', '0 → 1\u00a0cell · reward 559.61 CKB', null],
     ]);
     expect(base.closest('[role="listitem"]')).toHaveClass('quiet');
   });
 
-  it('is two lines at 608 px: value and fee join what it did, the figures take the right edge', () => {
+  // Re-pinned on purpose (lane D4): the card at 608 px is the phone row's three parts, its quiet
+  // line keeping the bytes and the cycles where no table stands yet (it was two lines, value and
+  // fee after what it did and the figures at the right edge).
+  it('is three lines at 608 px: the quiet line keeps the bytes and the cycles', () => {
     atContainerWidth(608);
     render(<TransactionListTable transactions={[scriptCall]} />);
     const [call] = screen.getAllByTestId('transaction-row-mobile');
     expect(phoneLines(call).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · /)],
+      ['what', 'Script call · .bit Time Index State · .bit Time Info', null],
       [
-        'what',
-        // a phone row's summary form (readability R5, re-pinned on purpose: was "0.00030000")
-        'Script call · .bit Time Index State · .bit Time Info · 0 CKB · fee 0.0003 CKB',
-        '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
+        'figures',
+        // a phone row's summary form (readability R5: was "0.00030000")
+        '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB · 903 B · 1,704,957 cycles',
+        null,
       ],
     ]);
+  });
+});
+
+// Lane D4 (the phone-rows board the owner passed at gate D0′, its transactions pane): one row,
+// three parts. Line 1 the hash in its tight form and the block with its age; line 2 what it did, in
+// the reading ink, wrapping between its parts; line 3 quiet, what every reader uses — the cells,
+// the value and the fee, each figure with its name (PA-09: the bare "0 CKB" lost its column's name).
+// Bytes and cycles leave the phone row: they are on the transaction's page, in the table from its
+// bound and in the cards from 560 px. A cellbase writes what it pays on line 2 and its reward,
+// named, on line 3.
+describe('the transactions phone row on the phone-rows board (lane D4)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is three parts at 358 px: hash and block · age, what it did, then cells · value · fee', () => {
+    atContainerWidth(358);
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    const [call, sent, base] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(call).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['identity', 'head', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · \d+[smhdy] ago$/)],
+      ['what', 'body', 'Script call · .bit Time Index State · .bit Time Info', null],
+      ['figures', 'quiet', '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB', null],
+    ]);
+    const figures = call.querySelector('[data-line="figures"]')!;
+    expect(dottedItems(figures)).toEqual(['3 → 3\u00a0cells', 'value 0 CKB', 'fee 0.0003 CKB']);
+    // no value without its name: every amount on the row stands after its label, in the quiet ink
+    for (const row of [call, sent, base])
+      for (const amount of row.querySelectorAll('[data-ckb-amount]')) {
+        const item = amount.closest('[data-dotted-item]')!;
+        const label = item.querySelector('[data-role="figure-label"]');
+        expect(label, `${item.textContent}: an amount without its name`).not.toBeNull();
+        expect(inkOf(label!)).toMatch(/text-text-dim|quiet/);
+      }
+    // bytes and cycles are not on the phone row
+    expect(call.textContent).not.toMatch(/903 B|cycles/);
+    // line 2 is what it did, in the reading ink: the key on line 1 is the row's one bright thing
+    const what = call.querySelector('[data-line="what"]')!;
+    expect(what.querySelector('.text-text-bright')).toBeNull();
+    expect(phoneLines(sent)[2].left).toBe('3 → 3\u00a0cells · value 767.29 CKB · fee 0.0003 CKB');
+    expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0xc89d…2cd7', expect.stringMatching(/^#20,829,775 · /)],
+      ['what', 'Cellbase · pays #20,829,764', null],
+      // a cellbase pays no fee: its row names the reward it pays and nothing else
+      ['figures', '0 → 1\u00a0cell · reward 559.61 CKB', null],
+    ]);
+  });
+
+  it('keeps the bytes and the cycles in the cards from 560 px, where no table stands yet', () => {
+    atContainerWidth(608);
+    render(<TransactionListTable transactions={[scriptCall]} />);
+    const [call] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(call).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · /)],
+      ['what', 'Script call · .bit Time Index State · .bit Time Info', null],
+      [
+        'figures',
+        '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB · 903 B · 1,704,957 cycles',
+        null,
+      ],
+    ]);
+  });
+
+  // The board's head(): the 16 px stone (32.3 wide) and its gap, the tight hash at 14 px, the 12 px
+  // between the parts, and the block with its age at 13 px. At its widest under a year,
+  // "#99,999,999 · 364d ago" (22 characters, 171.6), it is 316.3 of a 360 px phone's 328 px line.
+  // An age of a year or more ("10y 364d ago", 202.8) makes it 347.5: it fits 390's 358 and drops
+  // the block and its age under the hash at 360, whole (the finding the lane hands back).
+  it('states its first line, 316.3 of 328 px, and draws its widest row under a year in it', async () => {
+    atContainerWidth(PHONE_LINE_PX[360]);
+    const T = Date.parse('2027-10-25T00:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'], now: T });
+    const widest: Transaction = {
+      ...scriptCall,
+      blockNumber: 99_999_999,
+      // 364 days and an hour before now: the widest age under a year
+      timestamp: new Date(T - (364 * 86_400 + 3_600) * 1000).toISOString(),
+    };
+    render(<TransactionListTable transactions={[widest]} />);
+    const [row] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(row)[0].right).toBe('#99,999,999 · 364d ago');
+    expect(statedHeadPx(row)).toBe(316.3);
+    expect(phoneHeadPx(row, 360)).toBe(statedHeadPx(row));
+  });
+});
+
+// Lane D4 follow-up (the coordinator's note): the block a cellbase pays is a link inside a line,
+// on the phone row and in the table alike: the inline look (components/ui/link.tsx), underlined in
+// its line's ink, no hand-written hover ink.
+describe('the block a cellbase pays is an inline link (lane D4 follow-up)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('on the phone row and in the table', () => {
+    atContainerWidth(358);
+    const { unmount } = render(<TransactionListTable transactions={[cellbase]} />);
+    const phone = within(screen.getByTestId('transaction-row-mobile')).getByRole('link', {
+      name: '#20,829,764',
+    });
+    expect(phone).toHaveClass('underline');
+    expect(phone).not.toHaveClass('hover:text-jade');
+    unmount();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    atContainerWidth(1248);
+    render(<TransactionListTable transactions={[cellbase]} />);
+    const table = within(screen.getByRole('table')).getByRole('link', { name: '#20,829,764' });
+    expect(table).toHaveClass('underline');
   });
 });

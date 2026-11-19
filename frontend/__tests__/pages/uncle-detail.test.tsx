@@ -7,8 +7,9 @@ import { server } from '@/__tests__/msw/server';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import UncleDetailPage from '@/app/blocks/[id]/uncles/[index]/client-page';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { factsOf } from '@/__tests__/utils/facts';
-import { expectBefore } from '@/__tests__/utils/seals';
+import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
 
 const params = vi.hoisted(() => ({ current: { id: '8775638', index: '0' } }));
 vi.mock('@/src/navigation', async (importOriginal) => ({
@@ -29,6 +30,41 @@ class Boundary extends Component<{ children: ReactNode }, { error: Error | null 
 }
 
 describe('Uncle detail page', () => {
+  // Lane D2b (U-03, PA-06; the owner's ruling of 2026-11-19): the uncle page takes the block's name
+  // plate — its stone beside the kind line "Uncle", the h1 and the id line with its copy, then the
+  // status strip and the lede under them — the stone the block stone WITHOUT rods (the chain keeps
+  // no transactions for an uncle) in the dead ink; one plain sentence says why it has no rods.
+  it('stands its name plate beside its block stone without rods, in the dead ink (lane D2b)', async () => {
+    params.current = { id: '8775638', index: '0' };
+    const { container } = render(<UncleDetailPage />);
+    const h1 = await screen.findByRole('heading', { level: 1, name: '#8,775,637' });
+    const seal = expectOnePageSeal(
+      container,
+      { kind: 'block', hash: blockUncle.hash, txs: 'not kept' },
+      'ink'
+    );
+    expect(seal.querySelector('svg')).toHaveAttribute(
+      'aria-label',
+      `Block seal ${blockUncle.hash.slice(0, 10)}, the chain keeps no transaction count for an uncle`
+    );
+    const { stone, kindLine, title, idLine, below } = expectNamePlate(container, 'Uncle');
+    expect(stone).toBe(seal);
+    expect(title).toBe(h1);
+    expect(h1).toHaveClass('text-entity', 'max-md:text-index');
+    expect(kindLine).toHaveTextContent(/^Uncle$/);
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'copy uncle hash' }));
+    // under the stone and the plate: the strip, then the lede on the measure, which says once why
+    // the stone has no rods
+    expect(below!.children).toHaveLength(2);
+    expect(below!.firstElementChild).toBe(screen.getByRole('group', { name: 'Uncle status' }));
+    const lede = below!.lastElementChild as HTMLElement;
+    expect(lede).toHaveAttribute('data-detail-lede');
+    expect(lede).toHaveClass('max-w-measure');
+    expect(within(lede).getByText(/^Its seal has no rods/)).toHaveTextContent(
+      'Its seal has no rods: a block’s seal counts its transactions in rods, and the chain keeps none for an uncle.'
+    );
+  });
+
   // Lane D2 (PA-13, PA-06; gate D0′'s strip, with the uncle's own four facts): the block that
   // included it, its time, the canonical block at its height and its epoch stand in the status
   // strip under the id line, and its sentence follows the strip as every entity page's lede does
@@ -59,8 +95,10 @@ describe('Uncle detail page', () => {
   it('reads the uncle through its including block, with header and DAO evidence', async () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);
-    // PB-06 / PA-32: an entity h1 without a seal takes the phone step too (30 → 26 px below md).
-    expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toHaveClass(
+    // PB-06 / PA-32: an entity h1 takes the phone step (30 → 26 px below md). Re-pinned on purpose
+    // (lane D2b): the h1 is the height alone, "#8,775,637", as the block page's; the kind line
+    // above it says "Uncle" (it was "Uncle #8,775,637", with no kind line), here and below
+    expect(await screen.findByRole('heading', { name: '#8,775,637' })).toHaveClass(
       'text-entity',
       'max-md:text-index'
     );
@@ -99,10 +137,13 @@ describe('Uncle detail page', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     const { container } = render(<UncleDetailPage />);
-    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    await screen.findByRole('heading', { name: '#8,775,637' });
     const id = container.querySelector('[data-head-id]') as HTMLElement;
     fireEvent.click(id);
     expect(writeText).not.toHaveBeenCalled();
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+    // its box, and nothing above the copy clips it
+    expectAnswerUnclipped(screen.getByRole('button', { name: 'copy uncle hash' }));
     fireEvent.click(screen.getByRole('button', { name: 'copy uncle hash' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(blockUncle.hash));
     expect(blockUncle.hash).toBe(`0x${'ee'.repeat(32)}`);
@@ -111,7 +152,7 @@ describe('Uncle detail page', () => {
   it('writes the header epoch like the facts and never breaks DAO prose mid-word (BA-41/BA-42)', async () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);
-    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    await screen.findByRole('heading', { name: '#8,775,637' });
     // facts strip + raw header row: one epoch format on the page
     expect(screen.getAllByText('5,414 · 1 / 1,800')).toHaveLength(2);
     const decoded = screen.getByLabelText('Decoded DAO header');
@@ -154,7 +195,7 @@ describe('Uncle detail page', () => {
   it('names the canonical block at its height as its sibling on the same parent, and the delay', async () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);
-    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    await screen.findByRole('heading', { name: '#8,775,637' });
     const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
     expect(sentence).toHaveTextContent(
       /on the canonical chain is 0x.+, its sibling: both were mined on parent #8,775,636 0x.+, and this uncle came 92 ms after it\./
@@ -170,7 +211,7 @@ describe('Uncle detail page', () => {
       )
     );
     render(<UncleDetailPage />);
-    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    await screen.findByRole('heading', { name: '#8,775,637' });
     const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
     expect(sentence).toHaveTextContent('which has another parent');
     expect(sentence).not.toHaveTextContent('sibling');
@@ -196,7 +237,7 @@ describe('Uncle detail page', () => {
   it('shows the packed epoch with its reading in the header (BA-41, R2b-a rawEpoch)', async () => {
     params.current = { id: '8775638', index: '0' };
     render(<UncleDetailPage />);
-    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    await screen.findByRole('heading', { name: '#8,775,637' });
     expect(screen.getByText('0x7080001001526')).toBeInTheDocument();
     expect(screen.getByText('0x7080001001526').parentElement).toHaveTextContent(
       '0x7080001001526 = 5,414 · 1 / 1,800'
@@ -240,7 +281,7 @@ describe('Uncle detail page', () => {
       render(<UncleDetailPage />);
       expect(await screen.findByText('Loading uncle…')).toHaveAttribute('role', 'status');
       act(() => onlineManager.setOnline(true));
-      expect(await screen.findByRole('heading', { name: 'Uncle #8,775,637' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: '#8,775,637' })).toBeInTheDocument();
       expect(screen.queryByText('Loading uncle…')).toBeNull();
     } finally {
       onlineManager.setOnline(true);

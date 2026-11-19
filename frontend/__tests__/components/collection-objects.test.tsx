@@ -8,6 +8,10 @@ import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { nervape3xInsights, nervape3xOtherTraits } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { atViewportWidth } from '@/__tests__/utils/viewport';
+import { phoneHeadPx, phoneLines, statedHeadPx, dottedItems } from '@/__tests__/utils/phone-row';
+import { shortenAddress } from '@/lib/shorten';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 import {
   collectionGalleryFilteredProducer,
   collectionInsightsPendingProducer,
@@ -498,5 +502,81 @@ describe('the dropped-genes caption’s box', () => {
     expect(caption).toHaveAttribute('data-role', 'caption');
     expect(caption).toHaveClass('max-w-measure');
     expect(caption).toHaveTextContent(/Hat/);
+  });
+});
+
+// Lane D4 follow-up (the coordinator's item 1; PB-10): below md a cluster's newest objects were the
+// table's grid in two columns, its cells flowing in pairs — the minting day and the block with no
+// label, the genes split over two lines, the owner's lock cut to "…" in its tag. Each object is the
+// phone-rows board's item row now: its name alone on line 1 (it may wrap, it is never cut); who holds
+// it on line 2, its lock in plain words where it is not the default lock, the composition chip held
+// at the line's right edge; quiet on line 3, the genes the grid shows as columns, each named by its
+// gene, and where and when it was minted, named. The share of each gene (how many objects carry it)
+// is the gel's above the list and the cell's title in the table; the object's page has every gene.
+describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const joy = seededAddress('joyid1', JOYID_CODE_HASH);
+
+  it('is the board’s item row below md: name · holder and chip · genes and the mint, named', async () => {
+    atViewportWidth(390);
+    vi.mocked(api.getCollectionGallery).mockResolvedValue(
+      emptyPage([
+        {
+          ...base,
+          chainTime: '1700000000100',
+          ownerAddress: joy,
+          lockCodeHash: JOYID_CODE_HASH,
+          lockKind: 'JoyID',
+          mediaProfile: { ...base.mediaProfile, tier: 'pure_ckb' },
+        },
+        {
+          ...base,
+          sporeId: `0x${'04'.repeat(32)}`,
+          number: null,
+          ownerLockHash: null,
+          ownerAddress: null,
+          // no media profile: the grid's "not recorded"
+          mediaProfile: null,
+        },
+      ])
+    );
+    render(
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    );
+    const [held, ownerless] = await screen.findAllByTestId('cluster-object-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Newest objects' })).toBeNull();
+    expect(phoneLines(held).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['name', 'head', '#18,446,744,073,709,551,614', null],
+      ['holder', 'body', `held by ${shortenAddress(joy, 'row')} JoyID`, 'Pure CKB'],
+      ['minted', 'quiet', 'Face Blue · minted at #100 on 2023-11-15', null],
+    ]);
+    // the chip holds the holder's line's right edge; the lock is words, never a tag cut to "…"
+    expect(held.querySelector('[data-line="holder"]')).toHaveClass('flex-nowrap');
+    expect(held.querySelector('[data-line="holder"] [data-row-tag]')).toBeNull();
+    expect(dottedItems(held.querySelector('[data-line="minted"]')!)).toEqual([
+      'Face Blue',
+      'minted at #100 on 2023-11-15',
+    ]);
+    const labels = Array.from(held.querySelectorAll('[data-role="figure-label"]'));
+    expect(labels.map((l) => l.textContent)).toEqual(['held by', 'Face', 'minted at', 'on']);
+    expect(phoneLines(ownerless).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['name', '0x04040404…040404', null],
+      ['holder', 'No live owner', 'not recorded'],
+      ['minted', 'Face Blue · minted at #100 on 2023-11-15', null],
+    ]);
+    // line 1 is the name alone at its widest: the mark and its gap and a u64 object number
+    expect(statedHeadPx(held)).toBe(246.8);
+    expect(statedHeadPx(held)).toBeLessThanOrEqual(PHONE_LINE_PX[360]);
+    expect(phoneHeadPx(held, 360)).toBeLessThanOrEqual(statedHeadPx(held));
+  });
+
+  it('keeps the table from md', async () => {
+    atViewportWidth(1024);
+    vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage([base]));
+    render(
+      <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
+    );
+    await screen.findByRole('table', { name: 'Newest objects' });
+    expect(screen.queryByTestId('cluster-object-row-mobile')).toBeNull();
   });
 });
