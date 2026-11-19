@@ -147,11 +147,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'a collection’s items pager: a list in id order whose search pages carry no total, which no mode of the Pager draws (pages needs the count; time says newer / older; more appends)',
   },
-  'components/asset/item-evidence.tsx': {
-    lane: 'c2-assets',
-    sites: { select: 1 },
-    reason: 'the evidence’s version select',
-  },
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home, charts ----
   'app/fiber/channels/client-page.tsx': {
     lane: 'c2-topics',
@@ -193,7 +188,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 40;
+const TOLERATED_TOTAL = 39;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 
