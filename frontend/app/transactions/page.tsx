@@ -1,7 +1,7 @@
 'use client';
 
 import { TopicCharts } from '@/components/charts/topic-charts';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
@@ -12,7 +12,7 @@ import { DetailLayout } from '@/components/ui/detail-layout';
 import { CELL_GAP_PX, ListTable, minimumWidth, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { RowSeal } from '@/components/ui/row-seal';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { activityHeadline } from '@/components/activity-event-row';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import {
@@ -41,7 +41,7 @@ import {
 import { formatCount } from '@/lib/format-count';
 import { useAge, Utc8Age, Utc8DateTime } from '@/components/ui/utc8-date';
 import { ROW_SEAL } from '@/components/ui/row-seal';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
 import {
   MAX_BLOCK_BYTES,
@@ -101,6 +101,11 @@ function PoolDot({ status }: { status: PoolStatus }) {
   );
 }
 
+/** The pool transactions' statuses, each a word in the Status column. */
+const POOL_STATUSES: readonly PoolStatus[] = ['pending', 'proposed', 'committed_awaiting_index'];
+/** Their words, as the Status column and the phone row write them. */
+const POOL_STATUS_WORDS = POOL_STATUSES.map(poolStatusLabel);
+
 /** The cells a pool transaction consumes: a cellbase none (the API counts its one null input). */
 function poolConsumed(tx: PoolRow): number {
   return tx.activity?.isCellbase ? 0 : tx.inputsCount;
@@ -121,14 +126,35 @@ function NewestSeen({ at }: { at: string }) {
 }
 
 /**
- * A pool transaction as a phone row (no board; built from board L2's rules): the hash with its
- * status and wait, then what it does and its value, then fee, rate, cells, size and cycles quiet.
+ * Line 1 of a pool transaction's phone row (the phone-rows board's head(), as the committed list's):
+ * the unpressed stone and its gap (ROW_SEAL.tx.footprint, 40.3), the tight hash at the key's 14 px
+ * (92.4), the 12 px between the parts and, at 13 px, the status and its wait as the Status column
+ * holds them: the 7 px dot, 6 px, the widest status ("Confirming", 78), 6 px and the longest wait
+ * under 100 days ("· 99d ago", 70.2): 311.9 of a 360 px phone's 328 px line.
+ */
+const POOL_PHONE_HEAD_PX = phoneHead(
+  'pool transactions',
+  ROW_SEAL.tx.footprint +
+    textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    7 +
+    6 +
+    textPx(Math.max(...POOL_STATUS_WORDS.map((w) => w.length)), fontPx('small')) +
+    6 +
+    textPx('· 99d ago'.length, fontPx('small'))
+);
+
+/**
+ * A pool transaction as a phone row (the phone-rows board, as the committed list's row): the hash
+ * with its status and wait; what it does; then, quiet, the cells, the value, the fee and its rate,
+ * each figure after its name. Bytes and cycles are on the transaction's page and in the table; the
+ * cards from 560 px (`wide`) keep them at the end of the quiet line.
  */
 function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
   const what = (
     <>
       {tx.activity ? (
-        <span className="text-text-bright">{activityHeadline(tx.activity)}</span>
+        activityHeadline(tx.activity)
       ) : (
         <span className="text-text-dim">Interpretation unavailable</span>
       )}
@@ -138,52 +164,57 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
       />
     </>
   );
-  const value =
+  const figures: ReactNode[] = [
+    <span key="cells" className="whitespace-nowrap">
+      {poolConsumed(tx)} → {formatCount(tx.outputsCount, 'cell')}
+    </span>,
     tx.value === null ? (
-      <span className="text-text-dim">Interpretation partial</span>
+      <span key="value" className="text-text-dim">
+        Interpretation partial
+      </span>
     ) : (
-      <CkbAmount
-        form="summary"
-        shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
-        signed={false}
-        tone="plain"
-      />
-    );
-  const fee = (
-    <span className="whitespace-nowrap">
-      fee{' '}
+      <Labelled key="value" label="value">
+        <CkbAmount
+          form="summary"
+          shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
+          signed={false}
+          tone="plain"
+        />
+      </Labelled>
+    ),
+    <Labelled key="fee" label="fee">
       <CkbAmount
         form="summary"
         shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
         signed={false}
         tone="plain"
       />
-    </span>
-  );
-  const figures = [
-    <span key="rate" className="whitespace-nowrap">
+    </Labelled>,
+    <Labelled key="rate" label="fee rate">
       {BigInt(tx.feeRate).toLocaleString('en-US')} shannon/KB
-    </span>,
-    <span key="cells" className="whitespace-nowrap">
-      {poolConsumed(tx)} → {formatCount(tx.outputsCount, 'cell')}
-    </span>,
-    <span key="size" className="whitespace-nowrap">
-      {tx.txSize.toLocaleString('en-US')} B
-    </span>,
-    <span key="cycles" className="whitespace-nowrap">
-      {BigInt(tx.cycles).toLocaleString('en-US')} cycles
-    </span>,
+    </Labelled>,
+    ...(wide
+      ? [
+          <span key="size" className="whitespace-nowrap">
+            {tx.txSize.toLocaleString('en-US')} B
+          </span>,
+          <span key="cycles" className="whitespace-nowrap">
+            {BigInt(tx.cycles).toLocaleString('en-US')} cycles
+          </span>,
+        ]
+      : []),
   ];
   return (
     <PhoneRow
       testId="pool-row-mobile"
+      head={POOL_PHONE_HEAD_PX}
       mark={<RowSeal id={poolSealId(tx)} state="unpressed" />}
       lines={[
         {
           key: 'identity',
           tone: 'head',
           left: (
-            <Link href={`/tx/${tx.hash}`} className="hover:underline">
+            <Link href={`/tx/${tx.hash}`} look="key">
               <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
             </Link>
           ),
@@ -201,31 +232,12 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
             </span>
           ),
         },
-        wide
-          ? {
-              key: 'what',
-              tone: 'body',
-              left: <Dotted parts={[what, value, fee]} />,
-              right: (
-                <span className="text-text-dim text-meta">
-                  <Dotted parts={figures} />
-                </span>
-              ),
-            }
-          : { key: 'what', tone: 'body', left: what, right: value },
-        !wide && {
-          key: 'figures',
-          tone: 'quiet',
-          left: <span className="text-text">{fee}</span>,
-          right: <Dotted parts={figures} />,
-        },
+        { key: 'what', tone: 'body', left: what },
+        { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
       ]}
     />
   );
 }
-
-/** The pool transactions' statuses, each a word in the Status column. */
-const POOL_STATUSES: readonly PoolStatus[] = ['pending', 'proposed', 'committed_awaiting_index'];
 
 /**
  * The pool list's columns (readability F3-e: each budgeted from the widest value it holds).
@@ -298,10 +310,7 @@ function poolColumns(sameWidth: number): ListColumn<PoolRow>[] {
       minWidth: columnPx(
         7 +
           6 +
-          textPx(
-            Math.max(...POOL_STATUSES.map((s) => poolStatusLabel(s).length)),
-            fontPx('small')
-          ) +
+          textPx(Math.max(...POOL_STATUS_WORDS.map((w) => w.length)), fontPx('small')) +
           6 +
           textPx('· 99d ago'.length, fontPx('small')) +
           CELL_GAP_PX
@@ -610,7 +619,7 @@ export default function TransactionsPage() {
             ) : poolHead.data ? (
               <div
                 data-testid="pool-banner"
-                className="text-small hidden flex-wrap items-center gap-x-4 gap-y-2 sm:flex"
+                className="text-small flex flex-wrap items-center gap-x-4 gap-y-2"
               >
                 <span className="text-text-dim">In the pool</span>
                 <span
@@ -649,10 +658,11 @@ export default function TransactionsPage() {
                     </>
                   )}
                 </span>
+                {/* its way into the pool from sm; below it the views' tab row is that way */}
                 <button
                   type="button"
                   onClick={() => setTab('pool')}
-                  className="border-base-border text-text hover:text-text-bright border px-3 py-2"
+                  className="border-base-border text-text hover:text-text-bright hidden border px-3 py-2 sm:inline-flex"
                 >
                   Open the pool →
                 </button>

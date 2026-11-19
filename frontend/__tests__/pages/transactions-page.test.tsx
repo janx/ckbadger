@@ -891,17 +891,17 @@ describe('Transactions pool view', () => {
     fireEvent.click(screen.getByRole('tab', { name: /^in the pool/ }));
     const [row] = await screen.findAllByTestId('pool-row-mobile');
     expect(screen.queryByRole('table', { name: 'Transactions in the pool' })).toBeNull();
+    // Re-pinned on purpose (lane D4, the phone-rows board): the value leaves the right of what it
+    // does for line 3, where every figure stands after its name and the rate is named ("fee rate");
+    // bytes and cycles leave the phone row (it was "fee 0.00012345 CKB" with "54,623 shannon/KB ·
+    // 2 → 3 cells · 226 B · 1,709,221 cycles" at the right, the value bare beside what it does).
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0xabab…abab', expect.stringMatching(/^Proposed· .+ ago$/)],
-      [
-        'what',
-        'Interpretation unavailablepartial: an input is not yet resolvable',
-        'Interpretation partial',
-      ],
+      ['what', 'Interpretation unavailablepartial: an input is not yet resolvable', null],
       [
         'figures',
-        'fee 0.00012345 CKB',
-        '54,623 shannon/KB · 2 → 3\u00a0cells · 226 B · 1,709,221 cycles',
+        '2 → 3\u00a0cells · Interpretation partial · fee 0.00012345 CKB · fee rate 54,623 shannon/KB',
+        null,
       ],
     ]);
   });
@@ -1158,8 +1158,13 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
     ).toEqual(['all', 'ckb', 'script', 'cellbase', 'dao', 'token', 'object', 'identity']);
     expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^all/);
     expect(screen.queryByRole('radiogroup', { name: 'kind' })).toBeNull();
-    // The pool banner stays from sm; the views' tab row is drawn at every width.
-    expect(screen.getByTestId('pool-banner')).toHaveClass('hidden', 'sm:flex');
+    // Re-pinned on purpose (lane D4, PA-20): the pool's strip keeps its figures below sm (it was
+    // hidden there whole, `hidden sm:flex`); its "Open the pool →" stays from sm, and the views'
+    // tab row is drawn at every width.
+    expect(screen.getByTestId('pool-banner')).not.toHaveClass('hidden');
+    expect(
+      within(screen.getByTestId('pool-banner')).getByRole('button', { name: 'Open the pool →' })
+    ).toHaveClass('hidden', 'sm:inline-flex');
     expect(screen.getByRole('tablist', { name: 'Transaction views' })).toBeInTheDocument();
     fireEvent.change(select, { target: { value: 'token' } });
     // a phone's window, so a phone's twenty a page (R2; the test drew the phone line in a
