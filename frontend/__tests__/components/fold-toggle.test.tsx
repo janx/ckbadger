@@ -63,4 +63,28 @@ describe('FoldToggle', () => {
     const toggle = screen.getByRole('button', { name: /^all 158\switnesses ↓$/ });
     expect(toggle).toHaveClass('text-jade', 'text-small', 'h-8', 'sm:h-7');
   });
+
+  // Lane P2's third round (item 9): a list the route sends no count of folds too, asked for by
+  // name ("all activity ↓"), no number where there is none; the same one button, the same way back
+  it('folds an uncounted list asked for by name, "all activity ↓" / "fewer ↑", no number', () => {
+    function Uncounted() {
+      const [open, setOpen] = useState(false);
+      return (
+        <div>
+          <ul id="feed">{open ? <li>the whole feed</li> : <li>the newest five</li>}</ul>
+          <FoldToggle open={open} uncounted="activity" controls="feed" onToggle={setOpen} />
+        </div>
+      );
+    }
+    render(<Uncounted />);
+    const toggle = screen.getByRole('button', { name: 'all activity ↓' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveAttribute('aria-controls', 'feed');
+    expect(toggle.textContent).not.toMatch(/\d/);
+    toggle.focus();
+    fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: 'fewer ↑' })).toBe(toggle);
+    expect(document.activeElement).toBe(toggle);
+    expect(screen.getByText('the whole feed')).toBeInTheDocument();
+  });
 });
