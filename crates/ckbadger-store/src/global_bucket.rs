@@ -389,6 +389,19 @@ mod tests {
         ]
     }
 
+    /// The senders bit (`TAG_INPUT`) is not a kind: every pinned fixture
+    /// classifies the same with every party marked as a sender.
+    #[test]
+    fn the_senders_bit_moves_no_transaction_to_another_kind() {
+        for (name, fixture, expected) in pinned_fixtures() {
+            let mut sent = fixture.clone();
+            for party in &mut sent.participants {
+                party.tags |= crate::types::TAG_INPUT;
+            }
+            assert_eq!(classify_global_bucket(&sent), expected, "fixture `{name}`");
+        }
+    }
+
     #[test]
     fn classification_is_pinned_to_the_pre_move_api_semantics() {
         for (name, fixture, expected) in pinned_fixtures() {

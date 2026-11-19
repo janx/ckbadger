@@ -2630,6 +2630,13 @@ pub const TAG_PROTOCOL: u16 = 1 << 4;
 pub const TAG_CELLBASE: u16 = 1 << 5;
 pub const TAG_TYPE_CALL: u16 = 1 << 6;
 pub const TAG_LOCK_CALL: u16 = 1 << 7;
+/// The participant's lock is the lock of at least one input of the
+/// transaction: a cell of its was consumed, so it sent (the owner's
+/// "senders"). Decided by the inputs' locks alone, whatever their capacity;
+/// a cellbase and a party a protocol names but whose lock holds no cell in
+/// the transaction never carry it. Set once, by the activity builder that
+/// serves live sync and bulk build; read through [`ParticipantDelta::sent`].
+pub const TAG_INPUT: u16 = 1 << 8;
 
 /// What kind of item an `ItemDelta` moves.
 ///
@@ -2744,6 +2751,14 @@ pub struct ParticipantDelta {
     pub item_deltas: Vec<ItemDelta>,
     pub tags: u16,
     pub roles: u8,
+}
+
+impl ParticipantDelta {
+    /// Whether this party sent: its lock is the lock of at least one input of
+    /// the transaction ([`TAG_INPUT`]). The one reader of the bit.
+    pub fn sent(&self) -> bool {
+        self.tags & TAG_INPUT != 0
+    }
 }
 
 /// 按 20 字节前缀记录的参与统计（domain，`CF_ADDR_PREFIX_STATS`）。
@@ -4426,6 +4441,25 @@ mod tests {
         assert_eq!(metadata["vaultCount"], 2);
     }
 
+    /// The senders bit (`TAG_INPUT`, bit 8): `sent()` reads it and nothing
+    /// else, whatever other tags a party carries.
+    #[test]
+    fn participant_sent_reads_the_input_bit_alone() {
+        let party = |tags: u16| ParticipantDelta {
+            id: ParticipantId::Lock([0x5e; 32]),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags,
+            roles: 0,
+        };
+        assert_eq!(TAG_INPUT, 0x0100);
+        assert!(party(TAG_INPUT).sent());
+        assert!(party(TAG_INPUT | TAG_TOKEN | TAG_LOCK_CALL).sent());
+        assert!(!party(0).sent());
+        assert!(!party(0x00ff).sent(), "bits 0-7 are the other tags");
+    }
+
     #[test]
     fn test_tag_constants_are_distinct_bits() {
         let all_tags = [
@@ -4437,6 +4471,7 @@ mod tests {
             TAG_CELLBASE,
             TAG_TYPE_CALL,
             TAG_LOCK_CALL,
+            TAG_INPUT,
         ];
         // Each tag should be a single bit (power of 2)
         for tag in &all_tags {
