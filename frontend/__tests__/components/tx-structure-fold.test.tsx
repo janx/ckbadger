@@ -210,6 +210,42 @@ describe('TxStructure: a sheet folds after six tiles (lane D3)', () => {
     expect(document.activeElement).toBe(control);
   });
 
+  // Lane P1 (lane D3's note): a cell a script group or a witness lights inside a folded sheet was
+  // shown only once the sheet opened, and the fold row did not say a lit cell was among the folded.
+  it('says how many of the folded cells are lit (P1)', () => {
+    const { container } = render(
+      <TxStructure
+        txHash={TX}
+        inputs={cells('in', 158, OWNER, 'ckb1…sqylvfrs')}
+        outputs={cells('out', 2)}
+        fee="1572400"
+        continuityList={false}
+        linking="page"
+        focusedCellIds={['in:2', 'in:20', 'in:30']}
+        fold={{ head: FOLD_HEAD, keep: [], open: closed, onToggle: () => {} }}
+      />
+    );
+    expect(sheet(container, 'consumed').fold!.querySelector('[data-fold-words]')).toHaveTextContent(
+      /^152 more cells from ckb1…sqylvfrs · 2 lit$/
+    );
+    // nothing lit among the folded, nothing said
+    const plain = render(
+      <TxStructure
+        txHash={TX}
+        inputs={cells('in', 158, OWNER, 'ckb1…sqylvfrs')}
+        outputs={cells('out', 2)}
+        fee="1572400"
+        continuityList={false}
+        linking="page"
+        focusedCellIds={['in:2']}
+        fold={{ head: FOLD_HEAD, keep: [], open: closed, onToggle: () => {} }}
+      />
+    );
+    expect(
+      sheet(plain.container, 'consumed').fold!.querySelector('[data-fold-words]')
+    ).toHaveTextContent(/^152 more cells from ckb1…sqylvfrs$/);
+  });
+
   it('never folds a cell the page keeps, nor the continuity partner of a cell it draws', () => {
     const outputs = cells('out', 10);
     const { container } = structure({
