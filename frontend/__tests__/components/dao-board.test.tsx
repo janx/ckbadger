@@ -2165,11 +2165,12 @@ describe('DaoBoard reads its figures from the route (lane exactness, part A)', (
     stubCalculator();
     const { liveCellsCount: _cells, ...noCells } = stats;
     expect(() => render(<DaoBoard statistics={noCells as never} evidence={evidence} />)).toThrow(
-      'DAO statistics send no liveCellsCount: the API is older than this page'
+      // re-pinned on purpose (the third read's La N6): the one reader's sentence (lib/api-fields.ts sentField)
+      'DAO statistics: the API sends no liveCellsCount: it is older than this page'
     );
     const { secondaryIssuance: _whole, ...noWhole } = stats;
     expect(() => render(<DaoBoard statistics={noWhole as never} evidence={evidence} />)).toThrow(
-      'DAO statistics send no secondaryIssuance: the API is older than this page'
+      'DAO statistics: the API sends no secondaryIssuance: it is older than this page'
     );
   });
 

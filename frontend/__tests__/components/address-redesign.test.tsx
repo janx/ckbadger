@@ -793,3 +793,23 @@ describe('Address activity is the shared activity row (C3)', () => {
     expect(container).not.toHaveTextContent('Roles:');
   });
 });
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('the address balance on an older API', () => {
+  // it said "Address Nervos DAO cells: expected a non-negative decimal integer, received undefined":
+  // true, and silent that the API is older
+  it.each(['daoCellsCapacity', 'otherCellsOccupiedCapacity', 'otherCellsFreeCapacity'] as const)(
+    'refuses holdings without %s by name',
+    (field) => {
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const older = { ...holdingsFixture } as Record<string, unknown>;
+      delete older[field];
+      expect(() =>
+        render(<AddressBalance holdings={older as unknown as typeof holdingsFixture} />)
+      ).toThrow(`Address holdings: the API sends no ${field}: it is older than this page`);
+      log.mockRestore();
+    }
+  );
+});

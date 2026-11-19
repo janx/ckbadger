@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
-import { api } from '@/lib/api';
+import { api, dayUserTransactions } from '@/lib/api';
 import { completedYesterdayActivities, previousChainDay } from '@/lib/activity-stats';
 import { countNoun } from '@/lib/format-count';
 import { NoBreak } from '@/components/ui/no-break';
@@ -18,7 +18,7 @@ export default function ActivitiesPage() {
   const yesterday = previousChainDay();
   const summary = data ? completedYesterdayActivities(data) : undefined;
   // yesterday's activities: the day's user transactions, the route's count (no page subtracts)
-  const count = summary?.userTransactionCount;
+  const count = summary === undefined ? undefined : dayUserTransactions(summary);
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">

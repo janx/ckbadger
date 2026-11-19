@@ -8,6 +8,7 @@ import {
 import { foldRuns, runKey, runParties, type RunSubject } from '@/lib/activity-runs';
 import type { ParticipantRef } from '@/lib/api';
 import { readable } from '@/components/activity-event-row';
+import { sentField } from '@/lib/api-fields';
 
 /**
  * What a row's part draws, by which its boundary starts again (B4 third round): its transaction and
@@ -54,10 +55,10 @@ export function runSubject(
 ): RunSubject | null {
   if (rowReadFails(activity)) return null;
   const pending = activity.blockNumber === null;
-  // the API states the field on every row (null where it has none): one without it is not this API
-  if (activity.itemTypes === undefined)
-    throw new Error(`transaction ${activity.txHash}: the row states no itemTypes field`);
-  if (!pending && activity.itemTypes === null) {
+  // the API states the field on every row (null where it has none): one without it is older than
+  // this page, refused by name through the one reader
+  const itemTypes = sentField(activity.itemTypes, `transaction ${activity.txHash}`, 'itemTypes');
+  if (!pending && itemTypes === null) {
     if (activity.itemTypesUnread === null)
       throw new Error(
         `transaction ${activity.txHash}: a committed row with no item types says no why`
@@ -71,7 +72,7 @@ export function runSubject(
     protocolActions: activity.protocolActions,
     typeCalls: activity.typeCalls,
     lockCalls: activity.lockCalls,
-    itemTypes: activity.itemTypes ?? [],
+    itemTypes: itemTypes ?? [],
     parties,
   };
 }

@@ -871,7 +871,8 @@ describe('runSubject: a row whose item types are not stated (the item-types ruli
   it('refuses a row with no itemTypes field at all, by name (not this API)', () => {
     const { itemTypes: _gone, ...row } = unread(1);
     expect(() => runSubject(row as GlobalActivity, 'Script call')).toThrow(
-      `transaction ${row.txHash}: the row states no itemTypes field`
+      // re-pinned on purpose (the third read's La N6): the one reader's sentence (lib/api-fields.ts sentField)
+      `transaction ${row.txHash}: the API sends no itemTypes: it is older than this page`
     );
   });
 });

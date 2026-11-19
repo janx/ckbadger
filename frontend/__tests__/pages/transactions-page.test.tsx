@@ -18,6 +18,7 @@ import { render } from '@/__tests__/utils/test-utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage, { TRANSACTIONS_FORM_PX } from '@/app/transactions/page';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { poolStatusLabel } from '@/components/ui/pool-status';
@@ -1750,4 +1751,31 @@ describe('Transactions: the cellbases, one tab away (lists lane P3)', () => {
       })
     );
   });
+});
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+// it drew the "all" chip and the lede without their count, silently
+it('refuses yesterday without userTransactionCount by name, never a chip with no count', async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+  const { userTransactionCount: _gone, ...older } = dailyActivities[0];
+  vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+    { ...older, date: yesterday } as (typeof dailyActivities)[0],
+  ]);
+  vi.mocked(api.getTransactions).mockResolvedValue(
+    pagedRead({ data: [], limit: 50, nextCursor: null, hasMore: false, total: 0 })
+  );
+  render(
+    <ErrorBoundary fallbackRender={(error) => <p role="alert">{error.message}</p>}>
+      <TransactionsPage />
+    </ErrorBoundary>
+  );
+  expect(
+    await screen.findByText(
+      `daily activities on ${yesterday}: the API sends no userTransactionCount: it is older than this page`
+    )
+  ).toHaveAttribute('role', 'alert');
+  log.mockRestore();
 });

@@ -14,6 +14,7 @@ import { screen, waitFor, within, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api, type KnownScript } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
 import { pagedRead } from '@/__tests__/utils/paged-read';
@@ -325,6 +326,28 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  // The third read's La N6, with S5's rule: on an API one version older the page refuses by name
+  // or draws truthfully; this plan's fields go through the one reader (lib/api-fields.ts sentField)
+  // it threw a TypeError on counts.both
+  it('refuses role counts without both and neither by name', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(api.getScripts).mockResolvedValue({
+      ...withSummary,
+      roleCounts: { all: 70, locks: 41, types: 34 } as never,
+    });
+    render(
+      <ErrorBoundary fallbackRender={(error) => <p role="alert">{error.message}</p>}>
+        <ScriptsPage />
+      </ErrorBoundary>
+    );
+    expect(
+      await screen.findByText(
+        'Scripts: the API sends no roleCounts.both: it is older than this page'
+      )
+    ).toHaveAttribute('role', 'alert');
+    log.mockRestore();
   });
 
   const hero = () => screen.getByRole('region', { name: 'Scripts' });

@@ -1,6 +1,8 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
+import { sentField } from '@/lib/api-fields';
+import { readPart } from '@/components/read-failure';
 import { isAwaited } from '@/lib/query-state';
 import { api, LabelCount, type NetworkDistributions as Distributions } from '@/lib/api';
 import { DATA_COLOR, DATA_KEY } from '@/lib/design-tokens';
@@ -50,10 +52,9 @@ function grouping<K extends 'hosting' | 'releases'>(
   data: Distributions,
   field: K
 ): Distributions[K] | string {
-  const value = (data as Partial<Distributions>)[field];
-  return value === undefined
-    ? `Network distributions send no ${field}: the API is older than this page.`
-    : (value as Distributions[K]);
+  // through the one reader of a field an older API does not send, its sentence drawn in place
+  const read = readPart(() => sentField(data[field], 'Network distributions', field));
+  return read.error ? read.error.message : (read.value as Distributions[K]);
 }
 
 /**

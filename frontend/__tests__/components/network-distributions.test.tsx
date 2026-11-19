@@ -215,11 +215,14 @@ describe('NetworkDistributions', () => {
     );
     expect(
       await screen.findByText(
-        'Network distributions send no releases: the API is older than this page.'
+        // re-pinned on purpose (the third read's La N6): the one reader's sentence (lib/api-fields.ts sentField)
+        'Network distributions: the API sends no releases: it is older than this page'
       )
     ).toBeInTheDocument();
     expect(
-      screen.getByText('Network distributions send no hosting: the API is older than this page.')
+      screen.getByText(
+        'Network distributions: the API sends no hosting: it is older than this page'
+      )
     ).toBeInTheDocument();
   });
 

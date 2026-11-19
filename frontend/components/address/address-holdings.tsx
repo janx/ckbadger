@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, type ReactNode } from 'react';
+import { sentField } from '@/lib/api-fields';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api, type Address, type AddressHoldings, type AddressCellClass } from '@/lib/api';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -211,12 +212,18 @@ function ExactParts({ shannons }: { shannons: bigint }) {
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
   const sum = exactUnsignedInteger(holdings.balance, 'Address balance');
-  const daoCells = exactUnsignedInteger(holdings.daoCellsCapacity, 'Address Nervos DAO cells');
+  // the balance's three parts this plan added to the route, refused by name where an older API
+  // sends none (the third read's La N6: it said "expected a non-negative decimal integer, received
+  // undefined", true, and silent that the API is older)
+  const part = (
+    field: 'daoCellsCapacity' | 'otherCellsOccupiedCapacity' | 'otherCellsFreeCapacity'
+  ) => sentField(holdings[field], 'Address holdings', field);
+  const daoCells = exactUnsignedInteger(part('daoCellsCapacity'), 'Address Nervos DAO cells');
   const occupied = exactUnsignedInteger(
-    holdings.otherCellsOccupiedCapacity,
+    part('otherCellsOccupiedCapacity'),
     'Address other cells occupied'
   );
-  const free = exactUnsignedInteger(holdings.otherCellsFreeCapacity, 'Address other cells free');
+  const free = exactUnsignedInteger(part('otherCellsFreeCapacity'), 'Address other cells free');
   if (daoCells + occupied + free !== sum)
     throw new Error(
       `Address ${holdings.lockScriptHash}: Nervos DAO cells ${daoCells} + occupied ${occupied} + free ${free} ≠ balance ${sum} shannons`

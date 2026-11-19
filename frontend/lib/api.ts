@@ -1,4 +1,5 @@
 import type { CompositionTier } from '@/lib/asset-utils';
+import { sentField } from '@/lib/api-fields';
 import type { ScriptRefHashType } from '@/lib/script-ref';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 import { color } from '@/lib/palette';
@@ -4411,12 +4412,21 @@ function cursorReadQuery(params: CursorQueryParams): URLSearchParams {
  * round, N7: it read `invalid decimal "undefined"`).
  */
 function routeCount(day: DailyActivityStats, field: 'kindOccurrences' | 'daoCount'): string {
-  const value = (day as Partial<DailyActivityStats>)[field];
-  if (value === undefined)
-    throw new Error(
-      `daily activities on ${day.date} send no ${field}: the API is older than this page`
-    );
-  return String(value);
+  return String(sentField(day[field], `daily activities on ${day.date}`, field));
+}
+
+/**
+ * A day's user transactions, the route's count (the P3 follow-up's 2b), as every page reads it:
+ * the activities lede, the transactions page's "all" chip and lede, the home daily figure. An API
+ * older than the page sends none, refused by name (the third read's La N6: the lede and the chip
+ * were drawn without it, silently, and the home figure threw a TypeError).
+ */
+export function dayUserTransactions(day: DailyActivityStats): number {
+  return sentField(
+    day.userTransactionCount,
+    `daily activities on ${day.date}`,
+    'userTransactionCount'
+  );
 }
 
 export const api = {

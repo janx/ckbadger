@@ -157,3 +157,24 @@ describe('exact completed day counts', () => {
     // (userTransactionCount), so the page's subtraction and its tests went with it
   });
 });
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+describe('scriptShares on an older API', () => {
+  // it read BigInt(undefined)
+  it('refuses a summary without scriptCalls or scriptRest by name', () => {
+    expect(() =>
+      scriptShares({ scriptCounts: [], scriptRest: null } as unknown as Parameters<
+        typeof scriptShares
+      >[0])
+    ).toThrow(
+      'the 24 h activity summary: the API sends no scriptCalls: it is older than this page'
+    );
+    expect(() =>
+      scriptShares({ scriptCounts: [], scriptCalls: 0 } as unknown as Parameters<
+        typeof scriptShares
+      >[0])
+    ).toThrow('the 24 h activity summary: the API sends no scriptRest: it is older than this page');
+  });
+});

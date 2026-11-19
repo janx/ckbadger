@@ -3,6 +3,7 @@ import { vi, it, expect, beforeEach, afterEach } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import ActivitiesPage from '@/app/activities/page';
+import { ErrorBoundary } from '@/components/error-boundary';
 import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 vi.mock('@/lib/api', async () => ({
@@ -87,4 +88,28 @@ it('selects UTC+8 yesterday at the UTC date boundary', async () => {
   render(<ActivitiesPage />);
   expect(await screen.findByText('50')).toBeInTheDocument();
   expect(screen.getByTestId('stream-summary')).toHaveTextContent('20261025');
+});
+
+// The third read's La N6, with S5's rule: a page on an API one version older refuses by name or
+// draws truthfully. Every field this plan added and this page reads goes through the one reader
+// (lib/api-fields.ts sentField): "<what>: the API sends no <field>: it is older than this page".
+// it drew the lede without its count, silently
+it('refuses yesterday without userTransactionCount by name, never a lede with no count', async () => {
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+  const { userTransactionCount: _gone, ...older } = dailyActivities[0];
+  vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+    { ...older, date: yesterday.replaceAll('-', '') } as (typeof dailyActivities)[0],
+  ]);
+  render(
+    <ErrorBoundary fallbackRender={(error) => <p role="alert">{error.message}</p>}>
+      <ActivitiesPage />
+    </ErrorBoundary>
+  );
+  expect(
+    await screen.findByText(
+      `daily activities on ${yesterday.replaceAll('-', '')}: the API sends no userTransactionCount: it is older than this page`
+    )
+  ).toHaveAttribute('role', 'alert');
+  log.mockRestore();
 });
