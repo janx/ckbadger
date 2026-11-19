@@ -343,7 +343,17 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
       }))
     : [];
   // The board's table names the genes that vary as its columns (two at most; the rest in titles).
-  const columns = (lanes ?? []).slice(0, 2);
+  // Readability P2: a gene the same on every row of this page is no column: it is said once over
+  // the list (the review: twenty rows of "COPPER · 4,788" and "020172…c · 4,788", only the id
+  // changing).
+  const geneOf = (item: (typeof items)[number], lane: AlleleLane) =>
+    item.traits.find((t) => t.name === lane.gene)?.value ?? null;
+  const onEveryRow = (lane: AlleleLane) =>
+    items.length > 1 && items.every((item) => geneOf(item, lane) === geneOf(items[0], lane));
+  const columns = (lanes ?? []).slice(0, 2).filter((lane) => !onEveryRow(lane));
+  const saidOnce = (lanes ?? [])
+    .slice(0, 2)
+    .filter((lane) => onEveryRow(lane) && geneOf(items[0], lane) !== null);
   const total = genetics.eligibleItems;
   // Each gene column is at least as wide as its widest cell (lane A follow-up); the object and
   // owner columns share the rest.
@@ -438,6 +448,37 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               </span>
             )}
           </div>
+          {saidOnce.length > 0 && (
+            <p data-role="said-once" className="text-text text-small max-w-measure">
+              <Dotted
+                parts={[
+                  <span key="all" className="text-text-dim">
+                    {unitText(`every one of the ${formatCount(items.length, 'object')} listed`)}
+                  </span>,
+                  ...saidOnce.map((lane) => {
+                    const value = geneOf(items[0], lane)!;
+                    const band = lane.bands.find((b) => b.value === value);
+                    return (
+                      <span key={lane.gene}>
+                        <span className="text-text-dim">{geneLabel(lane.gene)}</span>{' '}
+                        <TraitText text={geneCellText(value)} />
+                        {band && (
+                          <span className="text-text-dim">
+                            {' '}
+                            (
+                            {unitText(
+                              `${band.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`
+                            )}
+                            )
+                          </span>
+                        )}
+                      </span>
+                    );
+                  }),
+                ]}
+              />
+            </p>
+          )}
           {gallery.data ? (
             <>
               <AssetReadState label="newest objects" error={gallery.error} retained />

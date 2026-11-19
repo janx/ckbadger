@@ -241,12 +241,49 @@ it('says in its place that it cannot read the newest objects when an owner’s l
   expect(screen.getByRole('heading', { name: 'The collection page' })).toBeInTheDocument();
 });
 
+// Readability P2 (lane p-assets): "lists drop a column that is the same on every row and say it
+// once above the table" (the review: twenty rows of "COPPER · 4,788" and "020172…c · 4,788").
+it('says a gene the same on every row of the page once over the list, not as a column', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  const own = base.traits.find((t) => t.name === 'Face')!;
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([
+      { ...base, number: '7' },
+      { ...base, sporeId: `0x${'03'.repeat(32)}`, number: '8' },
+    ])
+  );
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+  ).toEqual(['Object', 'Made of', 'Owner', 'Minted']);
+  const once = screen
+    .getByRole('region', { name: 'Objects' })
+    .querySelector('[data-role="said-once"]')!;
+  expect(once).toHaveTextContent(
+    new RegExp(`^every one of the 2\\sobjects listed · Face ${own.value}`)
+  );
+  expect(once.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  // the row's title still names its genes
+  expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(`Face ${own.value}`);
+});
+
 it('writes each Newest row on one line with the name bright and the rest in its title (L2-4, C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
     emptyPage([
       { ...base, number: '7' },
-      { ...base, sporeId: `0x${'03'.repeat(32)}`, number: null, ownerAddress: null },
+      // re-pinned on purpose (lane p-assets): its own Face, so the gene varies on the page and
+      // keeps its column (a gene the same on every row is said once over the list)
+      {
+        ...base,
+        sporeId: `0x${'03'.repeat(32)}`,
+        number: null,
+        ownerAddress: null,
+        traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
+      },
     ])
   );
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
@@ -537,6 +574,9 @@ describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
           ownerAddress: null,
           // no media profile: the grid's "not recorded"
           mediaProfile: null,
+          // re-pinned on purpose (lane p-assets): its own Face, so the gene varies on the page
+          // and each row says its own (a gene the same on every row is said once over the list)
+          traits: base.traits.map((t) => (t.name === 'Face' ? { ...t, value: 'Red' } : t)),
         },
       ])
     );
@@ -568,7 +608,7 @@ describe('a cluster’s newest objects on a phone (lane D4, PB-10)', () => {
     expect(phoneLines(ownerless).map((l) => [l.key, l.left, l.right])).toEqual([
       ['name', '0x04040404…040404', null],
       ['holder', 'No live owner', 'not recorded'],
-      ['minted', 'Face Blue · minted at #100 on 2023-11-15', null],
+      ['minted', 'Face Red · minted at #100 on 2023-11-15', null],
     ]);
     // line 1 is the name alone at its widest: the mark and its gap and a u64 object number
     expect(statedHeadPx(held)).toBe(246.8);
