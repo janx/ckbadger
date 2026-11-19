@@ -7,6 +7,8 @@ import { fireEvent, render, screen, waitFor, within } from '../utils/test-utils'
 import { PeersTable } from '@/app/network/nodes-table';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
+import { http, HttpResponse } from 'msw';
+import { server } from '../msw/server';
 
 const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const UNVERIFIED_PEER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -76,6 +78,64 @@ describe('PeersTable', () => {
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
     expect(screen.getByText(rowId(UNVERIFIED_PEER_ID))).toBeInTheDocument();
     expect(screen.queryByText(rowId(REACHABLE_PEER_ID))).not.toBeInTheDocument();
+  });
+
+  // Lane C2 (topics), written before "Load more" and the filters are replaced: five peers first,
+  // then fifty more a load by the cursor the API served, under the ones shown; a filter starts the
+  // list again from its first five.
+  it('loads more peers by the served cursor under the first, and a filter starts again from the first five', async () => {
+    const asked: { cursor: string | null; limit: string | null; state: string | null }[] = [];
+    const peer = (id: string) => ({
+      peerId: id.repeat(64),
+      crawlerDialState: 'reachable',
+      participation: {
+        discoveryAdvertised: false,
+        directSessionObserved: false,
+        crawlerIdentified: true,
+      },
+      sessionInitiators: [],
+      primaryAddr: '/ip4/1.2.3.4/tcp/8115',
+      version: '0.114.0',
+      country: 'United States',
+      asn: null,
+      lastAdvertisedAt: 1751500800,
+      lastDialObservedAt: 1751500800,
+      latestPositiveObservedAt: 1751500800,
+      lastReachableAt: 1751500800,
+      rttMs: 42,
+    });
+    server.use(
+      http.get('/api/:network/v1/network/peers', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        asked.push({
+          cursor: params.get('cursor'),
+          limit: params.get('limit'),
+          state: params.get('state'),
+        });
+        return params.get('cursor') === 'after-d'
+          ? HttpResponse.json({ items: [peer('e')], nextCursor: null })
+          : HttpResponse.json({ items: [peer('d')], nextCursor: 'after-d' });
+      })
+    );
+    const more = () => screen.getByRole('button', { name: 'Load more' });
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
+    expect(asked).toEqual([{ cursor: null, limit: '5', state: null }]);
+    fireEvent.click(more());
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(2));
+    expect(asked.at(-1)).toEqual({ cursor: 'after-d', limit: '50', state: null });
+    // the first page's peer stays, the next one under it, and the list has no more to load
+    expect(screen.getByText(rowId('d'.repeat(64)))).toBeInTheDocument();
+    expect(screen.getByText(rowId('e'.repeat(64)))).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull();
+    fireEvent.change(screen.getByLabelText('Filter by crawler dial state'), {
+      target: { value: 'reachable' },
+    });
+    await waitFor(() =>
+      expect(asked.at(-1)).toEqual({ cursor: null, limit: '5', state: 'reachable' })
+    );
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(1));
+    expect(screen.queryByText(rowId('e'.repeat(64)))).toBeNull();
   });
 
   it('expands a peer into address-level probe evidence', async () => {

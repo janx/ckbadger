@@ -244,6 +244,50 @@ describe('FiberChannelsPage', () => {
       screen.getByRole('heading', { level: 2, name: 'Channels 38 closed together' })
     ).toBeInTheDocument();
   });
+
+  // Lane C2 (topics), written before the pager and the state chips are replaced: the list pages
+  // forward by the cursor the API served and back to the page before it, and a state starts the
+  // list again from its first page, so the replacements are proven against what the page did.
+  it('pages by the served cursor and back, and a state starts the list again from its first page', async () => {
+    const asked: { state: string | null; cursor: string | null }[] = [];
+    server.use(
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', ({ request }) => {
+        const params = new URL(request.url).searchParams;
+        const cursor = params.get('cursor');
+        asked.push({ state: params.get('state'), cursor });
+        const second = cursor === 'after-first';
+        // two channels, one a page: the second page is the last
+        return HttpResponse.json({
+          data: [second ? closedChannel : channel],
+          total: 2,
+          limit: 1,
+          hasMore: !second,
+          nextCursor: second ? null : 'after-first',
+        });
+      })
+    );
+    const next = () => screen.getByRole('button', { name: 'Next' });
+    const previous = () => screen.getByRole('button', { name: 'Previous' });
+    const state = (name: string) => screen.getByRole('button', { name });
+    render(<FiberChannelsPage />);
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+    expect(asked).toEqual([{ state: 'open', cursor: null }]);
+    fireEvent.click(next());
+    expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
+    expect(screen.queryByTitle(channel.channelId)).toBeNull();
+    expect(asked.at(-1)).toEqual({ state: 'open', cursor: 'after-first' });
+    fireEvent.click(previous());
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+    expect(screen.queryByTitle(closedChannel.channelId)).toBeNull();
+    fireEvent.click(next());
+    expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
+    fireEvent.click(await waitFor(() => state('Closed together 1')));
+    await waitFor(() =>
+      expect(asked.at(-1)).toEqual({ state: 'cooperativelyClosed', cursor: null })
+    );
+    expect(await screen.findByTitle(channel.channelId)).toBeInTheDocument();
+  });
 });
 
 // Board L8 (responsive plan, L3): three labelled lines on a phone, two at 640.

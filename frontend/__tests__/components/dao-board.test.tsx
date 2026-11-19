@@ -163,6 +163,30 @@ describe('DaoBoard', () => {
     expect(factsOf(reading)).toContainEqual(['share', '1.25%']);
   });
 
+  // Lane C2 (topics), written before the range's control is replaced: a day pinned on the picture
+  // is a day of the range it was pinned in, so a new range lets it go and the reading opens on its
+  // last day again.
+  it('lets a pinned day go when the range changes', () => {
+    stubChartWidth(1200);
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const reading = () => screen.getByRole('status', { name: 'History reading' });
+    const range = (name: string) => screen.getByRole('button', { name });
+    expect(reading()).not.toHaveTextContent(/selected/);
+    // a click on the deposited plot pins a day (jsdom lays nothing out: the plot's last day)
+    fireEvent.click(document.querySelector('svg[data-panel="deposited"]')!);
+    expect(reading()).toHaveTextContent(/selected 2024-01-15/);
+    fireEvent.click(range('1M'));
+    expect(reading()).not.toHaveTextContent(/selected/);
+    expect(factsOf(reading())).toContainEqual(['day', '2024-01-15']);
+  });
+
   it('keeps the owner link bound to the source address', () => {
     const owner = evidence.concentration.owners[0];
     // The desktop row and the compact card (DAO-22) both link the same address.
