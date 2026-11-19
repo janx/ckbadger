@@ -93,7 +93,7 @@ function paysNote(tx: Transaction): ReactNode {
   return (
     <>
       pays{' '}
-      <Link href={`/blocks/${tx.pays.hash}`} className="hover:text-jade">
+      <Link href={`/blocks/${tx.pays.hash}`} look="inline">
         {formatBlockNumber(tx.pays.number)}
       </Link>
     </>

@@ -3,6 +3,7 @@ import {
   exactUnsignedInteger,
   formatCompactInteger,
   formatScaledInteger,
+  cutScaledInteger,
   formatDecimal,
   exactDecimalRatio,
   exactSignedDecimalRatio,
@@ -70,5 +71,33 @@ describe('exact integer display', () => {
     expect(formatCompactRatio(BigInt(9900000001), BigInt(100000000))).toBe('99.00');
     expect(formatCompactRatio(BigInt('9007199254740993'), BigInt(1))).toBe('9.01P');
     expect(() => exactDecimalRatio('1e3', 'chart')).toThrow('chart');
+  });
+});
+
+// Lane D4 follow-up (the coordinator's item 3; the house rule, readability R5 and the brief's rule
+// 5: a shortened figure is the exact value CUT, never rounded, as a rounded figure can show a digit
+// that is not on chain). The H-multiplier was shortened by formatScaledInteger, which rounds
+// half-up: 1.005 read "1.01". Its cut is cutScaledInteger. formatScaledInteger rounds still, as its
+// other callers read it — chart readouts and labels, the home network figures, the compact forms, a
+// token's largest share and its holders' bar geometry, the orphan-rate target — and the API writes
+// the epoch-durations buckets' labels by the same half-up rule, which the chart's grid check
+// reproduces with it: whether those cut is the coordinator's ruling (the lane's hand-back lists
+// each, old and new).
+describe('an exact ratio cut, never rounded', () => {
+  it('cuts at the display precision where half-up and cut differ', () => {
+    expect(cutScaledInteger(BigInt(1005), BigInt(1000), 2)).toBe('1.00');
+    expect(formatScaledInteger(BigInt(1005), BigInt(1000), 2)).toBe('1.01');
+    expect(cutScaledInteger(BigInt(1999), BigInt(1000), 2)).toBe('1.99');
+    expect(cutScaledInteger(BigInt(15), BigInt(10), 0)).toBe('1');
+    expect(cutScaledInteger(BigInt('9007199254740993'), BigInt('1000000000000000'), 2)).toBe(
+      '9.00'
+    );
+    expect(cutScaledInteger(BigInt(150190999), BigInt(10000), 2)).toBe('15019.09');
+  });
+
+  it('refuses what formatScaledInteger refuses', () => {
+    expect(() => cutScaledInteger(BigInt(-1), BigInt(1), 2)).toThrow('invalid exact integer');
+    expect(() => cutScaledInteger(BigInt(1), BigInt(0), 2)).toThrow('invalid exact integer');
+    expect(() => cutScaledInteger(BigInt(1), BigInt(1), -1)).toThrow('invalid exact integer');
   });
 });

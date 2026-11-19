@@ -8,15 +8,31 @@ export function exactUnsignedInteger(value: string, context: string): bigint {
   return BigInt(value);
 }
 
-/** Round half-up only at the requested display precision. */
-export function formatScaledInteger(value: bigint, divisor: bigint, decimals: number): string {
+/** value ÷ divisor at `decimals`, half-up or cut: the one path of both forms below. */
+function scaledInteger(value: bigint, divisor: bigint, decimals: number, halfUp: boolean): string {
   if (value < BigInt(0) || divisor <= BigInt(0) || !Number.isInteger(decimals) || decimals < 0) {
     throw new Error('invalid exact integer display scale');
   }
   const scale = BigInt(10) ** BigInt(decimals);
-  const rounded = (value * scale * BigInt(2) + divisor) / (divisor * BigInt(2));
-  if (decimals === 0) return rounded.toString();
-  return `${rounded / scale}.${(rounded % scale).toString().padStart(decimals, '0')}`;
+  const shown = halfUp
+    ? (value * scale * BigInt(2) + divisor) / (divisor * BigInt(2))
+    : (value * scale) / divisor;
+  if (decimals === 0) return shown.toString();
+  return `${shown / scale}.${(shown % scale).toString().padStart(decimals, '0')}`;
+}
+
+/** Round half-up only at the requested display precision. */
+export function formatScaledInteger(value: bigint, divisor: bigint, decimals: number): string {
+  return scaledInteger(value, divisor, decimals, true);
+}
+
+/**
+ * The same ratio CUT at the display precision, never rounded (the house rule, readability R5: a
+ * rounded figure can show a digit that is not on chain; 1.005 reads 1.00): the form of a figure that
+ * shortens an exact ratio, the H-multiplier first (lane D4 follow-up).
+ */
+export function cutScaledInteger(value: bigint, divisor: bigint, decimals: number): string {
+  return scaledInteger(value, divisor, decimals, false);
 }
 
 export function formatCompactInteger(value: string, context: string): string {

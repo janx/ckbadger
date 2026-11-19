@@ -135,16 +135,20 @@ export function PhoneRow({
 /**
  * A labelled figure of a phone row (the phone-rows board: never a value without its name): the label
  * in the quiet ink, the value in its line's ink, one item a line never breaks inside. `after` puts
- * the label after the value, as a count reads ("11 holders").
+ * the label after the value, as a count reads ("11 holders"). `words`: the value is words someone
+ * else wrote (a trait's value), as long as they wrote it: it may break between its words, and inside
+ * a word longer than the line, never past the line.
  */
 export function Labelled({
   label,
   children,
   after = false,
+  words = false,
 }: {
   label: string;
   children: ReactNode;
   after?: boolean;
+  words?: boolean;
 }) {
   // the label's role is named, so a test reads every figure of a row against its name
   const name = (
@@ -153,7 +157,7 @@ export function Labelled({
     </span>
   );
   return (
-    <span className="whitespace-nowrap">
+    <span className={words ? 'min-w-0 [overflow-wrap:anywhere]' : 'whitespace-nowrap'}>
       {after ? (
         <>
           {children} {name}

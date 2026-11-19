@@ -19,7 +19,7 @@ import {
   type ItemFeedSubject,
 } from '@/lib/feed-headlines';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
-import { Dotted, PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { NoBreak } from '@/components/ui/no-break';
@@ -41,7 +41,7 @@ import { formatCount } from '@/lib/format-count';
 import { unitNode } from '@/components/ui/units';
 import { tokenAmountText } from '@/lib/amount-form';
 import { SHORT_FORMS } from '@/lib/shorten';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { COUNT_TRACK_PX } from '@/components/ui/aligned-bar';
 import {
   MAX_BLOCK_BYTES,
@@ -136,6 +136,142 @@ export interface AssetTransactionsProps {
    */
   identity?: { actionLabel: string; action: (tx: Transaction) => ReactNode };
 }
+/**
+ * Line 1 of an asset's transaction on a phone (the phone-rows board's head(), as the address page's
+ * transactions): the tight hash at the key's 14 px (92.4; no stone, as the table's), the 12 px
+ * between the parts and, at 13 px, the block with the oldest age a live list writes, "#99,999,999 ·
+ * 10y 364d ago" (26 characters, 202.8), wider than the identity boards' date ("· 2026-11-02",
+ * 187.2): 307.2 of a 360 px phone's 328 px line.
+ */
+const ASSET_TX_PHONE_HEAD_PX = phoneHead(
+  'asset transactions',
+  textPx(shortChars(SHORT_FORMS.tight.hash), fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`${WIDEST_BLOCK_NUMBER} · ${WIDEST_AGE}`.length, fontPx('small'))
+);
+
+/**
+ * An asset's transaction on a phone (the phone-rows board, as the address page's transaction row):
+ * the hash and the block with its age (its date on an identity's board, as the table writes it);
+ * what the row did on this asset where the feed says it (the identity's action, the feed's own
+ * column under its label); quiet, the cells, the token's amount moved with its symbol and the fee,
+ * each named. The output capacity, the bytes, the cycles and the index in the block are the table's
+ * and the transaction page's; the cards from 560 px (`wide`) keep them at the end of the quiet line.
+ */
+function AssetTxPhoneRow({
+  r,
+  wide,
+  token,
+  context,
+  identity,
+}: {
+  r: Transaction;
+  wide: boolean;
+  token: AssetTransactionsProps['token'];
+  context: AssetTransactionsProps['context'];
+  identity: AssetTransactionsProps['identity'];
+}) {
+  const did = [
+    identity ? identity.action(r) : null,
+    context ? (
+      context.placement === 'after-cells' ? (
+        context.render(r)
+      ) : (
+        <Labelled label={context.label} words>
+          {context.render(r)}
+        </Labelled>
+      )
+    ) : null,
+  ];
+  const figures = [
+    <span key="cells" className="whitespace-nowrap">
+      {r.inputsCount} → {formatCount(r.outputsCount, 'cell')}
+    </span>,
+    token ? (
+      <Labelled key="moved" label={`${token.symbol ?? 'token'} moved`} after>
+        <TokenAmount
+          form="summary"
+          amount={tokenMoved(r, token.typeHash)}
+          decimals={token.decimals}
+        />
+      </Labelled>
+    ) : null,
+    <Labelled key="fee" label="fee">
+      <CkbAmount form="summary" shannons={BigInt(r.fee)} signed={false} tone="plain" />
+    </Labelled>,
+    ...(wide
+      ? [
+          // ID-C8: the identity boards carry no output capacity and no cycles.
+          identity ? null : (
+            <Labelled key="output" label="output">
+              <CkbAmount
+                form="summary"
+                shannons={BigInt(r.outputCapacity!)}
+                signed={false}
+                tone="plain"
+              />
+            </Labelled>
+          ),
+          <span key="size" className="whitespace-nowrap">
+            {r.txSize!.toLocaleString('en-US')} B
+          </span>,
+          identity ? null : (
+            <span key="cycles" className="whitespace-nowrap">
+              {r.cycles === null
+                ? r.cyclesStatus === 'failed'
+                  ? 'cycles calculation failed'
+                  : 'cycles not computed'
+                : `${r.cycles.toLocaleString('en-US')} cycles`}
+            </span>
+          ),
+          <span key="index" className="whitespace-nowrap">
+            tx {r.index} in block
+          </span>,
+        ]
+      : []),
+  ];
+  return (
+    <PhoneRow
+      testId="asset-tx-row-mobile"
+      head={ASSET_TX_PHONE_HEAD_PX}
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: (
+            <AppLink href={`/tx/${r.hash}`} look="key">
+              <Hash hash={r.hash} size="tight" className="text-body" />
+            </AppLink>
+          ),
+          // the block and its age (or date) are each a unit; "this device's clock is behind" in
+          // the age's place is words and breaks between them (Utc8Age; L2)
+          right: (
+            <>
+              <NoBreak>
+                <AppLink href={`/blocks/${r.blockNumber}`} look="inline">
+                  {formatBlockNumber(r.blockNumber)}
+                </AppLink>
+              </NoBreak>
+              {' · '}
+              {identity ? (
+                <NoBreak>{formatUtc8Date(r.timestamp)}</NoBreak>
+              ) : (
+                <Utc8Age timestamp={r.timestamp} />
+              )}
+            </>
+          ),
+        },
+        did.some((part) => part !== null) && {
+          key: 'what',
+          tone: 'body',
+          left: <Dotted parts={did} />,
+        },
+        { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
+      ]}
+    />
+  );
+}
+
 export function AssetTransactions({ rows, token, context, identity }: AssetTransactionsProps) {
   for (const tx of rows) {
     if (tx.outputCapacity === undefined || !Number.isSafeInteger(tx.txSize) || tx.txSize! <= 0)
@@ -349,117 +485,9 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       columns={shown}
       rowKey={(r) => r.hash}
       empty="No transactions."
-      mobileRow={(r, wide) => {
-        // What the row did on this asset: the identity action, the feed's own context (an item's
-        // cell after it, a collection's headline) and the tokens moved; then the CKB it output.
-        const did = [
-          identity ? identity.action(r) : null,
-          context ? (
-            context.placement === 'after-cells' ? (
-              context.render(r)
-            ) : (
-              <span>
-                <span className="text-text-dim">{context.label}: </span>
-                {context.render(r)}
-              </span>
-            )
-          ) : null,
-          token ? (
-            <span className="whitespace-nowrap">
-              <TokenAmount
-                form="summary"
-                amount={tokenMoved(r, token.typeHash)}
-                decimals={token.decimals}
-              />{' '}
-              {token.symbol ?? 'token'} moved
-            </span>
-          ) : null,
-        ];
-        const output = identity ? null : (
-          <CkbAmount
-            form="summary"
-            shannons={BigInt(r.outputCapacity!)}
-            signed={false}
-            tone="plain"
-          />
-        );
-        const figures = [
-          <span key="cells" className="whitespace-nowrap">
-            {r.inputsCount} → {formatCount(r.outputsCount, 'cell')}
-          </span>,
-          <span key="fee" className="whitespace-nowrap">
-            fee <CkbAmount form="summary" shannons={BigInt(r.fee)} signed={false} tone="plain" />
-          </span>,
-          <span key="size" className="whitespace-nowrap">
-            {r.txSize!.toLocaleString('en-US')} B
-          </span>,
-          // ID-C8: the identity boards carry no cycles.
-          identity ? null : (
-            <span key="cycles" className="whitespace-nowrap">
-              {r.cycles === null
-                ? r.cyclesStatus === 'failed'
-                  ? 'cycles calculation failed'
-                  : 'cycles not computed'
-                : `${r.cycles.toLocaleString('en-US')} cycles`}
-            </span>
-          ),
-          <span key="index" className="whitespace-nowrap">
-            tx {r.index} in block
-          </span>,
-        ];
-        const hasDid = did.some((part) => part !== null);
-        return (
-          <PhoneRow
-            testId="asset-tx-row-mobile"
-            lines={[
-              {
-                key: 'identity',
-                tone: 'head',
-                left: (
-                  <AppLink href={`/tx/${r.hash}`}>
-                    <Hash hash={r.hash} size="tight" className="text-body" />
-                  </AppLink>
-                ),
-                // the block, its date and its age are each a unit; "this device's clock is
-                // behind" in the age's place is words and breaks between them (Utc8Age; L2)
-                right: (
-                  <>
-                    <NoBreak>
-                      <AppLink href={`/blocks/${r.blockNumber}`} className="text-text-bright">
-                        {formatBlockNumber(r.blockNumber)}
-                      </AppLink>
-                    </NoBreak>
-                    <span className="text-text">
-                      {' '}
-                      ·{' '}
-                      {identity ? (
-                        <NoBreak>{formatUtc8Date(r.timestamp)}</NoBreak>
-                      ) : (
-                        <Utc8Age timestamp={r.timestamp} />
-                      )}
-                    </span>
-                  </>
-                ),
-              },
-              wide
-                ? {
-                    key: 'what',
-                    tone: 'body',
-                    left: <Dotted parts={[...did, output]} />,
-                    right: (
-                      <span className="text-text-dim text-meta">
-                        <Dotted parts={figures} />
-                      </span>
-                    ),
-                  }
-                : hasDid
-                  ? { key: 'what', tone: 'body', left: <Dotted parts={did} />, right: output }
-                  : { key: 'what', tone: 'body', left: 'output', right: output },
-              !wide && { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
-            ]}
-          />
-        );
-      }}
+      mobileRow={(r, wide) => (
+        <AssetTxPhoneRow r={r} wide={wide} {...{ token, context, identity }} />
+      )}
     />
   );
 }
