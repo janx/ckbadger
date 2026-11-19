@@ -9,7 +9,8 @@ use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
 use crate::db::writer::{
-    build_script_reference_rollup_state_with_lineage, reference_binary, TypeIdCodeChange,
+    apply_generic_type_code, build_script_reference_rollup_state_with_lineage, reference_binary,
+    GenericTypeCodes, TypeIdCodeChange,
 };
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
@@ -27,6 +28,11 @@ pub(crate) struct ScriptOwner {
     reference_infos: FxHashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     type_id_reference_live_versions: FxHashMap<Vec<u8>, FxHashMap<Vec<u8>, u32>>,
     type_id_reference_versions: FxHashMap<Vec<u8>, Option<Vec<u8>>>,
+    /// Type hash -> binary -> its live code cells under that type script, for
+    /// every type script that is not Type ID (lane rd/api-lock-names, the
+    /// lead's ruling): what a generic type reference runs, counted by the one
+    /// family rule at finalize. Only code cells enter it.
+    generic_type_live_versions: FxHashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>>,
     type_id_lineage: FxHashMap<(Vec<u8>, Vec<u8>), Vec<i64>>,
     daily_deltas: FxHashMap<(Vec<u8>, u8, bool, u32), ScriptDailyDelta>,
 }
@@ -66,6 +72,18 @@ impl ScriptOwner {
                         .as_ref()
                         .map(crate::sync::bulk_build::accounting::bytes_vec_bytes)
                         .unwrap_or(0)
+            },
+        ) + crate::sync::bulk_build::accounting::hash_map_bytes(
+            &self.generic_type_live_versions,
+            |reference_hash, version_counts| {
+                crate::sync::bulk_build::accounting::bytes_vec_bytes(reference_hash)
+                    + version_counts
+                        .keys()
+                        .map(|version_hash| {
+                            crate::sync::bulk_build::accounting::bytes_vec_bytes(version_hash)
+                                + std::mem::size_of::<u32>() as u64
+                        })
+                        .sum::<u64>()
             },
         ) + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.type_id_lineage)
             + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_deltas)
@@ -314,9 +332,23 @@ impl ScriptOwner {
                 &b.version_hash,
             ))
         });
+        // A type reference with no Type ID binding runs what its live code
+        // cells hold (the lead's ruling), counted by the one family rule.
+        let mut generic = GenericTypeCodes::new();
+        for ((reference_hash, hash_type), binding) in &reference_mappings {
+            if *hash_type == 1
+                && binding.is_none()
+                && !self.type_id_reference_versions.contains_key(reference_hash)
+            {
+                if let Some(live) = self.generic_type_live_versions.get(reference_hash) {
+                    apply_generic_type_code(&mut generic, reference_hash, live);
+                }
+            }
+        }
         let rollups = build_script_reference_rollup_state_with_lineage(
             domain_store,
             reference_mappings,
+            &generic,
             reference_info_map,
             &lineage,
         )?;
@@ -428,6 +460,24 @@ impl BulkReducer for ScriptOwner {
                 .type_code_hash_id
                 .zip(input.type_hash_type)
                 .is_some_and(|(hash, kind)| is_native_type_id(ctx, hash, kind));
+            // A consumed code cell under a type script that is not Type ID
+            // leaves what that generic type reference runs (its binary is
+            // among the live ones only if it is code).
+            if !native_type_id && !self.generic_type_live_versions.is_empty() {
+                if let (Some(reference), Some(data_hash)) =
+                    (input.type_script_hash_id, input.data_hash)
+                {
+                    let reference = ctx.resolve_identity(reference);
+                    if let Some(live) = self.generic_type_live_versions.get_mut(reference) {
+                        if let Some(count) = live.get_mut(data_hash.as_slice()) {
+                            *count -= 1;
+                            if *count == 0 {
+                                live.remove(data_hash.as_slice());
+                            }
+                        }
+                    }
+                }
+            }
             if native_type_id {
                 let (Some(reference), Some(data_hash)) =
                     (input.type_script_hash_id, input.data_hash)
@@ -455,6 +505,33 @@ impl BulkReducer for ScriptOwner {
                     "type-id output lacks type hash at block {}",
                     tx.block_number
                 );
+            }
+            // A code cell under a type script that is not Type ID: what that
+            // generic type reference runs.
+            if !native_type_id && ckbadger_store::keys::is_code_cell(&cell.data) {
+                if let Some(reference) = cell.type_script_hash_id {
+                    let reference = ctx.resolve_identity(reference);
+                    let data_hash = cell.data_hash.ok_or_else(|| {
+                        anyhow!(
+                            "typed code output lacks data hash: block={} tx=0x{}",
+                            tx.block_number,
+                            hex::encode(tx.tx_hash)
+                        )
+                    })?;
+                    let count = self
+                        .generic_type_live_versions
+                        .entry(reference.to_vec())
+                        .or_default()
+                        .entry(data_hash.to_vec())
+                        .or_insert(0);
+                    *count = count.checked_add(1).ok_or_else(|| {
+                        anyhow!(
+                            "generic type reference live code count overflow: reference=0x{} block={}",
+                            hex::encode(reference),
+                            tx.block_number
+                        )
+                    })?;
+                }
             }
             if native_type_id && ckbadger_store::keys::is_code_cell(&cell.data) {
                 let reference = cell.type_script_hash_id.ok_or_else(|| {
@@ -1979,7 +2056,8 @@ mod tests {
                         .unwrap()
                         .lock_cells_count,
                     0,
-                    "generic type reference usage must stay unresolved"
+                    "a registered generic type reference runs the foreign binary its live code \
+                     cell holds, not the registered version"
                 );
                 assert_eq!(
                     domain_store
@@ -1989,6 +2067,17 @@ mod tests {
                         .cells_count,
                     0,
                     "generic type reference usage must stay outside the family"
+                );
+                // the lead's ruling (lane rd/api-lock-names): what it runs is
+                // the one live binary, outside the registry: its usage is that
+                // binary's, counted in no family
+                assert_eq!(
+                    domain_store
+                        .get_script_version(&observed_hash)
+                        .unwrap()
+                        .unwrap()
+                        .lock_cells_count,
+                    1
                 );
             }
             assert_eq!(
@@ -2546,6 +2635,145 @@ mod tests {
     /// writes no `script_info` row now (the row is the registry's label of one
     /// pair, label import's alone), and each pair's usage is its own
     /// `script_reference_info` row.
+    /// The lead's ruling (lane rd/api-lock-names), on the bulk path: a generic
+    /// (non Type ID) type reference is counted in a family by the binaries
+    /// its live code cells hold, by the one rule (`family_of_form`): two
+    /// versions of one family, in it; a binary outside the registry beside a
+    /// registered one, in none. The bulk build counted a generic type
+    /// reference in no family at all.
+    #[test]
+    fn bulk_build_counts_a_generic_type_reference_by_its_live_code_cells() {
+        let family_live_cells = |binaries: &[[u8; 32]]| -> i64 {
+            let dir = tempfile::tempdir().unwrap();
+            let domain_path = dir.path().join("domain");
+            let append_path = dir.path().join("append-only");
+            std::fs::create_dir_all(&domain_path).unwrap();
+            std::fs::create_dir_all(&append_path).unwrap();
+            let domain_store = CkbadgerStore::open_domain(&domain_path).unwrap();
+            let append_store = CkbadgerStore::open_append_only(&append_path).unwrap();
+            domain_store
+                .put_script_family_direct(
+                    "pair",
+                    &ckbadger_store::ScriptFamilyInfo {
+                        family_id: "pair".into(),
+                        name: "Pair Family".into(),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            for version in [[0x61u8; 32], [0x62; 32]] {
+                domain_store
+                    .put_script_version(
+                        &version,
+                        &ckbadger_store::ScriptVersionInfo {
+                            version_hash: version.to_vec(),
+                            name: Some("Pair Family".into()),
+                            family_id: Some("pair".into()),
+                            registered_references: vec![(version.to_vec(), 0)],
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+            }
+
+            let deployment_code = vec![0x13u8; 32];
+            let deployment_args = vec![0x5eu8; 4];
+            let reference = crate::parser::ScriptParser::compute_script_hash_raw(
+                &deployment_code,
+                1,
+                &deployment_args,
+            );
+            let interner = IdentityInterner::default();
+            let reference_id = interner.intern_bytes(reference.clone());
+            let code_id = interner.intern_bytes(deployment_code);
+            let args_id = interner.intern_bytes(deployment_args);
+            let other_lock_id = interner.intern_bytes(vec![0x9b; 32]);
+            let lock_hash_id = interner.intern_bytes(vec![0xaa; 32]);
+            let lock_args_id = interner.intern_bytes(vec![0xab; 20]);
+            let frozen = interner.snapshot_for_reads();
+            let ctx = ReducerContext::new(&frozen);
+            let base = |index: u32| CellFacts {
+                outpoint: OutPointKey::new([0x41; 32], index),
+                created_at_block: 200,
+                created_by_block_dao_ar: 1,
+                capacity: 150_00000000,
+                lock_script_hash_id: lock_hash_id,
+                lock_code_hash_id: other_lock_id,
+                lock_hash_type: 1,
+                lock_args_id,
+                type_script_hash_id: None,
+                type_code_hash_id: None,
+                type_hash_type: None,
+                type_args_id: None,
+                occupied_capacity: 61_00000000,
+                data_size: 0,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: crate::sync::CellSemanticTag::Plain,
+                dao_state: None,
+                protocol_facts: None,
+            };
+            // one code cell per binary under the deployment type script
+            let mut cells: Vec<CellFacts> = binaries
+                .iter()
+                .enumerate()
+                .map(|(index, binary)| CellFacts {
+                    type_script_hash_id: Some(reference_id),
+                    type_code_hash_id: Some(code_id),
+                    type_hash_type: Some(1),
+                    type_args_id: Some(args_id),
+                    data: b"\x7fELF\x02\x01\x01rest".to_vec(),
+                    data_size: 11,
+                    data_hash: Some(*binary),
+                    ..base(index as u32)
+                })
+                .collect();
+            // a cell locked by the reference: the pair's usage
+            cells.push(CellFacts {
+                lock_code_hash_id: reference_id,
+                ..base(binaries.len() as u32)
+            });
+            let tx = ResolvedTxFacts {
+                tx_hash: [0x41; 32],
+                block_number: 200,
+                block_hash: [0x09; 32],
+                timestamp_ms: 1_700_000_100_000,
+                chain_time_ms: 1_700_000_100_000,
+                block_dao_ar: 1,
+                tx_index: 0,
+                dotbit_action: None,
+                resolved_inputs: Vec::new(),
+                cells: cells.into(),
+            };
+            let mut owner = ScriptOwner::default();
+            owner.apply_tx(&tx, &ctx).unwrap();
+            let mut materializer = Materializer::new(&domain_store, &append_store);
+            owner.materialize_final(&mut materializer).unwrap();
+            let _ = materializer.finish();
+            domain_store
+                .get_script_family("pair")
+                .unwrap()
+                .unwrap()
+                .live_cells_count
+        };
+        assert_eq!(
+            family_live_cells(&[[0x61; 32], [0x62; 32]]),
+            1,
+            "two versions of one family: counted in it"
+        );
+        assert_eq!(
+            family_live_cells(&[[0x61; 32]]),
+            1,
+            "one binary: its family"
+        );
+        assert_eq!(
+            family_live_cells(&[[0x61; 32], [0x6f; 32]]),
+            0,
+            "a binary outside the registry beside a registered one: no family"
+        );
+    }
+
     #[test]
     fn bulk_build_writes_no_script_info_row_and_counts_each_pair_apart() {
         let dir = tempfile::tempdir().unwrap();

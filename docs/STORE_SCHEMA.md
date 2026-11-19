@@ -259,15 +259,28 @@ hash_type`: Zero Lock is `(0x00…00, data)`, Type ID is `(0x…545950455f4944, 
   cannot remove a row an active entry names: the rows it keeps are exactly the active pseudo
   pairs it writes. It holds no usage.
 - **The one naming rule** (`crates/api/src/utils/script_naming.rs`, `ScriptRegistry::name`): a
-  pseudo pair is named by its row; every other pair is named by the family of the one deployment
-  it resolves to — by `type` the binary its Type ID is bound to (a live code cell, the indexer's
-  `script_reference_to_version` binding, or the observed Type ID lineage), by `data*` the binary
-  whose data hash it is — the same membership rule the usage counts use, so counting and naming
-  agree. A pair that resolves to no deployment has no name (the API answers "Unknown" or `null`),
-  and never borrows the name of the code hash by another hash type. Where the named pair is not
+  pseudo pair is named by its row; every other pair is named by the family of what it runs
+  (`ckbadger_store::ReferenceCode`, decided by `ScriptFamilyMembershipIndex::family_of_form`, the
+  one function the indexer's family counts and every API name read, so counting and naming agree):
+  - by `data*`: the binary whose data hash it is;
+  - a native Type ID reference: the binary its Type ID is bound to (the indexer's
+    `script_reference_to_version` binding, written only from Type ID lineage), or, retired, the
+    family of its observed lineage;
+  - a generic (non Type ID) type reference: the binaries its live code cells hold (only code is a
+    binary). One binary: its family. Several: the family they are ALL versions of, and none where
+    they belong to two families or any is outside the registry (anyone who can create a cell under
+    a permissive type script can stand a second binary beside a registered one; the lookup says
+    `ambiguous` either way). None: no family (the indexer binds no generic type reference). The
+    indexer counts it the same way: bulk build tracks the live code cells under every type script
+    that is not Type ID, and the live rollup reads a generic reference's live code cells once per
+    batch and moves them with the batch's code cells, block by block.
+
+  A pair that resolves to no deployment has no name (the API answers "Unknown" or `null`), and
+  never borrows the name of the code hash by another hash type. Where the named pair is not
   the registry's registered reference for that version (`ScriptVersionInfo.registered_references`),
   the response carries the pair's hash type beside the name (`nameBy`, `lockKindBy`, …). A pair
   with a label row that also resolves to code is an inconsistency, refused with its pair named.
+
 - `script_reference_info` is a pair's own usage, keyed `hash_type ‖ reference_hash`, the only usage
   counters of a script (bulk build's script owner reduces it per pair; live sync applies it per
   pair under the block journal). `DailyActivityStats.script_counts` is keyed by the pair too

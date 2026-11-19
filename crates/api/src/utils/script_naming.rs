@@ -33,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 
 use ckbadger_store::{
     types::{ScriptFamilyInfo, ScriptInfo, ScriptVersionInfo},
-    CkbadgerStore, ScriptFamilyMembershipIndex,
+    CkbadgerStore, ReferenceCode, ScriptFamilyMembershipIndex,
 };
 
 use super::script_resolution::{
@@ -46,11 +46,15 @@ use super::script_resolution::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceFormFamily<'m> {
     pub family_id: Option<&'m str>,
-    /// The binary the form runs now, where one does.
+    /// The binary the form runs now, where it runs exactly one.
     pub current_version_hash: Option<Vec<u8>>,
     /// The binary its family was read from: the current one, or the form's
-    /// observed binding where it runs none now (a retired type reference).
+    /// observed binding where it runs none now (a retired type reference);
+    /// none where it runs several.
     pub family_version_hash: Option<Vec<u8>>,
+    /// A generic type reference whose live code cells hold several binaries
+    /// (the lead's ruling): a family only where all are one family's versions.
+    pub runs_several: bool,
 }
 
 /// THE family of one reference form (code hash, hash type): the rule the
@@ -66,7 +70,7 @@ pub fn reference_form_family<'m>(
     reference_hash: &[u8],
     hash_type: u8,
 ) -> anyhow::Result<ReferenceFormFamily<'m>> {
-    let current_version_hash = reference_form_member_version_with_lineage(
+    let code = reference_form_member_version_with_lineage(
         store,
         cells_store,
         hash_type,
@@ -74,18 +78,22 @@ pub fn reference_form_family<'m>(
         is_allowed_version,
         Some(observed_type_id),
     )?;
-    let family_version_hash = historical_family_member_candidate(
-        store,
-        hash_type,
-        reference_hash,
-        current_version_hash.clone(),
-    )?;
+    // A form that runs nothing now keeps its chain-observed binding's family
+    // (a retired reference: the code it ran).
+    let binding = match &code {
+        ReferenceCode::None => {
+            historical_family_member_candidate(store, hash_type, reference_hash, None)?
+        }
+        ReferenceCode::One(_) | ReferenceCode::Several(_) => None,
+    };
     let family_id =
-        membership.resolve_family(reference_hash, hash_type, family_version_hash.as_deref())?;
+        membership.family_of_form(reference_hash, hash_type, &code, binding.as_deref())?;
+    let current_version_hash = code.current().map(<[u8]>::to_vec);
     Ok(ReferenceFormFamily {
         family_id,
+        family_version_hash: current_version_hash.clone().or(binding),
         current_version_hash,
-        family_version_hash,
+        runs_several: matches!(code, ReferenceCode::Several(_)),
     })
 }
 

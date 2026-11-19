@@ -85,7 +85,7 @@ pub use layout_ops::{StoreLayoutMismatch, StoreLayoutState, STORE_LAYOUT, STORE_
 pub use network_types::*;
 pub use object_ops::CollectionActivityPage;
 pub use reorg_ops::{JournalEntry, RollbackResult};
-pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
+pub use script_reference_ops::{ReferenceCode, ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 pub use stats_ops::DaoDayFacts;
 pub use store::{
     cf_spec, cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,

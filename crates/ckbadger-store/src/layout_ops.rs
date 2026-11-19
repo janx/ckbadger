@@ -22,7 +22,9 @@ use crate::store::{CkbadgerStore, DOMAIN_CFS};
 ///   labels of the registry's pseudo deployments only (Zero Lock, Type ID),
 ///   no usage;
 ///   `DailyActivityStats.script_counts` is keyed
-///   `"<code hash hex>:<hash type label>"`. A store from before carries no
+///   `"<code hash hex>:<hash type label>"`; a generic (non Type ID) type
+///   reference is counted in a family by the binaries its live code cells
+///   hold (`ReferenceCode`, the one family rule). A store from before carries no
 ///   stamp: its `script_info` rows are keyed by the code hash alone and sum
 ///   every hash type's usage.
 pub const STORE_LAYOUT: u32 = 1;

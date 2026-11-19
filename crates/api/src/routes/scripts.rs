@@ -588,7 +588,9 @@ fn reference_custody(
                     "current code binding for type reference 0x{}: {e}",
                     hex::encode(reference_hash)
                 ))
-            })?;
+            })?
+            .current()
+            .map(<[u8]>::to_vec);
             let cells = state
                 .store
                 .list_cells_by_type(reference_hash, usize::MAX, None, &state.append_only_store)
@@ -1287,6 +1289,7 @@ fn family_classes_for_list(
         )?;
         if family_id.is_none()
             && member.current_version_hash.is_none()
+            && !member.runs_several
             && registered.contains(&(member.hash_type, member.reference_hash.clone()))
         {
             return Err(ApiError::internal(format!("script list registered reference 0x{} type {} lacks current binding and family lineage", hex::encode(&member.reference_hash), member.hash_type)));
@@ -1640,6 +1643,10 @@ struct FamilyMemberForm {
     reference_hash: Vec<u8>,
     hash_type: u8,
     current_version_hash: Option<Vec<u8>>,
+    /// A generic type reference whose live code cells hold several binaries:
+    /// it has no current binary, and a family only where all are one family's
+    /// versions (the lead's ruling), so missing a family is no lost binding.
+    runs_several: bool,
     info: ckbadger_store::types::ScriptReferenceInfo,
 }
 
@@ -1681,6 +1688,7 @@ fn resolve_member_form(
             reference_hash,
             hash_type,
             current_version_hash,
+            runs_several: form.runs_several,
             info,
         },
     ))
@@ -1740,6 +1748,7 @@ fn family_member_reference_forms(
         };
         if !is_member {
             if member.current_version_hash.is_none()
+                && !member.runs_several
                 && registered_references
                     .contains(&(member.hash_type, member.reference_hash.clone()))
             {

@@ -253,9 +253,16 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
                 10,
             );
             batch.put_cell_by_type(&reference, 10, &tx, 0);
-            if !different_binary || i == 0 {
-                batch.put_cell_by_data_hash(&version, 10, &tx, 0);
-            }
+            // Both cells hold code (the code-cell index files code only, and
+            // only code is a binary: lane rd/api-lock-names, the lead's
+            // ruling), each under its own data hash; the different binary was
+            // filed nowhere, as no code cell is.
+            let binary = if different_binary && i == 1 {
+                [0x83; 32]
+            } else {
+                version
+            };
+            batch.put_cell_by_data_hash(&binary, 10, &tx, 0);
         }
         batch.commit().unwrap();
         let app = create_router(test_config(store)).await;
@@ -280,8 +287,21 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
         let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let custody = &detail["references"][0]["custody"];
         if different_binary {
-            assert_eq!(custody["class"], "ambiguous");
-            assert!(detail["references"][0]["currentVersionHash"].is_null());
+            // The lead's ruling (lane rd/api-lock-names): the registered binary
+            // and a binary outside the registry under one generic type
+            // reference: it runs either, so it is no longer the family's (not
+            // listed among its references, not counted in it). It was listed
+            // with an "ambiguous" custody and no current binary. Its own
+            // resolution still says ambiguous (below).
+            let reference_hex = format!("0x{}", hex::encode(&reference));
+            assert!(
+                detail["references"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|listed| listed["referenceHash"] != reference_hex),
+                "{detail}"
+            );
             let response = app
                 .oneshot(
                     Request::builder()
@@ -1961,6 +1981,9 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
         100,
     );
     batch.put_cell_by_type(&reference_hash, 100, &[0xd1; 32], 0);
+    // a code cell: filed in the code-cell index (only code is a binary; lane
+    // rd/api-lock-names, the lead's ruling)
+    batch.put_cell_by_data_hash(&version_hash_a, 100, &[0xd1; 32], 0);
     batch.put_cell(
         &[0xd2; 32],
         0,
@@ -1979,6 +2002,7 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
         101,
     );
     batch.put_cell_by_type(&reference_hash, 101, &[0xd2; 32], 0);
+    batch.put_cell_by_data_hash(&version_hash_b, 101, &[0xd2; 32], 0);
     batch.commit().unwrap();
 
     let app = create_router(test_config(store)).await;
@@ -5517,4 +5541,289 @@ async fn by_pair_lookup_answers_each_pair_with_its_own_name_and_figures() {
     assert!(by_data["nameBy"].is_null(), "{json}");
     assert_eq!(by_data["liveCellsCount"], 2, "{json}");
     assert_eq!(by_data["ownedCapacitySum"], "20000000000", "{json}");
+}
+
+// ── The lead's ruling (lane rd/api-lock-names): a generic type reference whose
+// live code cells hold several binaries ─────────────────────────────────────
+//
+// A type reference that is not a Type ID runs whichever of its live code cells
+// a spender puts in the cell deps. It is a family's only where every binary its
+// live code cells hold is a version of that one registered family: named (with
+// its hash type beside the name, not being the registry's reference) and
+// counted in the family. A second binary of another family, or outside the
+// registry, gives it no family: not named, not counted in any family (its
+// usage stays its own pair's). The lookup says `ambiguous` either way. Counting
+// is held by the family usage route, whose sum must equal the family row the
+// indexer persists (`validate_persisted`): the row is seeded as the indexer's
+// rollup writes it under the same rule.
+
+const GENERIC_FAMILY: &str = "Pair Family";
+
+/// The generic type reference's deployment type script: a code hash that is
+/// not Type ID, by `type`, with args of its own.
+fn generic_deployment_script() -> ([u8; 32], Vec<u8>) {
+    ([0x13; 32], vec![0x5e; 4])
+}
+
+/// Its reference: the hash of that type script, and a lock run by it.
+fn generic_reference() -> Vec<u8> {
+    let (code, args) = generic_deployment_script();
+    compute_script_hash(&code, 1, &args)
+}
+
+/// Seed the family "Pair Family" with `versions` (each registered by its data
+/// hash), one live code cell under the generic reference per binary in
+/// `versions` and in `foreign` (binaries outside the registry), the
+/// reference's own usage as a lock (4 cells, 3 live), one address locked by it,
+/// and the family row as the indexer's rollup writes it: with the reference's
+/// usage when `counted`, without it otherwise.
+fn seed_generic_type_reference(
+    store: &CkbadgerStore,
+    versions: &[[u8; 32]],
+    foreign: &[[u8; 32]],
+    counted: bool,
+) -> Vec<u8> {
+    use ckbadger_store::types::{
+        AddressBalance, LockScriptEntry, ScriptFamilyInfo, ScriptVersionInfo,
+    };
+    let family_id = "pair-family";
+    let reference = generic_reference();
+    let usage = ScriptReferenceInfo {
+        reference_hash: reference.clone(),
+        hash_type: 1,
+        lock_cells_count: 4,
+        lock_live_cells_count: 3,
+        lock_capacity_sum: 400_00000000,
+        lock_owned_capacity_sum: 400_00000000,
+        ..Default::default()
+    };
+    let mut family = ScriptFamilyInfo {
+        family_id: family_id.to_string(),
+        name: GENERIC_FAMILY.to_string(),
+        versions_count: versions.len() as i64,
+        ..Default::default()
+    };
+    if counted {
+        let mut sum = ckbadger_store::ScriptFamilyUsage::default();
+        sum.add_reference(&usage).unwrap();
+        sum.apply_to(&mut family);
+    }
+    store.put_script_family_direct(family_id, &family).unwrap();
+    store
+        .put_script_family_name_direct(GENERIC_FAMILY, family_id)
+        .unwrap();
+    for binary in versions {
+        store
+            .put_script_version(
+                binary,
+                &ScriptVersionInfo {
+                    version_hash: binary.to_vec(),
+                    name: Some(GENERIC_FAMILY.to_string()),
+                    family_id: Some(family_id.to_string()),
+                    registered_references: vec![(binary.to_vec(), 0)],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .put_script_version_by_family_direct(family_id, binary)
+            .unwrap();
+    }
+    let (code, args) = generic_deployment_script();
+    let mut batch = StoreBatch::new(store);
+    for (index, binary) in versions.iter().chain(foreign).enumerate() {
+        let tx = [0xd0 + index as u8; 32];
+        batch.put_cell(
+            &tx,
+            0,
+            &LiveCellInfo {
+                capacity: 100_00000000,
+                lock_code_hash: [0x22; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_code_hash: Some(code),
+                type_hash_type: Some(1),
+                type_args: Some(args.clone()),
+                data_size: 64,
+                udt_amount: None,
+                data_hash: Some(*binary),
+            },
+            50,
+        );
+        batch.put_cell_by_type(&reference, 50, &tx, 0);
+        // the code-cell index files code only: these cells hold code
+        batch.put_cell_by_data_hash(binary, 50, &tx, 0);
+    }
+    batch.put_script_reference_info(1, &reference, &usage);
+    let lock_args = vec![0x44; 20];
+    let lock_hash = compute_script_hash(&reference, 1, &lock_args);
+    batch.put_lock_script(
+        &lock_hash,
+        &LockScriptEntry {
+            code_hash: reference.clone(),
+            hash_type: 1,
+            args: lock_args,
+        },
+    );
+    batch.put_addr_balance(
+        &lock_hash,
+        &AddressBalance {
+            balance: 100_00000000,
+            used_capacity: 61_00000000,
+            live_cells_count: 1,
+            total_cells_count: 1,
+            txs_count: 1,
+            cellbase_txs_count: 0,
+            first_seen_block: 10,
+            first_seen_tx_idx: 0,
+            last_activity_block: 20,
+            last_activity_tx_idx: 0,
+        },
+    );
+    batch.commit().unwrap();
+    seed_block_headers_at(store, &[(50, 1_700_000_000_000)]);
+    lock_hash
+}
+
+/// The lookup's answer, the address's lock info and the family usage route
+/// for the generic reference.
+async fn generic_reference_reads(
+    store: Arc<CkbadgerStore>,
+    lock_hash: &[u8],
+) -> (
+    serde_json::Value,
+    serde_json::Value,
+    StatusCode,
+    serde_json::Value,
+) {
+    let app = create_router(test_config(store)).await;
+    let reference = format!("0x{}", hex::encode(generic_reference()));
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/scripts/lookup")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(&serde_json::json!({
+                "scripts": [{ "codeHash": reference, "hashType": "type" }]
+            }))
+            .unwrap(),
+        ))
+        .unwrap();
+    let response = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let lookup: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let lookup = lookup[&format!("{reference}:type")].clone();
+    let (status, address) =
+        get_json(&app, &format!("/addresses/0x{}", hex::encode(lock_hash))).await;
+    assert_eq!(status, StatusCode::OK, "{address}");
+    let (usage_status, usage) = get_json(&app, "/scripts/Pair%20Family/usage").await;
+    (
+        lookup,
+        address["lockScriptInfo"].clone(),
+        usage_status,
+        usage,
+    )
+}
+
+/// Two live code cells holding two versions of one registered family: the
+/// reference runs that family's code whichever cell a spender uses. Named
+/// (by type: not the registry's reference), counted in the family, `ambiguous`
+/// at the lookup.
+#[tokio::test]
+async fn a_generic_type_reference_running_two_versions_of_one_family_is_that_family() {
+    let store = test_store();
+    let lock_hash = seed_generic_type_reference(&store, &[[0x61; 32], [0x62; 32]], &[], true);
+    let (lookup, lock_info, usage_status, usage) = generic_reference_reads(store, &lock_hash).await;
+    assert_eq!(lookup["name"], GENERIC_FAMILY, "{lookup}");
+    assert_eq!(lookup["nameBy"], "type", "{lookup}");
+    assert_eq!(lookup["resolutionState"], "ambiguous", "{lookup}");
+    assert_eq!(lock_info["name"], GENERIC_FAMILY, "{lock_info}");
+    assert_eq!(lock_info["nameBy"], "type", "{lock_info}");
+    assert_eq!(usage_status, StatusCode::OK, "{usage}");
+    assert_eq!(usage["cellsCount"], 4, "{usage}");
+    assert_eq!(usage["liveCellsCount"], 3, "{usage}");
+}
+
+/// A registered binary and a binary outside the registry under the same
+/// reference: anyone could stand the second one beside the first. No family:
+/// unnamed, counted in no family (the family's totals without it, which the
+/// usage route checks against the persisted row), `ambiguous` at the lookup.
+#[tokio::test]
+async fn a_generic_type_reference_running_a_registered_and_a_foreign_binary_has_no_family() {
+    let store = test_store();
+    let lock_hash = seed_generic_type_reference(&store, &[[0x61; 32]], &[[0x6f; 32]], false);
+    let (lookup, lock_info, usage_status, usage) = generic_reference_reads(store, &lock_hash).await;
+    assert!(
+        lookup.is_null() || lookup["name"] == "Unknown",
+        "named by no family: {lookup}"
+    );
+    if !lookup.is_null() {
+        assert!(lookup["nameBy"].is_null(), "{lookup}");
+        assert_eq!(lookup["resolutionState"], "ambiguous", "{lookup}");
+    }
+    assert!(lock_info.is_null(), "no name for the lock: {lock_info}");
+    assert_eq!(usage_status, StatusCode::OK, "{usage}");
+    assert_eq!(
+        usage["cellsCount"], 0,
+        "the family's totals without it: {usage}"
+    );
+}
+
+/// The same, where the reference has a binding to the registered binary (the
+/// function answered a form with several live binaries by its binding's
+/// family): the binding earns no name while a foreign binary stands beside it.
+#[tokio::test]
+async fn a_bound_generic_type_reference_running_a_foreign_binary_too_has_no_family() {
+    let store = test_store();
+    let lock_hash = seed_generic_type_reference(&store, &[[0x61; 32]], &[[0x6f; 32]], false);
+    store
+        .put_script_reference_to_version_direct(1, &generic_reference(), &[0x61; 32])
+        .unwrap();
+    let (lookup, lock_info, usage_status, usage) = generic_reference_reads(store, &lock_hash).await;
+    assert!(
+        lookup.is_null() || lookup["name"] == "Unknown",
+        "named by no family: {lookup}"
+    );
+    assert!(lock_info.is_null(), "no name for the lock: {lock_info}");
+    assert_eq!(usage_status, StatusCode::OK, "{usage}");
+    assert_eq!(
+        usage["cellsCount"], 0,
+        "the family's totals without it: {usage}"
+    );
+}
+
+/// Two families' binaries under one reference: no family either.
+#[tokio::test]
+async fn a_generic_type_reference_running_two_families_binaries_has_no_family() {
+    let store = test_store();
+    // the foreign binary is another registered family's version
+    seed_script_label(&store, &[0x6e; 32], 0, "Other Family");
+    let lock_hash = seed_generic_type_reference(&store, &[[0x61; 32]], &[[0x6e; 32]], false);
+    let (lookup, lock_info, usage_status, usage) = generic_reference_reads(store, &lock_hash).await;
+    assert!(
+        lookup.is_null() || lookup["name"] == "Unknown",
+        "named by no family: {lookup}"
+    );
+    assert!(lock_info.is_null(), "no name for the lock: {lock_info}");
+    assert_eq!(usage_status, StatusCode::OK, "{usage}");
+    assert_eq!(usage["cellsCount"], 0, "{usage}");
+}
+
+/// A generic type reference with no live code cell and no chain-observed
+/// binding (the indexer binds a type reference only through Type ID lineage):
+/// it runs nothing, has no family, and is counted in none (unchanged).
+#[tokio::test]
+async fn a_retired_generic_type_reference_has_no_family() {
+    let store = test_store();
+    let lock_hash = seed_generic_type_reference(&store, &[], &[], false);
+    // the family still needs a version for its page
+    let (lookup, lock_info, usage_status, usage) = generic_reference_reads(store, &lock_hash).await;
+    assert!(
+        lookup.is_null() || lookup["name"] == "Unknown",
+        "named by no family: {lookup}"
+    );
+    assert!(lock_info.is_null(), "{lock_info}");
+    assert_eq!(usage_status, StatusCode::OK, "{usage}");
+    assert_eq!(usage["cellsCount"], 0, "{usage}");
 }

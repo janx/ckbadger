@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use ckbadger_store::{
     types::{PositionedCellInfo, ScriptVersionInfo},
-    CkbadgerStore,
+    CkbadgerStore, ReferenceCode,
 };
 
 const UNKNOWN_SCRIPT_NAME: &str = "unknown";
@@ -427,16 +427,49 @@ pub fn reference_form_member_version(
     reference_hash: &[u8],
     is_allowed_version: &dyn Fn(&[u8]) -> bool,
 ) -> anyhow::Result<Option<Vec<u8>>> {
-    reference_form_member_version_with_lineage(
+    Ok(reference_form_member_version_with_lineage(
         store,
         cells_store,
         hash_type,
         reference_hash,
         is_allowed_version,
         None,
-    )
+    )?
+    .current()
+    .map(<[u8]>::to_vec))
 }
 
+/// The distinct binaries a generic type reference's live code cells hold:
+/// only code is a binary (`cell_by_data_hash` files code only), so a live cell
+/// of state data under the same type script is none.
+pub fn live_code_binaries(
+    store: &CkbadgerStore,
+    matches: Vec<TypeReferenceLiveMatch>,
+) -> anyhow::Result<std::collections::BTreeSet<Vec<u8>>> {
+    let mut binaries = std::collections::BTreeSet::new();
+    for candidate in matches {
+        if binaries.contains(&candidate.version_hash) {
+            continue;
+        }
+        if store.is_code_data_hash(&candidate.version_hash)? {
+            binaries.insert(candidate.version_hash);
+        }
+    }
+    Ok(binaries)
+}
+
+/// What one reference form runs now ([`ReferenceCode`], the input of the one
+/// family rule, `ScriptFamilyMembershipIndex::family_of_form`):
+///
+/// - a native Type ID reference (a live Type ID cell under it, or observed
+///   lineage and no live cell): its binding, the indexer's canonical one, or
+///   none when retired;
+/// - a generic type reference: the distinct binaries its live code cells
+///   hold, none, one or several (it reached `None` for both "no live cell"
+///   and "several live binaries" before the lead's ruling; `Several` now
+///   carries them);
+/// - a data form: its own hash where a code cell carries it.
+///
 /// Callers that already loaded all version records provide the observed Type
 /// ID set, avoiding another full version scan for each retired reference.
 pub fn reference_form_member_version_with_lineage(
@@ -446,7 +479,8 @@ pub fn reference_form_member_version_with_lineage(
     reference_hash: &[u8],
     is_allowed_version: &dyn Fn(&[u8]) -> bool,
     observed_type_id: Option<bool>,
-) -> anyhow::Result<Option<Vec<u8>>> {
+) -> anyhow::Result<ReferenceCode> {
+    let one = |binary: Option<Vec<u8>>| binary.map_or(ReferenceCode::None, ReferenceCode::One);
     if hash_type == 1 {
         let matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
         if matches.iter().any(|candidate| candidate.native_type_id)
@@ -456,32 +490,26 @@ pub fn reference_form_member_version_with_lineage(
                     None => has_observed_type_id_lineage(store, reference_hash)?,
                 })
         {
-            return persisted_reference_version_candidate(
+            return Ok(one(persisted_reference_version_candidate(
                 store,
                 cells_store,
                 hash_type,
                 reference_hash,
-            );
+            )?));
         }
-        let unique: HashSet<Vec<u8>> = matches
-            .into_iter()
-            .map(|candidate| candidate.version_hash)
-            .collect();
-        return Ok(if unique.len() == 1 {
-            unique.into_iter().next()
-        } else {
-            None
-        });
+        return Ok(ReferenceCode::of_live_binaries(live_code_binaries(
+            store, matches,
+        )?));
     }
     if let Some(version_hash) =
         persisted_reference_version_candidate(store, cells_store, hash_type, reference_hash)?
     {
-        return Ok(Some(version_hash));
+        return Ok(ReferenceCode::One(version_hash));
     }
     if matches!(hash_type, 0 | 2 | 4) && is_allowed_version(reference_hash) {
-        return Ok(Some(reference_hash.to_vec()));
+        return Ok(ReferenceCode::One(reference_hash.to_vec()));
     }
-    Ok(None)
+    Ok(ReferenceCode::None)
 }
 
 /// Family charts and usage describe the whole indexed history of a reference.
@@ -536,48 +564,17 @@ pub fn resolve_script_form_by_hash(
     // Defer lineage: `reference_form_member_version_with_lineage` only scans
     // when live type matches are empty (passing None). The common cell-detail
     // path has live matches and must not pay a full versions table scan.
-    let member_version = reference_form_member_version_with_lineage(
+    // The one reading of what the form runs: one binary, several (a generic
+    // type reference's live code cells), or none.
+    match reference_form_member_version_with_lineage(
         store,
         cells_store,
         hash_type,
         reference_hash,
         &|hash: &[u8]| has_own_code_cell && hash == reference_hash,
         None,
-    )?;
-    if let Some(version_hash) = member_version {
-        let version_info = store.get_script_version(&version_hash)?;
-        return Ok(CurrentScriptVersionResolution::Resolved(Box::new(
-            CurrentScriptVersion {
-                version_hash,
-                version_info,
-            },
-        )));
-    }
-
-    if hash_type != 1 {
-        return Ok(CurrentScriptVersionResolution::NotFound);
-    }
-
-    let type_matches = resolve_live_type_reference_matches(store, cells_store, reference_hash)?;
-    if type_matches
-        .iter()
-        .any(|candidate| candidate.native_type_id)
-        || (type_matches.is_empty() && has_observed_type_id_lineage(store, reference_hash)?)
-    {
-        return Ok(CurrentScriptVersionResolution::NotFound);
-    }
-    let unique_versions: Vec<Vec<u8>> = {
-        let mut seen = HashSet::new();
-        type_matches
-            .iter()
-            .filter(|m| seen.insert(m.version_hash.clone()))
-            .map(|m| m.version_hash.clone())
-            .collect()
-    };
-    match unique_versions.len() {
-        0 => Ok(CurrentScriptVersionResolution::NotFound),
-        1 => {
-            let version_hash = unique_versions[0].clone();
+    )? {
+        ReferenceCode::One(version_hash) => {
             let version_info = store.get_script_version(&version_hash)?;
             Ok(CurrentScriptVersionResolution::Resolved(Box::new(
                 CurrentScriptVersion {
@@ -586,11 +583,10 @@ pub fn resolve_script_form_by_hash(
                 },
             )))
         }
-        _ => Ok(CurrentScriptVersionResolution::Ambiguous(Box::new(
-            AmbiguousCurrentScriptVersion {
-                version_hashes: unique_versions,
-            },
-        ))),
+        ReferenceCode::Several(version_hashes) => Ok(CurrentScriptVersionResolution::Ambiguous(
+            Box::new(AmbiguousCurrentScriptVersion { version_hashes }),
+        )),
+        ReferenceCode::None => Ok(CurrentScriptVersionResolution::NotFound),
     }
 }
 
@@ -849,6 +845,9 @@ mod tests {
             10,
         );
         batch.put_cell_by_type(reference, 10, &tx, 0);
+        // a code cell: filed in the code-cell index, as only code is a binary
+        // (lane rd/api-lock-names, the lead's ruling)
+        batch.put_cell_by_data_hash(binary, 10, &tx, 0);
         batch.commit().unwrap();
     }
 
@@ -1325,6 +1324,9 @@ mod tests {
             10,
         );
         batch.put_cell_by_type(&reference_hash, 10, &[0x92; 32], 0);
+        // the live type match is a code cell (only code is a binary: lane
+        // rd/api-lock-names, the lead's ruling)
+        batch.put_cell_by_data_hash(&version_hash, 10, &[0x92; 32], 0);
         batch.commit().unwrap();
 
         match resolve_script_form_by_hash(&store, &store, 1, &reference_hash).unwrap() {

@@ -6,6 +6,46 @@ use crate::{CkbadgerStore, ScriptReferenceInfo};
 
 pub type ScriptReferenceInfoEntry = ((Vec<u8>, u8), ScriptReferenceInfo);
 
+/// What one script reference form runs now: THE input of the family rule
+/// (lane rd/api-lock-names, the lead's ruling on a type reference whose live
+/// code cells hold several binaries). The indexer's rollup and the API read
+/// every form's family through [`ScriptFamilyMembershipIndex::family_of_form`]
+/// from this, so counting and naming agree by construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReferenceCode {
+    /// One binary: a data form's own hash, a native Type ID reference's
+    /// binding, or the one binary a generic type reference's live code cells
+    /// hold.
+    One(Vec<u8>),
+    /// A generic (non Type ID) type reference whose live code cells hold
+    /// several distinct binaries, sorted. It runs whichever of them a spender
+    /// puts in the cell deps: none of them is "the" code it runs.
+    Several(Vec<Vec<u8>>),
+    /// No binary now: a retired type reference (its chain-observed binding,
+    /// if any, keeps its family) or a data form no code cell carries.
+    None,
+}
+
+impl ReferenceCode {
+    /// A generic type reference's code from the distinct binaries its live
+    /// code cells hold: none, one, or several.
+    pub fn of_live_binaries(binaries: std::collections::BTreeSet<Vec<u8>>) -> Self {
+        match binaries.len() {
+            0 => Self::None,
+            1 => Self::One(binaries.into_iter().next().expect("one binary")),
+            _ => Self::Several(binaries.into_iter().collect()),
+        }
+    }
+
+    /// The one binary the form runs, where it runs exactly one.
+    pub fn current(&self) -> Option<&[u8]> {
+        match self {
+            Self::One(binary) => Some(binary),
+            Self::Several(_) | Self::None => None,
+        }
+    }
+}
+
 /// Metadata-backed family membership is independent of current executable
 /// resolution. Build once per rollup/request, then resolve each reference form.
 #[derive(Debug, Default)]
@@ -58,6 +98,45 @@ impl ScriptFamilyMembershipIndex {
             }
         }
         Ok(index)
+    }
+
+    /// THE family of one reference form from what it runs (the one rule,
+    /// lane rd/api-lock-names): one binary, its family (a Type ID reference's
+    /// observed lineage first); several live binaries, the family they are
+    /// ALL versions of, else none (several families, or any binary outside
+    /// the registry: a second binary stood beside a registered one does not
+    /// earn the registered family's name or count); no binary, the family of
+    /// its chain-observed `binding` (a retired reference: the code it ran).
+    pub fn family_of_form(
+        &self,
+        reference_hash: &[u8],
+        hash_type: u8,
+        code: &ReferenceCode,
+        binding: Option<&[u8]>,
+    ) -> anyhow::Result<Option<&str>> {
+        match code {
+            ReferenceCode::One(binary) => {
+                self.resolve_family(reference_hash, hash_type, Some(binary))
+            }
+            ReferenceCode::Several(binaries) => {
+                anyhow::ensure!(
+                    hash_type == 1 && binaries.len() > 1,
+                    "several live binaries for a form that is not a type reference: reference=0x{} hash_type={} binaries={}",
+                    bytes_to_hex(reference_hash),
+                    hash_type,
+                    binaries.len()
+                );
+                let mut families = binaries
+                    .iter()
+                    .map(|binary| self.version_families.get(binary).map(String::as_str));
+                let first = families.next().flatten();
+                Ok(match first {
+                    Some(family) if families.all(|other| other == Some(family)) => Some(family),
+                    _ => None,
+                })
+            }
+            ReferenceCode::None => self.resolve_family(reference_hash, hash_type, binding),
+        }
     }
 
     pub fn resolve_family(
@@ -399,6 +478,79 @@ impl CkbadgerStore {
 #[cfg(test)]
 mod tests {
     use crate::{keys, CkbadgerStore, ScriptReferenceInfo};
+
+    /// The lead's ruling (lane rd/api-lock-names): a generic type reference
+    /// whose live code cells hold several binaries is that family's only
+    /// where every binary is a version of one registered family; two families,
+    /// or a binary outside the registry, give it none. One binary is its
+    /// family; none falls back to the chain-observed binding.
+    #[test]
+    fn a_form_running_several_binaries_has_a_family_only_when_all_are_one_familys() {
+        use super::ReferenceCode;
+        use crate::{ScriptFamilyMembershipIndex, ScriptVersionInfo};
+        let version = |hash: u8, family: &str| ScriptVersionInfo {
+            version_hash: vec![hash; 32],
+            family_id: Some(family.into()),
+            ..Default::default()
+        };
+        let (v1, v2, other) = (
+            version(0x31, "xudt"),
+            version(0x32, "xudt"),
+            version(0x33, "omni"),
+        );
+        let index = ScriptFamilyMembershipIndex::new([&v1, &v2, &other]).unwrap();
+        let generic = [0x77; 32];
+        let several = |binaries: &[u8]| {
+            ReferenceCode::of_live_binaries(binaries.iter().map(|b| vec![*b; 32]).collect())
+        };
+        assert_eq!(
+            index
+                .family_of_form(&generic, 1, &several(&[0x31, 0x32]), None)
+                .unwrap(),
+            Some("xudt"),
+            "two versions of one registered family"
+        );
+        assert_eq!(
+            index
+                .family_of_form(&generic, 1, &several(&[0x31, 0x33]), None)
+                .unwrap(),
+            None,
+            "two families"
+        );
+        assert_eq!(
+            index
+                .family_of_form(&generic, 1, &several(&[0x31, 0x99]), None)
+                .unwrap(),
+            None,
+            "a binary outside the registry"
+        );
+        assert_eq!(
+            index
+                .family_of_form(&generic, 1, &several(&[0x31]), None)
+                .unwrap(),
+            Some("xudt"),
+            "one binary"
+        );
+        assert_eq!(several(&[]), ReferenceCode::None);
+        assert_eq!(
+            index
+                .family_of_form(&generic, 1, &ReferenceCode::None, Some(&[0x33; 32]))
+                .unwrap(),
+            Some("omni"),
+            "retired: the chain-observed binding's family"
+        );
+        assert_eq!(
+            index
+                .family_of_form(&generic, 1, &ReferenceCode::None, None)
+                .unwrap(),
+            None
+        );
+        let error = index
+            .family_of_form(&[0x31; 32], 0, &several(&[0x31, 0x32]), None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not a type reference"), "{error}");
+    }
 
     #[test]
     fn family_membership_keeps_observed_lineage_separate_from_current_binary() {

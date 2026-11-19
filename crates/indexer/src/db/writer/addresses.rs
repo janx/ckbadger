@@ -284,9 +284,29 @@ pub(crate) struct ScriptReferenceRollupState {
     pub(crate) changed_families: Vec<String>,
 }
 
+/// What each generic (non Type ID) type reference runs: the lead's ruling's
+/// `ReferenceCode` from the binaries its live code cells hold. Its own input
+/// to the rollup, beside the bindings (a generic reference has no binding:
+/// the indexer binds a type reference only through Type ID lineage).
+pub(crate) type GenericTypeCodes = HashMap<Vec<u8>, ckbadger_store::ReferenceCode>;
+
+/// What a generic type reference runs, from `live` (binary -> its live code
+/// cells): THE reading bulk finalize and the live rollup share.
+pub(crate) fn apply_generic_type_code(
+    generic: &mut GenericTypeCodes,
+    reference: &[u8],
+    live: &std::collections::BTreeMap<Vec<u8>, u32>,
+) {
+    generic.insert(
+        reference.to_vec(),
+        ckbadger_store::ReferenceCode::of_live_binaries(live.keys().cloned().collect()),
+    );
+}
+
 pub(crate) fn build_script_reference_rollup_state_with_lineage(
     store: &ckbadger_store::CkbadgerStore,
     reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    generic: &GenericTypeCodes,
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
@@ -300,6 +320,7 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         versions,
         families,
         &mappings,
+        generic,
         &reference_info_map,
         lineage,
     )
@@ -443,6 +464,7 @@ pub(crate) fn build_script_reference_rollup_state_over(
     mut version_map: HashMap<Vec<u8>, ScriptVersionInfo>,
     mut family_map: HashMap<String, ScriptFamilyInfo>,
     mappings: &HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
+    generic: &GenericTypeCodes,
     reference_info_map: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
@@ -470,6 +492,17 @@ pub(crate) fn build_script_reference_rollup_state_over(
                 hash_type
             );
         };
+        // A generic type reference runs what its live code cells hold (one
+        // binary is its version); every other form its binding.
+        if let Some(code) = generic.get(reference_hash).filter(|_| *hash_type == 1) {
+            if let Some(version_hash) = code.current() {
+                usage
+                    .entry(version_hash)
+                    .or_default()
+                    .add(version_hash, reference_info)?;
+            }
+            continue;
+        }
         let Some(version_hash) = resolved else {
             continue;
         };
@@ -588,9 +621,16 @@ pub(crate) fn build_script_reference_rollup_state_over(
                 hash_type
             )
         })?;
-        if let Some(family) =
-            membership.resolve_family(reference, *hash_type, current.as_deref())?
-        {
+        // THE family of the form, from what it runs (the one rule the API
+        // names it by: `ScriptFamilyMembershipIndex::family_of_form`).
+        let code = match (generic.get(reference.as_slice()), *hash_type) {
+            (Some(code), 1) => code.clone(),
+            _ => match current {
+                Some(binary) => ckbadger_store::ReferenceCode::One(binary.clone()),
+                None => ckbadger_store::ReferenceCode::None,
+            },
+        };
+        if let Some(family) = membership.family_of_form(reference, *hash_type, &code, None)? {
             family_usage
                 .entry(family.to_owned())
                 .or_default()
@@ -624,8 +664,28 @@ struct RollupSteps {
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     versions: HashMap<Vec<u8>, ScriptVersionInfo>,
     families: HashMap<String, ScriptFamilyInfo>,
-    /// Reference -> binary, read once per batch and moved by Type ID lineage.
+    /// Reference -> binary, read once per batch and moved by Type ID lineage
+    /// (and, for a generic type reference, by its live code cells).
     mappings: HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
+    /// The type references with no Type ID binding: what they run is what
+    /// their live code cells hold (`generic_live`).
+    generic_refs: std::collections::BTreeSet<Vec<u8>>,
+    /// Type hash -> binary -> its live code cells under that type script (not
+    /// Type ID), read from the store the first time the batch needs it and
+    /// moved by the batch's code cells block by block.
+    generic_live: HashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>>,
+    /// What each generic type reference runs now.
+    generic: GenericTypeCodes,
+}
+
+/// A code cell under a type script that is not Type ID, created (+1) or
+/// consumed (-1) in a block: it moves what that generic type reference runs.
+#[derive(Debug, Clone)]
+pub(crate) struct GenericTypeCodeChange {
+    pub reference_hash: Vec<u8>,
+    pub binary: Vec<u8>,
+    pub created: bool,
+    pub block_number: i64,
 }
 
 /// Whether a script reference names its binary by data hash (`data` /
@@ -1223,8 +1283,10 @@ impl BatchWriter {
         input_script_hashes: &crate::sync::types::InputScriptHashes,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        // Type ID bindings this batch observes, in chain order.
+        // Type ID bindings this batch observes, in chain order, and the code
+        // cells it creates or consumes under any other type script.
         let mut lineage = Vec::new();
+        let mut generic_changes: Vec<GenericTypeCodeChange> = Vec::new();
         let mut chain_mappings: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
         for tx in txs {
             if !tx.is_cellbase {
@@ -1247,6 +1309,19 @@ impl BatchWriter {
                         .is_some_and(|(hash, kind)| {
                             kind == 1 && crate::parser::script::is_type_id(hash, 1)
                         });
+                    // A consumed cell under another type script: a code cell
+                    // there (its binary among the reference's live ones, which
+                    // only code enters) leaves what the reference runs.
+                    if let (Some(reference), Some(data_hash), false) =
+                        (type_script_hash, cell.data_hash, is_type_id_input)
+                    {
+                        generic_changes.push(GenericTypeCodeChange {
+                            reference_hash: reference.to_vec(),
+                            binary: data_hash.to_vec(),
+                            created: false,
+                            block_number: tx.block_number,
+                        });
+                    }
                     // A type-id input's reference is its type script hash.
                     let Some(reference) = type_script_hash.filter(|_| is_type_id_input) else {
                         continue;
@@ -1276,6 +1351,23 @@ impl BatchWriter {
                 }
             }
             for cell in &tx.cells {
+                // A code cell under a type script that is not Type ID moves
+                // what that generic type reference runs.
+                if let Some(reference) = cell.type_script_hash.as_ref().filter(|_| {
+                    !cell
+                        .type_code_hash
+                        .as_deref()
+                        .zip(cell.type_hash_type)
+                        .is_some_and(|(hash, kind)| crate::parser::script::is_type_id(hash, kind))
+                        && ckbadger_store::keys::is_code_cell(&cell.data)
+                }) {
+                    generic_changes.push(GenericTypeCodeChange {
+                        reference_hash: reference.clone(),
+                        binary: cell.data_hash.to_vec(),
+                        created: true,
+                        block_number: tx.block_number,
+                    });
+                }
                 if !cell
                     .type_code_hash
                     .as_deref()
@@ -1304,6 +1396,7 @@ impl BatchWriter {
         let mut blocks: std::collections::BTreeSet<i64> =
             updated_references.iter().map(|(block, _)| *block).collect();
         blocks.extend(lineage.iter().map(|change| change.block_number));
+        blocks.extend(generic_changes.iter().map(|change| change.block_number));
 
         // The committed state, then advanced block by block.
         let mut state = RollupSteps {
@@ -1315,6 +1408,9 @@ impl BatchWriter {
             versions: self.store.list_script_versions()?.into_iter().collect(),
             families: self.store.list_script_families()?.into_iter().collect(),
             mappings: HashMap::new(),
+            generic_refs: std::collections::BTreeSet::new(),
+            generic_live: HashMap::new(),
+            generic: HashMap::new(),
         };
         let updated_by_block: HashMap<i64, &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> =
             updated_references
@@ -1325,7 +1421,7 @@ impl BatchWriter {
             // Nothing moved: the rollup of the committed state must equal the
             // committed rows, so this stages nothing (a difference is drift,
             // and a journaled batch refuses an unscoped write).
-            return self.rollup_step(&mut state, &[], &[], batch);
+            return self.rollup_step(&mut state, &[], &[], &[], batch);
         }
         for block in blocks {
             // References this block observes for the first time.
@@ -1347,9 +1443,15 @@ impl BatchWriter {
                 .filter(|change| change.block_number == block)
                 .cloned()
                 .collect();
+            let block_generic: Vec<GenericTypeCodeChange> = generic_changes
+                .iter()
+                .filter(|change| change.block_number == block)
+                .cloned()
+                .collect();
             self.rollup_step(
                 &mut state,
                 &block_lineage,
+                &block_generic,
                 &first_seen,
                 &mut batch.at(block),
             )?;
@@ -1382,19 +1484,106 @@ impl BatchWriter {
     /// over the references as `state` holds them (each resolved by
     /// [`reference_binary`]), write the rows that changed and advance `state`
     /// to them.
+    /// The live code cells under the type script whose hash is `reference`
+    /// (not Type ID), by binary, as the committed store holds them: only code
+    /// is a binary (`cell_by_data_hash` files code only).
+    fn generic_live_from_store(
+        &self,
+        reference: &[u8],
+    ) -> Result<std::collections::BTreeMap<Vec<u8>, u32>> {
+        let mut live = std::collections::BTreeMap::new();
+        for (tx_hash, output_index, cell) in self.store.list_cells_by_type(
+            reference,
+            usize::MAX,
+            None,
+            self.append_only_store.as_ref(),
+        )? {
+            let native = cell
+                .type_code_hash
+                .as_ref()
+                .zip(cell.type_hash_type)
+                .is_some_and(|(hash, kind)| ckbadger_store::keys::is_type_id_script(hash, kind));
+            if native {
+                continue;
+            }
+            let binary = cell.cell.data_hash.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "live typed cell lacks its data hash: reference=0x{} outpoint=0x{}:{}",
+                    hex::encode(reference),
+                    hex::encode(&tx_hash),
+                    output_index
+                )
+            })?;
+            if self.store.is_code_data_hash(&binary)? {
+                let count: &mut u32 = live.entry(binary.to_vec()).or_insert(0);
+                *count = count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "generic type reference live code count overflow: reference=0x{}",
+                        hex::encode(reference)
+                    )
+                })?;
+            }
+        }
+        Ok(live)
+    }
+
+    /// The live code binaries of `reference` the batch holds now: read from
+    /// the store the first time the batch needs them.
+    fn generic_live<'s>(
+        &self,
+        generic_live: &'s mut HashMap<Vec<u8>, std::collections::BTreeMap<Vec<u8>, u32>>,
+        reference: &[u8],
+    ) -> Result<&'s mut std::collections::BTreeMap<Vec<u8>, u32>> {
+        if !generic_live.contains_key(reference) {
+            let live = self.generic_live_from_store(reference)?;
+            generic_live.insert(reference.to_vec(), live);
+        }
+        generic_live.get_mut(reference).ok_or_else(|| {
+            anyhow::anyhow!(
+                "generic type reference live code cells were not read: reference=0x{}",
+                hex::encode(reference)
+            )
+        })
+    }
+
     fn rollup_step(
         &self,
         state: &mut RollupSteps,
         lineage: &[TypeIdCodeChange],
+        generic: &[GenericTypeCodeChange],
         first_seen: &[(Vec<u8>, u8)],
         batch: &mut StoreBatch,
     ) -> Result<()> {
+        // This block's code cells under type scripts that are not Type ID.
+        for change in generic {
+            let live = self.generic_live(&mut state.generic_live, &change.reference_hash)?;
+            if change.created {
+                let count = live.entry(change.binary.clone()).or_insert(0);
+                *count = count.checked_add(1).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "generic type reference live code count overflow: reference=0x{} block={}",
+                        hex::encode(&change.reference_hash),
+                        change.block_number
+                    )
+                })?;
+            } else if let Some(count) = live.get_mut(&change.binary) {
+                // Only a code cell entered the set; a consumed state cell
+                // under the same type script is no binary.
+                *count -= 1;
+                if *count == 0 {
+                    live.remove(&change.binary);
+                }
+            }
+        }
         for (reference_hash, hash_type) in first_seen {
             if is_data_hash_reference(reference_hash, *hash_type)? {
                 batch.put_script_reference_to_version(*hash_type, reference_hash, reference_hash);
             }
         }
         for change in lineage {
+            // A Type ID binding: the reference runs what lineage binds.
+            state.generic_refs.remove(&change.reference_hash);
+            state.generic.remove(&change.reference_hash);
             state.mappings.insert(
                 (change.reference_hash.clone(), 1),
                 change.version_hash.clone(),
@@ -1411,6 +1600,9 @@ impl BatchWriter {
         let RollupSteps {
             reference_info_map,
             mappings,
+            generic_refs,
+            generic_live,
+            generic,
             ..
         } = &mut *state;
         for key in reference_info_map.keys() {
@@ -1418,14 +1610,24 @@ impl BatchWriter {
                 let version_hash = reference_binary(&key.0, key.1, || {
                     self.store.get_script_reference_version_hash(key.1, &key.0)
                 })?;
+                // A type reference with no Type ID binding runs what its live
+                // code cells hold (the lead's ruling).
+                if key.1 == 1 && version_hash.is_none() {
+                    generic_refs.insert(key.0.clone());
+                }
                 mappings.insert(key.clone(), version_hash);
             }
+        }
+        for reference in generic_refs.iter() {
+            let live = self.generic_live(generic_live, reference)?;
+            apply_generic_type_code(generic, reference, live);
         }
 
         let rollups = build_script_reference_rollup_state_over(
             std::mem::take(&mut state.versions),
             std::mem::take(&mut state.families),
             &state.mappings,
+            &state.generic,
             &state.reference_info_map,
             lineage,
         )?;
@@ -2052,6 +2254,7 @@ mod tests {
             let rollup = build_script_reference_rollup_state_with_lineage(
                 &store,
                 vec![((reference.clone(), 1), Some(current_binary.clone()))],
+                &GenericTypeCodes::new(),
                 infos,
                 &observations,
             )
@@ -2218,6 +2421,7 @@ mod tests {
         let rollup = build_script_reference_rollup_state_with_lineage(
             &store,
             vec![],
+            &GenericTypeCodes::new(),
             HashMap::new(),
             &observations,
         )
@@ -2722,6 +2926,192 @@ mod tests {
                 .unwrap()
                 .contains(&binary),
             "new by-family index must be removed on reorg"
+        );
+    }
+
+    /// The lead's ruling on the live path (lane rd/api-lock-names): the code
+    /// cells a batch creates and consumes under a type script that is not
+    /// Type ID move what that generic type reference runs, block by block, and
+    /// its family count follows. Block 20 deploys two versions of one family:
+    /// the reference is counted in it. Block 21 consumes one and stands a
+    /// binary outside the registry beside the other: counted in none.
+    #[test]
+    fn live_code_cells_move_a_generic_type_references_family_block_by_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
+        let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
+        let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 20..=23);
+        let code = vec![0x13u8; 32];
+        let args = vec![0x5eu8; 4];
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(&code, 1, &args);
+        let elf = |tag: u8| {
+            let mut data = b"\x7fELF\x02\x01\x01".to_vec();
+            data.push(tag);
+            data
+        };
+        let (data_one, data_two, data_foreign) = (elf(1), elf(2), elf(9));
+        let hash = |data: &[u8]| crate::parser::ScriptParser::compute_data_hash(data);
+        store
+            .put_script_family_direct(
+                "pair",
+                &ScriptFamilyInfo {
+                    family_id: "pair".into(),
+                    name: "Pair Family".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        for data in [&data_one, &data_two] {
+            let version = hash(data).to_vec();
+            store
+                .put_script_version(
+                    &version,
+                    &ScriptVersionInfo {
+                        version_hash: version.clone(),
+                        name: Some("Pair Family".into()),
+                        family_id: Some("pair".into()),
+                        registered_references: vec![(version.clone(), 0)],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+        }
+        let mut seed = StoreBatch::new(&store);
+        seed.put_script_reference_info(
+            1,
+            &reference,
+            &ScriptReferenceInfo {
+                reference_hash: reference.clone(),
+                hash_type: 1,
+                lock_cells_count: 4,
+                lock_live_cells_count: 3,
+                ..Default::default()
+            },
+        );
+        seed.commit().unwrap();
+        let code_cell = |data: &[u8]| crate::parser::cell::ParsedCell {
+            capacity: 10000,
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![],
+            lock_script_hash: vec![0x22; 32],
+            type_code_hash: Some(code.clone()),
+            type_hash_type: Some(1),
+            type_args: Some(args.clone()),
+            type_script_hash: Some(reference.clone()),
+            data_hash: hash(data),
+            data_size: data.len() as i32,
+            data: data.to_vec(),
+        };
+        let tx = |hash_byte: u8,
+                  block: i64,
+                  inputs: Vec<crate::parser::transaction::ParsedInput>,
+                  cells: Vec<crate::parser::cell::ParsedCell>| {
+            crate::sync::types::TxData {
+                hash: [hash_byte; 32],
+                block_number: block,
+                tx_index: 1,
+                inputs_count: inputs.len() as i16,
+                outputs_count: cells.len() as i16,
+                is_cellbase: false,
+                inputs,
+                cells,
+                witnesses: vec![],
+                total_input_capacity: 0,
+                total_output_capacity: 0,
+                fee: 0,
+                tx_size: 0,
+                cycles: None,
+                timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                semantic_tags: 0,
+            }
+        };
+        let run = |txs: &[crate::sync::types::TxData],
+                   input_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>| {
+            ckbadger_store::commit_journaled(&store, |batch| {
+                writer
+                    .materialize_script_versions_and_families_with_chain(
+                        &[],
+                        txs,
+                        input_cells,
+                        &HashMap::new(),
+                        &crate::sync::types::derive_input_script_hashes(
+                            txs,
+                            input_cells,
+                            &HashMap::new(),
+                        ),
+                        batch,
+                    )
+                    .unwrap();
+            })
+            .unwrap();
+            store
+                .get_script_family("pair")
+                .unwrap()
+                .unwrap()
+                .live_cells_count
+        };
+
+        let deploy = tx(
+            0x44,
+            20,
+            vec![],
+            vec![code_cell(&data_one), code_cell(&data_two)],
+        );
+        assert_eq!(
+            run(std::slice::from_ref(&deploy), &HashMap::new()),
+            3,
+            "two versions of one family deployed: counted in it"
+        );
+
+        // The deployed cells as the batch writer leaves them indexed.
+        let positioned = |data: &[u8]| {
+            ckbadger_store::PositionedCellInfo::new(
+                ckbadger_store::LiveCellInfo {
+                    capacity: 10000,
+                    lock_code_hash: [0x11; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: Some(code.clone().try_into().unwrap()),
+                    type_hash_type: Some(1),
+                    type_args: Some(args.clone()),
+                    data_size: data.len() as i32,
+                    udt_amount: None,
+                    data_hash: Some(hash(data)),
+                },
+                20,
+            )
+        };
+        let mut cells = StoreBatch::new(&store);
+        let mut payloads = StoreBatch::new(&append);
+        for (index, data) in [&data_one, &data_two].into_iter().enumerate() {
+            let outpoint = keys::encode_outpoint(&deploy.hash, index as i16);
+            payloads
+                .put_cell_payload(&outpoint, &positioned(data).cell)
+                .unwrap();
+            cells.put_live_cell_marker(&outpoint, 20);
+            cells.put_cell_by_type(&reference, 20, &deploy.hash, index as i16);
+            cells.put_cell_by_data_hash(&hash(data), 20, &deploy.hash, index as i16);
+        }
+        payloads.commit().unwrap();
+        cells.commit().unwrap();
+
+        let replace = tx(
+            0x45,
+            21,
+            vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: deploy.hash,
+                previous_output_index: 0,
+                since: 0,
+            }],
+            vec![code_cell(&data_foreign)],
+        );
+        let consumed = HashMap::from([((deploy.hash.to_vec(), 0), positioned(&data_one))]);
+        assert_eq!(
+            run(std::slice::from_ref(&replace), &consumed),
+            0,
+            "one version left beside a binary outside the registry: counted in none"
         );
     }
 
@@ -3389,6 +3779,7 @@ mod tests {
         let result = build_script_reference_rollup_state_with_lineage(
             &store,
             vec![((reference.clone(), 1), Some(vec![0x91; 32]))],
+            &GenericTypeCodes::new(),
             HashMap::from([((reference, 1), info)]),
             &[],
         );
@@ -3586,6 +3977,7 @@ mod tests {
         let rollup = build_script_reference_rollup_state_with_lineage(
             &store,
             vec![((labeled_ref.clone(), 1), Some(labeled.clone()))],
+            &GenericTypeCodes::new(),
             ref_info_map,
             &observed,
         )
@@ -3786,6 +4178,106 @@ mod tests {
         let family = store.get_script_family(family_id).unwrap().unwrap();
         assert_eq!(family.owned_capacity_sum, 370);
         assert_eq!(family.owned_knowledge_sum, 205);
+    }
+
+    /// The lead's ruling (lane rd/api-lock-names): the indexer counts a
+    /// generic (non Type ID) type reference in a family by the binaries its
+    /// live code cells hold, by the one rule the API names it by
+    /// (`ScriptFamilyMembershipIndex::family_of_form`): one binary or several
+    /// versions of one family, counted in that family; a binary outside the
+    /// registry beside a registered one, or no live code cell, in none. It
+    /// counted a generic type reference in no family at all (it binds type
+    /// references only through Type ID lineage), while the API counted one
+    /// with a single live binary.
+    #[test]
+    fn rollup_counts_a_generic_type_reference_by_the_binaries_its_live_code_cells_hold() {
+        let family_live_cells = |binaries: &[[u8; 32]]| -> i64 {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let writer = BatchWriter::new(store.clone(), store.clone());
+            let code = [0x13u8; 32];
+            let args = vec![0x5eu8; 4];
+            let reference = crate::parser::ScriptParser::compute_script_hash_raw(&code, 1, &args);
+            let mut batch = StoreBatch::new(&store);
+            batch.put_script_family(
+                "pair",
+                &ScriptFamilyInfo {
+                    family_id: "pair".into(),
+                    name: "Pair Family".into(),
+                    ..Default::default()
+                },
+            );
+            for version in [[0x61u8; 32], [0x62; 32]] {
+                batch.put_script_version(
+                    &version,
+                    &ScriptVersionInfo {
+                        version_hash: version.to_vec(),
+                        name: Some("Pair Family".into()),
+                        family_id: Some("pair".into()),
+                        registered_references: vec![(version.to_vec(), 0)],
+                        ..Default::default()
+                    },
+                );
+                batch.put_script_version_by_family("pair", &version);
+            }
+            for (index, binary) in binaries.iter().enumerate() {
+                let tx = [0xd0 + index as u8; 32];
+                batch.put_cell(
+                    &tx,
+                    0,
+                    &ckbadger_store::LiveCellInfo {
+                        capacity: 100,
+                        lock_code_hash: [0x12; 32],
+                        lock_hash_type: 1,
+                        lock_args: vec![],
+                        type_code_hash: Some(code),
+                        type_hash_type: Some(1),
+                        type_args: Some(args.clone()),
+                        data_size: 64,
+                        udt_amount: None,
+                        data_hash: Some(*binary),
+                    },
+                    11,
+                );
+                batch.put_cell_by_type(&reference, 11, &tx, 0);
+                // the code-cell index files code only
+                batch.put_cell_by_data_hash(binary, 11, &tx, 0);
+            }
+            batch.put_script_reference_info(
+                1,
+                &reference,
+                &ScriptReferenceInfo {
+                    reference_hash: reference.clone(),
+                    hash_type: 1,
+                    lock_cells_count: 4,
+                    lock_live_cells_count: 3,
+                    ..Default::default()
+                },
+            );
+            batch.commit().unwrap();
+            writer.commit_rollup_of_committed_state_for_test().unwrap();
+            store
+                .get_script_family("pair")
+                .unwrap()
+                .unwrap()
+                .live_cells_count
+        };
+        assert_eq!(
+            family_live_cells(&[[0x61; 32], [0x62; 32]]),
+            3,
+            "two versions of one family: counted in it"
+        );
+        assert_eq!(
+            family_live_cells(&[[0x61; 32]]),
+            3,
+            "one binary: its family"
+        );
+        assert_eq!(
+            family_live_cells(&[[0x61; 32], [0x6f; 32]]),
+            0,
+            "a binary outside the registry beside a registered one: no family"
+        );
+        assert_eq!(family_live_cells(&[]), 0, "no live code cell: no family");
     }
 
     #[test]
