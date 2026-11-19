@@ -1,6 +1,10 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
+import {
+  cellsInWords,
+  ScriptGroupMatrix,
+  type MatrixGroup,
+} from '@/components/transaction/script-group-matrix';
 import { txLinks } from '@/lib/tx-detail-model';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { TYPE_SCALE, type TypeStep } from '@/lib/type-scale';
@@ -400,5 +404,39 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
     );
     expect(sizes.length).toBeGreaterThan(0);
     expect(sizes.every((s) => s >= 11)).toBe(true);
+  });
+});
+
+// Lane P1 (lane D3's note: the long transaction's default lock "runs in input 0, 1, …, 157", about
+// ten lines long): a group's cells beyond three on a side are said as their count and their
+// ranges; three or fewer stay listed.
+describe('cellsInWords: a long side as its count and its ranges (P1)', () => {
+  const cols = (side: 'in' | 'out', n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${side}:${i}`, top: '', label: '', cap: '' }));
+  const ids = (side: 'in' | 'out', at: readonly number[]) => at.map((i) => `${side}:${i}`);
+  const range = (from: number, to: number) =>
+    Array.from({ length: to - from + 1 }, (_, i) => from + i);
+  it('lists three cells or fewer, as before', () => {
+    expect(cellsInWords(ids('in', [0, 1, 2]), cols('in', 3), [])).toBe('input 0, 1, 2');
+    expect(
+      cellsInWords([...ids('in', [0]), ...ids('out', [0])], cols('in', 1), cols('out', 1))
+    ).toBe('input 0 → output 0');
+  });
+  it('says 158 inputs as their count and one range', () => {
+    expect(cellsInWords(ids('in', range(0, 157)), cols('in', 158), [])).toBe(
+      '158 inputs: 0 to 157'
+    );
+  });
+  it('joins the ranges and the lone cells of a broken run, each side alike', () => {
+    expect(
+      cellsInWords(
+        [...ids('in', [0, 1, 2, 3, 7, 9, 10, 11, 12]), ...ids('out', [1])],
+        cols('in', 13),
+        cols('out', 2)
+      )
+    ).toBe('9 inputs: 0 to 3, 7, 9 to 12 → output 1');
+    expect(cellsInWords(ids('out', [0, 2, 4, 6]), [], cols('out', 7))).toBe(
+      '4 outputs: 0, 2, 4, 6'
+    );
   });
 });
