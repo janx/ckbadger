@@ -224,11 +224,14 @@ export function ScriptCodeClassLegend({
       aria-label="Who can change the code, in shares"
       className="text-text-dim text-small flex flex-wrap gap-x-6 gap-y-1"
     >
+      {/* Lane P2's fourth round (item 2): a row's label wraps and takes the room that is left, its
+          figure never leaves the line (at 320 the row "Immutable · code cell unspendable 96.47%",
+          334.2 px unbroken, ran 30 px past the window and cut the figure off) */}
       {held.map((row) => (
-        <li key={row.class} className="inline-flex items-center gap-2 whitespace-nowrap">
+        <li key={row.class} className="flex min-w-0 items-baseline gap-2">
           <CodeClassSwatch value={row.class} />
-          <span>{scriptClassLabel(row.class)}</span>{' '}
-          <span className="text-text tabular-nums">
+          <span className="min-w-0">{scriptClassLabel(row.class)}</span>{' '}
+          <span className="text-text shrink-0 whitespace-nowrap tabular-nums">
             {percentOf(BigInt(row.lockOwnedCapacitySum), total)}
           </span>
         </li>

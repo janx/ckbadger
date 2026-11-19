@@ -247,6 +247,24 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   }
 });
 
+// Lane P2's fourth round (item 1, MUST): at a 320 px window the page was the crash page, "Nervape
+// 3x: a 244 px DNA map cannot hold 16 lanes of 14 px (38 px ruler)". Its gels measure 244 px there
+// (the copper plate's box: 320 − 32 − 12 − 32): the DNA map wraps its lanes 8 a row and the
+// collection's allele gel takes its rows, and the page stands.
+it('stands at a 320 px window: its gels drawn in the 244 px box the copper plate gives them', async () => {
+  vi.unstubAllGlobals();
+  stubChartWidth(244);
+  const { container } = await page();
+  const evidence = screen.getByRole('region', { name: 'DNA evidence' });
+  expect(container.querySelectorAll('[data-nibble]')).toHaveLength(106);
+  expect(evidence.querySelectorAll('[data-gel-row]')).toHaveLength(2);
+  const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
+  expect(
+    [...among.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'))
+  ).toEqual(['prev.bg', 'Color', 'Serial']);
+  expect(screen.queryByText(/cannot hold/)).toBeNull();
+});
+
 it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async () => {
   const { container } = await page();
   const color = screen.getByLabelText('Traits').querySelector('[data-trait="Color"]')!;

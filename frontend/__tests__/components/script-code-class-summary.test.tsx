@@ -1,4 +1,12 @@
 import { render, screen, within } from '@testing-library/react';
+import {
+  containerContentPx,
+  gapPx,
+  outerPx,
+  shrinksAt,
+  textRunPx,
+  wrapsAt,
+} from '@/__tests__/utils/tailwind-box';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ScriptCodeClassTotalApi } from '@/lib/api';
 import {
@@ -303,5 +311,46 @@ describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
         />
       )
     ).toThrow(/Unknown script code class nonsense/);
+  });
+});
+
+// Lane P2's fourth round (item 2): /scripts at 320 ran 30 px past the window. The key's rows did not
+// wrap ("Immutable · code cell unspendable 96.47%": a 14 px swatch, two 8 px gaps, 33 glyphs of the
+// label and 6 of the figure at 7.8 px, 334.2 px in a 288 px content box, 16 px in from the window's
+// edge: 350.2 − 320 = 30.2 px out), so the figure was cut off the screen. The row's label wraps
+// and takes the room that is left; its figure never leaves the line and never shrinks.
+describe('the key of who can change the code holds at 320 px', () => {
+  const wide: ScriptCodeClassTotalApi[] = [
+    { ...classes[0], class: 'unspendable', lockOwnedCapacitySum: '9647' },
+    { ...classes[0], class: 'fixed', lockOwnedCapacitySum: '1' },
+    { ...classes[0], lockOwnedCapacitySum: '352' },
+  ];
+  it('lets a row’s label wrap and keeps its figure whole on the row', () => {
+    render(<ScriptCodeClassLegend classes={wide} />);
+    const legend = screen.getByRole('list', { name: 'Who can change the code, in shares' });
+    const rows = within(legend).getAllByRole('listitem');
+    expect(rows.map((r) => r.textContent)).toEqual([
+      'Immutable · pinned by data hash 0.01%',
+      'Immutable · code cell unspendable 96.47%',
+      'A multisig can replace 3.52%',
+    ]);
+    const content = containerContentPx(320);
+    expect(content).toBe(288);
+    for (const row of rows) {
+      const [swatch, label, figure] = Array.from(row.children);
+      expect(wrapsAt(label, 320)).toBe(true);
+      expect(wrapsAt(figure, 320)).toBe(false);
+      expect(shrinksAt(figure, 320)).toBe(false);
+      // the label's room at 320: what the swatch, the two gaps and the figure leave of 288 px
+      const room = content - outerPx(swatch, 320)! - 2 * gapPx(row, 320) - outerPx(figure, 320)!;
+      const longestWord = Math.max(
+        ...label.textContent!.split(' ').map((w) => textRunPx(w, label, 320))
+      );
+      expect(longestWord).toBeLessThanOrEqual(room);
+    }
+    // the longest label, 33 glyphs at 7.8 px (257.4 px), wraps in its 211.2 px at 320
+    const [, label, figure] = Array.from(rows[1].children);
+    expect(textRunPx(label.textContent!, label, 320)).toBeCloseTo(257.4, 5);
+    expect(outerPx(figure, 320)).toBeCloseTo(46.8, 5);
   });
 });
