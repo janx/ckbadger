@@ -540,6 +540,7 @@ fn build_capacity_history_chart_with_initial(
             },
         ],
         title,
+        bands: None,
     })
 }
 

@@ -3314,6 +3314,7 @@ fn build_script_capacity_history_chart(
             data: vec![],
             series,
             title,
+            bands: None,
         });
     }
 
@@ -3411,6 +3412,7 @@ fn build_script_capacity_history_chart(
         data,
         series,
         title,
+        bands: None,
     })
 }
 

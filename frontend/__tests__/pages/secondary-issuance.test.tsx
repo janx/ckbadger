@@ -68,9 +68,10 @@ describe('SecondaryIssuancePage', () => {
     // The head figure is the summary form, cut, its exact value in the reading's title (readability
     // R5, re-pinned on purpose:
     // was "99.00000001 CKB"); the unit after a no-break space (re-pinned for CH-14).
-    const readings = screen.getByRole('group', { name: 'Secondary issuance readings' });
-    expect(readings).toHaveTextContent('99 CKB');
-    expect(readings.querySelector('[title="99.00000001 CKB"]')).not.toBeNull();
+    // re-pinned for lane D1: the head's one figure (was the readings group)
+    const figure = screen.getByTestId('figure-value');
+    expect(figure).toHaveTextContent('99 CKB');
+    expect(figure).toHaveAttribute('title', '99.00000001 CKB');
     const evidence = document.querySelector('[data-tier="2"]') as HTMLElement;
     expect(evidence).toHaveTextContent('Frozen phase-1 overlap: 1 CKB');
   });

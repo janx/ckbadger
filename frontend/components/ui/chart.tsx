@@ -143,6 +143,23 @@ export interface ChartProps {
   integerTicks?: boolean;
   /** The first series' latest value written at the line's end, from its exact decimal. */
   endLabel?: (value: string) => string;
+  // --- lane D1, the chart pages on the chart-hero board: every one opt-in ---
+  /**
+   * A stack's bands named at their right ends (rule 5): each series' name and its stated figure at
+   * the last point (by series key), in a column right of the plot where the plot keeps three fifths
+   * of the width, else a key under the plot in the stack's order, top band first. No word on a band.
+   */
+  bandEnds?: Readonly<Record<string, string>>;
+  /** A stack drawn in solid fills (rule 5: a dark band clears the night ground by 1.5 : 1), not at 60 %. */
+  solidBands?: boolean;
+  /** A chart under the main one (rule 7): its line without the halo, so it is never the heaviest mark. */
+  quiet?: boolean;
+  /**
+   * Rule 6: the value axis stops at `value`, the largest value of the points that set it; a mark
+   * above is cut at the plot's top under a gold tick, and `note` (its exact value, in words) is
+   * written over the plot under its name, which is then required. No figure changes.
+   */
+  axisCap?: { value: number; note: string };
 }
 /**
  * Midnight, continued (move 5): the attributes that give a chart's primary data line its halo —
@@ -198,6 +215,27 @@ export const REFERENCE_KEY_BAND = REFERENCE_KEY_Y + 4;
 const REFERENCE_SWATCH = 18;
 /** An in-plot tick is written where its line lies at least a label's size and a pixel under the band. */
 export const INSIDE_TICK_ROOM = SVG_TEXT.label + 1;
+/**
+ * Lane D1 (the chart-hero board, rule 4): an in-plot tick's places, tried in order — over its grid
+ * line at the plot's left end, under it, then the same two at the right end — and the first whose
+ * box clears every mark of the plot by `TICK_CLEAR` is taken; where all four are crossed the line
+ * keeps no number. Above: its baseline 5 px over the line; under: 14 px below it (a 12 px label's
+ * cap clears the line by 3 px). Its box: 11 px over its baseline and 3 under (the board's).
+ */
+const TICK_OVER = -5;
+const TICK_UNDER = 14;
+const TICK_BOX_UP = 11;
+const TICK_BOX_DOWN = 3;
+const TICK_CLEAR = 2;
+/** Lane D1 (rule 5): a band's leader line and the gap after it, the gap between name and figure. */
+const BAND_LEADER = 12;
+const BAND_GAP = 16;
+/** The share of the width a plot keeps when its bands are named at their right ends. */
+const BAND_PLOT_SHARE = 0.6;
+/** One line of band names at the head step: the closest two names stand apart. */
+const BAND_LINE = tightLinePx(SVG_TEXT.head);
+/** Rule 6: the gold mark before an axis cap's note, and its room. */
+const CAP_MARK = 16;
 /**
  * The hover reading (F2 charts group, CH-22): its head's baseline (the label size and 5 px of
  * padding over its cap) and the line of each figure under it, set tight at the reading size.
@@ -261,6 +299,33 @@ function ReferenceStroke({ x1, x2, y }: { x1: number; x2: number; y: number }) {
   );
 }
 
+/**
+ * Where a stack's names stand at its right end (lane D1, rule 5): each at the middle of its band at
+ * the last point, the closest two a line apart — pushed down from the top, then up from the plot's
+ * foot where the last ran past it — with `mid` kept for the leader line to its band.
+ */
+function bandPlaces(
+  bands: readonly { key: string; lower: number; upper: number }[],
+  y: (value: number) => number,
+  top: number,
+  bottom: number
+): { key: string; index: number; mid: number; at: number }[] {
+  const placed = bands
+    .map((band, index) => ({ key: band.key, index, mid: y((band.lower + band.upper) / 2) }))
+    .sort((a, b) => a.mid - b.mid)
+    .map((band) => ({ ...band, at: band.mid }));
+  const half = BAND_LINE / 2;
+  placed.forEach((band, i) => {
+    band.at = Math.max(band.at, i ? placed[i - 1].at + BAND_LINE : top + half);
+  });
+  for (let i = placed.length - 1; i >= 0; i--)
+    placed[i].at = Math.min(
+      placed[i].at,
+      i === placed.length - 1 ? bottom - half : placed[i + 1].at - BAND_LINE
+    );
+  return placed;
+}
+
 /** Target-line keys laid right to left from the plot's right edge: dashed swatch, then label. */
 function referenceKeys(
   lines: readonly { label: string }[],
@@ -289,6 +354,7 @@ export type ChartValueAxisInput = Pick<
   | 'formatAxis'
   | 'bareTicks'
   | 'integerTicks'
+  | 'axisCap'
 >;
 
 /**
@@ -307,6 +373,7 @@ export function chartValueAxis({
   formatAxis = formatTick,
   bareTicks = false,
   integerTicks = false,
+  axisCap,
 }: ChartValueAxisInput): {
   values: number[][];
   plotValues: number[];
@@ -349,9 +416,13 @@ export function chartValueAxis({
   if (integerTicks && yScale === 'log')
     throw new Error(`${title}: a count axis is linear, not logarithmic`);
   const counted = { integer: integerTicks };
-  const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
-    (value) => (yScale === 'log' ? Math.log10(value) : value)
-  );
+  if (axisCap && (yScale === 'log' || yDomain || !Number.isFinite(axisCap.value)))
+    throw new Error(`${title}: an axis cap is a linear axis's own top`);
+  // Lane D1 (rule 6): a value over the cap does not set the axis; it is drawn cut at the top.
+  const geometryValues = [
+    ...plotValues.map((value) => (axisCap && value > axisCap.value ? axisCap.value : value)),
+    ...referenceLines.map((line) => line.value),
+  ].map((value) => (yScale === 'log' ? Math.log10(value) : value));
   const ticks = yDomain
     ? niceTicks(yDomain[0], yDomain[1], 4, 0, counted)
     : plotValues.length
@@ -416,11 +487,16 @@ export function Chart({
   bareTicks = false,
   integerTicks = false,
   endLabel,
+  bandEnds,
+  solidBands = false,
+  quiet = false,
+  axisCap,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const own = usePinnedReadout<number>();
   // Visual finish V13: an area's fill gradient, one per chart instance and series.
   const areaFillId = `chart-area-${useId().replace(/:/g, '')}`;
+  const clipId = `${areaFillId}-cap`;
   // Readability R1: by night the scan is cut into the fills (areas, bands, bars), never a line or
   // a word; null by day. The svg is drawn 1:1 (its viewBox is its size), so the rhythm holds.
   const scan = useScanFill();
@@ -494,9 +570,14 @@ export function Chart({
     formatAxis,
     bareTicks,
     integerTicks,
+    axisCap,
   });
   if (bareTicks && plotName === undefined)
     throw new Error(`${title}: bare ticks need the plot's name to say the unit`);
+  if (axisCap && plotName === undefined)
+    throw new Error(`${title}: an axis cap's note stands under the plot's name`);
+  if (bandEnds && (kind !== 'stacked' || series.some((s) => bandEnds[s.key] === undefined)))
+    throw new Error(`${title}: band ends name every band of a stack`);
   for (const marker of markers)
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
@@ -504,8 +585,9 @@ export function Chart({
   const color = (i: number) =>
     series[i].color ?? (series[i].assetClass ? CLASS_COLORS[series[i].assetClass!] : ramp[i]);
   // Midnight, continued (move 5): the primary data line of a line chart carries a 2.5 px halo
-  // in its own colour; bars and areas (and a model's dashed projection) have none.
-  const halo = (i: number) => lineHalo(kind, i, color(i));
+  // in its own colour; bars and areas (and a model's dashed projection) have none, nor a quiet
+  // chart under the main one (lane D1, rule 7).
+  const halo = (i: number) => (quiet ? { className: '' } : lineHalo(kind, i, color(i)));
   const activeIndex = active !== null && active < data.length ? active : null;
   const selected =
     activeIndex !== null
@@ -530,7 +612,20 @@ export function Chart({
       `${title}: plotLeft ${plotLeft} cannot hold its longest tick: "${labels.reduce((a, b) => (b.length > a.length ? b : a), '')}" needs ${gutter}`
     );
   const left = plotLeft ?? gutter;
-  const right = width === null ? null : width - 10;
+  // Lane D1 (rule 5): a stack's names at its bands' right ends take a column the plot gives up
+  // where it keeps three fifths of the width; else they are a key under the plot.
+  const bandColumn =
+    bandEnds && width !== null
+      ? (() => {
+          const names = Math.max(...series.map((s) => textPx(s.label.length, SVG_TEXT.head)));
+          const figures = Math.max(
+            ...series.map((s) => textPx(bandEnds[s.key].length, SVG_TEXT.head))
+          );
+          const column = BAND_LEADER + names + BAND_GAP + figures;
+          return width - column >= BAND_PLOT_SHARE * width ? column : null;
+        })()
+      : null;
+  const right = width === null ? null : bandColumn !== null ? width - bandColumn : width - 10;
   // hierarchy v3: an in-plot name keeps its own band above the data, a line more for each line
   // its words take where the plot cannot hold them on one (from left + 8 to the plot's right).
   const nameLines =
@@ -539,12 +634,27 @@ export function Chart({
       : right === null
         ? [plotName]
         : wrapWords(plotName, SVG_TEXT.label, right - left - 8);
+  // Rule 6: the cap's note, after its gold mark, broken between words where the plot is narrow;
+  // its first line stands a line under the name's last.
+  const capY =
+    PLOT_NAME_Y +
+    nameLines.length * PLOT_NAME_LINE +
+    (referenceLines.length ? REFERENCE_KEY_BAND : 0);
+  const capLines =
+    axisCap === undefined
+      ? []
+      : right === null
+        ? [axisCap.note]
+        : wrapWords(axisCap.note, SVG_TEXT.label, right - left - 8 - CAP_MARK);
   // A target line is keyed in its own band above the plot, never on the plot (C#16).
   const keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
     top =
       (plotName === undefined
         ? PLOT_TOP
-        : PLOT_NAME_BAND + (nameLines.length - 1) * PLOT_NAME_LINE) + keyBand,
+        : PLOT_NAME_BAND + (nameLines.length - 1) * PLOT_NAME_LINE) +
+      keyBand +
+      // the cap's note takes its own lines under the name (rule 6)
+      capLines.length * PLOT_NAME_LINE,
     bottom = height - X_AXIS_BAND + keyBand,
     axisY = height + keyBand - X_AXIS_FOOT;
   const lo = ticks?.values[0],
@@ -574,22 +684,73 @@ export function Chart({
   const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
   /**
-   * An in-plot value (hierarchy v3): a figure, so the dim ink (R4), from the plot's left edge,
-   * above its line.
+   * The span of y the plot's marks cover between `x0` and `x1` (lane D1): a line where it runs
+   * (its points inside and the line at both ends); a filled mark (a stack, a bar, an area) from its
+   * top down to the baseline. Null where no mark crosses.
    */
-  const insideTickLabel = (v: number) =>
-    ticks && (
+  const markSpan = (x0: number, x1: number): [number, number] | null => {
+    const ys: number[] = [];
+    const filled = kind === 'stacked' || kind === 'bars';
+    const shown = kind === 'stacked' ? [series.length - 1] : series.map((_, si) => si);
+    for (const si of shown) {
+      const tops = values.map((row) =>
+        kind === 'stacked' ? row.slice(0, si + 1).reduce((sum, v) => sum + v, 0) : row[si]
+      );
+      const yAt = (i: number) => Math.min(bottom, Math.max(top, y(tops[i])));
+      for (let i = 0; i < data.length; i++) {
+        const xi = x(i);
+        if (xi >= x0 && xi <= x1) ys.push(yAt(i));
+        if (!filled && i + 1 < data.length) {
+          const xn = x(i + 1);
+          for (const edge of [x0, x1])
+            if (xi < edge && edge < xn)
+              ys.push(yAt(i) + ((yAt(i + 1) - yAt(i)) * (edge - xi)) / (xn - xi));
+        }
+      }
+    }
+    if (!ys.length) return null;
+    return [Math.min(...ys), filled ? bottom : Math.max(...ys)];
+  };
+  /**
+   * An in-plot value (hierarchy v3): a figure, so the dim ink (R4), bare, at its line. Lane D1
+   * (rule 4): its number never lies on a mark of the plot — over its line at the left end, else
+   * under it, else at the right end over and under; where every place is crossed it is not
+   * written (the grid line stays).
+   */
+  const insideTickLabel = (v: number) => {
+    if (!ticks || right === null) return null;
+    const label = tickLabel(v, ticks.step);
+    // at the left end it starts where the plot's name does (left + 8); at the right it ends 2 px in
+    const wide = textPx(label.length, SVG_TEXT.label) + 10;
+    const line = yTick(v);
+    const places = [
+      { x: left + 8, anchor: 'start' as const, x0: left, x1: left + wide, dy: TICK_OVER },
+      { x: left + 8, anchor: 'start' as const, x0: left, x1: left + wide, dy: TICK_UNDER },
+      { x: right - 2, anchor: 'end' as const, x0: right - wide, x1: right, dy: TICK_OVER },
+      { x: right - 2, anchor: 'end' as const, x0: right - wide, x1: right, dy: TICK_UNDER },
+    ];
+    const place = places.find((spot) => {
+      const boxTop = line + spot.dy - TICK_BOX_UP;
+      const boxBottom = line + spot.dy + TICK_BOX_DOWN;
+      if (boxTop < top - TICK_CLEAR || boxBottom > bottom) return false;
+      const span = markSpan(spot.x0, spot.x1);
+      return span === null || boxBottom + TICK_CLEAR < span[0] || boxTop - TICK_CLEAR > span[1];
+    });
+    if (!place) return null;
+    return (
       <text
         key={`y-tick:${v}`}
         data-role="y-tick"
-        x={left + 8}
-        y={yTick(v) - 5}
+        x={place.x}
+        y={line + place.dy}
+        textAnchor={place.anchor}
         fill="var(--c-text-dim)"
         fontSize={SVG_TEXT.label}
       >
-        {tickLabel(v, ticks.step)}
+        {label}
       </text>
     );
+  };
   const xLabels =
     xTicks && right !== null && right > left && data.length
       ? placeXTicks(
@@ -654,7 +815,7 @@ export function Chart({
       )}
       <div ref={ref} className="min-w-0" style={{ minHeight: height }}>
         {!data.length ? (
-          <p className="text-text-dim text-small py-8">No data in this range.</p>
+          <p className="text-text text-small py-8">No data in this range.</p>
         ) : kind === 'ranked' ? (
           <ol className="space-y-3">
             {data.map((p, i) => (
@@ -710,6 +871,13 @@ export function Chart({
               }
             >
               {drawsFill && scan?.defs}
+              {axisCap && (
+                <defs>
+                  <clipPath id={clipId}>
+                    <rect x={left} y={top} width={right - left} height={bottom - top + 1} />
+                  </clipPath>
+                </defs>
+              )}
               {ticks.values.map((v, i) =>
                 insideYTicks ? (
                   // hierarchy v3: the baseline and a value in the name's band are not written.
@@ -797,38 +965,145 @@ export function Chart({
                   </g>
                 );
               })}
-              {series.map((s, si) => {
-                const upper = values.map((row) =>
-                  kind === 'stacked' ? row.slice(0, si + 1).reduce((sum, v) => sum + v, 0) : row[si]
-                );
-                const lower = values.map((row) =>
-                  kind === 'stacked' ? row.slice(0, si).reduce((sum, v) => sum + v, 0) : 0
-                );
-                const line = runs
-                  .map((run) =>
-                    run.map((i, k) => `${k ? 'L' : 'M'}${x(i)},${y(upper[i])}`).join(' ')
-                  )
-                  .join(' ');
-                // F2 charts group: a slot-wide bar for a few labelled buckets (CH-09).
-                const slot = (right - left) / Math.max(1, data.length);
-                const barWidth = slotBars ? (slot * 0.7) / series.length : 3;
-                if (kind === 'bars')
+              {/* Lane D1 (rule 6): a mark above an axis cap is cut at the plot's top. */}
+              <g clipPath={axisCap ? `url(#${clipId})` : undefined}>
+                {series.map((s, si) => {
+                  const upper = values.map((row) =>
+                    kind === 'stacked'
+                      ? row.slice(0, si + 1).reduce((sum, v) => sum + v, 0)
+                      : row[si]
+                  );
+                  const lower = values.map((row) =>
+                    kind === 'stacked' ? row.slice(0, si).reduce((sum, v) => sum + v, 0) : 0
+                  );
+                  const line = runs
+                    .map((run) =>
+                      run.map((i, k) => `${k ? 'L' : 'M'}${x(i)},${y(upper[i])}`).join(' ')
+                    )
+                    .join(' ');
+                  // F2 charts group: a slot-wide bar for a few labelled buckets (CH-09).
+                  const slot = (right - left) / Math.max(1, data.length);
+                  const barWidth = slotBars ? (slot * 0.7) / series.length : 3;
+                  if (kind === 'bars')
+                    return (
+                      <g key={s.key}>
+                        {/* one mask over the series' bars, not a mask (a layer) per bar */}
+                        <g mask={scan?.mask}>
+                          {upper.map((v, i) => (
+                            <rect
+                              key={i}
+                              x={slotBars ? x(i) - slot * 0.35 + si * barWidth : x(i) - 2 + si * 4}
+                              y={y(Math.max(0, v))}
+                              width={barWidth}
+                              height={Math.abs(y(v) - y(0))}
+                              fill={color(si)}
+                            />
+                          ))}
+                        </g>
+                        {/* F2 charts group: a bar's hovered top, like a line's hovered point. */}
+                        {pointDots && activeIndex !== null && (
+                          <circle
+                            data-hover-dot={s.key}
+                            cx={x(activeIndex)}
+                            cy={y(upper[activeIndex])}
+                            r="4"
+                            fill="var(--c-base-bg)"
+                            stroke={color(si)}
+                            strokeWidth="2"
+                          />
+                        )}
+                      </g>
+                    );
+                  // Visual finish V13: a single (not stacked) area is light, not paint — its colour
+                  // at .22 at the top of the fill fading to 0 at its foot; a stacked area keeps its
+                  // flat 60 %, since its bands must read as the parts of one whole.
+                  const lit = kind === 'area' && !s.lineOnly;
+                  const fillId = `${areaFillId}-${si}`;
+                  const areaFill =
+                    kind === 'stacked' ? color(si) : lit ? `url(#${fillId})` : 'none';
                   return (
                     <g key={s.key}>
-                      {/* one mask over the series' bars, not a mask (a layer) per bar */}
-                      <g mask={scan?.mask}>
-                        {upper.map((v, i) => (
-                          <rect
-                            key={i}
-                            x={slotBars ? x(i) - slot * 0.35 + si * barWidth : x(i) - 2 + si * 4}
-                            y={y(Math.max(0, v))}
-                            width={barWidth}
-                            height={Math.abs(y(v) - y(0))}
+                      {lit && (
+                        <defs>
+                          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0" stopColor={color(si)} stopOpacity="0.22" />
+                            <stop offset="1" stopColor={color(si)} stopOpacity="0" />
+                          </linearGradient>
+                        </defs>
+                      )}
+                      {(kind === 'area' || kind === 'stacked') && (
+                        <path
+                          d={runs
+                            .map(
+                              (run) =>
+                                `${run.map((i, k) => `${k ? 'L' : 'M'}${x(i)},${y(upper[i])}`).join(' ')} ${[
+                                  ...run,
+                                ]
+                                  .reverse()
+                                  .map((i) => `L${x(i)},${y(lower[i])}`)
+                                  .join(' ')} Z`
+                            )
+                            .join(' ')}
+                          fill={areaFill}
+                          fillOpacity={kind === 'stacked' ? (solidBands ? 1 : 0.6) : undefined}
+                          mask={areaFill === 'none' ? undefined : scan?.mask}
+                        />
+                      )}
+                      {projectedAfter === undefined ? (
+                        <path
+                          d={line}
+                          fill="none"
+                          stroke={color(si)}
+                          strokeWidth="1.5"
+                          strokeDasharray={s.dashed ? '4 3' : undefined}
+                          {...(s.dashed ? {} : halo(si))}
+                        />
+                      ) : (
+                        <>
+                          <path
+                            d={upper
+                              .slice(0, projectedAfter + 1)
+                              .map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`)
+                              .join(' ')}
+                            fill="none"
+                            stroke={color(si)}
+                            strokeWidth="1.5"
+                            {...halo(si)}
+                          />
+                          <path
+                            data-projected
+                            d={upper
+                              .slice(projectedAfter)
+                              .map((v, k) => `${k ? 'L' : 'M'}${x(projectedAfter + k)},${y(v)}`)
+                              .join(' ')}
+                            fill="none"
+                            stroke={color(si)}
+                            strokeWidth="1.5"
+                            strokeDasharray="4 3"
+                          />
+                          <circle
+                            cx={x(projectedAfter)}
+                            cy={y(upper[projectedAfter])}
+                            r="2.5"
                             fill={color(si)}
                           />
+                        </>
+                      )}
+                      {runs
+                        .filter((run) => run.length === 1)
+                        .map(([i]) => (
+                          <circle key={i} cx={x(i)} cy={y(upper[i])} r="2" fill={color(si)} />
                         ))}
-                      </g>
-                      {/* F2 charts group: a bar's hovered top, like a line's hovered point. */}
+                      {/* F2 charts group: the line's end and the hovered point (CH-12, CH-22). */}
+                      {pointDots && projectedAfter === undefined && kind !== 'stacked' && (
+                        <circle
+                          data-end-dot={s.key}
+                          cx={x(data.length - 1)}
+                          cy={y(upper[data.length - 1])}
+                          r="3.4"
+                          fill={color(si)}
+                        />
+                      )}
                       {pointDots && activeIndex !== null && (
                         <circle
                           data-hover-dot={s.key}
@@ -842,113 +1117,91 @@ export function Chart({
                       )}
                     </g>
                   );
-                // Visual finish V13: a single (not stacked) area is light, not paint — its colour
-                // at .22 at the top of the fill fading to 0 at its foot; a stacked area keeps its
-                // flat 60 %, since its bands must read as the parts of one whole.
-                const lit = kind === 'area' && !s.lineOnly;
-                const fillId = `${areaFillId}-${si}`;
-                const areaFill = kind === 'stacked' ? color(si) : lit ? `url(#${fillId})` : 'none';
-                return (
-                  <g key={s.key}>
-                    {lit && (
-                      <defs>
-                        <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0" stopColor={color(si)} stopOpacity="0.22" />
-                          <stop offset="1" stopColor={color(si)} stopOpacity="0" />
-                        </linearGradient>
-                      </defs>
-                    )}
-                    {(kind === 'area' || kind === 'stacked') && (
-                      <path
-                        d={runs
-                          .map(
-                            (run) =>
-                              `${run.map((i, k) => `${k ? 'L' : 'M'}${x(i)},${y(upper[i])}`).join(' ')} ${[
-                                ...run,
-                              ]
-                                .reverse()
-                                .map((i) => `L${x(i)},${y(lower[i])}`)
-                                .join(' ')} Z`
-                          )
-                          .join(' ')}
-                        fill={areaFill}
-                        fillOpacity={kind === 'stacked' ? 0.6 : undefined}
-                        mask={areaFill === 'none' ? undefined : scan?.mask}
-                      />
-                    )}
-                    {projectedAfter === undefined ? (
-                      <path
-                        d={line}
-                        fill="none"
-                        stroke={color(si)}
-                        strokeWidth="1.5"
-                        strokeDasharray={s.dashed ? '4 3' : undefined}
-                        {...(s.dashed ? {} : halo(si))}
-                      />
-                    ) : (
-                      <>
-                        <path
-                          d={upper
-                            .slice(0, projectedAfter + 1)
-                            .map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`)
-                            .join(' ')}
-                          fill="none"
-                          stroke={color(si)}
-                          strokeWidth="1.5"
-                          {...halo(si)}
-                        />
-                        <path
-                          data-projected
-                          d={upper
-                            .slice(projectedAfter)
-                            .map((v, k) => `${k ? 'L' : 'M'}${x(projectedAfter + k)},${y(v)}`)
-                            .join(' ')}
-                          fill="none"
-                          stroke={color(si)}
-                          strokeWidth="1.5"
-                          strokeDasharray="4 3"
-                        />
-                        <circle
-                          cx={x(projectedAfter)}
-                          cy={y(upper[projectedAfter])}
-                          r="2.5"
-                          fill={color(si)}
-                        />
-                      </>
-                    )}
-                    {runs
-                      .filter((run) => run.length === 1)
-                      .map(([i]) => (
-                        <circle key={i} cx={x(i)} cy={y(upper[i])} r="2" fill={color(si)} />
-                      ))}
-                    {/* F2 charts group: the line's end and the hovered point (CH-12, CH-22). */}
-                    {pointDots && projectedAfter === undefined && kind !== 'stacked' && (
-                      <circle
-                        data-end-dot={s.key}
-                        cx={x(data.length - 1)}
-                        cy={y(upper[data.length - 1])}
-                        r="3.4"
-                        fill={color(si)}
-                      />
-                    )}
-                    {pointDots && activeIndex !== null && (
-                      <circle
-                        data-hover-dot={s.key}
-                        cx={x(activeIndex)}
-                        cy={y(upper[activeIndex])}
-                        r="4"
-                        fill="var(--c-base-bg)"
-                        stroke={color(si)}
-                        strokeWidth="2"
-                      />
-                    )}
-                  </g>
-                );
-              })}
+                })}
+              </g>
               {insideYTicks === 'over' &&
                 ticks.values.map(
                   (v, i) => i > 0 && yTick(v) >= top + INSIDE_TICK_ROOM && insideTickLabel(v)
                 )}
+              {axisCap && (
+                <g data-role="axis-cap">
+                  {/* the gold mark and the note under the plot's name (the board's outlier) */}
+                  <path d={`M${left + 8} ${capY} l5 -10 l5 10 Z`} fill="var(--c-gold)" />
+                  <text
+                    x={left + 8 + CAP_MARK}
+                    y={capY}
+                    fill="var(--c-text)"
+                    fontSize={SVG_TEXT.label}
+                  >
+                    {capLines.map((line, i) => (
+                      <tspan
+                        key={`${i}:${line}`}
+                        x={i ? left + 8 + CAP_MARK : undefined}
+                        dy={i ? PLOT_NAME_LINE : undefined}
+                      >
+                        {line}
+                      </tspan>
+                    ))}
+                  </text>
+                  {/* a gold tick over each mark the cap cuts */}
+                  {values.flatMap((row, i) =>
+                    (kind === 'stacked' ? row.reduce((sum, v) => sum + v, 0) : Math.max(...row)) >
+                    axisCap.value
+                      ? [
+                          <line
+                            key={`cap:${i}`}
+                            data-cut={data[i].label}
+                            x1={x(i)}
+                            x2={x(i)}
+                            y1={top - 4}
+                            y2={top}
+                            stroke="var(--c-gold)"
+                            strokeWidth={2}
+                          />,
+                        ]
+                      : []
+                  )}
+                </g>
+              )}
+              {bandColumn !== null &&
+                bandEnds &&
+                bandPlaces(
+                  series.map((s, si) => ({
+                    key: s.key,
+                    lower: values[data.length - 1].slice(0, si).reduce((sum, v) => sum + v, 0),
+                    upper: values[data.length - 1].slice(0, si + 1).reduce((sum, v) => sum + v, 0),
+                  })),
+                  y,
+                  top,
+                  bottom
+                ).map((band) => (
+                  <g key={band.key} data-band-end={band.key}>
+                    <line
+                      x1={right}
+                      x2={right + BAND_LEADER - 4}
+                      y1={band.mid}
+                      y2={band.at}
+                      stroke={color(band.index)}
+                    />
+                    <text
+                      x={right + BAND_LEADER}
+                      y={band.at + centreShift(SVG_TEXT.head)}
+                      fill="var(--c-text)"
+                      fontSize={SVG_TEXT.head}
+                    >
+                      {series[band.index].label}
+                    </text>
+                    <text
+                      x={width}
+                      y={band.at + centreShift(SVG_TEXT.head)}
+                      textAnchor="end"
+                      fill="var(--c-text-bright)"
+                      fontSize={SVG_TEXT.head}
+                    >
+                      {bandEnds[band.key]}
+                    </text>
+                  </g>
+                ))}
               {endLabel && (
                 <text
                   data-role="end-label"
@@ -1127,6 +1380,25 @@ export function Chart({
           )
         )}
       </div>
+      {/* Lane D1 (rule 5): where the column does not fit, the key under the plot, top band first. */}
+      {bandEnds && width !== null && bandColumn === null && (
+        <ul aria-label={`${title} key`} className="text-small mt-3 flex flex-col gap-1">
+          {[...series.keys()].reverse().map((i) => (
+            <li key={series[i].key} className="flex min-w-0 items-center gap-2">
+              <span
+                aria-hidden="true"
+                data-swatch
+                className="inline-block h-2.5 w-2.5 shrink-0"
+                style={{ backgroundColor: color(i) }}
+              />
+              <span className="text-text min-w-0">{series[i].label}</span>
+              <span className="text-text-bright ml-auto whitespace-nowrap tabular-nums">
+                {bandEnds[series[i].key]}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
       {pinnedReadout && (
         <div className="mt-2">
           <ReadoutRow label={pinnedReadout.label} pinned={tap.showingPin} idle={pinnedReadout.idle}>
@@ -1180,7 +1452,7 @@ export function Chart({
         </span>
       )}
       {markers.length > 0 && !hideMarkerLegend && (
-        <div className="text-text-dim text-meta mt-2 flex flex-wrap gap-4">
+        <div className="text-meta mt-2 flex flex-wrap gap-4">
           {markers.map((m) => (
             <Link key={`${m.index}:${m.label}`} href={m.href} look="inline">
               {m.label} · {data[m.index].label}

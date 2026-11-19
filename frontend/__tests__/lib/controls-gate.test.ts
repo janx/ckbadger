@@ -112,20 +112,14 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
   // ---- c2-topics: dao, forks, fiber, network, hardforks, home: replaced at its merge ----
-  // ---- d1-charts: the chart pages, which lane D1 is rebuilding ----
-  'components/charts/chart-detail.tsx': {
-    lane: 'd1-charts',
-    sites: { choice: 2 },
-    reason:
-      'the chart page’s range buttons (30 d · 90 d · 1 y · all, pressed by hand) and its log-scale toggle: the RangeSelect’s, for lane D1',
-  },
+  // ---- d1-charts: the chart pages' range and scale are the library's RangeSelect and FilterChips (lane D1) ----
   // ---- shared: the old pager (components/ui/cursor-pagination.tsx) went with its last use; the
   // click-to-copy of an id (HexCode's, HexDisplay's) went with its last call site (lane c2-finish,
   // rulings round 1: an id inside a link is the link, not a copy target) ----
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 3;
+const TOLERATED_TOTAL = 1;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

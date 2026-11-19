@@ -26,7 +26,10 @@ describe('a CKB chart’s readouts state the exact value', () => {
   beforeEach(() => stubChartWidth(600));
   afterEach(() => vi.restoreAllMocks());
 
-  it('reads a day, its in-plot reading and Last change exactly; the head keeps the summary', async () => {
+  // Re-pinned for lane D1 (the chart-hero board, rule 2): "Last change" goes; the change is a
+  // figure of the head's sentence, cut like the head (rule 2: every figure cut, never rounded),
+  // and every readout of a day stays exact.
+  it('reads a day and its in-plot reading exactly; the head and its sentence keep the summary', async () => {
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue({
       title: 'Common Knowledge Size',
       yAxisLabel: 'CKB',
@@ -39,12 +42,13 @@ describe('a CKB chart’s readouts state the exact value', () => {
     const { container } = render(<ChartDetail slug="knowledge-size" />);
     const plot = await screen.findByRole('img', { name: 'Knowledge size, CKB' });
     // The head figure: the summary form, every digit in its title.
-    const head = screen.getByRole('group', { name: 'Knowledge size readings' });
-    expect(head).toHaveTextContent('2026-02-191,236,001 CKB');
-    expect(head.querySelector('[title="1,236,001.5 CKB"]')).not.toBeNull();
-    // Last change: the exact signed delta, its trailing zeros dropped.
-    const change = screen.getByText('Last change').nextElementSibling;
-    expect(change).toHaveTextContent(/^\+1,434\.37654322 CKB$/);
+    const head = screen.getByTestId('figure-value');
+    expect(head).toHaveTextContent('1,236,001 CKB');
+    expect(head).toHaveAttribute('title', '1,236,001.5 CKB');
+    // The change, in the sentence: the exact delta (1,434.37654322) in the summary form, cut.
+    expect(document.querySelector('[data-role="sentence-words"]')).toHaveTextContent(
+      '1,434 CKB up on the day before.'
+    );
     // A day read on the chart: the readout line and the in-plot reading, exact.
     fireEvent.keyDown(plot, { key: 'ArrowLeft' });
     expect(screen.getByRole('status', { name: 'Knowledge size readout' })).toHaveTextContent(
@@ -55,26 +59,30 @@ describe('a CKB chart’s readouts state the exact value', () => {
     expect(reading).toHaveTextContent('1,234,567.12345678 CKB');
   });
 
-  it('keys the bands of a CKB chart with their exact values', async () => {
+  // Re-pinned for lane D1 (rule 5): a stack's bands are named at their right ends with their
+  // shares (was a key under the plot reading each band's value); a day's exact value per band is
+  // read on its readout line.
+  it('reads the bands of a CKB chart with their exact values', async () => {
     vi.mocked(api.getTotalSupplyChart).mockResolvedValue({
       title: 'Total Supply',
       data: [
         {
           date: '2026-02-23',
-          values: { circulating: '8131306075.44505907', nervosdao: '1234.50000000' },
+          // the three places the API always sends (the head's sentence reads all three)
+          values: { circulating: '8131306075.44505907', nervosdao: '1234.50000000', burnt: '0.1' },
         },
       ],
       series: [
         { key: 'circulating', label: 'Circulating', color: '#00c389' },
         { key: 'nervosdao', label: 'Nervos DAO', color: '#3b82f6' },
+        { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
     });
     render(<ChartDetail slug="total-supply" />);
-    const legend = await screen.findByRole('list', { name: 'Supply legend' });
-    expect(
-      within(legend)
-        .getAllByRole('listitem')
-        .map((item) => item.textContent)
-    ).toEqual(['Circulating8,131,306,075.44505907 CKB', 'Nervos DAO1,234.5 CKB']);
+    const plot = await screen.findByRole('img', { name: 'Supply, CKB' });
+    fireEvent.keyDown(plot, { key: 'ArrowLeft' });
+    expect(screen.getByRole('status', { name: 'Supply readout' })).toHaveTextContent(
+      '2026-02-23 · Circulating 8,131,306,075.44505907 CKB · Nervos DAO 1,234.5 CKB · Burnt 0.1 CKB'
+    );
   });
 });

@@ -4,6 +4,7 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { ChartDetail } from '@/components/charts/chart-detail';
 import { CHART_BY_SLUG } from '@/components/charts/chart-catalogue';
 import { chartModel, formatChartExact, formatChartReadout } from '@/components/charts/chart-model';
+import { chartHead } from '@/components/charts/chart-head';
 import { Chart } from '@/components/ui/chart';
 import { api } from '@/lib/api';
 
@@ -53,7 +54,11 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
       })),
     });
     render(<ChartDetail slug="nominal-apc" />);
-    expect(await screen.findByRole('heading', { name: 'Model 20 years' })).toBeInTheDocument();
+    // Re-pinned for lane D1 (the chart-hero board, rule 4): the chart stands under its figure with
+    // no command line (was "Model 20 years"); its plot's name says the years it runs over.
+    expect(await screen.findByTestId('figure-eyebrow')).toHaveTextContent('the model today');
+    const name = document.querySelector('[data-role="chart-name"]');
+    expect(name).toHaveTextContent('% a year · year 0 to year 20');
     expect(document.body).not.toHaveTextContent('model samples');
   });
 
@@ -68,15 +73,20 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
         { date: '2026-11', value: '1.5', value2: '300' },
       ],
     };
-    expect(chartModel(def('address-cohort-retention'), payload).headline).toEqual({
-      pre: '2026-10',
-      display: '3.25',
-      unit: '%',
+    // Re-pinned for lane D1 (rule 9, CH-07): the page's head, which the card reads too (was a card
+    // headline of its own, and a readings group on the page)
+    expect(
+      chartHead(
+        def('address-cohort-retention'),
+        chartModel(def('address-cohort-retention'), payload)
+      )
+    ).toMatchObject({
+      eyebrow: 'occupied share of its balance, the 2026-10 cohort',
+      figure: { display: '3.25', unit: '%' },
     });
     vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(payload);
     render(<ChartDetail slug="address-cohort-retention" />);
-    const readings = await screen.findByRole('group', { name: 'Cohort retention readings' });
-    expect(readings).toHaveTextContent('2026-103.25%');
+    expect(await screen.findByTestId('figure-value')).toHaveTextContent('3.25%');
     expect(screen.getByRole('group', { name: 'Common knowledge reading' })).toHaveTextContent(
       '2026-10200 CKB'
     );
@@ -91,11 +101,32 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
       data: [
         {
           date: '2026-11-13',
-          values: { ...Object.fromEntries(keys.map((key) => [key, '12.5'])), holderCount: '1' },
+          values: {
+            ...Object.fromEntries(keys.map((key) => [key, '12.5'])),
+            '1m6m': '25',
+            lt1m: '37.5',
+            holderCount: '1',
+          },
         },
       ],
+      bands: [
+        { key: 'gt3y', label: '3 years or more', members: ['gt3y'] },
+        { key: '1y3y', label: '1 to 3 years', members: ['1y3y'] },
+        { key: '6m1y', label: '6 to 12 months', members: ['6m1y'] },
+        { key: '1m6m', label: '1 to 6 months', members: ['3m6m', '1m3m'] },
+        { key: 'lt1m', label: 'under 1 month', members: ['1w1m', '1d1w', '24h'] },
+      ],
     });
+    // Re-pinned for lane D1 (rule 5): the eight ages keep these names in the table under the chart
+    // (were the eight drawn bands); the chart draws the API's five, in the board's words.
     expect(model.series.map((series) => series.label)).toEqual([
+      '3 years or more',
+      '1 to 3 years',
+      '6 to 12 months',
+      '1 to 6 months',
+      'under 1 month',
+    ]);
+    expect(model.table?.map((row) => row.name)).toEqual([
       '> 3 y',
       '1 y – 3 y',
       '6 m – 1 y',
@@ -138,6 +169,10 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
         { key: 'others', label: 'Others', color: '#000' },
       ],
       data: [{ date: '2026-11-13', values: { top0: '300000000', others: '100000000' } }],
+      bands: [
+        { key: 'top0', label: 'Default Lock', members: ['top0'] },
+        { key: 'others', label: 'Others', members: ['others'] },
+      ],
     };
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue({
       title: 'Scripts',
@@ -196,7 +231,11 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
       ],
     });
     render(<ChartDetail slug="hash-rate" />);
-    await screen.findByRole('group', { name: 'Hash rate readings' });
-    expect(screen.getByText('Last change').nextElementSibling).toHaveTextContent('−1,233.57 PH/s');
+    // Re-pinned for lane D1 (rule 2): the change is the sentence's, a fall said in words and cut,
+    // never rounded (was "Last change −1,233.57 PH/s"); no "-0.00" and no hyphen for a minus.
+    await screen.findByTestId('figure-value');
+    const words = document.querySelector('[data-role="sentence-words"]')!;
+    expect(words).toHaveTextContent('1,233.56 PH/s down on the day before.');
+    expect(words.textContent).not.toMatch(/-0\.00|-\d/);
   });
 });
