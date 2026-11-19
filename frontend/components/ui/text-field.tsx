@@ -3,13 +3,19 @@
 import { cn } from '@/lib/utils';
 
 /**
- * The field's well (the controls board, gate D0′): the header search field's material — the
- * well's ground (`base-void`), the frame line, its inset — square, 28 px high from 640 and 32
- * below it (a thumb's box), 10 px in; the focused field's line is celadon. The select draws its
- * native control in the same well (components/ui/select.tsx).
+ * The well's material (the controls board, gate D0′): its ground (`base-void`), the frame line
+ * and its inset, square. The one material of every field: the text field and the select draw
+ * their box in it (`FIELD_WELL`).
  */
-export const FIELD_WELL =
-  'bg-base-void border-base-border focus-within:border-jade inline-flex h-8 min-w-0 items-center border px-2.5 shadow-[inset_0_1px_3px_var(--m-well-inset)] transition-colors sm:h-7';
+export const WELL_MATERIAL =
+  'bg-base-void border-base-border border shadow-[inset_0_1px_3px_var(--m-well-inset)]';
+
+/**
+ * The field's well (the controls board, gate D0′): the well's material (`WELL_MATERIAL`), 28 px
+ * high from 640 and 32 below it (a thumb's box), 10 px in; the focused field's line is celadon.
+ * The select draws its native control in the same well (components/ui/select.tsx).
+ */
+export const FIELD_WELL = `${WELL_MATERIAL} focus-within:border-jade inline-flex h-8 min-w-0 items-center px-2.5 transition-colors sm:h-7`;
 
 interface TextFieldProps {
   /** The field's name for a screen reader (it has no visible label: the placeholder prompts). */
