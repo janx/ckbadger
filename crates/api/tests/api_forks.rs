@@ -140,6 +140,8 @@ async fn overview_separates_canonical_uncles_from_node_switches_on_complete_days
         ])
     );
     assert_eq!(json["unclesInWindow"], 5);
+    // lane exactness, part A, A5 (i): the window's canonical blocks, the route's (the hero's rate summed the days)
+    assert_eq!(json["canonicalBlocksInWindow"], 2, "{json}");
     assert_eq!(json["nodeSwitchesInWindow"], 1);
     assert_eq!(json["nodeSwitchesAllTime"], 1);
     emit_fixture("fork-overview.json", &json);

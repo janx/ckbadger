@@ -4581,3 +4581,41 @@ async fn hardforks_counts_live_references_and_known_versions_per_hash_type() {
         "{body}"
     );
 }
+
+/// lane exactness, part A, A1: the miners card's "Others" is the window's blocks found by every miner after the five
+/// largest, which the route states (`restBlocks`); the page subtracted the five from the total.
+/// Seven miners found 30, 20, 15, 10, 8, 5 and 2 blocks: the five largest 83 of 90, the rest 7.
+#[tokio::test]
+async fn miner_distribution_states_the_blocks_past_the_five_largest() {
+    let store = test_store();
+    let utc8 = chrono::FixedOffset::east_opt(ckbadger_common::CKB_UTC8_OFFSET).unwrap();
+    let day = chrono::Utc::now().with_timezone(&utc8).date_naive() - chrono::Duration::days(1);
+    let key = day.format("%Y%m%d").to_string();
+    for (i, blocks) in [30, 20, 15, 10, 8, 5, 2].into_iter().enumerate() {
+        let hash = vec![0x10 + i as u8; 32];
+        store
+            .put_miner_stats(
+                &key,
+                &hash,
+                &MinerStats {
+                    miner_lock_hash: hash.clone(),
+                    blocks_count: blocks,
+                    last_block_number: 99,
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(
+        &store,
+        50,
+        &(day + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string(),
+    );
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/miner-address-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["totalBlocks"], 90);
+    assert_eq!(json["data"].as_array().unwrap().len(), 7);
+    assert_eq!(json["restBlocks"], 7, "{json}");
+}

@@ -2691,6 +2691,8 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_a))
     );
     assert_eq!(json["data"][0]["itemCount"], 2);
+    // lane exactness, part A, A3: the rank of the page's first row, the route's
+    assert_eq!(json["firstRank"], 1, "{json}");
     let next_cursor = json["nextCursor"].as_str().expect("next cursor");
 
     let request = Request::builder()
@@ -2709,6 +2711,7 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
         format!("0x{}", hex::encode(owner_b))
     );
     assert_eq!(json["data"][0]["itemCount"], 1);
+    assert_eq!(json["firstRank"], 2, "{json}");
 }
 
 #[tokio::test]
