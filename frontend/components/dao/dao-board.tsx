@@ -51,6 +51,7 @@ import { percentOf } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { LockWordsView, rowLock } from '@/components/ui/lock-kind';
+import { PartReadError, readPart } from '@/components/read-failure';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -988,15 +989,34 @@ function ownerLink(owner: Owner, size: ShortSize) {
 }
 
 /**
- * A depositor's lock by the one decision (B4 second fix round), read off its address: in the Lock
- * column every row is named (the default lock by its name, or "lock 0x…" where the API names
- * none); beside the party on a phone row the default lock is not, and the part is left out.
+ * A depositor's lock by the one decision (B4 second fix round), read off its address and the hash
+ * type it sends (`lockHashType`, B4 third round: the decision's where it has no address, and the
+ * address must spell it): in the Lock column every row is named (the default lock by its name, or
+ * "lock 0x…" where the API names none); beside the party on a phone row the default lock is not,
+ * and the part is left out. A lock the decision refuses fails its cell in place (D7), said with
+ * the depositor.
  */
-function ownerLock(owner: Owner, place: 'column' | 'inline') {
-  return rowLock(
-    { lockKind: owner.lockKind, lockCodeHash: owner.lockCodeHash, address: owner.address },
-    place
+function ownerLock(owner: Owner, place: 'column' | 'inline', size: ShortSize): ReactNode {
+  const read = readPart(() =>
+    rowLock(
+      {
+        lockKind: owner.lockKind,
+        lockCodeHash: owner.lockCodeHash,
+        lockHashType: owner.lockHashType,
+        address: owner.address,
+      },
+      place
+    )
   );
+  if (read.error !== undefined)
+    return (
+      <PartReadError
+        what="the depositor’s lock"
+        where={`depositor ${owner.lockScriptHash}`}
+        error={read.error}
+      />
+    );
+  return read.value && <LockWordsView words={read.value} size={size} />;
 }
 
 /**
@@ -1042,11 +1062,12 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     // writes for a lock the API names none of, "lock " and its code hash at the row size (22
     // characters, 184.8) and the gap (B4 second fix round: it was the code hash alone), the rest of
     // the container beyond the sum. A lock on the default code hash by another hash type adds
-    // " by data1" (9 more), held on its line (one unit), past the column's room into its gap.
+    // " by data1" (9 more): words after the unit that a line may break before (`LockWordsView`),
+    // so where the column has no room for them they wrap under "lock 0x…", inside the column.
     minWidth: columnPx(ownerCell('lock '.length + shortChars(SHORT_FORMS.row.hash)) + CELL_GAP_PX),
     width: 'auto',
     className: OWNER_CELL,
-    render: (o) => <LockWordsView words={ownerLock(o, 'column')!} size="row" />,
+    render: (o) => ownerLock(o, 'column', 'row'),
   },
   {
     key: 'deposits',
@@ -1128,9 +1149,7 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
               <span className="text-text-dim shrink-0">{o.sharePercent}%</span>
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-              {ownerLock(o, 'inline') && (
-                <LockWordsView words={ownerLock(o, 'inline')!} size="tight" />
-              )}
+              {ownerLock(o, 'inline', 'tight')}
               <span className="text-text-bright">
                 <Amount form="column" value={o.capacity} /> CKB
                 <span className="text-text-dim"> · {plural(o.depositCount, 'deposit')}</span>

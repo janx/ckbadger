@@ -226,7 +226,11 @@ it('says in its place that it cannot read the newest objects when an owner’s l
       <CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />
     </main>
   );
-  const alert = await screen.findByText(/^Could not read the newest objects: /);
+  // third round (re-pinned on purpose, the coordinator's item 4): said where (the collection and
+  // its page), the section's pager outside the failed part
+  const alert = await screen.findByText(
+    /^Could not draw the newest objects \(collection collection, page 1\): /
+  );
   expect(alert).toHaveTextContent(`address ${joy} spells the lock code hash ${JOYID_CODE_HASH}`);
   expect(screen.getByRole('heading', { name: 'The collection page' })).toBeInTheDocument();
 });

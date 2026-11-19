@@ -1280,6 +1280,32 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     vi.unstubAllGlobals();
   });
 
+  // B4 third round (review-rules-fixes2 NOTE 5, the coordinator's item 7): the decision reads the
+  // depositor's own hash type (lockHashType) beside its address; a depositor whose address spells
+  // another hash type than it sends is refused in its Lock cell, said with the depositor, and the
+  // table stands
+  it('refuses a depositor whose address spells another hash type than it sends, in its cell', () => {
+    const [first, second] = evidence.concentration.owners;
+    const owners = [first, { ...second, lockHashType: 'data' }];
+    const withOwners = { ...evidence, concentration: { ...evidence.concentration, owners } };
+    stubCalculator();
+    stubChartWidth(1248);
+    render(<DaoBoard statistics={stats} evidence={withOwners} />);
+    const table = within(who()).getByRole('table', { name: 'Largest depositors' });
+    const at = within(table)
+      .getAllByRole('columnheader')
+      .findIndex((h) => h.textContent === 'Lock');
+    const cells = within(table)
+      .getAllByRole('row')
+      .slice(1)
+      .map((r) => within(r).getAllByRole('cell')[at]);
+    expect(within(cells[1]).getByRole('alert')).toHaveTextContent(
+      `Could not draw the depositor’s lock (depositor ${second.lockScriptHash}): address ${second.address} spells the lock ${second.lockCodeHash} by type, the row says by data`
+    );
+    expect(within(cells[0]).queryByRole('alert')).toBeNull();
+    vi.unstubAllGlobals();
+  });
+
   it('draws the concentration bar: largest, next 9, next 90, everyone else', () => {
     stubCalculator();
     const many = {

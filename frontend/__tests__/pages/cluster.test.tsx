@@ -1,3 +1,5 @@
+import { clusterProtocolProducer } from '@/__tests__/msw/fixtures/item-producer';
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   render,
@@ -31,6 +33,28 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
+// Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+// lock decision's refusals placed above their parts fail the part they are in, said in its place,
+// never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+it('fails the cluster cell holder’s lock note in place, the page drawn', async () => {
+  const { current } = clusterProtocolProducer;
+  const joy = seededAddress('joycp', JOYID_CODE_HASH);
+  vi.spyOn(api, 'getSporeClusterProtocol').mockResolvedValue({
+    kind: 'spore_cluster',
+    clusterId: id,
+    source: 'canonicalLiveTypeIndex',
+    current: { ...current, cell: { ...current.cell, ownerAddress: joy } },
+  } as never);
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByRole('heading', { name: 'Genes' })).toBeInTheDocument();
+  const metrics = screen.getByRole('region', { name: 'Metrics' });
+  await waitFor(() =>
+    expect(within(metrics).getByRole('alert')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    )
+  );
+});
+
 it('renders collection identity, capacity history, genes, gallery, holders and both feed layers', async () => {
   render(<ClusterPage clusterId={id} />);
   expect(await screen.findByRole('heading', { name: 'Genes' })).toHaveClass('text-entity');

@@ -235,7 +235,9 @@ describe('Collection holders', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       // B4 second fix round (re-pinned on purpose, ruling D7): the refusal fails the section in
-      // its place, saying why, where it took the page
+      // its place, saying why, where it took the page. Third round (re-pinned on purpose, the
+      // coordinator's item 4): it fails the distribution's column alone, said with its collection;
+      // the section's heading and the holders' table stand
       render(
         <CollectionHolders
           assetClass="objects"
@@ -245,8 +247,9 @@ describe('Collection holders', () => {
         />
       );
       expect(screen.getByRole('alert')).toHaveTextContent(
-        /^Could not read the collection holders: .*(collection|Collection)/
+        /^Could not draw the holder distribution \(collection bad-distribution\): .*(collection|Collection)/
       );
+      expect(screen.getByRole('heading', { name: /^Who holds it/ })).toBeInTheDocument();
     } finally {
       error.mockRestore();
     }

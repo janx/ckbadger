@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import * as producer from '@/__tests__/msw/fixtures/item-producer';
 import { addressScript } from '@/lib/lock-script';
+import { scriptHash } from '@/__tests__/utils/ckb-hash';
 
 interface Owned {
   path: string;
@@ -47,6 +48,21 @@ describe('the producer fixture’s owners', () => {
       expect([hash, [...new Set(same.map((r) => r.ownerAddress))].length]).toEqual([hash, 1]);
       expect([hash, same.some(carries)]).toEqual([hash, true]);
     }
+  });
+
+  // B4 third round (the coordinator's item 8): an owner's lock hash is the hash of the lock its
+  // address spells, as the API derives both from one stored lock
+  it('carries, as each owner’s lock hash, the hash of the lock its address spells', () => {
+    const disagree = rows.flatMap((row) =>
+      row.ownerLockHash !== undefined &&
+      row.ownerLockHash !== scriptHash(addressScript(row.ownerAddress))
+        ? [
+            `${row.path}: ${row.ownerLockHash} is not ${scriptHash(addressScript(row.ownerAddress))}`,
+          ]
+        : []
+    );
+    expect(rows.filter((row) => row.ownerLockHash !== undefined).length).toBeGreaterThan(5);
+    expect(disagree).toEqual([]);
   });
 
   it('spells, in each owner address, the lock its row carries', () => {

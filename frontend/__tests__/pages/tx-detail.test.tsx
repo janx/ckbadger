@@ -699,9 +699,10 @@ describe('TransactionDetailPage', () => {
       expect(screen.queryByText('page-level boundary')).toBeNull();
       const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
       expect(within(header).getByText(TX_HASH)).toBeInTheDocument();
-      // the summary slot, under the h1
+      // the summary slot, under the h1. B4 third round (re-pinned on purpose, the coordinator's
+      // item 4): the error in its own words, its name with them where it is not a plain Error
       expect(within(header).getByTestId('activity-read-error')).toHaveTextContent(
-        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+        `Cannot read tx ${TX_HASH}: SyntaxError: Cannot convert abc to a BigInt`
       );
       expect(within(header).queryByTestId('tx-summary')).toBeNull();
       const moved = screen.getByRole('heading', { name: 'What moved' }).closest('section')!;
@@ -712,7 +713,7 @@ describe('TransactionDetailPage', () => {
       // Balance changes keeps its heading; its body is one error, the table is gone
       expect(within(balance).getAllByTestId('activity-read-error')).toHaveLength(1);
       expect(within(balance).getByTestId('activity-read-error')).toHaveTextContent(
-        `Cannot read tx ${TX_HASH}: Cannot convert abc to a BigInt`
+        `Cannot read tx ${TX_HASH}: SyntaxError: Cannot convert abc to a BigInt`
       );
       expect(within(balance).queryByRole('table')).toBeNull();
       // The sections that do not read the activity render as always.

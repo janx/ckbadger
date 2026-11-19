@@ -50,6 +50,37 @@ describe('ErrorBoundary fallbackRender', () => {
     expect(screen.getByText('static')).toBeInTheDocument();
   });
 
+  // B4 third round: a part starts again when what it draws changes, and a part that drew keeps
+  // its elements (a key remounted them, and a page's table went stale under its reader)
+  it('lets a caught error go when its reset key changes, and keeps children that drew', () => {
+    const fallbackRender = (error: Error) => <p>caught: {error.message}</p>;
+    const view = render(
+      <ErrorBoundary resetKey="page 1" fallbackRender={fallbackRender}>
+        <Thrower message="first" />
+      </ErrorBoundary>
+    );
+    expect(screen.getByText('caught: first')).toBeInTheDocument();
+    view.rerender(
+      <ErrorBoundary resetKey="page 1" fallbackRender={fallbackRender}>
+        <p>healthy</p>
+      </ErrorBoundary>
+    );
+    expect(screen.getByText('caught: first')).toBeInTheDocument();
+    view.rerender(
+      <ErrorBoundary resetKey="page 2" fallbackRender={fallbackRender}>
+        <p>healthy</p>
+      </ErrorBoundary>
+    );
+    const drawn = screen.getByText('healthy');
+    expect(screen.queryByText(/caught/)).toBeNull();
+    view.rerender(
+      <ErrorBoundary resetKey="page 3" fallbackRender={fallbackRender}>
+        <p>healthy</p>
+      </ErrorBoundary>
+    );
+    expect(screen.getByText('healthy')).toBe(drawn);
+  });
+
   it('stays caught under the same key and starts afresh under a new one', () => {
     const fallbackRender = (error: Error) => <p>caught: {error.message}</p>;
     const view = render(

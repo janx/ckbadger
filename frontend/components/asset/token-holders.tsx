@@ -36,7 +36,7 @@ import {
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
 import { shortChars } from '@/lib/list-bounds';
-import { PartReadBoundary } from '@/components/read-failure';
+import { PartReadBoundary, PartReadError, readPart } from '@/components/read-failure';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
 // 8 px AlignedBar on the table's own scale, what left the row in its title.
@@ -82,12 +82,72 @@ export interface TokenDistributionViewProps {
   distribution: TokenDistribution;
   symbol: string | null;
   holders?: ReactNode;
+  /** The token it draws (B4 third round): said where a part of it cannot be drawn (D7). */
+  where: string;
 }
+/**
+ * A token's distribution: the share of supply, and the holders by balance beside the holders it is
+ * given. A distribution that breaks its invariants, or a part of it that cannot be drawn, fails in
+ * its place (D7, B4 third round), said with the token; the holders beside it stand, with their pager.
+ */
 export function TokenDistributionView({
   distribution: d,
   symbol,
   holders,
+  where,
 }: TokenDistributionViewProps) {
+  const read = readPart(() => distributionParts(d, symbol));
+  return (
+    <div className="space-y-4">
+      {read.value !== undefined && read.value.total > BigInt(0) && (
+        // F2 objects (IV-18): the shared concentration bar, in the token colour.
+        <PartReadBoundary
+          what="the share of supply"
+          where={where}
+          render={() => (
+            <ConcentrationBar
+              label="Share of supply"
+              assetClass="tokens"
+              total={read.value.total}
+              groups={read.value.groups}
+            />
+          )}
+        />
+      )}
+      {/* Two tables, never one row grid (readability B5): from xl, where they stand side by side
+          on rows of one height, a 32 px gutter, a rule in the row-rule ink and 32 px more lie
+          between them (a column gap inside a table is 16 px), so a holder's row does not read on
+          into a band's. Below xl they stack. The bands list sits in a column of its own, so it
+          measures its own width without the gutter. */}
+      <div
+        className={
+          holders
+            ? 'grid min-w-0 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] xl:gap-x-8'
+            : 'min-w-0'
+        }
+      >
+        {holders}
+        <div className={holders ? 'xl:border-row-rule min-w-0 xl:border-l xl:pl-8' : 'min-w-0'}>
+          {read.error !== undefined ? (
+            <PartReadError what="the holder distribution" where={where} error={read.error} />
+          ) : (
+            <PartReadBoundary
+              what="the holders by balance"
+              where={where}
+              render={read.value.bands}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The distribution's parts, read from it once its totals agree with its own supply: the share
+ * bar's groups and the bands table (drawn inside its part). Throws where they do not.
+ */
+function distributionParts(d: TokenDistribution, symbol: string | null) {
   const total = exactUnsignedInteger(d.totalSupply, 'distribution supply');
   // F2 objects (IV-18): the board's names for the three groups.
   const next = Math.max(Math.min(9, d.holdersCount - 1), 0);
@@ -173,97 +233,69 @@ export function TokenDistributionView({
       render: (b) => <span>{share(BigInt(b.balance))}</span>,
     },
   ]);
-  return (
-    <div className="space-y-4">
-      {total > BigInt(0) && (
-        // F2 objects (IV-18): the shared concentration bar, in the token colour.
-        <ConcentrationBar
-          label="Share of supply"
-          assetClass="tokens"
-          total={total}
-          groups={groups.map(([label], i) => ({ label, value: groupAmounts[i] }))}
+  const bands = () => (
+    <ListTable
+      label="Holders by balance"
+      columns={columns}
+      rows={d.buckets}
+      rowKey={(b) => b.lowerBound}
+      empty="No holders."
+      density="row"
+      mobileRow={(b) => (
+        <PhoneRow
+          testId="holder-bucket-row-mobile"
+          lines={[
+            {
+              key: 'range',
+              tone: 'body',
+              left: columns[0].render(b),
+              right: (
+                <span className="whitespace-nowrap">
+                  <AssetCount value={b.holdersCount} />{' '}
+                  <span className="text-text-dim">
+                    {countNoun(b.holdersCount, 'holder', 'holders')}
+                  </span>
+                </span>
+              ),
+            },
+            {
+              key: 'share',
+              tone: 'quiet',
+              left: (
+                <span aria-hidden="true" className="bg-bar-track inline-block h-1.5 w-10">
+                  <span
+                    className="bg-token scan-fill block h-full"
+                    style={{
+                      width:
+                        d.holdersCount === 0 ? '0%' : `${(b.holdersCount / d.holdersCount) * 100}%`,
+                    }}
+                  />
+                </span>
+              ),
+              right: <>{share(BigInt(b.balance))} of supply</>,
+            },
+          ]}
         />
       )}
-      {/* Two tables, never one row grid (readability B5): from xl, where they stand side by side
-          on rows of one height, a 32 px gutter, a rule in the row-rule ink and 32 px more lie
-          between them (a column gap inside a table is 16 px), so a holder's row does not read on
-          into a band's. Below xl they stack. The bands list sits in a column of its own, so it
-          measures its own width without the gutter. */}
-      <div
-        className={
-          holders
-            ? 'grid min-w-0 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] xl:gap-x-8'
-            : 'min-w-0'
-        }
-      >
-        {holders}
-        <div className={holders ? 'xl:border-row-rule min-w-0 xl:border-l xl:pl-8' : 'min-w-0'}>
-          <ListTable
-            label="Holders by balance"
-            columns={columns}
-            rows={d.buckets}
-            rowKey={(b) => b.lowerBound}
-            empty="No holders."
-            density="row"
-            mobileRow={(b) => (
-              <PhoneRow
-                testId="holder-bucket-row-mobile"
-                lines={[
-                  {
-                    key: 'range',
-                    tone: 'body',
-                    left: columns[0].render(b),
-                    right: (
-                      <span className="whitespace-nowrap">
-                        <AssetCount value={b.holdersCount} />{' '}
-                        <span className="text-text-dim">
-                          {countNoun(b.holdersCount, 'holder', 'holders')}
-                        </span>
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'share',
-                    tone: 'quiet',
-                    left: (
-                      <span aria-hidden="true" className="bg-bar-track inline-block h-1.5 w-10">
-                        <span
-                          className="bg-token scan-fill block h-full"
-                          style={{
-                            width:
-                              d.holdersCount === 0
-                                ? '0%'
-                                : `${(b.holdersCount / d.holdersCount) * 100}%`,
-                          }}
-                        />
-                      </span>
-                    ),
-                    right: <>{share(BigInt(b.balance))} of supply</>,
-                  },
-                ]}
-              />
-            )}
-          />
-        </div>
-      </div>
-    </div>
+    />
   );
+  return {
+    total,
+    groups: groups.map(([label], i) => ({ label, value: groupAmounts[i] })),
+    bands,
+  };
 }
 export interface TokenHoldersProps {
   typeHash: string;
   symbol: string | null;
   decimals: number | null;
 }
-/** The token's holders; a refusal while they are drawn fails this section in its place (D7). */
-export function TokenHolders(props: TokenHoldersProps) {
-  return (
-    <PartReadBoundary what="the holders">
-      <TokenHoldersSection {...props} />
-    </PartReadBoundary>
-  );
-}
-
-function TokenHoldersSection({ typeHash, symbol, decimals }: TokenHoldersProps) {
+/**
+ * The token's holders. A refusal while the holders' table is drawn fails that table in its place
+ * (D7), said with the token and the view; the heading, its button and the pager stay, and the
+ * table starts again on another view or page.
+ */
+export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) {
   const distributionSource = `holder distribution from /tokens/${typeHash}/distribution`;
   const [all, setAll] = useState(false),
     pagination = useCursorPagination();
@@ -428,54 +460,60 @@ function TokenHoldersSection({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {holders.data ? (
         <>
           <AssetReadState error={holders.error} label="holders" retained />
-          <ListTable
-            label={all ? 'All holders' : 'Top 10 holders'}
-            columns={wordHeads(holderColumns(holders.data.data))}
-            rows={holders.data.data}
-            rowKey={(h) => h.lockScriptHash}
-            empty="No holders."
-            density="row"
-            rowTitle={holderTitle}
-            mobileRow={(h, wide) => {
-              const share = holderShare(h);
-              const rows = holders.data!.data;
-              const scale = shareScaleOf(rows);
-              return (
-                <HolderPhoneRow
-                  rank={rank(h)}
-                  party={
-                    <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
-                      {/* Below sm the tight size, 11 characters for an address, 4…6: rank,
+          <PartReadBoundary
+            what="the holders"
+            where={`token ${typeHash}, ${all ? `all holders, page ${pagination.page}` : 'top 10'}`}
+            render={() => (
+              <ListTable
+                label={all ? 'All holders' : 'Top 10 holders'}
+                columns={wordHeads(holderColumns(holders.data.data))}
+                rows={holders.data.data}
+                rowKey={(h) => h.lockScriptHash}
+                empty="No holders."
+                density="row"
+                rowTitle={holderTitle}
+                mobileRow={(h, wide) => {
+                  const share = holderShare(h);
+                  const rows = holders.data!.data;
+                  const scale = shareScaleOf(rows);
+                  return (
+                    <HolderPhoneRow
+                      rank={rank(h)}
+                      party={
+                        <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
+                          {/* Below sm the tight size, 11 characters for an address, 4…6: rank,
                           address, lock and amount share a 358 px line (L5); from sm the row
                           size, the table's (R9). */}
-                      <Hash
-                        hash={h.address ?? h.lockScriptHash}
-                        kind={h.address ? 'address' : 'hash'}
-                        size={phoneSize}
-                        copyable={false}
-                        className="text-body"
-                      />
-                    </AppLink>
-                  }
-                  lock={
-                    // In the row's own dim small ink, as the kind was written before U-15; no
-                    // part where the row names no lock (B4)
-                    phoneLock(h) && (
-                      <LockWordsView
-                        words={phoneLock(h)!}
-                        size={phoneSize}
-                        className="text-text-dim text-small"
-                      />
-                    )
-                  }
-                  amount={<TokenAmount form="summary" amount={h.balance} decimals={decimals} />}
-                  share={share.text}
-                  bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
-                  axis={rows[0] === h ? formatShareTick(scale) : undefined}
-                  wide={wide}
-                />
-              );
-            }}
+                          <Hash
+                            hash={h.address ?? h.lockScriptHash}
+                            kind={h.address ? 'address' : 'hash'}
+                            size={phoneSize}
+                            copyable={false}
+                            className="text-body"
+                          />
+                        </AppLink>
+                      }
+                      lock={
+                        // In the row's own dim small ink, as the kind was written before U-15; no
+                        // part where the row names no lock (B4)
+                        phoneLock(h) && (
+                          <LockWordsView
+                            words={phoneLock(h)!}
+                            size={phoneSize}
+                            className="text-text-dim text-small"
+                          />
+                        )
+                      }
+                      amount={<TokenAmount form="summary" amount={h.balance} decimals={decimals} />}
+                      share={share.text}
+                      bar={{ value: share.hundredths, scale, color: CLASS_COLORS.tokens }}
+                      axis={rows[0] === h ? formatShareTick(scale) : undefined}
+                      wide={wide}
+                    />
+                  );
+                }}
+              />
+            )}
           />
           {all && (
             <CursorPagination
@@ -522,6 +560,7 @@ function TokenHoldersSection({ typeHash, symbol, decimals }: TokenHoldersProps) 
             distribution={distribution.data}
             symbol={symbol}
             holders={holderTable}
+            where={`token ${typeHash}`}
           />
         </>
       ) : (

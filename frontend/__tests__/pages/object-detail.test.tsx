@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { Component, type ReactNode } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
@@ -5,6 +6,7 @@ import {
   screen,
   fireEvent,
   waitFor,
+  within,
   act,
   createTestQueryClient,
 } from '@/__tests__/utils/test-utils';
@@ -67,6 +69,36 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
 });
 // A4 Chrome F3: the object id under the title was HexCode's own-box scroller (box 358 px for
 // 436 px at 390, the first screen); it is the head's HeadId in the head's 11 px.
+// Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+// lock decision's refusals placed above their parts fail the part they are in, said in its place,
+// never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+it('fails the owner note in place when its lock is refused, the page drawn', async () => {
+  const joy = seededAddress('joysp', JOYID_CODE_HASH);
+  const versions = sporeCellVersionsProducer.data.map((cell) => ({ ...cell, ownerAddress: joy }));
+  vi.spyOn(api, 'getItemCellVersions').mockResolvedValue({
+    data: versions,
+    total: versions.length,
+  });
+  render(<SporeDetailPage sporeId={id} />);
+  expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
+  const metrics = screen.getByRole('region', { name: 'Metrics' });
+  await waitFor(() =>
+    expect(within(metrics).getByRole('alert')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    )
+  );
+});
+
+it('fails the owner note in place when an owner has no cell version, the page drawn', async () => {
+  vi.spyOn(api, 'getItemCellVersions').mockResolvedValue({ data: [], total: 0 });
+  render(<SporeDetailPage sporeId={id} />);
+  expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
+  const metrics = screen.getByRole('region', { name: 'Metrics' });
+  await waitFor(() =>
+    expect(within(metrics).getByRole('alert')).toHaveTextContent(/but no cell versions/)
+  );
+});
+
 it('prints the object id in its head as the head’s full id, never a scroller', async () => {
   render(<SporeDetailPage sporeId={id} />);
   expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();

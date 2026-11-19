@@ -8,6 +8,8 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { addressScript, isDefaultLock } from '@/lib/lock-script';
 import { normalizeScriptRefHashType, type ScriptRefHashType } from '@/lib/script-ref';
 import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { PartReadError, readPart } from '@/components/read-failure';
+import type { ReactNode } from 'react';
 
 /** A lock's name in its default form: plain words in the quiet ink, at the size of its line. */
 const LOCK_WORDS = 'text-text-dim';
@@ -86,23 +88,36 @@ export function lockWords(facts: LockFacts, place: LockPlace): LockWords | null 
  * The lock of an API row (a holder, an owner, a token's issuer, a supply event): the registry's name
  * and the lock's code hash as the API sends them (a name comes with its code hash, Round 3 R-2),
  * and where the row has an address, the lock read off it, which carries the hash type and decides.
+ * A row that sends its lock's hash type (a DAO depositor's `lockHashType`; lane B4 third round) is
+ * decided by it where it has no address; where it has one, the address must spell that hash type.
  */
 export function rowLockFacts({
   lockKind,
   lockCodeHash,
+  lockHashType,
   address,
 }: {
   lockKind: string | null;
   lockCodeHash: string | null;
+  /** The lock's hash type, where the row sends one. */
+  lockHashType?: string | null;
   address: string | null;
 }): LockFacts {
   if (lockCodeHash === null && lockKind !== null)
     throw new Error(`lock kind ${lockKind} without its lock code hash`);
-  if (address === null) return { name: lockKind, codeHash: lockCodeHash, hashType: null };
+  const hashType =
+    lockHashType === undefined || lockHashType === null
+      ? null
+      : hashTypeOf(lockHashType, `lock ${lockCodeHash}`);
+  if (address === null) return { name: lockKind, codeHash: lockCodeHash, hashType };
   const script = addressScript(address);
   if (lockCodeHash !== null && lockCodeHash.toLowerCase() !== script.codeHash)
     throw new Error(
       `address ${address} spells the lock code hash ${script.codeHash}, the row says ${lockCodeHash}`
+    );
+  if (hashType !== null && hashType !== script.hashType)
+    throw new Error(
+      `address ${address} spells the lock ${script.codeHash} by ${script.hashType}, the row says by ${hashType}`
     );
   return { name: lockKind, codeHash: script.codeHash, hashType: script.hashType };
 }
@@ -178,9 +193,30 @@ export function cellOwnerLock(cell: {
   );
 }
 
+/**
+ * A cell owner's lock as a part of a note or a fact (`cellOwnerLock`, `LockWordsView`): null where
+ * none is written, so a list leaves the part out; a lock the decision refuses fails this part in
+ * its place, said with the refusal (ruling D7; lane B4 third round), never the page.
+ */
+export function cellOwnerLockPart(
+  cell: Parameters<typeof cellOwnerLock>[0],
+  className?: string
+): ReactNode {
+  const read = readPart(() => cellOwnerLock(cell));
+  if (read.error !== undefined)
+    return (
+      <PartReadError
+        what="the owner’s lock"
+        where={`cell ${cell.txHash}:${cell.outputIndex}`}
+        error={read.error}
+      />
+    );
+  return read.value && <LockWordsView words={read.value} size="row" className={className} />;
+}
+
 /** An API row's lock where it stands (`rowLockFacts`, `lockWords`), or null where none is written. */
 export function rowLock(
-  row: { lockKind: string | null; lockCodeHash: string | null; address: string | null },
+  row: Parameters<typeof rowLockFacts>[0],
   place: LockPlace
 ): LockWords | null {
   return lockWords(rowLockFacts(row), place);

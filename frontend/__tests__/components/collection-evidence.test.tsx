@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { cleanup, fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import {
   ClusterCellEvidence,
@@ -87,6 +88,28 @@ describe('ClusterCellEvidence names the holder’s lock by the one decision', ()
         lockName: 'SECP256K1/blake160',
       })
     ).toHaveTextContent(/^ckb1…eqvguktl · lock 0x9bd7e06f…a3cce8 by data$/);
+  });
+});
+
+// Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+// lock decision's refusals placed above their parts fail the part they are in, said in its place,
+// never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+describe('ClusterCellEvidence fails its holder’s lock in place', () => {
+  it('says the lock cannot be read where it stands, and draws the rest of the cell', () => {
+    const { current, clusterId } = clusterProtocolProducer;
+    const joy = seededAddress('joycl', JOYID_CODE_HASH);
+    render(
+      <ClusterCellEvidence
+        clusterId={clusterId}
+        current={{ ...current, cell: { ...current.cell, ownerAddress: joy } }}
+      />
+    );
+    const facts = screen.getByLabelText('The cluster cell');
+    const heldBy = within(facts).getByText('held by').nextElementSibling as HTMLElement;
+    expect(within(heldBy).getByRole('alert')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    );
+    expect(facts).toHaveTextContent('the cluster id is this cell’s type args');
   });
 });
 

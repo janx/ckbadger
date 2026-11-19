@@ -25,6 +25,7 @@ import type { AssetClass } from '@/lib/design-tokens';
 import { ShortId } from '@/components/ui/short-id';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
+import { errorWords } from '@/components/read-failure';
 
 // ---------------------------------------------------------------------------
 // Shared helpers (extracted from latest-activities.tsx)
@@ -118,7 +119,8 @@ export function protocolActionLabel(pa: ActivityProtocolAction): string {
 
 /** An activity part that cannot be read, said in its row with the tx it belongs to. */
 export function ActivityReadError({ txHash, error }: { txHash: string; error: unknown }) {
-  const message = error instanceof Error ? error.message : String(error);
+  // in the error's own words: its name too where it is not a plain Error (B4 third round)
+  const message = error instanceof Error ? errorWords(error) : String(error);
   return (
     <span
       role="alert"
@@ -141,10 +143,16 @@ function RenderedInBoundary({ render }: { render: () => ReactNode }) {
  * transaction, so whatever it computes and every component it returns fail here, as an
  * ActivityReadError, instead of reaching the page-level boundary. Adds no element of its own.
  */
-export function readable(txHash: string, render: () => ReactNode): ReactElement {
+export function readable(
+  txHash: string,
+  render: () => ReactNode,
+  /** What the part draws, where it can change under one transaction (a pool row that commits). */
+  version: string = txHash
+): ReactElement {
   return (
     <ErrorBoundary
       key={txHash}
+      resetKey={version}
       fallbackRender={(error) => <ActivityReadError txHash={txHash} error={error} />}
     >
       <RenderedInBoundary render={render} />

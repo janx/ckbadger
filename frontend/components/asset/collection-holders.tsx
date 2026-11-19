@@ -110,13 +110,8 @@ function holderKey(holder: CollectionHolder): string {
 }
 
 export function CollectionHolders(props: CollectionHoldersProps) {
-  // A different collection starts a new cursor scope and Top 10 view; a refusal while its holders
-  // are drawn fails this section in its place (D7).
-  return (
-    <PartReadBoundary key={props.queryKey} what="the collection holders">
-      <ScopedCollectionHolders {...props} />
-    </PartReadBoundary>
-  );
+  // A different collection starts a new cursor scope and Top 10 view.
+  return <ScopedCollectionHolders key={props.queryKey} {...props} />;
 }
 
 function ScopedCollectionHolders({
@@ -134,28 +129,27 @@ function ScopedCollectionHolders({
     queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
     queryFn: () => load({ limit, cursor: pagination.cursor }),
   });
-  let totalHolders = BigInt(0);
-  let totalItems = BigInt(0);
-  const ranges = new Set<string>();
-  for (const bucket of distribution ?? []) {
-    if (!bucket.range || ranges.has(bucket.range))
-      throw new Error('Collection holder distribution has an empty or repeated range');
-    ranges.add(bucket.range);
-    const n = count(bucket.holders, 'bucket holders');
-    const items = count(bucket.items, 'bucket items');
-    if (items < n || (n === BigInt(0) && items !== BigInt(0)))
-      throw new Error(`Collection holder distribution has inconsistent counts: ${bucket.range}`);
-    totalHolders += n;
-    totalItems += items;
-  }
-  for (const holder of holders.data?.data ?? []) {
-    holderKey(holder);
-    count(holder.itemCount, 'holder item count');
-  }
-  // The list (server-cached up to 30 s) and the distribution are separate reads: when a page
-  // lists more holders than the distribution counts, say so and show both (#6).
-  const readsDiffer =
-    !!distribution && !!holders.data && BigInt(holders.data.data.length) > totalHolders;
+  // The distribution's totals, read while its column is drawn: a distribution that breaks its
+  // invariants fails its own column in place (D7), the holders' table and the heading standing.
+  const totalsOf = () => {
+    let holdersTotal = BigInt(0);
+    let itemsTotal = BigInt(0);
+    const ranges = new Set<string>();
+    for (const bucket of distribution ?? []) {
+      if (!bucket.range || ranges.has(bucket.range))
+        throw new Error('Collection holder distribution has an empty or repeated range');
+      ranges.add(bucket.range);
+      const n = count(bucket.holders, 'bucket holders');
+      const items = count(bucket.items, 'bucket items');
+      if (items < n || (n === BigInt(0) && items !== BigInt(0)))
+        throw new Error(`Collection holder distribution has inconsistent counts: ${bucket.range}`);
+      holdersTotal += n;
+      itemsTotal += items;
+    }
+    return { holders: holdersTotal, items: itemsTotal };
+  };
+  // the holders' table: where it is drawn, by its view and page (its part starts again on another)
+  const holdersWhere = `collection ${queryKey}, ${all ? `all holders, page ${pagination.page}` : 'top 10'}`;
   const rank = (holder: CollectionHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(holder) + 1;
   // the holder at the form's size (U-09): row in the table and in a phone row from sm, tight in
@@ -184,7 +178,8 @@ function ScopedCollectionHolders({
       `${holder.itemCount.toLocaleString('en-US')} ${countNoun(holder.itemCount, 'item', 'items')}`,
     ].join(' · ');
   const listed = holders.data?.data ?? [];
-  const columns: ListColumn<CollectionHolder>[] = [
+  // the holders' columns, built while their table is drawn (inside its part)
+  const columnsOf = (): ListColumn<CollectionHolder>[] => [
     {
       key: 'rank',
       label: '#',
@@ -234,7 +229,10 @@ function ScopedCollectionHolders({
     },
     countColumn('items', 'Items', listed, (holder) => holder.itemCount, assetClass, true),
   ];
-  const bucketColumns: ListColumn<NonNullable<CollectionHoldersProps['distribution']>[number]>[] = [
+  // the distribution's columns, built while its column is drawn (inside its part)
+  const bucketColumnsOf = (): ListColumn<
+    NonNullable<CollectionHoldersProps['distribution']>[number]
+  >[] => [
     {
       key: 'range',
       label: 'Holds',
@@ -288,41 +286,54 @@ function ScopedCollectionHolders({
           {holders.data ? (
             <>
               <AssetReadState error={holders.error} label="collection holders" retained />
-              <ListTable
-                label={all ? 'All collection holders' : 'Top 10 collection holders'}
-                columns={wordHeads(columns)}
-                rows={holders.data.data}
-                rowKey={holderKey}
-                empty="No current holders."
-                density="row"
-                rowTitle={holderTitle}
-                mobileRow={(holder, wide) => {
-                  // R7: the table's scale for its Items bars — the page's rounded maximum.
-                  const scale = resourceScale(listed.map((h) => h.itemCount));
+              {/* a refusal while the holders are drawn fails their table in its place (D7) */}
+              <PartReadBoundary
+                what="the collection holders"
+                where={holdersWhere}
+                render={() => {
+                  for (const holder of holders.data!.data) {
+                    holderKey(holder);
+                    count(holder.itemCount, 'holder item count');
+                  }
                   return (
-                    <HolderPhoneRow
-                      rank={rank(holder)}
-                      party={party(holder, phoneSize)}
-                      lock={(() => {
-                        // no part where the row names no lock (B4)
-                        const words = rowLock(holder, 'inline');
-                        return words && <LockWordsView words={words} size={phoneSize} />;
-                      })()}
-                      amount={
-                        <span className="whitespace-nowrap">
-                          <AssetCount value={holder.itemCount} />{' '}
-                          <span className="text-text-dim text-small">
-                            {countNoun(holder.itemCount, 'item', 'items')}
-                          </span>
-                        </span>
-                      }
-                      bar={{
-                        value: holder.itemCount,
-                        scale,
-                        color: CLASS_COLORS[assetClass],
+                    <ListTable
+                      label={all ? 'All collection holders' : 'Top 10 collection holders'}
+                      columns={wordHeads(columnsOf())}
+                      rows={holders.data.data}
+                      rowKey={holderKey}
+                      empty="No current holders."
+                      density="row"
+                      rowTitle={holderTitle}
+                      mobileRow={(holder, wide) => {
+                        // R7: the table's scale for its Items bars — the page's rounded maximum.
+                        const scale = resourceScale(listed.map((h) => h.itemCount));
+                        return (
+                          <HolderPhoneRow
+                            rank={rank(holder)}
+                            party={party(holder, phoneSize)}
+                            lock={(() => {
+                              // no part where the row names no lock (B4)
+                              const words = rowLock(holder, 'inline');
+                              return words && <LockWordsView words={words} size={phoneSize} />;
+                            })()}
+                            amount={
+                              <span className="whitespace-nowrap">
+                                <AssetCount value={holder.itemCount} />{' '}
+                                <span className="text-text-dim text-small">
+                                  {countNoun(holder.itemCount, 'item', 'items')}
+                                </span>
+                              </span>
+                            }
+                            bar={{
+                              value: holder.itemCount,
+                              scale,
+                              color: CLASS_COLORS[assetClass],
+                            }}
+                            axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
+                            wide={wide}
+                          />
+                        );
                       }}
-                      axis={listed[0] === holder ? formatTick(scale, scale) : undefined}
-                      wide={wide}
                     />
                   );
                 }}
@@ -348,53 +359,71 @@ function ScopedCollectionHolders({
         </div>
         {distribution && (
           <div className="min-w-0">
-            <p className="text-text-dim text-meta max-w-measure mb-2 break-words">
-              Full collection: <AssetCount value={totalHolders.toString()} /> holders ·{' '}
-              <AssetCount value={totalItems.toString()} /> items
-            </p>
-            {readsDiffer && (
-              <p role="note" className="text-text-dim text-meta max-w-measure mb-2">
-                The holder list ({holders.data!.data.length.toLocaleString('en-US')} shown) and the
-                distribution ({totalHolders.toLocaleString('en-US')} holder
-                {totalHolders === BigInt(1) ? '' : 's'}) were read at different moments.
-              </p>
-            )}
-            <ListTable
-              label="Holders by how many items they hold"
-              columns={wordHeads(bucketColumns)}
-              rows={distribution}
-              rowKey={(bucket) => bucket.range}
-              empty="No current holders."
-              density="row"
-              mobileRow={(bucket) => (
-                <PhoneRow
-                  testId="holder-bucket-row-mobile"
-                  lines={[
-                    {
-                      key: 'range',
-                      tone: 'body',
-                      left: (
-                        <>
-                          holds {bucket.range}
-                          <span className="text-text-dim">
-                            {' · '}
-                            <AssetCount value={bucket.items} />{' '}
-                            {countNoun(bucket.items, 'item', 'items')}
-                          </span>
-                        </>
-                      ),
-                      right: (
-                        <span className="inline-flex items-center gap-1.5">
-                          {bucketColumns[1].render(bucket)}
-                          <span className="text-text-dim">
-                            {countNoun(bucket.holders, 'holder', 'holders')}
-                          </span>
-                        </span>
-                      ),
-                    },
-                  ]}
-                />
-              )}
+            {/* a distribution that breaks its invariants fails this column in place (D7) */}
+            <PartReadBoundary
+              what="the holder distribution"
+              where={`collection ${queryKey}`}
+              render={() => {
+                const totals = totalsOf();
+                const bucketColumns = bucketColumnsOf();
+                // The list (server-cached up to 30 s) and the distribution are separate reads:
+                // when a page lists more holders than the distribution counts, say so and show
+                // both (#6).
+                const readsDiffer =
+                  !!holders.data && BigInt(holders.data.data.length) > totals.holders;
+                return (
+                  <>
+                    <p className="text-text-dim text-meta max-w-measure mb-2 break-words">
+                      Full collection: <AssetCount value={totals.holders.toString()} /> holders ·{' '}
+                      <AssetCount value={totals.items.toString()} /> items
+                    </p>
+                    {readsDiffer && (
+                      <p role="note" className="text-text-dim text-meta max-w-measure mb-2">
+                        The holder list ({holders.data!.data.length.toLocaleString('en-US')} shown)
+                        and the distribution ({totals.holders.toLocaleString('en-US')} holder
+                        {totals.holders === BigInt(1) ? '' : 's'}) were read at different moments.
+                      </p>
+                    )}
+                    <ListTable
+                      label="Holders by how many items they hold"
+                      columns={wordHeads(bucketColumns)}
+                      rows={distribution}
+                      rowKey={(bucket) => bucket.range}
+                      empty="No current holders."
+                      density="row"
+                      mobileRow={(bucket) => (
+                        <PhoneRow
+                          testId="holder-bucket-row-mobile"
+                          lines={[
+                            {
+                              key: 'range',
+                              tone: 'body',
+                              left: (
+                                <>
+                                  holds {bucket.range}
+                                  <span className="text-text-dim">
+                                    {' · '}
+                                    <AssetCount value={bucket.items} />{' '}
+                                    {countNoun(bucket.items, 'item', 'items')}
+                                  </span>
+                                </>
+                              ),
+                              right: (
+                                <span className="inline-flex items-center gap-1.5">
+                                  {bucketColumns[1].render(bucket)}
+                                  <span className="text-text-dim">
+                                    {countNoun(bucket.holders, 'holder', 'holders')}
+                                  </span>
+                                </span>
+                              ),
+                            },
+                          ]}
+                        />
+                      )}
+                    />
+                  </>
+                );
+              }}
             />
           </div>
         )}

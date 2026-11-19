@@ -18,7 +18,7 @@ import { formatCount } from '@/lib/format-count';
 import { unitText } from '@/components/ui/units';
 import { ShortId } from '@/components/ui/short-id';
 import { Utc8Date } from '@/components/ui/utc8-date';
-import { cellOwnerLock, LockWordsView } from '@/components/ui/lock-kind';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 
 /**
  * "The cluster cell, byte by byte" (consistency C5, Main board tier 2): the current cluster cell's
@@ -33,7 +33,7 @@ export function ClusterCellEvidence({
 }) {
   const { cell } = current;
   const type = cell.type;
-  const holderLock = cellOwnerLock(cell);
+  const holderLock = cellOwnerLockPart(cell, 'text-text');
   return (
     <ProtocolEvidence
       title="The cluster cell, byte by byte"
@@ -66,7 +66,7 @@ export function ClusterCellEvidence({
           {holderLock && (
             <>
               {' · '}
-              <LockWordsView words={holderLock} size="row" className="text-text" />
+              {holderLock}
             </>
           )}
         </dd>

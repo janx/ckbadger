@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import ScriptByCodeHashPage from '@/app/script/[codeHash]/client-page';
@@ -27,10 +27,11 @@ const mockGovernanceArgs = '0xa222222222222222222222222222222222222222';
 const mockDeploymentTxHash = '0x4444444444444444444444444444444444444444444444444444444444444444';
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 let currentCodeHashParam = mockCodeHash;
+let currentSearch = new URLSearchParams();
 
 vi.mock('@/src/navigation', () => ({
   useParams: () => ({ codeHash: currentCodeHashParam }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => currentSearch,
   useRouter: () => ({ replace: replaceMock }),
 }));
 
@@ -46,6 +47,7 @@ describe('ScriptByCodeHashPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     currentCodeHashParam = mockCodeHash;
+    currentSearch = new URLSearchParams();
     vi.mocked(api.lookupScripts).mockImplementation(async (codeHashes) => {
       const response: Record<string, any> = {};
 
@@ -227,6 +229,78 @@ describe('ScriptByCodeHashPage', () => {
         `/scripts/${encodeURIComponent('Default Lock')}?ref=${mockCodeHash}&hashType=type&kind=lock`
       );
     });
+  });
+
+  // Lane B4 third round (review-rules-fixes2 MUST 2, the coordinator's item 2): a lock's link
+  // carries its hash type. A code hash the registry names by `type` (a family's type-id
+  // reference) opened by `data` is another script: the code whose data hashes to that code hash,
+  // which no cell can have for a type id. The page does not send it to the family it is not; it
+  // stays on the code hash, by the hash type the link gives.
+  it('stays on a code hash its family does not reference by the hash type asked', async () => {
+    currentSearch = new URLSearchParams('hashType=data&kind=lock');
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [mockCodeHash]: {
+        referenceHash: mockCodeHash,
+        codeHash: mockCodeHash,
+        name: 'Default Lock',
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: mockCodeHash,
+        deploymentDataHash: mockDataHash,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+        liveCellsCount: 15,
+        ownedCapacitySum: '25000000000',
+        ownedKnowledgeSum: '14000000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
+        resolutionState: 'resolved',
+        ambiguity: null,
+      },
+    });
+
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+
+    await waitFor(() => expect(api.lookupScripts).toHaveBeenCalled());
+    // the lookup answered, and the page acted on it
+    await act(async () => {
+      await vi.mocked(api.lookupScripts).mock.results[0].value;
+    });
+    expect(replaceMock).not.toHaveBeenCalled();
+    expect(screen.queryByText('Resolving script page…')).toBeNull();
+    expect(await screen.findByRole('table', { name: 'Code versions' })).toBeInTheDocument();
+  });
+
+  it('sends a code hash its family references by the hash type asked to the family', async () => {
+    currentSearch = new URLSearchParams('hashType=type&kind=lock');
+    vi.mocked(api.lookupScripts).mockResolvedValue({
+      [mockCodeHash]: {
+        referenceHash: mockCodeHash,
+        codeHash: mockCodeHash,
+        name: 'Default Lock',
+        scriptKind: 'lock',
+        decoderType: null,
+        hashType: 'type',
+        deploymentTypeHash: mockCodeHash,
+        deploymentDataHash: mockDataHash,
+        codeCellTxHash: null,
+        codeCellOutputIndex: null,
+        liveCellsCount: 15,
+        ownedCapacitySum: '25000000000',
+        ownedKnowledgeSum: '14000000000',
+        codeCellsLiveCount: 0,
+        codeCellsTotal: 0,
+        resolutionState: 'resolved',
+        ambiguity: null,
+      },
+    });
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+    await waitFor(() =>
+      expect(replaceMock).toHaveBeenCalledWith(
+        `/scripts/${encodeURIComponent('Default Lock')}?ref=${mockCodeHash}&hashType=type&kind=lock`
+      )
+    );
   });
 
   // Readability F3-e: every column of the code reference's tables budgeted from what it holds, at
