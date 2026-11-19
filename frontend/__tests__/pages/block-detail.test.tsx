@@ -7,6 +7,8 @@ import { ErrorBoundary } from '@/components/error-boundary';
 import { render } from '@/__tests__/utils/test-utils';
 import { loadUnderStillClock, T0, tick } from '@/__tests__/utils/still-clock';
 import { factsOf } from '@/__tests__/utils/facts';
+import { textPx } from '@/lib/type-metrics';
+import { expectOneRowSeal } from '@/__tests__/utils/seals';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { api } from '@/lib/api';
 
@@ -163,7 +165,9 @@ describe('BlockDetailPage', () => {
     const facts = factsOf(strip);
     expect(facts.map(([label]) => label)).toEqual(['status', 'time', 'miner', 'reward']);
     expect(facts[0][1]).toBe('canonical · 12 confirmations');
-    expect(facts[1][1]).toMatch(/^2026-02-22 08:00:00 UTC\+8 · \S+ ago · 10 s after its parent$/);
+    // re-pinned on purpose (lane D2b): the time's note is its age alone; "10 s after its parent"
+    // stands in the evidence tier's facts, so the strip is one row at 1280
+    expect(facts[1][1]).toMatch(/^2026-02-22 08:00:00 UTC\+8 · \S+ ago$/);
     expect(facts[2][1]).toBe('ckb1…ysf30a0g');
     expect(facts[3][1]).toBe('100 CKB · paid in #8,775,649');
     expect(within(strip).getByRole('link', { name: '#8,775,649' })).toHaveAttribute(
@@ -178,6 +182,41 @@ describe('BlockDetailPage', () => {
     const tier2 = screen.getByTestId('block-tier2-facts');
     expect(within(tier2).getByText('Fees').parentElement).toHaveTextContent(
       /^Fees0\.00012345 CKB$/
+    );
+  });
+
+  // Lane D2b: the block's strip stands in one row at 1280 (its content is 1,232 px): the note "N s
+  // after its parent" made it 1,327.6 px and two rows; it is a fact of the evidence tier now. The
+  // arithmetic, from the strip as drawn, with the widest real values: a 20,000,000-confirmation
+  // block, the widest age ("6y 363d ago"), a miner at the row size, a four-digit reward paid at
+  // #21,000,011. A value is counted at 14 px (its unit too, which is 12), a note at 13 px with the
+  // separator list's 33.6 px before it, the state's dot 13 px, 44 px between facts.
+  it('states its strip in one row at 1280: the parent interval is an evidence fact (lane D2b)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({
+      ...mockBlock,
+      confirmations: 20_000_000,
+      rewardPaidAtBlock: 21_000_011,
+    });
+    render(<BlockDetailPage />);
+    const strip = await screen.findByRole('group', { name: 'Block status' });
+    expect(strip).not.toHaveTextContent('after its parent');
+    const widest = factsOf(strip).map(([label, text]) => {
+      const [drawn, ...notes] = text.split(' · ');
+      // the widest age, and a four-digit reward to the shannon (the fixture's is 100 CKB)
+      const value = label === 'reward' ? '1,234.56789012 CKB' : drawn;
+      const shownNotes = label === 'time' ? ['6y 363d ago'] : notes;
+      const line =
+        (label === 'status' ? 13 : 0) +
+        textPx(value.length, 14) +
+        shownNotes.reduce((w, note) => w + 33.6 + textPx(note.length, 13), 0);
+      return Math.max(textPx(label.length, 12), line);
+    });
+    const row = widest.reduce((s, w) => s + w, 0) + 44 * (widest.length - 1);
+    expect(row).toBeLessThanOrEqual(1232);
+    // the interval stands in the evidence tier's facts, as it was written
+    const tier2 = screen.getByTestId('block-tier2-facts');
+    expect(within(tier2).getByText('Interval').parentElement).toHaveTextContent(
+      /^Interval10 s after its parent$/
     );
   });
 
@@ -476,6 +515,24 @@ describe('BlockDetailPage', () => {
     );
   });
 
+  // Lane D2b (U-03, R8; the owner's ruling of 2026-11-19): an included uncle's row leads with its
+  // row stone, the block stone without rods (the chain keeps no transactions for an uncle), in the
+  // dead ink, as the fork page's dropped block leads with its stone.
+  it('leads every included uncle’s row with its row stone, without rods, in the dead ink (lane D2b)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, unclesCount: 1, uncles: [carrier] });
+    vi.mocked(api.getBlockProposals).mockResolvedValue([]);
+    render(<BlockDetailPage />);
+    const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest(
+      'section'
+    ) as HTMLElement;
+    const row = within(uncles)
+      .getByRole('link', { name: /#8,775,637/ })
+      .closest('article')!;
+    expectOneRowSeal(row, { kind: 'block', hash: carrier.hash, txs: 'not kept' }, 'ink');
+    // the stone leads the row, its words beside it
+    expect(row.firstElementChild).toHaveAttribute('data-seal', 'block');
+  });
+
   it('names an uncle the block read does not list yet as text, without crashing (#6)', async () => {
     // Block and proposals are two reads; a reorg between them is timing, not a broken invariant.
     vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, proposalsCount: 1, unclesCount: 0 });
@@ -635,7 +692,12 @@ describe('BlockDetailPage', () => {
       expect(age()).toBe('59s ago');
       tick(1000);
       expect(age()).toBe('1m ago');
-      expect(facts()).toHaveTextContent(/1m ago · [\d,.]+ s after its parent/);
+      // re-pinned on purpose (lane D2b): the age is the time's one note; the interval to the
+      // parent is the evidence tier's fact (it followed the age here)
+      expect(facts()).not.toHaveTextContent('after its parent');
+      expect(screen.getByTestId('block-tier2-facts')).toHaveTextContent(
+        /[\d,.]+ s after its parent/
+      );
       unmount();
       expect(vi.getTimerCount()).toBe(0);
     } finally {

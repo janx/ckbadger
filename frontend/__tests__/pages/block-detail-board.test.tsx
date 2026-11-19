@@ -894,7 +894,10 @@ describe('Block board · R2b-a fields', () => {
     render(<BlockDetailPage />);
     const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
     const row = uncles.querySelector('article')!;
-    expect(row).toHaveClass('flex-col');
+    // re-pinned on purpose (lane D2b): the row leads with its row stone, so the article is the
+    // stone beside a stack, and the stack holds the three lines (the article was the stack)
+    expect(row.firstElementChild).toHaveAttribute('data-seal', 'block');
+    expect(row.lastElementChild).toHaveClass('flex-col');
     await waitFor(() => expect(row).toHaveTextContent(/sibling of #20,827,931 0x95959595…959595,/));
   });
 

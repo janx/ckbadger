@@ -115,9 +115,19 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
   ];
   return (
     <DetailLayout
-      title={`Uncle ${formatBlockNumber(uncle.number)}`}
+      // The block's name plate (lane D2b; U-03, PA-06, the UI review's R8): the kind line says
+      // "Uncle", so the h1 is the height alone, as the block page's is
+      title={formatBlockNumber(uncle.number)}
       documentTitle={[formatBlockNumber(uncle.number), 'uncle']}
       identity={<HeadId value={uncle.hash} kind="hash" copy="copy uncle hash" />}
+      // The block stone without rods, in the dead ink (the owner's ruling of 2026-11-19): a block
+      // stone counts its transactions in rods, and the chain keeps none for an uncle (its header
+      // and its proposals); an uncle is no longer in force, as a consumed cell is not
+      seal={{
+        id: { kind: 'block', hash: uncle.hash, txs: 'not kept' },
+        state: 'ink',
+        kind: 'Uncle',
+      }}
       // The status strip under the id line (lane D2; PA-13, PA-06): the block that included it
       // (the dot in the dead ink: an uncle is no longer in force), its time with its age and the
       // delay to its sibling, the canonical block at its height and its epoch; its sentence
@@ -155,33 +165,40 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         ],
       }}
       lede={
-        <p className="text-body leading-relaxed">
-          Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
-          {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
-          chain is{' '}
-          <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
-            <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
-          </Link>
-          {delay ? (
-            <>
-              , its sibling: both were mined on parent{' '}
-              <Link href={`/blocks/${uncle.parentHash}`}>
-                {formatBlockNumber(uncle.number - 1)} <Hash hash={uncle.parentHash} size="row" />
-              </Link>
-              , and this uncle came {delay} it.
-            </>
-          ) : (
-            <>
-              , which has another parent; this uncle was mined on parent{' '}
-              <Link href={`/blocks/${uncle.parentHash}`}>
-                <Hash hash={uncle.parentHash} size="row" />
-              </Link>
-              .
-            </>
-          )}{' '}
-          It is not part of the canonical chain: its transactions never ran, but the proposals it
-          carried count toward the proposal window.
-        </p>
+        <>
+          <p className="text-body leading-relaxed">
+            Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
+            {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
+            chain is{' '}
+            <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+              <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
+            </Link>
+            {delay ? (
+              <>
+                , its sibling: both were mined on parent{' '}
+                <Link href={`/blocks/${uncle.parentHash}`}>
+                  {formatBlockNumber(uncle.number - 1)} <Hash hash={uncle.parentHash} size="row" />
+                </Link>
+                , and this uncle came {delay} it.
+              </>
+            ) : (
+              <>
+                , which has another parent; this uncle was mined on parent{' '}
+                <Link href={`/blocks/${uncle.parentHash}`}>
+                  <Hash hash={uncle.parentHash} size="row" />
+                </Link>
+                .
+              </>
+            )}{' '}
+            It is not part of the canonical chain: its transactions never ran, but the proposals it
+            carried count toward the proposal window.
+          </p>
+          {/* why its stone has no rods, said once (lane D2b) */}
+          <p className="text-body mt-2 leading-relaxed">
+            Its seal has no rods: a block’s seal counts its transactions in rods, and the chain
+            keeps none for an uncle.
+          </p>
+        </>
       }
       tier2={
         <>

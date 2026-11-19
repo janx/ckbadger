@@ -5,6 +5,7 @@ import { mockItemReads, dotcellItem, emptyPage } from '@/__tests__/utils/item-re
 import { dotcellProtocolProducer as evidence } from '@/__tests__/msw/fixtures/item-producer';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { fullText } from '@/__tests__/utils/full-text';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -26,6 +27,29 @@ it('reads its term, then its records, then its roles (lane D2, PB-22)', async ()
     Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
   expect(follows(term, records)).toBe(true);
   expect(follows(records, roles)).toBe(true);
+});
+// Lane D2b (PB-22, the owner line D2 left untested): a .cell party's Owner fact is drawn as every
+// identity page's owner line is — the address at the row size through `Address`, in the key look
+// (the .bit, .bit Cell and did:ckb Owner facts draw it so; a .cell party drew a Hash in an AppLink).
+it('draws its Owner fact as every identity page’s owner line: an Address at the row size, in the key look (lane D2b)', async () => {
+  const address = seededAddress('dotcell-owner');
+  vi.mocked(api.getDotCellItemDetail).mockResolvedValue({
+    ...dotcellItem(),
+    owner: {
+      hashPrefix: '0x' + 'ab'.repeat(20),
+      lockHash: '0x' + 'cd'.repeat(32),
+      address,
+      scriptName: 'Default Lock',
+    },
+  });
+  render(<Page identityId={evidence.itemId} />);
+  const facts = await screen.findByRole('region', { name: 'Metrics' });
+  const owner = within(facts).getByText('Owner', { selector: 'dt' }).parentElement!;
+  const link = within(owner).getByRole('link');
+  expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);
+  expect(link).toHaveTextContent(new RegExp(`^ckb1…${address.slice(-8)}$`));
+  // the key look, through the Address renderer: the bright ink, the body step, the mono face
+  expect(link).toHaveClass('text-text-bright', 'text-body', 'font-mono');
 });
 it('routes only an actual name 404 to exact endpoint evidence', async () => {
   vi.mocked(api.getDotCellItemDetail).mockRejectedValue(
