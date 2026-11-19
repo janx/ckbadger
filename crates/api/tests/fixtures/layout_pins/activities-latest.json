@@ -3,6 +3,7 @@
     "blockNumber": 5,
     "isCellbase": false,
     "itemTypes": [],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {
@@ -38,6 +39,7 @@
     "blockNumber": 4,
     "isCellbase": false,
     "itemTypes": [],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {
@@ -79,6 +81,7 @@
         "typeHashType": "type"
       }
     ],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {
@@ -134,6 +137,7 @@
         "typeHashType": "data1"
       }
     ],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {
@@ -201,6 +205,7 @@
         "typeHashType": "type"
       }
     ],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {
@@ -249,6 +254,7 @@
         "typeHashType": "data1"
       }
     ],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {
@@ -297,6 +303,7 @@
     "blockNumber": 1,
     "isCellbase": false,
     "itemTypes": [],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {
@@ -338,6 +345,7 @@
         "typeHashType": "data1"
       }
     ],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {

@@ -3,6 +3,7 @@
     "blockNumber": 4,
     "isCellbase": false,
     "itemTypes": [],
+    "itemTypesUnread": null,
     "lockCalls": [],
     "participants": [
       {

@@ -196,9 +196,11 @@ pub struct ActivityResponse {
     // TX-level Layer 3
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
-    /// The transaction's items' and Nervos DAO step's type scripts ([`item_types`]); `None`
-    /// exactly on a pool row.
+    /// The transaction's items' and Nervos DAO step's type scripts ([`item_types`]); `None` on a
+    /// pool row, and on a committed row whose item's script the stores cannot say
+    /// (`item_types_unread` says why).
     pub item_types: Option<Vec<ItemTypeResponse>>,
+    pub item_types_unread: Option<String>,
     pub protocol_actions: Vec<ProtocolActionResponse>,
     // Other participants
     pub participants: Vec<ParticipantRef>,
@@ -306,9 +308,11 @@ pub struct GlobalActivityResponse {
     pub protocol_actions: Vec<ProtocolActionResponse>,
     pub type_calls: Vec<TypeCallResponse>,
     pub lock_calls: Vec<LockCallResponse>,
-    /// The transaction's items' and Nervos DAO step's type scripts ([`item_types`]); `None`
-    /// exactly on a pool row.
+    /// The transaction's items' and Nervos DAO step's type scripts ([`item_types`]); `None` on a
+    /// pool row, and on a committed row whose item's script the stores cannot say
+    /// (`item_types_unread` says why).
     pub item_types: Option<Vec<ItemTypeResponse>>,
+    pub item_types_unread: Option<String>,
     // All participants with their data
     pub participants: Vec<ParticipantResponse>,
 }
@@ -338,8 +342,16 @@ fn default_latest_limit() -> usize {
     8
 }
 
-/// A token's `(symbol, decimals)`, `None` when no token row exists.
-type TokenDisplay = Option<(Option<String>, Option<u8>)>;
+/// What an activity reads of a token's row, once: its symbol and decimals, and its type script's
+/// code (`item_types`); `None` when no token row exists.
+#[derive(Clone)]
+struct TokenFacts {
+    symbol: Option<String>,
+    decimals: Option<u8>,
+    type_code_hash: Vec<u8>,
+    hash_type: i16,
+}
+type TokenDisplay = Option<TokenFacts>;
 
 /// What one response has already read for its item deltas: token symbol /
 /// decimals, and object delta contexts keyed by `(object id, indexed)` — a
@@ -427,33 +439,53 @@ pub struct ItemTypeResponse {
     pub script_name: Option<String>,
 }
 
+/// What a committed activity states of its items' scripts ([`item_types`]): the codes, or, where
+/// the stores cannot say one item's, why (`types` is then `None`). A part the stores cannot state
+/// fails that part only: the row says so and stands alone in a feed, never the response.
+pub(crate) struct ItemTypesRead {
+    pub types: Option<Vec<ItemTypeResponse>>,
+    pub unread: Option<String>,
+}
+
 /// The type scripts a committed activity's items and its Nervos DAO step carry, each code once,
 /// in code-hash then hash-type order: the type script of every token, object and identity a
-/// participant gained or lost ([`item_type_script`]), and the Nervos DAO's when the transaction
-/// took a DAO step. Read from ckbadger's own stores in the request's pinned view, never from the
-/// node. Beside it, `typeCalls` are the type scripts the indexer does not recognise (an item's
-/// type never is one), and `lockCalls` the non-standard locks attached to the transaction's
-/// OUTPUTS, which did not run: the locks that ran are its inputs', which the stored activity does
-/// not name yet (they wait for the indexer's per-participant input flag, a re-sync).
+/// participant gained or lost, as the indexer classified the item ([`item_type_script`]), and the
+/// Nervos DAO's when the transaction took a DAO step. Read from ckbadger's own stores in the
+/// request's pinned view, never from the node. Beside it, `typeCalls` are the type scripts the
+/// indexer does not recognise (an item's type never is one), and `lockCalls` the non-standard
+/// locks attached to the transaction's OUTPUTS, which did not run: the locks that ran are its
+/// inputs', which the stored activity does not name yet (they wait for the indexer's
+/// per-participant input flag, a re-sync).
 fn item_types(
     store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
     actions: &TxActions,
     names: &mut ScriptNameCache,
-) -> anyhow::Result<Vec<ItemTypeResponse>> {
+    items: &mut ItemDeltaCache,
+) -> anyhow::Result<ItemTypesRead> {
     let mut codes: std::collections::BTreeSet<(Vec<u8>, i16)> = std::collections::BTreeSet::new();
     let mut read: Vec<(ItemKind, &[u8])> = Vec::new();
+    let mut outputs = CreatingOutputs::default();
     for item in actions.participants.iter().flat_map(|p| &p.item_deltas) {
-        if !read.contains(&(item.kind, item.item_id.as_slice())) {
-            read.push((item.kind, item.item_id.as_slice()));
-            codes.insert(item_type_script(store, cells_store, item).map_err(|e| {
-                anyhow::anyhow!(
-                    "activity tx 0x{} at block {}: item 0x{}: {e}",
-                    hex::encode(&actions.tx_hash),
-                    actions.block_number,
-                    hex::encode(&item.item_id)
-                )
-            })?);
+        if read.contains(&(item.kind, item.item_id.as_slice())) {
+            continue;
+        }
+        read.push((item.kind, item.item_id.as_slice()));
+        match item_type_script(store, cells_store, item, &mut outputs, items)? {
+            Ok(code) => {
+                codes.insert(code);
+            }
+            Err(why) => {
+                return Ok(ItemTypesRead {
+                    types: None,
+                    unread: Some(format!(
+                        "item 0x{} ({:?}) of tx 0x{}: {why}",
+                        hex::encode(&item.item_id),
+                        item.kind,
+                        hex::encode(&actions.tx_hash)
+                    )),
+                })
+            }
         }
     }
     if actions.protocol_actions.iter().any(|a| a.protocol == "dao") {
@@ -464,7 +496,7 @@ fn item_types(
             .ok_or_else(|| anyhow::anyhow!("the hash type table has no \"type\""))?;
         codes.insert((dao, i16::from(type_byte)));
     }
-    codes
+    let types = codes
         .into_iter()
         .map(|(code, hash_type)| {
             Ok(ItemTypeResponse {
@@ -475,101 +507,175 @@ fn item_types(
                 script_name: cached_script_name(store, names, &code)?,
             })
         })
-        .collect()
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    Ok(ItemTypesRead {
+        types: Some(types),
+        unread: None,
+    })
 }
 
-/// An item's type script (code hash, hash type), read from its own record:
+/// A creating transaction's outputs as one activity reads them, each transaction once.
+#[derive(Default)]
+struct CreatingOutputs(HashMap<Vec<u8>, Vec<Option<ckbadger_store::types::LiveCellInfo>>>);
+
+impl CreatingOutputs {
+    /// The outputs of `tx_hash` (`None` where its payload is missing), or why there are none.
+    fn of(
+        &mut self,
+        store: &CkbadgerStore,
+        cells_store: &CkbadgerStore,
+        tx_hash: &[u8],
+    ) -> anyhow::Result<Result<&[Option<ckbadger_store::types::LiveCellInfo>], String>> {
+        if !self.0.contains_key(tx_hash) {
+            let Some((_, _, tx)) = store.get_tx_by_hash(tx_hash)? else {
+                return Ok(Err(format!(
+                    "its creating transaction 0x{} is not indexed",
+                    hex::encode(tx_hash)
+                )));
+            };
+            let outputs = cells_store.get_tx_output_payloads(tx_hash, tx.outputs_count)?;
+            self.0.insert(tx_hash.to_vec(), outputs);
+        }
+        Ok(Ok(self.0[tx_hash].as_slice()))
+    }
+}
+
+/// The type script of a cell the indexer recorded, or why its payload does not hold one.
+fn recorded_cell_type(
+    cells_store: &CkbadgerStore,
+    tx_hash: &[u8],
+    index: i16,
+) -> anyhow::Result<Result<(Vec<u8>, i16), String>> {
+    let at = format!("0x{}:{index}", hex::encode(tx_hash));
+    let Some(cell) =
+        cells_store.get_cell_by_outpoint_key(&keys::encode_outpoint(tx_hash, index))?
+    else {
+        return Ok(Err(format!("its recorded cell {at} has no payload")));
+    };
+    Ok(cell_type(&cell).ok_or_else(|| format!("its recorded cell {at} has no type script")))
+}
+
+fn cell_type(cell: &ckbadger_store::types::LiveCellInfo) -> Option<(Vec<u8>, i16)> {
+    Some((cell.type_code_hash?.to_vec(), cell.type_hash_type?))
+}
+
+/// The one code among `codes`, or why there is not one.
+fn the_one(
+    codes: std::collections::BTreeSet<(Vec<u8>, i16)>,
+    what: &str,
+) -> Result<(Vec<u8>, i16), String> {
+    match codes.len() {
+        1 => Ok(codes.into_iter().next().expect("one code")),
+        0 => Err(format!("no {what}")),
+        n => Err(format!("{n} {what}s under different codes")),
+    }
+}
+
+/// An item's type script (code hash, hash type) as the indexer classified the item, read from
+/// what the stores hold for it, never guessed from bytes a transaction carries (anyone can write a
+/// second output whose args equal an item's id under any code):
 ///
-/// - a token: its row (`CF_TOKENS`, keyed by the type script hash the item is);
-/// - an object (a spore, a Spore cluster, an m-NFT token): the output of its creating transaction
-///   (its row's `created_at_tx`) whose type args are its id, as the activity writer took the id
-///   from the type args;
-/// - an identity (.bit Cell, did:ckb, `.cell`): its cells in the item outpoint index
-///   (`object_outpoint_by_id`), and a .bit account's by its account id; every cell of one item
-///   carries one type script, so its first is read.
+/// - a token: its row (`CF_TOKENS`, keyed by the type script hash the item is), the script itself;
+/// - a spore, and an identity of the shared id space (did:ckb, .bit Cell, `.cell`): the first cell
+///   the indexer recorded for it in the item outpoint index (`object_outpoint_by_id`); a .bit
+///   account: the first cell recorded for its account id; the payload holds its type script, and
+///   every cell recorded for one item was classified by the same rule;
+/// - an m-NFT token: the outputs of its creating transaction (its row's `created_at_tx`) the
+///   indexer recorded as this token (`object_outpoints`, MNFT_TOKEN);
+/// - a Spore cluster, for which the indexer records no cell: the outputs of its creating
+///   transaction it would classify as a cluster, a code the protocol registry names `Cluster`
+///   (the classifier's own table) with the cluster's id as args.
 ///
-/// An item its record does not place is an indexer fault, refused.
+/// `Ok(Err(why))` where the stores cannot say: no row or no recorded cell, a recorded payload with
+/// no type script, or two codes for one item (a shape a transaction may carry). A read that fails
+/// is `Err`.
 fn item_type_script(
     store: &CkbadgerStore,
     cells_store: &CkbadgerStore,
     item: &ItemDelta,
-) -> anyhow::Result<(Vec<u8>, i16)> {
+    outputs: &mut CreatingOutputs,
+    items: &mut ItemDeltaCache,
+) -> anyhow::Result<Result<(Vec<u8>, i16), String>> {
+    use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
+    use ckbadger_store::types::ObjectStandard;
     let id = item.item_id.as_slice();
-    let of_cell = |cell: &ckbadger_store::types::LiveCellInfo, at: &str| {
-        Ok::<_, anyhow::Error>((
-            cell.type_code_hash
-                .ok_or_else(|| anyhow::anyhow!("its cell at {at} has no type script"))?
-                .to_vec(),
-            cell.type_hash_type
-                .ok_or_else(|| anyhow::anyhow!("its cell at {at} has no type hash type"))?,
-        ))
+    let first_recorded = |outpoints: Vec<(Vec<u8>, i16)>| -> anyhow::Result<Result<_, String>> {
+        match outpoints.first() {
+            Some((tx_hash, index)) => recorded_cell_type(cells_store, tx_hash, *index),
+            None => Ok(Err("no cell recorded for it".to_string())),
+        }
     };
     match item.kind {
-        ItemKind::Token => {
-            let token = store
-                .get_token(id)?
-                .ok_or_else(|| anyhow::anyhow!("a token item with no token row"))?;
-            Ok((token.type_code_hash, i16::from(token.hash_type)))
-        }
+        ItemKind::Token => Ok(match token_facts(store, &mut items.tokens, id)? {
+            Some(token) => Ok((token.type_code_hash, token.hash_type)),
+            None => Err("no token row".to_string()),
+        }),
         ItemKind::Object => {
-            let entry = match store.get_spore(id)? {
-                Some(entry) => entry,
-                None => store.get_mnft(id)?.ok_or_else(|| {
-                    anyhow::anyhow!("an object item with no spore, cluster or m-NFT row")
-                })?,
+            if let Some(entry) = store.get_spore(id)? {
+                return match entry.standard {
+                    ObjectStandard::Spore => {
+                        first_recorded(store.list_spore_outpoints_by_spore_id(id)?)
+                    }
+                    ObjectStandard::SporeCluster => {
+                        let made = match outputs.of(store, cells_store, &entry.created_at_tx)? {
+                            Ok(made) => made,
+                            Err(why) => return Ok(Err(why)),
+                        };
+                        let codes = made
+                            .iter()
+                            .flatten()
+                            .filter(|cell| cell.type_args.as_deref() == Some(id))
+                            .filter_map(cell_type)
+                            .filter(|(code, _)| PROTOCOL_REGISTRY.is(code, ProtocolScript::Cluster))
+                            .collect();
+                        Ok(the_one(codes, "cluster cell in its creating transaction"))
+                    }
+                    other => Ok(Err(format!("a {other:?} row where an object's is read"))),
+                };
+            }
+            let Some(entry) = store.get_mnft(id)? else {
+                return Ok(Err("no spore, cluster or m-NFT row".to_string()));
             };
-            let made_by = &entry.created_at_tx;
-            let (_, _, tx) = store.get_tx_by_hash(made_by)?.ok_or_else(|| {
-                anyhow::anyhow!(
-                    "its creating transaction 0x{} is not indexed",
-                    hex::encode(made_by)
-                )
-            })?;
-            let mut found = std::collections::BTreeSet::new();
-            for (index, cell) in cells_store
-                .get_tx_output_payloads(made_by, tx.outputs_count)?
+            if entry.standard != ObjectStandard::MnftToken {
+                return Ok(Err(format!(
+                    "a {:?} row where an m-NFT token's is read",
+                    entry.standard
+                )));
+            }
+            let made_by = entry.created_at_tx.clone();
+            let made = match outputs.of(store, cells_store, &made_by)? {
+                Ok(made) => made,
+                Err(why) => return Ok(Err(why)),
+            };
+            let indexes: Vec<i16> = (0..made.len())
+                .map(i16::try_from)
+                .collect::<Result<_, _>>()?;
+            let outpoints: Vec<(&[u8], i16)> = indexes
                 .iter()
-                .enumerate()
-            {
-                let cell = cell.as_ref().ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "its creating transaction 0x{} has no payload for output {index}",
-                        hex::encode(made_by)
-                    )
-                })?;
-                if cell.type_args.as_deref() == Some(id) {
-                    found.insert(of_cell(
-                        cell,
-                        &format!("0x{}:{index}", hex::encode(made_by)),
-                    )?);
-                }
-            }
-            match found.len() {
-                1 => Ok(found.into_iter().next().expect("one")),
-                n => anyhow::bail!(
-                    "its creating transaction 0x{} has {n} type scripts with its id as args, not one",
-                    hex::encode(made_by)
-                ),
-            }
+                .map(|index| (made_by.as_slice(), *index))
+                .collect();
+            let recorded: Vec<i16> = store
+                .get_mnft_token_ids_by_outpoints_batch(&outpoints)?
+                .into_iter()
+                .filter(|(_, _, token)| token.as_slice() == id)
+                .map(|(_, index, _)| index)
+                .collect();
+            let codes = recorded
+                .iter()
+                .filter_map(|index| made.get(usize::try_from(*index).ok()?)?.as_ref())
+                .filter_map(cell_type)
+                .collect();
+            Ok(the_one(
+                codes,
+                "recorded m-NFT token cell in its creating transaction",
+            ))
         }
-        ItemKind::Identity(standard) => {
-            let outpoints = match standard {
-                IdentityStandard::DotBit => {
-                    store.list_dotbit_account_outpoints_by_account_id(id)?
-                }
-                IdentityStandard::BitCell
-                | IdentityStandard::DidCkb
-                | IdentityStandard::DotCell => store.list_spore_outpoints_by_spore_id(id)?,
-            };
-            let (tx_hash, index) = outpoints.first().ok_or_else(|| {
-                anyhow::anyhow!("a {standard:?} item with no cell in the item outpoint index")
-            })?;
-            let at = format!("0x{}:{index}", hex::encode(tx_hash));
-            let cell = cells_store
-                .get_cell_by_outpoint_key(&keys::encode_outpoint(tx_hash, *index))?
-                .ok_or_else(|| anyhow::anyhow!("its cell at {at} has no payload"))?;
-            of_cell(&cell, &at)
-        }
+        ItemKind::Identity(standard) => first_recorded(match standard {
+            IdentityStandard::DotBit => store.list_dotbit_account_outpoints_by_account_id(id)?,
+            IdentityStandard::BitCell | IdentityStandard::DidCkb | IdentityStandard::DotCell => {
+                store.list_spore_outpoints_by_spore_id(id)?
+            }
+        }),
     }
 }
 
@@ -579,11 +685,20 @@ fn lookup_token_info(
     cache: &mut HashMap<Vec<u8>, TokenDisplay>,
     type_script_hash: &[u8],
 ) -> anyhow::Result<(Option<String>, Option<u8>)> {
+    Ok(token_facts(store, cache, type_script_hash)?
+        .map(|t| (t.symbol, t.decimals))
+        .unwrap_or((None, None)))
+}
+
+/// A token's row as one activity reads it, once for its item deltas and its item types (a row
+/// can be large: its icon, its description).
+fn token_facts(
+    store: &CkbadgerStore,
+    cache: &mut HashMap<Vec<u8>, TokenDisplay>,
+    type_script_hash: &[u8],
+) -> anyhow::Result<TokenDisplay> {
     if let Some(cached) = cache.get(type_script_hash) {
-        return Ok(cached
-            .as_ref()
-            .map(|(s, d)| (s.clone(), *d))
-            .unwrap_or((None, None)));
+        return Ok(cached.clone());
     }
     let result = store
         .get_token(type_script_hash)
@@ -593,9 +708,14 @@ fn lookup_token_info(
                 hex::encode(type_script_hash)
             )
         })?
-        .map(|t| (t.symbol.clone(), t.decimals.map(|d| d as u8)));
+        .map(|t| TokenFacts {
+            symbol: t.symbol.clone(),
+            decimals: t.decimals.map(|d| d as u8),
+            type_code_hash: t.type_code_hash,
+            hash_type: i16::from(t.hash_type),
+        });
     cache.insert(type_script_hash.to_vec(), result.clone());
-    Ok(result.unwrap_or((None, None)))
+    Ok(result)
 }
 
 /// Registered script names already read by one response, keyed by code hash
@@ -1069,7 +1189,7 @@ pub(crate) fn build_activity_response(
     script_info_cache: &mut ScriptNameCache,
     item_cache: &mut ItemDeltaCache,
     address_cache: &mut HashMap<Vec<u8>, Option<String>>,
-    item_types: Option<Vec<ItemTypeResponse>>,
+    item_types: Option<ItemTypesRead>,
     pool: Option<PoolRowMeta<'_>>,
 ) -> anyhow::Result<ActivityResponse> {
     anyhow::ensure!(
@@ -1112,7 +1232,8 @@ pub(crate) fn build_activity_response(
         item_deltas,
         type_calls: convert_type_calls(store, script_info_cache, &actions.type_calls)?,
         lock_calls: convert_lock_calls(store, script_info_cache, &actions.lock_calls)?,
-        item_types,
+        item_types: item_types.as_ref().and_then(|read| read.types.clone()),
+        item_types_unread: item_types.and_then(|read| read.unread),
         protocol_actions: actions
             .protocol_actions
             .iter()
@@ -1181,6 +1302,13 @@ pub(crate) fn build_global_activity_response_with_pool(
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
+    let types = match pool_record {
+        None => item_types(store, ao_store, actions, script_info_cache, &mut item_cache)?,
+        Some(_) => ItemTypesRead {
+            types: None,
+            unread: None,
+        },
+    };
     Ok(GlobalActivityResponse {
         tx_hash: format!("0x{}", hex::encode(&actions.tx_hash)),
         block_number: actions.block_number,
@@ -1194,10 +1322,8 @@ pub(crate) fn build_global_activity_response_with_pool(
             .collect::<anyhow::Result<Vec<_>>>()?,
         type_calls: convert_type_calls(store, script_info_cache, &actions.type_calls)?,
         lock_calls: convert_lock_calls(store, script_info_cache, &actions.lock_calls)?,
-        item_types: match pool_record {
-            None => Some(item_types(store, ao_store, actions, script_info_cache)?),
-            Some(_) => None,
-        },
+        item_types: types.types,
+        item_types_unread: types.unread,
         participants,
     })
 }
@@ -1505,6 +1631,7 @@ async fn get_address_activities(
                     cells.as_ref(),
                     actions,
                     &mut script_info_cache,
+                    &mut item_cache,
                 )?;
                 activities.push(build_activity_response(
                     store.as_ref(),

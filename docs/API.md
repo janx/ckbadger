@@ -79,12 +79,24 @@ and these codes, never their args)
 - `itemTypes: [{ typeCodeHash, typeHashType, scriptName }] | null` — the type scripts the
   transaction's items and its Nervos DAO step carry, each code (code hash and hash type) once, in
   code-hash order: the type script of every token, object and identity any participant gained or
-  lost, and the Nervos DAO's when it took a DAO step; `scriptName` is the registry's name. Read
-  from ckbadger's own stores in the request's view, from the item's own record: a token's row
-  (`CF_TOKENS`); an object's (spore, Spore cluster, m-NFT token) creating transaction's output
-  whose type args are its id; an identity's cell in the item outpoint index (did:ckb, .bit Cell,
-  `.cell` by item id, a .bit account by account id). An item its record does not place is a `500`
-  naming the transaction and the item. `null` exactly on a pool row (a pending row never folds).
+  lost, and the Nervos DAO's when it took a DAO step; `scriptName` is the registry's name. Each is
+  what the indexer classified, read from ckbadger's own stores in the request's view, never a
+  match on bytes a transaction carries (anyone can add an output whose args equal an item's id):
+  - a token: its row (`CF_TOKENS`), the script itself;
+  - a spore, a did:ckb, a .bit Cell, a `.cell` name: the first cell the indexer recorded for the
+    item (`object_outpoint_by_id`); a .bit account: the first cell recorded for its account id;
+  - an m-NFT token: the outputs of its creating transaction the indexer recorded as the token
+    (`object_outpoints`, MNFT_TOKEN);
+  - a Spore cluster, for which no cell is recorded: the outputs of its creating transaction the
+    classifier would take as the cluster (a code the protocol registry names `Cluster`, the
+    cluster's id as args).
+
+  `null` on a pool row (a pending row never folds), and on a committed row whose item's script the
+  stores cannot say (no row, no recorded cell, a recorded payload without a type, two codes for one
+  item): `itemTypesUnread` then says which item and why. That part fails alone; the page answers,
+  and a feed folds such a row with no other.
+
+- `itemTypesUnread: string | null` — see `itemTypes`.
 - `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
   with their args.
 - `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
