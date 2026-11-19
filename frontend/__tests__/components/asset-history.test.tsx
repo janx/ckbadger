@@ -330,7 +330,8 @@ describe('Asset history', () => {
   describe('names a supply-event party’s unregistered lock by its code hash (U-15)', () => {
     const unregistered = `0x${'43'.repeat(32)}`;
     // B4 second fix round (re-pinned on purpose): the link opens that lock, by the hash type its
-    // address spells, as a lock (the script page reads both)
+    // address spells, as a lock (the script page sends it to a family only where the family references
+    // the code hash by that hash type)
     const scriptPage = expect.stringMatching(
       new RegExp(`/script/${unregistered}\\?hashType=type&kind=lock$`)
     );

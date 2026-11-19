@@ -31,6 +31,36 @@ function normalizeHashType(value: string | null | undefined): string | null {
   return normalized || null;
 }
 
+/**
+ * Whether the family the registry names for a code hash references it by the hash type asked
+ * (lane B4 third round): by `type` where the code hash is the family's type id (or the registry
+ * references it by type), by `data` / `data1` / `data2` where it is the code's data hash (or the
+ * registry references it by data). The registry names a code hash alone, so a lock on a family's
+ * type-id code hash by data is another script, no cell's data hashing to a type id: it stays on
+ * the code hash, read by the hash type asked. No hash type asked takes the registry's reference.
+ */
+function familyReferences(
+  known: {
+    hashType: string | null;
+    deploymentTypeHash?: string | null;
+    deploymentDataHash?: string | null;
+  },
+  codeHash: string,
+  hashType: string | null
+): boolean {
+  if (hashType === null) return true;
+  if (hashType === 'type')
+    return known.hashType === 'type' || known.deploymentTypeHash?.toLowerCase() === codeHash;
+  if (hashType === 'data' || hashType === 'data1' || hashType === 'data2')
+    return (
+      (known.hashType !== null && known.hashType !== 'type') ||
+      known.deploymentDataHash?.toLowerCase() === codeHash
+    );
+  throw new Error(
+    `/script/${codeHash}: hash type ${JSON.stringify(hashType)} is not a CKB hash type`
+  );
+}
+
 export interface ScriptByCodeHashPageProps {
   codeHash: string;
 }
@@ -70,34 +100,36 @@ export default function ScriptByCodeHashPage({
     staleTime: Infinity,
   });
   const knownScript = lookupResult;
+  // the family the registry names, where it references this code hash by the hash type asked
+  const family =
+    knownScript &&
+    hasKnownScriptName(knownScript.name) &&
+    familyReferences(knownScript, normalizedCodeHash, initialHashType)
+      ? knownScript
+      : null;
 
   useEffect(() => {
-    if (
-      !isCodeHashIdentifier ||
-      !knownScript ||
-      knownScript.resolutionState !== 'resolved' ||
-      !hasKnownScriptName(knownScript.name)
-    ) {
+    if (!isCodeHashIdentifier || !family || family.resolutionState !== 'resolved') {
       return;
     }
 
-    const targetName = knownScript.name.trim();
+    const targetName = family.name.trim();
     const query = new URLSearchParams();
     query.set('ref', normalizedCodeHash);
-    const redirectHashType = initialHashType ?? normalizeHashType(knownScript.hashType);
+    const redirectHashType = initialHashType ?? normalizeHashType(family.hashType);
     if (redirectHashType) query.set('hashType', redirectHashType);
-    const redirectKind = initialKind ?? normalizeScriptKind(knownScript.scriptKind);
+    const redirectKind = initialKind ?? normalizeScriptKind(family.scriptKind);
     if (redirectKind) query.set('kind', redirectKind);
     const suffix = query.toString();
 
     router.replace(`/scripts/${encodeURIComponent(targetName)}${suffix ? `?${suffix}` : ''}`);
-  }, [initialHashType, initialKind, isCodeHashIdentifier, knownScript, normalizedCodeHash, router]);
+  }, [initialHashType, initialKind, isCodeHashIdentifier, family, normalizedCodeHash, router]);
 
   if (isMalformedCodeHash) {
     return <NotFoundPage notAnId={{ kind: 'script', reason: CODE_HASH_RULE }} />;
   }
 
-  if (!isCodeHashIdentifier || (knownScript && hasKnownScriptName(knownScript.name))) {
+  if (!isCodeHashIdentifier || family) {
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">

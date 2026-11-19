@@ -72,8 +72,9 @@ describe('an activity row names a lock on the default code hash by data as anoth
     const kind = container.querySelector('[data-role="participant"] [data-role="lock-kind"]');
     expect(kind).toHaveTextContent(new RegExp(`^${BY_DATA_WORDS}$`));
     // B4 second fix round (review-rules-fixes-logic SHOULD 2, the coordinator's item 4): its link
-    // opens that lock, by its hash type, as a lock (the script page reads both); a bare code hash
-    // opened the default lock's family page
+    // carries its hash type and kind; the script page keeps a code hash its family does not
+    // reference by that hash type on the code hash, read by it (third round; it sent every named
+    // code hash to its family, the default lock's: script-code-hash.test.tsx)
     expect(kind!.querySelector('a')).toHaveAttribute(
       'href',
       `/mainnet/script/${DEFAULT_LOCK_CODE_HASH}?hashType=data&kind=lock`
