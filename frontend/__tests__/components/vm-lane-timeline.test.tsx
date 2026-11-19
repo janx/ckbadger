@@ -478,3 +478,80 @@ describe('VmLaneTimeline: every word in its place (readability F3)', () => {
         expectInside(line, rectBox(bar.querySelector('rect')!), `${line.text} in its bar`);
   });
 });
+
+// Readability plan 2026-11-18, P4 ("the hardforks rows are named in plain words with hash_type
+// second"; the review: the rows were named "hash_type type / data1 / data2 / data", what they mean
+// in 11 px dim under them). A lane says first what it is, in the protocol's terms (RFC 0032 /
+// 0051: `type` runs on the newest VM the chain runs, `data` pins VM0, `data1` VM1, `data2` VM2), in
+// the lane head's ink and size; its hash type is the quiet label under it. On a phone the head is
+// a line of its own, and the hash type stands with the lane's count on the line under it.
+describe('VmLaneTimeline: each lane named in plain words, its hash type second (P4)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const WORDS = {
+    type: 'follows the newest VM',
+    data1: 'pinned to VM1',
+    data2: 'pinned to VM2',
+    data: 'pinned to VM0',
+  } as const;
+  const COUNTS = {
+    type: '1,830,780 · 59 versions',
+    data1: '98,551 · 19 versions',
+    data2: '0 · no known script yet',
+    data: '472 · 1 version',
+  } as const;
+  const draw = (width: number) => {
+    stubChartWidth(width);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={laned}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    return screen.getByRole('img');
+  };
+  const own = (lane: Element, text: string) =>
+    [...lane.querySelectorAll(':scope > text')].find((t) => t.textContent === text);
+
+  it('on the desktop: the words as the lane head, its hash type the quiet note under them', () => {
+    const svg = draw(1232);
+    for (const [hashType, words] of Object.entries(WORDS)) {
+      const lane = svg.querySelector(`[data-lane="${hashType}"]`)!;
+      const head = own(lane, words);
+      const note = own(lane, `hash_type ${hashType}`);
+      expect(head, `${hashType}: ${words}`).toBeDefined();
+      expect(note, `${hashType}: hash_type ${hashType}`).toBeDefined();
+      expect(head).toHaveAttribute('font-size', '13');
+      expect(head).toHaveAttribute('fill', 'var(--c-text-bright)');
+      expect(note).toHaveAttribute('font-size', '12');
+      expect(note).toHaveAttribute('fill', 'var(--c-text-dim)');
+      expect(Number(head!.getAttribute('x'))).toBe(0);
+      expect(Number(note!.getAttribute('x'))).toBe(0);
+      expect(Number(note!.getAttribute('y'))).toBeGreaterThan(Number(head!.getAttribute('y')));
+    }
+  });
+
+  it.each([358, 326])(
+    'on a phone (%i px): the words a line of their own, the hash type with the count under them',
+    (width) => {
+      const svg = draw(width);
+      for (const [hashType, words] of Object.entries(WORDS)) {
+        const lane = svg.querySelector(`[data-lane="${hashType}"]`)!;
+        const head = own(lane, words);
+        const note = own(lane, `hash_type ${hashType}`);
+        const count = own(lane, COUNTS[hashType as keyof typeof COUNTS]);
+        expect(head, `${hashType}: ${words}`).toBeDefined();
+        expect(note, `${hashType}: hash_type ${hashType}`).toBeDefined();
+        expect(count, `${hashType}: its count`).toBeDefined();
+        expect(head).toHaveAttribute('fill', 'var(--c-text-bright)');
+        expect(note).toHaveAttribute('fill', 'var(--c-text-dim)');
+        // the head stands alone on its line; the hash type and the count share the next one
+        expect(Number(note!.getAttribute('y'))).toBeGreaterThan(Number(head!.getAttribute('y')));
+        expect(count!.getAttribute('y')).toBe(note!.getAttribute('y'));
+      }
+    }
+  );
+});
