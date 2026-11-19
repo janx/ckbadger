@@ -143,8 +143,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-assets: token, cluster, class, objects, identities, their feeds ----
   'components/asset/collection-gallery.tsx': {
     lane: 'c2-assets',
-    sites: { select: 1, 'text-input': 1, pager: 1 },
-    reason: 'the gallery’s name search, its sort select and its pager',
+    sites: { pager: 1 },
+    reason:
+      'a collection’s items pager: a list in id order whose search pages carry no total, which no mode of the Pager draws (pages needs the count; time says newer / older; more appends)',
   },
   'components/asset/item-evidence.tsx': {
     lane: 'c2-assets',
@@ -192,7 +193,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 42;
+const TOLERATED_TOTAL = 40;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

@@ -44,12 +44,14 @@ it('shows identities, exact created/live counts, capacity history and parallel r
 });
 it('searches the entire identity collection and applies status before pagination', async () => {
   render(<Page collectionId="dotbit" />);
-  fireEvent.change(await screen.findByRole('textbox', { name: 'Search collection' }), {
+  // re-pinned (lane c2-assets): the board's search field (a searchbox, was a textbox) and status
+  // chips (a radio group "status", was a select "Item status")
+  fireEvent.change(await screen.findByRole('searchbox', { name: 'Search collection' }), {
     target: { value: 'alice' },
   });
-  fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
-    target: { value: 'live' },
-  });
+  fireEvent.click(
+    within(screen.getByRole('radiogroup', { name: 'status' })).getByRole('radio', { name: 'live' })
+  );
   await waitFor(() =>
     expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith('dotbit', {
       limit: 24,
