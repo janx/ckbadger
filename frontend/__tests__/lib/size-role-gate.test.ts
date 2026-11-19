@@ -344,9 +344,11 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   lists: 6,
   topics: 2,
   charts: 1,
-  shared: 3,
+  // shared 3 → 2 (lane cd-fixes-controls): the chart's markers' legend at 13 px
+  shared: 2,
 };
-const TOLERATED_FILES = 18;
+// 18 → 17 (lane cd-fixes-controls): components/ui/chart.tsx left the list
+const TOLERATED_FILES = 17;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -437,11 +439,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { link: 1 },
     reason: `the epoch vital's words at 12 px below md, inside its link; ${WORK}`,
   },
-  'components/ui/chart.tsx': {
-    family: 'shared',
-    sites: { link: 1 },
-    reason: `the markers' legend links at 12 px; ${WORK}`,
-  },
+  // 'components/ui/chart.tsx' left the list (lane cd-fixes-controls): the markers' legend, links,
+  // reads at 13 px
   'components/ui/lock-kind.tsx': {
     family: 'shared',
     sites: { link: 1 },

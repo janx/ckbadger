@@ -1462,7 +1462,8 @@ export function Chart({
         </span>
       )}
       {markers.length > 0 && !hideMarkerLegend && (
-        <div className="text-meta mt-2 flex flex-wrap gap-4">
+        // the markers' legend: links, at 13 px (lane cd-fixes-controls, the ink and size round)
+        <div className="text-small mt-2 flex flex-wrap gap-4">
           {markers.map((m) => (
             <Link key={`${m.index}:${m.label}`} href={m.href} look="inline">
               {m.label} · {data[m.index].label}

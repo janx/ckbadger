@@ -544,6 +544,9 @@ describe('one chart grammar', () => {
     expect(screen.getByRole('link', { name: 'Mirana · Oct 24' })).toHaveAttribute(
       'href',
       '/mainnet/hardforks'
+    ); // the markers' legend: links, at 13 px (lane cd-fixes-controls, the ink and size round: 12)
+    expect(screen.getByRole('link', { name: 'Mirana · Oct 24' }).parentElement).toHaveClass(
+      'text-small'
     );
   });
   it('retains exact large decimal readouts independently of geometry precision', () => {
