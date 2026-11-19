@@ -409,7 +409,8 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
 
 // Lane P1 (lane D3's note: the long transaction's default lock "runs in input 0, 1, …, 157", about
 // ten lines long): a group's cells beyond three on a side are said as their count and their
-// ranges; three or fewer stay listed.
+// ranges, the count a unit (its number and noun joined by a no-break space, as every count's);
+// three or fewer stay listed.
 describe('cellsInWords: a long side as its count and its ranges (P1)', () => {
   const cols = (side: 'in' | 'out', n: number) =>
     Array.from({ length: n }, (_, i) => ({ id: `${side}:${i}`, top: '', label: '', cap: '' }));
@@ -424,7 +425,7 @@ describe('cellsInWords: a long side as its count and its ranges (P1)', () => {
   });
   it('says 158 inputs as their count and one range', () => {
     expect(cellsInWords(ids('in', range(0, 157)), cols('in', 158), [])).toBe(
-      '158 inputs: 0 to 157'
+      '158\u00a0inputs: 0 to 157'
     );
   });
   it('joins the ranges and the lone cells of a broken run, each side alike', () => {
@@ -434,9 +435,9 @@ describe('cellsInWords: a long side as its count and its ranges (P1)', () => {
         cols('in', 13),
         cols('out', 2)
       )
-    ).toBe('9 inputs: 0 to 3, 7, 9 to 12 → output 1');
+    ).toBe('9\u00a0inputs: 0 to 3, 7, 9 to 12 → output 1');
     expect(cellsInWords(ids('out', [0, 2, 4, 6]), [], cols('out', 7))).toBe(
-      '4 outputs: 0, 2, 4, 6'
+      '4\u00a0outputs: 0, 2, 4, 6'
     );
   });
 });

@@ -88,7 +88,25 @@ export function ScriptGroupLegend({ children }: { children?: ReactNode }) {
   );
 }
 
-/** `input 0, 1, 2`, `input 0 → output 0`, `output 1`: a group's cells in words. */
+/** A side's indices, ascending, as their runs: `0 to 3, 7, 9 to 12` (a run of three or more). */
+function indexRuns(at: readonly number[]): string {
+  const parts: string[] = [];
+  for (let i = 0; i < at.length; ) {
+    let j = i;
+    while (j + 1 < at.length && at[j + 1] === at[j] + 1) j++;
+    if (j - i >= 2) parts.push(`${at[i]} to ${at[j]}`);
+    else for (let k = i; k <= j; k++) parts.push(String(at[k]));
+    i = j + 1;
+  }
+  return parts.join(', ');
+}
+
+/**
+ * `input 0, 1, 2`, `input 0 → output 0`, `output 1`: a group's cells in words. A side of more than
+ * three cells is said as its count and its runs (lane P1, lane D3's note: the long transaction's
+ * default lock listed 158 indices, about ten lines): `158 inputs: 0 to 157`,
+ * `9 inputs: 0 to 3, 7, 9 to 12`.
+ */
 export function cellsInWords(
   cellIds: readonly string[],
   inputs: readonly MatrixColumn[],
@@ -97,7 +115,10 @@ export function cellsInWords(
   // The columns are the transaction's cells in order, so a column's position is its index.
   const side = (word: string, cells: readonly MatrixColumn[]) => {
     const at = cells.flatMap((c, i) => (cellIds.includes(c.id) ? [i] : []));
-    return at.length ? `${word} ${at.join(', ')}` : null;
+    if (at.length === 0) return null;
+    return at.length <= 3
+      ? `${word} ${at.join(', ')}`
+      : `${formatCount(at.length, word)}: ${indexRuns(at)}`;
   };
   return [side('input', inputs), side('output', outputs)]
     .filter((part): part is string => part !== null)
