@@ -45,6 +45,7 @@ import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/ty
 import { COUNT_TRACK_PX } from '@/components/ui/aligned-bar';
 import {
   MAX_BLOCK_BYTES,
+  MAX_TX_INPUTS,
   TX_CYCLES_BOUND,
   WIDEST_AGE,
   WIDEST_BLOCK_NUMBER,
@@ -339,10 +340,10 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
     {
       key: 'cells',
       label: 'Cells',
-      // four digits a side as written, "9999 → 9999" (85.8); it was 70
-      minWidth: columnPx(
-        cell(`${WIDEST_COUNT_DIGITS} → ${WIDEST_COUNT_DIGITS}`.length) + CELL_GAP_PX
-      ),
+      // a transaction's inputs, up to MAX_TX_INPUTS (13,568: five digits, a consensus bound), and
+      // its outputs, four digits (WIDEST_COUNT), ungrouped as written: "13568 → 9999" (93.6 at 13
+      // px; it budgeted four digits of inputs, "9999 → 9999", 85.8: the page lane notes)
+      minWidth: columnPx(cell(`${MAX_TX_INPUTS} → ${WIDEST_COUNT_DIGITS}`.length) + CELL_GAP_PX),
       numeric: true,
       render: (r) => `${r.inputsCount} → ${r.outputsCount}`,
     },
