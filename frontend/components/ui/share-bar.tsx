@@ -1,5 +1,5 @@
 import { cn } from '@/lib/utils';
-import { trackPx } from '@/components/ui/aligned-bar';
+import { COUNT_TRACK_PX, trackPx } from '@/components/ui/aligned-bar';
 import { resourceScale } from '@/components/blocks/block-visual';
 
 /**
@@ -77,8 +77,11 @@ export function ShareBar({
   scale: number;
   /** The class colour of the list. */
   color: string;
-  /** The track's fixed width in px. */
-  track: number;
+  /**
+   * The track's fixed width in px; `grow`, the room its line leaves it, at least a count bar's
+   * 48 px (COUNT_TRACK_PX): a list's one bar beside the figures that name it (the phone-rows board).
+   */
+  track: number | 'grow';
   className?: string;
 }) {
   const width = shareBarWidth(value, scale);
@@ -86,8 +89,8 @@ export function ShareBar({
     <span
       aria-hidden="true"
       data-share-track
-      className={cn('bg-bar-track flex h-1 flex-none', className)}
-      style={{ width: `${track}px` }}
+      className={cn('bg-bar-track flex h-1', track === 'grow' ? 'flex-1' : 'flex-none', className)}
+      style={track === 'grow' ? { minWidth: `${COUNT_TRACK_PX}px` } : { width: `${track}px` }}
     >
       <span
         data-share-bar={width}

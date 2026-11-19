@@ -404,7 +404,7 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
   'app/forks/page.tsx': [phoneRow('<Miners event={event} size="tight" />')],
   // the folded peer row below 560 px of container (from it, one line at the row size)
   'app/network/nodes-table.tsx': [phoneRow('value={peer.peerId}')],
-  'app/scripts/page.tsx': [phoneRow("shortenHash(s.codeHash, 'tight')")],
+  'app/scripts/page.tsx': [phoneRow('<ShortId value={s.codeHash} kind="hash" size="tight" />')],
   'app/transactions/page.tsx': [phoneRow('hash={tx.hash}')],
   'components/address/address-history.tsx': [
     phoneRow('hash={tx.txHash}'),

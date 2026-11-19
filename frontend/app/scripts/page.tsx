@@ -13,7 +13,9 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { WIDEST_CKB_HELD, WIDEST_ROW_COUNT } from '@/lib/list-bounds';
-import { PhoneRow } from '@/components/ui/phone-row';
+import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
+import { ShareBar } from '@/components/ui/share-bar';
+import { DATA_COLOR } from '@/lib/design-tokens';
 import { AlignedBar, BAR_FIGURE_GAP, ScaleHeader, trackPx } from '@/components/ui/aligned-bar';
 import { RowTag } from '@/components/ui/row-tag';
 import {
@@ -36,11 +38,12 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { shortenHash } from '@/lib/shorten';
+import { ShortId } from '@/components/ui/short-id';
 import { formatCount } from '@/lib/format-count';
 import { useDocumentTitle } from '@/lib/use-document-title';
 import { percentOf, withUnit } from '@/lib/format-unit';
 import { unitNode } from '@/components/ui/units';
-import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -76,10 +79,15 @@ const GOVERNOR: Partial<Record<NonNullable<KnownScript['codeClasses']>[number]['
     one_key: 'one key',
   };
 
-/** The board's Code column as words: "Immutable" or "Upgradable · N versions", then by whom. */
+/**
+ * The board's Code column as words: "Immutable" or "Upgradable · N versions", then by whom. `facts`
+ * are the code's own facts without the day it is known from (how immutable code is held; by whom
+ * upgradable code is changed, and whether some references are pinned): the phone row writes them,
+ * the day being the script page's and the row's title's.
+ */
 function scriptCodeClass(
   script: KnownScript
-): { head: string; sub: string; replaceable: boolean } | null {
+): { head: string; sub: string; facts: string[]; replaceable: boolean } | null {
   const classes = script.codeClasses ?? [];
   if (!classes.length) return null;
   const replaceable = classes.filter((row) => !isImmutableClass(row.class));
@@ -87,24 +95,28 @@ function scriptCodeClass(
   if (script.firstDeployedAt === undefined)
     throw new Error(`Script family ${script.name} row has no firstDeployedAt`);
   const first = script.firstDeployedAt;
-  if (!replaceable.length)
+  if (!replaceable.length) {
+    const facts = immutableHow(immutable.map((row) => row.class));
     return {
       head: 'Immutable',
       sub: [
         ...(first ? [first.blockNumber === 0 ? 'genesis' : formatUtc8Date(first.timestampMs)] : []),
-        ...immutableHow(immutable.map((row) => row.class)),
+        ...facts,
       ].join(' · '),
+      facts,
       replaceable: false,
     };
+  }
   if (script.versionsCount === undefined)
     throw new Error(`Script family ${script.name} has replaceable code but no versionsCount`);
+  const by = `by ${replaceable.map((row) => GOVERNOR[row.class] ?? scriptClassLabel(row.class).toLowerCase()).join(' or ')}`;
+  const pinned = immutable.length ? ['some references pinned'] : [];
   return {
     head: `Upgradable · ${formatCount(script.versionsCount, 'version')}`,
-    sub: [
-      `by ${replaceable.map((row) => GOVERNOR[row.class] ?? scriptClassLabel(row.class).toLowerCase()).join(' or ')}`,
-      ...(first ? [`since ${formatUtc8Date(first.timestampMs)}`] : []),
-      ...(immutable.length ? ['some references pinned'] : []),
-    ].join(' · '),
+    sub: [by, ...(first ? [`since ${formatUtc8Date(first.timestampMs)}`] : []), ...pinned].join(
+      ' · '
+    ),
+    facts: [formatCount(script.versionsCount, 'version'), by, ...pinned],
     replaceable: true,
   };
 }
@@ -158,92 +170,103 @@ function codeStatusText(script: KnownScript): string {
 }
 
 /**
- * A script family on a phone (board L6): name and the CKB its cells hold; role, code class and
- * cell counts with the occupied share; the description in full, never clamped. In a wide
- * container (640) two lines: role and code join the name, the counts share the description's line.
+ * Line 1 of a script family on a phone (the phone-rows board's head(): 311 of 328 px there for
+ * "Default Lock" and its tag beside "46,864,609,312 CKB"): a name of 20 characters at the key's
+ * 14 px (168), the 12 px between the parts and the widest CKB a row's cells hold at the key's step,
+ * "99,999,999,999" (WIDEST_CKB_HELD, 117.6) and " CKB" at the unit's 12 px (28.8): 326.4 of a 360 px
+ * phone's 328 px line, 356.4 at 390 leaving 23 characters. The role's tag stands on line 2, where
+ * the board drew it beside the name: beside the widest figure it left a name 7 characters. Ten of
+ * the 75 names the registry writes are longer than 20 (21 to 25 characters, "Godwoken ETH Account
+ * Lock" the longest): beside a figure that wide the figure drops under the name, whole and
+ * right-aligned (PhoneRow's rule).
  */
-function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolean }) {
+const SCRIPT_PHONE_HEAD_PX = phoneHead(
+  'scripts',
+  textPx(20, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(WIDEST_CKB_HELD.length, fontPx('body')) +
+    textPx(' CKB'.length, fontPx('meta'))
+);
+
+/**
+ * A script family on a phone (the phone-rows board, its scripts pane): the name and the CKB its
+ * cells hold, the figure the list sorts by; what it is, in words that wrap between their items (a
+ * deprecation, its role, the code's class and how it is held or who can change it; an unlabeled
+ * family's reference first); the list's one bar, the occupied share, with the two figures that
+ * name it. The description, the cells ever and the day the code is known from are the script
+ * page's and the row's title's. The cards from 560 px take the same three parts.
+ */
+function ScriptPhoneRow({ script: s }: { script: KnownScript }) {
   const code = scriptCodeClass(s);
-  const role = s.scriptKind ?? 'unregistered';
-  const kind = (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5">
-      {role}
-      <span className="text-text-dim">·</span>
-      {code ? (
-        <>
-          <CodeClassPip replaceable={code.replaceable} />
-          {/* Lane F follow-up: immutable is the accent tag; the name stays the one bright thing. */}
-          {code.replaceable ? (
-            <span>{code.head}</span>
-          ) : (
-            <RowTag variant="accent">immutable</RowTag>
-          )}
-          <span className="text-text-dim">· {code.sub}</span>
-        </>
-      ) : (
-        <span className="text-text-dim">code evidence unavailable</span>
-      )}
-    </span>
-  );
-  // The counts as two facts, each whole: from 560 px one line beside the description (50
-  // characters at most, 390 px); below it two lines by construction, live of ever over the occupied
-  // share (the coordinator's sweep, F3-e: one line of 45 glyphs, 351 px, stood past a 328 px row),
-  // the widest "99,999,999 live · of 99,999,999" (31 characters at 13 px, 241.8).
-  const liveOf = `${countText(s.liveCellsCount)} live · of ${countText(s.cellsCount)}`;
-  const occupied = `${occupiedShare(s).share} occupied`;
-  const cells = wide ? (
-    <span className="whitespace-nowrap">
-      {liveOf} · {occupied}
-    </span>
-  ) : (
-    <span className="inline-flex flex-col items-end">
-      <span className="whitespace-nowrap">{liveOf}</span>
-      <span className="whitespace-nowrap">{occupied}</span>
-    </span>
-  );
-  const name = (
-    <>
-      <AppLink
-        href={scriptHref(s)}
-        title={!hasName(s) ? `${s.hashType} ref:${s.codeHash}` : undefined}
-        className="text-text-bright hover:text-emphasis font-medium hover:underline"
-      >
-        {hasName(s) ? s.name!.trim() : 'Unlabeled'}
-      </AppLink>
-      {s.deprecated && (
-        <RowTag variant="warn" title={DEPRECATED_TITLE} className="ml-2">
-          deprecated
-        </RowTag>
-      )}
-    </>
-  );
-  const description = hasName(s)
-    ? s.description
-    : `${getScriptRefBadgeLabel(s.hashType)} · ${shortenHash(s.codeHash, 'tight')}`;
+  const what = [
+    s.deprecated && (
+      <RowTag key="deprecated" variant="warn" title={DEPRECATED_TITLE}>
+        deprecated
+      </RowTag>
+    ),
+    !hasName(s) && (
+      <span key="ref">
+        {getScriptRefBadgeLabel(s.hashType)} <ShortId value={s.codeHash} kind="hash" size="tight" />
+      </span>
+    ),
+    <RowTag key="role">{roleText(s)}</RowTag>,
+    ...(code
+      ? [
+          <span key="class" className="inline-flex items-center gap-1.5">
+            <CodeClassPip replaceable={code.replaceable} />
+            {/* Lane F follow-up: immutable is the accent tag; the name stays the one bright thing. */}
+            {code.replaceable ? 'upgradable' : <RowTag variant="accent">immutable</RowTag>}
+          </span>,
+          ...code.facts,
+        ]
+      : [
+          <span key="none" className="text-text-dim">
+            code evidence unavailable
+          </span>,
+        ]),
+  ];
   return (
     <PhoneRow
       testId="script-row-mobile"
+      head={SCRIPT_PHONE_HEAD_PX}
       lines={[
         {
           key: 'identity',
           tone: 'head',
-          left: wide ? (
-            <>
-              {name}
-              <span className="text-text-dim text-small"> · </span>
-              <span className="text-text-dim text-small">{kind}</span>
-            </>
-          ) : (
-            name
+          left: (
+            <AppLink
+              href={scriptHref(s)}
+              look="key"
+              title={!hasName(s) ? `${s.hashType} ref:${s.codeHash}` : undefined}
+              className="font-medium"
+            >
+              {hasName(s) ? s.name!.trim() : 'Unlabeled'}
+            </AppLink>
           ),
-          right: <span className="text-text-bright">{capacityText(s.ownedCapacitySum!)}</span>,
+          right: (
+            <span className="text-body text-text-bright">{capacityText(s.ownedCapacitySum!)}</span>
+          ),
         },
-        !wide && { key: 'code', tone: 'body', left: kind, right: cells },
+        { key: 'code', tone: 'body', left: <Dotted parts={what} /> },
         {
-          key: 'description',
+          key: 'share',
           tone: 'quiet',
-          left: description,
-          right: wide ? cells : undefined,
+          grow: true,
+          left: (
+            <ShareBar value={occupiedPpm(s)} scale={SHARE_SCALE} color={DATA_COLOR} track="grow" />
+          ),
+          right: (
+            <Dotted
+              parts={[
+                <Labelled key="live" label="live" after>
+                  {countText(s.liveCellsCount)}
+                </Labelled>,
+                <Labelled key="occupied" label="occupied" after>
+                  {occupiedShare(s).share}
+                </Labelled>,
+              ]}
+            />
+          ),
         },
       ]}
     />
@@ -688,7 +711,7 @@ export default function ScriptsPage() {
                     rowTitle={scriptRowTitle}
                     // T5: body ink for the row, the name alone bright.
                     rowClassName={() => 'text-text'}
-                    mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
+                    mobileRow={(s) => <ScriptPhoneRow script={s} />}
                   />
                 )}
                 {data && data.data.length > 0 && (
