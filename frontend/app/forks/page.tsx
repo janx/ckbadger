@@ -8,7 +8,7 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
-import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { Pager } from '@/components/ui/pager';
 import { PromptHeading } from '@/components/ui/prompt-heading';
 import { ClockText, useClockTime } from '@/components/ui/utc8-date';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
@@ -16,7 +16,7 @@ import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ForkNodeRecord, type ReorgEvent } from '@/lib/api';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { DEFAULT_PAGE_SIZE, pageCount } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -155,6 +155,12 @@ function competingLine(record: ForkNodeRecord): string | null {
   ]
     .filter(Boolean)
     .join(' · ');
+}
+
+/** The branch switches' total: the API serves it on every page, and a page without it is refused. */
+function switchesTotal(total: number | undefined): number {
+  if (total === undefined) throw new Error('Forks list response has no total');
+  return total;
 }
 
 const seenWhen = (event: ReorgEvent) => formatUtc8DateTime(event.detectedAt).slice(0, 19);
@@ -547,29 +553,34 @@ export default function ForksPage() {
                     </div>
                   )}
                 />
-                {collapsed ? (
-                  <button
-                    type="button"
-                    aria-expanded={false}
-                    onClick={() => setExpanded(true)}
-                    className="text-text hover:text-text-bright text-small mt-3 hover:underline"
-                  >
-                    {total === undefined
-                      ? 'Show all branch switches ↓'
-                      : `Show all ${total.toLocaleString('en-US')} branch switches ↓`}
-                  </button>
+                {/* The controls board's pager: the short list's own form while the first five
+                    stand for the list ("all 18 branch switches ↓"), then a cursor in time, newest
+                    first, the page of the pages the served total makes at the served page size;
+                    nothing under an empty list. */}
+                {events.data.data.length === 0 ? null : collapsed ? (
+                  <div className="mt-3">
+                    <Pager
+                      mode="more"
+                      all={{
+                        count: switchesTotal(events.data.total),
+                        singular: 'branch switch',
+                        plural: 'branch switches',
+                        onShow: () => setExpanded(true),
+                      }}
+                    />
+                  </div>
                 ) : (
                   <div className="mt-5">
-                    <CursorPagination
-                      total={events.data.total}
-                      totalLabel="switches"
-                      pageSize={limit}
+                    <Pager
+                      mode="time"
+                      label="branch switches"
+                      order="newest first"
                       page={page}
-                      currentCount={events.data.data.length}
-                      hasMore={events.data.hasMore}
-                      hasPrevious={hasPrevious}
-                      onNext={() => goToNext(events.data!.nextCursor)}
-                      onPrevious={goToPrevious}
+                      pages={pageCount(switchesTotal(events.data.total), events.data.limit)}
+                      onNewer={hasPrevious ? goToPrevious : undefined}
+                      onOlder={
+                        events.data.hasMore ? () => goToNext(events.data!.nextCursor) : undefined
+                      }
                     />
                   </div>
                 )}
