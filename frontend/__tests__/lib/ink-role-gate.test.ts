@@ -429,9 +429,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'app/network/advertisement-graph.tsx': {
     family: 'topics',
-    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink
-    sites: { prose: 3 },
-    reason: 'the loading, refresh and empty lines in the quiet ink',
+    // prose 4 → 3 (B7): the advertisement note explains, in the reading ink; 3 → 2 (P4 topics):
+    // the empty line reads
+    sites: { prose: 2 },
+    reason: 'the loading and refreshing lines, transient notes in the quiet ink',
   },
   'app/network/client-page.tsx': {
     family: 'topics',
