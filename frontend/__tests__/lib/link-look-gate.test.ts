@@ -158,11 +158,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // onward)
   // 'app/blocks/page.tsx' left the list (lane P3: look 9, ink 5 → 0; a block number its row's key,
   // the miner, the paid block and the hardfork inline)
-  'app/dao/depositors/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 5, ink: 2 },
-    reason: '5 without a look; inks by hand (hover:underline, text-text-bright, text-text)',
-  },
+  // 'app/dao/depositors/page.tsx' left the list (lane P3: look 5, ink 2 → 0; a depositor its row's
+  // key, the way to the DAO page onward, the blocks inline)
   // 'app/scripts/page.tsx' left the list (lane P3: look 1, ink 2, raw 1 → 0; a script's name its
   // row's key, "How it works" a way onward)
   // 'app/transactions/page.tsx' left the list (lane P3: look 3, ink 2 → 0; the activities link
@@ -269,8 +266,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
 // → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
 // (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14) → 63
-// (lane P3: the blocks list, 14) → 55 (lane P3: the activity row, 8)
-const TOLERATED_TOTAL = 55;
+// (lane P3: the blocks list, 14) → 55 (lane P3: the activity row, 8) → 48 (lane P3: the DAO
+// depositors, 7)
+const TOLERATED_TOTAL = 48;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
