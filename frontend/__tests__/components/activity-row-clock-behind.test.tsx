@@ -136,6 +136,7 @@ describe.each([390, 360, 320])(
       const rows = [row(), row({ txHash: `0x${'c2'.repeat(32)}`, blockNumber: 21047790 })];
       const { container } = render(
         <ActivityRuns
+          more={false}
           age
           rows={rows.map((a) => ({
             key: a.txHash,

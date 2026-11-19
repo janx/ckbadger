@@ -57,6 +57,7 @@ describe('a refused lock fails its part, in its place', () => {
     const rows = [row(1, seededAddress('good01')), row(2, 'ckb1qzda0b')];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -103,6 +104,7 @@ describe('a refused lock fails its part, in its place', () => {
     });
     const runsOf = (a: GlobalActivity) => (
       <ActivityRuns
+        more={false}
         rows={[
           {
             key: a.txHash,

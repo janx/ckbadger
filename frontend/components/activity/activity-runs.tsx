@@ -123,10 +123,17 @@ function subjectOf(r: FeedRow): RunSubject {
  */
 export function ActivityRuns({
   rows,
+  more,
   age = false,
   showScriptDetails = true,
 }: {
   rows: readonly FeedRow[];
+  /**
+   * Whether rows older than the last given are unread (a next page, the stream's older pages): the
+   * last run of the rows given is then not final, the next row may continue it, and its counts
+   * say "so far" (the lead's finding, the exactness lane's B9). Every feed that folds says it.
+   */
+  more: boolean;
   age?: boolean;
   showScriptDetails?: boolean;
 }) {
@@ -169,7 +176,7 @@ export function ActivityRuns({
   return (
     // one element in every state, so no row remounts as runs open and fold (a block, as the rows)
     <div id={listId} data-role="feed-rows">
-      {runs.flatMap(({ run, head, isOpen }) => {
+      {runs.flatMap(({ run, head, isOpen }, at) => {
         const [lead] = run;
         // each row, and each run's head, fails in its place (ruling D7): what a row cannot read
         // (a lock the decision refuses) is said where the row stands, the others drawn
@@ -189,6 +196,7 @@ export function ActivityRuns({
             className={lead.className}
             fresh={run.some((r) => r.fresh)}
             open={isOpen}
+            final={!(more && at === runs.length - 1)}
             controls={listId}
             onToggle={() => toggle(run, isOpen)}
           />

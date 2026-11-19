@@ -149,9 +149,11 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
         '3'
       )
     );
-    // three depositors, and the two parties every request shares
+    // three depositors, and the two parties every request shares; re-pinned on purpose (the
+    // lead's finding, the exactness lane's B9): the three newest, older DAO activity unread (the
+    // route has more), so the run's counts are so far (it said "all 3 … · 5 participants")
     expect(section.querySelector('[data-role="run-count"]')).toHaveTextContent(
-      /^all 3 transactions ↓ · 5 participants$/
+      /^3 transactions so far ↓ · 5 participants so far$/
     );
     expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
   });

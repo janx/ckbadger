@@ -603,6 +603,8 @@ function RecentAssetFeed({
             {acts.data.data.length ? (
               <ActivityRuns
                 showScriptDetails={!plain}
+                // rows past the teaser's, or a next page, are unread: its last run is not final
+                more={acts.data.data.length > recent.rows || acts.data.hasMore}
                 rows={acts.data.data.slice(0, recent.rows).map((a) =>
                   feedActivityRow(a, {
                     item,
@@ -777,6 +779,7 @@ function FullAssetFeed({
                 // B4: a run folds within this page; one that goes on is a second run on the next
                 <ActivityRuns
                   showScriptDetails={!plain}
+                  more={acts.data!.hasMore}
                   rows={acts.data!.data.map((a) =>
                     feedActivityRow(a, {
                       item,

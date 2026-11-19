@@ -1438,6 +1438,7 @@ export function FoldedActivityRow({
   className,
   fresh = false,
   open,
+  final,
   controls,
   onToggle,
 }: {
@@ -1457,6 +1458,11 @@ export function FoldedActivityRow({
   className?: string;
   fresh?: boolean;
   open: boolean;
+  /**
+   * Whether its counts are the run's whole: false for a feed's last run of the rows read while
+   * older rows are unread (the next row may continue it), whose counts say "so far".
+   */
+  final: boolean;
   /**
    * The id of the list its rows are drawn in (`ActivityRuns`'s): opened, the run's rows stand in
    * it under this row, siblings of the feed's other rows, so a row never remounts as it joins or
@@ -1486,12 +1492,15 @@ export function FoldedActivityRow({
     false,
     first.itemTypes
   );
-  const transactions = formatCount(rows.length, 'transaction');
+  // a count of what is read, older rows unread, is not final, and says so (the lead's finding)
+  const soFar = final ? '' : ' so far';
+  const transactions = `${formatCount(rows.length, 'transaction')}${soFar}`;
   const toggle = (
     <FoldToggle
       open={open}
       count={rows.length}
       singular="transaction"
+      soFar={!final}
       controls={controls}
       onToggle={onToggle}
     />
@@ -1523,7 +1532,13 @@ export function FoldedActivityRow({
             becomes that count here once the indexer records, per participant, that its lock holds
             an input (the per-participant input flag, a re-sync; the route then states it and
             `runParties` counts the parties that sent). This is the one place that writes it. */}
-        <Dotted parts={[toggle, open && transactions, formatCount(participants, 'participant')]} />
+        <Dotted
+          parts={[
+            toggle,
+            open && transactions,
+            `${formatCount(participants, 'participant')}${soFar}`,
+          ]}
+        />
       </div>
     </article>
   );

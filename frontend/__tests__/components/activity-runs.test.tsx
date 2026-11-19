@@ -554,7 +554,13 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     const first = [transfer, oracle(4, 'q3q7ue', '0x00', 200), oracle(5, 'q3q7ue', '0x00', 250)];
     pages(first, [oracle(6, 'q3q7ue', '0x00', 300)]);
     render(<ActivitiesStreamExplorer />);
-    const toggle = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
+    // re-pinned on purpose (the lead's finding, the exactness lane's B9): the run cut by the
+    // page's end, older rows unread, is not final ("2 transactions so far"); with the older page
+    // in, the feed's end read, it is all 3 (it said "all 2" over the unread rows)
+    const toggle = await screen.findByRole('button', { name: /^2\stransactions so far ↓$/ });
+    expect(document.querySelector('[data-role="run-count"]')!.textContent).toMatch(
+      /participants? so far$/
+    );
     await user.click(screen.getByRole('button', { name: /^next \d+ ↓$/ }));
     await waitFor(() => expect(toggle).toHaveTextContent(/^all 3\stransactions ↓$/));
     expect(toggle.isConnected).toBe(true);
@@ -580,6 +586,7 @@ describe('a folded run counts its parties and names none (Gate B)', () => {
     ];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -661,6 +668,7 @@ describe('the run’s toggle on a phone (B4 fix round)', () => {
     const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -708,6 +716,7 @@ describe('a run is set back as its rows are (R4)', () => {
     const rows = [oracle(1, 'q3q7ue', '0x00', 49), oracle(2, 'q3q7ue', '0x00', 98)];
     render(
       <ActivityRuns
+        more={false}
         rows={rows.map((a) => ({
           key: a.txHash,
           subject: runSubject(a, activityTitleText(a)),
@@ -893,5 +902,49 @@ describe('what the runs remember between renders', () => {
     memory = runMemory([folded('a0', 'a0', 'a1')], memory.drawn);
     expect(memory.drawn.has('a0')).toBe(true);
     expect(memory.heads.get('a1')).toBe('a0');
+  });
+});
+
+// The lead's finding (in Chrome, the exactness lane's B9): a folded run that reaches the last READ
+// row while the feed has older rows unread said "all 59 transactions ↓ · 918 participants" over
+// "Reading older activities…", and "all 64 … 1,050" once the next page was in. A count that is not
+// final says so: the last run of what is read, while older rows are unread (`more`), states both
+// counts as so far; when the feed's end is read, or the next run begins, it is "all N" again.
+describe('a run whose count is not final (older rows unread)', () => {
+  const asRows = (rows: GlobalActivity[]) =>
+    rows.map((a) => ({
+      key: a.txHash,
+      subject: runSubject(a, activityTitleText(a)),
+      activity: a,
+      title: <ActivityTitle activity={a} />,
+      row: <ActivityRow activity={a} />,
+    }));
+  const said = () =>
+    [...document.querySelectorAll('[data-role="run-count"]')].map((el) =>
+      el.textContent!.replace(/\s+/g, ' ')
+    );
+
+  // drop `more` (every run final): "all 2 …", red
+  it('says so far of a run that ends exactly at the read rows’ end with more unread', () => {
+    render(
+      <ActivityRuns
+        more
+        rows={asRows([
+          transfer,
+          oracle(4, 'q3q7ue', '0x00', 200),
+          oracle(5, 'q3q7ue', '0x00', 250),
+        ])}
+      />
+    );
+    expect(said()).toEqual(['2 transactions so far ↓ · 1 participant so far']);
+  });
+
+  it('says all of a run that ends before the read rows’ last row, and of the last page’s runs', () => {
+    const run = [oracle(4, 'q3q7ue', '0x00', 200), oracle(5, 'q3q7ue', '0x00', 250)];
+    const first = render(<ActivityRuns more rows={asRows([...run, transfer])} />);
+    expect(said()).toEqual(['all 2 transactions ↓ · 1 participant']);
+    first.unmount();
+    render(<ActivityRuns more={false} rows={asRows([transfer, ...run])} />);
+    expect(said()).toEqual(['all 2 transactions ↓ · 1 participant']);
   });
 });

@@ -31,10 +31,27 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     participants: [],
   });
 
+  // The lead's finding (the exactness lane's B9): on a page with a next page, the page's last run
+  // may go on in rows not read; its counts say so
+  it('says so far of the page’s last run while a next page holds older rows', () => {
+    render(
+      <AddressActivities more rows={[update(1), update(2), update(3)]} address={addressFixture} />
+    );
+    expect(document.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^3\stransactions so far ↓ · 1 participant so far$/
+    );
+  });
+
   // re-pinned on purpose (Gate B's rule, lane P3): the folded row wrote this address, the one
   // party of every row; it counts the parties now and names none
   it('folds its consecutive same rows, counting this address', () => {
-    render(<AddressActivities rows={[update(1), update(2), update(3)]} address={addressFixture} />);
+    render(
+      <AddressActivities
+        more={false}
+        rows={[update(1), update(2), update(3)]}
+        address={addressFixture}
+      />
+    );
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '3');
     expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
@@ -56,6 +73,7 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     });
     render(
       <AddressActivities
+        more={false}
         rows={[
           transfer(1, '100000000000'),
           transfer(2, '-25000000000'),
@@ -107,6 +125,7 @@ describe('an address page folds its own runs (B4 item 5)', () => {
   it('heads a burn and a mint as every feed does, a transfer by its direction, and folds none of them together', () => {
     render(
       <AddressActivities
+        more={false}
         rows={[
           moved(1, '-10000000000', 'burn'),
           moved(2, '-5000000000', 'transfer'),
@@ -127,6 +146,7 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     expect(() =>
       render(
         <AddressActivities
+          more={false}
           rows={[{ ...moved(1, '-100', 'burn'), itemDeltas: [older as never] }]}
           address={addressFixture}
         />
@@ -151,6 +171,7 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     });
     render(
       <AddressActivities
+        more={false}
         rows={[withOther(1, 'aaaaaa'), withOther(2, 'bbbbbb')]}
         address={addressFixture}
       />

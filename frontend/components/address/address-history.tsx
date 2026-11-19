@@ -188,9 +188,19 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
  * and the transaction's other parties, which the row does not draw but the activity names. A run
  * folds within the page shown.
  */
-export function AddressActivities({ rows, address }: { rows: Activity[]; address: Address }) {
+export function AddressActivities({
+  rows,
+  address,
+  more,
+}: {
+  rows: Activity[];
+  address: Address;
+  /** Whether a next page holds older rows: the page's last run is then not final. */
+  more: boolean;
+}) {
   return (
     <ActivityRuns
+      more={more}
       rows={rows.map((activity) => {
         const { row, participant, headline } = addressRow(activity, address);
         return {
