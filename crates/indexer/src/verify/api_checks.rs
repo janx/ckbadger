@@ -1656,6 +1656,269 @@ impl Check for DataHashIndexFilesOnlyCodeCells {
     }
 }
 
+/// The Type ID script's code hash: a cell under it carries a type whose hash
+/// stands for the code in its data however that data changes.
+const TYPE_ID_CODE_HASH_HEX: &str =
+    "0x00000000000000000000000000000000000000000000000000545950455f4944";
+
+/// The hash types a script can have on chain, by their JSON-RPC labels.
+const SCRIPT_HASH_TYPE_LABELS: [&str; 4] = ["type", "data", "data1", "data2"];
+
+/// One answer of `POST /scripts/lookup`: the pair's own name and figures.
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScriptLookupRecord {
+    name: String,
+    hash_type: String,
+    live_cells_count: i64,
+}
+
+/// Ask `POST /scripts/lookup` for `pairs` (code hash, hash type label); the
+/// answers are keyed `"<code hash>:<hash type>"`, a pair with neither a label
+/// nor a usage row unanswered.
+fn lookup_script_pairs(
+    ctx: &CheckContext,
+    pairs: &[(String, &str)],
+) -> anyhow::Result<HashMap<String, ScriptLookupRecord>> {
+    let scripts: Vec<serde_json::Value> = pairs
+        .iter()
+        .map(|(code_hash, hash_type)| {
+            serde_json::json!({ "codeHash": code_hash, "hashType": hash_type })
+        })
+        .collect();
+    api_post(
+        ctx,
+        "scripts/lookup",
+        &serde_json::json!({ "scripts": scripts }),
+    )
+}
+
+/// A genesis output deployed under Type ID whose data is code.
+#[derive(Debug)]
+struct GenesisTypeIdBinary {
+    outpoint: String,
+    /// The hash of its Type ID type script: what a script names the code by
+    /// `type`.
+    type_id_hash: String,
+    /// The hash of its data: what a script names the code by `data`,
+    /// `data1` or `data2`.
+    data_hash: String,
+}
+
+/// Every output of a node block deployed under Type ID whose data is code
+/// (`keys::is_code_cell`); any malformed field is an error naming it.
+fn genesis_type_id_binaries(block: &serde_json::Value) -> anyhow::Result<Vec<GenesisTypeIdBinary>> {
+    let decode = |value: &serde_json::Value, what: &str| -> anyhow::Result<Vec<u8>> {
+        value
+            .as_str()
+            .and_then(|hex| hex::decode(hex.trim_start_matches("0x")).ok())
+            .ok_or_else(|| anyhow::anyhow!("node {what} is not hex: {value}"))
+    };
+    let txs = block["transactions"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("node block has no transactions array"))?;
+    let mut binaries = Vec::new();
+    for tx in txs {
+        let tx_hash = tx["hash"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("node transaction has no hash"))?
+            .to_ascii_lowercase();
+        let cells = tx["outputs"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("node transaction {tx_hash} has no outputs"))?;
+        let data = tx["outputs_data"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("node transaction {tx_hash} has no outputs_data"))?;
+        anyhow::ensure!(
+            cells.len() == data.len(),
+            "node transaction {tx_hash} has {} outputs but {} outputs_data",
+            cells.len(),
+            data.len()
+        );
+        for (index, (cell, data)) in cells.iter().zip(data).enumerate() {
+            let type_script = &cell["type"];
+            if type_script.is_null() {
+                continue;
+            }
+            let outpoint = format!("{tx_hash}:{index}");
+            let code_hash = type_script["code_hash"].as_str().ok_or_else(|| {
+                anyhow::anyhow!("node output {outpoint} has a type script without a code hash")
+            })?;
+            let hash_type = type_script["hash_type"].as_str().ok_or_else(|| {
+                anyhow::anyhow!("node output {outpoint} has a type script without a hash type")
+            })?;
+            if !(code_hash.eq_ignore_ascii_case(TYPE_ID_CODE_HASH_HEX) && hash_type == "type") {
+                continue;
+            }
+            let data = decode(data, &format!("output {outpoint} data"))?;
+            if !ckbadger_store::keys::is_code_cell(&data) {
+                continue;
+            }
+            let code_hash = decode(
+                &type_script["code_hash"],
+                &format!("output {outpoint} type code hash"),
+            )?;
+            let args = decode(
+                &type_script["args"],
+                &format!("output {outpoint} type args"),
+            )?;
+            let type_id_hash = ckbadger_common::script_hash(
+                &code_hash,
+                ckbadger_common::hash_type_from_label("type")
+                    .ok_or_else(|| anyhow::anyhow!("the hash type table has no `type`"))?,
+                &args,
+            );
+            binaries.push(GenesisTypeIdBinary {
+                outpoint,
+                type_id_hash: format!("0x{}", hex::encode(type_id_hash)),
+                data_hash: format!(
+                    "0x{}",
+                    hex::encode(crate::parser::script::ScriptParser::compute_data_hash(
+                        &data
+                    ))
+                ),
+            });
+        }
+    }
+    Ok(binaries)
+}
+
+/// F9 (lane rd/api-lock-names): a script is named by its pair (code hash, hash
+/// type), never by its code hash alone. Each genesis binary deployed under
+/// Type ID gives four pairs no script can be: its Type ID hash by `data`,
+/// `data1` or `data2` (a Type ID hash is no code's data hash) and its code's
+/// data hash by `type` (it is no type script's hash). The registry names none
+/// of them, so the lookup answers each "Unknown" — the store that kept one
+/// label row per code hash named a cell on (Type ID hash, data) after the
+/// script of (Type ID hash, type). Every pair asked is answered as itself
+/// (its `hashType`), and no pair is answered that was not asked.
+pub struct ScriptNamesByPair;
+
+impl Check for ScriptNamesByPair {
+    fn name(&self) -> &'static str {
+        "script_names_by_pair"
+    }
+    fn description(&self) -> &'static str {
+        "A script is named by its pair: each genesis Type ID binary's Type ID hash by data and \
+         its data hash by type are named by none, and every pair asked is answered as itself"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Fast
+    }
+    fn requires_rpc(&self) -> bool {
+        true
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let rpc_url = ctx
+            .rpc_url
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("script_names_by_pair needs --rpc-url"))?;
+        let genesis = rpc_get_block(ctx, rpc_url, 0)?
+            .ok_or_else(|| anyhow::anyhow!("the node has no genesis block"))?;
+        let binaries = genesis_type_id_binaries(&genesis)?;
+        anyhow::ensure!(
+            !binaries.is_empty(),
+            "the node's genesis block deploys no code under Type ID: script_names_by_pair has \
+             no pair to ask"
+        );
+
+        // Every pair on each binary's two hashes, and why a pair is no script.
+        let mut asked: Vec<(String, &str, Option<String>)> = Vec::new();
+        for binary in &binaries {
+            for hash_type in SCRIPT_HASH_TYPE_LABELS {
+                let impossible = (hash_type != "type").then(|| {
+                    format!(
+                        "{} is the Type ID hash of genesis {}, no code's data hash",
+                        binary.type_id_hash, binary.outpoint
+                    )
+                });
+                asked.push((binary.type_id_hash.clone(), hash_type, impossible));
+            }
+            for hash_type in SCRIPT_HASH_TYPE_LABELS {
+                let impossible = (hash_type == "type").then(|| {
+                    format!(
+                        "{} is the data hash of genesis {}'s code, no type script's hash",
+                        binary.data_hash, binary.outpoint
+                    )
+                });
+                asked.push((binary.data_hash.clone(), hash_type, impossible));
+            }
+        }
+        let pairs: Vec<(String, &str)> = asked
+            .iter()
+            .map(|(code_hash, hash_type, _)| (code_hash.clone(), *hash_type))
+            .collect();
+        let answers = lookup_script_pairs(ctx, &pairs)?;
+
+        let mut findings = Vec::new();
+        let mut impossible_pairs = 0u64;
+        let asked_keys: BTreeSet<String> = pairs
+            .iter()
+            .map(|(code_hash, hash_type)| format!("{code_hash}:{hash_type}"))
+            .collect();
+        for (code_hash, hash_type, impossible) in &asked {
+            let key = format!("{code_hash}:{hash_type}");
+            if impossible.is_some() {
+                impossible_pairs += 1;
+            }
+            let Some(answer) = answers.get(&key) else {
+                continue;
+            };
+            let mut details = Vec::new();
+            if answer.hash_type != *hash_type {
+                details.push(format!(
+                    "asked by {hash_type}, answered as hash type {:?}",
+                    answer.hash_type
+                ));
+            }
+            if let Some(why) = impossible {
+                if answer.name != "Unknown" {
+                    let type_pair_name = answers
+                        .get(&format!("{code_hash}:type"))
+                        .map(|other| other.name.as_str());
+                    details.push(format!(
+                        "named {:?} ({} live cells), but {why}: no script is this pair{}",
+                        answer.name,
+                        answer.live_cells_count,
+                        match type_pair_name {
+                            Some(name) if name == answer.name && *hash_type != "type" =>
+                                format!("; the name is ({code_hash}, type)'s"),
+                            _ => String::new(),
+                        }
+                    ));
+                }
+            }
+            if !details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("script ({code_hash}, {hash_type})"),
+                    details,
+                });
+            }
+        }
+        for key in answers.keys() {
+            if !asked_keys.contains(key) {
+                findings.push(Finding {
+                    entity: format!("script lookup answer {key}"),
+                    details: vec!["answered a pair that was not asked".to_string()],
+                });
+            }
+        }
+        let checked = asked.len() as u64;
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(
+                checked,
+                format!(
+                    "{} genesis Type ID binaries: {checked} pairs answered as themselves, the \
+                     {impossible_pairs} that no script can be named by none",
+                    binaries.len()
+                ),
+            ))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ============================================
 // SAMPLING CHECKS (S1-S19)
 // ============================================
@@ -6974,6 +7237,297 @@ impl Check for BitCellAccountIndexConsistency {
     }
 }
 
+/// Rows a by-script walk reads per page, and the rows it reads of one pair and
+/// one kind before it stops and checks only the lower bound.
+const BY_SCRIPT_PAGE_LIMIT: usize = 100;
+const SCRIPT_WALK_CAP: usize = 1_000;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ActivitySummaryScripts {
+    script_counts: Vec<ScriptCountRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScriptCountRecord {
+    code_hash: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ByScriptPage {
+    data: Vec<serde_json::Value>,
+    has_more: bool,
+    next_cursor: Option<String>,
+}
+
+/// The live cells the index lists for a pair as `kind` (`lock` or `type`),
+/// walked page by page up to [`SCRIPT_WALK_CAP`] rows: `(rows, complete)`,
+/// `complete` false where rows remain past the cap.
+fn walk_live_cells_by_script(
+    ctx: &CheckContext,
+    code_hash: &str,
+    hash_type: &str,
+    kind: &str,
+) -> anyhow::Result<(usize, bool)> {
+    let mut rows = 0usize;
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut path = format!(
+            "cells/by-script?code_hash={code_hash}&hash_type={hash_type}&script_kind={kind}\
+             &limit={BY_SCRIPT_PAGE_LIMIT}"
+        );
+        if let Some(cursor) = &cursor {
+            path.push_str(&format!("&cursor={cursor}"));
+        }
+        let page: ByScriptPage = api_get(ctx, &path)?;
+        rows += page.data.len();
+        if !page.has_more {
+            return Ok((rows, true));
+        }
+        if rows >= SCRIPT_WALK_CAP {
+            return Ok((rows, false));
+        }
+        let next = page.next_cursor.ok_or_else(|| {
+            anyhow::anyhow!(
+                "cells/by-script ({code_hash}, {hash_type}) as {kind}: hasMore without a \
+                 nextCursor after {rows} rows"
+            )
+        })?;
+        anyhow::ensure!(
+            cursor.as_deref() != Some(next.as_str()),
+            "cells/by-script ({code_hash}, {hash_type}) as {kind}: the next cursor repeats the \
+             one asked after {rows} rows"
+        );
+        cursor = Some(next);
+    }
+}
+
+/// One pair's live cells two ways: the lookup's figure (its usage row) and
+/// the cells the index lists by the pair, as lock and as type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PairLiveReading {
+    code_hash: String,
+    /// The hash type asked.
+    hash_type: &'static str,
+    /// `None`: the lookup did not answer the pair (no label, no usage row).
+    counted: Option<i64>,
+    /// The hash type the lookup answered the pair as, where it answered.
+    answered_as: Option<String>,
+    listed: usize,
+    /// Whether both walks reached the end of the index's rows.
+    complete: bool,
+}
+
+/// How a pair's two readings disagree, or `None` where they agree: equal when
+/// the walks reached the end, the figure at least the rows walked when not.
+impl PairLiveReading {
+    /// The pair as findings name it: `(code hash, hash type)`.
+    fn pair(&self) -> String {
+        format!("({}, {})", self.code_hash, self.hash_type)
+    }
+}
+
+fn pair_live_difference(reading: &PairLiveReading) -> Option<String> {
+    let pair = reading.pair();
+    let listed = reading.listed;
+    if let Some(answered_as) = &reading.answered_as {
+        if answered_as != reading.hash_type {
+            return Some(format!("{pair}: answered as hash type {answered_as:?}"));
+        }
+    }
+    match (reading.counted, reading.complete) {
+        (None, _) if listed == 0 => None,
+        (None, true) => Some(format!(
+            "{pair}: the lookup has no figures, the index lists {listed} live cells"
+        )),
+        (None, false) => Some(format!(
+            "{pair}: the lookup has no figures, the index lists more than {listed} live cells"
+        )),
+        (Some(counted), true) if counted == listed as i64 => None,
+        (Some(counted), true) => Some(format!(
+            "{pair}: liveCellsCount {counted}, the index lists {listed} live cells"
+        )),
+        (Some(counted), false) if counted >= listed as i64 => None,
+        (Some(counted), false) => Some(format!(
+            "{pair}: liveCellsCount {counted}, the index lists more than {listed} live cells"
+        )),
+    }
+}
+
+/// Every pair on `code_hash` (its four hash types), read once: the lookup's
+/// figures in one request, then each pair's rows as lock and as type.
+fn read_code_hash_pairs(
+    ctx: &CheckContext,
+    code_hash: &str,
+) -> anyhow::Result<Vec<PairLiveReading>> {
+    let pairs: Vec<(String, &'static str)> = SCRIPT_HASH_TYPE_LABELS
+        .iter()
+        .map(|hash_type| (code_hash.to_string(), *hash_type))
+        .collect();
+    let answers = lookup_script_pairs(ctx, &pairs)?;
+    let mut readings = Vec::with_capacity(pairs.len());
+    for (code_hash, hash_type) in pairs {
+        let (lock_rows, lock_complete) =
+            walk_live_cells_by_script(ctx, &code_hash, hash_type, "lock")?;
+        let (type_rows, type_complete) =
+            walk_live_cells_by_script(ctx, &code_hash, hash_type, "type")?;
+        let answer = answers.get(&format!("{code_hash}:{hash_type}"));
+        readings.push(PairLiveReading {
+            code_hash,
+            hash_type,
+            counted: answer.map(|answer| answer.live_cells_count),
+            answered_as: answer.map(|answer| answer.hash_type.clone()),
+            listed: lock_rows + type_rows,
+            complete: lock_complete && type_complete,
+        });
+    }
+    Ok(readings)
+}
+
+/// S (lane rd/api-lock-names): each script's figures are its own. For every
+/// code hash used in the last 24 hours of chain time, by each of its four
+/// hash types, the lookup's live cells of the pair (its `script_reference_info`
+/// row, as lock plus as type) equal the live cells the index lists by that
+/// pair (`/cells/by-script`, walked to its end; past [`SCRIPT_WALK_CAP`] rows
+/// the figure is only held to the rows walked, and the pair is named). The
+/// store that kept one usage row per code hash answered (X, data) with the
+/// cells of (X, type) as well. A difference counts only where it stands at one
+/// block (the API's view before and after the reads); one never read at one
+/// block leaves the check inconclusive.
+pub struct ScriptReferenceLiveCellsConsistency;
+
+impl Check for ScriptReferenceLiveCellsConsistency {
+    fn name(&self) -> &'static str {
+        "script_reference_live_cells_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Each pair (code hash, hash type) of the scripts used in 24 h: the lookup's live cells \
+         equal the live cells the index lists by that pair"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let summary: ActivitySummaryScripts = api_get(ctx, "stats/activity-summary-24h")?;
+        let code_hashes: BTreeSet<String> = summary
+            .script_counts
+            .iter()
+            .map(|entry| entry.code_hash.to_ascii_lowercase())
+            .collect();
+        if code_hashes.is_empty() {
+            return Ok(CheckResult::inconclusive(
+                "no script was used in the last 24 hours of chain time: no pair to read",
+            ));
+        }
+        let mut findings = Vec::new();
+        let mut unsettled = Vec::new();
+        let mut walked_in_part = Vec::new();
+        let mut agreed_on_reread = 0u64;
+        let mut waited = std::time::Duration::ZERO;
+        let mut checked = 0u64;
+        for code_hash in &code_hashes {
+            let started = std::time::Instant::now();
+            let mut readings_taken = 0u32;
+            loop {
+                let before = api_view_anchor(ctx)?;
+                let readings = read_code_hash_pairs(ctx, code_hash)?;
+                let after = api_view_anchor(ctx)?;
+                readings_taken += 1;
+                let differences: Vec<String> =
+                    readings.iter().filter_map(pair_live_difference).collect();
+                if differences.is_empty() {
+                    checked += readings.len() as u64;
+                    walked_in_part.extend(
+                        readings
+                            .iter()
+                            .filter(|reading| !reading.complete)
+                            .map(PairLiveReading::pair),
+                    );
+                    if readings_taken > 1 {
+                        agreed_on_reread += 1;
+                        waited += started.elapsed();
+                    }
+                    break;
+                }
+                let one_block = match (&before, &after) {
+                    (Some(before), Some(after)) if before == after => Some(before.clone()),
+                    _ => None,
+                };
+                if let Some(anchor) = one_block {
+                    let mut details = differences;
+                    details.push(format!(
+                        "every read at block {} ({})",
+                        anchor.block_number, anchor.block_hash
+                    ));
+                    findings.push(Finding {
+                        entity: format!("code hash {code_hash}"),
+                        details,
+                    });
+                    checked += readings.len() as u64;
+                    if readings_taken > 1 {
+                        waited += started.elapsed();
+                    }
+                    break;
+                }
+                if waited + started.elapsed() >= COUNT_SETTLE_WAIT {
+                    unsettled.push(format!(
+                        "{code_hash}: {} — not read at one block in {readings_taken} reading(s) \
+                         (last: {})",
+                        differences.join("; "),
+                        describe_view_anchors(&before, &after)
+                    ));
+                    waited += started.elapsed();
+                    break;
+                }
+                std::thread::sleep(COUNT_SETTLE_INTERVAL);
+            }
+            progress.inc(1);
+        }
+        let mut notes = Vec::new();
+        if agreed_on_reread > 0 {
+            notes.push(format!(
+                "{agreed_on_reread} code hash(es) agreed on a re-read (the first read spanned \
+                 two blocks)"
+            ));
+        }
+        if !walked_in_part.is_empty() {
+            notes.push(format!(
+                "walked to {SCRIPT_WALK_CAP} rows a kind only, the figure held to a lower bound: \
+                 {}",
+                walked_in_part.join(", ")
+            ));
+        }
+        if !findings.is_empty() {
+            if !unsettled.is_empty() {
+                notes.push(format!("not read at one block: {}", unsettled.join(" | ")));
+            }
+            return Ok(CheckResult {
+                detail: (!notes.is_empty()).then(|| notes.join("; ")),
+                ..CheckResult::fail(checked, findings)
+            });
+        }
+        if !unsettled.is_empty() {
+            return Ok(CheckResult::inconclusive(format!(
+                "{} code hash(es) differ and no reading was taken at one block — rerun: {}",
+                unsettled.len(),
+                unsettled.join(" | ")
+            )));
+        }
+        let mut detail = format!(
+            "{checked} pairs on the {} code hashes used in 24 h: each pair's live cells are the \
+             ones the index lists by it",
+            code_hashes.len()
+        );
+        for note in notes {
+            detail.push_str("; ");
+            detail.push_str(&note);
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -6985,6 +7539,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DaoStatisticsSane),
         Box::new(GenesisBaselineBurntInvariant),
         Box::new(DataHashIndexFilesOnlyCodeCells),
+        Box::new(ScriptNamesByPair),
         // Sampling
         Box::new(BlockHashRoundtrip),
         Box::new(BlockParentChain),
@@ -7022,6 +7577,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DaoDepositorAggregateConsistency),
         Box::new(ClusterActivitiesCountConsistency),
         Box::new(BitCellAccountIndexConsistency),
+        Box::new(ScriptReferenceLiveCellsConsistency),
     ]
 }
 
@@ -7220,13 +7776,15 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 44);
+        assert_eq!(checks.len(), 46);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
         assert!(names.contains(&"genesis_baseline_burnt_invariant"));
         assert!(names.contains(&"data_hash_index_only_code_cells"));
+        assert!(names.contains(&"script_names_by_pair"));
+        assert!(names.contains(&"script_reference_live_cells_consistency"));
         assert!(names.contains(&"chart_block_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_length_sane"));
@@ -7332,8 +7890,10 @@ mod tests {
             .iter()
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
-        assert_eq!(fast_count, 8);
-        assert_eq!(sampling_count, 36);
+        // lane rd/api-lock-names: script_names_by_pair (fast) and
+        // script_reference_live_cells_consistency (sampling)
+        assert_eq!(fast_count, 9);
+        assert_eq!(sampling_count, 37);
     }
 
     #[test]
@@ -11156,5 +11716,350 @@ mod tests {
             "{:?}",
             result.detail
         );
+    }
+    // ---- script_names_by_pair (lane rd/api-lock-names) ----
+
+    /// The genesis fixture's one binary under Type ID (cellbase output 1): its
+    /// Type ID hash and its code's data hash.
+    fn genesis_binary_hashes() -> (String, String) {
+        let type_id_code = hex::decode(TYPE_ID_CODE_HASH_HEX.trim_start_matches("0x")).unwrap();
+        let type_id_hash = ckbadger_common::script_hash(&type_id_code, 1, &[0x01]);
+        (
+            format!("0x{}", hex::encode(type_id_hash)),
+            format!("0x{}", hex::encode(hash_of(GENESIS_BINARY))),
+        )
+    }
+
+    fn lookup_answer(name: &str, hash_type: &str, live: i64) -> serde_json::Value {
+        json!({"name": name, "hashType": hash_type, "liveCellsCount": live, "cellsCount": live})
+    }
+
+    /// The node answers its genesis; the API answers the lookup with `answers`.
+    fn run_script_names_check(answers: serde_json::Value) -> (CheckResult, Vec<serde_json::Value>) {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let genesis = genesis_block();
+        runtime.block_on(async {
+            Mock::given(method("POST"))
+                .and(path("/"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": genesis})),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/scripts/lookup"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(answers))
+                .mount(&server)
+                .await;
+        });
+        let result = ScriptNamesByPair
+            .run(&rpc_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        let asked: Vec<serde_json::Value> = runtime
+            .block_on(server.received_requests())
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path() == "/api/v1/scripts/lookup")
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        (result, asked)
+    }
+
+    /// The registry names the binary by its Type ID (the type pair); the
+    /// other three pairs on that hash and the type pair on its data hash are
+    /// no script, and the lookup names none of them: the check passes, having
+    /// asked every pair on both hashes.
+    #[test]
+    fn script_names_by_pair_passes_when_each_pair_is_named_as_itself() {
+        let (type_id_hash, data_hash) = genesis_binary_hashes();
+        let (result, asked) = run_script_names_check(json!({
+            format!("{type_id_hash}:type"): lookup_answer("SECP256K1/blake160", "type", 2),
+            format!("{type_id_hash}:data"): lookup_answer("Unknown", "data", 1),
+        }));
+        assert!(result.passed(), "{:?}", result.findings);
+        assert_eq!(result.items_checked, 8);
+        assert!(
+            result.detail.as_deref().unwrap_or_default().contains(
+                "1 genesis Type ID binaries: 8 pairs answered as themselves, the 4 that no \
+                 script can be named by none"
+            ),
+            "{:?}",
+            result.detail
+        );
+        assert_eq!(asked.len(), 1, "one lookup: {asked:?}");
+        let scripts = asked[0]["scripts"].as_array().unwrap();
+        for hash_type in ["type", "data", "data1", "data2"] {
+            for code_hash in [&type_id_hash, &data_hash] {
+                assert!(
+                    scripts.contains(&json!({"codeHash": code_hash, "hashType": hash_type})),
+                    "({code_hash}, {hash_type}) not asked: {scripts:?}"
+                );
+            }
+        }
+    }
+
+    /// The bug the check exists for: a store that keeps one label per code
+    /// hash names a lock on (Type ID hash, data) after the script of (Type ID
+    /// hash, type), and (data hash, type) after the code. Each is a finding
+    /// naming the pair, and the first says whose name it is.
+    #[test]
+    fn script_names_by_pair_fails_on_a_pair_named_by_its_code_hash_alone() {
+        let (type_id_hash, data_hash) = genesis_binary_hashes();
+        let (result, _) = run_script_names_check(json!({
+            format!("{type_id_hash}:type"): lookup_answer("Default Lock", "type", 3),
+            format!("{type_id_hash}:data"): lookup_answer("Default Lock", "data", 3),
+            format!("{data_hash}:type"): lookup_answer("Default Lock", "type", 0),
+        }));
+        assert!(!result.passed());
+        let entities: Vec<&str> = result.findings.iter().map(|f| f.entity.as_str()).collect();
+        assert_eq!(
+            entities,
+            vec![
+                format!("script ({type_id_hash}, data)").as_str(),
+                format!("script ({data_hash}, type)").as_str(),
+            ]
+        );
+        let first = result.findings[0].details.join("\n");
+        assert!(
+            first.contains("named \"Default Lock\" (3 live cells)")
+                && first.contains("no code's data hash")
+                && first.contains(&format!("the name is ({type_id_hash}, type)'s")),
+            "{first}"
+        );
+        assert!(
+            result.findings[1]
+                .details
+                .join("\n")
+                .contains("no type script's hash"),
+            "{:?}",
+            result.findings[1]
+        );
+    }
+
+    /// Every pair is answered as itself: an answer under the key of one hash
+    /// type that says another, or an answer to a pair never asked, fails.
+    #[test]
+    fn script_names_by_pair_fails_on_a_pair_answered_as_another() {
+        let (type_id_hash, _) = genesis_binary_hashes();
+        let (result, _) = run_script_names_check(json!({
+            format!("{type_id_hash}:data1"): lookup_answer("Unknown", "type", 3),
+            format!("0x{}:type", "ab".repeat(32)): lookup_answer("Unknown", "type", 0),
+        }));
+        assert!(!result.passed());
+        let details: Vec<String> = result
+            .findings
+            .iter()
+            .map(|f| format!("{}: {}", f.entity, f.details.join("; ")))
+            .collect();
+        assert_eq!(
+            details,
+            vec![
+                format!(
+                    "script ({type_id_hash}, data1): asked by data1, answered as hash type \"type\""
+                ),
+                format!(
+                    "script lookup answer 0x{}:type: answered a pair that was not asked",
+                    "ab".repeat(32)
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn script_names_by_pair_is_fast_and_reads_the_node() {
+        assert_eq!(ScriptNamesByPair.tier(), CheckTier::Fast);
+        assert!(ScriptNamesByPair.requires_rpc());
+    }
+
+    // ---- script_reference_live_cells_consistency (lane rd/api-lock-names) ----
+
+    fn live_reading(counted: Option<i64>, listed: usize, complete: bool) -> PairLiveReading {
+        PairLiveReading {
+            code_hash: "0xaa".to_string(),
+            hash_type: "data",
+            counted,
+            answered_as: counted.map(|_| "data".to_string()),
+            listed,
+            complete,
+        }
+    }
+
+    #[test]
+    fn a_pair_reading_agrees_only_with_its_own_rows() {
+        // walked to the end: the figure is the rows
+        assert_eq!(pair_live_difference(&live_reading(Some(2), 2, true)), None);
+        assert_eq!(
+            pair_live_difference(&live_reading(Some(5), 2, true)).as_deref(),
+            Some("(0xaa, data): liveCellsCount 5, the index lists 2 live cells")
+        );
+        // walked in part: the figure is at least the rows walked
+        assert_eq!(
+            pair_live_difference(&live_reading(Some(5000), 1000, false)),
+            None
+        );
+        assert_eq!(
+            pair_live_difference(&live_reading(Some(10), 1000, false)).as_deref(),
+            Some("(0xaa, data): liveCellsCount 10, the index lists more than 1000 live cells")
+        );
+        // unanswered: no figures, and so no cells
+        assert_eq!(pair_live_difference(&live_reading(None, 0, true)), None);
+        assert_eq!(
+            pair_live_difference(&live_reading(None, 3, true)).as_deref(),
+            Some("(0xaa, data): the lookup has no figures, the index lists 3 live cells")
+        );
+        // answered as another hash type
+        let mut other = live_reading(Some(2), 2, true);
+        other.answered_as = Some("type".to_string());
+        assert_eq!(
+            pair_live_difference(&other).as_deref(),
+            Some("(0xaa, data): answered as hash type \"type\"")
+        );
+    }
+
+    /// The code hash the 24-hour summary names, the lookup's answers, the
+    /// index's live rows by pair and kind, and the API's view at `view`.
+    fn mount_live_cells_fixture(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        code_hash: &str,
+        answers: serde_json::Value,
+        rows: &[(&str, &str, usize)],
+    ) {
+        let page = |n: usize| {
+            json!({"data": (0..n).map(|i| json!({"outputIndex": i})).collect::<Vec<_>>(),
+                   "limit": 100, "hasMore": false, "nextCursor": null})
+        };
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/stats/activity-summary-24h"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "scriptCounts": [{"codeHash": code_hash, "hashType": "type",
+                                      "name": "Default Lock", "count": 3}],
+                })))
+                .mount(server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api/v1/scripts/lookup"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(answers))
+                .mount(server)
+                .await;
+            for (hash_type, kind, n) in rows {
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/cells/by-script"))
+                    .and(query_param("code_hash", code_hash))
+                    .and(query_param("hash_type", *hash_type))
+                    .and(query_param("script_kind", *kind))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(page(*n)))
+                    .with_priority(1)
+                    .mount(server)
+                    .await;
+            }
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/by-script"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(page(0)))
+                .with_priority(10)
+                .mount(server)
+                .await;
+        });
+    }
+
+    fn run_live_cells_check(
+        answers: serde_json::Value,
+        rows: &[(&str, &str, usize)],
+        view: Option<i64>,
+    ) -> CheckResult {
+        let code_hash = format!("0x{}", "9b".repeat(32));
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_live_cells_fixture(&runtime, &server, &code_hash, answers, rows);
+        match view {
+            Some(view) => mount_view_anchor(&runtime, &server, view),
+            None => runtime.block_on(async {
+                // every read of the view stands at a later block: never one block
+                let reads = Arc::new(AtomicUsize::new(0));
+                struct MovingView(Arc<AtomicUsize>);
+                impl Respond for MovingView {
+                    fn respond(&self, _: &Request) -> ResponseTemplate {
+                        let n = self.0.fetch_add(1, Ordering::SeqCst) as i64;
+                        ResponseTemplate::new(200)
+                            .set_body_json(json!({ "anchor": anchor_json(100 + n) }))
+                    }
+                }
+                Mock::given(method("GET"))
+                    .and(path("/api/v1/assets/summary"))
+                    .respond_with(MovingView(reads))
+                    .mount(&server)
+                    .await;
+            }),
+        }
+        ScriptReferenceLiveCellsConsistency
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap()
+    }
+
+    /// Each pair counted as itself: (X, type) has two live locks, (X, data)
+    /// one, and the lookup says so of each.
+    #[test]
+    fn script_live_cells_pass_when_each_pair_counts_its_own_cells() {
+        let code_hash = format!("0x{}", "9b".repeat(32));
+        let result = run_live_cells_check(
+            json!({
+                format!("{code_hash}:type"): lookup_answer("Default Lock", "type", 2),
+                format!("{code_hash}:data"): lookup_answer("Unknown", "data", 1),
+            }),
+            &[("type", "lock", 2), ("data", "lock", 1)],
+            Some(7),
+        );
+        assert!(result.passed(), "{:?} {:?}", result.findings, result.detail);
+        assert_eq!(result.items_checked, 4);
+    }
+
+    /// The bug the check exists for: one usage row per code hash answers both
+    /// pairs with the cells of both (three). At one block each is a finding.
+    #[test]
+    fn script_live_cells_fail_on_figures_lumped_across_hash_types() {
+        let code_hash = format!("0x{}", "9b".repeat(32));
+        let result = run_live_cells_check(
+            json!({
+                format!("{code_hash}:type"): lookup_answer("Default Lock", "type", 3),
+                format!("{code_hash}:data"): lookup_answer("Default Lock", "data", 3),
+            }),
+            &[("type", "lock", 2), ("data", "lock", 1)],
+            Some(7),
+        );
+        assert!(!result.passed());
+        assert_eq!(result.findings.len(), 1, "{:?}", result.findings);
+        assert_eq!(result.findings[0].entity, format!("code hash {code_hash}"));
+        assert_eq!(
+            result.findings[0].details,
+            vec![
+                format!("({code_hash}, type): liveCellsCount 3, the index lists 2 live cells"),
+                format!("({code_hash}, data): liveCellsCount 3, the index lists 1 live cells"),
+                format!("every read at block 7 (0x{:064x})", 7),
+            ]
+        );
+    }
+
+    /// A difference never read at one block says nothing of the index: the
+    /// check is inconclusive, never a pass and never a failure.
+    #[test]
+    fn script_live_cells_are_inconclusive_when_never_read_at_one_block() {
+        let code_hash = format!("0x{}", "9b".repeat(32));
+        let result = run_live_cells_check(
+            json!({ format!("{code_hash}:type"): lookup_answer("Default Lock", "type", 3) }),
+            &[("type", "lock", 2)],
+            None,
+        );
+        assert_eq!(result.status, CheckStatus::Inconclusive, "{result:?}");
+        assert!(result.findings.is_empty(), "{:?}", result.findings);
+    }
+
+    #[test]
+    fn script_live_cells_check_is_sampling_and_reads_only_the_api() {
+        let check = ScriptReferenceLiveCellsConsistency;
+        assert_eq!(check.tier(), CheckTier::Sampling);
+        assert!(!check.requires_rpc());
     }
 }
