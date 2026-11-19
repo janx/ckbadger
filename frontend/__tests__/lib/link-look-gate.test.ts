@@ -177,11 +177,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // 'components/home/mini-chart.tsx' left the list (lane P3: look 1, ink 1 → 0; a card's title its key)
   // 'components/home/ranked-bars.tsx' left the list (lane P3: look 2, ink 1 → 0; the title its key, a row one block)
   // 'components/not-found-page.tsx' left the list (lane P3: look 5, ink 5 → 0; the ways on and the alternative ways onward)
-  'components/pipeline/pipeline-panel.tsx': {
-    lane: 'p-lists',
-    sites: { look: 3, ink: 2 },
-    reason: '3 without a look; inks by hand (text-aqua, no-underline, text-interactive)',
-  },
+  // 'components/pipeline/pipeline-panel.tsx' left the list for NAMED (the P3 follow-up's 2c: look
+  // 3, ink 2, the owner's accepted pipeline design)
   // ---- p-topics ----
   // the Fiber channel and channels pages left the list (lane P4: look 1, ink 1 and look 3, ink
   // 4, raw 1 → 0)
@@ -264,8 +261,9 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
 // (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14) → 63
 // (lane P3: the blocks list, 14) → 55 (lane P3: the activity row, 8) → 48 (lane P3: the DAO
-// depositors, 7) → 37 (the P3 follow-up's 2c: the item facts and protocol notes, 11)
-const TOLERATED_TOTAL = 37;
+// depositors, 7) → 37 (the P3 follow-up's 2c: the item facts and protocol notes, 11) → 32 (the
+// pipeline panel's 5, NAMED: the owner's accepted design)
+const TOLERATED_TOTAL = 32;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
@@ -279,6 +277,11 @@ const NAMED: Readonly<Record<string, Named>> = {
     reason:
       'the error page’s bare home link (`plain`): it renders without the router, and its href stays `/` where Link would prefix the network',
   },
+  'components/pipeline/pipeline-panel.tsx': {
+    sites: { look: 3, ink: 2 },
+    reason:
+      'the owner’s accepted pipeline design (homepage pipeline finish, F and G, merged 2026-11-18): the tip’s flaring block link, the pinned tx or block’s aqua "open tx ↗" with its own rule, and the heading’s "all blocks →" in the interactive ink are drawn as the approved board drew them',
+  },
   'components/ui/tabs.tsx': {
     sites: { ink: 1 },
     reason:
@@ -286,8 +289,11 @@ const NAMED: Readonly<Record<string, Named>> = {
   },
 };
 
-/** The pinned total of NAMED's sites: 1, and TabLinks' name since the reader learned a child's ink. */
-const NAMED_TOTAL = 2;
+/**
+ * The pinned total of NAMED's sites: 1, and TabLinks' name since the reader learned a child's ink,
+ * and the pipeline panel's 5 (the P3 follow-up's 2c).
+ */
+const NAMED_TOTAL = 7;
 
 /** The files that draw the one `<a>` of a link (they own it). */
 const LINK_FILES = ['components/ui/link.tsx', 'components/ui/external-link.tsx'];
