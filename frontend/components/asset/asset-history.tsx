@@ -302,8 +302,11 @@ export function AssetHistory({
         bareTicks: true,
       }
     : null;
+  // Lane P2's third round (item 7): a series of one complete week (or none) in the range is said
+  // in words, the readout's week line, and no chart is drawn of one bar: one mark says nothing a
+  // figure does not, and its axis invites a wrong reading
   const weeklyAxis: ChartValueAxisInput | null =
-    weeklyUnavailable === null
+    weeklyUnavailable === null && weeks.length > 1
       ? {
           title: `${weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions'} per week`,
           data: weeks.map((w) => ({

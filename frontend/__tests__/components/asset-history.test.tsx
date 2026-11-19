@@ -11,6 +11,11 @@ const daily = [
   { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
   { date: '2024-01-08', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
 ];
+/** Three days and two complete weeks: a weekly series a chart draws (one week is said in words). */
+const dailyOfTwoWeeks = [
+  ...daily,
+  { date: '2024-01-15', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
+];
 /** A supply event's party address in the fixture below: its seed spelled from its index. */
 const eventAddress = (i: number, codeHash: string) => seededAddress(String(i).repeat(6), codeHash);
 
@@ -53,13 +58,18 @@ describe('Asset history', () => {
     // The token page printed ".0k transactions": a fixed 100 px gutter cut "10k transactions".
     stubChartWidth(358);
     try {
+      // re-pinned on purpose (lane P2's third round, item 7): a series of one week is said in words and draws no chart, so the gutter's
+      // three plots read a series of two weeks
       render(
         <AssetHistory
           assetClass="tokens"
           weeklyNoun="transactions"
-          daily={daily}
-          weekly={[{ weekStart: '2024-01-01', count: 8000 }]}
-          completeThrough="2024-01-08"
+          daily={dailyOfTwoWeeks}
+          weekly={[
+            { weekStart: '2024-01-01', count: 8000 },
+            { weekStart: '2024-01-08', count: 10 },
+          ]}
+          completeThrough="2024-01-15"
           token={{ symbol: 'RGB++', decimals: 8 }}
         />
       );
@@ -630,13 +640,18 @@ describe('Asset history', () => {
   });
   it('names what the weekly totals count and says when only the newest supply events are listed', () => {
     stubChartWidth(358);
+    // re-pinned on purpose (lane P2's third round, item 7): a series of one week is said in words and draws no chart, so the weekly chart
+    // it names reads a series of two weeks
     render(
       <AssetHistory
         assetClass="tokens"
         weeklyNoun="transactions"
-        daily={daily}
-        weekly={[{ weekStart: '2024-01-01', count: 3 }]}
-        completeThrough="2024-01-14"
+        daily={dailyOfTwoWeeks}
+        weekly={[
+          { weekStart: '2024-01-01', count: 3 },
+          { weekStart: '2024-01-08', count: 5 },
+        ]}
+        completeThrough="2024-01-15"
         token={{ symbol: 'T', decimals: 8 }}
         supplyEvents={{
           total: 1234,
@@ -666,6 +681,51 @@ describe('Asset history', () => {
     fireEvent.click(screen.getByText('Every change to the supply (1,234)'));
     expect(screen.getByText('The newest 1 are listed.')).toBeInTheDocument();
     vi.unstubAllGlobals();
+  });
+  // Lane P2's third round (item 7): a series of one complete week is said in words, the
+  // readout's line, and no chart is drawn of one bar (one mark says nothing a figure does not,
+  // and its axis invites a wrong reading); two weeks and more are a chart
+  it('says a single complete week in words and draws no chart of one bar', () => {
+    stubChartWidth(1248);
+    try {
+      const { unmount } = render(
+        <AssetHistory
+          assetClass="objects"
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[{ weekStart: '2024-01-01', count: 3 }]}
+          completeThrough="2024-01-08"
+        />
+      );
+      expect(screen.queryByRole('img', { name: /per week/ })).toBeNull();
+      expect(screen.getByLabelText('History readout')).toHaveTextContent(
+        'Latest complete week, from 2024-01-01: 3 transfers'
+      );
+      unmount();
+      render(
+        <AssetHistory
+          assetClass="objects"
+          weeklyNoun="transfers"
+          daily={[
+            ...daily,
+            {
+              date: '2024-01-15',
+              capacity: '20000000001',
+              occupiedCapacity: '6100000000',
+              supply: '26',
+            },
+          ]}
+          weekly={[
+            { weekStart: '2024-01-01', count: 3 },
+            { weekStart: '2024-01-08', count: 5 },
+          ]}
+          completeThrough="2024-01-15"
+        />
+      );
+      expect(screen.getByRole('img', { name: /Transfers per week/ })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
   it('rejects invalid day labels and incomplete weekly buckets', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});

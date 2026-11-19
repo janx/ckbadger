@@ -46,7 +46,11 @@ it('preserves single shannons, complete-day cutoff and shared capacity/transfer 
   const range = screen.getByRole('radiogroup', { name: 'History time range' });
   fireEvent.click(within(range).getByRole('radio', { name: '1 w' }));
   expect(within(range).getByRole('radio', { name: '1 w' })).toHaveAttribute('aria-checked', 'true');
-  expect(screen.getByText('No data in this range.')).toBeInTheDocument();
+  // re-pinned on purpose (lane P2's third round, item 7): a series of one week is said in words and draws no chart, so the one week of the
+  // series draws no chart at any range, and no empty one either (it said "No data in this range."
+  // under a chart of no bar)
+  expect(screen.queryByRole('img', { name: /per week/ })).toBeNull();
+  expect(screen.queryByText('No data in this range.')).toBeNull();
   expect(readout).toHaveTextContent('100.00000013');
 });
 it('rejects an incomplete calendar day and missing exact occupied state', () => {
