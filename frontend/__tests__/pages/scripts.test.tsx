@@ -205,7 +205,7 @@ describe('ScriptsPage', () => {
         })
       );
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Reverse order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse sort direction' }));
     await waitFor(() =>
       expect(api.getScripts).toHaveBeenLastCalledWith(
         expect.objectContaining({ sortKey: 'used', sortDirection: 'asc' })
@@ -417,7 +417,7 @@ describe('the scripts list’s pages (what the controls ask for)', () => {
     );
     expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
     await toPageTwo();
-    fireEvent.click(screen.getByRole('button', { name: 'Reverse order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse sort direction' }));
     await waitFor(() =>
       expect(lastList()).toEqual(
         expect.objectContaining({ sortDirection: 'asc', cursor: undefined })
@@ -425,10 +425,11 @@ describe('the scripts list’s pages (what the controls ask for)', () => {
     );
     expect((await screen.findAllByText('Script 1')).length).toBeGreaterThan(0);
     await toPageTwo();
+    // re-pinned on purpose (lists lane P3): the search filters as typed (no Search button), and the
+    // sort direction is named as the inventory's ("Reverse sort direction"; it was "Reverse order")
     fireEvent.change(screen.getByPlaceholderText('search by name or code hash'), {
       target: { value: 'script' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     await waitFor(() =>
       expect(lastList()).toEqual(expect.objectContaining({ search: 'script', cursor: undefined }))
     );
