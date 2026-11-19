@@ -40,6 +40,16 @@ export interface TxFlow {
   to: FlowEnd[];
   /** What left the givers, terminals included: the flow's volume. */
   total: bigint;
+  /**
+   * What left the giving parties: `from`'s party ends, without a giving terminal (compensation,
+   * minted). The figure of a sentence that says what left them.
+   */
+  sent: bigint;
+  /**
+   * What reached the receiving parties: `to`'s party ends, without a receiving terminal (the
+   * miner's fee, burnt). The figure of a sentence that says what moved to them (lane P1).
+   */
+  received: bigint;
 }
 
 const ZERO = BigInt(0);
@@ -84,6 +94,11 @@ function partyEnds(entries: Entry[]): FlowEnd[] {
 
 function sum(ends: readonly FlowEnd[]): bigint {
   return ends.reduce((acc, e) => acc + e.amount, ZERO);
+}
+
+/** A side's party ends alone: its terminals (the miner, compensation, minted, burnt) left out. */
+function parties(ends: readonly FlowEnd[]): FlowEnd[] {
+  return ends.filter((e) => e.t === 'party');
 }
 
 /**
@@ -133,7 +148,15 @@ export function txFlows({
     const diff = sum(to) - sum(from);
     if (diff > ZERO) from.unshift({ t: 'minted', amount: diff });
     else if (diff < ZERO) to.push({ t: 'burnt', amount: -diff });
-    return { key, asset: flow.asset, from, to, total: sum(from) };
+    return {
+      key,
+      asset: flow.asset,
+      from,
+      to,
+      total: sum(from),
+      sent: sum(parties(from)),
+      received: sum(parties(to)),
+    };
   });
 
   const from = partyEnds(ckbFrom);
@@ -153,9 +176,33 @@ export function txFlows({
       throw new Error(
         `${hash}: the CKB flow does not conserve: ${given} shannons from the givers, ${received} to the receivers (fee ${feeShannons}, compensation ${compensation ?? 0})`
       );
-    flows.push({ key: 'ckb', asset: { kind: 'ckb' }, from, to, total: given });
+    flows.push({
+      key: 'ckb',
+      asset: { kind: 'ckb' },
+      from,
+      to,
+      total: given,
+      sent: sum(parties(from)),
+      received: sum(parties(to)),
+    });
   }
   return flows;
+}
+
+/**
+ * Whether a transaction moved its fee and nothing else (lane P1, the plan's "a transaction that
+ * moves only its fee says so in one line"): its flows are the CKB flow alone, which ends at the
+ * miner and at no party, with no Nervos DAO compensation entering it. A transaction that moved
+ * nothing, not even a fee, did not move "only its fee".
+ */
+export function onlyFeeMoved(flows: readonly TxFlow[]): boolean {
+  if (flows.length !== 1 || flows[0].asset.kind !== 'ckb') return false;
+  const [ckb] = flows;
+  return (
+    ckb.to.length > 0 &&
+    ckb.to.every((e) => e.t === 'miner') &&
+    ckb.from.every((e) => e.t === 'party')
+  );
 }
 
 const SHOWN_WHEN_FOLDED = PARTICIPANT_LIMIT - 1;
