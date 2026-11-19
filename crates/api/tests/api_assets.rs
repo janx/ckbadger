@@ -2714,6 +2714,156 @@ async fn test_assets_nft_collection_holders_supports_pagination() {
     assert_eq!(json["firstRank"], 2, "{json}");
 }
 
+/// lane exactness, part A2 (S1 and the test review's SHOULD-2): an object collection's and an identity
+/// collection's holders pages start after the cursor's place, and read the ranking of the view's
+/// own tip. Page one ends at owner_a (2 items) at tip 1; a new holder of 5 arrives and the tip
+/// moves to 2: page two starts at owner_a's place in the new ranking (owner_b), its firstRank 3,
+/// where a ranking cached across tips would start at rank 2; then owner_a leaves, and the page
+/// after its place still starts at owner_b, rank 2.
+#[tokio::test]
+async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s_place() {
+    let store = test_store();
+    let collection_id = b"dotbit_collection_______________".to_vec();
+    let nft_a = [0x81u8; 20];
+    let nft_b = [0x82u8; 20];
+    let nft_c = [0x83u8; 20];
+    let nft_d = [0x84u8; 20];
+    let owner_a = vec![0x11u8; 32];
+    let owner_b = vec![0x22u8; 32];
+    let owner_c = vec![0x33u8; 32];
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_collection_aggregate(
+        &collection_id,
+        &IdentityCollectionAggregate {
+            name: Some(".bit".to_string()),
+            standard: IdentityStandard::DotBit,
+            total_count: 4,
+            live_count: 3,
+            holders_count: 2,
+            activities_count: 0,
+        },
+    );
+    batch.put_identity(
+        &nft_a,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_a.clone()),
+            name: Some("alpha.bit".to_string()),
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_000),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity(
+        &nft_b,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_a.clone()),
+            name: Some("beta.bit".to_string()),
+            is_live: true,
+            created_at_block: 101,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_001),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity(
+        &nft_c,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_b.clone()),
+            name: Some("gamma.bit".to_string()),
+            is_live: true,
+            created_at_block: 102,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_002),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity(
+        &nft_d,
+        &IdentityEntry {
+            standard: IdentityStandard::DotBit,
+            owner_lock_hash: Some(owner_c),
+            name: Some("dead.bit".to_string()),
+            is_live: false,
+            created_at_block: 103,
+            created_at_tx: vec![],
+            extra: IdentityExtra::DotBit {
+                expired_at: Some(1_800_000_003),
+                registered_at: None,
+                status: None,
+            },
+        },
+    );
+    batch.put_identity_by_collection(&collection_id, &nft_a);
+    batch.put_identity_by_collection(&collection_id, &nft_b);
+    batch.put_identity_by_collection(&collection_id, &nft_c);
+    batch.put_identity_by_collection(&collection_id, &nft_d);
+    batch.put_identity_owner_count(&collection_id, &owner_a, 2);
+    batch.put_identity_owner_count(&collection_id, &owner_b, 1);
+    batch.commit().unwrap();
+
+    let owner_new = vec![0x99u8; 32];
+    seed_block_headers_at(&store, &[(1, 1_700_000_001_000)]);
+    let app = create_router(test_config(store.clone())).await;
+    for path in [
+        "/assets/objects/dotbit/holders",
+        "/assets/identities/dotbit/holders",
+    ] {
+        let (status, first) = get_json(&app, &format!("{path}?limit=1")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {first}");
+        assert_eq!(first["firstRank"], 1, "{path}: {first}");
+        let cursor = first["nextCursor"].as_str().unwrap().to_string();
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_identity_owner_count(&collection_id, &owner_new, 5);
+        batch.commit().unwrap();
+        seed_block_headers_at(&store, &[(2, 1_700_000_002_000)]);
+        let (status, second) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {second}");
+        assert_eq!(
+            second["data"][0]["lockScriptHash"],
+            format!("0x{}", hex::encode(&owner_b)),
+            "{path}: {second}"
+        );
+        assert_eq!(second["firstRank"], 3, "{path}: {second}");
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_identity_owner_count(&collection_id, &owner_a, 0);
+        batch.commit().unwrap();
+        seed_block_headers_at(&store, &[(3, 1_700_000_003_000)]);
+        let (status, third) = get_json(&app, &format!("{path}?limit=1&cursor={cursor}")).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {third}");
+        assert_eq!(
+            third["data"][0]["lockScriptHash"],
+            format!("0x{}", hex::encode(&owner_b)),
+            "{path}: {third}"
+        );
+        assert_eq!(third["firstRank"], 2, "{path}: {third}");
+
+        // the next path starts from page one's state again
+        let mut batch = StoreBatch::new(&store);
+        batch.put_identity_owner_count(&collection_id, &owner_a, 2);
+        batch.put_identity_owner_count(&collection_id, &owner_new, 0);
+        batch.commit().unwrap();
+        let next = if path.contains("objects") { 4 } else { 5 };
+        seed_block_headers_at(&store, &[(next, 1_700_000_000_000 + next * 1000)]);
+    }
+}
+
 #[tokio::test]
 async fn test_assets_nft_collection_activities_supports_action_filter() {
     let (core_store, append_only_store) = split_test_stores();
