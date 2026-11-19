@@ -159,6 +159,38 @@ describe('line-runs reads the runs a line cannot break inside', () => {
     ).toThrow(/cannot shrink and has a set width/);
   });
 
+  // B4 second fix round (review-rules-fixes-tests NOTE-3, the coordinator's item 16): what the
+  // reader would misread it refuses, by name: an item behind `display: contents` (its flex row is
+  // its grandparent's, and the wrapper drops the row's gap), an item that cannot shrink below its
+  // max-content width by its minimum (`min-w-max`, `min-w-fit`), and an item with two width
+  // classes (which wins is the cascade's, not the first one read).
+  it('refuses an item behind display: contents, a max-content minimum, two width classes', () => {
+    expect(() =>
+      runs(
+        <span className="text-small flex flex-wrap gap-2">
+          <span className="contents">
+            <span className="shrink-0">cd ef</span>
+          </span>
+        </span>
+      )
+    ).toThrow(/display: contents/);
+    for (const min of ['min-w-max', 'min-w-fit'])
+      expect(() =>
+        runs(
+          <span className="text-small flex flex-wrap gap-2">
+            <span className={min}>cd ef</span>
+          </span>
+        )
+      ).toThrow(/cannot shrink below its max-content/);
+    expect(() =>
+      runs(
+        <span className="text-small flex">
+          <span className="max-w-full shrink-0 basis-0">cd ef</span>
+        </span>
+      )
+    ).toThrow(/two width classes/);
+  });
+
   it('starts a run at a block, and leaves out what is not drawn', () => {
     expect(
       runs(
