@@ -479,8 +479,8 @@ export function IdentitySummary({
               ' that still holds it. '
             ) : (
               <>
-                ; since {formatUtc8Date(owners.since.timestamp)} {lockOf(owners.since)} holds
-                it.{' '}
+                ; since <NoBreak>{formatUtc8Date(owners.since.timestamp)}</NoBreak>{' '}
+                {lockOf(owners.since)} holds it.{' '}
               </>
             )
           )}
