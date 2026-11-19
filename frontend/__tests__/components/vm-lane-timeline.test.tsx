@@ -13,6 +13,18 @@ import {
 import { VmLaneTimeline } from '@/components/hardforks/vm-lane-timeline';
 import producer from '@/__tests__/fixtures/network-api-producer/hardforks-deployments.json';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
+import {
+  PALETTE,
+  PALETTE_KEYS,
+  THEMES,
+  apcaLc,
+  contrastRatio,
+  inkOnFill,
+  overGround,
+  type PaletteKey,
+  type ThemeName,
+} from '@/lib/palette';
+import { resetThemeForTests } from '@/lib/theme';
 
 // F2 charts group (CH-40, CH-41): the Hardforks board's VM lanes.
 
@@ -353,6 +365,81 @@ describe('VmLaneTimeline', () => {
       )
     ).toThrow(/between genesis and the tip/);
   });
+});
+
+// Readability page lane P4 (PAGE-LANE-NOTES, F1 follow-up): "VM2" on its bar, jade at 0.55, read
+// 3.81 : 1 by night in the bright ink (and 4.13 : 1 in the well's ink: no ink reads on that step),
+// written in `text-bright` by hand. A word on a VM bar takes the ink its fill calls for (inkOnFill:
+// the well or the bright ink, whichever reads stronger on the fill as the eye sees it over the
+// page) and every step of the VM ramp reads at 4.5 : 1 or more in both themes, by night at Lc 60
+// or more too (the night grade of a word ink that is not the reading ink): the step moves, the
+// palette does not.
+function inTheme(theme: ThemeName) {
+  localStorage.setItem('ckbadger.theme', theme);
+  resetThemeForTests();
+  document.documentElement.setAttribute('data-theme', theme);
+}
+const paletteKey = (ref: string | null): PaletteKey => {
+  const key = /^var\(--c-([a-z0-9-]+)\)$/.exec(ref ?? '')?.[1];
+  if (!key || !(PALETTE_KEYS as string[]).includes(key))
+    throw new Error(`${ref} is not a palette colour`);
+  return key as PaletteKey;
+};
+
+describe('VmLaneTimeline: a word on a VM bar reads on its fill (P4, F1 follow-up)', () => {
+  afterEach(() => {
+    localStorage.clear();
+    resetThemeForTests();
+    document.documentElement.setAttribute('data-theme', 'dark');
+    vi.restoreAllMocks();
+  });
+
+  it.each(THEMES.flatMap((theme) => [1232, 358].map((width) => [theme, width] as const)))(
+    'in the %s theme at %i px',
+    (theme, width) => {
+      inTheme(theme);
+      stubChartWidth(width);
+      render(
+        <VmLaneTimeline
+          editions={editions}
+          lanes={lanes}
+          deployments={laned}
+          genesisMs={genesisMs}
+          tipMs={tipMs}
+          tipEpoch={15203}
+        />
+      );
+      const svg = screen.getByRole('img');
+      const words = [...svg.querySelectorAll('[data-lane] g')].filter((g) =>
+        /^VM\d$/.test(g.querySelector('text')?.textContent ?? '')
+      );
+      expect(words.length).toBe(6);
+      const short: string[] = [];
+      for (const g of words) {
+        const rect = g.querySelector('rect')!;
+        const text = g.querySelector('text')!;
+        const fill = overGround(
+          theme,
+          paletteKey(rect.getAttribute('fill')),
+          Number(rect.getAttribute('fill-opacity'))
+        );
+        const ink = paletteKey(text.getAttribute('fill'));
+        const ratio = contrastRatio(PALETTE[theme][ink], fill);
+        const lc = Math.abs(apcaLc(PALETTE[theme][ink], fill));
+        const what = `${text.textContent} at ${rect.getAttribute('fill-opacity')} in ${ink}`;
+        if (ratio < 4.5) short.push(`${what}: ${ratio.toFixed(2)} : 1`);
+        if (theme === 'dark' && lc < 60) short.push(`${what}: Lc ${lc.toFixed(1)}`);
+        // the ink its fill calls for, not one picked by hand
+        const called = inkOnFill(
+          theme,
+          paletteKey(rect.getAttribute('fill')),
+          Number(rect.getAttribute('fill-opacity'))
+        ).ink;
+        if (ink !== called) short.push(`${what}: its fill calls for ${called}`);
+      }
+      expect(short).toEqual([]);
+    }
+  );
 });
 
 // Readability plan 2026-11-18, lane F3 (the figures' text budgets): at the 12 px floor every word
