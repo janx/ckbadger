@@ -57,6 +57,7 @@
                 "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
               ],
               "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+              "verifiedCodeCell": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5:0",
               "witnessState": "verified",
               "owners": []
             }
@@ -110,6 +111,7 @@
                 "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
               ],
               "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+              "verifiedCodeCell": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5:0",
               "witnessState": "verified",
               "owners": []
             }
@@ -163,6 +165,7 @@
                 "0xb6931c61c9472326c26e1c485358f4af009cb126"
               ],
               "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+              "verifiedCodeCell": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b:0",
               "witnessState": "verified",
               "owners": []
             }
@@ -216,6 +219,7 @@
                 "0xb6931c61c9472326c26e1c485358f4af009cb126"
               ],
               "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+              "verifiedCodeCell": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b:0",
               "witnessState": "verified",
               "owners": []
             }
@@ -263,6 +267,7 @@
               "requireFirstN": null,
               "keyHashes": [],
               "verifiedByTx": null,
+              "verifiedCodeCell": null,
               "witnessState": "never_signed",
               "owners": []
             }
@@ -290,6 +295,7 @@
           "requireFirstN": null,
           "keyHashes": [],
           "verifiedByTx": null,
+          "verifiedCodeCell": null,
           "witnessState": "never_signed",
           "owners": []
         }
@@ -333,6 +339,7 @@
             "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
           ],
           "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "verifiedCodeCell": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -366,6 +373,7 @@
             "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
           ],
           "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "verifiedCodeCell": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -399,6 +407,7 @@
             "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
           ],
           "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "verifiedCodeCell": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -432,6 +441,7 @@
             "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
           ],
           "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "verifiedCodeCell": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -465,6 +475,7 @@
             "0xb6931c61c9472326c26e1c485358f4af009cb126"
           ],
           "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "verifiedCodeCell": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -498,6 +509,7 @@
             "0xb6931c61c9472326c26e1c485358f4af009cb126"
           ],
           "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "verifiedCodeCell": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -531,6 +543,7 @@
             "0xb6931c61c9472326c26e1c485358f4af009cb126"
           ],
           "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "verifiedCodeCell": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -564,6 +577,7 @@
             "0xb6931c61c9472326c26e1c485358f4af009cb126"
           ],
           "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "verifiedCodeCell": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b:0",
           "witnessState": "verified",
           "owners": []
         }
@@ -591,6 +605,7 @@
           "requireFirstN": null,
           "keyHashes": [],
           "verifiedByTx": null,
+          "verifiedCodeCell": null,
           "witnessState": "never_signed",
           "owners": []
         }

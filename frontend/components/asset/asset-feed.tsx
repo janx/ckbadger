@@ -542,25 +542,22 @@ export function AssetFeed(props: AssetFeedProps) {
   // its control is the one disclosure control (FoldToggle, lane P1): "all 184 transactions ↓",
   // the collection's own count, opens the whole feed on its transactions (the tabs switch to the
   // activities), and the same button, still focused, "fewer ↑", folds it back to the newest
-  // rows. Where the count is not derived (L2) the fold has no count to say; the newest rows keep
-  // their two ways in (RecentAssetFeed), FoldToggle stating a count of every list it opens.
+  // rows. Where the count is not derived (L2) the fold asks for the feed by name, "all activity
+  // ↓", no number (lane P2's third round, item 9), and opens it on its activities.
   return (
     <>
       <div id={feedId} className="min-w-0">
         {opened ? (
-          // the count's fold opens on the transactions it counts; the uncounted way, "All activity
-          // →", on the activities
+          // the counted fold opens on the transactions it counts, the uncounted on the activities
           <FullAssetFeed {...props} initialTab={count === null ? 'activities' : 'transactions'} />
         ) : (
-          <RecentAssetFeed
-            {...props}
-            recent={props.recent}
-            onOpen={count === null ? () => setOpened(true) : undefined}
-          />
+          <RecentAssetFeed {...props} recent={props.recent} />
         )}
       </div>
-      {count !== null && (
-        <div className="mt-3">
+      <div className="mt-3">
+        {count === null ? (
+          <FoldToggle open={opened} uncounted="activity" controls={feedId} onToggle={setOpened} />
+        ) : (
           <FoldToggle
             open={opened}
             count={count}
@@ -568,8 +565,8 @@ export function AssetFeed(props: AssetFeedProps) {
             controls={feedId}
             onToggle={setOpened}
           />
-        </div>
-      )}
+        )}
+      </div>
     </>
   );
 }
@@ -585,11 +582,8 @@ function RecentAssetFeed({
   mark,
   token,
   recent,
-  onOpen,
 }: AssetFeedProps & {
   recent: NonNullable<AssetFeedProps['recent']>;
-  /** The way into the whole feed where no fold can say its count (the count not derived). */
-  onOpen?: () => void;
 }) {
   if (!Number.isSafeInteger(recent.rows) || recent.rows <= 0)
     throw new Error(`recent activity needs a positive row count, got ${recent.rows}`);
@@ -599,19 +593,9 @@ function RecentAssetFeed({
   });
   return (
     <section aria-label="Recent activity" className="min-w-0">
-      {/* Rubbing × Song print, phase 5 (A10): the activity, run on the rows it shows; the two
-          links that open the full feed are the right-prompt note. */}
-      <PromptHeading
-        command="Activity"
-        args={`--last ${recent.rows}`}
-        note={
-          onOpen && (
-            <button type="button" onClick={onOpen} className="text-text hover:text-text-bright">
-              All activity →
-            </button>
-          )
-        }
-      />
+      {/* Rubbing × Song print, phase 5 (A10): the activity, run on the rows it shows; the fold
+          that opens the whole feed stands under the rows (AssetFeed). */}
+      <PromptHeading command="Activity" args={`--last ${recent.rows}`} />
       <div className="mt-3.5">
         {acts.data ? (
           <>

@@ -229,7 +229,11 @@ export function CanonicalIdentityDetail({
     ) : null;
   return (
     <AssetDetailShell
-      title={<IdentityName name={parts.name} suffix={parts.suffix} />}
+      title={
+        // a did:ckb's title is its handle whole (lane P2's third round, item 6): the domain after
+        // its first dot is the personal data server's, no standard's suffix, so it takes no rose
+        kind === 'did' ? parts.full : <IdentityName name={parts.name} suffix={parts.suffix} />
+      }
       documentTitle={[`${parts.name}${parts.suffix}`, 'identity']}
       kind="identities"
       railAfterHeader

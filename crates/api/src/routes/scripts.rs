@@ -313,6 +313,7 @@ fn custody_without_witness(
         require_first_n: None,
         key_hashes: Vec::new(),
         verified_by_tx: None,
+        verified_code_cell: None,
         witness_state: if class == "fixed" || class == "unspendable" {
             "not_applicable"
         } else {
@@ -417,6 +418,7 @@ fn verified_multisig_config(
     lock_args: &[u8],
     witness: &[u8],
     tx_hash: &[u8],
+    (code_tx_hash, code_output_index): (&[u8], i16),
 ) -> Result<ScriptCustodyResponse, ApiRouteError> {
     let parsed = packed::WitnessArgs::from_slice(witness).map_err(|e| {
         ApiError::internal(format!(
@@ -476,6 +478,10 @@ fn verified_multisig_config(
             .map(|key| format!("0x{}", hex::encode(key)))
             .collect(),
         verified_by_tx: Some(format!("0x{}", hex::encode(tx_hash))),
+        verified_code_cell: Some(format!(
+            "0x{}:{code_output_index}",
+            hex::encode(code_tx_hash)
+        )),
         witness_state: "verified".to_string(),
         owners: Vec::new(),
     })
@@ -595,12 +601,18 @@ fn attach_multisig_witness(
             hex::encode(consuming_tx)
         ))
     })?;
-    let verified = verified_multisig_config(&cell.lock_args, &witness, consuming_tx)?;
+    let verified = verified_multisig_config(
+        &cell.lock_args,
+        &witness,
+        consuming_tx,
+        (tx_hash, output_index),
+    )?;
     custody.threshold = verified.threshold;
     custody.key_count = verified.key_count;
     custody.require_first_n = verified.require_first_n;
     custody.key_hashes = verified.key_hashes;
     custody.verified_by_tx = verified.verified_by_tx;
+    custody.verified_code_cell = verified.verified_code_cell;
     custody.witness_state = verified.witness_state;
     Ok(())
 }
@@ -3697,7 +3709,15 @@ mod tests {
                     .build(),
             )
             .build();
-        let custody = verified_multisig_config(&args, witness.as_slice(), &[0x55; 32]).unwrap();
+        let custody =
+            verified_multisig_config(&args, witness.as_slice(), &[0x55; 32], (&[0x44; 32], 2))
+                .unwrap();
+        // lane P2's third round (item 16): the code cell the holder signed to spend, so a page
+        // opens the spending transaction at it
+        assert_eq!(
+            custody.verified_code_cell.as_deref(),
+            Some(format!("0x{}:2", "44".repeat(32)).as_str())
+        );
         assert_eq!(custody.threshold, Some(3));
         assert_eq!(custody.key_count, Some(5));
         assert_eq!(custody.require_first_n, Some(1));
@@ -3705,7 +3725,13 @@ mod tests {
         assert_eq!(custody.witness_state, "verified");
         let mut wrong = args;
         wrong[0] ^= 1;
-        assert!(verified_multisig_config(&wrong, witness.as_slice(), &[0x55; 32]).is_err());
+        assert!(verified_multisig_config(
+            &wrong,
+            witness.as_slice(),
+            &[0x55; 32],
+            (&[0x44; 32], 2)
+        )
+        .is_err());
     }
 
     #[test]

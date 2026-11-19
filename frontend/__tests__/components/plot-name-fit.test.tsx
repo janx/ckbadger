@@ -96,6 +96,7 @@ describe.each(WIDTHS)('history plot names at %i px', (width) => {
       date: date(i),
       capacity: String((1000 + i * 10) * 1e8),
       occupiedCapacity: String(600 * 1e8),
+      freeCapacity: String((400 + i * 10) * 1e8),
       supply: String((19_000_000 + i * 50_000) * 1e6),
     }));
     const weekly = [0, 7, 14, 21].map((d) => ({ weekStart: date(d), count: 1510 }));

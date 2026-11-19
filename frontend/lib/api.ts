@@ -1635,7 +1635,14 @@ export interface TokenHistory {
   source: 'indexed_chain_time';
   completeThrough: string;
   anchor: { blockNumber: number; blockHash: string };
-  daily: { date: string; supply: string; capacity: string; occupiedCapacity: string }[];
+  /** Each day's held capacity, its occupied part and its free part (`capacity - occupied`). */
+  daily: {
+    date: string;
+    supply: string;
+    capacity: string;
+    occupiedCapacity: string;
+    freeCapacity: string;
+  }[];
   /** Transactions (not transfer legs) per complete Monday-start week. */
   weeklyTransactions: { weekStart: string; transactionsCount: number }[];
   mintCount: number;
@@ -2629,7 +2636,11 @@ interface DotCellPartyRef {
   hashPrefix: string;
   lockHash: string | null;
   address: string | null;
-  scriptName: string | null;
+  /**
+   * The registry's name for the party's lock code hash (lane P2's third round, item 12: the one
+   * name a lock's registry name has on the wire, `lockScriptName`; it was `scriptName`).
+   */
+  lockScriptName: string | null;
 }
 
 interface DotCellDecodedAddress {
@@ -3123,6 +3134,8 @@ export interface ScriptCustodyApi {
   requireFirstN: number | null;
   keyHashes: string[];
   verifiedByTx: string | null;
+  /** The code cell `verifiedByTx` spent, `0x<tx hash>:<output index>` (with it, or neither). */
+  verifiedCodeCell: string | null;
   witnessState: 'never_signed' | 'verified' | 'unavailable' | 'not_applicable';
   owners: {
     lockCodeHash: string;

@@ -32,6 +32,12 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '..', '..');
 const API_NAMES = new Set(['lockKind', 'lockName', 'lockScriptName']);
+/**
+ * A called lock's registry name keeps the word `scriptName` on an activity's lock call (lane P2's
+ * third round, item 12): read where the receiver is a lock call (`lc`, `lockCall`,
+ * `primaryLockCall`); a type call's and a code cell's `scriptName` name no lock.
+ */
+const LOCK_CALL = /^(lc|lockCall|primaryLockCall)$/;
 /** The directories the gate reads: those every source gate reads (lane cd-fixes-controls: hooks/). */
 const READ_DIRS = ['app', 'components', 'hooks', 'lib'];
 
@@ -146,6 +152,8 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
     if (ts.isPropertyAccessExpression(node)) {
       const name = node.name.text;
       if (API_NAMES.has(name)) count('api name');
+      else if (name === 'scriptName' && LOCK_CALL.test(terminalName(node.expression) ?? ''))
+        count('api name');
       else if (name === 'lockScriptInfo') {
         if (!placesLockScriptInfo(node)) refuse(node, 'lockScriptInfo taken whole');
       } else if (name === 'name') {
@@ -156,6 +164,8 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
       const key = node.argumentExpression;
       if (ts.isStringLiteralLike(key)) {
         if (API_NAMES.has(key.text)) count('api name');
+        else if (key.text === 'scriptName' && LOCK_CALL.test(terminalName(node.expression) ?? ''))
+          count('api name');
         else if (key.text === 'lockScriptInfo') {
           if (!placesLockScriptInfo(node)) refuse(node, 'lockScriptInfo taken whole');
         } else if (key.text === 'name') {
@@ -206,7 +216,9 @@ function reads(): Reads {
   for (const dir of READ_DIRS)
     for (const path of files(join(ROOT, dir))) {
       const rel = relative(ROOT, path);
-      if (rel === 'components/ui/lock-kind.tsx') continue;
+      // the decision itself: its drawn half and its text half (lib/lock-words.ts, which the agent
+      // renderer imports without React; lane P2's third round)
+      if (rel === 'components/ui/lock-kind.tsx' || rel === 'lib/lock-words.ts') continue;
       const found = lockNameReads(readFileSync(path, 'utf8'), rel);
       if (Object.keys(found).length > 0) out[rel] = found;
     }
@@ -255,6 +267,9 @@ const FEEDS: Reads = {
   // the address's lock (`addressLockName`, lane P1 follow-up; it was known writers 7 and 11): the
   // registry's name in its script info, handed to `cellLockFacts` with the lock and the address
   'components/address/address-holdings.tsx': { 'script info name': 1 },
+  // an address record that is the owner's or manager's own: the party's name handed with the
+  // record's address to `partyLockSentence` (lane P2's third round, item 12)
+  'components/identity/identity-records.tsx': { 'api name': 1 },
 };
 /** The decision's words already written: a tile's `lockKind` (`lockWordsText` of the decision). */
 const DECIDED: Reads = {
@@ -312,6 +327,16 @@ const KNOWN: Reads = {
   // lane (p-topics): the Fiber graph's party row writes the registry's name of its lock before
   // "lock hash", outside lockWords
   'components/fiber/fiber-network-graph.tsx': { 'api name': 2 },
+  // 14–20, found when the gate learned the identity parties' lock name (lane P2's third round,
+  // item 12, the test review's MUST-1): a .cell / .bit party's `scriptName`, renamed on the wire
+  // `lockScriptName`, and a called lock's `scriptName` on an activity's lock call. Then the .cell
+  // parties' writers went to the decision (`partyLockWordsText`, `partyLockSentence`): the
+  // identity overview (4), the roles (1), the records (2 → 1, which feeds it), the party chip (2,
+  // its badge gone), the named party (2) and the AI view's owner and manager rows (2). Left: the
+  // AI view's primary lock call (an activity's called lock, its hash type not sent) and the lists
+  // lane's activity row, not this lane's to edit
+  'lib/ai/markdown-renderer.ts': { 'api name': 1 },
+  'components/activity/activity-row.tsx': { 'api name': 2 },
 };
 
 describe('the gate reads the syntax, every form (lane B4 third round)', () => {
@@ -353,6 +378,20 @@ describe('the gate reads the syntax, every form (lane B4 third round)', () => {
     expect(
       lockNameReads(
         `party.lockScriptName; row['lockScriptName']; const { lockScriptName: n } = cell;`,
+        'x.ts'
+      )
+    ).toEqual({ 'api name': 3 });
+  });
+
+  // Lane P2's third round (item 12, the test review's MUST-1): a .cell / .bit party's lock name is
+  // `lockScriptName` on the wire now (it was `scriptName`, which the gate did not read); a called
+  // lock's registry name is still `scriptName` on an activity's lock call, read off the call (`lc`,
+  // `lockCall`, `primaryLockCall`); a type call's and a code cell's `scriptName` name no lock
+  it('counts a lock call’s scriptName, never a type call’s or a code cell’s', () => {
+    expect(
+      lockNameReads(
+        `lc.scriptName; c.primaryLockCall.scriptName; lockCall['scriptName'];
+         sc.scriptName; c.primaryTypeCall.scriptName; out.codeCell.scriptName;`,
         'x.ts'
       )
     ).toEqual({ 'api name': 3 });
@@ -438,11 +477,25 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // page's, the address's and the transaction page's known writers (7 to 12), 10 known reads in 7
   // files, four of its reads feeding the decision now; 12 → 2 known reads in 1 file (the Fiber
   // graph's, writer 13), 25 → 19 in all in 13
-  it('pins the totals: 19 reads in 13 files, the known writers 1 file and 2 reads', () => {
+  // Re-pinned on purpose (lane P2's third round, item 12; renamed, it was "… 25 reads in 16 files,
+  // … 8 files and 12 reads"): the gate learned a party's lock name and a called lock's, which it
+  // could not see (the test review's MUST-1): 16 reads in 7 more files came to light, so the
+  // totals RISE here, 12 → 28 known reads in 8 → 15 files, 25 → 41 in all in 16 → 23; they fall as
+  // the writers go to the decision
+  // Re-pinned on purpose (lane P2's third round, item 12b; renamed, it was "… 41 reads in 23
+  // files, … 15 files and 28 reads"): the .cell parties' lock words go through the decision, 28 →
+  // 15 known reads in 15 → 10 files; the records' one read feeds it; 41 → 29 in all in 23 → 19
+  // Re-pinned on purpose (the merge of lane P1's third round with lane P2's; renamed, it was "… 19
+  // reads in 13 files, … 1 file and 2 reads" on the base, "… 29 reads in 19 files, … 10 files
+  // and 15 reads" here): the base took the cell page's, the address's and the transaction page's
+  // known writers, this lane the identity parties'; what is left known is the Fiber graph's (2),
+  // the AI view's primary lock call (1) and the lists lane's activity row (2): 5 known reads in 3
+  // files; the records' read feeds the decision; 23 reads in all in 16 files
+  it('pins the totals: 23 reads in 16 files, the known writers 3 files and 5 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(13);
-    expect(total(all)).toBe(19);
-    expect(Object.keys(KNOWN)).toHaveLength(1);
-    expect(total(KNOWN)).toBe(2);
+    expect(Object.keys(all)).toHaveLength(16);
+    expect(total(all)).toBe(23);
+    expect(Object.keys(KNOWN)).toHaveLength(3);
+    expect(total(KNOWN)).toBe(5);
   });
 });

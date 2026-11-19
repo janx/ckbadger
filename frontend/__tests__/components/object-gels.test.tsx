@@ -134,7 +134,11 @@ describe('AlleleGel (Collection board, OB-4 / OB-C2)', () => {
       'fill-opacity',
       '0.22'
     );
-    expect(container.querySelector('[data-lane="Color"] [data-variants]')!.textContent).toBe('8');
+    // re-pinned on purpose (lane P2's third round, item 5): a lane that holds the noun says its
+    // count with it, one unit (it was a bare "8", which only the legend explained)
+    expect(container.querySelector('[data-lane="Color"] [data-variants]')!.textContent).toBe(
+      '8\u00a0variants'
+    );
     expect(
       container.querySelector('[data-lane="Color"] [data-allele="Water Veins"] title')!.textContent
     ).toBe('Color = Water Veins: 20 of 90 (22.22%)');
