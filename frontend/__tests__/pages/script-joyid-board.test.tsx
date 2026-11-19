@@ -14,6 +14,7 @@ import { expectTicksInGutter, plotLeftOf, yTickLabels } from '@/__tests__/utils/
 import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
 import { getCapacityRangeParams } from '@/lib/capacity-range';
+import { linkLookClass } from '@/components/ui/link';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -802,10 +803,15 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     // part and not coloured text; it was a boxed button in the reading ink
     const pager = screen.getByRole('navigation', { name: 'cells' });
     expect(within(pager).getByRole('button', { name: 'next →' })).toHaveClass('text-jade');
+    // re-pinned on purpose (lane p-assets): a way onward is the link owner's onward look, celadon
+    // by the link rule (components/ui/link.tsx) as the pager's way to go is, not coloured text: the
+    // newest cells' "all N cells ↓" to its cells list (it was a raw anchor in the reading ink)
+    const onward = linkLookClass('onward')!;
     const coloured = [...tier1().querySelectorAll('[class]')].filter(
       (el) =>
         !el.matches('[data-row-tag="accent"]') &&
         !pager.contains(el) &&
+        !(el.matches('a') && el.classList.contains(onward)) &&
         el
           .getAttribute('class')!
           .split(/\s+/)
