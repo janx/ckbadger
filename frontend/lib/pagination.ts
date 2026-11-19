@@ -84,6 +84,32 @@ export interface CursorWalk {
   ask<R extends object>(fetch: (cursor: string | undefined) => Promise<R>): () => Promise<Asked<R>>;
 }
 
+/** The most rows of the tx pool page one of an address's list carries (POOL_ROWS_PER_ADDRESS). */
+export const POOL_ROWS_MAX = 200;
+
+/**
+ * How many of a page's rows are the tx pool's (lane cd-fixes-controls, the second read's MUST 1).
+ * Page one of an address's activities and of its transactions carries, on purpose, the pool's rows
+ * above up to a page of committed rows, its page size stated as asked (crates/api/src/routes/
+ * activities.rs, cells.rs: "a page-one-only segment, above every committed row"; at most
+ * POOL_ROWS_MAX, crates/api/src/routes/address_pool.rs). They are page one's own part, not rows of
+ * the page: a page counts its committed rows against its size, and its count counts committed rows.
+ * The one rule, read here alone: a row whose `poolStatus` is set is the pool's, as the API marks
+ * every pool row and no committed one. A pool row below a committed row, or more pool rows than the
+ * API sends, is refused.
+ */
+export function poolRowsOf(list: string, data: readonly unknown[]): number {
+  const pool = (row: unknown) =>
+    typeof row === 'object' && row !== null && (row as { poolStatus?: unknown }).poolStatus != null;
+  let pooled = 0;
+  while (pooled < data.length && pool(data[pooled])) pooled++;
+  if (data.slice(pooled).some(pool))
+    throw new Error(`${list}: a pool row below a committed row (the pool’s rows stand above them)`);
+  if (pooled > POOL_ROWS_MAX)
+    throw new Error(`${list}: ${pooled} pool rows, more than the ${POOL_ROWS_MAX} the API sends`);
+  return pooled;
+}
+
 /** The pages a count of rows fills at the page size the response states. */
 function pageCount(list: string, total: number, limit: number): number {
   if (!Number.isSafeInteger(limit) || limit < 1)
@@ -96,7 +122,8 @@ function pageCount(list: string, total: number, limit: number): number {
  * What a response says of itself, checked once for both helpers: the stamp (a response no walk
  * asked for is refused), the page size it served (a whole number of rows: the API clamps a limit
  * to 1–100 and states back the size it served, and the rows before a page are counted at it), its
- * rows (no more than a page), its count (a whole number), and its next cursor (one where more
+ * rows (its committed rows no more than a page; the pool's rows of page one apart, `poolRowsOf`,
+ * and only on a page asked with no cursor), its count (a whole number), and its next cursor (one where more
  * follows, never the cursor it was asked with: an API fault, L1 NOTE 8). And whether it is kept
  * data: a response asked at another page, cursor or page size than the walk stands on, shown while
  * the walk's page loads; it states its own page and offers no next.
@@ -107,8 +134,16 @@ function readOf(list: string, read: Asked<CursorPageRead>, walk: CursorWalk) {
     throw new Error(`${list}: a response no walk asked for (a page number is the response's own)`);
   if (!Number.isSafeInteger(read.limit) || read.limit < 1)
     throw new Error(`${list}: a page size of ${read.limit} rows`);
-  if (read.data.length > read.limit)
-    throw new Error(`${list}: ${read.data.length} rows on a page of ${read.limit}`);
+  const pooled = poolRowsOf(list, read.data);
+  if (pooled > 0 && at.cursor !== undefined)
+    throw new Error(
+      `${list}: the pool’s rows on a page asked at a cursor (${at.cursor}): they stand on page one alone`
+    );
+  const rows = read.data.length - pooled;
+  if (rows > read.limit)
+    throw new Error(
+      `${list}: ${rows} rows on a page of ${read.limit}${pooled ? ` (besides the pool’s ${pooled})` : ''}`
+    );
   const total = read.total === undefined || read.total === null ? null : read.total;
   const pages = total === null ? null : pageCount(list, total, read.limit);
   if (read.hasMore && !read.nextCursor)
@@ -121,6 +156,8 @@ function readOf(list: string, read: Asked<CursorPageRead>, walk: CursorWalk) {
     Boolean(at.kept) || at.page !== walk.page || at.cursor !== walk.cursor || at.size !== walk.size;
   return {
     page: at.page,
+    /** The page's committed rows: the pool's rows of page one are not rows of the page. */
+    rows,
     total,
     pages,
     onPrevious: walk.hasPrevious ? walk.goToPrevious : undefined,
@@ -170,7 +207,7 @@ export function rankedPageAt(
   walk: CursorWalk
 ): RankedPage | null {
   const at = readOf(list, read, walk);
-  const n = read.data.length;
+  const n = at.rows;
   if (at.page === 1 && !read.hasMore) return null;
   if (at.page === 1 && n === 0)
     throw new Error(`${list}: an empty first page with more rows after it`);

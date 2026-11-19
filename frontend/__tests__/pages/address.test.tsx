@@ -747,6 +747,85 @@ describe('Address v3', () => {
   // 2, rows 21–40 of 25, threw, and the address page was the crash page. The page a response was
   // asked for travels with it: while page 2 loads the pager says page 1's figures and offers no
   // next; when page 2 arrives, its own.
+  // Lane cd-fixes-controls, the second read's MUST 1: an address with a pending transaction opens
+  // its own page. Page one of its activities and of its transactions is the pool's rows above up
+  // to 20 committed rows, the page size stated as asked; the pager counted every row against it
+  // and threw ("activities: 21 rows on a page of 20"), and the address page was the error page.
+  // The pool's rows are page one's own part: 1 pool row over 20 committed rows is page one of
+  // more, 2 pool rows over 19 committed rows one page with no pager.
+  describe('page one with the pool’s rows above its committed rows', () => {
+    const pooled = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({ ...poolActivity(), txHash: fixtureHash(900 + i) }));
+    const pooledTxs = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...addressTransactionsFixture[0],
+        txHash: fixtureHash(950 + i),
+        blockNumber: null,
+        timestamp: null,
+        poolStatus: 'pending' as const,
+        timeAddedToPool: new Date(Date.now() - 60000).toISOString(),
+      }));
+    const committedTxs = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...addressTransactionsFixture[i % addressTransactionsFixture.length],
+        txHash: `0x${(8192 + i).toString(16).padStart(64, '0')}`,
+      }));
+    const pageOne = <T,>(pool: T[], rows: T[], more: boolean) =>
+      pagedRead({
+        ...pageFixture([...pool, ...rows]),
+        hasMore: more,
+        nextCursor: more ? 'older-1' : null,
+      });
+
+    it.each([
+      [1, 20, true],
+      [2, 19, false],
+    ] as const)(
+      'opens its activities with %i pool rows above %i committed rows',
+      async (pooledCount, rows, more) => {
+        vi.mocked(api.getAddressActivities).mockImplementation(async (_l, p) =>
+          p?.filter !== 'all' || p.cursor
+            ? pagedRead(pageFixture([]))
+            : { ...pageOne(pooled(pooledCount), activitiesPage(rows), more), pool }
+        );
+        render(<AddressDetailPage />);
+        await loaded();
+        const history = screen.getByRole('region', { name: 'History' });
+        // the pool's rows stand above the committed ones, each with its status
+        expect((await within(history).findAllByText('Proposed')).length).toBeGreaterThanOrEqual(
+          pooledCount
+        );
+        if (more)
+          expect(await within(history).findByRole('button', { name: 'older →' })).toBeVisible();
+        else expect(within(history).queryByRole('navigation', { name: 'activities' })).toBeNull();
+      }
+    );
+
+    it.each([
+      [1, 20, true],
+      [2, 19, false],
+    ] as const)(
+      'opens its transactions with %i pool rows above %i committed rows',
+      async (pooledCount, rows, more) => {
+        vi.mocked(api.getAddressTransactions).mockImplementation(async (_l, p) =>
+          p?.cursor
+            ? pagedRead(pageFixture([]))
+            : { ...pageOne(pooledTxs(pooledCount), committedTxs(rows), more), pool }
+        );
+        render(<AddressDetailPage />);
+        await loaded();
+        await tab('Transactions');
+        const table = await screen.findByRole('table', { name: 'Address transactions' });
+        expect(within(table).getAllByRole('row').length).toBeGreaterThan(rows);
+        expect(within(table).getAllByText('Pending').length).toBeGreaterThanOrEqual(pooledCount);
+        const history = screen.getByRole('region', { name: 'History' });
+        if (more)
+          expect(await within(history).findByRole('button', { name: 'older →' })).toBeVisible();
+        else expect(within(history).queryByRole('navigation', { name: 'transactions' })).toBeNull();
+      }
+    );
+  });
+
   it('steps into the last page of 25 live cells while page 2 is still on its way', async () => {
     let arrive: () => void = () => {};
     const second = new Promise<void>((resolve) => (arrive = resolve));

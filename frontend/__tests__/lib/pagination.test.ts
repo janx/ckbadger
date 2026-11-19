@@ -298,6 +298,67 @@ describe('a ranked list read at two tips', () => {
   });
 });
 
+// Lane cd-fixes-controls, the second read's MUST 1: page one of an address's activities and of its
+// transactions is, on purpose, the pool's rows (up to 200, each marked with its `poolStatus`)
+// above up to a page of committed rows, the page size stated as asked (activities.rs, cells.rs).
+// The helper counted every row against the page size and threw: the address page with a pending
+// transaction was the error page ("activities: 21 rows on a page of 20").
+describe('page one of an address’s list: the pool’s rows above its committed rows', () => {
+  const pool = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ poolStatus: 'pending', txHash: `p${i}` }));
+  const committed = (n: number) => Array.from({ length: n }, (_, i) => ({ txHash: `c${i}` }));
+  const pageOne = (pooled: number, rows: number, more: boolean, total?: number) =>
+    stampAsked(
+      {
+        data: [...pool(pooled), ...committed(rows)],
+        limit: 20,
+        hasMore: more,
+        nextCursor: more ? 'c1' : null,
+        total,
+      },
+      asked(1)
+    );
+
+  it('counts only the committed rows against the page size: 1 or 2 pool rows and 20 committed', () => {
+    for (const pooled of [1, 2]) {
+      const at = timePageAt('activities', pageOne(pooled, 20, true), walk(1));
+      expect(at).toMatchObject({ page: 1 });
+      expect(at!.onOlder).toBeDefined();
+    }
+  });
+
+  it('draws no pager for 2 pool rows and 19 committed rows on one page', () => {
+    expect(timePageAt('transactions', pageOne(2, 19, false), walk(1))).toBeNull();
+  });
+
+  it('ranks the committed rows alone: rows 1–20 of 40 under 3 pool rows', () => {
+    expect(figures(rankedPageAt('activities', pageOne(3, 20, true, 40), walk(1)))).toMatchObject({
+      rows: { from: 1, to: 20 },
+      count: { total: 40, pages: 2 },
+    });
+  });
+
+  it('still refuses more committed rows than a page, a pool row below a committed one, and pool rows past page one', () => {
+    expect(() => timePageAt('activities', pageOne(2, 21, true), walk(1))).toThrow(
+      'activities: 21 rows on a page of 20 (besides the pool’s 2)'
+    );
+    const below = stampAsked(
+      { data: [...committed(1), ...pool(1)], limit: 20, hasMore: false, nextCursor: null },
+      asked(1)
+    );
+    expect(() => timePageAt('activities', below, walk(1))).toThrow(
+      'activities: a pool row below a committed row (the pool’s rows stand above them)'
+    );
+    const later = stampAsked(
+      { data: [...pool(1), ...committed(20)], limit: 20, hasMore: true, nextCursor: 'c2' },
+      asked(2)
+    );
+    expect(() => timePageAt('activities', later, walk(2))).toThrow(
+      'activities: the pool’s rows on a page asked at a cursor (c1): they stand on page one alone'
+    );
+  });
+});
+
 describe('a caller’s or the API’s fault still throws', () => {
   it('refuses a page size or a count that is not one', () => {
     expect(() =>
