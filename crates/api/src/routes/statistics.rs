@@ -6765,6 +6765,23 @@ mod tests {
         );
     }
 
+    /// A cohort's share is cut at its six decimals, never rounded (lane D1's third round, S9):
+    /// 2 of 3 is 66.666666…%, cut 66.666666 (half up 66.666667).
+    #[test]
+    fn cohort_retention_cuts_its_share() {
+        let cohort = DailyAddressCohort {
+            cohorts: vec![ckbadger_store::AddressCohortEntry {
+                cohort_month: "2024-03".to_string(),
+                used_capacity: 2,
+                total_balance: 3,
+            }],
+        };
+        assert_eq!(
+            build_address_cohort_response(&cohort).unwrap().data[0].value,
+            "66.666666"
+        );
+    }
+
     #[test]
     fn test_empty_address_cohort_response_has_metadata() {
         let response = empty_address_cohort_response();
