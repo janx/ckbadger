@@ -244,7 +244,7 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       <p className="text-text-dim text-meta max-w-measure">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
-          <Hash hash={v.cell.txHash} size="row" copyable={false} className="text-meta" />
+          <Hash hash={v.cell.txHash} size="row" className="text-meta" />
         </AppLink>
       </p>
     </Tier2Section>
@@ -428,7 +428,6 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
                     hash={v.cell.ownerAddress}
                     kind="address"
                     size="row"
-                    copyable={false}
                     className="text-small"
                   />
                 </AppLink>{' '}
@@ -450,7 +449,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               ) : (
                 <>
                   <AppLink href={`/identities/dotcell/${d.nextId}`}>
-                    <Hash hash={d.nextId} size="row" copyable={false} className="text-small" />
+                    <Hash hash={d.nextId} size="row" className="text-small" />
                   </AppLink>
                   <AssetReadState label="its name" error={next.error} read={next} />
                 </>

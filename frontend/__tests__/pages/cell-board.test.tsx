@@ -5,7 +5,9 @@ import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
 import { expectBefore, expectNamePlate, expectOnePageSeal } from '@/__tests__/utils/seals';
+import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { factsOf } from '@/__tests__/utils/facts';
+import { gapPx, widthRuleAt } from '@/__tests__/utils/tailwind-box';
 
 // The Cell board's own cell: live Spore 0xbe1b9761…936cd8:1 (320 CKB, 8 + 66 + 65 + 181 bytes),
 // its CellOutput and data bytes taken from the chain by the board generator.
@@ -114,6 +116,9 @@ describe('Cell page against the Cell board', () => {
       Object.assign(navigator, { clipboard: undefined });
       const { unmount } = view();
       const button = await screen.findByRole('button', { name: 'copy out point' });
+      // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under
+      // its box, and nothing above the copy clips it
+      expectAnswerUnclipped(button);
       await act(async () => {
         fireEvent.click(button);
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -187,6 +192,26 @@ describe('Cell page against the Cell board', () => {
     const outpointLine = screen.getByRole('button', { name: 'copy out point' }).closest('div')!;
     expect(plate).toContainElement(outpointLine);
     expectBefore(outpointLine, line);
+  });
+
+  // Lane c2-finish, rulings round 2: the out point and its copy are every id line's one form
+  // (IdCopyRow, HeadId's): the copy 8 px after the out point at its first line (it was its own
+  // flex-wrap row, 10 px apart and centred), the out point taking its content's width so the copy
+  // stands right after it, the copy the row's full height so its answer hangs under the whole id.
+  // The out point is not one of HeadId's kinds (a hash and its index): it wraps where its line does.
+  it('writes the out point and its copy in the id line’s one form', async () => {
+    view();
+    const copy = await screen.findByRole('button', { name: 'copy out point' });
+    const copyRoot = copy.parentElement!;
+    const row = copyRoot.parentElement!;
+    expect(row.className).toBe('flex min-w-0 items-start gap-2');
+    expect(copyRoot).toHaveClass('shrink-0', 'self-stretch');
+    const outpoint = row.firstElementChild as HTMLElement;
+    expect(outpoint).toHaveTextContent(`${cell.txHash}:1`);
+    for (const w of [1280, 390]) {
+      expect(widthRuleAt(outpoint, w)).toBe('auto');
+      expect(gapPx(row, w)).toBe(8);
+    }
   });
 
   // The name plate (C10): the kind line "Cell", the h1 the short out point alone (the dim "Cell"

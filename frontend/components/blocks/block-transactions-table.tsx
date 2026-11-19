@@ -134,7 +134,7 @@ export function BlockTransactionsTable({
       <span className="text-text-dim">cellbase</span>
     ) : (
       <span className="whitespace-nowrap">
-        <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`}>
+        <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`} look="inline">
           {formatBlockNumber(tx.proposalOrigin!.blockNumber)}
         </Link>
         <span className="text-text-dim">
@@ -161,7 +161,7 @@ export function BlockTransactionsTable({
       minWidth: columnPx(textPx(shortChars(SHORT_FORMS.row.hash), fontPx('small')) + CELL_GAP_PX),
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash hash={tx.hash} size="row" copyable={false} className="text-small" />
+          <Hash hash={tx.hash} size="row" className="text-small" />
         </Link>
       ),
     },
@@ -296,7 +296,7 @@ export function BlockTransactionsTable({
               tone: 'head',
               left: (
                 <Link href={`/tx/${tx.hash}`} look="key">
-                  <Hash hash={tx.hash} size="tight" copyable={false} className="text-body" />
+                  <Hash hash={tx.hash} size="tight" className="text-body" />
                 </Link>
               ),
               right: named('output', tx.outputCapacity!, 'output capacity', tx),

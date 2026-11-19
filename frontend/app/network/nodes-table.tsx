@@ -648,7 +648,7 @@ export function PeersTable() {
           <div
             id={filtersId}
             className={cn(
-              'border-base-border flex-wrap items-center gap-3 border-b px-4 py-2',
+              'border-base-border flex-wrap items-center gap-3 border-b py-2 md:px-4',
               filtersOpen ? 'flex' : 'hidden md:flex'
             )}
           >
@@ -656,7 +656,9 @@ export function PeersTable() {
                 filter starts the list again from its first five. A select's well never shrinks
                 (components/ui/select.tsx): where the pair is wider than the panel's line its well
                 goes under its label, as on a phone ('crawler dial state', 140.4 px, 10 and a
-                310 px well: 460.4 px, past the 296 px a 360 px phone leaves the panel). */}
+                310 px well: 460.4 px). Below md the panel's content takes the page's line, no
+                side padding of its own (lane c2-finish, rulings round 1): at 360 its 328 px hold
+                the wells, 310 and 302.2 px, where the 296 px its 16 px padding left did not. */}
             <Select
               label="crawler dial state"
               value={filters.state ?? ''}

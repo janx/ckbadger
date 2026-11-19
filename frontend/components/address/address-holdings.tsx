@@ -822,23 +822,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                         className="text-text-bright hover:text-jade"
                       >
                         {tokenName(t) ?? (
-                          <Hash
-                            hash={t.typeScriptHash}
-                            size="row"
-                            copyable={false}
-                            className="text-small"
-                          />
+                          <Hash hash={t.typeScriptHash} size="row" className="text-small" />
                         )}
                       </Link>{' '}
                       <span className="text-text-dim">{formatStandard(t.standard)}</span>
                       {sharedNames(tokens.data.data).has(tokenName(t) ?? '') && (
                         <span data-type-hash className="text-meta ml-2">
-                          <Hash
-                            hash={t.typeScriptHash}
-                            size="row"
-                            copyable={false}
-                            className="text-meta"
-                          />
+                          <Hash hash={t.typeScriptHash} size="row" className="text-meta" />
                         </span>
                       )}
                     </span>
@@ -883,7 +873,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           href={getIdentityItemDetailHref(d.standard, d.id)}
                           className="text-text-bright text-body"
                         >
-                          {d.name ?? <Hash hash={d.id} size="row" copyable={false} />}
+                          {d.name ?? <Hash hash={d.id} size="row" />}
                         </Link>
                         <span className="text-text-dim text-small">
                           {formatStandard(d.standard)}

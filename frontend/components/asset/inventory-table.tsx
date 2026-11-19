@@ -6,7 +6,8 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { formatStandard } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { exactUnsignedInteger, formatDecimal } from '@/lib/exact-integer';
+import { exactDecimalRatio, exactUnsignedInteger } from '@/lib/exact-integer';
+import { formatHMultiplier } from '@/components/ui/h-multiplier';
 import { ckbAmountText } from '@/lib/amount-form';
 import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { RowTag } from '@/components/ui/row-tag';
@@ -23,7 +24,6 @@ import type { CSSProperties, ReactNode } from 'react';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { percentOf } from '@/lib/format-unit';
-import { groupCount } from '@/lib/format-count';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { UNAVAILABLE, WIDEST_CKB_HELD, WIDEST_ROW_COUNT } from '@/lib/list-bounds';
 
@@ -167,7 +167,7 @@ function InventoryPhoneRow({ asset: a }: { asset: Asset }) {
         <ClassMark kind={INVENTORY_MARK[a.assetType]} size={12} className="mr-1.5 h-3 w-3" />
         <AppLink href={assetHref(a)} look="key" className="font-medium">
           {(a.assetType === 'token' ? (a.name ?? a.symbol) : a.name) || (
-            <Hash hash={a.id} size="tight" copyable={false} className="text-small" />
+            <Hash hash={a.id} size="tight" className="text-small" />
           )}
         </AppLink>
       </>
@@ -339,13 +339,12 @@ const countText = (value: number | string | null | undefined, one: string, many:
     : `${exactUnsignedInteger(String(value), many).toLocaleString('en-US')} ${value === 1 || value === '1' ? one : many}`;
 
 /**
- * The H-multiplier to 2 dp for the row (its exact value is in the title), its whole part grouped as
- * every figure of the site is (PA-09: "×15019.09" read as no figure of ours).
+ * The H-multiplier for the row, in its one form (formatHMultiplier: cut at 2 dp, grouped; its exact
+ * value is in the title).
  */
 function HMultiplier({ value }: { value: string | null }) {
   if (value === null) return <span>Unavailable</span>;
-  const [whole, fraction] = formatDecimal(value, 2).split('.');
-  return <span>{`×${groupCount(BigInt(whole))}.${fraction}`}</span>;
+  return <span>{formatHMultiplier(...exactDecimalRatio(value, 'H-multiplier'))}</span>;
 }
 
 /**
@@ -379,9 +378,7 @@ function TokenName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright leading-row min-w-0 truncate"
       >
-        {a.name ?? a.symbol ?? (
-          <Hash hash={a.id} size="row" copyable={false} className="text-small" />
-        )}
+        {a.name ?? a.symbol ?? <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name && a.symbol && <RowTag>{a.symbol}</RowTag>}
       {a.standard !== 'xudt' && a.standard !== 'xudt_compatible' && (
@@ -513,7 +510,7 @@ function CollectionName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright leading-row min-w-0 truncate"
       >
-        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       <RowTag>{formatStandard(a.standard)}</RowTag>
       {a.compositionTier === 'pure_ckb' || a.compositionTier === 'btc_ckb' ? (
@@ -621,7 +618,7 @@ function SystemName({ asset: a }: { asset: Asset }) {
         href={assetHref(a)}
         className="text-body text-text-bright leading-row min-w-0 truncate"
       >
-        {a.name || <Hash hash={a.id} size="row" copyable={false} className="text-small" />}
+        {a.name || <Hash hash={a.id} size="row" className="text-small" />}
       </AppLink>
       {a.name !== standard && <RowTag>{standard}</RowTag>}
     </span>

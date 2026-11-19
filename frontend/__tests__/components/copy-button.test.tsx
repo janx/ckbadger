@@ -3,7 +3,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CopyButton } from '@/components/ui/copy-button';
 import { COPIED_MS } from '@/hooks/useCopy';
 import { inkOf, QUIET } from '@/__tests__/utils/ink-role';
-import { boxPx, targetHeightPx } from '@/__tests__/utils/tailwind-box';
+import { boxPx, contentPx, inFlowAt, targetHeightPx } from '@/__tests__/utils/tailwind-box';
 import { roundedRects } from '@/__tests__/utils/square-corners';
 
 /**
@@ -54,6 +54,8 @@ describe('CopyButton', () => {
     expect(COPIED_MS).toBe(1500);
   });
 
+  // Re-pinned (lane c2-finish, rulings round 1): `not copied` stands for the same 1.5 s as
+  // `copied` (it stood until the next try: drawn over the line under its box, it would cover it)
   it('says “not copied” where the clipboard refuses the write, and never “copied”', async () => {
     setClipboard({ writeText: vi.fn().mockRejectedValue(new DOMException('denied')) });
     render(<CopyButton value={HASH} label="copy transaction hash" />);
@@ -62,8 +64,10 @@ describe('CopyButton', () => {
     expect(status).toHaveTextContent('not copied');
     expect(status).toHaveClass('text-negative');
     expect(status.textContent).not.toBe('copied');
-    act(() => vi.advanceTimersByTime(COPIED_MS * 2));
+    act(() => vi.advanceTimersByTime(COPIED_MS - 1));
     expect(status).toHaveTextContent('not copied');
+    act(() => vi.advanceTimersByTime(1));
+    expect(status).toBeEmptyDOMElement();
   });
 
   it('says “not copied” where there is no clipboard (a page over plain HTTP on a LAN address)', async () => {
@@ -110,5 +114,74 @@ describe('CopyButton', () => {
       fireEvent.click(button);
     });
     expect(screen.getByRole('status').textContent).toBe('copied');
+    // its answer as every copy's: out of the line's flow, under its box
+    expect(inFlowAt(screen.getByRole('status'), 390)).toBe(false);
+    expect(screen.getByRole('status')).toHaveClass('absolute', 'top-full', 'right-0');
+  });
+});
+
+/**
+ * Lane c2-finish, rulings round 1: a copy's answer never moves a line. A line that jumps under
+ * the reader's finger is worse than the answer it carries, so the words stand out of the line's
+ * flow, a small label anchored under the copy box, its right edge on the box's right edge (it never
+ * runs past the line's end and never covers the id before the box), on the elevated ground in the
+ * frame line so the words under it do not show through; it takes no width and no height.
+ */
+describe('CopyButton: its answer moves no line', () => {
+  const ANSWER_GROUND = ['bg-base-elevated', 'border', 'border-base-border'];
+
+  it('takes no width and no height: the copy is as wide as its box, the answer out of flow', async () => {
+    setClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
+    render(<CopyButton value={HASH} label="copy transaction hash" />);
+    const button = screen.getByRole('button', { name: 'copy transaction hash' });
+    const root = button.parentElement!;
+    const status = screen.getByRole('status');
+    const widths = () => [1280, 640, 390, 360].map((w) => contentPx(root, w));
+    expect(widths()).toEqual([24, 24, 32, 32]);
+    expect(root).toHaveClass('relative');
+    // while it has nothing to say it draws nothing: no ground, no frame
+    for (const cls of ANSWER_GROUND) expect(status).not.toHaveClass(cls);
+    await click();
+    expect(status).toHaveTextContent(/^copied$/);
+    for (const w of [1280, 640, 390, 360]) expect(inFlowAt(status, w)).toBe(false);
+    expect(widths()).toEqual([24, 24, 32, 32]);
+    expect(status).toHaveClass(
+      'absolute',
+      'top-full',
+      'right-0',
+      'whitespace-nowrap',
+      ...ANSWER_GROUND
+    );
+    expect(status).not.toHaveClass('left-0');
+  });
+
+  it('anchors its left edge on the box’s where its right edge would run past the page’s start', async () => {
+    setClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
+    render(<CopyButton value={HASH} label="copy transaction hash" />);
+    const status = screen.getByRole('status');
+    // a box at the start of a 360 px phone's line: its right edge at 16 + 32 = 48 px, the label
+    // 57.2 px wide would start at -9.2 px
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      const left = this === status ? -9.2 : 16;
+      return {
+        left,
+        right: left + 57.2,
+        width: 57.2,
+        top: 0,
+        bottom: 0,
+        height: 0,
+        x: left,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    });
+    await click();
+    expect(status).toHaveClass('left-0');
+    expect(status).not.toHaveClass('right-0');
+    act(() => vi.advanceTimersByTime(COPIED_MS));
+    expect(status).toBeEmptyDOMElement();
+    expect(status).toHaveClass('right-0');
   });
 });

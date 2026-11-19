@@ -4,7 +4,15 @@
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AssetTransactions } from '@/components/asset/asset-feed';
 import type { Transaction } from '@/lib/api';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
+import { seededAddress } from '@/__tests__/utils/ckb-address';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 
 const tx = (n: number, size: number, cycles: number | null): Transaction => ({
   hash: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
@@ -227,17 +235,15 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     );
     expect(screen.queryByRole('table')).toBeNull();
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    // Re-pinned on purpose (lane D4 follow-up, the address page's transaction row): the output
+    // capacity left line 2's right (it was a bare "500 CKB"), and the bytes, the cycles and the
+    // index left the quiet line ("· 1,930 B · 1,923,713 cycles · tx 1 in block"); the table and the
+    // cards from 560 px keep them
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       // U-09 (re-pinned): the phone row's hash at the tight size
       ['identity', '0x0101…0101', expect.stringMatching(/^#1,001 · .+ ago$/)],
-      // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-      // decimals)
-      ['what', 'Minted 3', '500 CKB'],
-      [
-        'figures',
-        '1 → 2\u00a0cells · fee 0.00001 CKB · 1,930 B · 1,923,713 cycles · tx 1 in block',
-        null,
-      ],
+      ['what', 'Minted 3', null],
+      ['figures', '1 → 2\u00a0cells · fee 0.00001 CKB', null],
     ]);
   });
 
@@ -253,25 +259,126 @@ describe('AssetTransactions phone row (board L2 rules)', () => {
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     const lines = phoneLines(row);
     expect(lines[0].right).toMatch(/^#1,001 · \d{4}-\d{2}-\d{2}$/);
-    expect(lines[1]).toMatchObject({ left: 'Renewed · Cell after: output 1', right: null });
-    // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-    // decimals)
-    expect(lines[2].left).toBe('1 → 2\u00a0cells · fee 0.00001 CKB · 640 B · tx 1 in block');
+    // re-pinned on purpose (lane D4 follow-up): the context is named by its label as a labelled
+    // figure ("Cell after output 1", was "Cell after: output 1"), and the bytes and the index left
+    // the quiet line (it read "… · 640 B · tx 1 in block")
+    expect(lines[1]).toMatchObject({ left: 'Renewed · Cell after output 1', right: null });
+    expect(lines[2].left).toBe('1 → 2\u00a0cells · fee 0.00001 CKB');
   });
 
-  it('folds into two lines at 608 px', () => {
+  // Re-pinned on purpose (lane D4 follow-up): the card at 608 px is the phone row's parts, its quiet
+  // line keeping the output, the bytes, the cycles and the index where no table stands (it was two
+  // lines: a bare "500 CKB" with the figures at its right)
+  it('keeps the output, bytes, cycles and index on the quiet line of the 608 px card', () => {
     atContainerWidth(608);
     render(<AssetTransactions rows={[tx(1, 1930, null)]} />);
     const [row] = screen.getAllByTestId('asset-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0x0101…0101', expect.stringMatching(/ago$/)],
       [
-        'what',
-        // a phone row is the summary form (readability R5, re-pinned on purpose: was padded to 8
-        // decimals)
-        '500 CKB',
-        '1 → 2\u00a0cells · fee 0.00001 CKB · 1,930 B · cycles not computed · tx 1 in block',
+        'figures',
+        // a phone row is the summary form (readability R5)
+        '1 → 2\u00a0cells · fee 0.00001 CKB · output 500 CKB · 1,930 B · cycles not computed · tx 1 in block',
+        null,
       ],
     ]);
+  });
+});
+
+// Lane D4 follow-up (the coordinator's item 2): an asset's transactions on a phone (a token's page,
+// a collection's, an identity's) are the address page's transaction row: the tight hash and the
+// block with its age (a date on the identity boards, as their table writes it); what the row did
+// on this asset where the feed says (the identity's action, the feed's own column, named); quiet,
+// the cells, the token's amount moved with its symbol and the fee, each named. The output capacity,
+// the bytes, the cycles and the index in the block leave the phone row for the table and the
+// transaction's page; the cards from 560 px keep them at the end of the quiet line.
+describe('an asset’s transactions on a phone (lane D4 follow-up)', () => {
+  const USDC = `0x${'5d'.repeat(32)}`;
+  const moved = (n: number): Transaction => ({
+    ...tx(n, 1930, 1_923_713),
+    activity: {
+      txHash: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
+      blockNumber: 1000 + n,
+      txIndex: 1,
+      timestamp: '1700000000000',
+      isCellbase: false,
+      protocolActions: [],
+      typeCalls: [],
+      lockCalls: [],
+      participants: [
+        {
+          address: seededAddress('usdc1'),
+          lockHash: `0x${'71'.repeat(32)}`,
+          lockHashPrefix: null,
+          roles: [],
+          tags: 0,
+          ckbDelta: '-1000',
+          usedDelta: '0',
+          itemDeltas: [
+            {
+              kind: 'token',
+              typeScriptHash: USDC,
+              delta: '2000000000',
+              symbol: 'USDC',
+              decimals: 6,
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  it('is the address row at 358 px: hash and block · age, then cells · amount moved · fee', () => {
+    atContainerWidth(358);
+    render(
+      <AssetTransactions
+        rows={[moved(1)]}
+        token={{ typeHash: USDC, symbol: 'USDC', decimals: 6 }}
+      />
+    );
+    const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['identity', 'head', '0x0101…0101', expect.stringMatching(/^#1,001 · .+ ago$/)],
+      ['figures', 'quiet', '1 → 2\u00a0cells · 2,000 USDC moved · fee 0.00001 CKB', null],
+    ]);
+    const figures = row.querySelector('[data-line="figures"]')!;
+    expect(dottedItems(figures)).toEqual([
+      '1 → 2\u00a0cells',
+      '2,000 USDC moved',
+      'fee 0.00001 CKB',
+    ]);
+    expect(
+      Array.from(figures.querySelectorAll('[data-role="figure-label"]')).map((l) => l.textContent)
+    ).toEqual(['USDC moved', 'fee']);
+    // the output capacity, the bytes, the cycles and the index leave the phone row
+    expect(row.textContent).not.toMatch(/500 CKB|1,930 B|cycles|in block/);
+  });
+
+  it('names what the row did on this asset where the feed says, on line 2', () => {
+    atContainerWidth(358);
+    render(
+      <AssetTransactions
+        rows={[tx(1, 640, 0)]}
+        identity={{ actionLabel: '.bit action', action: () => 'Renewed' }}
+        context={{ label: 'Cell after', render: () => 'output 1' }}
+      />
+    );
+    const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0x0101…0101', expect.stringMatching(/^#1,001 · \d{4}-\d{2}-\d{2}$/)],
+      ['what', 'Renewed · Cell after output 1', null],
+      ['figures', '1 → 2\u00a0cells · fee 0.00001 CKB', null],
+    ]);
+  });
+
+  // The board's head(): the tight hash at 14 px (92.4), the 12 px between the parts and the block
+  // with the oldest age a live list writes at 13 px, "#99,999,999 · 10y 364d ago" (26 characters,
+  // 202.8): 307.2 of a 360 px phone's 328 px line (no stone, as the table's).
+  it('states its first line, 307.2 of 328 px', () => {
+    atContainerWidth(PHONE_LINE_PX[360]);
+    render(<AssetTransactions rows={[tx(1, 640, 0)]} />);
+    const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    expect(statedHeadPx(row)).toBe(307.2);
+    expect(phoneHeadPx(row, 360)).toBeLessThanOrEqual(statedHeadPx(row));
   });
 });

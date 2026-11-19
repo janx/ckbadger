@@ -23,6 +23,7 @@ import { ERROR_PAGE_LAYOUT, ErrorPageShell } from '@/components/error-page-shell
 import { inkOf } from '@/__tests__/utils/ink-role';
 import { displayAt, textRunPx, wrapsAt } from '@/__tests__/utils/tailwind-box';
 import { WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
+import { clippingAncestors } from '@/__tests__/utils/copy-answer';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
 
@@ -270,6 +271,15 @@ describe('ErrorPageShell', () => {
     // an id's, so its words stand on screen beside the icon (they were only its accessible name)
     const copy = screen.getByRole('button', { name: 'copy details for a bug report' });
     expect(copy).toHaveTextContent(/^copy details for a bug report$/);
+    // lane c2-finish, rulings round 1: the copy's answer stands out of the line's flow under its
+    // box. The crash page's own boxes clip (its main, overflow-hidden; its root, overflow-x-hidden),
+    // so the answer stays inside them by their padding: it reaches 24 px under the box (a 4 px gap,
+    // a 12 px line at 1.5 and its 1 px frame) inside the text column's 40 px of bottom padding,
+    // and never past the box's right edge or the page's left edge, inside the 16 px side padding
+    const status = within(copy.parentElement!).getByRole('status');
+    expect(status).toHaveClass('absolute', 'top-full', 'mt-1', 'text-meta');
+    expect(clippingAncestors(copy)).toEqual(['<main> overflow-hidden', '<div> overflow-x-hidden']);
+    expect(copy.closest('[data-error-layout]')).toHaveClass('px-4', 'pb-10');
     expect(
       screen.getByText(
         'the chain was not checked in this view — this says nothing about what it holds'

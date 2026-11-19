@@ -60,7 +60,9 @@ function PartyIdentity({ party, size }: { party: PartyDisplay; size: ShortSize |
   // to no address (an unencodable lock).
   if (party.lockHash) {
     return (
-      <Link href={`/address/${party.lockHash}`} className="hover:underline">
+      // the lock hash is the link to its address, not a copy target (lane c2-finish, rulings
+      // round 1): a block look, the hex drawing its own inks
+      <Link href={`/address/${party.lockHash}`} look="block">
         {size ? (
           <HexDisplay value={party.lockHash} size={size} textSize="sm" />
         ) : (

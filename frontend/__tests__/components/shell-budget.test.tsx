@@ -616,7 +616,9 @@ describe('the footer per width', () => {
     for (const w of [390, 360, 320])
       expect(footerLines(w, phone)).toEqual([
         { items: ['Hardforks', 'Network', 'Fiber channels'], px: 274 },
-        { items: ['Fiber dashboard ↗', 'cknerv ↗', 'Web5 ↗'], px: 281.8 },
+        // re-pinned (lane c2-finish, rulings round 2): each ↗ glued by a no-break space, one
+        // glyph as the space was, so the line's width is the same
+        { items: ['Fiber dashboard\u00a0↗', 'cknerv\u00a0↗', 'Web5\u00a0↗'], px: 281.8 },
       ]);
   });
 

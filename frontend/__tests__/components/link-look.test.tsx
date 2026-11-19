@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import Link, { INLINE_UNDERLINE, LINK_LOOKS } from '@/components/ui/link';
 import { ExternalLink } from '@/components/ui/external-link';
 import { GLOBALS_CSS } from '@/__tests__/utils/css-paint';
+import { wrapsAt } from '@/__tests__/utils/tailwind-box';
 
 /** The underline of a link inside a line, as its classes write it: 1 px, 3 px under, muted. */
 const UNDERLINE = [
@@ -16,9 +17,8 @@ const UNDERLINE = [
 /**
  * The looks of a link (the controls board, gate D0′, item "links"; lane c2-links): a link says its
  * job, never its classes. Three looks a page's content draws — a row's key (the bright ink), a link
- * inside a line (the line's ink, underlined in the muted ink), a way onward (celadon, never broken,
- * with its arrow, which the
- * component writes) — and two that draw no link ink of their own: a block (a tile, a card, a mark)
+ * inside a line (the line's ink, underlined in the muted ink), a way onward (celadon, wrapping
+ * between its words, with its arrow glued to its last word, which the component writes) — and two that draw no link ink of their own: a block (a tile, a card, a mark)
  * and the shell's navigation. Hover and focus turn any of them celadon: one rule, globals.css.
  */
 const ink = (el: Element) =>
@@ -74,7 +74,12 @@ describe('Link: the look a caller names', () => {
       ).toEqual([]);
   });
 
-  it('draws a way onward celadon and unbroken, and writes its arrow held to the last word', () => {
+  // Re-pinned (lane c2-finish, rulings round 2): a way onward wraps between its words (it was
+  // never broken, whitespace-nowrap, and a long one ran out of the page: the chart pages' hardfork
+  // note, 413 px on one line, scrolled them sideways 77 px at 360); its arrow stays held to its
+  // last word: a no-break space and the arrow (it was a space and the arrow), in a span that does
+  // not wrap, glued to the word before it.
+  it('draws a way onward celadon, wrapping between its words, its arrow held to the last word', () => {
     render(
       <Link href="/tokens/0xab/holders" look="onward">
         all 522 holders
@@ -83,11 +88,38 @@ describe('Link: the look a caller names', () => {
     // the arrow is drawn, not read: the link's name is its words
     const link = screen.getByRole('link', { name: 'all 522 holders' });
     expect(ink(link)).toEqual(['text-jade']);
-    expect(link).toHaveClass('whitespace-nowrap');
-    expect(link.textContent).toBe('all 522 holders →');
+    expect(link).not.toHaveClass('whitespace-nowrap');
+    expect(link.textContent).toBe('all 522 holders\u00a0→');
     const arrow = link.lastElementChild!;
-    expect(arrow.textContent).toBe(' →');
+    expect(arrow.textContent).toBe('\u00a0→');
+    expect(arrow).toHaveClass('whitespace-nowrap');
     expect(arrow).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  // The hold, exactly: a line may break at a space (after it); the arrow's span begins with a
+  // no-break space, which offers no break before or after it (Unicode line breaking, LB12 and
+  // LB12a: glue), and the word before it ends in a letter or a digit, no space and no hyphen, so
+  // there is no break between the last word and the arrow; inside the span, white-space: nowrap
+  // keeps the two characters together however the line's own white-space reads. So where the words
+  // wrap, the arrow ends the line its last word ends, never a line of its own.
+  it('lets a long way onward wrap at its spaces while its arrow is glued to its last word', () => {
+    const words = 'Hardforks: Mirana, epoch 5,414 · Meepo, epoch 12,293';
+    render(
+      <p>
+        <Link href="/hardforks" look="onward">
+          {words}
+        </Link>
+      </p>
+    );
+    const link = screen.getByRole('link', { name: words });
+    for (const w of [1280, 390, 360]) expect(wrapsAt(link, w), `at ${w}`).toBe(true);
+    const arrow = link.lastElementChild!;
+    for (const w of [1280, 360]) expect(wrapsAt(arrow, w)).toBe(false);
+    expect(arrow.textContent).toMatch(/^\u00a0→$/);
+    const before = arrow.previousSibling!;
+    expect(before.nodeType).toBe(Node.TEXT_NODE);
+    expect(before.textContent).toBe(words);
+    expect(before.textContent).toMatch(/[^\s-]$/);
   });
 
   it('points a way onward to a place further down this page downward', () => {
@@ -96,7 +128,8 @@ describe('Link: the look a caller names', () => {
         all 1,204 cells
       </Link>
     );
-    expect(screen.getByRole('link').lastElementChild!.textContent).toBe(' ↓');
+    // re-pinned (lane c2-finish, rulings round 2): glued by a no-break space (was a space)
+    expect(screen.getByRole('link').lastElementChild!.textContent).toBe(' ↓');
   });
 
   it('draws no link ink for a block or the shell’s navigation, and keeps the caller’s layout', () => {
@@ -147,7 +180,10 @@ describe('ExternalLink: the same looks, its ↗ its own', () => {
     );
     const link = screen.getByRole('link', { name: 'ckb2021 overview ↗' });
     expect(ink(link)).toEqual(['text-jade']);
-    expect(link).toHaveClass('whitespace-nowrap');
+    // re-pinned (lane c2-finish, rulings round 2): it wraps between its words, its ↗ glued to the
+    // last word by a no-break space (it was nowrap)
+    expect(link).not.toHaveClass('whitespace-nowrap');
+    expect(link.lastElementChild!.textContent).toBe('\u00a0↗');
     expect(link.textContent).not.toContain('→');
   });
 

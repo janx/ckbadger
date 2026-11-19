@@ -9,7 +9,7 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { loadUnderStillClock, tick } from '@/__tests__/utils/still-clock';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
-import { insetsPx, textRunPx } from '@/__tests__/utils/tailwind-box';
+import { containerContentPx, insetsPx, textRunPx } from '@/__tests__/utils/tailwind-box';
 import { NARROWEST_LINE_PX } from '@/lib/control-row-fit';
 
 const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
@@ -170,6 +170,37 @@ describe('PeersTable', () => {
       }
     }
     expect(over).toEqual([]);
+  });
+
+  // Lane c2-finish, rulings round 1, item 3: the filter panel's 16 px side padding left its
+  // content 296 px of a 360 px phone's 328, and both wells are wider (310 and 302.2 px), so they
+  // stood 14 and 6.2 px into the padding. Below md the panel's content takes the page's line, its
+  // own side padding 0 (16 px from md, where the panel stands beside nothing else in the box).
+  it('gives the filters the page’s line below md: each well whole inside it at 360', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const wells: Record<string, number> = {};
+    for (const name of ['crawler dial state', 'address observation']) {
+      const select = screen.getByLabelText<HTMLSelectElement>(name);
+      const panel = select.parentElement!.parentElement!.parentElement!;
+      expect(
+        [360, 390, 640, 768, 1280].map((w) => insetsPx(panel, w).box),
+        name
+      ).toEqual([0, 0, 0, 32, 32]);
+      const line = containerContentPx(360) - insetsPx(panel, 360).box;
+      expect(line).toBe(NARROWEST_LINE_PX);
+      const chrome = insetsPx(select.parentElement!, 360).box + insetsPx(select, 360).box;
+      wells[name] = Math.max(
+        ...Array.from(
+          select.options,
+          (o) => Math.round((chrome + textRunPx(o.textContent!, select, 360)) * 100) / 100
+        )
+      );
+      expect(wells[name], name).toBeLessThanOrEqual(line);
+    }
+    // the widest choices: 'Aliases exhausted · verified before' (35 glyphs), 'Authenticated, no
+    // Identify in time' (34), at 7.8 px a glyph and 37 px of frame and padding
+    expect(wells).toEqual({ 'crawler dial state': 310, 'address observation': 302.2 });
   });
 
   // A filter says what the rows say: the dial-state filter names a state as the row's badge does,

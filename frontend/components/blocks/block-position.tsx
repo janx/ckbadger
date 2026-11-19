@@ -267,25 +267,13 @@ export function BlockPosition({
             <p className="text-text-dim">Uncle parent → included uncle</p>
             {/* U-16: a full hash is one token, whole on its line or scrolled in its own box */}
             <Link href={`/blocks/${uncle.parentHash}`} className="block">
-              Parent{' '}
-              <HexCode
-                value={uncle.parentHash}
-                truncate={false}
-                copyable={false}
-                variant="inherit"
-              />
+              Parent <HexCode value={uncle.parentHash} truncate={false} variant="inherit" />
             </Link>
             <Link href={getUncleDetailHref(block.number, index)} className="block">
               <Dotted
                 parts={[
                   `Uncle ${formatBlockNumber(uncle.number)}`,
-                  <HexCode
-                    key="hash"
-                    value={uncle.hash}
-                    truncate={false}
-                    copyable={false}
-                    variant="inherit"
-                  />,
+                  <HexCode key="hash" value={uncle.hash} truncate={false} variant="inherit" />,
                 ]}
               />
             </Link>

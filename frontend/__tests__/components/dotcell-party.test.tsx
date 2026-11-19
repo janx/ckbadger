@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, screen } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DotCellParty } from '@/components/identity/dotcell-party';
 
@@ -37,6 +37,31 @@ describe('DotCellParty', () => {
     expect(screen.getByRole('link')).toHaveAttribute('href', `/mainnet/address/${LOCK_HASH}`);
     expect(screen.queryByText('unresolved')).not.toBeInTheDocument();
   });
+
+  // Lane c2-finish, rulings round 1: an id inside a link is the link, not a copy target. The lock
+  // hash copied on a click while its link went to the address, so the copy was never seen; it is
+  // the link alone now, its whole value in its title.
+  for (const size of [undefined, 'row'] as const)
+    it(`copies nothing on a click of the linked lock hash${size ? ' in a row' : ''}`, () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+      try {
+        render(
+          <DotCellParty
+            party={{ hashPrefix: PREFIX, lockHash: LOCK_HASH, address: null, scriptName: null }}
+            size={size}
+          />
+        );
+        const link = screen.getByRole('link');
+        const id = link.firstElementChild as HTMLElement;
+        expect(id).toHaveAttribute('title', LOCK_HASH);
+        expect(id.className).not.toMatch(/cursor-pointer/);
+        fireEvent.click(id);
+        expect(writeText).not.toHaveBeenCalled();
+      } finally {
+        Object.assign(navigator, { clipboard: undefined });
+      }
+    });
 
   it('shows a bare prefix as an unresolved prefix, never as a link to an address', () => {
     render(

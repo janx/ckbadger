@@ -5,7 +5,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { useFromSm } from '@/hooks/useFromMd';
 import { rovingTarget } from '@/lib/roving-focus';
 import { groupCount } from '@/lib/format-count';
-import { tabRowShowsCounts, type TabRowItem } from '@/lib/control-row-fit';
+import { tabRowShowsCounts, type TabRowItem, type TabRowStep } from '@/lib/control-row-fit';
 import Link from '@/components/ui/link';
 import { cn } from '@/lib/utils';
 
@@ -34,15 +34,31 @@ interface TabsProps<K extends string> {
 }
 
 /**
- * A tab's box, the same for a tab and a tab that is its own address (`TabLinks`): the name at the
- * body step below sm and the section step from it, a 32 px target standing on the row's rule, the
- * 2 px line under it (its colour the caller's: celadon for the current one).
+ * A tab's box, the same for a tab and a tab that is its own address (`TabLinks`): a 32 px target
+ * standing on the row's rule, the 2 px line under it (its colour the caller's: celadon for the
+ * current one), and the name at its role's step (`TAB_STEP`).
  */
-const TAB_BOX =
-  'text-body sm:text-section -mb-px inline-flex h-8 items-end whitespace-nowrap border-b-2 pb-1.5 transition-colors sm:pb-[7px]';
+const TAB_BOX = '-mb-px inline-flex h-8 items-end whitespace-nowrap border-b-2 transition-colors';
 
-/** The row under its 1 px rule, one line, a gap of 16 px between tabs (22 from sm). */
-const TAB_ROW = 'border-row-rule flex min-w-0 items-baseline gap-4 border-b sm:gap-[22px]';
+/** The row under its 1 px rule, one line, the gap between its tabs at its role's step. */
+const TAB_ROW = 'border-row-rule flex min-w-0 items-baseline border-b';
+
+/**
+ * A tab row's size by its role (the owner's ruling, 2026-11-19; lane c2-finish, rulings round 2).
+ * A command row IS its section's heading, so it takes the heading's size: the section step from sm
+ * (17 px, the gap 22 px, the line 7 px under the name) and the body step below it (14 px, 16, 6). A
+ * plain row stands inside a section under that section's own heading, so it takes the body step at
+ * every width: a 17 px row under a 17 px heading read as two headings (the home feed under "feed
+ * --last 8"). The fit (lib/control-row-fit.ts `TabRowStep`) reads the same steps.
+ */
+const TAB_STEP = {
+  command: { box: 'text-body sm:text-section pb-1.5 sm:pb-[7px]', row: 'gap-4 sm:gap-[22px]' },
+  plain: { box: 'text-body pb-1.5', row: 'gap-4' },
+} as const;
+
+/** The step a row of this role is set at, for the fit: a plain row's is the body step everywhere. */
+const rowStep = (command: boolean, fromSm: boolean): TabRowStep =>
+  command && fromSm ? 'section' : 'body';
 
 /** The prompt square before the first name of a command line, pulled toward it. */
 const TAB_SQUARE = 'section-mark -mr-2 self-center sm:-mr-3';
@@ -60,8 +76,10 @@ function TabCount({ count }: { count: TabRowItem['count'] }) {
 
 /**
  * A tab row (the controls board, gate D0′, passed 2026-11-19; UI review 2026-11-14, phase C): one
- * line under a 1 px rule, the names at the section step (17 px) from sm and the body step (14 px)
- * below it, each a 32 px target. A name is the reading ink, the current one bright and 600 on the
+ * line under a 1 px rule, each name a 32 px target at its role's step (`TAB_STEP`, the owner's ruling
+ * of 2026-11-19): a command row, its section's heading, at the section step (17 px) from sm and the
+ * body step (14 px) below it; a plain row, under its section's own heading, at the body step at
+ * every width. A name is the reading ink, the current one bright and 600 on the
  * 2 px celadon line; a count is 12 px in the quiet ink after its name; a zero's name is quiet.
  * WAI-ARIA tabs: `role="tablist"`, one stop in the tab order (the current tab), ← and → move and
  * select (selection follows focus: a panel here is a list the API serves at once, local first),
@@ -87,7 +105,7 @@ export function Tabs<K extends string>({
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
   const index = tabs.findIndex((tab) => tab.key === value);
   if (index < 0) throw new Error(`Tabs "${label}": no tab ${value}`);
-  const counts = tabRowShowsCounts(tabs, fromSm ? 'section' : 'body', command, linePx);
+  const counts = tabRowShowsCounts(tabs, rowStep(command, fromSm), command, linePx);
   const tabId = (key: K) => `${id}-tab-${key}`;
   const panelId = `${id}-panel`;
 
@@ -106,7 +124,7 @@ export function Tabs<K extends string>({
         role="tablist"
         aria-label={label}
         onKeyDown={onKeyDown}
-        className={TAB_ROW}
+        className={cn(TAB_ROW, TAB_STEP[command ? 'command' : 'plain'].row)}
       >
         {command && <span aria-hidden="true" className={TAB_SQUARE} />}
         {tabs.map((tab, i) => {
@@ -126,6 +144,7 @@ export function Tabs<K extends string>({
               onClick={() => onChange(tab.key)}
               className={cn(
                 TAB_BOX,
+                TAB_STEP[command ? 'command' : 'plain'].box,
                 command && 'lowercase',
                 selected
                   ? 'border-jade text-text-bright font-semibold'
@@ -192,9 +211,13 @@ export function TabLinks<K extends string>({
   const [lineRef, linePx] = useElementWidth<HTMLElement>();
   const index = tabs.findIndex((tab) => tab.key === current);
   if (index < 0) throw new Error(`TabLinks "${label}": no link ${current}`);
-  const counts = tabRowShowsCounts(tabs, fromSm ? 'section' : 'body', command, linePx);
+  const counts = tabRowShowsCounts(tabs, rowStep(command, fromSm), command, linePx);
   return (
-    <nav ref={lineRef} aria-label={label} className={cn(TAB_ROW, className)}>
+    <nav
+      ref={lineRef}
+      aria-label={label}
+      className={cn(TAB_ROW, TAB_STEP[command ? 'command' : 'plain'].row, className)}
+    >
       {command && <span aria-hidden="true" className={TAB_SQUARE} />}
       {tabs.map((tab, i) => {
         const selected = i === index;
@@ -206,6 +229,7 @@ export function TabLinks<K extends string>({
             aria-current={selected ? 'page' : undefined}
             className={cn(
               TAB_BOX,
+              TAB_STEP[command ? 'command' : 'plain'].box,
               'group',
               command && 'lowercase',
               selected ? 'border-jade font-semibold' : 'border-transparent font-normal'

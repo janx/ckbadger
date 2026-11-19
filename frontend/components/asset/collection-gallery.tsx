@@ -44,14 +44,14 @@ function ItemOwner({ item }: { item: CollectionItem }) {
   if (item.ownerLockHash)
     return (
       <span className="text-meta">
-        <Hash hash={item.ownerLockHash} size="row" copyable={false} className="text-meta" />
+        <Hash hash={item.ownerLockHash} size="row" className="text-meta" />
         <span className="text-text-dim block">address not indexed</span>
       </span>
     );
   if (item.ownerHashPrefix)
     return (
       <span className="text-meta [overflow-wrap:anywhere]">
-        <Hash hash={item.ownerHashPrefix} truncate={false} copyable={false} className="text-meta" />
+        <Hash hash={item.ownerHashPrefix} truncate={false} className="text-meta" />
         <span className="text-text-dim block">named owner prefix · no indexed lock</span>
       </span>
     );
@@ -96,7 +96,7 @@ function itemHolder(item: CollectionItem): ReactNode {
       <Dotted
         parts={[
           <Labelled key="lock" label="held by">
-            <Hash hash={item.ownerLockHash} size="row" copyable={false} />
+            <Hash hash={item.ownerLockHash} size="row" />
           </Labelled>,
           <span key="note" className="text-text-dim">
             address not indexed
@@ -109,7 +109,7 @@ function itemHolder(item: CollectionItem): ReactNode {
       <Dotted
         parts={[
           <Labelled key="prefix" label="held by">
-            <Hash hash={item.ownerHashPrefix} truncate={false} copyable={false} />
+            <Hash hash={item.ownerHashPrefix} truncate={false} />
           </Labelled>,
           <span key="note" className="text-text-dim">
             named owner prefix · no indexed lock
@@ -207,9 +207,7 @@ const ITEM_NAME_LINE_PX = phoneHead(
 function itemName(item: CollectionItem): ReactNode {
   return item.standard === 'm-nft'
     ? mnftRowTitle(item)
-    : (item.name ?? item.did ?? (
-        <Hash hash={item.nftId} size="row" copyable={false} className="text-meta" />
-      ));
+    : (item.name ?? item.did ?? <Hash hash={item.nftId} size="row" className="text-meta" />);
 }
 
 /** The status filter's values, as the heading's args say them (the chips' own words). */
@@ -314,14 +312,7 @@ export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps)
                       {item.standard === 'm-nft'
                         ? mnftRowTitle(item)
                         : (item.name ??
-                          item.did ?? (
-                            <Hash
-                              hash={item.nftId}
-                              size="row"
-                              copyable={false}
-                              className="text-meta"
-                            />
-                          ))}
+                          item.did ?? <Hash hash={item.nftId} size="row" className="text-meta" />)}
                     </AppLink>
                     <span className="text-text-dim text-meta mt-1 block">
                       {formatStandard(item.standard)} · {item.isLive ? 'Live' : 'Inactive'}

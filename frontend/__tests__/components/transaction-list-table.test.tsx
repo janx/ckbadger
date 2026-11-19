@@ -1205,3 +1205,29 @@ describe('the transactions phone row on the phone-rows board (lane D4)', () => {
     expect(phoneHeadPx(row, 360)).toBe(statedHeadPx(row));
   });
 });
+
+// Lane D4 follow-up (the coordinator's note): the block a cellbase pays is a link inside a line,
+// on the phone row and in the table alike: the inline look (components/ui/link.tsx), underlined in
+// its line's ink, no hand-written hover ink.
+describe('the block a cellbase pays is an inline link (lane D4 follow-up)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('on the phone row and in the table', () => {
+    atContainerWidth(358);
+    const { unmount } = render(<TransactionListTable transactions={[cellbase]} />);
+    const phone = within(screen.getByTestId('transaction-row-mobile')).getByRole('link', {
+      name: '#20,829,764',
+    });
+    expect(phone).toHaveClass('underline');
+    expect(phone).not.toHaveClass('hover:text-jade');
+    unmount();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    atContainerWidth(1248);
+    render(<TransactionListTable transactions={[cellbase]} />);
+    const table = within(screen.getByRole('table')).getByRole('link', { name: '#20,829,764' });
+    expect(table).toHaveClass('underline');
+  });
+});

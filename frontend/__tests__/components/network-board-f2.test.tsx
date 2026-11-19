@@ -554,8 +554,9 @@ describe('Network board (F2 charts)', () => {
   });
 
   it('lets the peer filters shrink to a phone width (visual pass: 390 overflowed to 448)', async () => {
-    // the panel's line on a 360 px phone: 328 less its 16 px padding each side
-    stubChartWidth(296);
+    // the panel's line on a 360 px phone: the page's 328 (re-pinned, lane c2-finish rulings
+    // round 1: it was 296, less the panel's 16 px side padding, which goes below md)
+    stubChartWidth(328);
     render(wrap(<PeersTable />));
     // re-pinned (lane C2 topics): the filters are the controls board's selects, each after its
     // label in the field's well (they were bare selects named "Filter by …", capped at the line by
@@ -563,7 +564,7 @@ describe('Network board (F2 charts)', () => {
     // shrank (min-w-0), so the well took what the label left of the line and a native select
     // clipped its chosen value without a mark; now the well and the select never shrink, and the
     // well goes under its label where the pair does not fit the panel's line (on a phone: 'crawler
-    // dial state' 140.4 + 10 + a 310 px well, 460.4 px, past 296)
+    // dial state' 140.4 + 10 + a 310 px well, 460.4 px, past 328)
     for (const name of ['address observation', 'crawler dial state']) {
       const select = await screen.findByLabelText(name);
       const well = select.parentElement!;
