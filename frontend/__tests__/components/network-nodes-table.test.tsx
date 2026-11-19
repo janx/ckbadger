@@ -490,6 +490,10 @@ describe('PeersTable form by measured width (T3)', () => {
     expect(value('Version')).toHaveTextContent('0.114.0');
     expect(value('Country')).toHaveTextContent('United States');
     expect(value('RTT')).toHaveTextContent('42 ms');
+    // P4 topics (readability R4: 12 px is for labels, ticks and notes): each value at 13 px, its
+    // label at 12
+    for (const dd of pairs.querySelectorAll('dd')) expect(dd).toHaveClass('text-small');
+    for (const dt of pairs.querySelectorAll('dt')) expect(dt).toHaveClass('text-meta');
     // The retained evidence still loads under the pairs.
     expect(await screen.findByText('Retained verification')).toBeInTheDocument();
   });

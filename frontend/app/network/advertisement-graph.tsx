@@ -77,7 +77,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
               >
                 <ShortId value={edge.targetPeerId} kind="hash" size="row" />
               </span>
-              <span className="text-text-dim text-meta min-w-0 [overflow-wrap:anywhere]">
+              <span className="text-text text-small min-w-0 [overflow-wrap:anywhere]">
                 {edge.alias}
               </span>
             </div>

@@ -493,7 +493,7 @@ function PeerRow({
               </span>
               {/* As wide as its words (R16), at most the column, cut to fit. */}
               <span
-                className="text-text text-meta min-w-0 max-w-full justify-self-start truncate"
+                className="text-text text-small min-w-0 max-w-full justify-self-start truncate"
                 title={peer.primaryAddr ?? undefined}
               >
                 {orDash(peer.primaryAddr)}
@@ -520,7 +520,7 @@ function PeerRow({
                 </RowTag>
               </span>
               <span
-                className="text-text text-meta col-span-2 col-start-2 min-w-0 max-w-full justify-self-start truncate"
+                className="text-text text-small col-span-2 col-start-2 min-w-0 max-w-full justify-self-start truncate"
                 title={peer.primaryAddr ?? undefined}
               >
                 {orDash(peer.primaryAddr)}
@@ -530,12 +530,12 @@ function PeerRow({
           {expanded && (
             <dl
               data-testid="peer-columns"
-              className="text-meta grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
+              className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
             >
               {columns.map((c) => (
                 <Fragment key={c.label}>
-                  <dt className="text-text-dim">{c.label}</dt>
-                  <dd className={cn('text-text min-w-0', c.pair)}>{c.value}</dd>
+                  <dt className="text-text-dim text-meta">{c.label}</dt>
+                  <dd className={cn('text-text text-small min-w-0', c.pair)}>{c.value}</dd>
                 </Fragment>
               ))}
             </dl>
