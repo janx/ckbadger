@@ -8,6 +8,7 @@ import { render, screen } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const PAGE_TOKEN = `0x${'77'.repeat(32)}`;
 const OTHER_TOKEN = `0x${'88'.repeat(32)}`;
@@ -64,20 +65,24 @@ function feed(tokenPage: boolean) {
       plain
       mark="tokens"
       token={tokenPage ? { typeHash: PAGE_TOKEN, symbol: 'RGB++', decimals: 8 } : undefined}
-      loadActivities={async () => ({
-        data: [swap],
-        total: 1,
-        limit: 50,
-        hasMore: false,
-        nextCursor: null,
-      })}
-      loadTransactions={async () => ({
-        data: [],
-        total: 0,
-        limit: 50,
-        hasMore: false,
-        nextCursor: null,
-      })}
+      loadActivities={async () =>
+        pagedRead({
+          data: [swap],
+          total: 1,
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })
+      }
+      loadTransactions={async () =>
+        pagedRead({
+          data: [],
+          total: 0,
+          limit: 50,
+          hasMore: false,
+          nextCursor: null,
+        })
+      }
     />
   );
 }

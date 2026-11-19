@@ -288,7 +288,6 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   // below md (where the table's one line per object needs the room) the phone-rows board's item row
   const fromMd = useFromMd();
   const [gene, setGene] = useState<string | null>(null);
-  const pages = useCursorPagination();
   const genetics = insights.genetics;
   if (
     genetics.decodedItems + genetics.pendingItems + genetics.failedItems !==
@@ -325,11 +324,13 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   const urlTraits = useMemo(() => traitsFromUrl(searchParams, lanes), [searchParams, lanes]);
   const urlKey = JSON.stringify(urlTraits);
   const [traits, setTraits] = useState<Record<string, string>>(urlTraits);
+  // the walk starts again on a change of the list it pages (lane cd-fixes-controls): the traits,
+  // also when the URL changes them under this page
+  const pages = useCursorPagination(undefined, { list: [id, traits] });
   // The filter follows its URL, also when a link or a history entry changes it under this page.
   useEffect(() => setTraits(JSON.parse(urlKey) as Record<string, string>), [urlKey]);
   const ink = tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other';
   const filter = (name: string, value: string | null) => {
-    pages.reset();
     const next = { ...traits };
     if (value === null || traits[name] === value) delete next[name];
     else next[name] = value;

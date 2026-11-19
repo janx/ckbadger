@@ -448,17 +448,12 @@ export default function TransactionsPage() {
   const [tab, setTab] = useState<'committed' | 'cellbases' | 'pool'>('committed');
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
   // a change of page size at md starts each walk again (lane c2-finish, 1d)
-  const committedPage = useCursorPagination(limit);
+  // and so does a change of the list it pages (lane cd-fixes-controls): the kind
+  const committedPage = useCursorPagination(limit, { list: [kind] });
   const cellbasePage = useCursorPagination(limit);
-  const poolPage = useCursorPagination(limit);
-  const { reset: resetCommitted } = committedPage;
-  const { reset: resetPool } = poolPage;
+  const poolPage = useCursorPagination(limit, { list: [kind] });
   // D11: the page follows its URL, also when a link or history entry changes it under this page.
-  useEffect(() => {
-    setKind(urlKind);
-    resetCommitted();
-    resetPool();
-  }, [urlKind, resetCommitted, resetPool]);
+  useEffect(() => setKind(urlKind), [urlKind]);
   const committed = useQuery({
     queryKey: ['transactions', committedPage.cursor, limit, committedType],
     queryFn: committedPage.ask((cursor: string | undefined) =>
@@ -512,8 +507,6 @@ export default function TransactionsPage() {
     : undefined;
   const setKindAndUrl = (value: TransactionKind) => {
     setKind(value);
-    committedPage.reset();
-    poolPage.reset();
     // D11: the URL names the chosen kind (replace: a filter is not a step of history). Outside a
     // router there is no address to keep in step, and leaving the page would reload it.
     if (inRouter) {

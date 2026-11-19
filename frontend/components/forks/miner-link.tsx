@@ -4,7 +4,6 @@ import type { ReactNode } from 'react';
 import Link, { type LinkLook } from '@/components/ui/link';
 import { ShortId } from '@/components/ui/short-id';
 import { shortenAddress, type ShortSize } from '@/lib/shorten';
-import { cn } from '@/lib/utils';
 
 /**
  * The one way a miner is named (round 3, contracts R-C · R-12): by the pool `pools.toml` names for
@@ -27,11 +26,11 @@ function minerTitle(address: string, pool: string | null): string {
 
 /**
  * A miner linked to its address. `unnamed` replaces the tail form where a page shows the address
- * itself for an unnamed miner (blocks list, block page). `look` is the link's job where the caller
- * states it (lane P4: the fork pages write a miner inside a line or a cell, `inline`), drawn by the
- * owner of the looks with no ink of its own; a caller that states none keeps the former ink:
- * `className` lets a list row set it in body ink, where its key cell is the one bright thing
- * (table-rows T5); bright by default.
+ * itself for an unnamed miner (blocks list, block page). `look` is the link's job, which its caller
+ * states (lane P4: the fork pages write a miner inside a line or a cell, `inline`; a row's key,
+ * `key`), drawn by the owner of the looks with no ink of its own. It is required (lane
+ * cd-fixes-controls, review-p-tests SHOULD-4): the bright ink a caller that stated none drew went,
+ * with no caller left that states none.
  */
 export function MinerLink({
   address,
@@ -47,14 +46,14 @@ export function MinerLink({
   size: ShortSize;
   unnamed?: ReactNode;
   className?: string;
-  look?: Extract<LinkLook, 'key' | 'inline'>;
+  look: Extract<LinkLook, 'key' | 'inline'>;
 }) {
   if (pool === null && unnamed !== undefined) return <>{unnamed}</>;
   return (
     <Link
       href={`/address/${address}`}
       look={look}
-      className={look === undefined ? cn('text-text-bright hover:text-jade', className) : className}
+      className={className}
       title={minerTitle(address, pool)}
       data-miner-pool={pool ?? undefined}
     >

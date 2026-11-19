@@ -61,6 +61,10 @@ export function ParticipantRefView({
   const address = participant.address;
 
   if (address !== null) {
+    // the full form of an address is an Address, which states its look (lane cd-fixes-controls,
+    // review-p-tests SHOULD-4); the compact form's feeds may still state none
+    if (!compact && look === undefined)
+      throw new Error('ParticipantRefView: the full form is an Address, which states its look');
     const isCkbAddr = address.startsWith('ckb1') || address.startsWith('ckt1');
     return (
       <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
@@ -90,7 +94,7 @@ export function ParticipantRefView({
             <ShortId value={address} kind="address" size={size} />
           </Link>
         ) : (
-          <Address address={address} size={size} look={look} />
+          <Address address={address} size={size} look={look!} />
         )}
         {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>

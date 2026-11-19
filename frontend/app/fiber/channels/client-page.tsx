@@ -311,8 +311,8 @@ function ChannelPhoneRow({
 export default function FiberChannelsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('open');
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
-  // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const pagination = useCursorPagination(pageSize);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): the state
+  const pagination = useCursorPagination(pageSize, { list: [stateFilter] });
   const network = useQuery({ queryKey: ['fiber-network'], queryFn: api.getFiberNetwork });
   const pin = useFiberGraphPin();
   const channels = useQuery({
@@ -395,10 +395,7 @@ export default function FiberChannelsPage() {
                 count: summary ? filter.count(summary) : undefined,
               }))}
               value={stateFilter}
-              onChange={(next) => {
-                setStateFilter(next);
-                pagination.reset();
-              }}
+              onChange={setStateFilter}
               counted
             />
             {channels.isError && (

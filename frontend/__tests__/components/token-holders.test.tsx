@@ -8,6 +8,7 @@ import type { TokenDistribution } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatShareTick } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // B4 fix round: a row reads its lock off its address, so each holder's address spells the lock
 // its row names (JoyID's real code hash, and an unregistered one).
@@ -252,7 +253,7 @@ describe('Token holders (board L5)', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  const holders = {
+  const holders = pagedRead({
     data: [
       {
         lockScriptHash: `0x${'11'.repeat(32)}`,
@@ -276,7 +277,7 @@ describe('Token holders (board L5)', () => {
     // 562,997 of 24,255,256.49 is 2.32 %.
     totalSupply: '2425525649000000',
     anchor: null,
-  };
+  });
   const mount = () => {
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue(holders);
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -286,13 +287,16 @@ describe('Token holders (board L5)', () => {
   // Lane P2's follow-up (item 10): the list opens and folds by the one disclosure control
   // (FoldToggle): one button that stays mounted while the list loads and keeps the focus both ways
   it('opens and folds its list with one button that keeps the focus', async () => {
-    vi.spyOn(api, 'getTokenHolders').mockImplementation(async (_, p) => ({
-      ...holders,
-      limit: p?.limit ?? 10,
-      total: 21,
-      hasMore: true,
-      nextCursor: 'page2',
-    }));
+    vi.spyOn(api, 'getTokenHolders').mockImplementation(async (_, p) =>
+      pagedRead({
+        ...holders,
+        // a full page of its rows with more after it (lane cd-fixes-controls, SHOULD-5)
+        limit: holders.data.length,
+        total: 21,
+        hasMore: true,
+        nextCursor: 'page2',
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
     await screen.findByRole('table', { name: 'Top 10 holders' });
@@ -517,7 +521,7 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
   const scriptPage = expect.stringMatching(
     new RegExp(`/script/${unregistered}\\?hashType=type&kind=lock$`)
   );
-  const page = {
+  const page = pagedRead({
     data: [
       {
         lockScriptHash: `0x${'11'.repeat(32)}`,
@@ -547,7 +551,7 @@ describe('Token holders name an unregistered lock by its code hash (U-15)', () =
     nextCursor: null,
     totalSupply: '600',
     anchor: null,
-  };
+  });
   const mount = () => {
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue(page);
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -614,30 +618,32 @@ describe('a token holder on a phone has one shape (lane D4, PB-09)', () => {
   });
   const unregistered = `0x${'43'.repeat(32)}`;
   const mount = () => {
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: JOY_HOLDER,
-          balance: '300',
-          lockCodeHash: JOYID_CODE_HASH,
-          lockKind: 'JoyID',
-        },
-        {
-          lockScriptHash: `0x${'22'.repeat(32)}`,
-          address: UNREGISTERED_HOLDER,
-          balance: '200',
-          lockCodeHash: unregistered,
-          lockKind: null,
-        },
-      ],
-      total: 2,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '600',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: JOY_HOLDER,
+            balance: '300',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+          {
+            lockScriptHash: `0x${'22'.repeat(32)}`,
+            address: UNREGISTERED_HOLDER,
+            balance: '200',
+            lockCodeHash: unregistered,
+            lockKind: null,
+          },
+        ],
+        total: 2,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '600',
+        anchor: null,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
   };
@@ -687,30 +693,32 @@ describe('Token holders’ shares at the extremes', () => {
   });
   it('writes <0.01% for a holder above nothing and >99.99% for one below the whole', async () => {
     atContainerWidth(1248);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: JOY_HOLDER,
-          balance: '999999',
-          lockCodeHash: JOYID_CODE_HASH,
-          lockKind: 'JoyID',
-        },
-        {
-          lockScriptHash: `0x${'22'.repeat(32)}`,
-          address: JOY_HOLDER_2,
-          balance: '1',
-          lockCodeHash: JOYID_CODE_HASH,
-          lockKind: 'JoyID',
-        },
-      ],
-      total: 2,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '1000000',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: JOY_HOLDER,
+            balance: '999999',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+          {
+            lockScriptHash: `0x${'22'.repeat(32)}`,
+            address: JOY_HOLDER_2,
+            balance: '1',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+        ],
+        total: 2,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '1000000',
+        anchor: null,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
@@ -733,23 +741,25 @@ describe('Token holders name a holder whose lock has no address form by its lock
   });
   const lockHash = `0x${'88'.repeat(32)}`;
   const mount = () => {
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: lockHash,
-          address: null,
-          balance: '100',
-          lockCodeHash: JOYID_CODE_HASH,
-          lockKind: 'JoyID',
-        },
-      ],
-      total: 1,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '100',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: lockHash,
+            address: null,
+            balance: '100',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+        ],
+        total: 1,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '100',
+        anchor: null,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
   };
@@ -785,23 +795,25 @@ describe('Token holders where the table does not fit (L5)', () => {
   });
   it('falls back to the two-line row just below the 548 px table', async () => {
     atContainerWidth(546);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: null,
-          balance: '100',
-          lockCodeHash: JOYID_CODE_HASH,
-          lockKind: 'JoyID',
-        },
-      ],
-      total: 1,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '1000',
-      anchor: null,
-    });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: null,
+            balance: '100',
+            lockCodeHash: JOYID_CODE_HASH,
+            lockKind: 'JoyID',
+          },
+        ],
+        total: 1,
+        limit: 10,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '1000',
+        anchor: null,
+      })
+    );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const [row] = await screen.findAllByTestId('holder-row-mobile');

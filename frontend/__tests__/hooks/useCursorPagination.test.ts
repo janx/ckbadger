@@ -30,7 +30,7 @@ describe('useCursorPagination', () => {
       asked.push(cursor);
       return { data: [1], nextCursor: 'c1' };
     })();
-    expect(first.asked).toEqual({ page: 1, cursor: undefined, size: 20 });
+    expect(first.asked).toEqual({ page: 1, cursor: undefined, size: 20, list: '[]' });
     act(() => result.current.goToNext(first));
     const second = await result.current.ask(async (cursor) => {
       asked.push(cursor);
@@ -100,18 +100,42 @@ describe('useCursorPagination', () => {
     });
   });
 
-  describe('reset', () => {
-    it('starts the walk again from the first page; a response of a later page moves nothing', async () => {
-      const { result } = renderHook(() => useCursorPagination());
-      const p1 = await askPage(result.current, 'cursor-1');
-      act(() => result.current.goToNext(p1));
-      const p2 = await askPage(result.current, 'cursor-2');
-      act(() => result.current.reset());
-      expect(result.current.cursor).toBeUndefined();
-      expect(result.current.hasPrevious).toBe(false);
-      // page 2's response, kept while the first page loads again: not the page the walk is on
-      act(() => result.current.goToNext(p2));
+  // Lane cd-fixes-controls, the second read's SHOULD 1: the walk knows the list it pages (a
+  // filter, a class, a sort, a search), stamps it on every response and starts again when it
+  // changes; it replaces `reset`, which the callers called on a change of the list. A response of
+  // the other list, still shown while the new list's first page loads, moves nothing: it was asked
+  // of another list (the reviewer's sequence: "all" → "dao", then `older →` before dao arrives).
+  describe('a change of the list it pages', () => {
+    it('starts the walk again; a response of the other list moves nothing, page one or later', async () => {
+      const { result, rerender } = renderHook(
+        ({ kind }) => useCursorPagination(20, { list: [kind] }),
+        { initialProps: { kind: 'all' } }
+      );
+      const all1 = await askPage(result.current, 'all-20');
+      expect(all1.asked).toEqual({ page: 1, cursor: undefined, size: 20, list: '["all"]' });
+      rerender({ kind: 'dao' });
+      expect(result.current.list).toBe('["dao"]');
+      act(() => result.current.goToNext(all1));
       expect(result.current.page).toBe(1);
+      expect(result.current.cursor).toBeUndefined();
+      // the same on a later page: the walk on "dao" page 2, back to "all"
+      const dao1 = await askPage(result.current, 'dao-20');
+      act(() => result.current.goToNext(dao1));
+      expect(result.current.page).toBe(2);
+      rerender({ kind: 'all' });
+      expect(result.current.page).toBe(1);
+      expect(result.current.hasPrevious).toBe(false);
+    });
+
+    it('keeps its walk while its list stays the same, a new array of the same values included', async () => {
+      const { result, rerender } = renderHook(
+        ({ kind }) => useCursorPagination(20, { list: [kind, 'newest'] }),
+        { initialProps: { kind: 'all' } }
+      );
+      const p1 = await askPage(result.current, 'c1');
+      act(() => result.current.goToNext(p1));
+      rerender({ kind: 'all' });
+      expect(result.current.page).toBe(2);
     });
   });
 
@@ -122,13 +146,13 @@ describe('useCursorPagination', () => {
   // response read there is not the newest end's
   describe('a walk that starts from a cursor', () => {
     it('asks its first page there, comes back to it, and starts again when the cursor changes', async () => {
-      const { result, rerender } = renderHook(({ from }) => useCursorPagination(20, from), {
+      const { result, rerender } = renderHook(({ from }) => useCursorPagination(20, { from }), {
         initialProps: { from: 'url-7' as string | undefined },
       });
       expect(result.current.cursor).toBe('url-7');
       expect(result.current.hasPrevious).toBe(false);
       const fromUrl = await askPage(result.current, 'url-8');
-      expect(fromUrl.asked).toEqual({ page: 1, cursor: 'url-7', size: 20 });
+      expect(fromUrl.asked).toEqual({ page: 1, cursor: 'url-7', size: 20, list: '[]' });
       act(() => result.current.goToNext(fromUrl));
       expect(result.current.cursor).toBe('url-8');
       act(() => result.current.goToPrevious());

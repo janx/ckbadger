@@ -5,6 +5,7 @@ const DID_CKB_COLLECTION_ID = '0x6469645f636b625f636f6c6c656374696f6e5f5f5f5f5f5
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
 import everDepositorsProducer from '@/__tests__/fixtures/dao-ever-depositors-api-producer.json';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 describe('api', () => {
   describe('query parameter building', () => {
@@ -102,7 +103,9 @@ describe('api', () => {
           expect(query.get('class')).toBe('identity');
           expect(query.get('cursor')).toBe('20:0xab:1');
           expect(query.get('limit')).toBe('50');
-          return HttpResponse.json({ data: [], hasMore: false, nextCursor: null, limit: 50 });
+          return HttpResponse.json(
+            pagedRead({ data: [], hasMore: false, nextCursor: null, limit: 50 })
+          );
         })
       );
       expect((await api.getAddressHoldings('ckb1owner')).balance).toBe('9007199254740993');
@@ -117,7 +120,9 @@ describe('api', () => {
           expect(query.get('class')).toBe('object');
           expect(query.get('collection')).toBe('0x40');
           expect(query.get('limit')).toBe('10');
-          return HttpResponse.json({ data: [], hasMore: false, nextCursor: null, limit: 10 });
+          return HttpResponse.json(
+            pagedRead({ data: [], hasMore: false, nextCursor: null, limit: 10 })
+          );
         })
       );
       await api.getAddressCells('ckb1owner', { class: 'object', collection: '0x40', limit: 10 });
@@ -149,13 +154,15 @@ describe('api', () => {
           const url = new URL(request.url);
           expect(url.searchParams.get('cursor')).toBe('test-cursor');
           expect(url.searchParams.get('limit')).toBe('25');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 25,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 25,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -167,13 +174,15 @@ describe('api', () => {
         http.get('/api/:network/v1/transactions', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('block_number')).toBe('12345');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -205,13 +214,15 @@ describe('api', () => {
           const url = new URL(request.url);
           expect(url.searchParams.get('lock_script_hash')).toBe('0xabc123');
           expect(url.searchParams.get('type_script_hash')).toBe('0xdef456');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -224,13 +235,15 @@ describe('api', () => {
       server.use(
         http.get('/api/:network/v1/cells/by-script', ({ request }) => {
           seen.push(Object.fromEntries(new URL(request.url).searchParams));
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 5,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 5,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
       await api.getCellsByScriptRef({
@@ -273,13 +286,15 @@ describe('api', () => {
           const url = new URL(request.url);
           expect(url.searchParams.get('search')).toBe('USDT');
           expect(url.searchParams.get('standard')).toBe('sudt');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -291,13 +306,15 @@ describe('api', () => {
         http.get('/api/:network/v1/dao/deposits', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('status')).toBe('1');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -383,13 +400,15 @@ describe('api', () => {
           expect(url.searchParams.get('network')).toBe('mainnet');
           expect(url.searchParams.get('decoder_type')).toBe('lock');
           expect(url.searchParams.get('search')).toBe('secp256k1');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -399,26 +418,28 @@ describe('api', () => {
     it('maps script family list responses into known script rows', async () => {
       server.use(
         http.get('/api/:network/v1/scripts', () => {
-          return HttpResponse.json({
-            data: [
-              {
-                familyId: 'default-lock',
-                name: 'Default Lock',
-                description: 'Default lock family',
-                scriptKind: 'lock',
-                website: null,
-                liveCellsCount: 10,
-                cellsCount: 14,
-                ownedCapacitySum: '1500',
-                ownedKnowledgeSum: '900',
-                versionsCount: 1,
-              },
-            ],
-            total: 1,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [
+                {
+                  familyId: 'default-lock',
+                  name: 'Default Lock',
+                  description: 'Default lock family',
+                  scriptKind: 'lock',
+                  website: null,
+                  liveCellsCount: 10,
+                  cellsCount: 14,
+                  ownedCapacitySum: '1500',
+                  ownedKnowledgeSum: '900',
+                  versionsCount: 1,
+                },
+              ],
+              total: 1,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -561,13 +582,15 @@ describe('api', () => {
           expect(url.searchParams.get('type')).toBe('token');
           expect(url.searchParams.get('sort_key')).toBe('transfers_24h');
           expect(url.searchParams.get('sort_direction')).toBe('asc');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -580,13 +603,15 @@ describe('api', () => {
           const url = new URL(request.url);
           expect(url.searchParams.get('type')).toBe('object');
           expect(url.searchParams.get('standard')).toBe('spore');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -927,12 +952,14 @@ describe('api', () => {
             expect(url.searchParams.get('cursor')).toBe('abc');
             expect(url.searchParams.get('search')).toBe('alice');
             expect(url.searchParams.get('status')).toBe('live');
-            return HttpResponse.json({
-              data: [],
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [],
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -955,13 +982,15 @@ describe('api', () => {
             expect(params.collectionId).toBe('dotbit');
             expect(url.searchParams.get('limit')).toBe('20');
             expect(url.searchParams.get('cursor')).toBe('2:abcd');
-            return HttpResponse.json({
-              data: [],
-              total: 0,
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [],
+                total: 0,
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -983,12 +1012,14 @@ describe('api', () => {
             expect(url.searchParams.get('limit')).toBe('20');
             expect(url.searchParams.get('cursor')).toBe('300:1');
             expect(url.searchParams.get('action')).toBe('transfer');
-            return HttpResponse.json({
-              data: [],
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [],
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -1008,13 +1039,15 @@ describe('api', () => {
           expect(params.clusterId).toBe('0xcluster');
           expect(url.searchParams.get('limit')).toBe('20');
           expect(url.searchParams.get('cursor')).toBe('4:ffff');
-          return HttpResponse.json({
-            data: [],
-            total: 0,
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              total: 0,
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -1033,12 +1066,14 @@ describe('api', () => {
           expect(url.searchParams.get('limit')).toBe('20');
           expect(url.searchParams.get('cursor')).toBe('300:0');
           expect(url.searchParams.get('action')).toBe('burn');
-          return HttpResponse.json({
-            data: [],
-            limit: 20,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [],
+              limit: 20,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -1084,20 +1119,22 @@ describe('api', () => {
             expect(url.searchParams.get('limit')).toBe('20');
             expect(url.searchParams.get('cursor')).toBe('300:0');
             expect(url.searchParams.get('action')).toBe('transfer');
-            return HttpResponse.json({
-              data: [
-                {
-                  txHash: '0xtx',
-                  blockNumber: 300,
-                  txIndex: 0,
-                  timestamp: '1700000300',
-                  actions: ['transfer'],
-                },
-              ],
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [
+                  {
+                    txHash: '0xtx',
+                    blockNumber: 300,
+                    txIndex: 0,
+                    timestamp: '1700000300',
+                    actions: ['transfer'],
+                  },
+                ],
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -1145,20 +1182,22 @@ describe('api', () => {
             expect(url.searchParams.get('limit')).toBe('20');
             expect(url.searchParams.get('cursor')).toBe('300:0');
             expect(url.searchParams.get('action')).toBe('transfer');
-            return HttpResponse.json({
-              data: [
-                {
-                  txHash: '0xtx',
-                  blockNumber: 300,
-                  txIndex: 0,
-                  timestamp: '1700000300',
-                  actions: ['transfer'],
-                },
-              ],
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [
+                  {
+                    txHash: '0xtx',
+                    blockNumber: 300,
+                    txIndex: 0,
+                    timestamp: '1700000300',
+                    actions: ['transfer'],
+                  },
+                ],
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -1206,12 +1245,14 @@ describe('api', () => {
             expect(url.searchParams.get('limit')).toBe('20');
             expect(url.searchParams.get('cursor')).toBe('456:0');
             expect(url.searchParams.get('action')).toBe('transfer');
-            return HttpResponse.json({
-              data: [],
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [],
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -1287,12 +1328,14 @@ describe('api', () => {
             expect(params.idOrName).toBe('support.cell');
             expect(url.searchParams.get('limit')).toBe('50');
             expect(url.searchParams.get('cursor')).toBe(childId);
-            return HttpResponse.json({
-              data: [{ identityId: childId, label: 'blog.support', name: 'blog.support.cell' }],
-              limit: 50,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [{ identityId: childId, label: 'blog.support', name: 'blog.support.cell' }],
+                limit: 50,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -1315,12 +1358,14 @@ describe('api', () => {
             expect(url.searchParams.get('limit')).toBe('20');
             expect(url.searchParams.get('cursor')).toBe('456:0');
             expect(url.searchParams.get('action')).toBe('transfer');
-            return HttpResponse.json({
-              data: [],
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [],
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -1356,19 +1401,21 @@ describe('api', () => {
           const url = new URL(request.url);
           expect(params.addr).toBe('0xlockhash');
           expect(url.searchParams.get('limit')).toBe('50');
-          return HttpResponse.json({
-            data: [
-              {
-                identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
-                label: 'support',
-                name: 'support.cell',
-                expiredAt: 1821507678,
-              },
-            ],
-            limit: 50,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [
+                {
+                  identityId: '0x62d71147ac82b83c8531126cacb0d2f072bfd94a',
+                  label: 'support',
+                  name: 'support.cell',
+                  expiredAt: 1821507678,
+                },
+              ],
+              limit: 50,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -1432,20 +1479,22 @@ describe('api', () => {
             expect(url.searchParams.get('limit')).toBe('20');
             expect(url.searchParams.get('cursor')).toBe('300:0');
             expect(url.searchParams.get('action')).toBe('transfer');
-            return HttpResponse.json({
-              data: [
-                {
-                  txHash: '0xtx',
-                  blockNumber: 300,
-                  txIndex: 0,
-                  timestamp: '1700000300',
-                  actions: ['transfer'],
-                },
-              ],
-              limit: 20,
-              hasMore: false,
-              nextCursor: null,
-            });
+            return HttpResponse.json(
+              pagedRead({
+                data: [
+                  {
+                    txHash: '0xtx',
+                    blockNumber: 300,
+                    txIndex: 0,
+                    timestamp: '1700000300',
+                    actions: ['transfer'],
+                  },
+                ],
+                limit: 20,
+                hasMore: false,
+                nextCursor: null,
+              })
+            );
           }
         )
       );
@@ -1464,23 +1513,25 @@ describe('api', () => {
           const url = new URL(request.url);
           expect(url.searchParams.get('limit')).toBe('50');
           expect(url.searchParams.get('cursor')).toBe('test-cursor');
-          return HttpResponse.json({
-            data: [
-              {
-                typeScriptHash: '0x123',
-                standard: 'sudt',
-                name: 'Test Token',
-                symbol: 'TEST',
-                decimals: 8,
-                iconUrl: null,
-                balance: '1000000000000',
-              },
-            ],
-            total: 1,
-            limit: 50,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [
+                {
+                  typeScriptHash: '0x123',
+                  standard: 'sudt',
+                  name: 'Test Token',
+                  symbol: 'TEST',
+                  decimals: 8,
+                  iconUrl: null,
+                  balance: '1000000000000',
+                },
+              ],
+              total: 1,
+              limit: 50,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -1735,23 +1786,25 @@ describe('api', () => {
         http.get('/api/:network/v1/forks', ({ request }) => {
           const url = new URL(request.url);
           expect(url.searchParams.get('limit')).toBe('10');
-          return HttpResponse.json({
-            data: [
-              {
-                id: 1,
-                eventType: 'auto',
-                depth: 3,
-                forkPointNumber: 1000,
-                orphanedBlocksCount: 3,
-                orphanedTransactionsCount: 15,
-                detectedAt: '2024-01-15T10:30:00Z',
-              },
-            ],
-            total: 1,
-            limit: 10,
-            hasMore: false,
-            nextCursor: null,
-          });
+          return HttpResponse.json(
+            pagedRead({
+              data: [
+                {
+                  id: 1,
+                  eventType: 'auto',
+                  depth: 3,
+                  forkPointNumber: 1000,
+                  orphanedBlocksCount: 3,
+                  orphanedTransactionsCount: 15,
+                  detectedAt: '2024-01-15T10:30:00Z',
+                },
+              ],
+              total: 1,
+              limit: 10,
+              hasMore: false,
+              nextCursor: null,
+            })
+          );
         })
       );
 
@@ -1843,7 +1896,7 @@ describe('api', () => {
     it('refuses an unfiltered page without its activity total', async () => {
       server.use(
         http.get('/api/:network/v1/addresses/:addr/activities', () =>
-          HttpResponse.json({ data: [], limit: 50, hasMore: false, nextCursor: null })
+          HttpResponse.json(pagedRead({ data: [], limit: 50, hasMore: false, nextCursor: null }))
         )
       );
       await expect(api.getAddressActivities('0x' + '11'.repeat(32), { limit: 50 })).rejects.toThrow(

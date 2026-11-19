@@ -158,11 +158,9 @@ function ScopedCollectionHolders({
   const limit = all ? allPageSize : 10;
   // a change of page size (at md, or the top ten opened to all) starts the walk again (lane
   // c2-finish, 1d)
-  const pagination = useCursorPagination(limit);
-  const showAll = (open: boolean) => {
-    setAll(open);
-    pagination.reset();
-  };
+  // and so does a change of the list it pages (lane cd-fixes-controls): the top ten or all of them
+  const pagination = useCursorPagination(limit, { list: [all] });
+  const showAll = (open: boolean) => setAll(open);
   // The top ten, read whether the list is folded or open: the fold's count is theirs, and folding
   // back finds them read, so the fold's one button never waits on a read (lane P2's follow-up,
   // item 10: the loading list unmounted it and the focus fell to the page)

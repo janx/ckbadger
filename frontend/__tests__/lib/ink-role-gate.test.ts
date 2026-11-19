@@ -61,6 +61,23 @@ interface Tolerated {
   reason: string;
 }
 
+/**
+ * The pinned total of TOLERATED's sites by family, and of its files (lane cd-fixes-controls,
+ * review-p-tests NOTE-4: the list pinned no total, so a file could join it with a count without
+ * moving a figure; the link-look, controls and lock-words gates pin theirs). Each figure only falls.
+ */
+// chain 36 → 31, lists 43 → 36, topics 18 → 14, files 59 → 58 (the merge with the P3 follow-up's
+// 2d, each site decided: the blocks list 5, the transactions page 5 (one with 2b), the activities
+// page 1, the stream explorer 1, the DAO depositors 4, which left the list)
+const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
+  chain: 31,
+  assets: 33,
+  lists: 36,
+  topics: 14,
+  shared: 9,
+};
+const TOLERATED_FILES = 58;
+
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
   'app/address/[addr]/client-page.tsx': {
@@ -1191,6 +1208,16 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
   // without a second look at the whole; its total is pinned too.
   it('sets back three elements in all: the pinned total of QUIET_SITES', () => {
     expect(Object.values(QUIET_SITES).reduce((total, entry) => total + entry.count, 0)).toBe(3);
+  });
+
+  it('tolerates 123 sites in 58 files: the pinned totals by family, which only fall', () => {
+    const byFamily: Partial<Record<Family, number>> = {};
+    for (const entry of Object.values(TOLERATED))
+      byFamily[entry.family] =
+        (byFamily[entry.family] ?? 0) +
+        Object.values(entry.sites).reduce((sum, n) => sum + (n ?? 0), 0);
+    expect(byFamily).toEqual(TOLERATED_BY_FAMILY);
+    expect(Object.keys(TOLERATED)).toHaveLength(TOLERATED_FILES);
   });
 
   it('draws no link, amount, table cell or paragraph in the quiet ink but the tolerated list’s', () => {

@@ -117,7 +117,9 @@ export function Pager(props: PagerProps) {
       throw new Error(`Pager "${label}": ${pages} pages and no page`);
     if (page !== undefined && pages !== undefined && (page < 1 || page > pages))
       throw new Error(`Pager "${label}": page ${page} of ${pages}`);
-    if (!onNewer && !onOlder) return null;
+    // a list of one page draws no pager by the helper (timePageAt gives null); a page with neither
+    // end to take is kept data while the next page loads, drawn where it stands (lane
+    // cd-fixes-controls, the second read's NOTE 1)
     return (
       <nav aria-label={label} className={LINE}>
         <span className="mr-auto">{order}</span>

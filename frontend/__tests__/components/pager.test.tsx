@@ -259,11 +259,16 @@ describe('Pager: a cursor in time', () => {
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['← newer', 'older →']);
   });
 
-  it('draws nothing when neither end can be taken', () => {
-    const { container } = render(
-      <Pager mode="time" label="feed" order="newest first" page={1} pages={1} />
-    );
-    expect(container).toBeEmptyDOMElement();
+  // Re-pinned on purpose (lane cd-fixes-controls, the second read's NOTE 1): a list of one page
+  // draws no pager by the helper (timePageAt gives null); a page with neither end to take is kept
+  // data while the next page loads (page 1's, which has no way back, and no way on while the walk
+  // is ahead), drawn where it stands, both ends quiet, so the pager does not leave and come back
+  // under the reader (it drew nothing)
+  it('draws a page whose two ends cannot be taken, both ends quiet', () => {
+    render(<Pager mode="time" label="feed" order="newest first" page={1} pages={3} />);
+    const nav = screen.getByRole('navigation', { name: 'feed' });
+    expect(nav).toHaveTextContent(/^newest first← newerpage 1 of 3older →$/);
+    expect(screen.queryAllByRole('button')).toEqual([]);
   });
 });
 

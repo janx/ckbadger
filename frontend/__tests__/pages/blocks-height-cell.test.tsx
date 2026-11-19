@@ -6,6 +6,7 @@ import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import BlocksPage from '@/app/blocks/page';
 import { api } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getBlocks: vi.fn() },
@@ -50,13 +51,15 @@ const BLOCK = {
  */
 describe('the /blocks Height cell', () => {
   beforeEach(() => {
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      data: [BLOCK],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    } as unknown as Awaited<ReturnType<typeof api.getBlocks>>);
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pagedRead({
+        data: [BLOCK],
+        total: 1,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      }) as unknown as Awaited<ReturnType<typeof api.getBlocks>>
+    );
   });
 
   it('puts the hash on its own block line under the number in the 608 px table', async () => {

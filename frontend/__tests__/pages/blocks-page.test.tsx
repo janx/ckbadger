@@ -24,6 +24,7 @@ import type { SealId } from '@/lib/seal/stones';
 import { expectBefore, expectOneRowSeal } from '@/__tests__/utils/seals';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 // Time and record the seals' drawing without changing what it draws (a plain wrapper, not a mock
 // function: the phone describe's restoreAllMocks would reset one).
@@ -64,7 +65,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const mockBlocksResponse = {
+const mockBlocksResponse = pagedRead({
   data: [
     {
       ...blockEvidence,
@@ -127,7 +128,7 @@ const mockBlocksResponse = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 describe('BlocksPage', () => {
   beforeEach(() => {
@@ -271,7 +272,7 @@ describe('BlocksPage · Blocks v3 board', () => {
       proposalsCount: 0,
     })
   );
-  const page = {
+  const page = pagedRead({
     data: [
       row(20_828_894, {
         size: 3917,
@@ -293,10 +294,21 @@ describe('BlocksPage · Blocks v3 board', () => {
       }),
     ],
     total: 20_828_902,
-    limit: 50,
+    limit: 2,
     hasMore: true,
     nextCursor: '20828892',
-  };
+  });
+  // A page of these rows as the API sends it, through the checker: a full page with more after it,
+  // at `nextCursor`, or the last where it is none (lane cd-fixes-controls, review-p-tests SHOULD-5:
+  // the tests spread the shared page with rows of their own and kept its page size and its "more")
+  const pageOf = (data: readonly Block[], nextCursor: string | null = page.nextCursor) =>
+    pagedRead({
+      ...page,
+      data: [...data],
+      limit: data.length,
+      hasMore: nextCursor !== null,
+      nextCursor,
+    });
   beforeEach(() => {
     vi.mocked(api.getBlocks).mockResolvedValue(page);
   });
@@ -374,10 +386,9 @@ describe('BlocksPage · Blocks v3 board', () => {
   });
 
   it('names the miner by its pool when pools.toml does, linked to the address (R-12)', async () => {
-    vi.mocked(api.getBlocks).mockResolvedValue({
-      ...page,
-      data: [{ ...page.data[0], minerPool: 'Example Pool' }, page.data[1]],
-    });
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pageOf([{ ...page.data[0], minerPool: 'Example Pool' }, page.data[1]])
+    );
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const pool = within(table).getByRole('link', { name: 'Example Pool' });
@@ -399,6 +410,11 @@ describe('BlocksPage · Blocks v3 board', () => {
   // the newest end, "older →" a way to go. It wrote "2 newest of 20,828,902" beside a disabled
   // "Newer" and an "Older →" button, with no page.
   it('pages as newest first: page 1 of 416,579, ← newer at its end, older → (BA-06)', async () => {
+    // a full first page of 50 (lane cd-fixes-controls, SHOULD-5: the shared page's two rows said
+    // more followed on a page of fifty)
+    vi.mocked(api.getBlocks).mockResolvedValue(
+      pageOf(Array.from({ length: 50 }, (_, i) => row(20_828_894 - i, { transactionSizes: [355] })))
+    );
     render(<BlocksPage />);
     const pager = await screen.findByRole('navigation', { name: 'blocks' });
     expect(pager.textContent).toBe('newest first← newerpage 1 of 416,579older →');
@@ -410,14 +426,10 @@ describe('BlocksPage · Blocks v3 board', () => {
   // The controls lane (C2, c2-lists), written before the pager became the controls board's: older
   // asks for the page after the cursor the list served, newer goes back to the page before it.
   it('walks older by the cursor the list served, and newer back to the page before (BA-06)', async () => {
-    const older = {
-      ...page,
-      data: [
-        row(20_828_892, { transactionSizes: [355] }),
-        row(20_828_891, { transactionSizes: [355] }),
-      ],
-      nextCursor: '20828890',
-    };
+    const older = pageOf(
+      [row(20_828_892, { transactionSizes: [355] }), row(20_828_891, { transactionSizes: [355] })],
+      '20828890'
+    );
     vi.mocked(api.getBlocks).mockImplementation(async ({ cursor } = {}) =>
       cursor === '20828892' ? older : page
     );
@@ -542,7 +554,7 @@ describe('BlocksPage · Blocks v3 board', () => {
   // 1 and 7 in rods, past nine a full block; the same stone in the table, the 608 px table and the
   // phone rows.
   it('writes each block’s transaction count on its stone: 1, 7 and 12 transactions', async () => {
-    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+    vi.mocked(api.getBlocks).mockResolvedValue(pageOf(counted));
     render(<BlocksPage />);
     const table = await screen.findByRole('table', { name: 'Latest blocks' });
     const rows = Array.from(table.querySelectorAll('tbody tr'));
@@ -565,7 +577,7 @@ describe('BlocksPage · Blocks v3 board', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     onTestFinished(() => spy.mockRestore());
     const uncounted = { ...page.data[0], transactionsCount: undefined } as unknown as Block;
-    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: [uncounted, page.data[1]] });
+    vi.mocked(api.getBlocks).mockResolvedValue(pageOf([uncounted, page.data[1]]));
     render(
       <ErrorBoundary fallbackRender={(error) => <p data-testid="refused">{error.message}</p>}>
         <BlocksPage />
@@ -589,7 +601,7 @@ describe('BlocksPage · Blocks v3 board', () => {
         proposalsCount: 0,
       })
     );
-    vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: fifty, hasMore: false });
+    vi.mocked(api.getBlocks).mockResolvedValue(pageOf(fifty, null));
     drawn.ms = 0;
     drawn.ids = [];
     const started = performance.now();
@@ -818,10 +830,9 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     it('lets a long pool name end in the one ellipsis, its title the miner', async () => {
       const long = 'A Mining Pool Whose Name Is Longer Than Its Column';
-      vi.mocked(api.getBlocks).mockResolvedValue({
-        ...page,
-        data: [{ ...page.data[0], minerPool: long }, page.data[1]],
-      });
+      vi.mocked(api.getBlocks).mockResolvedValue(
+        pageOf([{ ...page.data[0], minerPool: long }, page.data[1]])
+      );
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       const pool = within(table).getByRole('link', { name: long });
@@ -872,10 +883,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       const ahead = new Date(Date.now() + 10 * 60_000).toISOString();
       for (const width of [1232, 608]) {
         atContainerWidth(width);
-        vi.mocked(api.getBlocks).mockResolvedValue({
-          ...page,
-          data: [{ ...page.data[0], timestamp: ahead }, page.data[1]],
-        });
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([{ ...page.data[0], timestamp: ahead }, page.data[1]])
+        );
         const { unmount } = render(<BlocksPage />);
         const table = await screen.findByRole('table', { name: 'Latest blocks' });
         const [first] = Array.from(table.querySelectorAll('tbody tr'));
@@ -908,9 +918,8 @@ describe('BlocksPage · Blocks v3 board', () => {
         [608, 133, stone + at(12, 14)],
       ] as const) {
         atContainerWidth(width);
-        vi.mocked(api.getBlocks).mockResolvedValue({
-          ...page,
-          data: [
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([
             row(100_000_000, {
               size: 641,
               overheadSize: 641,
@@ -920,8 +929,8 @@ describe('BlocksPage · Blocks v3 board', () => {
               proposalsCount: 0,
             }),
             page.data[1],
-          ],
-        });
+          ])
+        );
         const { unmount } = render(<BlocksPage />);
         const table = await screen.findByRole('table', { name: 'Latest blocks' });
         const cols = Array.from(table.querySelectorAll('col')).map((c) =>
@@ -1002,7 +1011,7 @@ describe('BlocksPage · Blocks v3 board', () => {
         proposalsCount: 0,
         unclesCount: 0,
       };
-      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: [busy, plain] });
+      vi.mocked(api.getBlocks).mockResolvedValue(pageOf([busy, plain]));
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       const [head, , figures] = phoneLines(cards[0]);
@@ -1054,9 +1063,8 @@ describe('BlocksPage · Blocks v3 board', () => {
     it('keeps the miner and a fee below 10 CKB on one line at 390 and 360 px', async () => {
       atContainerWidth(358);
       const testnetMiner = 'ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgx3ze7p';
-      vi.mocked(api.getBlocks).mockResolvedValue({
-        ...page,
-        data: [
+      vi.mocked(api.getBlocks).mockResolvedValue(
+        pageOf([
           { ...page.data[0], totalFees: '999999999' },
           { ...page.data[1], minerPool: 'Example Pool', totalFees: '1935' },
           {
@@ -1065,8 +1073,8 @@ describe('BlocksPage · Blocks v3 board', () => {
             hash: `0x${'7c'.repeat(32)}`,
             minerAddress: testnetMiner,
           },
-        ],
-      });
+        ])
+      );
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       const [unnamed, pooled, testnet] = cards.map((card) => phoneLines(card)[1]);
@@ -1138,10 +1146,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       async (viewport) => {
         const content = viewport - 32;
         atContainerWidth(content);
-        vi.mocked(api.getBlocks).mockResolvedValue({
-          ...page,
-          data: [{ ...page.data[0], totalFees: '99999999' }],
-        });
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([{ ...page.data[0], totalFees: '99999999' }])
+        );
         render(<BlocksPage />);
         const [card] = await screen.findAllByTestId('block-row-mobile');
         const line = card.querySelector(':scope > [data-line="miner"]') as HTMLElement;
@@ -1169,9 +1176,8 @@ describe('BlocksPage · Blocks v3 board', () => {
       const T = Date.parse('2030-11-14T12:00:02.000Z');
       vi.useFakeTimers({ toFake: ['Date'], now: T });
       try {
-        vi.mocked(api.getBlocks).mockResolvedValue({
-          ...page,
-          data: [
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([
             {
               ...page.data[0],
               number: 99_999_999,
@@ -1181,8 +1187,8 @@ describe('BlocksPage · Blocks v3 board', () => {
               // ten years and 364 days on the UTC+8 calendar: the oldest age a live list writes
               timestamp: '2019-11-15T12:00:01.000Z',
             },
-          ],
-        });
+          ])
+        );
         render(<BlocksPage />);
         const [card] = await screen.findAllByTestId('block-row-mobile');
         const [head] = phoneLines(card);
@@ -1203,10 +1209,9 @@ describe('BlocksPage · Blocks v3 board', () => {
       const T = Date.parse('2026-11-14T12:00:00.000Z');
       vi.useFakeTimers({ toFake: ['Date'], now: T });
       try {
-        vi.mocked(api.getBlocks).mockResolvedValue({
-          ...page,
-          data: [{ ...page.data[0], timestamp: new Date(T - 20_000).toISOString() }],
-        });
+        vi.mocked(api.getBlocks).mockResolvedValue(
+          pageOf([{ ...page.data[0], timestamp: new Date(T - 20_000).toISOString() }])
+        );
         render(<BlocksPage />);
         const [card] = await screen.findAllByTestId('block-row-mobile');
         expect(phoneLines(card)[0].right).toMatch(/ · 20s ago$/);
@@ -1237,7 +1242,7 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     it('writes the transaction count on each phone row’s stone: 1, 7 and 12 transactions', async () => {
       atContainerWidth(358);
-      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+      vi.mocked(api.getBlocks).mockResolvedValue(pageOf(counted));
       render(<BlocksPage />);
       const cards = await screen.findAllByTestId('block-row-mobile');
       expect(cards).toHaveLength(3);
@@ -1290,7 +1295,7 @@ describe('BlocksPage · Blocks v3 board', () => {
 
     it('writes the transaction count on each stone of the 608 px table: 1, 7 and 12 transactions', async () => {
       atContainerWidth(608);
-      vi.mocked(api.getBlocks).mockResolvedValue({ ...page, data: counted });
+      vi.mocked(api.getBlocks).mockResolvedValue(pageOf(counted));
       render(<BlocksPage />);
       const table = await screen.findByRole('table', { name: 'Latest blocks' });
       const rows = Array.from(table.querySelectorAll('tbody tr'));

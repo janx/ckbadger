@@ -6,6 +6,7 @@ import fixture from '@/__tests__/fixtures/scripts/newest-cells.json';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -30,7 +31,7 @@ vi.mock('@/src/navigation', () => ({
 }));
 
 type ScriptName = keyof typeof fixture.scripts;
-const EMPTY = { data: [], total: 0, limit: 12, hasMore: false, nextCursor: null };
+const EMPTY = pagedRead({ data: [], total: 0, limit: 12, hasMore: false, nextCursor: null });
 
 /**
  * The lane's real captures (worktree API on the live store, tip #20,911,460): each script's family

@@ -8,6 +8,7 @@ import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
 import { factsOf } from '@/__tests__/utils/facts';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -60,12 +61,14 @@ describe('DaoPage', () => {
     vi.mocked(api.getDaoEvidence).mockResolvedValue(evidence);
     vi.mocked(api.getDaoTotalDepositChart).mockResolvedValue(history);
     vi.mocked(api.getDaoCirculationRatioChart).mockResolvedValue(ratio);
-    vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: [],
-      hasMore: false,
-      nextCursor: null,
-      limit: 12,
-    });
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(
+      pagedRead({
+        data: [],
+        hasMore: false,
+        nextCursor: null,
+        limit: 12,
+      })
+    );
     vi.mocked(api.getDaoArHistory).mockResolvedValue({
       anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
       days: [
@@ -98,12 +101,14 @@ describe('DaoPage', () => {
         freeCapacity: '989800000000',
       })
     );
-    vi.mocked(api.getTransactions).mockResolvedValue({
-      data: [],
-      hasMore: false,
-      nextCursor: null,
-      limit: 12,
-    });
+    vi.mocked(api.getTransactions).mockResolvedValue(
+      pagedRead({
+        data: [],
+        hasMore: false,
+        nextCursor: null,
+        limit: 12,
+      })
+    );
   });
 
   it('waits for the derived DAO evidence behind the banner, never its error (L1, L0)', async () => {

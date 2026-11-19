@@ -6,7 +6,8 @@
  * hash — `plain` with no type, `sudt` (the UDT parser), a registry slug, `typed` for 0x99…99.
  */
 import type { AddressCell, AddressHoldings, CursorPaginatedResponse } from '@/lib/api';
-export const addressProducerCells = {
+import { pagedRead } from '@/__tests__/utils/paged-read';
+export const addressProducerCells = pagedRead({
   data: [
     {
       capacity: '100000000000',
@@ -334,7 +335,7 @@ export const addressProducerCells = {
   limit: 50,
   nextCursor: null,
   total: 11,
-} satisfies CursorPaginatedResponse<AddressCell>;
+}) satisfies CursorPaginatedResponse<AddressCell>;
 export const addressProducerHoldings = {
   balance: '1100000000000',
   classes: {

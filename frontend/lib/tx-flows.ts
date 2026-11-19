@@ -9,6 +9,7 @@
  * hash.
  */
 import { TAG_DAO, type GlobalActivity, type ItemDelta, type ParticipantInfo } from '@/lib/api';
+import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PARTICIPANT_LIMIT } from '@/lib/participant-order';
 
 export type FlowAsset =
@@ -54,11 +55,11 @@ export interface TxFlow {
 
 const ZERO = BigInt(0);
 
-/** A Nervos DAO step in words, by the activity's action (the API's `dao` protocol actions). */
-const DAO_STEP: Readonly<Record<string, string>> = {
-  deposit: 'Nervos DAO deposit',
-  withdraw_request: 'Nervos DAO withdrawal request',
-  withdraw_complete: 'Nervos DAO withdrawal',
+/** A Nervos DAO step in words, one and several, by the activity's action (`dao` actions). */
+const DAO_STEP: Readonly<Record<string, readonly [string, string]>> = {
+  deposit: ['Nervos DAO deposit', 'Nervos DAO deposits'],
+  withdraw_request: ['Nervos DAO withdrawal request', 'Nervos DAO withdrawal requests'],
+  withdraw_complete: ['Nervos DAO withdrawal', 'Nervos DAO withdrawals'],
 };
 
 /**
@@ -81,33 +82,54 @@ export function daoStepsAttributed(activity: {
 }
 
 /**
- * What a party's Nervos DAO step is, in words, from the activity's own kind (lane P1 follow-up;
- * review chain-b tx-dao-deposit: What moved drew a deposit to its holder as a payment): the
- * transaction's DAO actions, each named once, for a party the activity tags DAO (`TAG_DAO`: its
- * cells hold the step); "a Nervos DAO step" where the activity does not say whose each step is
- * (`daoStepsAttributed`), never a step the party did not take; null for any other party, or where
- * the transaction takes no DAO step. A DAO action this page has no words for fails, by the
- * transaction and the action.
+ * A party's Nervos DAO step: its words, and the step's own amount (the action's capacity, the
+ * figure the lede states) where the activity says it is this party's one step of its kind; null
+ * where it does not (several parties took steps of that kind, or the activity does not say whose
+ * each step is).
  */
-export function daoStepOf(
+export interface DaoStep {
+  words: string;
+  capacity: bigint | null;
+}
+
+/**
+ * What a party's Nervos DAO steps are, from the activity's own kind (lane P1 follow-up; review
+ * chain-b tx-dao-deposit: What moved drew a deposit to its holder as a payment): each kind of the
+ * transaction's DAO actions once, for a party the activity tags DAO (`TAG_DAO`: its cells hold the
+ * step), with the step's own amount where it is the party's one step of the kind (lane P1, the
+ * lead's look after the third round: a self-deposit's end read "0.00001124 CKB · Nervos DAO
+ * deposit", the fee beside the step, as if the deposit were the fee; the step's amount is its
+ * own, apart from what flowed); "a Nervos DAO step" where the activity does not say whose each
+ * step is (`daoStepsAttributed`), never a step the party did not take; null for any other party,
+ * or where the transaction takes no DAO step. A DAO action this page has no words for fails, by
+ * the transaction and the action.
+ */
+export function daoStepsOf(
   activity: {
     txHash: string;
     protocolActions: GlobalActivity['protocolActions'];
     participants: readonly Pick<ParticipantInfo, 'tags'>[];
   },
   party: Pick<ParticipantInfo, 'tags'>
-): string | null {
+): DaoStep[] | null {
   if ((party.tags & TAG_DAO) === 0) return null;
-  const steps = [
-    ...new Set(activity.protocolActions.filter((a) => a.protocol === 'dao').map((a) => a.action)),
-  ];
-  if (steps.length === 0) return null;
-  const words = steps.map((step) => {
-    const said = DAO_STEP[step];
-    if (!said) throw new Error(`${activity.txHash}: a Nervos DAO step "${step}" has no words`);
-    return said;
+  const actions = activity.protocolActions.filter((a) => a.protocol === 'dao');
+  if (actions.length === 0) return null;
+  const kinds = [...new Set(actions.map((a) => a.action))];
+  for (const kind of kinds)
+    if (!DAO_STEP[kind])
+      throw new Error(`${activity.txHash}: a Nervos DAO step "${kind}" has no words`);
+  if (!daoStepsAttributed(activity)) return [{ words: 'a Nervos DAO step', capacity: null }];
+  const alone = activity.participants.filter((p) => (p.tags & TAG_DAO) !== 0).length === 1;
+  return kinds.map((kind) => {
+    const [one, several] = DAO_STEP[kind];
+    const of = actions.filter((a) => a.action === kind);
+    // the party's own steps of this kind are all of them where it is the one party tagged DAO
+    if (!alone) return { words: one, capacity: null };
+    return of.length === 1
+      ? { words: one, capacity: protocolActionMeta(of[0]).capacity }
+      : { words: `${of.length.toLocaleString('en-US')} ${several}`, capacity: null };
   });
-  return daoStepsAttributed(activity) ? words.join(', ') : 'a Nervos DAO step';
 }
 
 function exact(value: string | number, what: string, hash: string): bigint {

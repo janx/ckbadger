@@ -20,6 +20,7 @@ import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { SCREENS } from '@/__tests__/utils/tailwind-box';
 import resolveConfig from 'tailwindcss/resolveConfig';
 import tailwindConfig from '@/tailwind.config';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -93,7 +94,8 @@ const transfer: GlobalActivity = {
   ],
 };
 
-const page = (data: GlobalActivity[]) => ({ data, limit: 50, hasMore: false, nextCursor: null });
+const page = (data: GlobalActivity[]) =>
+  pagedRead({ data, limit: 50, hasMore: false, nextCursor: null });
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
@@ -496,8 +498,11 @@ describe('an older page that continues the last run (B4 fix round)', () => {
   function pages(first: GlobalActivity[], older: GlobalActivity[]) {
     vi.mocked(api.getGlobalActivities).mockImplementation(async (params) =>
       params?.cursor === 'older'
-        ? { data: older, limit: 50, hasMore: false, nextCursor: null }
-        : { data: first, limit: 50, hasMore: true, nextCursor: 'older' }
+        ? pagedRead({ data: older, limit: 50, hasMore: false, nextCursor: null })
+        : // a full page of its rows with more after it (lane cd-fixes-controls, review-p-tests
+          // SHOULD-5: it was the first rows on a page of fifty that said more followed); the
+          // stream's next button says that page's size, so the clicks below find it by its form
+          pagedRead({ data: first, limit: first.length, hasMore: true, nextCursor: 'older' })
     );
   }
   const feedRows = () =>
@@ -514,7 +519,7 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     await screen.findAllByRole('article');
     expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
     const drawn = document.querySelector(`article[data-feed-row="${last.txHash}"]`)!;
-    await user.click(screen.getByRole('button', { name: 'next 50 ↓' }));
+    await user.click(screen.getByRole('button', { name: /^next \d+ ↓$/ }));
     await waitFor(() => expect(feedRows()).toContain(transfer.txHash));
     await waitFor(() =>
       expect(document.querySelector('[data-role="activity-run"]')).toHaveAttribute(
@@ -535,7 +540,7 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     pages(first, [oracle(6, 'q3q7ue', '0x00', 300)]);
     render(<ActivitiesStreamExplorer />);
     const toggle = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
-    await user.click(screen.getByRole('button', { name: 'next 50 ↓' }));
+    await user.click(screen.getByRole('button', { name: /^next \d+ ↓$/ }));
     await waitFor(() => expect(toggle).toHaveTextContent(/^all 3\stransactions ↓$/));
     expect(toggle.isConnected).toBe(true);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
@@ -667,13 +672,15 @@ describe('a token page’s feed folds within the page it shows (B4 item 5)', () 
         plain
         mark="tokens"
         loadActivities={async () => ({ ...page(run), total: 2 })}
-        loadTransactions={async () => ({
-          data: [],
-          total: 0,
-          limit: 50,
-          hasMore: false,
-          nextCursor: null,
-        })}
+        loadTransactions={async () =>
+          pagedRead({
+            data: [],
+            total: 0,
+            limit: 50,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
       />
     );
     const folded = await screen.findByRole('button', { name: /^all 2\stransactions ↓$/ });
@@ -724,13 +731,15 @@ describe('a run is set back as its rows are (R4)', () => {
         scope="This identity's whole life"
         item={{ kind: 'identity', protocolName: '.cell' }}
         loadActivities={async () => ({ ...page(rows), total: 3 })}
-        loadTransactions={async () => ({
-          data: [],
-          total: 0,
-          limit: 50,
-          hasMore: false,
-          nextCursor: null,
-        })}
+        loadTransactions={async () =>
+          pagedRead({
+            data: [],
+            total: 0,
+            limit: 50,
+            hasMore: false,
+            nextCursor: null,
+          })
+        }
       />
     );
     await waitFor(() =>

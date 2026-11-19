@@ -435,8 +435,19 @@ export default function ScriptDetailPage({
   // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
   const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
-  // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const cellsPagination = useCursorPagination(cellsPageSize);
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): the version
+  // (what the cells' query key holds of the list: a code-hash page's version and its kind, a
+  // family page's name)
+  const cellsPagination = useCursorPagination(cellsPageSize, {
+    list: isCodeHashMode
+      ? [
+          selectedVersion?.codeHash,
+          selectedVersion?.scriptKind === 'lock' || selectedVersion?.scriptKind === 'type'
+            ? selectedVersion.scriptKind
+            : undefined,
+        ]
+      : [name],
+  });
   const capacityRangeParams = getCapacityRangeParams(capacityRange);
   const namedScriptDetailRead = useQuery({
     queryKey: ['script-family-detail', name],
@@ -1279,7 +1290,6 @@ export default function ScriptDetailPage({
         scriptKind: versionRow.scriptKind,
       });
       setSelectedDeploymentOutpoint(null);
-      cellsPagination.reset();
     }
   };
   const isSelected = (versionRow: (typeof versionRows)[number]) =>

@@ -16,6 +16,7 @@ import ScriptsPage from '@/app/scripts/page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
 import { api, type KnownScript } from '@/lib/api';
 import { fullText } from '@/__tests__/utils/full-text';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getScripts: vi.fn() },
@@ -104,14 +105,14 @@ const godwoken = family({
   codeClasses: [],
 });
 
-const response = {
+const response = pagedRead({
   data: [joyid, defaultLock, godwoken],
   total: 3,
   limit: 50,
   hasMore: false,
   nextCursor: null,
   roleCounts: { all: 3, locks: 3, types: 0, both: 0, neither: 0 },
-};
+});
 
 describe('Scripts list against the Scripts board', () => {
   beforeEach(() => {

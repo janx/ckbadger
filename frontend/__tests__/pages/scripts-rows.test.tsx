@@ -4,6 +4,7 @@ import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, type KnownScript } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: { getScripts: vi.fn() },
@@ -136,14 +137,16 @@ const empty = family({
 });
 
 const rows = [defaultLock, joyid, bitLock, pwLock, empty];
-const response = {
+// a full page of the five rows with more after it (lane cd-fixes-controls, SHOULD-5: it was five
+// rows on a page of fifty that said more followed)
+const response = pagedRead({
   data: rows,
   total: 70,
-  limit: 50,
+  limit: 5,
   hasMore: true,
   nextCursor: 'c',
   roleCounts: { all: 70, locks: 41, types: 34, both: 5, neither: 0 },
-};
+});
 
 const table = () => screen.findByRole('table', { name: 'Scripts' });
 const rowOf = (t: HTMLElement, name: string) =>

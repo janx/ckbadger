@@ -5,6 +5,7 @@ import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, KnownScript } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -16,7 +17,7 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const mockScriptsResponse = {
+const mockScriptsResponse = pagedRead({
   data: [
     {
       codeHash: '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8',
@@ -73,7 +74,7 @@ const mockScriptsResponse = {
   limit: 50,
   hasMore: false,
   nextCursor: null,
-};
+});
 
 describe('ScriptsPage', () => {
   beforeEach(() => {
@@ -219,36 +220,38 @@ describe('ScriptsPage', () => {
     // U-09 (re-pinned): the table's reference at the row size
     const unknownScriptRefDisplay = 'type · 0x010445a3…000001';
     const unknownScriptRefFull = `type ref:${unknownCodeHash}`;
-    vi.mocked(api.getScripts).mockResolvedValue({
-      data: [
-        {
-          codeHash: unknownCodeHash,
-          name: 'Unknown',
-          description: null,
-          scriptKind: 'type',
-          rfc: null,
-          website: null,
-          sourceUrl: null,
-          decoderType: null,
-          network: 'mainnet',
-          hashType: 'type',
-          dataHash: null,
-          typeHash: null,
-          tag: null,
-          deprecated: false,
-          isSystem: false,
-          codeCellTxHash: null,
-          codeCellOutputIndex: null,
-          ownedCapacitySum: '2000000000',
-          ownedKnowledgeSum: '1000000000',
-          firstDeployedAt: null,
-        } satisfies KnownScript,
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
-    });
+    vi.mocked(api.getScripts).mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            codeHash: unknownCodeHash,
+            name: 'Unknown',
+            description: null,
+            scriptKind: 'type',
+            rfc: null,
+            website: null,
+            sourceUrl: null,
+            decoderType: null,
+            network: 'mainnet',
+            hashType: 'type',
+            dataHash: null,
+            typeHash: null,
+            tag: null,
+            deprecated: false,
+            isSystem: false,
+            codeCellTxHash: null,
+            codeCellOutputIndex: null,
+            ownedCapacitySum: '2000000000',
+            ownedKnowledgeSum: '1000000000',
+            firstDeployedAt: null,
+          } satisfies KnownScript,
+        ],
+        total: 1,
+        limit: 50,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
 
     render(<ScriptsPage />);
 
@@ -370,20 +373,22 @@ describe('the scripts list’s pages (what the controls ask for)', () => {
     codeHash: `0x${n.toString(16).padStart(64, '0')}`,
     name: `Script ${n}`,
   });
-  const firstPage = () => ({
-    data: Array.from({ length: 50 }, (_, i) => script(i + 1)),
-    total: 51,
-    limit: 50,
-    hasMore: true,
-    nextCursor: 'n2',
-  });
-  const lastPage = () => ({
-    data: [script(51)],
-    total: 51,
-    limit: 50,
-    hasMore: false,
-    nextCursor: null,
-  });
+  const firstPage = () =>
+    pagedRead({
+      data: Array.from({ length: 50 }, (_, i) => script(i + 1)),
+      total: 51,
+      limit: 50,
+      hasMore: true,
+      nextCursor: 'n2',
+    });
+  const lastPage = () =>
+    pagedRead({
+      data: [script(51)],
+      total: 51,
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
   const lastList = () =>
     vi
       .mocked(api.getScripts)

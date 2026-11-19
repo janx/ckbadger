@@ -15,6 +15,7 @@ import { AssetHistory } from '@/components/asset/asset-history';
 import { api, type GlobalActivity } from '@/lib/api';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -122,34 +123,48 @@ describe('a refused lock fails its part, in its place', () => {
 
   it('the token holders: the section says it cannot read its holders, the page stands', async () => {
     atContainerWidth(1248);
-    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: SPELLS_ANOTHER,
-          balance: '100',
-          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: 'Default Lock',
-        },
-      ],
-      // re-pinned on purpose (lane p-assets): more holders than the top ten show, so the short
-      // list's "all 11 holders ↓" is drawn (the way to all is drawn only where there are more;
-      // it was one holder of one, and the heading row's button always stood)
-      total: 11,
-      limit: 10,
-      hasMore: true,
-      nextCursor: 'more',
-      totalSupply: '100',
-      anchor: null,
+    // Re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-5): the pages agree with
+    // themselves and with the distribution (pagedRead). 11 holders of a supply of 100: the top ten
+    // are the refused lock with 20 and nine holders with 8 each, the eleventh holds 8; the
+    // distribution says the same (largest 20, the next nine 72, the rest 8). It was one row on a
+    // page of ten that said more followed, beside a distribution whose largest held the whole
+    // supply while ten holders held nothing. More holders than the top ten show, so the short
+    // list's "all 11 holders ↓" is drawn (lane p-assets).
+    const holder = (n: number, balance = '8') => ({
+      lockScriptHash: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
+      address: seededAddress(`good${n}`),
+      balance,
+      lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+      lockKind: 'Default Lock',
     });
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: SPELLS_ANOTHER,
+            balance: '20',
+            lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+            lockKind: 'Default Lock',
+          },
+          ...Array.from({ length: 9 }, (_, i) => holder(i + 2)),
+        ],
+        total: 11,
+        limit: 10,
+        hasMore: true,
+        nextCursor: 'more',
+        totalSupply: '100',
+        anchor: null,
+      })
+    );
     // the distribution is read as the API gives it (lane cd-fixes-controls, SHOULD-3): it was
     // rejected, which the scenario never needed and which drew an alert of its own
     vi.spyOn(api, 'getTokenDistribution').mockResolvedValue({
       holdersCount: 11,
       totalSupply: '100',
-      largestHolderBalance: '100',
-      nextNineBalance: '0',
-      remainingBalance: '0',
+      largestHolderBalance: '20',
+      nextNineBalance: '72',
+      remainingBalance: '8',
       unit: 'token',
       decimals: 0,
       // one bucket holds every holder and the whole supply: the buckets equal the totals
@@ -169,23 +184,20 @@ describe('a refused lock fails its part, in its place', () => {
     expect(screen.getByRole('heading', { name: 'The token page' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^Who holds it/ })).toBeInTheDocument();
     // another view of the holders draws again: the part starts again when its data changes
-    vi.mocked(api.getTokenHolders).mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'22'.repeat(32)}`,
-          address: seededAddress('good22'),
-          balance: '100',
-          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: 'Default Lock',
-        },
-      ],
-      total: 1,
-      limit: 10,
-      hasMore: false,
-      nextCursor: null,
-      totalSupply: '100',
-      anchor: null,
-    });
+    // read at a later tip: the holder whose lock was refused has left, its 20 to the second
+    // holder; all ten on one page of twenty (re-pinned on purpose, SHOULD-5: it was one holder of
+    // one on a page of ten)
+    vi.mocked(api.getTokenHolders).mockResolvedValue(
+      pagedRead({
+        data: [holder(2, '28'), ...Array.from({ length: 9 }, (_, i) => holder(i + 3))],
+        total: 10,
+        limit: 20,
+        hasMore: false,
+        nextCursor: null,
+        totalSupply: '100',
+        anchor: null,
+      })
+    );
     // re-pinned on purpose (lane p-assets): the short list's form, "all N holders ↓"
     fireEvent.click(screen.getByRole('button', { name: /^all .*holders ↓$/ }));
     expect(await screen.findByRole('table', { name: 'All holders' })).toBeInTheDocument();
@@ -201,21 +213,23 @@ describe('a refused lock fails its part, in its place', () => {
 
   it('the collection holders: the section says it cannot read its holders', async () => {
     atContainerWidth(1248);
-    const load = vi.fn().mockResolvedValue({
-      data: [
-        {
-          lockScriptHash: `0x${'11'.repeat(32)}`,
-          address: SPELLS_ANOTHER,
-          itemCount: 2,
-          lockCodeHash: DEFAULT_LOCK_CODE_HASH,
-          lockKind: 'Default Lock',
-        },
-      ],
-      limit: 10,
-      total: 1,
-      hasMore: false,
-      nextCursor: null,
-    });
+    const load = vi.fn().mockResolvedValue(
+      pagedRead({
+        data: [
+          {
+            lockScriptHash: `0x${'11'.repeat(32)}`,
+            address: SPELLS_ANOTHER,
+            itemCount: 2,
+            lockCodeHash: DEFAULT_LOCK_CODE_HASH,
+            lockKind: 'Default Lock',
+          },
+        ],
+        limit: 10,
+        total: 1,
+        hasMore: false,
+        nextCursor: null,
+      })
+    );
     render(
       <main>
         <h1>The collection page</h1>

@@ -445,25 +445,26 @@ const SCRIPTS_TITLE = ['Scripts'] as const;
 export default function ScriptsPage() {
   useDocumentTitle(SCRIPTS_TITLE);
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
-  // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const pagination = useCursorPagination(pageSize);
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>();
   // The search filters as typed (debounced), no button: the inventory's field's one behaviour (the
   // placement lane's note: this list was the only one with a Search button and a "×")
-  const { reset: resetPage } = pagination;
   useEffect(() => {
     const next = searchInput.trim() || undefined;
     if (next === search) return;
     const timer = setTimeout(() => {
       setSearch(next);
-      resetPage();
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchInput, search, resetPage]);
+  }, [searchInput, search]);
   const [role, setRole] = useState<'lock' | 'type' | undefined>();
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): its search,
+  // role and sort
+  const pagination = useCursorPagination(pageSize, {
+    list: [search, role, sortKey, sortDirection],
+  });
   // The table's page (declared first: its request goes first).
   // The page a response was asked as travels with it: the table keeps the page it shows while the
   // next one loads (keepPreviousData), and the pager writes that page's figures, not the next's.
@@ -497,7 +498,6 @@ export default function ScriptsPage() {
   function sortBy(next: SortKey, direction: SortDirection) {
     setSortKey(next);
     setSortDirection(direction);
-    pagination.reset();
   }
 
   const rows = data?.data ?? [];
@@ -664,7 +664,6 @@ export default function ScriptsPage() {
                 value={role ?? 'all'}
                 onChange={(next: Role) => {
                   setRole(next === 'all' ? undefined : next);
-                  pagination.reset();
                 }}
               >
                 <div className="text-text-dim text-small mb-3 mt-[18px] flex flex-wrap items-center gap-2">

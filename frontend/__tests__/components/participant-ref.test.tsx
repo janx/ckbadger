@@ -15,9 +15,15 @@ describe('ParticipantRefView', () => {
   const address =
     'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqt4z78ng4yutl5u6xsv27lt52eh9jvvtd9wj5clj';
 
+  // re-pinned on purpose (lane cd-fixes-controls, review-p-tests SHOULD-4): the full form is an
+  // Address, which states its look
   it('renders a linked address when the party resolved', () => {
     render(
-      <ParticipantRefView size="row" participant={makeRef({ address, lockHash: '0xabcd' })} />
+      <ParticipantRefView
+        size="row"
+        look="inline"
+        participant={makeRef({ address, lockHash: '0xabcd' })}
+      />
     );
     const link = screen.getByRole('link');
     expect(link).toHaveAttribute('href', `/mainnet/address/${address}`);

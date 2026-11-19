@@ -102,9 +102,6 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     pathname = usePathname(),
     params = useSearchParams();
   const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
-  // a change of page size at md starts the walk again (lane c2-finish, 1d)
-  const pagination = useCursorPagination(pageSize);
-  const resetPage = pagination.reset;
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string>();
   // F2 objects (IV-07): the board's search box filters as you type (debounced), no button.
@@ -113,10 +110,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     if (next === search) return;
     const timer = setTimeout(() => {
       setSearch(next);
-      resetPage();
     }, 250);
     return () => clearTimeout(timer);
-  }, [searchInput, search, resetPage]);
+  }, [searchInput, search]);
   const [standard, setStandard] = useState<string | undefined>(
     params.get('standard')?.trim().toLowerCase() || undefined
   );
@@ -125,6 +121,11 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
   );
   const [sortKey, setSortKey] = useState<AssetSortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  // a change of page size at md starts the walk again (lane c2-finish, 1d), and so does a change of the list it pages (lane cd-fixes-controls): its class,
+  // search, standard, tier and sort
+  const pagination = useCursorPagination(pageSize, {
+    list: [assetType, search, standard, compositionTier, sortKey, sortDirection],
+  });
   const summary = useQuery({
     queryKey: ['inventory-summary'],
     queryFn: api.getInventorySummary,
@@ -165,7 +166,6 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     const next = value || undefined;
     if (key === 'standard') setStandard(next);
     else setCompositionTier(next);
-    pagination.reset();
     const query = new URLSearchParams(params.toString());
     if (next) query.set(key, next);
     else query.delete(key);
@@ -228,23 +228,12 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               data-testid="inventory-controls"
               className="text-text-dim text-meta sm:text-small flex flex-wrap items-center gap-x-1.5 gap-y-1 sm:gap-x-2"
             >
-              <Select
-                label="sorted by"
-                value={sortKey}
-                options={SORTS}
-                onChange={(next) => {
-                  setSortKey(next);
-                  pagination.reset();
-                }}
-              />
+              <Select label="sorted by" value={sortKey} options={SORTS} onChange={setSortKey} />
               <button
                 type="button"
                 aria-label="Reverse sort direction"
                 className="text-text hover:text-text-bright whitespace-nowrap"
-                onClick={() => {
-                  setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc');
-                  pagination.reset();
-                }}
+                onClick={() => setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc')}
               >
                 {sortDirection === 'desc' ? '↓' : '↑'}
                 <span className="hidden sm:inline">
