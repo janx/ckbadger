@@ -8,6 +8,7 @@ import liveFixture from '@/__tests__/fixtures/d5/cell-live.json';
 import spentFixture from '@/__tests__/fixtures/d5/cell-spent.json';
 import { expectPrompt } from '@/__tests__/utils/prompt-heading';
 import { canvasLines, seamLines, seamOverlay } from '@/__tests__/utils/tx-lines';
+import { scriptHash } from '@/__tests__/utils/ckb-hash';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
@@ -117,6 +118,74 @@ function tx(hash: string, cellbase = false): TransactionDetail {
     ],
     witnessDetails: cellbase ? [] : [{ index: 0, size: 42, kind: 'opaque', fields: [] }],
   } as unknown as TransactionDetail;
+}
+/** The executed and the attached lock groups of one script hash, beside the Type ID group. */
+function attachedGroups(detail: TransactionDetail): TransactionDetail {
+  const hash = `0x${'33'.repeat(32)}`;
+  return {
+    ...detail,
+    scriptGroups: [
+      {
+        scriptHash: hash,
+        kind: 'lock',
+        ran: true,
+        inputIndices: [0],
+        outputIndices: [],
+        witnessIndex: 0,
+        script: lock,
+        cycles: '123',
+      },
+      {
+        scriptHash: hash,
+        kind: 'lock',
+        ran: false,
+        inputIndices: [],
+        // every output's lock is in a group: output 1's too
+        outputIndices: [0, 1],
+        witnessIndex: null,
+        script: lock,
+        cycles: null,
+      },
+      // the Type ID group of input 0 and output 0, as before
+      ...detail.scriptGroups!.filter((group) => group.kind === 'type'),
+    ],
+  } as unknown as TransactionDetail;
+}
+/**
+ * Where a fixture transaction disagrees with itself (lane B4 third round, the coordinator's item
+ * 8): a group whose hash is not its script's, or a cell whose lock (or type) is not the script of
+ * the group that lists it.
+ */
+function disagreements(detail: TransactionDetail): string[] {
+  type Script = { codeHash: string; hashType: string; args: string };
+  const groups = detail.scriptGroups! as unknown as {
+    kind: 'lock' | 'type';
+    scriptHash: string;
+    script: Script;
+    inputIndices: number[];
+    outputIndices: number[];
+  }[];
+  const out: string[] = [];
+  for (const g of groups)
+    if (g.scriptHash !== scriptHash(g.script))
+      out.push(`${g.kind} group ${g.scriptHash} is the hash of no script it holds`);
+  const sides = [
+    ['input', detail.inputs ?? [], (g: (typeof groups)[number]) => g.inputIndices],
+    ['output', detail.outputs ?? [], (g: (typeof groups)[number]) => g.outputIndices],
+  ] as const;
+  for (const [side, cells, indices] of sides)
+    (cells as unknown as { lock: Script; type?: Script | null }[]).forEach((cell, i) => {
+      for (const kind of ['lock', 'type'] as const) {
+        const script = cell[kind];
+        if (!script) continue;
+        const listing = groups.filter((g) => g.kind === kind && indices(g).includes(i));
+        if (listing.length === 0) out.push(`${side} ${i}'s ${kind} is in no group`);
+        for (const g of listing)
+          if (JSON.stringify(g.script) !== JSON.stringify(script))
+            out.push(`${side} ${i}'s ${kind} is not the script of its group ${g.scriptHash}`);
+      }
+    });
+  return out;
 }
 function view(cell: Cell) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -247,38 +316,21 @@ describe('CellTransactions', () => {
     expect(screen.queryByText(/\(dep_group\)/)).toBeNull();
   });
 
+  // B4 third round (the coordinator's item 8): the fixture agrees with itself, as the API's
+  // transactions do: each group's hash is its script's, and each cell's lock and type are the
+  // scripts of the groups that list it; the cells' own fixtures carry their lock's hash
+  it('its fixtures agree with themselves', () => {
+    const hash = `0x${'ee'.repeat(32)}`;
+    expect(disagreements(tx(hash))).toEqual([]);
+    expect(disagreements(tx(hash, true))).toEqual([]);
+    expect(disagreements(attachedGroups(tx(hash)))).toEqual([]);
+    for (const cell of [liveFixture, spentFixture])
+      expect(cell.lockScriptHash).toBe(scriptHash(cell.lock));
+  });
+
   it('keeps executed and attached lock groups with the same script hash distinct', async () => {
     const hash = `0x${'77'.repeat(32)}`;
-    getTransactionDetail.mockImplementation(async () => {
-      const detail = tx(hash);
-      const scriptHash = `0x${'33'.repeat(32)}`;
-      detail.scriptGroups = [
-        {
-          scriptHash,
-          kind: 'lock',
-          ran: true,
-          inputIndices: [0],
-          outputIndices: [],
-          witnessIndex: 0,
-          script: lock,
-          cycles: '123',
-        },
-        {
-          scriptHash,
-          kind: 'lock',
-          ran: false,
-          inputIndices: [],
-          // every output's lock is in a group: output 1's too
-          outputIndices: [0, 1],
-          witnessIndex: null,
-          script: lock,
-          cycles: null,
-        },
-        // the Type ID group of input 0 and output 0, as before
-        ...detail.scriptGroups!.filter((group) => group.kind === 'type'),
-      ];
-      return detail;
-    });
+    getTransactionDetail.mockImplementation(async () => attachedGroups(tx(hash)));
     view(liveFixture as unknown as Cell);
     const structure = await screen.findByTestId('structure');
     const groups = structure.querySelectorAll<HTMLElement>('[data-group-id]');
