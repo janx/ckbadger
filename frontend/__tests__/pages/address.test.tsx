@@ -1573,7 +1573,7 @@ describe('Address board · F2 blocks', () => {
   it('writes the class headers as the board: "9 kinds in 15 cells", "14 in 7 collections"', async () => {
     render(<AddressDetailPage />);
     expect(await section(/Tokens$/)).toHaveTextContent(/9 kinds in 15 cells · 21,507 CKB held/);
-    expect(await section(/Objects$/)).toHaveTextContent(/14 in 7 collections · 4,093\.0+ CKB held/);
+    expect(await section(/Objects$/)).toHaveTextContent(/14 in 7 collections · 4,093 CKB held/);
   });
 });
 
