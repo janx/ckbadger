@@ -457,11 +457,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 2, ink: 2 },
     reason: '2 without a look; inks by hand (text-text, hover:text-text-bright, hover:underline)',
   },
-  'components/deep-fork-alert.tsx': {
-    lane: 'p-topics',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (style, color)',
-  },
+  // 'components/deep-fork-alert.tsx' left the list (lane P4: look 1, ink 1 → 0, the button the
+  // block look, its words' ink on a span inside it)
   'components/fiber/fiber-channel-board.tsx': {
     lane: 'p-topics',
     sites: { look: 5, ink: 5 },
@@ -510,8 +507,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // follow-up: the asset feed's phone row, its key and its block link, 3: two looks, one ink) → 551
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
 // and one ink) → 533 (lane P4: the fork page's 17, MinerLink's look 1) → 525 (lane P4: the forks
-// page's 8)
-const TOLERATED_TOTAL = 525;
+// page's 8) → 523 (lane P4: the deep-fork alert's 2)
+const TOLERATED_TOTAL = 523;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
