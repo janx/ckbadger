@@ -175,7 +175,10 @@ describe('identity facts rail (ID-C6)', () => {
     expect(fact('Manager')).toHaveTextContent(item.manager.hashPrefix);
     expect(fact('Expires')).toHaveTextContent('grace to');
     expect(fact('Records')).toHaveTextContent('0');
-    expect(fact('Sub-names · for sale')).toHaveTextContent('none · no');
+    // re-pinned on purpose (lane P2's follow-up, a standing cause): the sub-names and the sale are
+    // two facts (one metric said "none · no"), and a name not for sale draws no sale metric
+    expect(fact('Sub-names')).toHaveTextContent('none');
+    expect(screen.queryByText('For sale')).toBeNull();
   });
 
   // Readability review 2026-11-18 (lane A): on verification.cell at 1280 "CKB held in its cell"
@@ -198,6 +201,28 @@ describe('identity facts rail (ID-C6)', () => {
     const value = fact('CKB held in its cell')!.querySelector('dd [data-ckb-amount]')!;
     expect(value).toHaveClass('whitespace-nowrap');
     expect(value).not.toHaveClass('flex-wrap');
+  });
+});
+
+// Lane P2's follow-up (a standing cause, empty identity metrics): a metric with nothing to say is
+// not drawn. A .bit version that stores no expiry drew "Expires · not recorded"; the page's
+// sentence says it once ("Version N of its cell records no expiry.").
+describe('identity facts draw no metric with nothing to say', () => {
+  it('draws no expiry for a version that stores none', () => {
+    const protocol = valar();
+    for (const v of protocol.versions) v.decoded.expiredAt = null;
+    render(
+      <Facts
+        protocol={protocol}
+        term={identityTerm(protocol)}
+        now={NOW}
+        isLive
+        createdAtBlock={12260151}
+      />
+    );
+    expect(factLabels()).not.toContain('Expires');
+    expect(document.body).not.toHaveTextContent('not recorded');
+    expect(factLabels()).toContain('Registered');
   });
 });
 
