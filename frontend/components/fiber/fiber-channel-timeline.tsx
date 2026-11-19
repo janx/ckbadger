@@ -26,8 +26,6 @@ const POINT_STROKE = 1.5;
  * the segment and cross its ends.
  */
 const SEGMENT_Y = LINE_Y - POINT_R - POINT_STROKE / 2 - 1 - descentPx(SVG_TEXT.label);
-/** The wait's words stand under the line, a pixel under a point's circle. */
-const WAIT_Y = LINE_Y + POINT_R + 1 + lineAscentPx(SVG_TEXT.note);
 /** A point's words under the line start 14 px under it, clear of its circle and the wait. */
 const BELOW_TOP = LINE_Y + 14;
 /** A point's name over the line: on the svg's top line (the waiting label's), two lines higher below 700 px. */
@@ -103,7 +101,14 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
       key: 'settle',
       t: ms(required(channel.settlementTimestamp, 'a settlement time', id), 'settlement time'),
       block: required(channel.settlementBlock, 'a settlement block', id),
-      label: 'settled',
+      // Lane P4, the wait's rule: the wait is said here, in the settlement's label at the line's
+      // right end, as a waiting channel says it there ("not settled · wait 1 epoch"). It was its
+      // own word under the dashed segment, which has no room of its own: where the close and the
+      // settlement stand a few pixels apart, or the close near the right end on a phone, it ran
+      // past the svg or met "force-closed". Here it is 23 glyphs at 12.5 px, 172.5 px, ending 6 px
+      // right of the settlement, 40 px in from the svg's right side: from W − 206.5, above the line,
+      // where no other word stands.
+      label: `settled · wait ${delay}`,
       place: 'above-end',
     });
   const waiting = channel.state === 'forceClosed';
@@ -155,27 +160,16 @@ export function FiberChannelTimeline({ channel }: { channel: FiberChannelDetail 
           {channel.state === 'open' ? ' so far' : ''} · payments off chain
         </text>
         {third && (
-          <>
-            <line
-              data-segment="wait"
-              x1={X(second.t)}
-              x2={X(third.t)}
-              y1={LINE_Y}
-              y2={LINE_Y}
-              stroke={FIBER_COLORS.forced}
-              strokeWidth="1.5"
-              strokeDasharray="3 3"
-            />
-            <text
-              x={narrow ? X(second.t) + 10 : (X(second.t) + X(third.t)) / 2}
-              y={WAIT_Y}
-              textAnchor={narrow ? 'start' : 'middle'}
-              fontSize={SVG_TEXT.note}
-              fill={FIBER_COLORS.history}
-            >
-              {delay}
-            </text>
-          </>
+          <line
+            data-segment="wait"
+            x1={X(second.t)}
+            x2={X(third.t)}
+            y1={LINE_Y}
+            y2={LINE_Y}
+            stroke={FIBER_COLORS.forced}
+            strokeWidth="1.5"
+            strokeDasharray="3 3"
+          />
         )}
         {waiting && (
           <>
