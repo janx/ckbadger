@@ -305,7 +305,7 @@ describe('CellDetailPage', () => {
     expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('live evidence');
     expect(screen.getByRole('region', { name: 'Cell facts' })).toHaveTextContent(
-      'Occupied61 B · 39.00000000 CKB free'
+      'Occupied61 B · 39 CKB free'
     );
   });
   it('shows exact spent input, timestamps and chain lifetime', async () => {

@@ -1087,7 +1087,7 @@ export default function TransactionDetailPage() {
     <>
       block reward{' '}
       <CkbAmount
-        form="column"
+        form="exact"
         shannons={exactUnsignedInteger(
           required(tx.outputsCapacity, hash, 'outputsCapacity'),
           `${hash}: outputs capacity`
@@ -1114,22 +1114,17 @@ export default function TransactionDetailPage() {
       });
       return (
         <span data-testid="tx-capacity-equation">
-          <CkbAmount form="column" shannons={eq.inputs} signed={false} tone="plain" /> in
+          <CkbAmount form="exact" shannons={eq.inputs} signed={false} tone="plain" /> in
           {eq.compensation !== null && (
             <>
               {' + '}
-              <CkbAmount
-                form="column"
-                shannons={eq.compensation}
-                signed={false}
-                tone="plain"
-              />{' '}
+              <CkbAmount form="exact" shannons={eq.compensation} signed={false} tone="plain" />{' '}
               compensation
             </>
           )}
           {' = '}
-          <CkbAmount form="column" shannons={eq.outputs} signed={false} tone="plain" /> out +{' '}
-          <CkbAmount form="column" shannons={eq.fee} signed={false} tone="plain" /> fee
+          <CkbAmount form="exact" shannons={eq.outputs} signed={false} tone="plain" /> out +{' '}
+          <CkbAmount form="exact" shannons={eq.fee} signed={false} tone="plain" /> fee
         </span>
       );
     })

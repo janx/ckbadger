@@ -234,7 +234,7 @@ function CellFacts({
           {capacity === occupied ? (
             '0'
           ) : (
-            <CkbAmount form="column" shannons={capacity - occupied} signed={false} tone="plain" />
+            <CkbAmount form="exact" shannons={capacity - occupied} signed={false} tone="plain" />
           )}{' '}
           free
         </span>
@@ -452,7 +452,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
               deposit block <BlockLink look="inline" number={cell.daoInfo.depositBlockNumber} /> ·{' '}
               {cell.daoInfo.compensationState === 'accruing' && 'unclaimed '}compensation{' '}
               <CkbAmount
-                form="column"
+                form="exact"
                 shannons={parseShannons(
                   cell.daoInfo.compensation,
                   `DAO cell ${cell.txHash}:${cell.outputIndex} compensation`

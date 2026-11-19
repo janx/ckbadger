@@ -197,7 +197,7 @@ export default function BlockDetailPage() {
   const epochStart = block.number - epoch.index;
   const amount = (value: string, field: string) => (
     <CkbAmount
-      form="column"
+      form="exact"
       shannons={parseShannons(value, `block ${block.number} ${field}`)}
       signed={false}
       tone="plain"

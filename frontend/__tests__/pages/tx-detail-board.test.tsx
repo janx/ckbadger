@@ -881,7 +881,7 @@ describe('Transaction board, tier 2', () => {
       })
     ).toBeInTheDocument();
     expect(await screen.findByTestId('tx-capacity-equation')).toHaveTextContent(
-      '555.00000000 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
+      '555 CKB in = 554.99935881 CKB out + 0.00064119 CKB fee'
     );
     // B4 item 2 (re-pinned on purpose): the common-knowledge change carries its unit
     // B4 fix round (re-pinned on purpose, tests MUST-2): the pair carries its unit once, after
@@ -942,7 +942,7 @@ describe('Transaction variants (D4)', () => {
     expect(first).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
     await screen.findByTestId('tx-capacity-equation');
     expect(screen.getByTestId('tx-capacity-equation')).toHaveTextContent(
-      '26,050.00000000 CKB in + 175.30634165 CKB compensation = 26,225.30633229 CKB out + 0.00000936 CKB fee'
+      '26,050 CKB in + 175.30634165 CKB compensation = 26,225.30633229 CKB out + 0.00000936 CKB fee'
     );
     expect(screen.getByTestId('tx-balance-net')).toHaveTextContent(
       'Nervos DAO compensation, less the fee'

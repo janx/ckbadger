@@ -334,7 +334,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 {BigInt(a.pendingSummary.capacityDelta) !== BigInt(0) && (
                   <span>
                     <CkbAmount
-                      form="column"
+                      form="summary"
                       shannons={BigInt(a.pendingSummary.capacityDelta)}
                       wrap
                     />{' '}

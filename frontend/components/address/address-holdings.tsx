@@ -523,7 +523,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   const held_ = (kind: AddressCellClass) => (
     <>
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"
@@ -536,7 +536,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     <>
       {unitNode(formatCount(holdings.classes[kind].cellCount, 'cell'))} ·{' '}
       <CkbAmount
-        form="column"
+        form="summary"
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
         tone="plain"

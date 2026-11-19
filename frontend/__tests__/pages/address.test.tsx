@@ -1524,7 +1524,7 @@ describe('Address board · F2 blocks', () => {
   it('writes "1 cell" for a single identity cell (BA-45)', async () => {
     render(<AddressDetailPage />);
     const identities = await section(/Identities$/);
-    expect(identities).toHaveTextContent(/1 cell · 227\.99993047 CKB held/);
+    expect(identities).toHaveTextContent(/1 cell · 227\.99 CKB held/);
   });
 
   // F2 blocks visual pass + R2b-a order=capacity (BA-34).
@@ -1572,9 +1572,7 @@ describe('Address board · F2 blocks', () => {
 
   it('writes the class headers as the board: "9 kinds in 15 cells", "14 in 7 collections"', async () => {
     render(<AddressDetailPage />);
-    expect(await section(/Tokens$/)).toHaveTextContent(
-      /9 kinds in 15 cells · 21,507\.60266154 CKB held/
-    );
+    expect(await section(/Tokens$/)).toHaveTextContent(/9 kinds in 15 cells · 21,507 CKB held/);
     expect(await section(/Objects$/)).toHaveTextContent(/14 in 7 collections · 4,093\.0+ CKB held/);
   });
 });
