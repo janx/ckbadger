@@ -399,23 +399,16 @@ fn list_user_transactions_page(
     limit: usize,
     cursor: Option<(i64, i32)>,
 ) -> anyhow::Result<Vec<(TxListEntry, Option<TxActions>)>> {
-    let rows = store.list_tx_actions_recent(limit, cursor)?;
+    let (rows, entries): (Vec<TxActions>, Vec<_>) = store
+        .list_tx_actions_recent_with_entries(limit, cursor)?
+        .into_iter()
+        .unzip();
     ckbadger_store::ensure_no_cellbase_activity(&rows)?;
-    let positions: Vec<(i64, i32)> = rows
-        .iter()
-        .map(|actions| (actions.block_number, actions.tx_index))
-        .collect();
-    let entries = store.tx_index_entries_at("activities", &positions)?;
-    rows.into_iter()
+    Ok(rows
+        .into_iter()
         .zip(entries)
         .map(|(actions, entry)| {
-            anyhow::ensure!(
-                entry.tx_hash.as_slice() == actions.tx_hash.as_slice(),
-                "activities row at block={}, tx_idx={} names another transaction than tx_index",
-                actions.block_number,
-                actions.tx_index
-            );
-            Ok((
+            (
                 (
                     actions.block_number,
                     actions.block_hash.clone(),
@@ -423,9 +416,9 @@ fn list_user_transactions_page(
                     entry,
                 ),
                 Some(actions),
-            ))
+            )
         })
-        .collect()
+        .collect())
 }
 
 /// Cellbase has no persisted TxActions row: scan the existing canonical index.
