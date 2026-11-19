@@ -905,11 +905,18 @@ export default function TransactionDetailPage() {
     queryFn: () => api.getTransactionLifecycle(hash),
     enabled: !!tx && !isProvisional && !tx.isCellbase,
   });
-  const [graphOpen, setGraphOpen] = useState(searchParams.get('tab') === 'graph');
+  // Each disclosure owns what it shows (lane cd-fixes-controls, the lead's ruling on the sweep):
+  // the Cell graph's state and Raw data's around it, each its own, so folding the graph folds the
+  // graph only. A `?tab=graph` link opens both (a deep link to the graph shows it, so its section
+  // opens). The graph is asked for only while it is open and Raw data is too: nothing asks for what
+  // nothing shows.
+  const graphLinked = searchParams.get('tab') === 'graph';
+  const [graphOpen, setGraphOpen] = useState(graphLinked);
+  const [rawOpen, setRawOpen] = useState(graphLinked);
   const { data: graph, error: graphError } = useQuery({
     queryKey: ['txGraph', hash],
     queryFn: () => api.getTransactionGraph(hash),
-    enabled: !!tx && !isProvisional && graphOpen,
+    enabled: !!tx && !isProvisional && graphOpen && rawOpen,
   });
   const codeHashes = useMemo(
     () =>
@@ -987,6 +994,16 @@ export default function TransactionDetailPage() {
     else next.set('witness', String(index));
     if (group === null) next.delete('wg');
     else next.set('wg', group);
+    router.replace(urlWith(next), { scroll: false });
+  };
+  // The address holds one truth of the graph: `tab=graph` while it is open, written in place as it
+  // opens or folds (a disclosure is no step of the history); it says nothing of Raw data.
+  const toggleGraph = (open: boolean) => {
+    setGraphOpen(open);
+    if ((searchParams.get('tab') === 'graph') === open) return;
+    const next = new URLSearchParams(searchParams.toString());
+    if (open) next.set('tab', 'graph');
+    else next.delete('tab');
     router.replace(urlWith(next), { scroll: false });
   };
   // The fold (lane D3): which sheets are drawn whole, from the URL; opening or folding one is a
@@ -1483,7 +1500,7 @@ export default function TransactionDetailPage() {
           ))}
         </div>
       </SectionDisclosure>
-      <SectionDisclosure form="inner" summary="Cell graph" open={graphOpen} onToggle={setGraphOpen}>
+      <SectionDisclosure form="inner" summary="Cell graph" open={graphOpen} onToggle={toggleGraph}>
         {isProvisional ? (
           <PendingValue />
         ) : graphError ? (
@@ -2026,9 +2043,9 @@ export default function TransactionDetailPage() {
           </div>
         </dl>
 
-        {/* the library's section disclosure, drawn open by the Cell graph's state as before (a
-            `?tab=graph` link opens both); its raw content scrolls sideways itself */}
-        <SectionDisclosure summary="Raw data" open={graphOpen}>
+        {/* the library's section disclosure, its state its own (a `?tab=graph` link opens it with
+            the graph); its raw content scrolls sideways itself */}
+        <SectionDisclosure summary="Raw data" open={rawOpen} onToggle={setRawOpen}>
           <div className="overflow-x-auto">{raw}</div>
         </SectionDisclosure>
       </DetailTier2>
