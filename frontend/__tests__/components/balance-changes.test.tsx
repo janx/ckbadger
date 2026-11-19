@@ -15,6 +15,7 @@ import type { GlobalActivity } from '@/lib/api';
 import { WIDEST_OCCUPIED_CHANGE } from '@/lib/list-bounds';
 import { fontPx, textPx } from '@/lib/type-metrics';
 import { activityRead } from '@/__tests__/utils/activity-read';
+import { inkOf, QUIET, READING } from '@/__tests__/utils/ink-role';
 
 const UNNAMED_LOCK = `0x43b2924e${'00'.repeat(26)}895d`;
 /** A lock the registry names (made up: the fixture names it "Nervape Shadow Lock"). */
@@ -208,6 +209,16 @@ describe('BalanceChanges form by measured width', () => {
     expect(list.lastElementChild).toBe(net);
     expect(net).toHaveTextContent('Net −0.00064119 CKB · occupied +26');
     expect(net).toHaveTextContent('the fee, paid to the miner');
+  });
+
+  // lane P1, the ink and size roles: the net row's figures and its note are values and a
+  // sentence, the reading ink; "Net" names them, quiet (the whole row was quiet)
+  it.each([358, 912])('reads the Net row in the reading ink, its name quiet, at %i px', (width) => {
+    renderAt(width);
+    const net = screen.getByTestId('tx-balance-net');
+    expect(inkOf(net)).toBe(READING);
+    expect(inkOf(within(net).getByText('Net'))).toBe(QUIET);
+    expect(inkOf(within(net).getByText(/the fee, paid to the miner/))).toBe(READING);
   });
 
   it.each([358, 608, 912])(

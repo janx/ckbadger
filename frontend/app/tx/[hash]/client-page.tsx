@@ -118,7 +118,7 @@ import { unitNode, unitText } from '@/components/ui/units';
 import { cellLockFacts, lockWords, lockWordsText } from '@/components/ui/lock-kind';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
-  loading: () => <p className="text-text-dim text-small">Loading graph section…</p>,
+  loading: () => <p className="text-text text-small">Loading graph section…</p>,
 });
 const POLL_MS = 3000;
 function provisional(tx: TransactionDetail | undefined): boolean {
@@ -172,7 +172,7 @@ function cellsValue(open: Record<'consumed' | 'created', boolean>): string | nul
         : null;
 }
 function PendingValue() {
-  return <span className="text-text-dim">pending…</span>;
+  return <span className="text-text">pending…</span>;
 }
 /** Total DAO compensation the transaction's completed withdrawals pay, from their metadata. */
 function daoCompensation(activity: GlobalActivity): bigint | null {
@@ -1031,10 +1031,7 @@ export default function TransactionDetailPage() {
         identity={hash}
         status={<span className="text-text-dim text-small">Pending</span>}
       >
-        <div
-          data-testid="tx-inputs-not-yet-resolvable"
-          className="text-text-dim text-small space-y-3"
-        >
+        <div data-testid="tx-inputs-not-yet-resolvable" className="text-text text-small space-y-3">
           <p className="max-w-measure">
             waiting for the node… the inputs of this unconfirmed transaction cannot be resolved yet.
             Retrying automatically.
@@ -1308,9 +1305,9 @@ export default function TransactionDetailPage() {
     </>
   ) : compensation === undefined ? (
     activityError ? (
-      <span className="text-text-dim">unreadable without the transaction&rsquo;s activity</span>
+      <span className="text-text">unreadable without the transaction&rsquo;s activity</span>
     ) : (
-      <span className="text-text-dim">Reading…</span>
+      <span className="text-text">Reading…</span>
     )
   ) : (
     readable(hash, () => {
@@ -1524,7 +1521,7 @@ export default function TransactionDetailPage() {
             }}
           />
         ) : (
-          <p className="text-text-dim py-4">Loading graph…</p>
+          <p className="text-text py-4">Loading graph…</p>
         )}
       </SectionDisclosure>
       <SectionDisclosure form="inner" summary="JSON">
@@ -1704,7 +1701,7 @@ export default function TransactionDetailPage() {
             />
             <div data-testid="tx-witness-tab">
               {!tx.witnessesAvailable ? (
-                <p className="text-text-dim py-3">Witness bytes are unavailable</p>
+                <p className="text-text py-3">Witness bytes are unavailable</p>
               ) : (
                 <>
                   <div id={witnessListId}>
@@ -1805,7 +1802,7 @@ export default function TransactionDetailPage() {
                   {depsError.message}
                 </p>
               ) : deps && deps.length === 0 ? (
-                <p className="text-text-dim py-3">none</p>
+                <p className="text-text py-3">none</p>
               ) : deps ? (
                 deps.map((dep, i) => (
                   <DepRow
@@ -1818,7 +1815,7 @@ export default function TransactionDetailPage() {
                   />
                 ))
               ) : (
-                <p className="text-text-dim py-3">Resolving cell deps…</p>
+                <p className="text-text py-3">Resolving cell deps…</p>
               )}
             </div>
             {headerDeps.length > 0 && (
@@ -1833,13 +1830,13 @@ export default function TransactionDetailPage() {
                     className="border-row-rule flex flex-wrap justify-between gap-3 border-b py-2.5"
                   >
                     {h.blockNumber === null ? (
-                      <span className="text-text-dim">block not indexed yet</span>
+                      <span className="text-text">block not indexed yet</span>
                     ) : (
                       <Link look="inline" href={`/blocks/${h.blockNumber}`}>
                         {formatBlockNumber(h.blockNumber)}
                       </Link>
                     )}
-                    <span className="text-text-dim">
+                    <span className="text-text">
                       <ShortId value={h.blockHash} kind="hash" size="row" />
                     </span>
                   </div>
@@ -1883,7 +1880,7 @@ export default function TransactionDetailPage() {
             <dt className="text-text-dim">Proposed, then committed</dt>
             <dd className="flex flex-col gap-1">
               {tx.isCellbase ? (
-                <span className="text-text-dim">
+                <span className="text-text">
                   never proposed: a cellbase is its block&rsquo;s first transaction
                 </span>
               ) : isProvisional ? (
@@ -1912,7 +1909,7 @@ export default function TransactionDetailPage() {
                       </Link>
                     )}
                     {tx.index !== undefined && lifecycle?.commitmentWindow && (
-                      <span className="text-text-dim">
+                      <span className="text-text">
                         {' '}
                         · position {tx.index.toLocaleString('en-US')}
                         {lifecycle.commitmentDistance !== null &&
@@ -1952,12 +1949,12 @@ export default function TransactionDetailPage() {
                 'Not available'
               )}
               {isPaused && (
-                <span className={hasCycles ? 'text-text-dim mt-1 block' : 'text-text-dim'}>
+                <span className={hasCycles ? 'text-text mt-1 block' : 'text-text'}>
                   Paused: indexer is on a deep fork
                 </span>
               )}
               {tx.feeRate !== null && (
-                <span className="text-text-dim mt-1 block">
+                <span className="text-text mt-1 block">
                   fee rate{' '}
                   {exactUnsignedInteger(tx.feeRate, `${hash}: fee rate`).toLocaleString('en-US')}{' '}
                   shannon/KB
@@ -2035,7 +2032,7 @@ export default function TransactionDetailPage() {
               <dd>
                 {/* "occupied" always carries its unit, the pair's once after it (B4) */}
                 occupied {occupiedPairText(occupiedIn!, occupiedOut!, `transaction ${hash}`)}{' '}
-                <span className="text-text-dim">
+                <span className="text-text">
                   · common knowledge {occupiedBytesDelta(knowledgeDelta)}
                 </span>
               </dd>

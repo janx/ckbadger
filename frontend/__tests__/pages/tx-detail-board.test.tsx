@@ -26,6 +26,7 @@ import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
 import { activityRead, ITEM_TYPE } from '@/__tests__/utils/activity-read';
+import { inkOf, READING } from '@/__tests__/utils/ink-role';
 
 const TX_HASH = '0x57a54eb7922190d5b0e0d7f5ad91dbbd91714a9bd852000994f99250ddc08e0f';
 const LOCK_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
@@ -1426,6 +1427,8 @@ describe('Transaction variants (D4)', () => {
     ]);
     expect(comment).not.toHaveTextContent('to the miner');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
+    // lane P1, the ink and size roles: a sentence, the reading ink (it was quiet)
+    expect(inkOf(screen.getByText(/never proposed/))).toBe(READING);
     await waitFor(() =>
       expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
         // U-09 (re-pinned): a witness note in its row, the row size
