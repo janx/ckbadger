@@ -60,9 +60,17 @@ describe('a token history at 358 px', () => {
     expect([...left][0]).toBeLessThanOrEqual(56);
   });
 
+  // Re-pinned on purpose (lane P2's third round, item 7; 7147718c left it red, "Unable to find an
+  // accessible element with the role \"img\" and name `/per week/`"): a series of one week is said
+  // in words and draws no chart, so the ticks are read on a series of two weeks of one transaction
   it('ticks a week of one transaction 0 and 1, never 0.5', () => {
     stubChartWidth(358);
-    render(usdc([{ weekStart: date(7), count: 1 }]));
+    render(
+      usdc([
+        { weekStart: date(7), count: 1 },
+        { weekStart: date(14), count: 1 },
+      ])
+    );
     const weekly = screen.getByRole('img', { name: /per week/ });
     expect(yTickLabels(weekly).map((t) => t.textContent)).toEqual(['0', '1']);
   });
