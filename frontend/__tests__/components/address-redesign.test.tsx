@@ -172,8 +172,11 @@ describe('Address v3 components', () => {
         ['lock', 'JoyID · type · 22-byte args'],
         ['live cells', '40'],
         ['transactions', '1,021'],
-        // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space
-        ['holdings', '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity'],
+        // re-pinned (A4 round 2): each count a unit, number and noun joined by a plain space.
+        // Re-pinned on purpose (lane P1; review of phases C and D, NOTE 12): no "29 holdings", a
+        // sum of unlike counts (DAO cells, token kinds, objects, identities) made in the page; the
+        // strip states each class's count, the API's, the first its value and the rest its notes
+        ['holdings', '5 DAO cells · 9 tokens · 14 objects · 1 identity'],
       ]);
       expect(within(strip).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
         'href',

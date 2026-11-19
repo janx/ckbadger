@@ -184,7 +184,8 @@ describe('Address v3', () => {
       'JoyID · type · 22-byte args',
       '40',
       '1,021',
-      '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
+      // re-pinned on purpose (lane P1; review of phases C and D, NOTE 12): no sum of unlike counts
+      '5 DAO cells · 9 tokens · 14 objects · 1 identity',
     ]);
     expect(within(strip).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
       'href',
