@@ -2327,6 +2327,116 @@ async fn test_hodl_wave_chart_draws_five_bands_merged_from_exact_capacities() {
     assert_eq!(json["series"].as_array().unwrap().len(), 8);
 }
 
+/// A chart page states a percentage as the exact value cut, never rounded (the D1 hand-back,
+/// item 1): a rounded share can show a digit that is not on chain. Two of three CKB unmoved for
+/// three years is 66.666…%: half up 66.67, cut 66.66.
+#[tokio::test]
+async fn test_hodl_wave_chart_cuts_its_shares_never_rounds() {
+    let store = test_store();
+    store
+        .put_hodl_wave(
+            "20240115",
+            &ckbadger_store::types::DailyHodlWave {
+                band_gt_3y: 2,
+                band_24h: 1,
+                holder_count: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/hodl-wave").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let values = &json["data"][0]["values"];
+    assert_eq!(values["gt3y"], "66.66");
+    assert_eq!(values["24h"], "33.33");
+    assert_eq!(values["lt1m"], "33.33");
+    assert_eq!(values["1m6m"], "0.00");
+}
+
+/// The whole a chart page's sentence states is the route's (the D1 hand-back, item 2): knowledge by
+/// kind partitions the day's knowledge size, and the route sends that size beside its parts.
+#[tokio::test]
+async fn test_knowledge_composition_chart_states_its_whole() {
+    let store = test_store();
+    store
+        .put_daily_stats("20240115", &knowledge_size_day(100_000_000_000))
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let state = test_app_state(test_config(store));
+    // No typed scripts: the whole knowledge size is plain transfer cells.
+    state.mem_cache.set(
+        ckbadger_api::warmup::CACHE_KEY_SCRIPTS_ALL,
+        &Vec::<(Vec<u8>, ckbadger_store::ScriptInfo)>::new(),
+        std::time::Duration::from_secs(60),
+    );
+    let app = router_from_state(state);
+    let (status, json) = get_json(&app, "/charts/common-knowledge-composition").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let values = &json["data"][0]["values"];
+    assert_eq!(values["knowledgeSize"], "1000", "{json}");
+    assert_eq!(values["knowledgeSize"], values["transfer"], "{json}");
+}
+
+/// The day's activity kinds can overlap (an action counts in each kind it is), so the page's
+/// sentence divides by the day's kind occurrences, which the route states: the eight kinds the
+/// charts read (not the coinbase, not the unknown fallback).
+#[tokio::test]
+async fn test_daily_activities_state_their_kind_occurrences() {
+    let store = test_store();
+    store
+        .put_daily_activity_stats(
+            "20240115",
+            &ckbadger_store::types::DailyActivityStats {
+                transfer_count: 30,
+                dao_deposit_count: 2,
+                dao_withdraw_request_count: 1,
+                dao_withdraw_complete_count: 1,
+                token_count: 3,
+                object_count: 4,
+                identity_count: 5,
+                script_call_count: 6,
+                coinbase_count: 7,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    seed_tip_block_on_utc8_day(&store, 10, "2024-01-16");
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json[0]["kindOccurrences"], 52, "{json}");
+}
+
+/// Cell size states its wholes (the D1 hand-back, item 2): the page's "of live cells" and "of it"
+/// divide by the live cells and the occupied CKB the route counts from its own snapshot.
+#[tokio::test]
+async fn test_cell_size_chart_states_its_wholes() {
+    let store = test_store();
+    store
+        .put_cell_distribution(
+            "20240115",
+            &ckbadger_store::types::DailyCellDistribution {
+                size_bucket_counts: [10, 20, 30, 40, 50, 60],
+                size_bucket_capacities: [
+                    1_000_000_000,
+                    2_000_000_000,
+                    3_000_000_000,
+                    4_000_000_000,
+                    5_000_000_000,
+                    6_000_000_050,
+                ],
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/cell-size-distribution").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["liveCells"], "210", "{json}");
+    assert_eq!(json["occupiedCapacity"], "210.0000005", "{json}");
+    assert_eq!(json["data"].as_array().unwrap().len(), 6, "{json}");
+}
+
 #[tokio::test]
 async fn test_asset_ecosystem_returns_expected_structure() {
     let store = test_store();
