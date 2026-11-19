@@ -2567,8 +2567,8 @@ fn assert_held_points_follow_the_seed(json: &serde_json::Value, expected: &[(i12
                 .unwrap()
         };
         assert_eq!(int("capacity"), *capacity, "{point}");
-        assert_eq!(int("used"), *used, "{point}");
-        assert_eq!(int("unused"), capacity - used, "{point}");
+        assert_eq!(int("occupiedCapacity"), *used, "{point}");
+        assert_eq!(int("freeCapacity"), capacity - used, "{point}");
     }
 }
 
@@ -2685,7 +2685,7 @@ async fn capacity_charts_exclude_incomplete_day_using_indexed_chain_clock() {
         // its parts (it sent used and unused, and a page summed them)
         assert_eq!(
             json["data"][1]["values"],
-            serde_json::json!({"used":"60","unused":"60","capacity":"120"})
+            serde_json::json!({"occupiedCapacity":"60","freeCapacity":"60","capacity":"120"})
         );
         // the seed's running sums: 100 and 50 CKB on the 25th, 120 and 60 on the 26th
         assert_held_points_follow_the_seed(&json, &[(100, 50), (120, 60)]);

@@ -778,10 +778,10 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "Test NFT Collection Capacity History");
     assert_eq!(json["data"].as_array().unwrap().len(), 3);
-    assert_eq!(json["data"][1]["values"]["used"], "60");
-    assert_eq!(json["data"][1]["values"]["unused"], "40");
-    assert_eq!(json["data"][2]["values"]["used"], "50");
-    assert_eq!(json["data"][2]["values"]["unused"], "30");
+    assert_eq!(json["data"][1]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][1]["values"]["freeCapacity"], "40");
+    assert_eq!(json["data"][2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(json["data"][2]["values"]["freeCapacity"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -796,8 +796,8 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["date"], "2024-01-16");
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "40");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/assets/objects/{}", collection_id_hex))
@@ -856,8 +856,8 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], ".bit Capacity History");
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "40");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri("/api/v1/assets/objects/dotbit")
@@ -1098,8 +1098,8 @@ async fn test_spore_collection_detail_reads_cluster_daily_history() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "90");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "90");
 }
 
 #[tokio::test]
@@ -1386,8 +1386,8 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "did:ckb Capacity History");
-    assert_eq!(json["data"][0]["values"]["used"], "70");
-    assert_eq!(json["data"][0]["values"]["unused"], "50");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "70");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "50");
 }
 
 fn seed_did_live_cell(batch: &mut StoreBatch<'_>, id: &[u8], hash: &[u8], block: i64) {
@@ -5234,8 +5234,14 @@ async fn dotcell_capacity_history_chart_resolves_the_alias() {
         assert_eq!(status, StatusCode::OK, "{alias}: {body}");
         assert_eq!(body["title"], ".cell Capacity History", "{alias}");
         assert_eq!(body["data"][0]["date"], "2024-01-15", "{alias}");
-        assert_eq!(body["data"][0]["values"]["used"], "20000000000", "{alias}");
-        assert_eq!(body["data"][0]["values"]["unused"], "4000000000", "{alias}");
+        assert_eq!(
+            body["data"][0]["values"]["occupiedCapacity"], "20000000000",
+            "{alias}"
+        );
+        assert_eq!(
+            body["data"][0]["values"]["freeCapacity"], "4000000000",
+            "{alias}"
+        );
     }
 }
 
