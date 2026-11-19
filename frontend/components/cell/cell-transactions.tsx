@@ -18,6 +18,7 @@ import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { formatCount } from '@/lib/format-count';
 import { Utc8DateTime } from '@/components/ui/utc8-date';
 import { unitNode } from '@/components/ui/units';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 
 /** Links in a board ink; the global `a:hover` jade still wins over them. */
 const LINK = inkStyle(BOARD_INKS.link);
@@ -111,7 +112,7 @@ export function TransactionEvidence({
   hash,
   label,
   focus,
-  anchor,
+  cell,
   onward,
   afterOnward,
 }: {
@@ -119,8 +120,8 @@ export function TransactionEvidence({
   label: Role;
   /** This cell's tile in the transaction (`out:1`, `in:57`). */
   focus: string;
-  /** This cell's out point, `<tx hash>-<index>`: the transaction page's anchor for it. */
-  anchor: string;
+  /** This cell's out point: the link opens the transaction at it (`transactionAtCellHref`). */
+  cell: { txHash: string; index: number };
   /** Drawn under the onward bridge (the dashed "Not spent yet" box). */
   afterOnward?: ReactNode;
   /** The focused output's txviz bridge label (the cell carries on past this transaction). */
@@ -158,7 +159,7 @@ export function TransactionEvidence({
           </>
         )}
         {' · '}
-        <Link href={`/tx/${hash}#${anchor}`} look="onward">
+        <Link href={transactionAtCellHref(hash, cell)} look="onward">
           open the transaction
         </Link>
       </p>
@@ -334,8 +335,8 @@ export function CellTransactions({
   if (cell.status === 'dead' && (!cell.consumedByTx || cell.consumingInputIndex == null))
     throw new Error(`Consumed cell ${cell.txHash}:${cell.outputIndex} lacks exact spending input`);
   const spent = cell.status === 'dead';
-  // this cell's out point, the transaction pages' anchor for it on either transaction
-  const anchor = `${cell.txHash}-${cell.outputIndex}`;
+  // this cell's out point: either transaction's page is opened at it
+  const outPoint = { txHash: cell.txHash, index: cell.outputIndex };
   return (
     // Rubbing × Song print, phase 5 (D11): the transactions it shows — the one that created it,
     // and the one that spent it once it is spent (its consumedByTx, required above).
@@ -345,7 +346,7 @@ export function CellTransactions({
           hash={cell.txHash}
           label="Created"
           focus={`out:${cell.outputIndex}`}
-          anchor={anchor}
+          cell={outPoint}
           onward={spent ? 'this cell, onward: spent below' : 'this cell, onward: not spent yet'}
           afterOnward={
             spent ? undefined : <NotSpentYet cell={cell} lockName={lockName} typeName={typeName} />
@@ -356,7 +357,7 @@ export function CellTransactions({
             hash={cell.consumedByTx!}
             label="Spent"
             focus={`in:${cell.consumingInputIndex}`}
-            anchor={anchor}
+            cell={outPoint}
           />
         )}
       </div>

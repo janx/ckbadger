@@ -100,7 +100,7 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
         hash={LONG_TX_HASH}
         label="Spent"
         focus="in:57"
-        anchor={`${LONG_TX_PREV}-57`}
+        cell={{ txHash: LONG_TX_PREV, index: 57 }}
       />
     );
     const structure = await screen.findByLabelText(`Transaction ${LONG_TX_HASH} structure`);
