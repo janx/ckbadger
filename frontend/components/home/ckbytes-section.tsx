@@ -501,7 +501,10 @@ interface ChangeView {
   max: bigint;
 }
 
-/** An exact signed change for the caption: whole CKB bright, the 8 decimals dim. */
+/**
+ * An exact signed change for the caption, one value in one ink and one size: its 8 decimals with
+ * its whole (BRIEF-ink-size-roles items 1 and 2, with R5: they were quiet at 12 px).
+ */
 function exactSignedReadout(delta: bigint): ReadoutValue {
   const text = formatSignedCkbExact(delta);
   const dot = text.indexOf('.');
@@ -509,7 +512,7 @@ function exactSignedReadout(delta: bigint): ReadoutValue {
     value: (
       <>
         {text.slice(0, dot)}
-        <span className="text-text-dim text-meta">{text.slice(dot)}</span>
+        {text.slice(dot)}
       </>
     ),
     text: `${text} CKB`,
