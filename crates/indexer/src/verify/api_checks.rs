@@ -5490,6 +5490,157 @@ impl Check for ParticipantSentMatchesInputLocks {
     }
 }
 
+// ── An activity's recognised types vs its cells ───────────────────────────
+
+/// Every sampled activity's `recognizedTypes` (the row's `recognized_type_codes`, C7) is exactly
+/// the set of type script codes the indexer recognises among the type scripts of its
+/// transaction's input and output cells, read from ckbadger's own cells (`/transactions/{hash}`:
+/// each consumed cell's and each output's type script as the stores hold them, no node), the
+/// recognition being the activity builder's own (`is_recognized_type_code`). A code that ran but
+/// is not stated, or a stated code no cell carries, is a finding naming the transaction and the
+/// code. A store synced before the list reads as rows in which no recognised type ran and fails
+/// on every activity whose cells carry one.
+pub struct ActivityRecognizedTypesMatchCells;
+
+/// How many recent activities the check reads (each costs one transaction read).
+const RECOGNIZED_TYPES_ACTIVITY_LIMIT: usize = 50;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecognizedTypeRecord {
+    type_code_hash: String,
+    type_hash_type: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecognizedTypesActivityRecord {
+    tx_hash: String,
+    block_number: i64,
+    recognized_types: Vec<RecognizedTypeRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CellScriptsRecord {
+    lock: Option<InputLockRecord>,
+    #[serde(rename = "type")]
+    type_script: Option<InputLockRecord>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TransactionCellsRecord {
+    inputs: Vec<CellScriptsRecord>,
+    outputs: Vec<CellScriptsRecord>,
+}
+
+/// The findings of one activity: its stated codes against the recognised codes of its cells.
+fn recognized_types_findings(
+    activity: &RecognizedTypesActivityRecord,
+    tx: &TransactionCellsRecord,
+) -> anyhow::Result<Vec<Finding>> {
+    let entity = format!("tx={} (block {})", activity.tx_hash, activity.block_number);
+    let mut details = vec![];
+    let mut carried = std::collections::BTreeSet::new();
+    for (side, cells) in [("input", &tx.inputs), ("output", &tx.outputs)] {
+        for (index, cell) in cells.iter().enumerate() {
+            if cell.lock.is_none() {
+                details.push(format!(
+                    "{side} {index} states no lock: its cell is not in the store"
+                ));
+                continue;
+            }
+            if let Some(script) = &cell.type_script {
+                let code = parse_hex_bytes(&script.code_hash)
+                    .map_err(|e| anyhow::anyhow!("{entity}: {side} {index} type code hash: {e}"))?;
+                if crate::db::writer::activities::is_recognized_type_code(&code) {
+                    carried.insert((
+                        normalize_hex_key(&script.code_hash),
+                        script.hash_type.clone(),
+                    ));
+                }
+            }
+        }
+    }
+    let stated: std::collections::BTreeSet<(String, String)> = activity
+        .recognized_types
+        .iter()
+        .map(|t| {
+            (
+                normalize_hex_key(&t.type_code_hash),
+                t.type_hash_type.clone(),
+            )
+        })
+        .collect();
+    for (code, hash_type) in carried.difference(&stated) {
+        details.push(format!(
+            "recognised type 0x{code} by {hash_type} ran on a cell, but the row does not state it"
+        ));
+    }
+    for (code, hash_type) in stated.difference(&carried) {
+        details.push(format!(
+            "the row states 0x{code} by {hash_type}, which no input or output of the transaction \
+             carries as a recognised type"
+        ));
+    }
+    Ok(if details.is_empty() {
+        vec![]
+    } else {
+        vec![Finding { entity, details }]
+    })
+}
+
+impl Check for ActivityRecognizedTypesMatchCells {
+    fn name(&self) -> &'static str {
+        "activity_recognized_types_match_cells"
+    }
+    fn description(&self) -> &'static str {
+        "Each recent activity states exactly the recognised type codes its cells carry"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    /// The recent-activity sample is sized by `--sample-count`.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(RECOGNIZED_TYPES_ACTIVITY_LIMIT) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let limit = ctx.sample_count.min(RECOGNIZED_TYPES_ACTIVITY_LIMIT);
+        if limit == 0 {
+            anyhow::bail!(
+                "activity_recognized_types_match_cells was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let page: CursorPage<RecognizedTypesActivityRecord> =
+            api_get(ctx, &format!("activities?limit={limit}"))?;
+        if page.data.is_empty() {
+            anyhow::bail!("/activities lists no activity: there is nothing to check the list on");
+        }
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        for activity in &page.data {
+            let tx: TransactionCellsRecord =
+                api_get(ctx, &format!("transactions/{}", activity.tx_hash))?;
+            findings.extend(recognized_types_findings(activity, &tx)?);
+            checked += 1;
+            progress.inc(1);
+        }
+        if findings.is_empty() {
+            Ok(CheckResult::pass(checked))
+        } else {
+            Ok(CheckResult::fail(checked, findings))
+        }
+    }
+}
+
 // ── Token live cell count ──────────────────────────────────────────────────
 
 /// A token's persisted live cell count (`cellsCount`: the running sum of its
@@ -7372,6 +7523,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
         Box::new(ParticipantSentMatchesInputLocks),
+        Box::new(ActivityRecognizedTypesMatchCells),
         Box::new(GlobalActivityBucketIndexConsistency),
         Box::new(DailyActivityKindsPartitionTransactions),
         Box::new(TokenLiveCellsConsistency),
@@ -7582,8 +7734,8 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        // 8 fast + 38 sampling (S40 participant_sent_matches_input_locks the newest).
-        assert_eq!(checks.len(), 46);
+        // 8 fast + 39 sampling (S41 activity_recognized_types_match_cells the newest).
+        assert_eq!(checks.len(), 47);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -7611,6 +7763,7 @@ mod tests {
         assert!(names.contains(&"global_activity_bucket_index_consistency"));
         assert!(names.contains(&"daily_activity_kinds_partition_transactions"));
         assert!(names.contains(&"participant_sent_matches_input_locks"));
+        assert!(names.contains(&"activity_recognized_types_match_cells"));
         assert!(names.contains(&"token_live_cells_consistency"));
         assert!(names.contains(&"collection_daily_activity_consistency"));
         assert!(names.contains(&"address_cellbase_count_consistency"));
@@ -7698,8 +7851,8 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 8);
-        // 38 here; with the entity-history and DAO-cell checks, the 40 of S1-S40.
-        assert_eq!(sampling_count, 38);
+        // 39 here; with the entity-history and DAO-cell checks, the 41 of S1-S41.
+        assert_eq!(sampling_count, 39);
     }
 
     #[test]
@@ -11092,6 +11245,117 @@ mod tests {
                 .any(|d| d.starts_with("type index lists cell 0x0101") && d.contains("5555")),
             "{:?}",
             findings[0].details
+        );
+    }
+
+    // ── activity_recognized_types_match_cells ────────────────────────────
+
+    const C7_DAO_CODE: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e";
+
+    fn c7_script(code_hash: &str, hash_type: &str) -> serde_json::Value {
+        json!({ "codeHash": code_hash, "hashType": hash_type, "args": "0x" })
+    }
+
+    fn c7_lock() -> serde_json::Value {
+        c7_script(
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "type",
+        )
+    }
+
+    /// Serves `/activities` as one activity stating `recognized` and its
+    /// `/transactions/{hash}` with an input of type `input_type` and outputs of
+    /// the types `output_types`.
+    fn run_recognized_types_check(
+        recognized: serde_json::Value,
+        input_type: serde_json::Value,
+        output_types: &[serde_json::Value],
+    ) -> CompletedCheck {
+        let tx = format!("0x{}", "c7".repeat(32));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        let outputs: Vec<_> = output_types
+            .iter()
+            .map(|t| json!({ "lock": c7_lock(), "type": t }))
+            .collect();
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/activities"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "txHash": tx, "blockNumber": 100, "recognizedTypes": recognized }],
+                    "nextCursor": null, "hasMore": false, "limit": 10
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/transactions/{tx}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "inputs": [{ "lock": c7_lock(), "type": input_type }],
+                    "outputs": outputs,
+                })))
+                .mount(&server)
+                .await;
+        });
+        execute_check(
+            registered_check("activity_recognized_types_match_cells").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    /// A DAO deposit's input carries no type, its outputs the DAO's (twice) and an unrecognised
+    /// type: the row states the DAO's code once, and the unrecognised one is no recognised type.
+    #[test]
+    fn recognized_types_check_passes_when_the_row_states_the_cells_recognised_codes() {
+        let completed = run_recognized_types_check(
+            json!([{ "typeCodeHash": C7_DAO_CODE, "typeHashType": "type", "scriptName": null }]),
+            serde_json::Value::Null,
+            &[
+                c7_script(C7_DAO_CODE, "type"),
+                c7_script(C7_DAO_CODE, "type"),
+                c7_script(&format!("0x{}", "3a".repeat(32)), "type"),
+            ],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    /// A store synced before the list reads as a row in which no recognised type ran: the DAO's
+    /// code on the cells, none on the row, is a finding naming the transaction and the code.
+    #[test]
+    fn recognized_types_check_fails_on_a_row_that_states_none_of_its_cells_codes() {
+        let completed = run_recognized_types_check(json!([]), c7_script(C7_DAO_CODE, "type"), &[]);
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(
+            result.findings[0].entity,
+            format!("tx=0x{} (block 100)", "c7".repeat(32))
+        );
+        assert_eq!(
+            result.findings[0].details,
+            vec![format!(
+                "recognised type {C7_DAO_CODE} by type ran on a cell, but the row does not state it"
+            )]
+        );
+    }
+
+    /// A row that states a code no cell of its transaction carries is a finding too.
+    #[test]
+    fn recognized_types_check_fails_on_a_code_no_cell_carries() {
+        let other = format!("0x{}", "4a".repeat(32));
+        let completed = run_recognized_types_check(
+            json!([{ "typeCodeHash": other, "typeHashType": "data1", "scriptName": null }]),
+            serde_json::Value::Null,
+            &[],
+        );
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Fail);
+        assert_eq!(
+            result.findings[0].details,
+            vec![format!(
+                "the row states {other} by data1, which no input or output of the transaction carries as a recognised type"
+            )]
         );
     }
 

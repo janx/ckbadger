@@ -424,6 +424,13 @@ pub(crate) mod test_detectors {
     }
 }
 
+/// Whether the activity builder recognises `code_hash` as an asset's or a protocol's type script:
+/// `TxActions::recognized_type_codes` holds exactly the codes it recognises that ran (C7). The
+/// verify check of that list reads the one classification here.
+pub(crate) fn is_recognized_type_code(code_hash: &[u8]) -> bool {
+    code_hashes().classify(code_hash).is_some()
+}
+
 /// Build `TxActions` for all transactions in a block (no protocol detectors).
 #[cfg(test)]
 pub fn build_tx_actions_for_block_no_detectors(txs: &[TxView<'_>]) -> Result<Vec<TxActions>> {
