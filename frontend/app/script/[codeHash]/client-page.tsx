@@ -8,7 +8,10 @@ import { scriptLookupKey } from '@/lib/script-pair';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
+import { ReadFailure } from '@/components/read-failure';
 import { getScriptDetailHref } from '@/lib/detail-routes';
+import { titleHash, useDocumentTitle } from '@/lib/use-document-title';
+import { retryTransientOnly } from '@/lib/query-client';
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
 /** What `/script/` takes besides a script name, as the not-an-id page says it. */
@@ -46,26 +49,34 @@ function normalizeHashType(value: string | null | undefined): string | null {
 }
 
 /**
- * A code hash alone names no script: the pairs on it that the registry names or the chain has
- * used, each a link to its own page, and no guess among them.
+ * A code hash alone names no script: the code hash, the pairs on it that the registry names or
+ * the chain has used, each a link to its own page, and no guess among them. A read that failed
+ * says so (`ReadFailure`), never a page left reading. Its sentences are the reading ink (R3); a
+ * pair's name is a value, its separator quiet.
  */
 function CodeHashPairs({
   codeHash,
   pairs,
+  error,
 }: {
   codeHash: string;
   pairs: ScriptLookupInfo[] | undefined;
+  error: Error | null;
 }) {
+  useDocumentTitle([titleHash(codeHash), 'script']);
   return (
     <div className="min-h-screen">
       <main className="container mx-auto space-y-3 py-8">
+        <h1 className="text-text-bright text-body break-all">{codeHash}</h1>
         <p className="text-body text-text max-w-measure">
           a code hash alone names no script: a script is its code hash and its hash type.
         </p>
-        {pairs === undefined ? (
-          <p className="text-text-dim text-body">Reading the scripts on this code hash…</p>
+        {error ? (
+          <ReadFailure what="code hash's scripts" error={error} />
+        ) : pairs === undefined ? (
+          <p className="text-text text-body">Reading the scripts on this code hash…</p>
         ) : pairs.length === 0 ? (
-          <p className="text-text-dim text-body">no script on this code hash is indexed.</p>
+          <p className="text-text text-body">no script on this code hash is indexed.</p>
         ) : (
           <ul className="text-body space-y-1">
             {pairs.map((pair) => (
@@ -77,7 +88,10 @@ function CodeHashPairs({
                   by {pair.hashType}
                 </Link>
                 {pair.name.toLowerCase() !== 'unknown' && (
-                  <span className="text-text-dim"> · {pair.name}</span>
+                  <>
+                    <span className="text-text-dim"> · </span>
+                    <span className="text-text">{pair.name}</span>
+                  </>
                 )}
               </li>
             ))}
@@ -130,7 +144,7 @@ export default function ScriptByCodeHashPage({
   });
   // With no hash type asked, every pair on the code hash: the page lists the ones that exist and
   // guesses none.
-  const { data: codeHashPairs } = useQuery({
+  const { data: codeHashPairs, error: codeHashPairsError } = useQuery({
     queryKey: ['script-code-hash-pairs', normalizedCodeHash],
     queryFn: async () => {
       const result = await api.lookupScripts(
@@ -142,6 +156,8 @@ export default function ScriptByCodeHashPage({
     },
     enabled: isCodeHashIdentifier && initialHashType === null,
     staleTime: Infinity,
+    // a real failure is said at once; only the API's transient states are waited through
+    retry: retryTransientOnly,
   });
   // the family the registry names for the pair asked
   const family = knownScript && hasKnownScriptName(knownScript.name) ? knownScript : null;
@@ -167,7 +183,13 @@ export default function ScriptByCodeHashPage({
   }
 
   if (isCodeHashIdentifier && !initialHashType) {
-    return <CodeHashPairs codeHash={normalizedCodeHash} pairs={codeHashPairs} />;
+    return (
+      <CodeHashPairs
+        codeHash={normalizedCodeHash}
+        pairs={codeHashPairs}
+        error={codeHashPairsError}
+      />
+    );
   }
 
   if (!isCodeHashIdentifier || family) {

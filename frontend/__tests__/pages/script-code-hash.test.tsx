@@ -7,7 +7,9 @@ import { api } from '@/lib/api';
 import { scriptLookupKey } from '@/lib/script-pair';
 import { pagedRead } from '@/__tests__/utils/paged-read';
 
-vi.mock('@/lib/api', () => ({
+// the module's own error classes stay (a read failure's words read them), its reads are mocked
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
     lookupScripts: vi.fn(),
     getCodeCell: vi.fn(),
@@ -562,7 +564,9 @@ describe('ScriptByCodeHashPage', () => {
       'href',
       `/mainnet/script/${mockCodeHash}?hashType=type`
     );
-    expect(screen.getByText('· Default Lock')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: mockCodeHash })).toBeInTheDocument();
+    expect(screen.getByText('Default Lock')).toBeInTheDocument();
+    expect(document.title).toMatch(/ · script · CKBadger$/);
     expect(screen.getByRole('link', { name: 'by data' })).toHaveAttribute(
       'href',
       `/mainnet/script/${mockCodeHash}?hashType=data`
@@ -570,6 +574,17 @@ describe('ScriptByCodeHashPage', () => {
     expect(screen.queryByRole('link', { name: 'by data1' })).toBeNull();
     expect(replaceMock).not.toHaveBeenCalled();
     expect(screen.queryByRole('table', { name: 'Code versions' })).toBeNull();
+  });
+
+  // A failed read of the pairs says so in the page's words; it is never left "Reading…".
+  it('says so when the pairs on a code hash cannot be read', async () => {
+    currentSearch = new URLSearchParams();
+    vi.mocked(api.lookupScripts).mockRejectedValue(new Error('lookup transport failed'));
+    render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      "Could not read this code hash's scripts: lookup transport failed"
+    );
+    expect(screen.queryByText('Reading the scripts on this code hash…')).toBeNull();
   });
 
   it('redirects /script/<name> alias to the named detail page', async () => {

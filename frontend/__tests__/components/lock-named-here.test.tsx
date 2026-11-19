@@ -28,6 +28,7 @@ import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { CELL_GAP_PX } from '@/components/ui/list-table';
 import { api, type CollectionHolder, type GlobalActivity, type TransactionDetail } from '@/lib/api';
 import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
+import { scriptLookupKey } from '@/lib/script-pair';
 import { columnPx, fontPx, textPx } from '@/lib/type-metrics';
 
 /** RFC 0021's example args on the default lock by type, and the same code hash by data. */
@@ -343,9 +344,11 @@ describe('the transaction’s cell tiles read the same decision', () => {
         cycles: null,
       })),
     }) as unknown as TransactionDetail;
+  // the registry's names, each by its script's pair (lane rd/api-lock-names): the default lock and
+  // JoyID by type; the default lock's code hash by data is no pair the registry names
   const LOOKUP = {
-    [DEFAULT_LOCK_CODE_HASH]: { name: 'Default Lock' },
-    [JOYID_CODE_HASH]: { name: 'JoyID' },
+    [scriptLookupKey(DEFAULT_LOCK_CODE_HASH, 'type')]: { name: 'Default Lock' },
+    [scriptLookupKey(JOYID_CODE_HASH, 'type')]: { name: 'JoyID' },
   } as never;
 
   // B4 second fix round (review-rules-fixes-logic MUST 2, tests MUST-1; the two refusals the
