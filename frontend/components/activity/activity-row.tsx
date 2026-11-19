@@ -167,7 +167,9 @@ export function ActivityRowHead({
     <Link
       data-role="headline"
       href={href}
-      className={cn(titleClass, 'hover:text-jade transition-colors')}
+      // the row's key: the key look's bright ink (a link's ink is its look's)
+      look="key"
+      className={cn('text-body font-medium', line && 'leading-row')}
     >
       {title}
     </Link>
@@ -232,10 +234,7 @@ export function ActivityRowHead({
             parts={[
               blockNumber !== null ? (
                 // its ink said on itself, the evidence's quiet ink (a part handed to the list)
-                <Link
-                  href={`/blocks/${blockNumber}`}
-                  className="text-text-dim hover:text-text transition-colors"
-                >
+                <Link href={`/blocks/${blockNumber}`} look="inline">
                   {formatBlockNumber(blockNumber)}
                 </Link>
               ) : poolStatus ? (
@@ -244,10 +243,7 @@ export function ActivityRowHead({
                 <span>Unconfirmed</span>
               ),
               !linked && (
-                <Link
-                  href={`/tx/${hash}`}
-                  className="hover:text-jade text-text-dim transition-colors"
-                >
+                <Link href={`/tx/${hash}`} look="inline">
                   <ShortId value={hash} kind="hash" size="row" />
                 </Link>
               ),
@@ -378,7 +374,7 @@ function callNames(refs: CallRef[], args: boolean): ReactNode[] {
       <Link
         href={g.href}
         title={args ? g.calls.join('\n') : undefined}
-        className="text-text-dim hover:text-jade transition-colors"
+        look="inline"
         onClick={(e) => e.stopPropagation()}
       >
         {g.name}

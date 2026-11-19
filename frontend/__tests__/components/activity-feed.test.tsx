@@ -200,7 +200,10 @@ describe('ActivityFeed', () => {
     const call = within(type).getByRole('link', { name: '.bit Time Info' });
     expect(call.parentElement).toHaveClass('whitespace-nowrap');
     expect(call).toHaveAttribute('title', '.bit Time Info(0x00)');
-    expect(call).toHaveClass('text-text-dim');
+    // re-pinned on purpose (lists lane P3, the link-look gate): a link inside its line, the inline
+    // look, its ink the detail run's quiet one (it wrote text-text-dim on itself)
+    expect(call).toHaveClass('underline');
+    expect(call.closest('[data-role="detail"]')).toHaveClass('text-text-dim');
     expect(first.querySelector('[class*="gold"]')).toBeNull();
   });
 

@@ -173,11 +173,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       '5 without a look; inks by hand (hover:text-jade, text-text-bright, text-positive), and one on a child (a span’s text-text-dim)',
   },
-  'components/activity/activity-row.tsx': {
-    lane: 'p-lists',
-    sites: { look: 4, ink: 4 },
-    reason: '4 without a look; inks by hand (hover:text-jade, text-text-dim, hover:text-text)',
-  },
+  // 'components/activity/activity-row.tsx' left the list (lane P3: look 4, ink 4 → 0; the headline
+  // its row's key, the evidence's block and transaction and a call's name inline in their lines)
   // 'components/crash-page.tsx' left the list (lane P3: look 1, ink 1 → 0; the way on a way onward)
   // 'components/error-page-shell.tsx' left the list (lane P3: look 1, ink 1 → 0; the seal caption's block inline)
   // 'components/home/activity-feed.tsx' left the list (lane P3: look 1, ink 1 → 0; "view all" a way onward)
@@ -272,8 +269,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
 // → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4) → 91
 // (lane P3: the home page's five files, 14) → 77 (lane P3: the error pages' three files, 14) → 63
-// (lane P3: the blocks list, 14)
-const TOLERATED_TOTAL = 63;
+// (lane P3: the blocks list, 14) → 55 (lane P3: the activity row, 8)
+const TOLERATED_TOTAL = 55;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {

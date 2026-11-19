@@ -480,11 +480,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: "the step's loading line, a transient note in the quiet ink",
   },
   // ---- shared ----
-  'components/activity/activity-row.tsx': {
-    family: 'shared',
-    sites: { link: 3 },
-    reason: "B4 rows: the row's block and tx links and a type-call link in the quiet ink",
-  },
+  // 'components/activity/activity-row.tsx' left the list (lane P3: link 3 → 0; its links take the
+  // inline look and the ink of the line they stand in, the evidence's and the detail run's, a note)
   'components/command-palette.tsx': {
     family: 'shared',
     sites: { prose: 1 },
