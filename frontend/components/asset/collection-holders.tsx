@@ -30,7 +30,12 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { countNoun } from '@/lib/format-count';
 import { SHORT_FORMS, type ShortSize } from '@/lib/shorten';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
-import { WIDEST_HELD_ITEMS, shortChars } from '@/lib/list-bounds';
+import {
+  WIDEST_COLLECTION_HOLDER_RANK,
+  WIDEST_COLLECTION_HOLDERS,
+  WIDEST_HELD_ITEMS,
+  shortChars,
+} from '@/lib/list-bounds';
 import { PartReadBoundary } from '@/components/read-failure';
 
 /** A run of characters at the cells' 13 px (readability F3-e: every column budgets what it holds). */
@@ -68,12 +73,12 @@ const COLLECTION_HOLDER_PHONE_HEAD_PX = phoneHead(
 /**
  * The count bars' track; the exact count prints beside it (table-rows L2-4). Readability F3-e:
  * the track holds its head's ticks ("0" … "750M", the tick form) whole, under the 48 px a bar
- * keeps at least, so 48; the count is a holder's items or a range's holders, under 100,000:
- * "99,999" (6 characters at 13 px, 46.8; it was 44, five).
+ * keeps at least, so 48; the count is a holder's items, "999,999" (WIDEST_HELD_ITEMS, 54.6 at
+ * 13 px), or a range's holders, "99,999" (WIDEST_COLLECTION_HOLDERS, 46.8). Lane P2's follow-up
+ * (item 7): each from lib/list-bounds.ts, where one "99,999" in this file held both.
  */
 const TRACK = COUNT_TRACK_PX;
-const WIDEST_COUNT = '99,999';
-const COUNT_WIDTH = columnPx(cell(WIDEST_COUNT.length));
+const countWidth = (widest: string) => columnPx(cell(widest.length));
 
 /**
  * F2 objects (OB-C7) on the row rules: a count as an 8 px bar in the class colour on the column's
@@ -85,15 +90,18 @@ function countColumn<T>(
   rows: readonly T[],
   value: (row: T) => number,
   assetClass: BarClass,
+  /** The widest count the column holds, as it is written (a bound of lib/list-bounds.ts). */
+  widest: string,
   /** The table's last column keeps no gap after it. */
   last = false
 ): ListColumn<T> {
   const scale = resourceScale(rows.map(value));
+  const figure = countWidth(widest);
   return {
     key,
     label,
     // the track, the bar's 10 px gap, the count and the gap, none after the last column
-    minWidth: columnPx(TRACK + BAR_FIGURE_GAP + COUNT_WIDTH + (last ? 0 : CELL_GAP_PX)),
+    minWidth: columnPx(TRACK + BAR_FIGURE_GAP + figure + (last ? 0 : CELL_GAP_PX)),
     header: <ScaleHeader label={label} scale={scale} trackWidth={TRACK} />,
     render: (row) => (
       <AlignedBar
@@ -107,7 +115,7 @@ function countColumn<T>(
             <AssetCount value={value(row)} />
           </span>
         }
-        displayWidth={COUNT_WIDTH}
+        displayWidth={figure}
       />
     ),
   };
@@ -221,7 +229,7 @@ function ScopedCollectionHolders({
       label: '#',
       // A rank of five digits (a collection's holders under 100,000), "99999" (39 at 13 px), and
       // the gap; it was 32, two digits.
-      minWidth: columnPx(cell('99999'.length) + CELL_GAP_PX),
+      minWidth: columnPx(cell(WIDEST_COLLECTION_HOLDER_RANK.length) + CELL_GAP_PX),
       className: 'whitespace-nowrap',
       render: (holder) => <span className="text-text-bright">{rank(holder)}</span>,
     },
@@ -265,7 +273,15 @@ function ScopedCollectionHolders({
         </span>
       ),
     },
-    countColumn('items', 'Items', listed, (holder) => holder.itemCount, assetClass, true),
+    countColumn(
+      'items',
+      'Items',
+      listed,
+      (holder) => holder.itemCount,
+      assetClass,
+      WIDEST_HELD_ITEMS,
+      true
+    ),
   ];
   // the distribution's columns, built while its column is drawn (inside its part)
   const bucketColumnsOf = (): ListColumn<
@@ -284,13 +300,20 @@ function ScopedCollectionHolders({
         <span className="text-body text-text-bright leading-row">{bucket.range}</span>
       ),
     },
-    countColumn('holders', 'Holders', distribution ?? [], (bucket) => bucket.holders, assetClass),
+    countColumn(
+      'holders',
+      'Holders',
+      distribution ?? [],
+      (bucket) => bucket.holders,
+      assetClass,
+      WIDEST_COLLECTION_HOLDERS
+    ),
     {
       key: 'items',
       label: 'Items',
       // A range's items under a million, "999,999" (54.6 at 13 px); the last column, no gap after
       // it. It was 100.
-      minWidth: columnPx(cell('999,999'.length)),
+      minWidth: columnPx(cell(WIDEST_HELD_ITEMS.length)),
       numeric: true,
       render: (bucket) => (
         <span>

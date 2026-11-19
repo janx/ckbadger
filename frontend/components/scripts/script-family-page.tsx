@@ -39,13 +39,17 @@ import { CAPACITY_RANGE_OPTIONS, type CapacityRangeKey } from '@/lib/capacity-ra
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
-import { ckbAmountText } from '@/lib/amount-form';
 import { MIN_TRACK_PX } from '@/components/ui/aligned-bar';
 import {
   UNAVAILABLE,
   WIDEST_BLOCK_NUMBER,
+  WIDEST_CELL_CAPACITY,
+  WIDEST_CELL_CAPACITY_SUMMARY,
+  WIDEST_CELL_OCCUPIED,
+  WIDEST_CODE_CELL_INDEX,
   WIDEST_COUNT_DIGITS,
   WIDEST_ROW_COUNT,
+  WIDEST_SCRIPT_VERSION,
   shortChars,
 } from '@/lib/list-bounds';
 import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
@@ -292,17 +296,15 @@ const small = (text: string) => textPx(text.length, fontPx('small'));
 const meta = (text: string) => textPx(text.length, fontPx('meta'));
 /** A hash at the row size, as a run of its characters ("0x12345678…abcdef"). */
 const ROW_HASH = 'x'.repeat(shortChars(SHORT_FORMS.row.hash));
-/** A code cell's out point: a deployment transaction writes a few cells, an index under 100. */
-const CODE_CELL_OUTPOINT = `${ROW_HASH}:99`;
+/** A code cell's out point: a deployment transaction writes a few cells (WIDEST_CODE_CELL_INDEX). */
+const CODE_CELL_OUTPOINT = `${ROW_HASH}:${WIDEST_CODE_CELL_INDEX}`;
 /** A live cell's out point: a transaction's outputs are under 10,000 (four digits). */
 const CELL_OUTPOINT = `${ROW_HASH}:${WIDEST_COUNT_DIGITS}`;
-/** A version's number: two digits. */
-const VERSION_NUMBER = 'v99';
-/** A cell's capacity: under ten billion CKB (the genesis allocation's cells hold billions). */
-const WIDEST_CELL_SHANNONS = BigInt('999999999999999999');
-const WIDEST_CELL_CAPACITY = ckbAmountText(WIDEST_CELL_SHANNONS, 'column');
-/** A cell's occupied bytes: under ten million (the genesis's largest cell holds a 1 MB table). */
-const WIDEST_OCCUPIED = `${(9_999_999).toLocaleString('en-US')} B`;
+/** A version's number: two digits (WIDEST_SCRIPT_VERSION). */
+const VERSION_NUMBER = WIDEST_SCRIPT_VERSION;
+// a cell's capacity and occupied bytes: lib/list-bounds.ts's WIDEST_CELL_CAPACITY and
+// WIDEST_CELL_OCCUPIED (lane P2's follow-up, item 7: they were kept here)
+const WIDEST_OCCUPIED = WIDEST_CELL_OCCUPIED;
 
 /**
  * Line 1 of a script's cell on a phone (the phone-rows board's head()): the out point at its tight
@@ -315,7 +317,7 @@ const SCRIPT_CELL_PHONE_HEAD_PX = phoneHead(
   'script cells',
   textPx(shortChars(SHORT_FORMS.tight.hash) + `:${WIDEST_COUNT_DIGITS}`.length, fontPx('body')) +
     PHONE_PART_GAP_PX +
-    textPx(ckbAmountText(WIDEST_CELL_SHANNONS, 'summary').length, fontPx('small')) +
+    textPx(WIDEST_CELL_CAPACITY_SUMMARY.length, fontPx('small')) +
     textPx(' CKB'.length, fontPx('meta'))
 );
 

@@ -317,8 +317,10 @@ describe('ScriptByCodeHashPage', () => {
     const versions = [
       idLine,
       block,
-      // a count of four digits, wider than the head's words ("Code" / "cells")
-      ceil(Math.max(at('9,999', 13), at('cells', 12)) + 16),
+      // re-pinned on purpose (lane P2's follow-up, item 7): a version's code cells, two digits
+      // (lib/list-bounds.ts's WIDEST_VERSION_CODE_CELLS: the most is 8, .bit Lock), under the
+      // head's word "cells" (it was four, "9,999", a block's or a transaction's count, 55)
+      ceil(Math.max(at('99', 13), at('cells', 12)) + 16),
       // eight digits of live cells, or "unavailable"
       ceil(Math.max(at('99,999,999', 13), at('unavailable', 13)) + 16),
       // the compact CKB and its unit, "999.99M CKB", or "unavailable"; the last column
@@ -345,11 +347,11 @@ describe('ScriptByCodeHashPage', () => {
       ceil(8 + 6 + at('data 9,999,999 B', 12)),
     ];
     expect([versions, deployments, cells]).toEqual([
-      [188, 102, 55, 102, 86],
+      [188, 102, 52, 102, 86],
       [188, 102, 188, 86],
       [188, 188, 188, 170, 170, 102, 130],
     ]);
-    expect([sum(versions), sum(deployments), sum(cells)]).toEqual([533, 564, 1136]);
+    expect([sum(versions), sum(deployments), sum(cells)]).toEqual([530, 564, 1136]);
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
       ...emptyCells,
       total: 1,

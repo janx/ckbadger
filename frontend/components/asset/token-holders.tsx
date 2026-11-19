@@ -34,7 +34,7 @@ import {
 } from '@/components/ui/aligned-bar';
 import { PHONE_PART_GAP_PX, columnPx, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
 import { SHORT_FORMS } from '@/lib/shorten';
-import { shortChars } from '@/lib/list-bounds';
+import { WIDEST_TOKEN_HOLDER_RANK, WIDEST_TOKEN_HOLDERS, shortChars } from '@/lib/list-bounds';
 import { PartReadBoundary, PartReadError, readPart } from '@/components/read-failure';
 
 // Table-rows round, lane L2-4: the holder tables on the row rules — one 41 px line, the bar an
@@ -42,13 +42,16 @@ import { PartReadBoundary, PartReadError, readPart } from '@/components/read-fai
 // Readability F3-e: every column budgeted from what it holds (lib/list-bounds.ts), the 13 px cells
 // at 0.6 em a glyph and the 16 px gap after every column but the last.
 /**
- * A token's holders: under 100,000, so a holder's rank is five digits ("99999", as the rank is
- * written) and a range's holder count six characters ("99,999").
+ * A lock's name a column ends in the one ellipsis: 12 characters of it, so the default lock's,
+ * "Default Lock", stands whole.
  */
-const WIDEST_RANK = '99999';
-const WIDEST_HOLDERS = '99,999';
-/** A name a column ends in the one ellipsis (a lock's kind, a balance): 12 characters of it. */
 const NAME_CHARS = 12;
+/**
+ * A balance the column ends in the one ellipsis, exact in its title: 11 characters of it. Lane P2's
+ * follow-up (item 7): the rank's bound grew a digit (WIDEST_TOKEN_HOLDER_RANK, a token's holders
+ * under a million), and in the 554 px column the table has at 1280 the balance gives that 8 px.
+ */
+const BALANCE_CHARS = 11;
 const cell = (chars: number) => textPx(chars, fontPx('small'));
 /**
  * The holders-per-range bar of "Holders by balance", and the share bar of the holder list: each
@@ -62,7 +65,7 @@ const SHARE_TRACK = SHARE_TRACK_PX;
  * The figures right of those bars: a range's holder count, "99,999" (it was 44, five
  * characters), and a holder's share, "100.00%" (it was 48, "41.23%").
  */
-const BUCKET_FIGURE = columnPx(cell(WIDEST_HOLDERS.length));
+const BUCKET_FIGURE = columnPx(cell(WIDEST_TOKEN_HOLDERS.length));
 // the share's box is its text exactly (54.6): its column rounds once, the 50.4 px track, the gap
 // and the figure together, 115 px (two roundings, 55 and then 116, made the table 555 px, a pixel
 // wider than the token page's 554 px column at 1280)
@@ -379,8 +382,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'rank',
         label: '#',
-        // A rank of five digits, "99999" (39 at 13 px), and the gap; it was 32, two digits.
-        minWidth: columnPx(cell(WIDEST_RANK.length) + CELL_GAP_PX),
+        // A rank of six digits, "999999" (46.8 at 13 px; WIDEST_TOKEN_HOLDER_RANK), and the gap; it
+        // was five (lane P2's follow-up, item 7), 32 before, two digits.
+        minWidth: columnPx(cell(WIDEST_TOKEN_HOLDER_RANK.length) + CELL_GAP_PX),
         className: 'whitespace-nowrap',
         render: (h) => <span className="text-text-bright">{rank(h)}</span>,
       },
@@ -440,8 +444,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       {
         key: 'balance',
         label: symbol ?? 'Balance',
-        // 12 characters of the amount (93.6 at 13 px) and the gap. It was 112.
-        minWidth: columnPx(cell(NAME_CHARS) + CELL_GAP_PX),
+        // 11 characters of the amount (85.8 at 13 px) and the gap (lane P2's follow-up, item 7: it
+        // was 12, 110, before the rank's bound grew a digit; 112 before that).
+        minWidth: columnPx(cell(BALANCE_CHARS) + CELL_GAP_PX),
         numeric: true,
         // One line; an amount too long for the column ends in an ellipsis, exact in the hover.
         render: (h) => (

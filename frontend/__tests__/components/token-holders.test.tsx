@@ -67,22 +67,26 @@ describe('Token distribution', () => {
   // Readability F3-e: the bands' columns budgeted from what they hold, at 0.6 em a glyph (the range
   // 14 px, the cells 13, ticks 12) and the 16 px gap after every column but the last. The range is
   // the flexible column: "10,000 – under 100,000" whole at its minimum.
-  it('budgets every band column from what it holds: 377 px, a table from it (F3-e)', () => {
+  // Re-pinned on purpose (lane P2's follow-up, item 7; renamed, it was "… 377 px …"): a range's
+  // holders are at most the token's, whose bound is lib/list-bounds.ts's WIDEST_TOKEN_HOLDERS,
+  // "999,999" (the most of any token is 11,866, RGB++ Protocol, on 2026-11-19; it was "99,999",
+  // kept in the file): 129 px, the table 385 and its rows below
+  it('budgets every band column from what it holds: 385 px, a table from it (F3-e)', () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5;
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
       ceil(at('10,000 – under 100,000', 14) + 16),
-      // the 48 px track (its widest ticks, "0 750M", are 43.2), the 10 px gap, "99,999" holders
-      48 + 10 + ceil(at('99,999', 13)) + 16,
+      // the 48 px track (its widest ticks, "0 750M", are 43.2), the 10 px gap, "999,999" holders
+      48 + 10 + ceil(at('999,999', 13)) + 16,
       // "100.00%", wider than the head's word "supply"; the last column
       ceil(Math.max(at('100.00%', 13), at('supply', 12))),
     ];
-    expect(budgets).toEqual([201, 121, 55]);
-    expect(budgets.reduce((s, w) => s + w, 0)).toBe(377);
+    expect(budgets).toEqual([201, 129, 55]);
+    expect(budgets.reduce((s, w) => s + w, 0)).toBe(385);
     for (const [width, form] of [
       [1232, 'table'],
-      [377, 'table'],
-      [376, 'rows'],
+      [385, 'table'],
+      [384, 'rows'],
       [358, 'rows'],
     ] as const) {
       atContainerWidth(width);
@@ -377,24 +381,30 @@ describe('Token holders (board L5)', () => {
   // once, track, gap and figure together (the figure's box was rounded to 55 first, which would
   // have made it 116 and the table 555): 115, 554 px (renamed: "552 px").
   // re-pinned on purpose (lane p-assets; renamed, it was "… 554 px, …"): the lock is its words
+  // Re-pinned on purpose (lane P2's follow-up, item 7): a rank is at most the token's holders,
+  // whose bound is WIDEST_TOKEN_HOLDERS (under a million: the most of any token is 11,866), six
+  // digits as the rank is written, 63 px (it was five, 55, kept in the file); the table's budget
+  // re-derived in the 554 px column it has at 1280: the balance gives the 8 px, 11 characters
+  // (its value already ends in the ellipsis, exact in its title), the lock keeps its 12 so the
+  // default lock's name, "Default Lock", stands whole
   it('budgets every holder column from what it holds: 549 px, a table from it (F3-e)', async () => {
     const at = (text: string, px: number) => (text.length * px * 3) / 5;
     const ceil = (px: number) => Math.ceil(Math.round(px * 100) / 100);
     const budgets = [
-      // a rank of five digits (a token's holders under 100,000), as the rank is written
-      ceil(at('99999', 13) + 16),
+      // a rank of six digits (a token's holders under 1,000,000), as the rank is written
+      ceil(at('999999', 13) + 16),
       // a holder with no address, its lock hash at the row size (an address is 13 characters)
       ceil(at('0x11111111…111111', 14) + 16),
       // the lock's name: 12 characters at 13 px, no box (re-pinned on purpose, lane p-assets: it
       // was a tag of 12 characters at 12 px with 5 px sides and a 1 px border, 115)
       ceil(at('x'.repeat(12), 13) + 16),
-      // 12 characters of the balance; a longer one ends in the ellipsis, exact in its title
-      ceil(at('x'.repeat(12), 13) + 16),
+      // 11 characters of the balance; a longer one ends in the ellipsis, exact in its title
+      ceil(at('x'.repeat(11), 13) + 16),
       // the track (its widest tick row, "0 0.75%", 7 glyphs at 12 px), the 10 px gap, "100.00%";
       // the last column
       ceil(at('0 0.75%', 12) + 10 + at('100.00%', 13)),
     ];
-    expect(budgets).toEqual([55, 159, 110, 110, 115]);
+    expect(budgets).toEqual([63, 159, 110, 102, 115]);
     expect(budgets.reduce((s, w) => s + w, 0)).toBe(549);
     atContainerWidth(549);
     mount();

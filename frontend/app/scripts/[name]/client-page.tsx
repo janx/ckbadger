@@ -18,8 +18,8 @@ import { ckbAmountText } from '@/lib/amount-form';
 import {
   UNAVAILABLE,
   WIDEST_BLOCK_NUMBER,
-  WIDEST_COUNT,
   WIDEST_ROW_COUNT,
+  WIDEST_VERSION_CODE_CELLS,
 } from '@/lib/list-bounds';
 import {
   ScriptCustodyEvidence,
@@ -1436,10 +1436,11 @@ export default function ScriptDetailPage({
                     {
                       key: 'deployments',
                       label: 'Code cells',
-                      // a count of four digits, wider than its head's words (F3-e: it was 110 and
-                      // 12 %)
+                      // a version's code cells, two digits (WIDEST_VERSION_CODE_CELLS; lane P2's
+                      // follow-up, item 7: it read WIDEST_COUNT, a block's or a transaction's
+                      // count), under its head's words (F3-e: it was 110 and 12 %)
                       minWidth: columnPx(
-                        Math.max(small(WIDEST_COUNT), meta('cells')) + CELL_GAP_PX
+                        Math.max(small(WIDEST_VERSION_CODE_CELLS), meta('cells')) + CELL_GAP_PX
                       ),
                       numeric: true,
                       render: (row) => row.deploymentsCount.toLocaleString(),

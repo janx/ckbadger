@@ -1,4 +1,5 @@
 'use client';
+import { WIDEST_DNA_SPAN } from '@/lib/list-bounds';
 import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
 import type {
   CollectionInsights,
@@ -58,12 +59,11 @@ import { unitText } from '@/components/ui/units';
  * gap after every column but the last. A gene's name, its rule and what an object shows are
  * pattern text that ends in the one ellipsis (the row's title holds it): each holds 12 characters
  * at its minimum, the last column is the flexible one and takes what the container gives beyond
- * the sum. A byte range is whole: a DNA under 1,000 bytes, "bytes 999–999".
+ * the sum. A byte range is whole: a DNA under 1,000 bytes, "bytes 999–999" (WIDEST_DNA_SPAN).
  */
 const GENE_TEXT_CHARS = 12;
 const geneText = (last = false) =>
   columnPx(textPx(GENE_TEXT_CHARS, fontPx('small')) + (last ? 0 : CELL_GAP_PX));
-const WIDEST_SPAN = 'bytes 999–999';
 const geneSpanPx = (text: string) => columnPx(textPx(text.length, fontPx('small')) + CELL_GAP_PX);
 
 // ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
@@ -528,7 +528,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               key: 'bytes',
               label: 'bytes',
               // the widest range with its " · clipped" note
-              minWidth: geneSpanPx(`${WIDEST_SPAN} · clipped`),
+              minWidth: geneSpanPx(`${WIDEST_DNA_SPAN} · clipped`),
               header: <span className="text-meta">bytes</span>,
               render: (g) => (
                 <span className="text-text-dim leading-row block truncate tabular-nums">
@@ -737,7 +737,7 @@ function PatternReading({
         {
           key: 'bytes',
           label: 'bytes',
-          minWidth: geneSpanPx(WIDEST_SPAN),
+          minWidth: geneSpanPx(WIDEST_DNA_SPAN),
           header: <span className="text-meta">bytes</span>,
           render: (row) => (
             <span className={cn(cell, 'text-text-dim tabular-nums')}>{row.span}</span>

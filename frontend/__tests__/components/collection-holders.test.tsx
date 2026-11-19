@@ -412,8 +412,11 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       // the lock's name: 12 characters at 13 px, no box (re-pinned on purpose, lane p-assets: it
       // was a tag of 12 characters at 12 px with 5 px sides and a 1 px border, 115)
       ceil(at('x'.repeat(12), 13) + 16),
-      // the 48 px track (ticks "0 750M" are 43.2), the 10 px gap, "99,999" items; the last column
-      48 + 10 + ceil(at('99,999', 13)),
+      // the 48 px track (ticks "0 750M" are 43.2), the 10 px gap, "999,999" items; the last
+      // column. Re-pinned on purpose (lane P2's follow-up, item 7): a holder's items are
+      // lib/list-bounds.ts's one bound of them, WIDEST_HELD_ITEMS, "999,999" (the column held
+      // "99,999", a second bound of the same quantity kept in the file), 113 px, the table 531
+      48 + 10 + ceil(at('999,999', 13)),
     ];
     const bands = [
       // the head "Holds", wider than the widest range, "3–5" at 14 px
@@ -423,9 +426,9 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       // a range's items under a million, "999,999"; the last column
       ceil(at('999,999', 13)),
     ];
-    expect(holders).toEqual([55, 253, 110, 105]);
+    expect(holders).toEqual([55, 253, 110, 113]);
     expect(bands).toEqual([52, 121, 55]);
-    expect(holders.reduce((s, w) => s + w, 0)).toBe(523);
+    expect(holders.reduce((s, w) => s + w, 0)).toBe(531);
     expect(bands.reduce((s, w) => s + w, 0)).toBe(228);
     const load = vi.fn().mockResolvedValue(page([joyid, named]));
     render(
@@ -440,7 +443,7 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     const cols = [...table.querySelectorAll('col')].map((c) => (c as HTMLElement).style);
     expect(cols.map((c) => Number.parseFloat(c.minWidth))).toEqual(holders);
     expect(cols[2].width).toBe('auto');
-    expect(Number.parseFloat(table.style.minWidth)).toBe(523);
+    expect(Number.parseFloat(table.style.minWidth)).toBe(531);
     const bandTable = screen.getByRole('table', { name: 'Holders by how many items they hold' });
     expect(
       [...bandTable.querySelectorAll('col')].map((c) =>
@@ -455,9 +458,10 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       for (const [width, holders, bands] of [
         [1232, 'table', 'table'],
         // re-pinned on purpose (lane p-assets): the holders' table is 523 px with the lock as
-        // words (it was 528 with the lock's tag)
-        [523, 'table', 'table'],
-        [522, 'rows', 'table'],
+        // words (it was 528 with the lock's tag); then (lane P2's follow-up, item 7) 531, its
+        // items column holding WIDEST_HELD_ITEMS
+        [531, 'table', 'table'],
+        [530, 'rows', 'table'],
         [358, 'rows', 'table'],
         [228, 'rows', 'table'],
         [227, 'rows', 'rows'],
