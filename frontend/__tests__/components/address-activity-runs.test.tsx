@@ -1,6 +1,7 @@
 // Readability 2026-11-18, lane B4 (pG) item 5, on the address page: its history lists this
-// address's own line alone, and folds its consecutive rows that say the same thing, the other
-// parties of each transaction compared though the row does not draw them.
+// address's own line alone, and folds its consecutive rows that did the same thing and called the
+// same script code (Gate B's rule, lists lane P3), counting this address and the other parties of
+// each transaction though the row does not draw them.
 import { describe, expect, it } from 'vitest';
 import { render, within } from '@/__tests__/utils/test-utils';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
@@ -30,16 +31,22 @@ describe('an address page folds its own runs (B4 item 5)', () => {
     participants: [],
   });
 
-  it('folds its consecutive same rows, written for this address', () => {
+  // re-pinned on purpose (Gate B's rule, lane P3): the folded row wrote this address, the one
+  // party of every row; it counts the parties now and names none
+  it('folds its consecutive same rows, counting this address', () => {
     render(<AddressActivities rows={[update(1), update(2), update(3)]} address={addressFixture} />);
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(folded).toHaveAttribute('data-run-count', '3');
-    // this address, as text (consistency C3), never a link to its own page
-    expect(within(folded).getByTitle(addressFixture.address!)).toHaveClass('this-address');
+    expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^3 transactions ↓ · 1 participant$/
+    );
+    expect(within(folded).queryByTitle(addressFixture.address!)).toBeNull();
     expect(folded.querySelector('[data-ckb-amount]')).toBeNull();
   });
 
-  it('does not fold rows whose other parties differ, though the row lists this address alone', () => {
+  // re-pinned on purpose (Gate B's rule, lane P3): "not the parties": rows whose other parties
+  // differ fold, and the run counts them (it did not fold them by the old rule)
+  it('folds rows whose other parties differ, and counts every party once', () => {
     const withOther = (n: number, seed: string): Activity => ({
       ...update(n),
       participants: [
@@ -57,6 +64,11 @@ describe('an address page folds its own runs (B4 item 5)', () => {
         address={addressFixture}
       />
     );
-    expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded).toHaveAttribute('data-run-count', '2');
+    // this address, and the two others
+    expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^2 transactions ↓ · 3 participants$/
+    );
   });
 });

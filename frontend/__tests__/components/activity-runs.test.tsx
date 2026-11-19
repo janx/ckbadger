@@ -1,7 +1,9 @@
-// Readability 2026-11-18, lane B4 (pG) item 5: consecutive rows with the same title, the same
-// scripts and the same parties become one row with their count and the newest time, opened in
-// place. It counts rows and sums nothing: the folded row shows no amount and no total. The rule of
-// "the same" is lib/activity-runs.ts (its own test); this pins how the feeds draw a run.
+// Readability 2026-11-18, lane B4 (pG) item 5, with the rule the owner ruled at Gate B (lists lane
+// P3): consecutive rows that did the same thing and called the same script code (not the args, not
+// the parties) become one row that says what they called, how many transactions and how many
+// participants, and the newest time, opened in place. It counts and sums nothing: the folded row
+// shows no amount and no total. The rule of "the same" is lib/activity-runs.ts (its own test); this
+// pins how the feeds draw a run.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import userEvent from '@testing-library/user-event';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
@@ -13,6 +15,7 @@ import { ActivityRuns, runSubject } from '@/components/activity/activity-runs';
 import type { GlobalActivity, ItemActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { formatTimeAgo } from '@/lib/utils';
+import live from '@/__tests__/fixtures/activities-live-mainnet.json';
 import { ROW_LINE_PX } from '@/lib/type-metrics';
 import { SCREENS } from '@/__tests__/utils/tailwind-box';
 import resolveConfig from 'tailwindcss/resolveConfig';
@@ -108,7 +111,9 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     transfer,
   ];
 
-  it('draws the run as one row: its title and scripts, its party, its count and its newest time', async () => {
+  // re-pinned on purpose (Gate B's rule, lane P3): the folded row named its rows' one party, the
+  // same on every row by the old rule; now it counts the parties and names none
+  it('draws the run as one row: its title and the code it called, its counts and its newest time', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page(run));
     render(<ActivitiesStreamExplorer />);
     await screen.findAllByRole('article');
@@ -117,12 +122,19 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     expect(folded).toHaveAttribute('data-run-count', '3');
     const head = folded.querySelector('[data-role="row-head"]') as HTMLElement;
     expect(head).toHaveTextContent(/^Script call · \.bit Time Index State · \.bit Time Info/);
+    // the code by name: no row's args in a name's hover (the rows' args may differ)
+    for (const name of ['.bit Time Index State', '.bit Time Info'])
+      expect(within(head).getByRole('link', { name })).not.toHaveAttribute('title');
     // the newest time, the first row's (a feed is newest first), said as the newest
     expect(folded.querySelector('[data-role="evidence"]')).toHaveTextContent(
       `newest ${formatTimeAgo(run[0].timestamp, NOW)}`
     );
-    // its party, as every row writes it; no amount and no total: nothing is summed
-    expect(folded).toHaveTextContent(`ckb1…${run[0].participants[0].address!.slice(-8)}`);
+    // how many transactions and how many participants, counted; no party named, no amount and no
+    // total: nothing is summed
+    expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^3 transactions ↓ · 1 participant$/
+    );
+    expect(folded).not.toHaveTextContent('ckb1');
     expect(folded.querySelector('[data-ckb-amount]')).toBeNull();
     expect(folded).not.toHaveTextContent('CKB');
     // the control that opens it, a real button, saying how many rows it holds
@@ -142,6 +154,10 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     await user.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
     expect(toggle).toHaveTextContent('fewer ↑');
+    // open, the counts stay, the transactions said as a fact after the toggle
+    expect(document.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^fewer ↑ · 3 transactions · 1 participant$/
+    );
     const rows = () =>
       [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
         r.getAttribute('data-feed-row')
@@ -158,7 +174,9 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     expect(rows()).toEqual([transfer.txHash]);
   });
 
-  it('never folds across a row that differs: the three oracles of mainnet take turns', async () => {
+  // re-pinned on purpose (Gate B's rule, lane P3): by the old rule the oracles' turns never
+  // folded (each its own args and party); one code called, they are one run
+  it('folds the three oracles of mainnet that take turns: one code, three args, three parties', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(
       page([
         oracle(1, 'hqqsv05e', '0x01', 10),
@@ -169,8 +187,65 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     );
     render(<ActivitiesStreamExplorer />);
     await screen.findAllByRole('article');
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded).toHaveAttribute('data-run-count', '4');
+    expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^4 transactions ↓ · 3 participants$/
+    );
+    expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(0);
+  });
+
+  it('never folds across a row that called other code', async () => {
+    const spv: GlobalActivity = {
+      ...oracle(2, 'js6cy70d', '0x3d8f', 20),
+      typeCalls: [
+        {
+          typeCodeHash: `0x${'a7'.repeat(32)}`,
+          typeHashType: 'type',
+          typeArgs: '0x3d8f',
+          scriptHash: `0x${'d0'.repeat(32)}`,
+          scriptName: 'Bitcoin SPV Type Lock',
+        },
+      ],
+    };
+    const rows = [oracle(1, 'hqqsv05e', '0x01', 10), spv, oracle(3, '0cr43nr7', '0x02', 30)];
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page(rows));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
     expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
-    expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(4);
+    expect(
+      [...document.querySelectorAll('article[data-feed-row]')].map((r) =>
+        r.getAttribute('data-feed-row')
+      )
+    ).toEqual(rows.map((a) => a.txHash));
+  });
+
+  // The live feed (mainnet, the first page of /activities read from the API on 2026-11-19, blocks
+  // #21,054,083 to #21,054,163): 50 activities drawn as 9 rows, five of them folded runs.
+  it('draws the live feed’s first page, 50 activities, as 9 rows', async () => {
+    const rows = live as unknown as GlobalActivity[];
+    vi.setSystemTime(Number(rows[0].timestamp) + 60_000);
+    vi.mocked(api.getGlobalActivities).mockResolvedValue(page(rows));
+    render(<ActivitiesStreamExplorer />);
+    await screen.findAllByRole('article');
+    const drawn = [
+      ...document.querySelectorAll('[data-role="activity-run"], article[data-feed-row]'),
+    ];
+    const said = (el: Element) =>
+      el.getAttribute('data-role') === 'activity-run'
+        ? `${el.querySelector('[data-role="head-main"]')!.textContent} | ${el.querySelector('[data-role="run-count"]')!.textContent}`
+        : el.querySelector('[data-role="headline"]')!.textContent;
+    expect(drawn.map(said)).toEqual([
+      'Script call · .bit Time Index State · .bit Time Info | 7 transactions ↓ · 3 participants',
+      'Script call',
+      'Script call · .bit Time Index State · .bit Time Info | 2 transactions ↓ · 2 participants',
+      'Script call',
+      'Script call · .bit Time Index State · .bit Time Info | 9 transactions ↓ · 3 participants',
+      '.bit · recycle expired account',
+      'Script call · .bit Time Index State · .bit Time Info | 21 transactions ↓ · 3 participants',
+      'CKB Transfer',
+      'Script call · .bit Time Index State · .bit Time Info | 7 transactions ↓ · 3 participants',
+    ]);
   });
 
   // Lane B4 fix round (review-rules-logic NOTE 1, the coordinator's item 11): a row whose
@@ -444,19 +519,21 @@ describe('an older page that continues the last run (B4 fix round)', () => {
   });
 });
 
-// Lane B4 fix round (review-rules-logic NOTE 2, the coordinator's item 12): a folded run's head
-// shows the parties its rows show, by the one rule (`participantsToShow`: over six, the five
-// largest, in the feed's order: paid, then received, each largest first). A run of 7-party
-// transactions with no focus, its parties in an API order that is not that order.
-describe('a folded run shows the parties its rows show (B4 fix round)', () => {
-  it('caps its parties by the rows’ rule: the five largest, in the rows’ order, and the count', async () => {
+// Lane B4 fix round (review-rules-logic NOTE 2) showed a folded run's parties by the rows' rule;
+// re-pinned on purpose (Gate B's rule, lane P3): a run's rows name other parties from row to row,
+// so the folded row names none and counts them, each once. A run of 7-party transactions, two
+// parties in common.
+describe('a folded run counts its parties and names none (Gate B)', () => {
+  it('counts every party its rows name, once, and draws no party line', async () => {
     const user = userEvent.setup();
-    const deltas = ['1', '2', '-700', '300', '400', '500', '600'];
-    const crowded = (n: number): GlobalActivity => ({
+    const crowded = (n: number, seeds: string[]): GlobalActivity => ({
       ...oracle(n, 'q3q7ue', '0x00', n * 49),
-      participants: deltas.map((d, i) => ({ ...oracleParty(`cap${i}`), ckbDelta: d })),
+      participants: seeds.map((seed, i) => ({ ...oracleParty(seed), ckbDelta: String(i - 3) })),
     });
-    const rows = [crowded(1), crowded(2)];
+    const rows = [
+      crowded(1, ['c0', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6']),
+      crowded(2, ['c0', 'c1', 'd2', 'd3', 'd4', 'd5', 'd6']),
+    ];
     render(
       <ActivityRuns
         rows={rows.map((a) => ({
@@ -469,20 +546,14 @@ describe('a folded run shows the parties its rows show (B4 fix round)', () => {
       />
     );
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
-    const head = [...folded.querySelectorAll('[data-role="party"]')].map((p) =>
-      p.getAttribute('data-party')
+    expect(folded.querySelector('[data-role="run-count"]')).toHaveTextContent(
+      /^2 transactions ↓ · 12 participants$/
     );
-    expect(folded.querySelector('[data-role="run-parties"]')).toHaveTextContent(
-      /\+2 participants$/
-    );
+    expect(folded.querySelectorAll('[data-role="party"]')).toHaveLength(0);
     await user.click(within(folded).getByRole('button', { name: '2 transactions ↓' }));
-    const row = document.querySelector(`article[data-feed-row="${rows[0].txHash}"]`)!;
-    const drawn = [...row.querySelectorAll('[data-role="participant"] [data-party]')].map((p) =>
-      p.getAttribute('data-party')
-    );
-    // paid 700, then received 600, 500, 400, 300; the 2 and the 1 under "+2 participants"
-    expect(drawn).toEqual([2, 6, 5, 4, 3].map((i) => `${rows[0].participants[i].lockHash}:${i}`));
-    expect(head).toEqual(drawn);
+    // opened, each row draws its own parties by the rows' rule (over six, five and the count)
+    const row = document.querySelector(`article[data-feed-row="${rows[1].txHash}"]`)!;
+    expect(row).toHaveTextContent('+2 participants');
   });
 });
 

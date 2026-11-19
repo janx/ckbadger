@@ -151,15 +151,14 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
   );
 }
 /**
- * The address's activities with their runs folded (readability B4, `lib/activity-runs.ts`): a run
- * is compared on this address's line and the transaction's other parties, which the row does not
- * draw but the activity names, so two transfers to different counterparties never fold. A run
+ * The address's activities with their runs folded (readability B4, `lib/activity-runs.ts`, the
+ * rule of Gate B: what was done and the script code, not the parties): a run counts this address
+ * and the transaction's other parties, which the row does not draw but the activity names. A run
  * folds within the page shown.
  */
 export function AddressActivities({ rows, address }: { rows: Activity[]; address: Address }) {
   return (
     <ActivityRuns
-      focusLockHash={address.lockScriptHash}
       rows={rows.map((activity) => {
         const { row, participant, headline } = addressRow(activity, address);
         return {

@@ -406,9 +406,21 @@ describe('ActivitiesStreamExplorer', () => {
         timestamp: String(Date.parse(`2026-11-14T15:59:${50 - n}Z`)),
         participants: [makeParticipant({ address: seededAddress('late'), ckbDelta: '-1' })],
       });
+    // a script call, so it is not one of the two transfers' run (Gate B's rule folds transfers by
+    // what was done and the code called, whoever the parties are: re-pinned on purpose, it was a
+    // transfer that its seven parties kept apart)
     const crowd = makeActivity({
       txHash: '0xcrowd',
       timestamp: String(Date.parse('2026-11-14T15:00:00Z')),
+      typeCalls: [
+        {
+          typeCodeHash: `0x${'3a'.repeat(32)}`,
+          typeHashType: 'type',
+          typeArgs: '0x00',
+          scriptHash: `0x${'3a'.repeat(31)}00`,
+          scriptName: '.bit Time Index State',
+        },
+      ],
       participants: ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((c, i) =>
         makeParticipant({ address: seededAddress(`crowd${c}`), ckbDelta: String(i + 1) })
       ),
