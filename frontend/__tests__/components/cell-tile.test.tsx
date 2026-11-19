@@ -536,7 +536,9 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(occupied.text.children).toHaveLength(3);
     const [bar, bytes] = Array.from(occupied.text.children) as HTMLElement[];
     expect(bar).toHaveAttribute('aria-hidden', 'true');
-    expect(bar).toHaveClass('h-1', 'w-14', 'shrink-0');
+    // re-pinned on purpose (lane D3): the track is 40 px (it was w-14, 56 px), so the line holds
+    // in every tile the pages draw (the test after this one)
+    expect(bar).toHaveClass('h-1', 'w-10', 'shrink-0');
     expect(bytes).toHaveTextContent(/^occupied 61 B$/);
     expect(bytes).toHaveClass('text-meta', 'text-text-dim');
     const state = expectEnd(occupied.text, /^live$/);
@@ -548,42 +550,31 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     // 'occupied 231'): a cell's occupied bytes are no more than the transaction that made it, and
     // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record), so the
     // widest figure is "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px.
-    // With the 56 px bar, 'consumed' and the 6 px gaps the line is 269.6 px.
+    // With the 40 px bar, 'consumed' and the 6 px gaps the line is 253.6 px.
     //
-    // The tile's text column, derived (second fix round, tests NOTE-2: 343 was typed, 215 came
-    // from a recorded 203): the transaction page's main column (the container less the 280 px rail
-    // and the 56 px gap, its lg grid), half of it less the 4 px seam (the two sheets), less the
+    // Re-pinned on purpose (lane D3): the tile's text column was derived with the 280 px facts
+    // rail and its 56 px gap beside the sheets (215 px at 1024, 343 at 1280), which lane D2 took
+    // away; the sheets now share the whole measure, half of it less the 4 px seam, less the
     // sheet's lane on the seam side (SHEETS.lane) and its outer side (12 px and the 1 px border),
-    // the tile's sides (12 px and 1 px each), its mark column and the 10 px gap: 215 px at 1024,
-    // 343 at 1280.
+    // the tile's sides (12 px and 1 px each), its mark column and the 10 px gap: 383 px at 1024,
+    // 511 at 1280. The line it said stood on two lines at 1024 for every real cell holds there.
     const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
     const textColumn = (viewport: number) =>
-      (containerContentPx(viewport) - 280 - 56 - SHEETS.seam) / 2 -
+      (containerContentPx(viewport) - SHEETS.seam) / 2 -
       SHEETS.lane -
       (12 + 1) -
       2 * (12 + 1) -
       mark -
       10;
-    expect([textColumn(1024), textColumn(1280)]).toEqual([215, 343]);
+    expect([textColumn(1024), textColumn(1280)]).toEqual([383, 511]);
     const lineOf = (words: string) =>
-      56 + 6 + textPx(words.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
+      40 + 6 + textPx(words.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
     const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES), 'a cell')}`;
     expect(widest).toBe('occupied 1,236,271\u00a0B');
-    expect(lineOf(widest)).toBeCloseTo(269.6, 10);
-    // it holds at 1280; at 1024 the line holds up to "occupied 9 B" (212 px) and not from
-    // "occupied 10 B" (219.2) on: every real cell, which occupies at least 41 bytes (its capacity
-    // field, 8, and its lock's code hash and hash type, 33), stands its state under the bar there,
-    // as it did before the unit was written (the type build, measured in Chrome)
+    expect(lineOf(widest)).toBeCloseTo(253.6, 10);
+    // it holds at 1280 and at 1024
     expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1280));
-    expect(lineOf(`occupied ${occupiedBytesText(BigInt(9), 'a cell')}`)).toBeLessThanOrEqual(
-      textColumn(1024)
-    );
-    expect(lineOf(`occupied ${occupiedBytesText(BigInt(10), 'a cell')}`)).toBeGreaterThan(
-      textColumn(1024)
-    );
-    expect(lineOf(`occupied ${occupiedBytesText(BigInt(41), 'a cell')}`)).toBeGreaterThan(
-      textColumn(1024)
-    );
+    expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1024));
     // where it does not fit, the line wraps and its end (the state) drops under the bar: the row
     // is a wrapping flex row, the state its own last item
     expect(occupied.text).toHaveClass('flex', 'flex-wrap');

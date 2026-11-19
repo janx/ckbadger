@@ -156,13 +156,14 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
-        {/* the bar, its bytes and the state at 12 px, budgeted at a cell's widest occupied figure:
-            no more than the transaction that made it (LARGEST_TX_BYTES, of record: genesis's
-            cellbase), "occupied 1,236,271 B", 144 px: 56 + 6 + 144 + 6 + 57.6 ('consumed') =
-            269.6 px. It holds in the 343 px text column at 1280. In the 215 px column at 1024 it
-            holds up to "occupied 9 B" and not from "occupied 10 B" on, so every real cell (at
-            least 41 bytes) stands its state, the line's end, under the bar on its own line at the
-            right, as it did before the unit was written (measured on the type build) */}
+        {/* the bar, its bytes and the state at 12 px on one line (lane D3): the bar's track 40 px
+            (it was 56), so a cell under 1,000,000 bytes, "occupied 999,999 B" (129.6 px), holds
+            40 + 6 + 129.6 + 6 + 57.6 ('consumed') = 239.2 px in the narrowest tile the pages draw,
+            248 px of text at 360 where the sheets stack; and the widest of record
+            (LARGEST_TX_BYTES, genesis's cellbase, "occupied 1,236,271 B", 144 px), 253.6 px, from
+            390 up (278 px stacked; 383 at 1024 and 511 at 1280 on the transaction page, 335 at
+            1024 on the cell page beside its onward bridge). Where it does not fit, the state wraps
+            under the bar at the right */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)
@@ -171,7 +172,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           {cell.anatomy ? (
             <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
           ) : (
-            <div aria-hidden="true" className="bg-bar-track h-1 w-14 shrink-0">
+            <div aria-hidden="true" className="bg-bar-track h-1 w-10 shrink-0">
               <div
                 className="bg-jade scan-fill h-full"
                 style={{ width: `${(Number(occupiedShannons) / Number(capacity)) * 100}%` }}
