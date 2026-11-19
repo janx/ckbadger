@@ -475,8 +475,10 @@ describe('Transaction board, tier 1', () => {
     expect(hash).toHaveAttribute('title', TX_HASH);
     // re-pinned (lane c2-finish, item 4: copy has one form): HeadId draws the copy after the id,
     // the one form of every head (8 px after it, at its first line: was items-center gap-0.5 by
-    // the page's hand); the id no longer positions a tick over itself (was 'relative')
-    expect(hash.className).toBe('block min-w-0 flex-1 font-mono');
+    // the page's hand); the id no longer positions a tick over itself (was 'relative'). Re-pinned
+    // again (lane c2-finish, rulings round 2): the id takes its content's width (it was flex-1 and
+    // filled the row, so its copy stood at the row's far end, 352 to 727 px after the hash at 1280)
+    expect(hash.className).toBe('block min-w-0 font-mono');
     expect(hash.querySelector('.overflow-x-auto')).toBeNull();
     expect(hash.parentElement!.className).toBe('flex min-w-0 items-start gap-2');
     // re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one

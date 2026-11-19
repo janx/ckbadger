@@ -1,5 +1,6 @@
 import { expect } from 'vitest';
 import { expectAnswerUnclipped } from '@/__tests__/utils/copy-answer';
+import { widthRuleAt } from '@/__tests__/utils/tailwind-box';
 
 /**
  * A4 Chrome F3: a full id in a page's head is the head's HeadId — one line where the measured line
@@ -21,4 +22,6 @@ export function expectHeadId(value: string) {
   const copy = id.parentElement!.querySelector<HTMLElement>(':scope > span > button');
   expect(copy, 'the head’s copy button stands after its id').not.toBeNull();
   expectAnswerUnclipped(copy!);
+  // rulings round 2: the id takes its content's width, so its copy stands 8 px after it
+  for (const w of [1280, 390]) expect(widthRuleAt(id, w), `the id at ${w}`).toBe('auto');
 }
