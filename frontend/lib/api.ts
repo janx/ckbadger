@@ -1366,6 +1366,11 @@ interface ActivityProtocolAction {
 const TAG_TOKEN = 1;
 const TAG_OBJECT = 2;
 const TAG_IDENTITY = 4;
+/**
+ * A party whose cells hold this transaction's Nervos DAO step (a deposit made, a withdrawal asked,
+ * a deposit withdrawn): the indexer's TAG_DAO (crates/ckbadger-store/src/types.rs, bit 3).
+ */
+const TAG_DAO = 8;
 const TAG_CELLBASE = 32;
 
 /** Address activity response (GET /addresses/{addr}/activities). */
@@ -3963,7 +3968,7 @@ export type {
   FiberChannelQueryParams,
 };
 
-export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_CELLBASE };
+export { TAG_TOKEN, TAG_OBJECT, TAG_IDENTITY, TAG_DAO, TAG_CELLBASE };
 
 export interface LabelCount {
   label: string;
