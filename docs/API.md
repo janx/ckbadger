@@ -800,7 +800,9 @@ network store too), no re-sync:
   `/statistics/network`'s `avgBlockTime` (two) and `tps`,
   `transactionsPerMinute`, `transactionsPerDay` (two, one, none),
   `/statistics/asset-ecosystem`'s category `percentage` (two), `/dao/calculator`'s
-  realized APC (two) and `/dao/evidence`'s percentages (two and four).
+  realized APC (two) and `/dao/evidence`'s percentages (two and four). The
+  inventory writes `hMultiplier` as it is, its whole part grouped, and refuses a
+  value not at two places (part B5: it cut the route's figure a second time).
 - `/statistics/network`'s `hashRate` and `difficulty` (part B, the third read's
   S3): in the unit the exact value reaches (no lowered threshold), cut at two
   places; the difficulty chart's day is the day's average cut to the integer.

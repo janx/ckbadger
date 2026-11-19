@@ -6,8 +6,7 @@ import { ClassMark } from '@/components/ui/class-mark';
 import { formatStandard } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import { formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { exactDecimalRatio, exactUnsignedInteger } from '@/lib/exact-integer';
-import { formatHMultiplier } from '@/components/ui/h-multiplier';
+import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { ckbAmountText } from '@/lib/amount-form';
 import { Dotted, Labelled, PhoneRow } from '@/components/ui/phone-row';
 import { RowTag } from '@/components/ui/row-tag';
@@ -339,12 +338,23 @@ const countText = (value: number | string | null | undefined, one: string, many:
     : `${exactUnsignedInteger(String(value), many).toLocaleString('en-US')} ${value === 1 || value === '1' ? one : many}`;
 
 /**
- * The H-multiplier for the row, in its one form (formatHMultiplier: cut at 2 dp, grouped; its exact
- * value is in the title).
+ * The H-multiplier as the route states it (`hMultiplier`, cut at two places by the route: part A2,
+ * S5), "×" and its whole part grouped, in the row and its title alike (lane exactness, part B5:
+ * the page read it into a ratio and cut it a second time, formatHMultiplier, and its title wrote
+ * the value bare). A value not at two places is no figure of the route's, refused by name.
  */
+function hMultiplierText(value: string): string {
+  if (!/^(0|[1-9]\d*)\.\d{2}$/.test(value))
+    throw new Error(
+      `H-multiplier ${JSON.stringify(value)} is not the route’s figure, cut at two places`
+    );
+  return `×${formatExactDecimal(value, 'H-multiplier')}`;
+}
+
+/** The H-multiplier for the row (`hMultiplierText`), or "Unavailable" where the route has none. */
 function HMultiplier({ value }: { value: string | null }) {
   if (value === null) return <span>Unavailable</span>;
-  return <span>{formatHMultiplier(...exactDecimalRatio(value, 'H-multiplier'))}</span>;
+  return <span>{hMultiplierText(value)}</span>;
 }
 
 /**
@@ -397,7 +407,7 @@ function tokenTitle(a: Asset): string {
       : `supply ${formatTokenBalanceWithRawMarker(a.totalSupply, a.decimals)}${a.symbol ? ` ${a.symbol}` : ''}`,
     a.hMultiplier === null
       ? 'CKB held ÷ occupied unavailable'
-      : `CKB held ÷ occupied ×${a.hMultiplier}`,
+      : `CKB held ÷ occupied ${hMultiplierText(a.hMultiplier)}`,
   ].join(' · ');
 }
 
@@ -549,7 +559,7 @@ function objectTitle(a: Asset): string {
     heldTitle(a),
     a.hMultiplier === null
       ? 'CKB held ÷ occupied unavailable'
-      : `CKB held ÷ occupied ×${a.hMultiplier}`,
+      : `CKB held ÷ occupied ${hMultiplierText(a.hMultiplier)}`,
   ].join(' · ');
 }
 
