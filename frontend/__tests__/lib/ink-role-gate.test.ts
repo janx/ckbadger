@@ -448,11 +448,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { prose: 1 },
     reason: 'the loading line, a transient note in the quiet ink',
   },
-  'app/network/nodes-table.tsx': {
-    family: 'topics',
-    sites: { prose: 9 },
-    reason: "a node's observation sentences and empty states in its detail",
-  },
   'app/network/trends.tsx': {
     family: 'topics',
     // prose 5 → 4 (B7): the top-label note explains, in the reading ink; td 1 → 0, prose 4 → 2

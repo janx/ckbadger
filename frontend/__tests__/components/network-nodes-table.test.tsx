@@ -244,6 +244,10 @@ describe('PeersTable', () => {
     expect(within(evidence).getByText('2 consecutive exhausted rounds')).toBeInTheDocument();
     expect(within(evidence).getByText(/first advertised/)).toHaveTextContent(/last advertised/);
     expect(within(evidence).getByText('Advertised by')).toBeInTheDocument();
+    // P4 topics (the ink-role gate's work list): a round's outcome is a value, in the reading ink
+    expect(within(evidence).getByText('2 consecutive exhausted rounds').closest('p')).toHaveClass(
+      'text-text'
+    );
   });
 
   // Lane E4: every age the table writes (a row's latest evidence, last dial and last verified; the
@@ -329,6 +333,10 @@ describe('PeersTable', () => {
     ).toBeInTheDocument();
     expect(within(evidence).getByText(/not used as crawler dial aliases/)).toBeInTheDocument();
     expect(within(evidence).getByText('No completed probe observation.')).toBeInTheDocument();
+    // P4 topics (the ink-role gate's work list): an empty state and a sentence that explains read
+    // in the reading ink
+    expect(within(evidence).getByText('No completed probe observation.')).toHaveClass('text-text');
+    expect(within(evidence).getByText(/not used as crawler dial aliases/)).toHaveClass('text-text');
   });
 
   // A1 review fix, round 2: a read paused offline, or in a hidden tab between retries, is still

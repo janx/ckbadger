@@ -174,7 +174,7 @@ function sessionInitiatorLabel(initiator: NetworkSessionInitiator): string {
 
 function ObservationList({ observations }: { observations: NetworkAddressProbeEvidence[] }) {
   if (observations.length === 0) {
-    return <p className="text-text-dim">No address observations recorded.</p>;
+    return <p className="text-text">No address observations recorded.</p>;
   }
   return (
     <ul className="space-y-1">
@@ -213,7 +213,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised aliases</h4>
         {detail.aliases.length === 0 ? (
-          <p className="text-text-dim">No aliases recorded.</p>
+          <p className="text-text">No aliases recorded.</p>
         ) : (
           <ul className="space-y-1">
             {detail.aliases.map((alias) => (
@@ -233,7 +233,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Direct CKB session evidence</h4>
         {detail.directSessions.length === 0 ? (
-          <p className="text-text-dim">No retained direct-session observation.</p>
+          <p className="text-text">No retained direct-session observation.</p>
         ) : (
           <ul className="space-y-1">
             {detail.directSessions.map((session) => (
@@ -254,7 +254,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
             ))}
           </ul>
         )}
-        <p className="text-text-dim max-w-measure mt-1">
+        <p className="text-text max-w-measure mt-1">
           Direction is from the configured observer&apos;s vantage. Session addresses are not used
           as crawler dial aliases.
         </p>
@@ -265,7 +265,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <h4 className="text-text-bright mb-1 font-bold">
             Last completed round #{detail.lastCompleted.roundId}
           </h4>
-          <p className="text-text-dim max-w-measure mb-1">
+          <p className="text-text max-w-measure mb-1">
             <span>{outcomeLabel(detail.lastCompleted.outcome)}</span>
             {detail.lastCompleted.outcome === 'exhausted' && (
               <>
@@ -280,13 +280,15 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
           <ObservationList observations={detail.lastCompleted.observations} />
         </div>
       ) : (
-        <p className="text-text-dim">No completed probe observation.</p>
+        <p className="text-text">No completed probe observation.</p>
       )}
 
       {detail.active && (
         <div>
           <h4 className="text-text-bright mb-1 font-bold">Active round #{detail.active.roundId}</h4>
-          <p className="text-text-dim max-w-measure">State: {detail.active.state}</p>
+          <p className="text-text max-w-measure">
+            <span className="text-text-dim">State:</span> {detail.active.state}
+          </p>
           <ObservationList observations={detail.active.observations} />
         </div>
       )}
@@ -294,7 +296,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       {detail.verified && (
         <div>
           <h4 className="text-text-bright mb-1 font-bold">Retained verification</h4>
-          <p className="text-text-dim max-w-measure">
+          <p className="text-text max-w-measure">
             {detail.verified.clientVersion} · last same-network Identify{' '}
             {ago(detail.verified.lastReachableAt)} · protocols{' '}
             {detail.verified.protocols.join(', ') || '—'}
@@ -319,7 +321,7 @@ function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
       <div>
         <h4 className="text-text-bright mb-1 font-bold">Advertised by</h4>
         {detail.advertisers.length === 0 ? (
-          <p className="text-text-dim">No retained advertiser evidence.</p>
+          <p className="text-text">No retained advertiser evidence.</p>
         ) : (
           <ul className="space-y-1">
             {detail.advertisers.map((advertiser) => (
