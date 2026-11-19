@@ -459,7 +459,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                     const value = geneOf(items[0], lane)!;
                     const band = lane.bands.find((b) => b.value === value);
                     return (
-                      <span key={lane.gene}>
+                      <span key={lane.gene} className="[overflow-wrap:anywhere]">
                         <span className="text-text-dim">{geneLabel(lane.gene)}</span>{' '}
                         <TraitText text={geneCellText(value)} />
                         {band && (
