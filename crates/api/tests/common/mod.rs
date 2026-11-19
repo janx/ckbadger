@@ -1370,6 +1370,61 @@ pub fn make_test_tx_actions(
     }
 }
 
+/// A cell whose type script is `code` (hash type `type`) with `args`: the cell an item's own
+/// record places for an activity's `itemTypes` (an object's creating output, an identity's cell in
+/// the item outpoint index).
+pub fn typed_cell(code: [u8; 32], args: &[u8]) -> LiveCellInfo {
+    LiveCellInfo {
+        capacity: 200_00000000,
+        lock_code_hash: [0x9b; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0x01; 20],
+        type_code_hash: Some(code),
+        type_hash_type: Some(1),
+        type_args: Some(args.to_vec()),
+        data_size: 0,
+        udt_amount: None,
+        data_hash: None,
+    }
+}
+
+/// An object's creating transaction for `itemTypes`: its location and index row at
+/// `(block, tx_index)` and one output per id, each a `code` cell whose type args are the id.
+pub fn seed_creating_tx(
+    batch: &mut StoreBatch,
+    block: i64,
+    tx_index: i32,
+    tx_hash: [u8; 32],
+    code: [u8; 32],
+    ids: &[&[u8]],
+) {
+    batch.put_tx_hash_map(&tx_hash, block, tx_index);
+    batch.put_tx_index(
+        block,
+        tx_index,
+        &TxIndexEntry {
+            tx_hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_000_000,
+            inputs_count: 1,
+            outputs_count: i16::try_from(ids.len()).unwrap(),
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    for (index, id) in ids.iter().enumerate() {
+        batch
+            .put_cell_payload_by_outpoint(
+                &tx_hash,
+                i16::try_from(index).unwrap(),
+                &typed_cell(code, id),
+            )
+            .unwrap();
+    }
+}
+
 /// Seed one committed transaction for `lock_hash`: the block header, the tx
 /// location/index, its `TxActions`, its `addr_txs` row and the address's
 /// transaction counters — everything the address activity feed and

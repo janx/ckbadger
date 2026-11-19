@@ -5472,7 +5472,12 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
     // The cluster's items each canonical row touched: tx 0x21 mints spore A
     // and burns spore B, tx 0x22 transfers spore A.
     let (spore_a, spore_b) = ([0xa1; 32], [0xa2; 32]);
-    for spore in [spore_a, spore_b] {
+    // their creating transactions (`itemTypes`): spore B's before, spore A's 0x21
+    seed_creating_tx(&mut batch, 0, 0, [0x20; 32], [0x4a; 32], &[&spore_b]);
+    batch
+        .put_cell_payload_by_outpoint(&[0x21; 32], 0, &typed_cell([0x4a; 32], &spore_a))
+        .unwrap();
+    for (spore, made_by) in [(spore_a, 0x21u8), (spore_b, 0x20)] {
         batch.put_spore(
             &spore,
             &ObjectEntry {
@@ -5484,7 +5489,7 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
                 description: None,
                 is_live: false,
                 created_at_block: 0,
-                created_at_tx: vec![0x21; 32],
+                created_at_tx: vec![made_by; 32],
                 extra: ObjectExtra::Spore {
                     content_type: "image/png".to_string(),
                     content_length: 1,

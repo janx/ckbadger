@@ -73,6 +73,25 @@ activity and transaction lists, and the address detail's `pendingSummary`).
 - `CursorPaginatedResponse<GlobalActivityResponse>` — tx-level global activity
 - `Vec<GlobalActivityResponse>` — plain vector for latest
 
+**The scripts an activity names** (both shapes; the feeds fold consecutive rows by what was done
+and these codes, never their args)
+
+- `itemTypes: [{ typeCodeHash, typeHashType, scriptName }] | null` — the type scripts the
+  transaction's items and its Nervos DAO step carry, each code (code hash and hash type) once, in
+  code-hash order: the type script of every token, object and identity any participant gained or
+  lost, and the Nervos DAO's when it took a DAO step; `scriptName` is the registry's name. Read
+  from ckbadger's own stores in the request's view, from the item's own record: a token's row
+  (`CF_TOKENS`); an object's (spore, Spore cluster, m-NFT token) creating transaction's output
+  whose type args are its id; an identity's cell in the item outpoint index (did:ckb, .bit Cell,
+  `.cell` by item id, a .bit account by account id). An item its record does not place is a `500`
+  naming the transaction and the item. `null` exactly on a pool row (a pending row never folds).
+- `typeCalls` — the type scripts the indexer does not recognise (an item's type never is one),
+  with their args.
+- `lockCalls` — the non-standard locks attached to the transaction's OUTPUTS, with their args.
+  An output's lock does not run: these are not the locks the transaction called. The locks that
+  ran, its inputs', are not stored per activity yet; they wait for the indexer's per-participant
+  input flag (a re-sync).
+
 **Participants**
 
 A participant is any party the transaction affects, not only a holder of one of its cells. Both
