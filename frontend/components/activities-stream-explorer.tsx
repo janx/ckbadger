@@ -254,6 +254,7 @@ function ActivityStreamToolbar({
         values={kindFilterValues(ACTIVITY_KINDS, counts ?? {})}
         value={selectedFilter}
         onChange={onFilterChange}
+        counted
       />
       {summary && (
         <p className="text-text-dim text-meta mt-2">

@@ -460,22 +460,26 @@ export default function TransactionsPage() {
   }, [urlKind, resetCommitted, resetPool]);
   const committed = useQuery({
     queryKey: ['transactions', committedPage.cursor, limit, activityType],
-    queryFn: () =>
+    queryFn: committedPage.ask((cursor: string | undefined) =>
       api.getTransactions({
-        cursor: committedPage.cursor,
+        cursor,
         limit,
         ...(activityType ? { activityType } : {}),
-      }),
+      })
+    ),
     staleTime: 30_000,
   });
   const pool = useQuery({
-    queryKey: ['pool-transactions', poolPage.cursor, limit, activityType],
-    queryFn: () =>
+    // asked by its walk (lane cd-fixes-controls, item 1), so its cache entry is its own beside the
+    // head's first page
+    queryKey: ['pool-transactions', poolPage.cursor, limit, activityType, 'page'],
+    queryFn: poolPage.ask((cursor: string | undefined) =>
       api.getPoolTransactions({
-        cursor: poolPage.cursor,
+        cursor,
         limit,
         ...(activityType ? { activityType } : {}),
-      }),
+      })
+    ),
     enabled: tab === 'pool',
     refetchInterval: 5000,
   });
@@ -523,7 +527,16 @@ export default function TransactionsPage() {
   // where the committed list stands in time (lib/pagination.ts): its page, and the pages its
   // served total makes where it states one (a kind's list states none); nothing for one page
   const committedAt = committed.data
-    ? timePageAt('committed transactions', committedPage.page, committed.data)
+    ? timePageAt('committed transactions', committed.data, committedPage)
+    : null;
+  // the pool's pages, a list in time with no count of pages: the pool moves under the reader
+  // (every five seconds), so its pages are no fixed number; its "more" is its next cursor
+  const poolAt = pool.data
+    ? timePageAt(
+        'pool transactions',
+        { ...pool.data, hasMore: pool.data.nextCursor !== null, total: null },
+        poolPage
+      )
     : null;
   return (
     <div className="min-h-screen">
@@ -582,6 +595,7 @@ export default function TransactionsPage() {
               values={kindFilterValues(TRANSACTION_KINDS, counts)}
               value={kind}
               onChange={chooseKind}
+              counted
             />
             {day && (
               <p className="text-text-dim text-meta max-w-measure">
@@ -718,12 +732,6 @@ export default function TransactionsPage() {
                       label="committed transactions"
                       order="newest first"
                       {...committedAt}
-                      onNewer={committedPage.hasPrevious ? committedPage.goToPrevious : undefined}
-                      onOlder={
-                        committed.data.hasMore
-                          ? () => committedPage.goToNext(committed.data.nextCursor)
-                          : undefined
-                      }
                     />
                   )}
                 </>
@@ -783,18 +791,9 @@ export default function TransactionsPage() {
                   />
                   {/* The controls board's cursor in time, without a count of pages: the pool moves
                       under the reader (every five seconds), so its pages are no fixed number. */}
-                  <Pager
-                    mode="time"
-                    label="pool transactions"
-                    order="newest first"
-                    page={poolPage.page}
-                    onNewer={poolPage.hasPrevious ? poolPage.goToPrevious : undefined}
-                    onOlder={
-                      pool.data.nextCursor !== null
-                        ? () => poolPage.goToNext(pool.data.nextCursor)
-                        : undefined
-                    }
-                  />
+                  {poolAt && (
+                    <Pager mode="time" label="pool transactions" order="newest first" {...poolAt} />
+                  )}
                 </>
               )}
             </div>

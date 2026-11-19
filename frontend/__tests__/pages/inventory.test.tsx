@@ -9,6 +9,7 @@ import TokensPage from '@/app/inventory/tokens/page';
 import ObjectsPage from '@/app/inventory/objects/page';
 import IdentitiesPage from '@/app/inventory/identities/page';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 const mockReplace = vi.fn((href: string) => {
   const url = new URL(href, 'http://localhost');
@@ -72,6 +73,12 @@ const mockTokenAssets = {
   nextCursor: null,
   anchor: { blockNumber: 21016902, blockHash: `0x${'ab'.repeat(32)}` },
 };
+
+/** One token a page, two pages: the first with an older one after it, then the last. */
+const twoTokenPages = (cursor: string | undefined) =>
+  cursor
+    ? pagedRead({ ...mockTokenAssets, limit: 1, total: 2, hasMore: false, nextCursor: null }, 1)
+    : pagedRead({ ...mockTokenAssets, limit: 1, total: 2, hasMore: true, nextCursor: 'older' });
 
 const mockClusterAssets = {
   data: [
@@ -971,12 +978,11 @@ describe('Inventory snapshot and pagination lifecycle', () => {
   // the second page it serves (52 rows, it said 2 beside a next page, which the old pager drew and
   // the new one refuses).
   it('resets the cursor when a standard chip changes', async () => {
-    vi.mocked(api.getAssets).mockResolvedValue({
-      ...mockTokenAssets,
-      total: 52,
-      hasMore: true,
-      nextCursor: 'older',
-    });
+    // re-pinned (lane cd-fixes-controls, item 1): two pages that agree with themselves
+    // (pagedRead), the first with an older one after it, then that older and last one (it served
+    // the same page at every cursor, whose next cursor repeated the one it was asked with: an API
+    // fault the pager now refuses; and one token on a page of 50 with more after it)
+    vi.mocked(api.getAssets).mockImplementation(async (p) => twoTokenPages(p?.cursor));
     render(<TokensPage />);
     await screen.findAllByText('Test Token');
     fireEvent.click(screen.getByRole('button', { name: 'next →' }));
@@ -993,12 +999,11 @@ describe('Inventory snapshot and pagination lifecycle', () => {
   // The controls lane (C2, c2-lists), written before the sort and the search became the controls
   // board's select and field: each starts the list again from its first page.
   it('starts the list again from its first page when the sort changes', async () => {
-    vi.mocked(api.getAssets).mockResolvedValue({
-      ...mockTokenAssets,
-      total: 52,
-      hasMore: true,
-      nextCursor: 'older',
-    });
+    // re-pinned (lane cd-fixes-controls, item 1): two pages that agree with themselves
+    // (pagedRead), the first with an older one after it, then that older and last one (it served
+    // the same page at every cursor, whose next cursor repeated the one it was asked with: an API
+    // fault the pager now refuses; and one token on a page of 50 with more after it)
+    vi.mocked(api.getAssets).mockImplementation(async (p) => twoTokenPages(p?.cursor));
     render(<TokensPage />);
     await screen.findAllByText('Test Token');
     fireEvent.click(screen.getByRole('button', { name: /^next/i }));
@@ -1015,12 +1020,11 @@ describe('Inventory snapshot and pagination lifecycle', () => {
     );
   });
   it('starts the list again from its first page when the search changes', async () => {
-    vi.mocked(api.getAssets).mockResolvedValue({
-      ...mockTokenAssets,
-      total: 52,
-      hasMore: true,
-      nextCursor: 'older',
-    });
+    // re-pinned (lane cd-fixes-controls, item 1): two pages that agree with themselves
+    // (pagedRead), the first with an older one after it, then that older and last one (it served
+    // the same page at every cursor, whose next cursor repeated the one it was asked with: an API
+    // fault the pager now refuses; and one token on a page of 50 with more after it)
+    vi.mocked(api.getAssets).mockImplementation(async (p) => twoTokenPages(p?.cursor));
     render(<TokensPage />);
     await screen.findAllByText('Test Token');
     fireEvent.click(screen.getByRole('button', { name: /^next/i }));
