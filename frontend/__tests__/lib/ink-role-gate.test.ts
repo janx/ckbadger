@@ -338,12 +338,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'custody, version and evidence states in table cells; the resolution, empty, loading and capacity sentences (script pages: P3 with the scripts list, or P2 with R7)',
   },
-  'app/scripts/page.tsx': {
-    family: 'lists',
-    // link 1 → 0, prose 2 → 1 (B7): the lede and its link read in the reading ink
-    sites: { prose: 1 },
-    reason: "the code-class bar's caption in the quiet ink",
-  },
+  // 'app/scripts/page.tsx' left the list (lane P3: prose 1 → 0; the code-class bar is named by
+  // the summary sentence, in the reading ink, no quiet label over it)
   'app/transactions/page.tsx': {
     family: 'lists',
     // link 1 → 0, prose 11 → 9 (lane P3): the activities link is a way onward (its look's ink);

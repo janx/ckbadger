@@ -166,12 +166,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { look: 5, ink: 2 },
     reason: '5 without a look; inks by hand (hover:underline, text-text-bright, text-text)',
   },
-  'app/scripts/page.tsx': {
-    lane: 'p-lists',
-    sites: { look: 1, ink: 2, raw: 1 },
-    reason:
-      '1 without a look; inks by hand (hover:underline, text-text-bright, hover:text-emphasis); 1 raw <a>',
-  },
+  // 'app/scripts/page.tsx' left the list (lane P3: look 1, ink 2, raw 1 → 0; a script's name its
+  // row's key, "How it works" a way onward)
   // 'app/transactions/page.tsx' left the list (lane P3: look 3, ink 2 → 0; the activities link
   // a way onward, the pool's squares blocks, the pool's hash a key whose Hash inherits its ink)
   'components/activity-event-row.tsx': {
@@ -309,8 +305,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // deep-fork alert's words on its filled button, a transaction cell's "no readable amount of", the
 // block page's step arrow mark; TabLinks' name span is NAMED) → 111 (lane P3: the transactions
 // page, 5, and its list, 5, every link its look, the Hash of a row's key inheriting its link's ink)
-// → 109 (lane P3: the activities page's way onward, 2)
-const TOLERATED_TOTAL = 109;
+// → 109 (lane P3: the activities page's way onward, 2) → 105 (lane P3: the scripts list, 4)
+const TOLERATED_TOTAL = 105;
 
 /** Sites kept by decision, by file: their count per kind and why. */
 interface Named {
