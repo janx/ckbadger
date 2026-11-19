@@ -19,6 +19,8 @@ vi.mock('@/components/cell/cell-transactions', () => ({
       {cell.status === 'dead' ? 'spent evidence' : 'live evidence'}
     </div>
   ),
+  // lane D3: the developer tier holds the transactions' script groups
+  CellScriptGroups: () => <div data-testid="script-groups" />,
 }));
 vi.mock('@/lib/api', async (importOriginal) => ({
   // the error class itself: the page's failed-read line reads a gateway status off it
@@ -334,9 +336,12 @@ describe('CellDetailPage', () => {
     const onlyName = screen.getByText(/The out point is the cell's only name/);
     expect(onlyName).toHaveTextContent('existed from block #123 until block #125 spent it.');
     // readability R3 / R4 (lane B7): the sentence explains, so it reads in the reading ink at the
-    // body step, in the lede's measured holder (it ran 171 characters a line at 1280, quiet, small)
-    expect(onlyName).toHaveClass('text-text', 'text-body');
-    expect(onlyName.closest('[data-detail-lede]')).toHaveClass('max-w-measure');
+    // body step, on the measure (it ran 171 characters a line at 1280, quiet, small). Re-pinned
+    // on purpose (lane D3, U-17): it stands in the page's developer tier, its own measure, where it
+    // stood in the lede's measured holder
+    expect(onlyName).toHaveClass('text-text', 'text-body', 'max-w-measure');
+    expect(onlyName.closest('[data-tier="2"]')).not.toBeNull();
+    expect(onlyName.closest('[data-detail-lede]')).toBeNull();
     expect(within(onlyName).getByRole('link', { name: '#123' })).toHaveAttribute(
       'href',
       '/mainnet/blocks/123'

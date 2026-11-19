@@ -24,6 +24,8 @@ vi.mock('@/components/cell/cell-transactions', () => ({
     transactionsProps(props);
     return <div data-testid="transactions" />;
   },
+  // lane D3: the developer tier holds the transactions' script groups
+  CellScriptGroups: () => <div data-testid="script-groups" />,
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/lib/api', () => ({
@@ -254,15 +256,19 @@ describe('Cell page against the Cell board', () => {
       'h-8',
       'sm:h-6'
     );
-    // re-pinned with readability R4 (lane B7): the lede in its measured holder under the plate
+    // re-pinned with readability R4 (lane B7): the lede in its measured holder under the plate.
+    // Re-pinned on purpose (lane D3, U-17): the generic "only name" sentence went to the page's
+    // developer tier; the lede keeps what this cell is and where it comes from
     const lede = below!.querySelector('[data-detail-lede] > div')!;
     const parts = Array.from(lede.children);
     expect(parts).toEqual([
       screen.getByTestId('cell-inventory'),
       screen.getByTestId('cell-origin'),
-      screen.getByText(/The out point is the cell's only name/),
     ]);
-    // the origin and the sentence keep the identity lines' dim small voice
+    expect(container.querySelector('[data-tier="2"]')).toContainElement(
+      screen.getByText(/The out point is the cell's only name/)
+    );
+    // the inventory and the origin lines keep the identity lines' dim small voice
     expect(lede).toHaveClass('text-text-dim', 'text-small', 'space-y-1.5');
   });
 

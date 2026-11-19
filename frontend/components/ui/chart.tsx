@@ -25,6 +25,11 @@ export interface ChartPoint {
   values: Readonly<Record<string, string>>;
   /** Optional exact time coordinate for plots sharing one time axis. */
   x?: number;
+  /**
+   * A stack's whole at this point as the API states it, which every share a chart page states of
+   * the point divides by (components/charts/chart-model.ts). Not drawn.
+   */
+  whole?: string;
 }
 export interface ChartSeries {
   key: string;
@@ -415,7 +420,9 @@ export function chartValueAxis({
     throw new Error(`${title}: invalid fixed value domain`);
   if (integerTicks && yScale === 'log')
     throw new Error(`${title}: a count axis is linear, not logarithmic`);
-  const counted = { integer: integerTicks };
+  // a log axis ticks whole decades only: a tick between them (10^0.5) has no exact label, and a
+  // tick's label is its value (the lead's ruling of 2026-11-19)
+  const counted = { integer: integerTicks || yScale === 'log' };
   if (axisCap && (yScale === 'log' || yDomain || !Number.isFinite(axisCap.value)))
     throw new Error(`${title}: an axis cap is a linear axis's own top`);
   // Lane D1 (rule 6): a value over the cap does not set the axis; it is drawn cut at the top.
@@ -654,7 +661,10 @@ export function Chart({
         : PLOT_NAME_BAND + (nameLines.length - 1) * PLOT_NAME_LINE) +
       keyBand +
       // the cap's note takes its own lines under the name (rule 6)
-      capLines.length * PLOT_NAME_LINE,
+      capLines.length * PLOT_NAME_LINE +
+      // the fork markers' labels stand a tight line under the name's last line and the cap's,
+      // as many lines as they are measured to take, at every width (the D1 hand-back, item 4)
+      (plotName !== undefined && markers.length ? MARKER_LABEL_GAP : 0),
     bottom = height - X_AXIS_BAND + keyBand,
     axisY = height + keyBand - X_AXIS_FOOT;
   const lo = ticks?.values[0],

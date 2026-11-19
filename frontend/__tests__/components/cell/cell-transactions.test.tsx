@@ -1,8 +1,8 @@
 import { addressScript } from '@/lib/lock-script';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { CellTransactions } from '@/components/cell/cell-transactions';
+import { CellScriptGroups, CellTransactions } from '@/components/cell/cell-transactions';
 import type { Cell, TransactionDetail } from '@/lib/api';
 import liveFixture from '@/__tests__/fixtures/d5/cell-live.json';
 import spentFixture from '@/__tests__/fixtures/d5/cell-spent.json';
@@ -190,11 +190,17 @@ function disagreements(detail: TransactionDetail): string[] {
     });
   return out;
 }
+/**
+ * The cell's transactions as the page draws them (lane D3, re-pinned on purpose: it was the one
+ * section, the groups inside each transaction's structure): the embed in tier 1, then the script
+ * groups of the developer tier, in the transaction page's rows.
+ */
 function view(cell: Cell) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
       <CellTransactions cell={cell} />
+      <CellScriptGroups cell={cell} />
     </QueryClientProvider>
   );
 }
@@ -271,10 +277,25 @@ describe('CellTransactions', () => {
     getTransactionDetail.mockImplementation(async (hash: string) => tx(hash, hash === cell.txHash));
     view(cell);
     expect((await screen.findAllByText(/in:0/)).length).toBeGreaterThan(0);
+    // Re-pinned on purpose (lane D3, PA-24): the groups are the developer tier's rows in the
+    // transaction page's words (they were the structure's own list: "Witness #0 · 42 bytes",
+    // "Cellbase group: no script execution").
+    const [created, spent] = await Promise.all(
+      ['created', 'spent'].map((t) =>
+        screen.findByRole('heading', { name: `Script groups of the transaction that ${t} it` })
+      )
+    );
+    const rows = (heading: HTMLElement) =>
+      Array.from(heading.closest('section')!.querySelectorAll<HTMLElement>('[data-group-row]'));
     // the spending transaction's lock group and its type group both read witness 0
-    expect(screen.getAllByText(/42 bytes/)).toHaveLength(2);
+    await waitFor(() =>
+      expect(
+        rows(spent).filter((r) => /#0 · opaque bytes, 42\sB/.test(r.textContent!))
+      ).toHaveLength(2)
+    );
     // the creating cellbase runs none of its groups: its outputs' lock group and its Type ID group
-    expect(screen.getAllByText(/Cellbase group: no script execution/)).toHaveLength(2);
+    await waitFor(() => expect(rows(created)).toHaveLength(2));
+    for (const row of rows(created)) expect(row).toHaveTextContent('attached, runs when spent');
     expect(getTransactionDetail).toHaveBeenCalledWith(cell.consumedByTx);
     // Phase 5 (D11): a spent cell's are two, the one that created it and the one that spent it.
     expectPrompt(screen.getByRole('heading', { name: 'Transactions 2' }), 'Transactions', '2');
@@ -294,8 +315,16 @@ describe('CellTransactions', () => {
     ]);
     expect(screen.queryByRole('heading', { name: 'Script groups' })).toBeNull();
     // both transactions keep their group rows: witness, code and cycles (in each, the lock group
-    // and the Type ID group read witness 0; the Type ID group ran 123 cycles)
-    expect(screen.getAllByText(/Witness #0 · 42 bytes/)).toHaveLength(4);
+    // and the Type ID group read witness 0; the Type ID group ran 123 cycles). Re-pinned on
+    // purpose (lane D3, PA-24): in the transaction page's rows and words, "#0 · opaque bytes,
+    // 42 B" (it was the structure's "Witness #0 · 42 bytes")
+    await waitFor(() =>
+      expect(
+        Array.from(document.querySelectorAll('[data-group-row]')).filter((r) =>
+          /#0 · opaque bytes, 42\sB/.test(r.textContent!)
+        )
+      ).toHaveLength(4)
+    );
     expect(screen.getAllByText('123 cycles')).toHaveLength(2);
   });
   // U-16 (UI review 2026-11-14): a group's code dep wrote its full out point, which wrapped across
@@ -305,7 +334,16 @@ describe('CellTransactions', () => {
   it('writes a group’s code dep as the transaction page does: its kind and the short out point', async () => {
     const DEP = `0x${'71a7ba8f'.repeat(8)}`;
     getTransactionCellDeps.mockResolvedValue([
-      { outPointTxHash: DEP, outPointIndex: 0, depType: 'dep_group', scriptHashes: [LOCK_HASH] },
+      // re-pinned on purpose (lane D3): the dep as the API sends it, with the output locks it holds
+      // code for and its resolved cells (the transaction page's rows read both)
+      {
+        outPointTxHash: DEP,
+        outPointIndex: 0,
+        depType: 'dep_group',
+        scriptHashes: [LOCK_HASH],
+        outputLockScriptHashes: [],
+        resolvedCells: [],
+      },
     ]);
     view(liveFixture as unknown as Cell);
     const short = `${DEP.slice(0, 10)}…${DEP.slice(-6)}:0`;
@@ -335,35 +373,26 @@ describe('CellTransactions', () => {
     const hash = `0x${'77'.repeat(32)}`;
     getTransactionDetail.mockImplementation(async () => attachedGroups(tx(hash)));
     view(liveFixture as unknown as Cell);
-    const structure = await screen.findByTestId('structure');
-    const groups = structure.querySelectorAll<HTMLElement>('[data-group-id]');
-    expect(groups).toHaveLength(3);
+    // Re-pinned on purpose (lane D3): the groups are the developer tier's rows (they were the
+    // structure's list, whose hover lit the cells in the embed; the embed now draws this cell
+    // alone and the cell page links nothing to it); each row keeps its own group and its cells
+    await screen.findByTestId('structure');
+    const groups = await waitFor(() => {
+      const found = document.querySelectorAll<HTMLElement>('[data-group-row]');
+      expect(found).toHaveLength(3);
+      return Array.from(found);
+    });
     // the groups' real hashes (B4 third round: they were 0x11… and 0x33…, the hashes of no
     // script in them)
-    expect(groups[2]).toHaveAttribute('data-group-id', `type:run:${TYPE_ID_HASH}`);
-    expect(groups[0]).toHaveAttribute('data-group-id', `lock:run:${LOCK_HASH}`);
-    expect(groups[1]).toHaveAttribute('data-group-id', `lock:attached:${LOCK_HASH}`);
-    fireEvent.mouseEnter(groups[0]);
-    expect(structure.querySelector('[data-cell-id="in:0"]')).toHaveAttribute(
-      'data-highlighted',
-      'true'
-    );
-    expect(structure.querySelector('[data-cell-id="out:0"]')).toHaveAttribute(
-      'data-highlighted',
-      'false'
-    );
-    fireEvent.mouseEnter(groups[1]);
-    expect(structure.querySelector('[data-cell-id="in:0"]')).toHaveAttribute(
-      'data-highlighted',
-      'false'
-    );
-    expect(structure.querySelector('[data-cell-id="out:0"]')).toHaveAttribute(
-      'data-highlighted',
-      'true'
-    );
-    expect(structure.querySelector('[data-cell-id="out:1"]')).toHaveAttribute(
-      'data-highlighted',
-      'true'
-    );
+    expect(groups[2]).toHaveAttribute('data-group-row', `type:run:${TYPE_ID_HASH}`);
+    expect(groups[0]).toHaveAttribute('data-group-row', `lock:run:${LOCK_HASH}`);
+    expect(groups[1]).toHaveAttribute('data-group-row', `lock:attached:${LOCK_HASH}`);
+    // the lock that ran is input 0's; the attached one guards outputs 0 and 1
+    const dots = (row: HTMLElement) => Array.from(row.querySelectorAll('[data-dot]'));
+    expect(dots(groups[0]).map((d) => d.getAttribute('data-dot'))).toEqual(['ran']);
+    expect(dots(groups[1]).map((d) => d.getAttribute('data-dot'))).toEqual([
+      'attached',
+      'attached',
+    ]);
   });
 });

@@ -168,7 +168,13 @@ describe('chart wording and marks (CH-19, CH-21)', () => {
         { key: 'top0', label: 'Default Lock', color: '#000', id: 'family:default-lock' },
         { key: 'others', label: 'Others', color: '#000' },
       ],
-      data: [{ date: '2026-11-13', values: { top0: '300000000', others: '100000000' } }],
+      // the day's whole, the route's (the D1 hand-back, item 2)
+      data: [
+        {
+          date: '2026-11-13',
+          values: { top0: '300000000', others: '100000000', total: '400000000' },
+        },
+      ],
       bands: [
         { key: 'top0', label: 'Default Lock', members: ['top0'] },
         { key: 'others', label: 'Others', members: ['others'] },

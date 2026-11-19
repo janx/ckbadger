@@ -54,6 +54,14 @@ function assertRegular(labels: string[]): void {
   expect(new Set(steps).size).toBeLessThanOrEqual(1);
 }
 
+/**
+ * Epoch durations as the API labels them: the minute in hours at two decimals, cut (the
+ * coordinator's ruling of 2026-11-19; it was half up, `(m / 60).toFixed(2)`: 181 minutes read 3.02,
+ * it reads 3.01).
+ */
+const hours = (m: number) =>
+  `${Math.floor(m / 60)}.${String(Math.floor(((m % 60) * 100) / 60)).padStart(2, '0')}`;
+
 describe('axis ticks (CH-12)', () => {
   beforeEach(() => {
     chartProps.length = 0;
@@ -91,7 +99,7 @@ describe('axis ticks (CH-12)', () => {
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue({
       title: 'Epoch Time Distribution',
       yAxisLabel: 'Epochs',
-      data: minutes.map((m) => ({ date: (m / 60).toFixed(2), value: '3' })),
+      data: minutes.map((m) => ({ date: hours(m), value: '3' })),
     });
     render(<ChartDetail slug="epoch-time-distribution" />);
     await screen.findByRole('img', { name: 'Epoch durations' });
@@ -131,9 +139,9 @@ describe('axis ticks (CH-12)', () => {
     vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue({
       title: 'Epoch Time Distribution',
       yAxisLabel: 'Epochs',
-      // the API's label: the minute in hours, two decimals, half up (no minute ties at .xx5)
+      // the API's label: the minute in hours, two decimals, cut
       data: MAINNET_EPOCH_MINUTES.map(([m, n]) => ({
-        date: (m / 60).toFixed(2),
+        date: hours(m),
         value: String(n),
       })),
     });
@@ -149,7 +157,8 @@ describe('axis ticks (CH-12)', () => {
     const { data, ticks } = await mountMainnetEpochs();
     const low = ticks.find((tick) => tick.label.startsWith('≤ '))!;
     const high = ticks.find((tick) => tick.label.startsWith('≥ '))!;
-    expect([low.label, high.label]).toEqual(['≤ 2.05', '≥ 7.67 h']);
+    // 460 minutes is 7.666… h, cut (re-pinned for the ruling: was half up, 7.67)
+    expect([low.label, high.label]).toEqual(['≤ 2.05', '≥ 7.66 h']);
     const run = data.slice(low.index + 1, high.index).map((point) => minute(point.label));
     const strides = run.slice(1).map((m, i) => m - run[i]);
     expect(strides.filter((stride) => stride !== 1)).toEqual([]);
@@ -162,7 +171,7 @@ describe('axis ticks (CH-12)', () => {
       const shown = kept(ticks, data.length, width, true);
       const labels = shown.map((tick) => tick.label);
       expect(labels, `${width} px`).toContain('4.0');
-      expect(labels.at(-1), `${width} px`).toBe('≥ 7.67 h');
+      expect(labels.at(-1), `${width} px`).toBe('≥ 7.66 h');
       const round = shown.filter((tick) => !isEdge(tick.label));
       assertRegular(round.map((tick) => tick.label));
       // a linear axis: the same pixels for every hour between any two round ticks
@@ -188,7 +197,7 @@ describe('axis ticks (CH-12)', () => {
       title: 'Epoch Time Distribution',
       yAxisLabel: 'Epochs',
       data: MAINNET_EPOCH_MINUTES.map(([m, n]) => ({
-        date: (m / 60).toFixed(2),
+        date: hours(m),
         value: String(n),
       })),
     });
@@ -199,7 +208,7 @@ describe('axis ticks (CH-12)', () => {
     const ticks = props.xTicks as Tick[];
     // the detail page's edges: the run between them is every minute from 163 to 340
     expect(ticks[0].label).toBe('≤ 2.05');
-    expect(ticks.at(-1)!.label).toBe('≥ 7.67 h');
+    expect(ticks.at(-1)!.label).toBe('≥ 7.66 h');
     const round = ticks.slice(1, -1);
     expect(round.length).toBeGreaterThan(2);
     expect(round.length).toBeLessThanOrEqual(6);
@@ -261,6 +270,9 @@ describe('axis ticks (CH-12)', () => {
       data: ['<100 CKB', '100-1k CKB', '1k-10k CKB', '10k-100k CKB', '100k-1m CKB', '>=1m CKB'].map(
         (date, i) => ({ date, value: String(600 - i * 100), value2: '1' })
       ),
+      // the route's wholes (lane D1): 600 + 500 + … + 100 cells, 1 CKB in each bucket
+      liveCells: '2100',
+      occupiedCapacity: '6',
     });
     render(<ChartDetail slug="cell-size-distribution" />);
     await screen.findByRole('img', { name: 'Cell size' });

@@ -1,5 +1,5 @@
 import { SHEETS } from '@/components/transaction/tx-structure';
-import { containerContentPx } from '@/__tests__/utils/tailwind-box';
+import { boxPx, containerContentPx } from '@/__tests__/utils/tailwind-box';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { LARGEST_TX_BYTES } from '@/lib/list-bounds';
 import { occupiedBytesText } from '@/lib/occupied';
@@ -241,8 +241,11 @@ describe('CellTile leads with the cell’s seal (seal kinds, C3)', () => {
     const address = within(tile).getByRole('link', { name: /^ckb1…[0-9a-z]{8}$/ });
     expect(address).toHaveAttribute('href', `/mainnet/address/${OWNER_ADDRESS}`);
     expect(text).toContainElement(address);
-    // one line: the stone at the line's height (20 px, 1 px over above and below)
-    expect(stone).toHaveClass('-my-px');
+    // one line: re-pinned on purpose (lane D3, Gate B's ruling): the 18 px stone, as high as the
+    // cell's, stands centred in a box of the 20 px line, 1 px clear above and below, as the cell's
+    // stone does (it was the 20 px stone overhanging the line, `-my-px`)
+    expect(stone).toHaveClass('h-row', 'items-center');
+    expect(stone.className).not.toMatch(/-my-/);
     // the out point and its seal come first; the owner, then the lock's kind
     expectBefore(within(tile).getByRole('link', { name: /:1$/ }), stone);
   });
@@ -418,7 +421,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     render(<CellTile cell={outputs[0]} />);
     const tile = screen.getByTestId('tx-io-output-0');
     expect(tile.tagName).toBe('ARTICLE');
-    // the widest of the three marks: the cell's stone (18), the owner's (15), the class mark (16)
+    // the widest of the three marks: the cell's stone (18), the owner's (13.5), the class mark (16)
     const column = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
     expect(column).toBe(18);
     expect(tile).toHaveClass(
@@ -440,7 +443,7 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(content.mark.firstElementChild).toHaveAttribute('width', '16');
     expect(occupied.mark.childNodes).toHaveLength(0);
     // each mark centred in the column, on its row's first line (the cell's stone centred in a box
-    // of the 20 px line, the owner's overhanging it by 1 px; the 16 px class mark sits 1 px down)
+    // of the 20 px line, the owner's 18 px stone too; the 16 px class mark sits 1 px down)
     for (const { mark } of [cell, owner, content])
       expect(mark).toHaveClass('flex', 'items-start', 'justify-center');
     expect(content.mark).toHaveClass('pt-px');
@@ -533,7 +536,9 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     expect(occupied.text.children).toHaveLength(3);
     const [bar, bytes] = Array.from(occupied.text.children) as HTMLElement[];
     expect(bar).toHaveAttribute('aria-hidden', 'true');
-    expect(bar).toHaveClass('h-1', 'w-14', 'shrink-0');
+    // re-pinned on purpose (lane D3): the track is 40 px (it was w-14, 56 px), so the line holds
+    // in every tile the pages draw (the test after this one)
+    expect(bar).toHaveClass('h-1', 'w-10', 'shrink-0');
     expect(bytes).toHaveTextContent(/^occupied 61 B$/);
     expect(bytes).toHaveClass('text-meta', 'text-text-dim');
     const state = expectEnd(occupied.text, /^live$/);
@@ -545,42 +550,31 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     // 'occupied 231'): a cell's occupied bytes are no more than the transaction that made it, and
     // the largest is genesis's cellbase, past the block limit (LARGEST_TX_BYTES, of record), so the
     // widest figure is "occupied 1,236,271 B", 20 glyphs at the meta step (7.2 a glyph): 144 px.
-    // With the 56 px bar, 'consumed' and the 6 px gaps the line is 269.6 px.
+    // With the 40 px bar, 'consumed' and the 6 px gaps the line is 253.6 px.
     //
-    // The tile's text column, derived (second fix round, tests NOTE-2: 343 was typed, 215 came
-    // from a recorded 203): the transaction page's main column (the container less the 280 px rail
-    // and the 56 px gap, its lg grid), half of it less the 4 px seam (the two sheets), less the
+    // Re-pinned on purpose (lane D3): the tile's text column was derived with the 280 px facts
+    // rail and its 56 px gap beside the sheets (215 px at 1024, 343 at 1280), which lane D2 took
+    // away; the sheets now share the whole measure, half of it less the 4 px seam, less the
     // sheet's lane on the seam side (SHEETS.lane) and its outer side (12 px and the 1 px border),
-    // the tile's sides (12 px and 1 px each), its mark column and the 10 px gap: 215 px at 1024,
-    // 343 at 1280.
+    // the tile's sides (12 px and 1 px each), its mark column and the 10 px gap: 383 px at 1024,
+    // 511 at 1280. The line it said stood on two lines at 1024 for every real cell holds there.
     const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
     const textColumn = (viewport: number) =>
-      (containerContentPx(viewport) - 280 - 56 - SHEETS.seam) / 2 -
+      (containerContentPx(viewport) - SHEETS.seam) / 2 -
       SHEETS.lane -
       (12 + 1) -
       2 * (12 + 1) -
       mark -
       10;
-    expect([textColumn(1024), textColumn(1280)]).toEqual([215, 343]);
+    expect([textColumn(1024), textColumn(1280)]).toEqual([383, 511]);
     const lineOf = (words: string) =>
-      56 + 6 + textPx(words.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
+      40 + 6 + textPx(words.length, fontPx('meta')) + 6 + textPx(8, fontPx('meta'));
     const widest = `occupied ${occupiedBytesText(BigInt(LARGEST_TX_BYTES), 'a cell')}`;
     expect(widest).toBe('occupied 1,236,271\u00a0B');
-    expect(lineOf(widest)).toBeCloseTo(269.6, 10);
-    // it holds at 1280; at 1024 the line holds up to "occupied 9 B" (212 px) and not from
-    // "occupied 10 B" (219.2) on: every real cell, which occupies at least 41 bytes (its capacity
-    // field, 8, and its lock's code hash and hash type, 33), stands its state under the bar there,
-    // as it did before the unit was written (the type build, measured in Chrome)
+    expect(lineOf(widest)).toBeCloseTo(253.6, 10);
+    // it holds at 1280 and at 1024
     expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1280));
-    expect(lineOf(`occupied ${occupiedBytesText(BigInt(9), 'a cell')}`)).toBeLessThanOrEqual(
-      textColumn(1024)
-    );
-    expect(lineOf(`occupied ${occupiedBytesText(BigInt(10), 'a cell')}`)).toBeGreaterThan(
-      textColumn(1024)
-    );
-    expect(lineOf(`occupied ${occupiedBytesText(BigInt(41), 'a cell')}`)).toBeGreaterThan(
-      textColumn(1024)
-    );
+    expect(lineOf(widest)).toBeLessThanOrEqual(textColumn(1024));
     // where it does not fit, the line wraps and its end (the state) drops under the bar: the row
     // is a wrapping flex row, the state its own last item
     expect(occupied.text).toHaveClass('flex', 'flex-wrap');
@@ -614,6 +608,70 @@ describe('CellTile: one mark column, one text edge (C11)', () => {
     );
     expect(cellBar).toHaveClass('min-w-0', 'flex-1');
     expect(words).toHaveTextContent(/^occupied 61 B$/);
+  });
+
+  // Lane D3 (the tile's last line; the readability review's note, ruled at Gate B for D3): the
+  // bar, "occupied N B" and the state stood on two lines in the narrow tiles, the state under the
+  // bar. A tile's text column, as the pages draw it since lane D2 gave tier 1 the whole measure:
+  // the sheet less its 12 px padding and 1 px border on the outer side (and its 36 px lane on the
+  // seam side from lg, where the sheets stand side by side; below lg they stack, the padding on
+  // both sides), the tile's 12 px padding and 1 px border on each side, the mark column and its
+  // 10 px gap. The line is the bar's track, 6 px, the bytes, 6 px and the state, at the meta step.
+  it('holds the bar, its bytes and the state on one line in every tile the pages draw, for every cell under 1,000,000 bytes', () => {
+    render(
+      <CellTile
+        cell={sealedTile({
+          id: 'in:0',
+          testId: 'tile',
+          href: '/cell/0x-0',
+          label: 'input 0',
+          owner: 'owner',
+          lockKind: null,
+          kind: 'ckb',
+          content: 'CKB',
+          capacity: '6100000000',
+          occupiedBytes: '61',
+          state: 'consumed',
+        })}
+      />
+    );
+    const [, , , occupied] = tileRows(screen.getByTestId('tile'));
+    const track = boxPx(occupied.text.firstElementChild!, 1024)!;
+    const mark = Math.max(ROW_SEAL.cell.width, OWNER_SEAL.width, 16);
+    const text = (sheet: number) => sheet - 2 * (12 + 1) - mark - 10;
+    /** The sheets side by side from lg, less the onward bridge's 96 px column where a page has it. */
+    const sideBySide = (viewport: number, bridge = 0) =>
+      text((containerContentPx(viewport) - SHEETS.seam - bridge) / 2 - SHEETS.lane - (12 + 1));
+    const stacked = (viewport: number) => text(containerContentPx(viewport) - 2 * (12 + 1));
+    const columns = {
+      'transaction page 1280': sideBySide(1280),
+      'transaction page 1024': sideBySide(1024),
+      'cell page 1024, beside its onward bridge': sideBySide(1024, 96),
+      'stacked 640': stacked(640),
+      'stacked 390': stacked(390),
+      'stacked 360': stacked(360),
+    };
+    expect(columns).toEqual({
+      'transaction page 1280': 511,
+      'transaction page 1024': 383,
+      'cell page 1024, beside its onward bridge': 335,
+      'stacked 640': 528,
+      'stacked 390': 278,
+      'stacked 360': 248,
+    });
+    const meta = fontPx('meta');
+    const lineOf = (bytes: number) =>
+      track +
+      6 +
+      textPx(`occupied ${occupiedBytesText(BigInt(bytes), 'a cell')}`.length, meta) +
+      6 +
+      textPx('consumed'.length, meta);
+    // every cell under 1,000,000 bytes (the widest state, "consumed") holds its line in every tile
+    for (const [where, width] of Object.entries(columns))
+      expect(lineOf(999_999), where).toBeLessThanOrEqual(width);
+    // the widest of record (genesis's cellbase, LARGEST_TX_BYTES) holds it from 390 up
+    for (const [where, width] of Object.entries(columns).filter(([w]) => !w.endsWith('360')))
+      expect(lineOf(LARGEST_TX_BYTES), where).toBeLessThanOrEqual(width);
   });
 });
 

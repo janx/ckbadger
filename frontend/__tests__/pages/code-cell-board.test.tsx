@@ -25,6 +25,8 @@ vi.mock('@/src/navigation', () => ({
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/components/cell/cell-transactions', () => ({
   CellTransactions: () => <div data-testid="transactions" />,
+  // lane D3: the developer tier holds the transactions' script groups
+  CellScriptGroups: () => <div data-testid="script-groups" />,
 }));
 vi.mock('@/lib/api', () => ({
   api: { getCell: vi.fn(), lookupScripts: vi.fn() },

@@ -236,7 +236,12 @@ describe('ChartsPage', () => {
     vi.mocked(api.getKnowledgeSizeChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue(mockStackedAreaResponse);
     vi.mocked(api.getCapacityTurnoverRatioChart).mockResolvedValue(mockChartResponse);
-    vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue(mockChartResponse);
+    vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue({
+      ...mockChartResponse,
+      // the route's wholes (lane D1)
+      liveCells: '100',
+      occupiedCapacity: '0',
+    });
     vi.mocked(api.getAddressCohortRetentionChart).mockResolvedValue(mockChartResponse);
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue(mockMostUtilizedScriptsResponse);
     vi.mocked(api.getMostUtilizedAssetsChart).mockResolvedValue(mockMostUtilizedAssetsResponse);

@@ -327,14 +327,16 @@ describe('Token holders (board L5)', () => {
     // Table-rows L2-4: the share is an 8 px bar on the page's own scale (the largest share here
     // is 41.23 %), not a 10 %-is-full hairline. Re-pinned on purpose (review fb-logic 7): on the
     // 50.4 px share track, "0" and the widest share tick, "0.75%" (it was 48)
-    const scale = resourceScale([232, 4123]);
+    // re-pinned for the coordinator's ruling of 2026-11-19, a shortened figure is cut: the bars' hundredths are cut, the second holder's 4,122.8 is 4,122
+    // (was half up, 4,123); its bar 34.62 px (was 34.63)
+    const scale = resourceScale([232, 4122]);
     expect(first.querySelector('[data-segment]')).toHaveStyle({
       width: barWidth(232, scale, 50.4),
       backgroundColor: CLASS_COLORS.tokens,
     });
     const second = within(table).getAllByRole('row')[2];
     expect(second.querySelector('[data-segment]')).toHaveStyle({
-      width: barWidth(4123, scale, 50.4),
+      width: barWidth(4122, scale, 50.4),
     });
   });
 

@@ -2,10 +2,12 @@ import { Seal } from '@/components/ui/seal';
 import { cn } from '@/lib/utils';
 
 /**
- * The owner's stone in px: a script's row stone at 20 px (15 wide), and the space between it and
- * the address it stands before (the round 16 board's 5 px).
+ * The owner's stone in px: a script's row stone at 18 px (13.5 wide: the script stone's 7.8 × 10.4
+ * units at that height), as high as the cell's own row stone beside it in a tile (ruled at Gate B,
+ * 2026-11-19; it was 20 px, 15 wide), and the space between it and the address it stands before
+ * (the round 16 board's 5 px).
  */
-export const OWNER_SEAL = { height: 20, width: 15, gap: 5 } as const;
+export const OWNER_SEAL = { height: 18, width: 13.5, gap: 5 } as const;
 
 /**
  * The owner's stone (the seals by kind): the row stone of a lock script's hash, an address's own

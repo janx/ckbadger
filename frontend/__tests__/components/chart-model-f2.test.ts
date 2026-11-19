@@ -30,7 +30,15 @@ const composition = {
   data: [
     {
       date: '2026-10-29',
-      values: { transfer: '100', dao: '300', udt: '50', nftSpore: '40', otherContracts: '10' },
+      values: {
+        transfer: '100',
+        dao: '300',
+        udt: '50',
+        nftSpore: '40',
+        otherContracts: '10',
+        // the day's knowledge size, the route's (the D1 hand-back, item 2)
+        knowledgeSize: '500',
+      },
     },
   ],
 };
@@ -80,18 +88,33 @@ describe('Charts index encodings (F2 charts)', () => {
       ['Objects', CLASS_COLORS.objects],
       ['Other scripts', CLASS_COLORS.other],
     ]);
+    // re-pinned for the four bands (lane D1, second follow-up, item 1): C in four bands, the unclaimed compensation the DAO's gold a step down
     const supply = chartModel(def('total-supply'), {
       title: 'Total Supply',
       series: [
-        { key: 'circulating', label: 'Circulating', color: '#00c389' },
-        { key: 'nervosdao', label: 'Nervos DAO', color: '#3b82f6' },
+        { key: 'outsideDao', label: 'Outside the DAO', color: '#00c389' },
+        { key: 'daoDeposited', label: 'In the Nervos DAO', color: '#3b82f6' },
+        { key: 'unclaimedCompensation', label: 'Unclaimed DAO compensation', color: '#a68b57' },
         { key: 'burnt', label: 'Burnt', color: '#6b7280' },
       ],
-      data: [{ date: '2026-10-29', values: { circulating: '3', nervosdao: '2', burnt: '1' } }],
+      data: [
+        {
+          date: '2026-10-29',
+          values: {
+            outsideDao: '3',
+            daoDeposited: '2',
+            unclaimedCompensation: '1',
+            burnt: '1',
+            totalIssuance: '7',
+            circulating: '5',
+          },
+        },
+      ],
     });
     expect(supply.series.map((s) => [s.label, s.color])).toEqual([
-      ['Circulating', DATA_COLOR],
-      ['Nervos DAO', CLASS_COLORS.dao],
+      ['Outside the DAO', DATA_COLOR],
+      ['In the Nervos DAO', CLASS_COLORS.dao],
+      ['Unclaimed DAO compensation', 'var(--c-gold-ramp)'],
       ['Burnt', CLASS_COLORS.ckb],
     ]);
     const secondary = chartModel(def('secondary-issuance'), {
@@ -107,6 +130,7 @@ describe('Charts index encodings (F2 charts)', () => {
           values: { compensation: '2', mining: '3', burnt: '1' },
           protocolTotalShannons: '600000000',
           phase1CompensationShannons: '0',
+          componentsTotalShannons: '600000000',
         },
       ],
     });
@@ -193,6 +217,8 @@ describe('Charts index encodings (F2 charts)', () => {
             object: '4',
             identity: '1',
             scriptCall: '20',
+            // the day's kind occurrences, the route's (the D1 hand-back, item 2)
+            kindOccurrences: '100',
           },
         },
       ],
@@ -244,6 +270,9 @@ describe('Charts index encodings (F2 charts)', () => {
         { date: '100-1k CKB', value: '300', value2: '1' },
         { date: '>=1m CKB', value: '100', value2: '1' },
       ],
+      // the route's wholes (the D1 hand-back, item 2)
+      liveCells: '1000',
+      occupiedCapacity: '3',
     });
     // Re-pinned for CH-12: the API's buckets only ('100+ CKB' is none of them), named in the
     // axis' words, and a bucket's unit is its symbol ('h', was 'hours'; CH-14).
@@ -258,14 +287,15 @@ describe('Charts index encodings (F2 charts)', () => {
       title: 'Epochs',
       yAxisLabel: 'Epochs',
       data: [
+        // minute 241 in hours, cut (re-pinned for the ruling: half up it was 4.02)
         { date: '3.98', value: '10' },
-        { date: '4.02', value: '622' },
+        { date: '4.01', value: '622' },
         { date: '50.50', value: '1' },
       ],
     });
     expect(chartHead(def('epoch-time-distribution'), epochs)).toMatchObject({
       eyebrow: 'the most common duration',
-      figure: { display: '4.02', unit: 'h' },
+      figure: { display: '4.01', unit: 'h' },
     });
     const cohort = chartModel(def('address-cohort-retention'), {
       title: 'Cohorts',
@@ -301,13 +331,14 @@ describe('Charts index encodings (F2 charts)', () => {
       ],
     });
     // Re-pinned for lane D1 (rule 9, CH-07): the card heads with the page's figure, the leading
-    // miner's blocks grouped (was its share in a headline of the card's own); its share, 62.9950
-    // half up to 63.00 as every percentage, stays on its row.
+    // miner's blocks grouped (was its share in a headline of the card's own); its share stays on
+    // its row, 42,705 of 67,791 blocks cut, 62.99% (re-pinned for the D1 hand-back, item 1: it was
+    // half up, 63.00%).
     expect(chartHead(def('miner-address-distribution'), miners)).toMatchObject({
       at: '2026-10-23 → 2026-10-29',
       figure: { display: '42,705', unit: 'blocks' },
     });
-    expect(miners.rankedRows?.[0].share).toBe('63.00%');
+    expect(miners.rankedRows?.[0].share).toBe('62.99%');
   });
 
   it("heads nominal APC with the API's today at its exact year, never the quarter sample (CH-03, CH-33)", () => {
@@ -326,12 +357,13 @@ describe('Charts index encodings (F2 charts)', () => {
       today: { blockNumber: 20876568, date: '2026-10-30', year: '6.9561234', value: '2.3395' },
     });
     // Re-pinned for lane D1: the page's head, at the API's today; its figure cut, never rounded
-    // (2.3395 is 2.33, was 2.34); with no today, no figure, never the quarter sample.
+    // (2.3395 is 2.33, was 2.34); with no today, no figure, never the quarter sample. Its year cut
+    // too (re-pinned for the ruling of 2026-11-19: 6.9561234 read year 6.96, it reads 6.95).
     expect(chartHead(def('nominal-apc'), model)).toMatchObject({
-      at: 'year 6.96',
+      at: 'year 6.95',
       figure: { display: '2.33', unit: '% a year' },
     });
-    expect(model.today).toEqual({ label: 'year 6.96', values: { primary: '2.3395' } });
+    expect(model.today).toEqual({ label: 'year 6.95', values: { primary: '2.3395' } });
     expect(
       chartHead(def('nominal-apc'), chartModel(def('nominal-apc'), payload)).figure
     ).toBeNull();
@@ -474,7 +506,11 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
       data: [
         {
           date: '2026-10-29',
-          values: Object.fromEntries(entries.map(([key], i) => [key, String((9 - i) * 100)])),
+          values: {
+            ...Object.fromEntries(entries.map(([key], i) => [key, String((9 - i) * 100)])),
+            // the day's whole, the route's (the D1 hand-back, item 2)
+            total: String(entries.reduce((sum, _, i) => sum + (9 - i) * 100, 0)),
+          },
         },
       ],
       // lane D1: five or fewer ranks, each series is its own band
@@ -600,13 +636,21 @@ describe('Deposited per day card window (CH-13)', () => {
 // the API's: a label off it, a label that is not a decimal number and a second series (an empty
 // bucket has no value for it) are broken reads, never guessed at. An axis reads the run the model
 // filled and fails without it (logic finding 2).
+/**
+ * Epoch durations as the API labels them: the minute in hours at two decimals, cut (the
+ * coordinator's ruling of 2026-11-19; it was half up, `(m / 60).toFixed(2)`: 181 minutes read 3.02,
+ * it reads 3.01).
+ */
+const hours = (m: number) =>
+  `${Math.floor(m / 60)}.${String(Math.floor(((m % 60) * 100) / 60)).padStart(2, '0')}`;
+
 describe('a filled histogram fails on what it cannot read', () => {
   const histogram = (slug: string, data: { date: string; value: string; value2?: string }[]) =>
     chartModel(def(slug), { title: slug, yAxisLabel: 'Epochs', data });
-  /** Epoch durations as the API labels them: the minute in hours, two decimals. */
+  /** Epoch durations as the API labels them: the minute in hours, two decimals, cut. */
   const minutes = (from: number, to: number) =>
     Array.from({ length: to - from + 1 }, (_, i) => ({
-      date: ((from + i) / 60).toFixed(2),
+      date: hours(from + i),
       value: '1',
     }));
   /** Block intervals: every 0.1 s from 0 to 5 s. */
@@ -617,10 +661,11 @@ describe('a filled histogram fails on what it cannot read', () => {
     data.map((point) => (point.date === at ? { ...point, date: by } : point));
 
   it('fails on a bucket off its grid', () => {
-    // 4.16 h is 249.6 minutes: the API writes minute 250 as 4.17
+    // 4.17 h is 250.2 minutes: the API writes minute 250 as 4.16, cut (re-pinned for the ruling:
+    // half up it wrote 4.17, and 4.16 was the label off the grid)
     expect(() =>
-      histogram('epoch-time-distribution', replaced(minutes(180, 300), '4.17', '4.16'))
-    ).toThrow('epoch-time-distribution: bucket 4.16 is not one of 1/60 of its unit');
+      histogram('epoch-time-distribution', replaced(minutes(180, 300), '4.16', '4.17'))
+    ).toThrow('epoch-time-distribution: bucket 4.17 is not one of 1/60 of its unit');
     expect(() => histogram('block-time-distribution', replaced(tenths(), '2.5', '2.55'))).toThrow(
       'block-time-distribution: bucket 2.55 is not one of 1/10 of its unit'
     );
@@ -628,8 +673,8 @@ describe('a filled histogram fails on what it cannot read', () => {
 
   it('fails on a bucket that is not a decimal number', () => {
     expect(() =>
-      histogram('epoch-time-distribution', replaced(minutes(180, 300), '4.17', '4.17e0'))
-    ).toThrow('epoch-time-distribution: bucket 4.17e0 is not a number');
+      histogram('epoch-time-distribution', replaced(minutes(180, 300), '4.16', '4.16e0'))
+    ).toThrow('epoch-time-distribution: bucket 4.16e0 is not a number');
   });
 
   it('fails on a histogram of more than one series', () => {
@@ -648,7 +693,7 @@ describe('a filled histogram fails on what it cannot read', () => {
     const model = histogram(
       'epoch-time-distribution',
       [123, 240, 241, 243, 250, 260, 270, 280, 290, 300, 3030].map((m) => ({
-        date: (m / 60).toFixed(2),
+        date: hours(m),
         value: '2',
       }))
     );

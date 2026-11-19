@@ -21,7 +21,13 @@ describe('CommonKnowledgeCompositionPage', () => {
     chartMock.mockClear();
     vi.mocked(api.getCommonKnowledgeCompositionChart).mockResolvedValue({
       title: 'Common Knowledge Bytes Composition',
-      data: [{ date: '2026-02-23', values: { transfer: '100.00000001', dao: '50.00000002' } }],
+      // with the day's knowledge size, the route's (the D1 hand-back, item 2)
+      data: [
+        {
+          date: '2026-02-23',
+          values: { transfer: '100.00000001', dao: '50.00000002', knowledgeSize: '150.00000003' },
+        },
+      ],
       series: [
         { key: 'transfer', label: 'CKB Transfer', color: '#22c55e' },
         { key: 'dao', label: 'DAO', color: '#f59e0b' },

@@ -85,10 +85,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'app/tx/[hash]/client-page.tsx': {
     lane: 'p-chain',
     // look 17 → 16 (lane D2): the facts rail's block link went with the rail; the strip's states
-    // its look
-    sites: { look: 16, ink: 16, raw: 2 },
-    reason:
-      '16 without a look; inks by hand (hover:text-jade, text-text-bright, text-text); 2 raw <a>',
+    // its look. Look 16 → 14, ink 16 → 12, raw 2 → 0 (lane D3): the script groups' code links
+    // moved to components/transaction/script-group-rows.tsx, each stating its look
+    sites: { look: 14, ink: 12 },
+    reason: '14 without a look; inks by hand (hover:text-jade, text-text-bright, text-text)',
   },
   'components/address/address-history.tsx': {
     lane: 'p-chain',
@@ -119,8 +119,10 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   'components/cell/cell-transactions.tsx': {
     lane: 'p-chain',
-    sites: { look: 5, ink: 4 },
-    reason: '5 without a look; inks by hand (hover:text-jade, text-[color:var(--ink)], style)',
+    // look 5 → 3, ink 4 → 2 (lane D3): the transaction's full-hash link and the groups' dep links
+    // went; the one link to the transaction states its look
+    sites: { look: 3, ink: 2 },
+    reason: '3 without a look; inks by hand (hover:text-jade, text-[color:var(--ink)], style)',
   },
   'components/cell/code-cell-board.tsx': {
     lane: 'p-chain',
@@ -156,11 +158,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     lane: 'p-chain',
     sites: { look: 2, ink: 2 },
     reason: '2 without a look; inks by hand (hover:text-jade, hover:underline)',
-  },
-  'components/transaction/tx-structure.tsx': {
-    lane: 'p-chain',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright, hover:text-jade)',
   },
   'components/transaction/what-moved.tsx': {
     lane: 'p-chain',
@@ -455,7 +452,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // party's lock-hash link states `block` and its hand-written underline went, 2) → 554 (lane D4
 // follow-up: the asset feed's phone row, its key and its block link, 3: two looks, one ink) → 551
 // (the links the phone rows share with the tables, paysNote and proposedIn, inline: 3, two looks
-// and one ink) → 475 (page lane P4, 76: the fork page's 17 and MinerLink's look 1, the forks
+// and one ink) → 434: page lane P4, 103 (the fork page's 17 and MinerLink's look 1, the forks
 // page's 8, the deep-fork alert's 2; the hardforks page, 14: its edition block link and the
 // overview links inline, "How it works" a way onward and no raw <a>, 8; the deployment
 // evidence's three links inline, 6; the Fiber channel page, 16: the breadcrumb's link inline,
@@ -464,11 +461,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // list's channel `key`, its parties `inline` in the table and the phone row, the lede's way
 // down `onward` (the raw anchor and its typed arrow gone), 8, the graph's party and block
 // links, 8; the network page, 2: its lede's "How it works" a Link of the onward look, one
-// ink and one raw <a>) → 448 (lane P4, the DAO page, 27: its blocks inline, a depositor its
-// row's key, the ways onward (the lede's, the charts', every depositor's, the activity lists',
-// the source block's and the anchor's) onward with no typed arrow and no raw <a>, the DAO
-// script's code hash a key)
-const TOLERATED_TOTAL = 448;
+// ink and one raw <a>; the DAO page, 27: its blocks inline, a depositor its row's key, the
+// ways onward (the lede's, the charts', every depositor's, the activity lists', the source
+// block's and the anchor's) onward with no typed arrow and no raw <a>, the DAO script's code
+// hash a key), and lane D3, 14 (the transaction page's script-group code links moved to
+// script-group-rows.tsx stating their look, 8: two looks, four inks, two raw; the
+// structure's group link went, 2; the cell page's transaction links, 4: two looks, two inks)
+const TOLERATED_TOTAL = 434;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {

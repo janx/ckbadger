@@ -2,7 +2,13 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
-import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
+import {
+  useParams,
+  usePathname,
+  useRouter,
+  useSearchAndHash,
+  useSearchParams,
+} from '@/src/navigation';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
@@ -11,6 +17,7 @@ import { HeadId } from '@/components/ui/head-id';
 import { SealedHead } from '@/components/ui/page-seal';
 import { Comment } from '@/components/ui/comment';
 import { Prose } from '@/components/ui/prose';
+import { Pager } from '@/components/ui/pager';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -25,10 +32,24 @@ import {
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { occupiedBytesDelta, occupiedPairText } from '@/lib/occupied';
 import { ParticipantRefView } from '@/components/participant-ref';
-import { TxStructure, continuityColor, type TxSealId } from '@/components/transaction/tx-structure';
+import {
+  FOLD_HEAD,
+  FoldBack,
+  TxStructure,
+  continuityColor,
+  type TxSealId,
+} from '@/components/transaction/tx-structure';
 import { txContinuity } from '@/lib/tx-continuity';
-import { cellTiles, kindOf, registeredName } from '@/components/transaction/transaction-cell-tiles';
-import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
+import { cellTiles, registeredName } from '@/components/transaction/transaction-cell-tiles';
+import { ScriptGroupLegend, ScriptGroupMatrix } from '@/components/transaction/script-group-matrix';
+import {
+  groupCells,
+  groupHref,
+  groupKey,
+  groupLabel,
+  scriptGroupRows,
+  witnessKindLabel,
+} from '@/components/transaction/script-group-rows';
 import { BalanceChanges } from '@/components/transaction/balance-changes';
 import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
 import { ProposalRuler } from '@/components/transaction/proposal-ruler';
@@ -41,7 +62,6 @@ import {
   isNotFoundApiError,
   isServiceUnavailableError,
   type TransactionDetail,
-  type TransactionScriptGroup,
   type TransactionWitness,
   type ScriptLookupResponse,
   type GlobalActivity,
@@ -53,18 +73,16 @@ import { isBadRequestApiError } from '@/lib/api-errors';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { txComment } from '@/lib/tx-comment';
 import {
-  getScriptDetailHref,
   getIdentityItemDetailHref,
   getObjectDetailHref,
   getTokenDetailHref,
 } from '@/lib/detail-routes';
 import { cn } from '@/lib/utils';
-import { shortenHash, type ShortSize } from '@/lib/shorten';
+import { shortenHash } from '@/lib/shorten';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import {
   capacityEquation,
-  shortCkb,
   txLinks,
   txMovements,
   type TxHover,
@@ -102,32 +120,50 @@ function required<T>(value: T | null | undefined, hash: string, field: string): 
     throw new Error(`Transaction ${hash} missing required field "${field}"`);
   return value;
 }
-function groupKey(group: TransactionScriptGroup): string {
-  return `${group.kind}:${group.ran ? 'run' : 'attached'}:${group.scriptHash}`;
-}
-function groupCells(g: TransactionScriptGroup): string[] {
-  return [...g.inputIndices.map((i) => `in:${i}`), ...g.outputIndices.map((i) => `out:${i}`)];
-}
 function indexParam(value: string | null): number | null {
   if (value === null) return null;
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)))
     throw new Error(`Invalid witness index ${value}`);
   return Number(value);
 }
+/**
+ * The fold's open state in the URL (lane D3): one parameter, `cells`, naming the sheets drawn
+ * whole — `consumed`, `created` or `all` — and absent when both are folded. A value it does not
+ * know is refused with the transaction named.
+ */
+const CELLS_PARAM = 'cells';
+function cellsParam(value: string | null, hash: string): Record<'consumed' | 'created', boolean> {
+  switch (value) {
+    case null:
+      return { consumed: false, created: false };
+    case 'consumed':
+      return { consumed: true, created: false };
+    case 'created':
+      return { consumed: false, created: true };
+    case 'all':
+      return { consumed: true, created: true };
+    default:
+      throw new Error(
+        `Transaction ${hash}: ${CELLS_PARAM}=${value} is none of consumed, created, all`
+      );
+  }
+}
+function cellsValue(open: Record<'consumed' | 'created', boolean>): string | null {
+  return open.consumed && open.created
+    ? 'all'
+    : open.consumed
+      ? 'consumed'
+      : open.created
+        ? 'created'
+        : null;
+}
+/** A cell's out point as the URL's anchor names it (`#<tx hash>-<index>`), or null for another. */
+function outPointAnchor(fragment: string): string | null {
+  const name = decodeURIComponent(fragment).toLowerCase();
+  return /^0x[0-9a-f]{64}-(0|[1-9][0-9]*)$/.test(name) ? name : null;
+}
 function PendingValue() {
   return <span className="text-text-dim">pending…</span>;
-}
-/** The registry's name for a code hash, or null when it has none. */
-function groupLabel(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return registeredName(lookup, g.script.codeHash) ?? shortenHash(g.script.codeHash, 'row');
-}
-function groupHref(g: TransactionScriptGroup, lookup: ScriptLookupResponse | undefined) {
-  return getScriptDetailHref({
-    name: lookup?.[g.script.codeHash]?.name,
-    codeHash: g.script.codeHash,
-    hashType: g.script.hashType,
-    scriptKind: g.kind,
-  });
 }
 /** Total DAO compensation the transaction's completed withdrawals pay, from their metadata. */
 function daoCompensation(activity: GlobalActivity): bigint | null {
@@ -279,24 +315,6 @@ function TxSummary({ activity }: { activity: GlobalActivity }) {
         ))}
     </p>
   );
-}
-
-/** `pubkey hash 0x11111111…111111`: the API's decoded lock args, as words. */
-function witnessKindLabel(kind: TransactionWitness['kind']): string {
-  switch (kind) {
-    case 'witness_args':
-      return 'WitnessArgs';
-    case 'ckbfs':
-      return 'CKBFS content';
-    case 'cobuild':
-      return 'CoBuild message';
-    case 'cellbase':
-      return 'Cellbase witness';
-    case 'empty':
-      return 'empty';
-    case 'opaque':
-      return 'opaque bytes';
-  }
 }
 
 const OVERHEAD_FIELD = /header|length|union|offset/i;
@@ -555,6 +573,79 @@ function DepRow({
   );
 }
 
+/** A witness drawn as its row, or a run of empty witnesses drawn as one line. */
+type WitnessItem =
+  | { kind: 'witness'; w: TransactionWitness }
+  | { kind: 'run'; from: number; to: number; count: number };
+
+/**
+ * The witness list as the developer tier draws it (lane D3; the board's "#1 to #157 are empty"):
+ * every witness in order, a run of two or more empty ones (0 bytes) that `folds` lets go — no
+ * group reads them, the page has not selected one — as one item; a lone empty witness keeps its
+ * row, and a witness with bytes is always written whole.
+ */
+function witnessItems(
+  witnesses: readonly TransactionWitness[],
+  folds: (w: TransactionWitness) => boolean
+): WitnessItem[] {
+  const out: WitnessItem[] = [];
+  let run: TransactionWitness[] = [];
+  const close = () => {
+    if (run.length > 1)
+      out.push({
+        kind: 'run',
+        from: run[0].index,
+        to: run[run.length - 1].index,
+        count: run.length,
+      });
+    else for (const w of run) out.push({ kind: 'witness', w });
+    run = [];
+  };
+  for (const w of witnesses) {
+    if (w.kind === 'empty' && w.size === 0 && folds(w)) run.push(w);
+    else {
+      close();
+      out.push({ kind: 'witness', w });
+    }
+  }
+  close();
+  return out;
+}
+
+/**
+ * A run of empty witnesses on one line (the board's dashed line): which they are, by counting,
+ * "#1 to #157 are empty: 157 witnesses of 0 B", and the way to every row, the Pager's short-list
+ * form ("all 158 witnesses ↓").
+ */
+function EmptyWitnesses({
+  run,
+  total,
+  onShow,
+}: {
+  run: Extract<WitnessItem, { kind: 'run' }>;
+  total: number;
+  onShow: () => void;
+}) {
+  return (
+    <div
+      data-testid={`tx-witness-run-${run.from}`}
+      className="border-text-dim/60 text-small my-2 flex flex-wrap items-center gap-x-3 gap-y-1 border border-dashed px-3 py-1.5"
+    >
+      <span data-run-words="" className="text-text min-w-0">
+        {unitText(
+          `#${run.from} to #${run.to} are empty: ${formatCount(run.count, 'witness', 'witnesses')} of ${formatCount(0, 'B', 'B')}`
+        )}
+      </span>
+      <div className="sm:ml-auto">
+        <Pager
+          mode="more"
+          all={{ count: total, singular: 'witness', plural: 'witnesses', onShow }}
+        />
+      </div>
+    </div>
+  );
+}
+
 function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   return (
     <div className="border-row-rule flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
@@ -635,10 +726,19 @@ export default function TransactionDetailPage() {
   );
   const [hover, setHover] = useState<TxHover | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(searchParams.get('wg'));
+  // the developer tier's runs of empty witnesses, each one line until opened (lane D3)
+  const [allWitnesses, setAllWitnesses] = useState(false);
   useEffect(() => {
     setSelectedWitness(indexParam(searchParams.get('witness')));
     setSelectedGroup(searchParams.get('wg'));
   }, [hash, searchParams]);
+  // the URL's anchor, `#…`: a cell's out point keeps that cell drawn under the fold
+  const searchAndHash = useSearchAndHash();
+  const fragment = searchAndHash.includes('#')
+    ? searchAndHash.slice(searchAndHash.indexOf('#'))
+    : '';
+  /** This page's URL with `next` as its query, its anchor kept. */
+  const urlWith = (next: URLSearchParams) => `${pathname}${next.size ? `?${next}` : ''}${fragment}`;
   const select = (index: number | null, group: string | null) => {
     setSelectedWitness(index);
     setSelectedGroup(group);
@@ -647,7 +747,17 @@ export default function TransactionDetailPage() {
     else next.set('witness', String(index));
     if (group === null) next.delete('wg');
     else next.set('wg', group);
-    router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
+    router.replace(urlWith(next), { scroll: false });
+  };
+  // The fold (lane D3): which sheets are drawn whole, from the URL; opening or folding one is a
+  // step of the history, so back walks it.
+  const openSheets = cellsParam(searchParams.get(CELLS_PARAM), hash);
+  const toggleSheet = (side: 'consumed' | 'created', open: boolean) => {
+    const next = new URLSearchParams(searchParams.toString());
+    const value = cellsValue({ ...openSheets, [side]: open });
+    if (value === null) next.delete(CELLS_PARAM);
+    else next.set(CELLS_PARAM, value);
+    router.push(urlWith(next), { scroll: false });
   };
   const shell = (children: ReactNode) => (
     <div className="min-h-screen">
@@ -799,137 +909,26 @@ export default function TransactionDetailPage() {
     label,
     links: continuity.filter((l) => l.label === label),
   }));
+  // The cell the URL points at by its out point (the cell page's link to this transaction): drawn
+  // wherever it stands, its continuity partner with it (the fold keeps both). An anchor that names
+  // no cell of this transaction keeps none, as a browser goes nowhere for an unknown anchor.
+  const anchored = outPointAnchor(fragment.slice(1));
+  const kept = tiles
+    ? [...tiles.inputs, ...tiles.outputs].filter(
+        (t) =>
+          t.outPoint !== undefined &&
+          `${t.outPoint.txHash.toLowerCase()}-${t.outPoint.index}` === anchored
+      )
+    : [];
 
   // ---- script-group matrix ----
-  const column = (
-    side: 'in' | 'out',
-    i: number,
-    cell: NonNullable<TransactionDetail['inputs']>[number]
-  ) => {
-    const display = cell.display;
-    const kind = kindOf(cell);
-    const top = display
-      ? display.kind === 'file'
-        ? display.standard.toUpperCase()
-        : formatStandard(display.standard)
-      : kind === 'ckb'
-        ? 'plain'
-        : kind === 'dao'
-          ? 'DAO'
-          : cell.type
-            ? (registeredName(lookup, cell.type.codeHash) ?? 'typed')
-            : 'plain';
-    // Lane L (L1): the column names a cell; it links to the cell's page. An input is the cell it
-    // spends; an output is a cell only once the transaction is committed.
-    const outPoint =
-      side === 'in'
-        ? required(cell.previousOutput, hash, `input ${i} outpoint`)
-        : isProvisional
-          ? null
-          : { txHash: hash, index: i };
-    return {
-      id: `${side}:${i}`,
-      top,
-      label: `${side} #${i}`,
-      ...(outPoint
-        ? {
-            href: `/cell/${outPoint.txHash}-${outPoint.index}`,
-            title: `${outPoint.txHash}:${outPoint.index}`,
-          }
-        : { title: 'not a cell until the transaction is committed' }),
-      cap:
-        cell.capacity === undefined
-          ? null
-          : shortCkb(exactUnsignedInteger(cell.capacity, `${hash}: ${side} ${i} capacity`)),
-    };
-  };
-  const matrixInputs = tx.isCellbase ? [] : (tx.inputs ?? []).map((c, i) => column('in', i, c));
-  const matrixOutputs = (tx.outputs ?? []).map((c, i) => column('out', i, c));
-  const matrixGroups: MatrixGroup[] = groups.map((g) => {
-    const key = groupKey(g);
-    const codeDeps = (deps ?? []).flatMap((d, i) =>
-      d.scriptHashes.includes(g.scriptHash) ? [{ d, i }] : []
-    );
-    const attachedDeps = (deps ?? []).flatMap((d, i) =>
-      !g.ran && d.outputLockScriptHashes.includes(g.scriptHash) ? [{ d, i }] : []
-    );
-    const w = g.witnessIndex === null ? null : witnesses.find((x) => x.index === g.witnessIndex);
-    const firstCell = g.inputIndices.length
-      ? tx.inputs?.[g.inputIndices[0]]
-      : tx.outputs?.[g.outputIndices[0]];
-    const mark = g.kind === 'type' && firstCell ? kindOf(firstCell) : null;
-    return {
-      id: key,
-      kind: g.kind,
-      name: groupLabel(g, lookup),
-      href: groupHref(g, lookup),
-      mark: mark && mark !== 'ckb' && mark !== 'other' ? mark : null,
-      sub: (size: ShortSize) => {
-        const line =
-          g.kind === 'lock' && firstCell
-            ? lockArgsLine(firstCell.lockArgsDecoded, firstCell.lockArgsDecodeError, size)
-            : null;
-        return line ?? `args ${shortenHash(g.script.args, size)}`;
-      },
-      ran: g.ran,
-      cellIds: groupCells(g),
-      cycles: g.cycles,
-      status: isProvisional && g.ran ? 'will run when committed' : undefined,
-      focusTestId: `tx-script-group-focus-${g.witnessIndex ?? 'none'}-${g.kind}`,
-      onFocus: () => (selectedGroup === key ? select(null, null) : select(g.witnessIndex, key)),
-      witness:
-        g.witnessIndex === null
-          ? null
-          : {
-              index: g.witnessIndex,
-              detail: w ? { kind: witnessKindLabel(w.kind), size: w.size } : null,
-              onSelect: () => select(g.witnessIndex, selectedGroup === key ? null : key),
-            },
-      code: (size: ShortSize) =>
-        !g.ran ? (
-          attachedDeps.length > 0 ? (
-            attachedDeps.map(({ d, i }) => (
-              <span key={i} className="text-text-dim block">
-                <a href={`#tx-dep-${i}`} className="hover:text-jade">
-                  code
-                </a>{' '}
-                <Link
-                  href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-                  className="hover:text-jade"
-                >
-                  <ShortId value={d.outPointTxHash} kind="hash" size={size} />
-                  <OutpointIndex index={d.outPointIndex} />
-                </Link>{' '}
-                · not run here
-              </span>
-            ))
-          ) : null
-        ) : isProvisional ? (
-          <span className="text-text-dim">read once committed</span>
-        ) : depsError ? (
-          <span className="text-text-dim">cell deps unreadable</span>
-        ) : !deps ? (
-          <span className="text-text-dim">Resolving code…</span>
-        ) : codeDeps.length === 0 ? (
-          <span className="text-text-dim">No matching dep</span>
-        ) : (
-          // The kind jumps to the dep row's evidence below; the out point opens the code cell.
-          codeDeps.map(({ d, i }) => (
-            <span key={i} className="block">
-              <a href={`#tx-dep-${i}`} className="hover:text-jade">
-                {d.depType === 'dep_group' ? 'dep group' : 'code'}
-              </a>{' '}
-              <Link
-                href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
-                className="text-text-dim hover:text-jade"
-              >
-                <ShortId value={d.outPointTxHash} kind="hash" size={size} />
-                <OutpointIndex index={d.outPointIndex} />
-              </Link>
-            </span>
-          ))
-        ),
-    };
+  const matrix = scriptGroupRows(tx, {
+    lookup,
+    deps,
+    depsError,
+    provisional: isProvisional,
+    depHref: (i) => `#tx-dep-${i}`,
+    select: { group: selectedGroup, pick: select },
   });
 
   // ---- headline and summary (TX-11) ----
@@ -1378,7 +1377,6 @@ export default function TransactionDetailPage() {
                 // C11: the sheets' heads end with the API's exact totals
                 consumedCapacity={required(tx.inputsCapacity, hash, 'inputsCapacity')}
                 createdCapacity={required(tx.outputsCapacity, hash, 'outputsCapacity')}
-                hideGroups
                 linking="page"
                 inflow={inflow}
                 continuityList={false}
@@ -1386,6 +1384,14 @@ export default function TransactionDetailPage() {
                 onCellHover={(id) => setHover(id ? { t: 'cell', id } : null)}
                 continuity={continuity}
                 seamSeal={seal}
+                // the fold (lane D3): six cells a sheet, the URL's cell kept, the open sheets the
+                // URL's `cells`
+                fold={{
+                  head: FOLD_HEAD,
+                  keep: kept.map((t) => t.id),
+                  open: openSheets,
+                  onToggle: toggleSheet,
+                }}
                 // A lit tile clears the selection on click only while there is one: a tile lit
                 // by hover alone has no clearing click (review 2026-11-03 — the clearing replace
                 // used to cancel the out point link's navigation to the cell page).
@@ -1420,31 +1426,58 @@ export default function TransactionDetailPage() {
                 <p className="text-text-dim py-3">Witness bytes are unavailable</p>
               ) : (
                 <>
-                  {witnesses.map((w) => (
-                    <WitnessRow
-                      key={w.index}
-                      tx={tx}
-                      w={w}
-                      readers={readersOf(w.index)}
-                      scale={witnessScale}
-                      selected={selectedWitness === w.index}
-                      lit={lit}
-                      lookup={lookup}
-                      groupNameByHash={groupNameByHash}
-                      minerMessage={
-                        cellbaseBlock
-                          ? {
-                              raw: cellbaseBlock.minerMessage,
-                              text: cellbaseBlock.minerMessageText,
-                            }
-                          : undefined
-                      }
-                      onSelect={() =>
-                        selectedWitness === w.index ? select(null, null) : select(w.index, null)
-                      }
-                      onHover={setHover}
-                    />
-                  ))}
+                  {witnessItems(
+                    witnesses,
+                    // a run folds the empty witnesses no group reads and the page did not select
+                    (w) =>
+                      !allWitnesses &&
+                      readersOf(w.index).length === 0 &&
+                      w.index !== selectedWitness
+                  ).map((item) =>
+                    item.kind === 'run' ? (
+                      <EmptyWitnesses
+                        key={`run-${item.from}`}
+                        run={item}
+                        total={witnesses.length}
+                        onShow={() => setAllWitnesses(true)}
+                      />
+                    ) : (
+                      <WitnessRow
+                        key={item.w.index}
+                        tx={tx}
+                        w={item.w}
+                        readers={readersOf(item.w.index)}
+                        scale={witnessScale}
+                        selected={selectedWitness === item.w.index}
+                        lit={lit}
+                        lookup={lookup}
+                        groupNameByHash={groupNameByHash}
+                        minerMessage={
+                          cellbaseBlock
+                            ? {
+                                raw: cellbaseBlock.minerMessage,
+                                text: cellbaseBlock.minerMessageText,
+                              }
+                            : undefined
+                        }
+                        onSelect={() =>
+                          selectedWitness === item.w.index
+                            ? select(null, null)
+                            : select(item.w.index, null)
+                        }
+                        onHover={setHover}
+                      />
+                    )
+                  )}
+                  {/* opened, the way back after the last witness, where a run had stood */}
+                  {allWitnesses &&
+                    witnessItems(witnesses, (w) => readersOf(w.index).length === 0).some(
+                      (item) => item.kind === 'run'
+                    ) && (
+                      <div className="mt-2">
+                        <FoldBack onFold={() => setAllWitnesses(false)} />
+                      </div>
+                    )}
                   {chosenWitness ? (
                     <WitnessInspector tx={tx} witness={chosenWitness} />
                   ) : (
@@ -1543,7 +1576,7 @@ export default function TransactionDetailPage() {
         <DetailSection
           title="Script groups"
           actions={
-            <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-4 gap-y-1">
+            <ScriptGroupLegend>
               <span data-testid="tx-groups-ran">
                 {isProvisional
                   ? 'will run when committed'
@@ -1553,18 +1586,7 @@ export default function TransactionDetailPage() {
                       ? `${ran} ran, ${cycles.toLocaleString('en-US')} cycles`
                       : `${ran} ran`}
               </span>
-              <span className="flex items-center gap-1.5">
-                <span aria-hidden="true" className="bg-jade h-[9px] w-[9px] rounded-full" />
-                runs here
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className="border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]"
-                />
-                attached, runs when spent
-              </span>
-            </span>
+            </ScriptGroupLegend>
           }
         >
           <Prose className="-mt-2 mb-3">
@@ -1572,9 +1594,9 @@ export default function TransactionDetailPage() {
           </Prose>
           <ScriptGroupMatrix
             txHash={hash}
-            inputs={matrixInputs}
-            outputs={matrixOutputs}
-            groups={matrixGroups}
+            inputs={matrix.inputs}
+            outputs={matrix.outputs}
+            groups={matrix.groups}
             lit={lit}
             onHover={setHover}
           />

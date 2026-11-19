@@ -357,8 +357,9 @@ describe('shared chart detail', () => {
       title: 'Epoch durations',
       yAxisLabel: 'Epochs',
       data: [
+        // minute 241 in hours, cut as the API writes it (re-pinned: half up it was 4.02)
         { date: '3.98', value: '10' },
-        { date: '4.02', value: '622' },
+        { date: '4.01', value: '622' },
         { date: '50.50', value: '1' },
       ],
     });
@@ -372,7 +373,7 @@ describe('shared chart detail', () => {
     expect(screen.queryByRole('heading', { name: /^Distribution|^Full history/ })).toBeNull();
     const props = lastChart('Epoch durations');
     expect(props.plotName).toBe('epochs, by hours taken · 3\u00a0buckets');
-    expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
+    expect(props.reading).toEqual({ label: '4.01', values: { primary: '622' } });
     expect(props.subtitle).toBe('Completed epochs by hours taken · 3\u00a0buckets');
     expect(props.slotBars).toBe(true);
   });
@@ -390,6 +391,9 @@ describe('shared chart detail', () => {
       title: 'Cell Size Distribution',
       yAxisLabel: 'Live Cells',
       data: labels.map((date, i) => ({ date, value: String(1000 - i) })),
+      // the route's wholes (lane D1): 1,000 + 999 + … + 995 cells; no CKB series sent
+      liveCells: '5985',
+      occupiedCapacity: '0',
     });
     render(<ChartDetail slug="cell-size-distribution" />);
     // re-pinned for lane D1: under its figure, with no command line (was "Distribution 6 buckets")

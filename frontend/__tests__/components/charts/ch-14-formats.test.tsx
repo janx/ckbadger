@@ -100,7 +100,15 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
       data: [
         {
           date: '2026-11-13',
-          values: { transfer: '100', dao: '300', udt: '50', nftSpore: '40', otherContracts: '10' },
+          values: {
+            transfer: '100',
+            dao: '300',
+            udt: '50',
+            nftSpore: '40',
+            otherContracts: '10',
+            // the day's knowledge size, the route's (the D1 hand-back, item 2)
+            knowledgeSize: '500',
+          },
         },
       ],
     });

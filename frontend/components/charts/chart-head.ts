@@ -1,6 +1,8 @@
 import type { ChartPoint } from '@/components/ui/chart';
-import type { ChartDefinition } from '@/components/charts/chart-catalogue';
+import { ACTIVITY_COUNT_WORDS, type ChartDefinition } from '@/components/charts/chart-catalogue';
 import {
+  axisOutliers,
+  axisStyle,
   cutDecimal,
   cutRatio,
   cutShare,
@@ -68,6 +70,7 @@ const COUNT_WORDS = new Set([
   'transactions',
   'addresses',
   'activities',
+  'kind counts',
   'cells',
   'blocks',
   'epochs',
@@ -239,16 +242,22 @@ const DURATION = { more: 'longest', less: 'shortest', span: '' };
 
 type HeadOf = (definition: ChartDefinition, model: ChartModel) => HeadDraft;
 
+/**
+ * A point's whole as the route states it, which every share the page states of the point divides
+ * by (the D1 hand-back, item 2; chart-model.ts): never the page's sum of its bands.
+ */
+function wholeAt(point: ChartPoint, context: string): string {
+  if (point.whole === undefined) throw new Error(`${context}: no stated whole at ${point.label}`);
+  return point.whole;
+}
+
 /** The share a ranking's five largest hold of the newest day's whole, from the API's bands. */
 function fiveLargest(model: ChartModel, entity: string): string {
   const history = model.historicalShares?.[0];
   const last = history?.points.at(-1);
   if (!history || !last) return 'No indexed observations yet.';
   const keys = history.series.map((entry) => entry.key);
-  const whole = exactSum(
-    keys.map((key) => last.values[key]),
-    `${model.title} whole`
-  );
+  const whole = wholeAt(last, `${model.title} whole`);
   const rest = keys.find((key) => key === 'rest' || key === 'others');
   const named = keys.filter((key) => key !== rest);
   const held = exactSum(
@@ -275,16 +284,15 @@ const HEADS: Record<string, HeadOf> = {
     dated(m, 'confirmed in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'active-addresses': (_, m) => dated(m, 'active in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'ckb-volume': (_, m) => dated(m, 'moved in a day', (x) => sinceSentence(x, FLOW_CKB)),
-  'activity-volume': (_, m) => dated(m, 'recorded in a day', (x) => sinceSentence(x, FLOW_COUNT)),
+  // counted, not recorded: the series is the day's kind counts (ACTIVITY_COUNT_WORDS)
+  'activity-volume': (_, m) => dated(m, 'counted in a day', (x) => sinceSentence(x, FLOW_COUNT)),
   'activity-type-breakdown': (_, m) => {
     const last = m.points.at(-1);
     if (!last) return dated(m, 'the largest kind in a day', () => '');
     const keys = m.series.map((entry) => entry.key);
     const [first, second] = largestTwo(last, keys);
-    const whole = exactSum(
-      keys.map((key) => last.values[key]),
-      'activities whole'
-    );
+    // the day's kind occurrences, the route's: kinds overlap, so they are no count of activities
+    const whole = wholeAt(last, 'activities whole');
     return {
       eyebrow: `${word(KIND_WORDS, first)}, the largest kind in a day`,
       at: last.label,
@@ -293,7 +301,7 @@ const HEADS: Record<string, HeadOf> = {
         display: formatChartHead(last.values[first], m.unit),
         unit: m.unit,
       },
-      sentence: `${capitalise(word(KIND_WORDS, first))} were ${cutShare(last.values[first], whole, 'activities')} of the day's activities, ${word(KIND_WORDS, second)} ${cutShare(last.values[second], whole, 'activities')}.`,
+      sentence: `${capitalise(word(KIND_WORDS, first))} were ${cutShare(last.values[first], whole, 'activities')} of the day's ${ACTIVITY_COUNT_WORDS.noun}, ${word(KIND_WORDS, second)} ${cutShare(last.values[second], whole, 'activities')}.`,
     };
   },
   'cell-count': (_, m) => dated(m, 'live', peakSentence),
@@ -312,22 +320,18 @@ const HEADS: Record<string, HeadOf> = {
         : `${capitalise(moved)}.`,
     };
   },
+  // Circulating is the protocol circulation, C − genesis burnt − S, the route's (lane D1, second
+  // follow-up): the site's one circulating amount. The sentence states C once, what circulates, of
+  // that what is in the DAO, and what is burnt, each share cut from the route's figures.
   'total-supply': (_, m) => {
     const last = m.points.at(-1);
     const head = dated(m, 'circulating', () => '');
-    if (!last) return head;
-    const whole = exactSum(
-      m.series.map((entry) => last.values[entry.key]),
-      'supply whole'
-    );
+    if (!last || !m.latest) return head;
+    const whole = wholeAt(last, 'supply whole');
+    const circulating = m.latest.raw;
     return {
       ...head,
-      figure: {
-        raw: last.values.circulating,
-        display: formatChartHead(last.values.circulating, 'CKB'),
-        unit: 'CKB',
-      },
-      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(last.values.nervosdao, whole, 'supply')} is deposited in the Nervos DAO and ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
+      sentence: `Of the ${stated(whole, 'CKB')} issued, ${cutShare(circulating, whole, 'supply')} circulates, ${cutShare(last.values.daoDeposited, circulating, 'supply')} of it in the Nervos DAO; ${cutShare(last.values.burnt, whole, 'supply')} is burnt.`,
     };
   },
   'total-deposit': (_, m) => dated(m, 'deposited in the Nervos DAO', peakSentence),
@@ -365,10 +369,7 @@ const HEADS: Record<string, HeadOf> = {
   'secondary-issuance': (_, m) =>
     dated(m, 'issued since genesis', (x) => {
       const last = x.points.at(-1)!;
-      const whole = exactSum(
-        x.series.map((entry) => last.values[entry.key]),
-        'issuance whole'
-      );
+      const whole = wholeAt(last, 'issuance whole');
       const share = (key: string) => cutShare(last.values[key], whole, 'issuance');
       return `By destination, ${share('burnt')} is burnt, ${share('compensation')} paid to DAO depositors as compensation and ${share('mining')} to miners.`;
     }),
@@ -381,10 +382,7 @@ const HEADS: Record<string, HeadOf> = {
     if (!last) return head;
     const keys = m.series.map((entry) => entry.key);
     const [first, second] = largestTwo(last, keys);
-    const whole = exactSum(
-      keys.map((key) => last.values[key]),
-      'knowledge whole'
-    );
+    const whole = wholeAt(last, 'knowledge whole');
     const one = KNOWLEDGE_WORDS[first];
     const two = KNOWLEDGE_WORDS[second];
     if (!one || !two) throw new Error(`chart head: no words for ${first} or ${second}`);
@@ -403,10 +401,9 @@ const HEADS: Record<string, HeadOf> = {
   'most-utilized-assets': rankedHead('asset'),
   'cell-size-distribution': (_, m) => {
     const lead = m.reading;
-    const counts = exactSum(
-      m.points.map((point) => point.values.primary),
-      'cells whole'
-    );
+    // the live cells and the CKB they occupy, the route's wholes
+    if (m.whole === undefined) throw new Error('cell size: no stated live cells');
+    const counts = m.whole;
     const ckb = m.secondary?.points ?? [];
     const most = ckb.length
       ? ckb.reduce((best, point) =>
@@ -428,10 +425,11 @@ const HEADS: Record<string, HeadOf> = {
       sentence: most
         ? `The most occupied CKB is in cells of ${most.label}, ${cutShare(
             most.values.secondary,
-            exactSum(
-              ckb.map((point) => point.values.secondary),
-              'cell CKB whole'
-            ),
+            (() => {
+              if (m.secondary?.whole === undefined)
+                throw new Error('cell size: no stated occupied CKB');
+              return m.secondary.whole;
+            })(),
             'cell CKB'
           )} of it.`
         : 'No indexed observations yet.',
@@ -533,6 +531,11 @@ export function chartHead(definition: ChartDefinition, model: ChartModel): Chart
   const figure = head.figure;
   return {
     ...head,
+    // what the series counts, said once where it needs saying (ACTIVITY_COUNT_WORDS.note)
+    sentence:
+      definition.countNote && model.points.length
+        ? `${head.sentence} ${definition.countNote}`
+        : head.sentence,
     figure: figure && {
       ...figure,
       title:
@@ -555,13 +558,13 @@ export function capNote(
   noun: string
 ): string {
   const valueAt = (point: ChartPoint) => {
-    // a stack is above the scale by its whole, the day's stack total, exactly
+    // a stack is above the scale by its whole, the day's, as the route states it
     if (model.kind === 'stacked') {
-      const whole = exactSum(
-        model.series.map((entry) => point.values[entry.key]),
-        `${model.title} at ${point.label}`
-      );
-      return { ratio: ratio(whole, 'cap whole'), text: stated(whole, model.unit, true) };
+      const whole = wholeAt(point, `${model.title} cap`);
+      return {
+        ratio: ratio(whole, 'cap whole'),
+        text: stated(whole, model.wholeUnit ?? model.unit, true),
+      };
     }
     const key = model.series.reduce((best, entry) =>
       compare(at(point, entry.key), at(point, best.key)) > 0 ? entry : best
@@ -580,4 +583,58 @@ export function capNote(
   return shown.length === 1
     ? `${named}, above this scale`
     : `${formatCount(shown.length, noun)} above this scale; the largest, ${named}`;
+}
+
+/**
+ * How a chart is drawn until its reader changes it (the chart-hero board, CH-08 and rule 6; the D1
+ * hand-back, item 3), for its page and its index card alike: the catalogue's log scale where a line
+ * spans orders of magnitude and every value is above zero, else linear, its outliers left off the
+ * axis and named over the plot. `points` and `series` are the ones drawn (a range, a card's);
+ * `scale` is the reader's choice where the page offers one.
+ */
+export function chartDrawing(
+  definition: ChartDefinition,
+  model: ChartModel,
+  points: readonly ChartPoint[],
+  series: ChartModel['series'],
+  scale?: 'linear' | 'log'
+): {
+  supportsLog: boolean;
+  yScale: 'linear' | 'log';
+  axisCap: { value: number; note: string } | undefined;
+} {
+  const supportsLog =
+    model.kind === 'line' &&
+    model.points.length > 0 &&
+    model.points.every((point) =>
+      model.series.every(
+        (entry) =>
+          exactSignedDecimalRatio(point.values[entry.key], `${definition.slug} log scale`)[0] >
+          BigInt(0)
+      )
+    );
+  const chosen = scale ?? (definition.logScale ? 'log' : 'linear');
+  const yScale = supportsLog && chosen === 'log' ? 'log' : 'linear';
+  const style = axisStyle(definition);
+  // Rule 6: an outlier does not set a linear axis; its value is named over the plot.
+  const outliers =
+    yScale === 'linear' && !model.yDomain && (style === 'date' || style === 'epoch')
+      ? axisOutliers(points, series, model.kind)
+      : null;
+  return {
+    supportsLog,
+    yScale,
+    axisCap: outliers
+      ? {
+          value: outliers.cap,
+          note: capNote(
+            model,
+            points,
+            outliers.indexes,
+            (label) => (style === 'epoch' ? `#${formatEpochLabel(label, definition.slug)}` : label),
+            style === 'epoch' ? 'epoch' : 'day'
+          ),
+        }
+      : undefined,
+  };
 }

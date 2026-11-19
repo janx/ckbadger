@@ -96,10 +96,15 @@ describe('TxStructure: two sheets and the seam (C11)', () => {
       expect(sheet).toHaveClass('glass', 'border', 'min-w-0');
     }
     expect(SHEETS.seam).toBe(4);
-    expect(root).toHaveClass('grid', 'grid-cols-1', 'gap-y-3', 'lg:gap-y-0');
+    // re-pinned on purpose (lane D3, the board's phone): below lg the stacked sheets are 4 px
+    // apart, the seam their row, as from lg (they were 12 px apart, `gap-y-3`, the seam hidden)
+    expect(root).toHaveClass('grid', 'grid-cols-1');
+    expect(root.className).not.toMatch(/(^|\s)(lg:)?gap-y-/);
     expect(root).toHaveClass('lg:grid-cols-[minmax(0,1fr)_4px_minmax(0,1fr)]');
-    // the seam: empty ground (round 3: with no continuity link, not even an overlay); none below lg
-    expect(seam).toHaveClass('relative', 'hidden', 'self-stretch', 'lg:block');
+    // the seam: empty ground (round 3: with no continuity link, not even an overlay); a 4 px row
+    // below lg (`h-1`), the column from lg
+    expect(seam).toHaveClass('relative', 'h-1', 'self-stretch', 'lg:h-auto');
+    expect(seam.className).not.toMatch(/(^|\s)hidden(\s|$)/);
     expect(seam).not.toHaveAttribute('data-instrument-frame');
     expect(seam.children).toHaveLength(0);
     // the cells on their sheets

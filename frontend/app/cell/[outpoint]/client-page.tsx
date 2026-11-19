@@ -8,7 +8,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
-import { CellTransactions } from '@/components/cell/cell-transactions';
+import { CellScriptGroups, CellTransactions } from '@/components/cell/cell-transactions';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { CkbAmount } from '@/components/ui/ckb-amount';
@@ -470,14 +470,20 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           </IdCopyRow>
         }
         // Under the stone and the plate, from the page's left edge (C10), in the identity lines'
-        // dim small voice: the inventory item this cell is (lane U, U6), the transaction it is an
-        // output of, and what its out point is.
+        // dim small voice: the inventory item this cell is (lane U, U6) and the transaction it is
+        // an output of (what an out point is, in general, is the developer tier's: lane D3).
         lede={
           <div className="text-text-dim text-small space-y-1.5">
             <CellInventoryLine cell={cell} />
             <CellOrigin cell={cell} />
+          </div>
+        }
+        // The developer tier (lane D3, U-17): what an out point is, the cell's bytes, and the
+        // script groups of its transactions, in the transaction page's rows.
+        tier2={
+          <>
             {/* a sentence that explains: the reading ink at the body step (R3, R4) */}
-            <p className="text-text text-body">
+            <p className="text-text text-body max-w-measure">
               The out point is the cell&apos;s only name: transaction hash and output index. No
               other cell has it, and this one{' '}
               {cell.status === 'dead' && cell.consumedAtBlock != null ? (
@@ -492,7 +498,14 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
                 </>
               )}
             </p>
-          </div>
+            <CellMicroscope
+              key={outpoint}
+              cell={cell}
+              lockName={names.lock}
+              typeName={names.type}
+            />
+            <CellScriptGroups cell={cell} />
+          </>
         }
       >
         {refreshError && (
@@ -524,7 +537,6 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           </DetailSection>
         )}
         {cell.elf && <CodeCellBoard cell={cell} />}
-        <CellMicroscope key={outpoint} cell={cell} lockName={names.lock} typeName={names.type} />
         {cell.isDepGroup && (
           <DetailSection title="Dep group" args={formatCount(depGroupItems(cell).length, 'item')}>
             <ul className="text-small space-y-2">

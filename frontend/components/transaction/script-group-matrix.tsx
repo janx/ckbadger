@@ -1,5 +1,5 @@
 'use client';
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -64,6 +64,30 @@ const SCRIPT_W = 250;
 const WITNESS_W = 230;
 const CODE_MIN = 180;
 
+/**
+ * The rows' legend, a section heading's right end: what a ● and a ○ mean, after the page's own
+ * note (the transaction page's "2 ran, 1,923,713 cycles"). One legend for the transaction page and
+ * the cell page's developer tier (lane D3).
+ */
+export function ScriptGroupLegend({ children }: { children?: ReactNode }) {
+  return (
+    <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-4 gap-y-1">
+      {children}
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden="true" className="bg-jade h-[9px] w-[9px] rounded-full" />
+        runs here
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span
+          aria-hidden="true"
+          className="border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]"
+        />
+        attached, runs when spent
+      </span>
+    </span>
+  );
+}
+
 /** `input 0, 1, 2`, `input 0 → output 0`, `output 1`: a group's cells in words. */
 export function cellsInWords(
   cellIds: readonly string[],
@@ -78,6 +102,43 @@ export function cellsInWords(
   return [side('input', inputs), side('output', outputs)]
     .filter((part): part is string => part !== null)
     .join(' → ');
+}
+
+/**
+ * A part of a row that selects (a witness, a group's focus) where the page gives a way to select,
+ * and the same words as text where it does not: no control that does nothing.
+ */
+function Pressable({
+  on,
+  testId,
+  label,
+  className,
+  style,
+  children,
+}: {
+  on?: () => void;
+  testId?: string;
+  label?: string;
+  className: string;
+  style?: CSSProperties;
+  children: ReactNode;
+}) {
+  return on ? (
+    <button
+      type="button"
+      data-testid={testId}
+      aria-label={label}
+      onClick={on}
+      className={className}
+      style={style}
+    >
+      {children}
+    </button>
+  ) : (
+    <span data-testid={testId} className={className} style={style}>
+      {children}
+    </span>
+  );
 }
 
 function cyclesLine(g: MatrixGroup, ranText: string): string {
@@ -95,22 +156,24 @@ function cyclesLine(g: MatrixGroup, ranText: string): string {
  * "How the cells were verified" (Main.dc.html Script groups): rows are script groups, columns
  * are the cells (inputs | → | outputs). A group that ran has ● on each of its cells joined by a
  * line; an output lock that is only attached has ○ ("runs when spent"). Hover is reported to the
- * page, which owns the linking (TX-14); everything the hover does not link dims to 0.25.
+ * page, which owns the linking (TX-14); everything the hover does not link dims to 0.25. A page
+ * with no linking and no witness inspector (the cell page's developer tier, lane D3) passes
+ * neither: the rows are the same, with nothing to press.
  */
 export function ScriptGroupMatrix({
   txHash,
   inputs,
   outputs,
   groups,
-  lit,
+  lit = null,
   onHover,
 }: {
   txHash: string;
   inputs: readonly MatrixColumn[];
   outputs: readonly MatrixColumn[];
   groups: readonly MatrixGroup[];
-  lit: TxLinkSets | null;
-  onHover: (hover: TxHover | null) => void;
+  lit?: TxLinkSets | null;
+  onHover?: (hover: TxHover | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const order: (MatrixColumn | null)[] = [...inputs, null, ...outputs];
@@ -161,10 +224,10 @@ export function ScriptGroupMatrix({
                   data-column={c.id}
                   data-dimmed={dim(lit?.cells.has(c.id) ?? false)}
                   tabIndex={0}
-                  onMouseEnter={() => onHover({ t: 'cell', id: c.id })}
-                  onMouseLeave={() => onHover(null)}
-                  onFocus={() => onHover({ t: 'cell', id: c.id })}
-                  onBlur={() => onHover(null)}
+                  onMouseEnter={() => onHover?.({ t: 'cell', id: c.id })}
+                  onMouseLeave={() => onHover?.(null)}
+                  onFocus={() => onHover?.({ t: 'cell', id: c.id })}
+                  onBlur={() => onHover?.(null)}
                   className={cn(
                     'flex flex-col items-center text-center transition-opacity',
                     lit?.cells.has(c.id) ? 'text-text-bright' : 'text-text',
@@ -207,10 +270,10 @@ export function ScriptGroupMatrix({
               data-group-row={g.id}
               data-lit={on}
               data-dimmed={dim(on)}
-              onMouseEnter={() => onHover({ t: 'group', id: g.id })}
-              onMouseLeave={() => onHover(null)}
-              onFocus={() => onHover({ t: 'group', id: g.id })}
-              onBlur={() => onHover(null)}
+              onMouseEnter={() => onHover?.({ t: 'group', id: g.id })}
+              onMouseLeave={() => onHover?.(null)}
+              onFocus={() => onHover?.({ t: 'group', id: g.id })}
+              onBlur={() => onHover?.(null)}
               className={cn(
                 'border-row-rule grid items-center border-b transition-opacity',
                 g.ran ? 'text-text min-h-[54px]' : 'text-text-dim min-h-[46px]',
@@ -246,11 +309,7 @@ export function ScriptGroupMatrix({
                 {g.witness === null ? (
                   <span className="text-text-dim">—</span>
                 ) : (
-                  <button
-                    type="button"
-                    className="hover:text-jade text-left"
-                    onClick={g.witness.onSelect}
-                  >
+                  <Pressable on={g.witness.onSelect} className="hover:text-jade text-left">
                     #{g.witness.index}
                     {g.witness.detail && (
                       <span className="text-text-dim">
@@ -259,15 +318,14 @@ export function ScriptGroupMatrix({
                         {unitNode(formatCount(g.witness.detail.size, 'B', 'B'))}
                       </span>
                     )}
-                  </button>
+                  </Pressable>
                 )}
               </span>
               <span role="cell" className="relative h-7">
-                <button
-                  type="button"
-                  data-testid={g.focusTestId}
-                  aria-label={`Focus the ${g.kind} group ${g.name}`}
-                  onClick={g.onFocus}
+                <Pressable
+                  on={g.onFocus}
+                  testId={g.focusTestId}
+                  label={`Focus the ${g.kind} group ${g.name}`}
                   className="absolute inset-0 grid h-full items-center"
                   style={{ gridTemplateColumns: cellTemplate }}
                 >
@@ -306,7 +364,7 @@ export function ScriptGroupMatrix({
                       </span>
                     )
                   )}
-                </button>
+                </Pressable>
               </span>
               <span role="cell" className="min-w-0 pl-4">
                 {g.code('row') ?? <span className="text-text-dim">—</span>}
@@ -339,7 +397,7 @@ function GroupList({
   groups: readonly MatrixGroup[];
   lit: TxLinkSets | null;
   dim: (on: boolean) => boolean;
-  onHover: (hover: TxHover | null) => void;
+  onHover?: (hover: TxHover | null) => void;
 }) {
   return (
     <ul aria-label="Script groups" className="text-small">
@@ -353,10 +411,10 @@ function GroupList({
             data-ran={g.ran}
             data-lit={on}
             data-dimmed={dim(on)}
-            onMouseEnter={() => onHover({ t: 'group', id: g.id })}
-            onMouseLeave={() => onHover(null)}
-            onFocus={() => onHover({ t: 'group', id: g.id })}
-            onBlur={() => onHover(null)}
+            onMouseEnter={() => onHover?.({ t: 'group', id: g.id })}
+            onMouseLeave={() => onHover?.(null)}
+            onFocus={() => onHover?.({ t: 'group', id: g.id })}
+            onBlur={() => onHover?.(null)}
             className={cn(
               'border-row-rule flex flex-col gap-1 border-t py-2.5 transition-opacity',
               g.ran ? 'text-text' : 'text-text-dim',
@@ -406,10 +464,9 @@ function GroupList({
                     : 'border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]'
                 )}
               />
-              <button
-                type="button"
-                data-testid={g.focusTestId}
-                onClick={g.onFocus}
+              <Pressable
+                on={g.onFocus}
+                testId={g.focusTestId}
                 className="hover:text-jade text-left"
               >
                 {g.ran ? 'runs in ' : 'guards '}
@@ -417,19 +474,15 @@ function GroupList({
                   {cellsInWords(g.cellIds, inputs, outputs)}
                 </span>
                 {g.ran ? '' : ' for the next spend'}
-              </button>
+              </Pressable>
               {' · '}
               {g.witness === null ? (
                 'no witness'
               ) : (
                 <>
-                  <button
-                    type="button"
-                    onClick={g.witness.onSelect}
-                    className="hover:text-jade text-left"
-                  >
+                  <Pressable on={g.witness.onSelect} className="hover:text-jade text-left">
                     reads <span className="text-text-bright">witness #{g.witness.index}</span>
-                  </button>
+                  </Pressable>
                   {g.witness.detail && (
                     <span className="text-text-dim">
                       {' '}

@@ -20,11 +20,18 @@ describe('MostUtilizedScriptsPage', () => {
     chartMock.mockClear();
     vi.mocked(api.getMostUtilizedScriptsChart).mockResolvedValue({
       title: 'Scripts Used & Total CKBytes',
+      // each day's whole, the route's (the D1 hand-back, item 2)
       usedShare: {
         title: 'Top Scripts Common Knowledge Share',
         data: [
-          { date: '2024-01-01', values: { top0: '9007199254740993', others: '20' } },
-          { date: '2024-01-02', values: { top0: '9007199254740995', others: '30' } },
+          {
+            date: '2024-01-01',
+            values: { top0: '9007199254740993', others: '20', total: '9007199254741013' },
+          },
+          {
+            date: '2024-01-02',
+            values: { top0: '9007199254740995', others: '30', total: '9007199254741025' },
+          },
         ],
         series: [
           { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },
@@ -39,8 +46,8 @@ describe('MostUtilizedScriptsPage', () => {
       capacityShare: {
         title: 'Top Scripts Capacity Share',
         data: [
-          { date: '2024-01-01', values: { top0: '100000001', others: '40' } },
-          { date: '2024-01-02', values: { top0: '200000002', others: '50' } },
+          { date: '2024-01-01', values: { top0: '100000001', others: '40', total: '100000041' } },
+          { date: '2024-01-02', values: { top0: '200000002', others: '50', total: '200000052' } },
         ],
         series: [
           { key: 'top0', label: 'SECP256K1_BLAKE160', color: '#00c389' },

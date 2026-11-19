@@ -14,14 +14,16 @@ import { percentFigure, percentOf, withUnit } from '@/lib/format-unit';
 describe('compact numbers: one form (CH-14)', () => {
   it('writes thousands with a lowercase k in every compact formatter, as the ticks do', () => {
     expect(formatTick(500_000, 100_000)).toBe('500k');
-    expect(formatCompactInteger('123456', 'count')).toBe('123.46k');
+    // re-pinned for the coordinator's ruling of 2026-11-19, a shortened figure is cut (was half up, 123.46k)
+    expect(formatCompactInteger('123456', 'count')).toBe('123.45k');
     expect(formatCompactRatio(BigInt(1234567), BigInt(1000))).toBe('1.23k');
     // re-pinned on purpose (R5): a CKB amount's compact form is cut, 123,456 CKB is 123.45k
     expect(ckbAmountText(BigInt('12345600000000'), 'compact')).toBe('123.45k');
   });
 
   it('keeps M, B and T for the larger magnitudes', () => {
-    expect(formatCompactInteger('123456789', 'count')).toBe('123.46M');
+    // re-pinned for the coordinator's ruling of 2026-11-19, a shortened figure is cut (was half up, 123.46M)
+    expect(formatCompactInteger('123456789', 'count')).toBe('123.45M');
     expect(ckbAmountText(BigInt('3360000000000000000'), 'compact')).toBe('33.60B');
     expect(ckbAmountText(BigInt('120000000000000000000'), 'compact')).toBe('1.20T');
   });

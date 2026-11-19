@@ -273,6 +273,7 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
     uniqueAddressCount: 500,
     totalCkbMoved: '0',
     scriptCounts: [],
+    kindOccurrences: total,
   };
 });
 

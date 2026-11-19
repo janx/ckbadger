@@ -21,7 +21,6 @@ import {
   type ChartDefinition,
 } from '@/components/charts/chart-catalogue';
 import {
-  axisOutliers,
   axisStyle,
   axisTicks,
   bucketName,
@@ -37,13 +36,12 @@ import {
   type ChartModel,
   type SubChart,
 } from '@/components/charts/chart-model';
-import { capNote, chartHead, type ChartHead } from '@/components/charts/chart-head';
+import { chartDrawing, chartHead, type ChartHead } from '@/components/charts/chart-head';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { chartAxisFormat, unitAfter, withUnit } from '@/lib/format-unit';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { useFromSm } from '@/hooks/useFromMd';
-import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { apiBaseFor } from '@/lib/active-network';
 import { unitText } from '@/components/ui/units';
 import { cn } from '@/lib/utils';
@@ -264,20 +262,18 @@ function DetailBody({
   const network = useActiveNetwork();
   const fromSm = useFromSm();
   const [range, setRange] = useState<ChartRange>('all');
-  const supportsLog =
-    model.kind === 'line' &&
-    model.points.length > 0 &&
-    model.points.every((point) =>
-      model.series.every(
-        (series) =>
-          exactSignedDecimalRatio(point.values[series.key], `${definition.slug} log scale`)[0] >
-          BigInt(0)
-      )
-    );
-  // The default scale is the one in which the series has shape (CH-08): the catalogue's log where
-  // a series spans orders of magnitude, else linear with its outliers named (rule 6).
-  const [scale, setScale] = useState<Scale>(definition.logScale && supportsLog ? 'log' : 'linear');
   const points = useMemo(() => rangePoints(model.points, range), [model.points, range]);
+  // The default scale is the one in which the series has shape (CH-08): the catalogue's log where
+  // a series spans orders of magnitude, else linear with its outliers named (rule 6). The index
+  // card draws the same (chartDrawing, the D1 hand-back's item 3).
+  const [scale, setScale] = useState<Scale | undefined>(undefined);
+  const { supportsLog, yScale, axisCap } = chartDrawing(
+    definition,
+    model,
+    points,
+    model.series,
+    scale
+  );
   const markers = chartHardforkMarkers(definition, points, events);
   // Every activated hardfork the full history crosses, linked from the evidence (CH-23).
   const crossed = chartHardforkMarkers(definition, model.points, events).flatMap((marker) =>
@@ -311,24 +307,6 @@ function DetailBody({
       : style === 'bucket'
         ? bucketName(label, xUnit)
         : label;
-  const yScale = supportsLog && scale === 'log' ? 'log' : 'linear';
-  // Rule 6: an outlier does not set a linear axis; its value is named over the plot.
-  const outliers =
-    yScale === 'linear' && !model.yDomain && (style === 'date' || style === 'epoch')
-      ? axisOutliers(points, model.series, model.kind)
-      : null;
-  const axisCap = outliers
-    ? {
-        value: outliers.cap,
-        note: capNote(
-          model,
-          points,
-          outliers.indexes,
-          pointLabel,
-          style === 'epoch' ? 'epoch' : 'day'
-        ),
-      }
-    : undefined;
   const ranked = model.kind === 'ranked';
   // Rule 8: one controls row of the controls library. The range and the scale stand at the title
   // row's right end from 640 and with the chart below it; a ranking's range belongs to its
@@ -337,7 +315,7 @@ function DetailBody({
     <RangeSelect label="range" options={RANGES} value={range} onChange={setRange} />
   );
   const scaleControl = supportsLog && (
-    <FilterChips label="scale" values={SCALES} value={scale} onChange={setScale} />
+    <FilterChips label="scale" values={SCALES} value={yScale} onChange={setScale} />
   );
   const controls = (rangeControl || scaleControl) && (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">

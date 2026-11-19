@@ -89,12 +89,13 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
     >
       {/* One mark column, one text edge (seals by kind, C11): a column of marks as wide as the
           widest, the cell's 18 px stone (readability R6: it was the 30 px stone's 30; the owner's
-          stone is 15 wide, the class mark 16), and the text, 10 px apart, in four rows — the
+          stone is 13.5 wide, the class mark 16), and the text, 10 px apart, in four rows — the
           cell's stone with its label and out point, the owner's stone with the owner, the class
           mark with the content, then the occupied bar. Each mark stands alone, centred in the
           column, on its row's first line (the row line, 20 px): the cell's 18 px stone centred on
-          it, 1 px clear above and below (RowSeal); the owner's overhangs it by 1 px; the 16 px
-          class mark sits 1 px down. Every row's text starts on the same edge; the rows after the
+          it, 1 px clear above and below (RowSeal), and the owner's 18 px stone the same, as high
+          as the cell's (Gate B; it was 20 px and overhung the line by 1 px); the 16 px class mark
+          sits 1 px down. Every row's text starts on the same edge; the rows after the
           first end with their right-end item (lock kind, capacity, the cell's state beside the
           bar), which wraps under its row's text when it does not fit and stays right. Row 1 is the
           label and the out point alone: with the state beside them it wrapped on every tile of a
@@ -137,7 +138,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="owner" data-tile-owner className="contents">
         <span data-tile-mark className="flex items-start justify-center">
-          <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="-my-px" />
+          <OwnerSeal lockHash={cell.seal.id.lock} gap={false} className="h-row items-center" />
         </span>
         {/* the lock's kind, a label beside the owner: quiet (R3) */}
         <TileText end={cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}>
@@ -155,13 +156,14 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       </div>
       <div data-tile-row="occupied" className="contents">
         <span data-tile-mark />
-        {/* the bar, its bytes and the state at 12 px, budgeted at a cell's widest occupied figure:
-            no more than the transaction that made it (LARGEST_TX_BYTES, of record: genesis's
-            cellbase), "occupied 1,236,271 B", 144 px: 56 + 6 + 144 + 6 + 57.6 ('consumed') =
-            269.6 px. It holds in the 343 px text column at 1280. In the 215 px column at 1024 it
-            holds up to "occupied 9 B" and not from "occupied 10 B" on, so every real cell (at
-            least 41 bytes) stands its state, the line's end, under the bar on its own line at the
-            right, as it did before the unit was written (measured on the type build) */}
+        {/* the bar, its bytes and the state at 12 px on one line (lane D3): the bar's track 40 px
+            (it was 56), so a cell under 1,000,000 bytes, "occupied 999,999 B" (129.6 px), holds
+            40 + 6 + 129.6 + 6 + 57.6 ('consumed') = 239.2 px in the narrowest tile the pages draw,
+            248 px of text at 360 where the sheets stack; and the widest of record
+            (LARGEST_TX_BYTES, genesis's cellbase, "occupied 1,236,271 B", 144 px), 253.6 px, from
+            390 up (278 px stacked; 383 at 1024 and 511 at 1280 on the transaction page, 335 at
+            1024 on the cell page beside its onward bridge). Where it does not fit, the state wraps
+            under the bar at the right */}
         <TileText
           align="center"
           // the cell's state is a value: the reading ink (R3)
@@ -170,7 +172,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           {cell.anatomy ? (
             <CellBar subject={cell.id} anatomy={cell.anatomy} className="min-w-0 flex-1" />
           ) : (
-            <div aria-hidden="true" className="bg-bar-track h-1 w-14 shrink-0">
+            <div aria-hidden="true" className="bg-bar-track h-1 w-10 shrink-0">
               <div
                 className="bg-jade scan-fill h-full"
                 style={{ width: `${(Number(occupiedShannons) / Number(capacity)) * 100}%` }}
