@@ -1,4 +1,5 @@
 'use client';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type DotCellItem, type ItemProtocol, type ProtocolVersion } from '@/lib/api';
@@ -243,7 +244,14 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       </div>
       <p className="text-text-dim text-meta max-w-measure">
         Decoded from the account data in the witness of tx{' '}
-        <AppLink look="inline" href={`/tx/${v.cell.txHash}`}>
+        <AppLink
+          look="inline"
+          // the witness's transaction opened at the account cell it made (its fold never hides it)
+          href={transactionAtCellHref(v.cell.txHash, {
+            txHash: v.cell.txHash,
+            index: v.cell.outputIndex,
+          })}
+        >
           <Hash hash={v.cell.txHash} size="row" className="text-meta" />
         </AppLink>
       </p>

@@ -114,6 +114,12 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     ).toHaveAttribute('title', 'enable_sub_account');
     // a field the witness version lacks (null) has no item; updated_at is served only as text
     expect(section).not.toHaveTextContent('updated');
+    // lane P2's follow-up (item 11): the witness's transaction opens at the account cell it made
+    const cell = p.versions.at(-1)!.cell;
+    expect(section.querySelector('a[href*="/tx/"]')).toHaveAttribute(
+      'href',
+      `/mainnet/tx/${cell.txHash}#${cell.txHash}-${cell.outputIndex}`
+    );
   });
 
   it('names the .bit account a .bit Cell points to as it is now, not as at minting', () => {

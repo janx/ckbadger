@@ -1,4 +1,5 @@
 'use client';
+import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import { useQueries } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
@@ -192,7 +193,15 @@ function Created({
         parts={[
           <>
             tx{' '}
-            <Link look="inline" href={`/tx/${cell.txHash}`} title={cell.txHash}>
+            <Link
+              look="inline"
+              // the creating transaction opened at this cell, so its fold never hides it
+              href={transactionAtCellHref(cell.txHash, {
+                txHash: cell.txHash,
+                index: cell.outputIndex,
+              })}
+              title={cell.txHash}
+            >
               <ShortId value={cell.txHash} kind="hash" size={size} />
             </Link>
           </>,

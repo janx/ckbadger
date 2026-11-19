@@ -192,9 +192,11 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         name: `${first.address!.slice(0, 4)}…${first.address!.slice(-8)}`,
       })
     ).toHaveAttribute('title', first.address);
+    // re-pinned on purpose (lane P2's follow-up, item 11): the creating transaction opens at
+    // this cell, the anchor P1's builder writes, so its fold never hides the cell
     expect(within(row).getByRole('link', { name: '0xfc79070b…5bcf91' })).toHaveAttribute(
       'href',
-      `/mainnet/tx/${first.txHash}`
+      `/mainnet/tx/${first.txHash}#${first.txHash}-0`
     );
     expect(within(row).getByRole('link', { name: '#20,911,460' })).toHaveAttribute(
       'href',
