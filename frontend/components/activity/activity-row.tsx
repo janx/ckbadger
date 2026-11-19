@@ -391,11 +391,12 @@ function itemTypeRef(t: ActivityItemType): CallRef {
 }
 
 /**
- * The calls by name, once per script (name and page), in first-call order, each with its count
- * and, on a row (`args`), every call it stands for in its hover. Without args on the row, two calls
- * of one script would read ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say
- * the same. A folded run's head names the code its rows called (`args` false): its rows' args
- * differ, so no row's args are its hover.
+ * The calls by name, once per script (name and page), in first-call order. On a row (`args`) each
+ * has its count and every call it stands for in its hover: without args on the row, two calls of
+ * one script would read ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say the
+ * same. A folded run's head (`args` false) names the code its rows called, each once: its rows
+ * differ in how many cells carried a code (the fold compares the set, the lead's final round, item
+ * 1) and in their args, so no row's count or args are the run's.
  */
 function callNames(refs: CallRef[], args: boolean): ReactNode[] {
   const groups: { name: string; href: string; calls: string[] }[] = [];
@@ -414,7 +415,7 @@ function callNames(refs: CallRef[], args: boolean): ReactNode[] {
       >
         {g.name}
       </Link>
-      {g.calls.length > 1 && <span className="text-text-dim"> ×{g.calls.length}</span>}
+      {args && g.calls.length > 1 && <span className="text-text-dim"> ×{g.calls.length}</span>}
     </span>
   ));
 }

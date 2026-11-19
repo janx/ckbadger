@@ -263,14 +263,24 @@ describe('the activities feed folds a run of rows that say the same thing (B4 it
     ]);
   });
 
+  // The lead's final round, item 1: the code is a set, so the 29 transfers that called the same
+  // codes with two to five Godwoken Withdrawal Lock outputs are one run, and its head names each
+  // code once: no "×2", which is a row's count of its own calls, not the run's
+  it('folds the live token transfers into one run whose head names each code once', async () => {
+    const drawn = await drawnFeed(feeds.token);
+    expect(drawn).toHaveLength(1);
+    const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
+    expect(folded).toHaveAttribute('data-run-count', '29');
+    expect(folded.querySelector('[data-role="head-main"]')!.textContent).not.toMatch(/×/);
+  });
+
   // the page-phase review's MUST-1: a folded run names the code its rows' items carry, here the
   // standard of the tokens they moved ("Simple UDT"), whatever tokens each row moved
   it('names the standard a run of token transfers carries, its tokens apart', async () => {
+    // re-pinned on purpose (the lead's final round, item 1): four runs, [11, 11, 3, 4], cut only by
+    // the count of Godwoken Withdrawal Lock outputs ("×2" to "×5" on the head), are one
     expect(await drawnFeed(feeds.token)).toEqual([
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×2 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 48 participants',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×3 · lock 0xff022d55…d32733 | all 11 transactions ↓ · 59 participants',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×4 · lock 0xff022d55…d32733 | all 3 transactions ↓ · 22 participants',
-      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock ×5 · lock 0xff022d55…d32733 | all 4 transactions ↓ · 32 participants',
+      'Token transfer · Simple UDT · Type ID · 0xa9267ff5…00e981 · lock 0x1c04df09…0ee5ac · Godwoken Custodian Lock · lock 0xede19974…56f0ba · Godwoken Withdrawal Lock · lock 0xff022d55…d32733 | all 29 transactions ↓ · 149 participants',
     ]);
   });
 

@@ -69,15 +69,26 @@ describe('runKey: what makes two rows the same', () => {
     expect(dao([request, deposit])).toBe(dao([deposit, request]));
   });
 
-  it('compares the script code (code hash and hash type), counted, in any order, never the args', () => {
+  // re-pinned on purpose (the lead's final round, item 1): the code is a SET. The owner's rule is
+  // "what was done plus the script code": the code that was called, not how many cells carried it
+  // (it was a multiset, which cut the live token feed where only the count of one lock's outputs
+  // changed)
+  it('compares the set of script codes (code hash and hash type), in any order, never the args or the count', () => {
     // the subject carries no args at all: the three oracles' 0x00 / 0x01 / 0x02 are one call
     expect(runKey(oracle({ typeCalls: [typeCall('9e'), typeCall('3a')] }))).toBe(runKey(oracle()));
     expect(runKey(oracle({ typeCalls: [typeCall('3a'), typeCall('5c')] }))).not.toBe(
       runKey(oracle())
     );
-    expect(
-      runKey(oracle({ typeCalls: [typeCall('3a'), typeCall('3a'), typeCall('9e')] }))
-    ).not.toBe(runKey(oracle()));
+    // one code twice is the code: the same set
+    expect(runKey(oracle({ typeCalls: [typeCall('3a'), typeCall('3a'), typeCall('9e')] }))).toBe(
+      runKey(oracle())
+    );
+    expect(runKey(oracle({ lockCalls: [lockCall('c1'), lockCall('c1'), lockCall('c1')] }))).toBe(
+      runKey(oracle({ lockCalls: [lockCall('c1')] }))
+    );
+    expect(runKey(oracle({ itemTypes: [itemType('5e'), itemType('5e')] }))).toBe(
+      runKey(oracle({ itemTypes: [itemType('5e')] }))
+    );
     // a script is the pair: one code hash referenced by data is another script
     expect(runKey(oracle({ typeCalls: [typeCall('3a', 'data1'), typeCall('9e')] }))).not.toBe(
       runKey(oracle())
@@ -234,12 +245,20 @@ describe('foldRuns: consecutive rows with one key', () => {
 // from its 22nd row, its first 21 being Force Bridge transactions of up to 774 parties). By the
 // rule a run is what was done and the code its rows carry; a row that carries other code ends it.
 // What the rule makes of them, read row by row: the whole feed's 50 rows in 14; the token feed's
-// 29 sUDT transfers in 4 runs, cut where the number of non-standard output locks attached changes
-// (6, 7, 8, 9 of them: a multiset, counted); its second run, #21,016,613 to #21,016,741, holds 11
-// transactions that moved USDC alone or USDC and USDC|bsc, two tokens of the one standard.
+// 29 sUDT transfers in one run, every row calling the same codes (re-pinned on purpose, the lead's
+// final round, item 1: the codes are a set; as a multiset they were 4 runs, [11, 11, 3, 4], cut
+// only where the number of Godwoken Withdrawal Lock outputs changed, 2 to 5); the run, #21,016,902
+// to #21,016,521, holds transactions that moved six sets of five tokens of the one standard.
 const LIVE_ALL_RUNS = [2, 1, 10, 1, 6, 1, 2, 1, 1, 5, 1, 3, 2, 14];
-const LIVE_TOKEN_RUNS = [11, 11, 3, 4];
-const LIVE_TOKEN_MIXED = new Set(['USDC', 'USDC,USDC|bsc']);
+const LIVE_TOKEN_RUNS = [29];
+const LIVE_TOKEN_MIXED = new Set([
+  'USDC',
+  'USDC,USDC|bsc',
+  'USDC,USDC|bsc,dCKB',
+  'USDC,WBTC,dCKB',
+  'BTCB|bsc,USDC,USDC|bsc,dCKB',
+  'USDC,dCKB',
+]);
 
 describe('the rule on the live feeds', () => {
   const feeds = (live as unknown as { feeds: Record<string, GlobalActivity[]> }).feeds;
