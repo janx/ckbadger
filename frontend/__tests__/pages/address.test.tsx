@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import {
@@ -606,6 +608,32 @@ describe('Address v3', () => {
       expect(link).toHaveAttribute('href', expect.stringContaining('/scripts/JoyID'));
     const strip = screen.getByRole('group', { name: 'Address status' });
     expect(within(strip).getByText('deprecated')).toHaveClass('text-negative');
+  });
+  // Lane P1 follow-up (the lock-words gate's known writer 11, the lock byte map's name and link):
+  // the address's lock is named once, by the one decision, and the strip and the byte map write
+  // it. A lock on the default lock's code hash by data is not the default lock: the registry's name
+  // for that code hash ("SECP256K1/blake160") is written nowhere, and no link opens the default
+  // lock's named page.
+  it('writes no default lock name for a lock on its code hash by data, strip or byte map', async () => {
+    const args = `0x${'ab'.repeat(20)}`;
+    vi.mocked(api.getAddress).mockResolvedValue({
+      ...addressFixture,
+      address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+      lockScript: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+      lockScriptInfo: {
+        codeHash: DEFAULT_LOCK_CODE_HASH,
+        name: 'SECP256K1/blake160',
+        scriptKind: 'lock',
+        deprecated: false,
+      },
+    });
+    render(<AddressDetailPage />);
+    await loaded();
+    expect(
+      screen.getByRole('heading', { name: 'The lock script this address names' })
+    ).toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('SECP256K1/blake160');
+    expect(document.querySelector('a[href*="/scripts/"]')).toBeNull();
   });
   it('shows raw script identity when no registered name is present', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({
@@ -1554,7 +1582,11 @@ describe('Address board · F2 blocks', () => {
   it('names the lock code and offers JSON and Markdown in the Lock script section (BA-38)', async () => {
     render(<AddressDetailPage />);
     const lock = await section(/^The lock script this address names/);
-    expect(lock).toHaveTextContent(/code_hash0x0+64 · JoyID/);
+    // re-pinned (lane P1 follow-up): the fixture's lock is the JoyID lock its address spells (its
+    // code hash was 0x0…64, which the address does not spell and the lock words now refuse)
+    expect(lock).toHaveTextContent(
+      'code_hash0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323 · JoyID'
+    );
     // Responsive fix plan 2026-11-01 (A3): in the break-all box the lock name split "Def/ault Lock".
     expect(within(lock).getByText('JoyID')).toHaveClass('whitespace-nowrap');
     expect(within(lock).getByRole('link', { name: 'Markdown' }).getAttribute('href')).toBe(

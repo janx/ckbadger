@@ -30,6 +30,7 @@ import { formatCount } from '@/lib/format-count';
 import { occupiedCapacityText } from '@/lib/occupied';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
+import { cellLockFacts, lockWords } from '@/components/ui/lock-kind';
 import { Pager } from '@/components/ui/pager';
 import type { StripFact } from '@/components/ui/status-strip';
 import { DetailFacts } from '@/components/ui/detail-layout';
@@ -344,12 +345,40 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
  * live cells and the holdings come with the holdings read, and an address read without its lock
  * script states no lock (the evidence tier says "Script unavailable").
  */
+/**
+ * The address's lock as the one decision names it (`lockWords`, lane P1 follow-up; the lock-words
+ * gate's known writers 7 and 11): the registry's name for its code hash ('Unknown' is the API's
+ * word for none), the lock read off the address and checked against its script. A lock on the
+ * default lock's code hash by data is another lock; the registry's name is the default lock's, so
+ * it has none and is written by its code hash (its hash type is the strip's note and the byte
+ * map's field). The strip and the evidence tier's byte map both write this one name.
+ */
+export function addressLockName(address: Address): string | null {
+  const lock = address.lockScript;
+  if (!lock) throw new Error(`address ${address.lockScriptHash}: no lock script to name`);
+  const registered = address.lockScriptInfo?.name ?? null;
+  const words = lockWords(
+    cellLockFacts(
+      {
+        lock,
+        name: registered !== null && registered.toLowerCase() !== 'unknown' ? registered : null,
+        address: address.address ?? null,
+      },
+      `address ${address.lockScriptHash}`
+    ),
+    'column'
+  );
+  if (words === null)
+    throw new Error(`address ${address.lockScriptHash}: a column's lock words are never empty`);
+  return words.form === 'not-indexed' ? null : words.name;
+}
+
 export function addressStripFacts(
   address: Address,
   holdings: AddressHoldings | undefined
 ): StripFact[] {
   const lock = address.lockScript;
-  const lockName = address.lockScriptInfo?.name;
+  const lockName = lock ? addressLockName(address) : null;
   const facts: StripFact[] = [];
   if (lock)
     facts.push({

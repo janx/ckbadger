@@ -13,6 +13,7 @@ import { Pager } from '@/components/ui/pager';
 import { Tabs } from '@/components/ui/tabs';
 import {
   AddressBalance,
+  addressLockName,
   addressStripFacts,
   AddressHoldingsSection,
   AddressLoadState,
@@ -227,6 +228,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         ? transactions.data?.pool
         : undefined;
   const a = address.data;
+  // the lock's name, the one decision's (lane P1 follow-up): the strip and the byte map write it
+  const lockName = a?.lockScript ? addressLockName(a) : null;
   if (!a && isNotFoundApiError(address.error)) {
     return (
       <NotFoundPage
@@ -305,9 +308,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     <ScriptByteMap
                       kind="lock"
                       script={a.lockScript}
-                      name={a.lockScriptInfo?.name}
+                      name={lockName}
                       href={getScriptDetailHref({
-                        name: a.lockScriptInfo?.name,
+                        name: lockName,
                         codeHash: a.lockScript.codeHash,
                         hashType: a.lockScript.hashType,
                         scriptKind: 'lock',

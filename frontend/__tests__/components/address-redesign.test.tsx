@@ -24,6 +24,8 @@ import { addressCellSealId } from '@/lib/address-cell-seal';
 import type { Activity, ItemDelta } from '@/lib/api';
 import { formatUtc8Date } from '@/lib/utils';
 import { factsOf } from '@/__tests__/utils/facts';
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 
 describe('Address v3 components', () => {
   it('keeps the balance hero once and preserves a single shannon in the partition', () => {
@@ -237,6 +239,33 @@ describe('Address v3 components', () => {
     // Lane D2: a fact the page does not know is not passed: before the holdings read answers, the
     // strip states the lock and the transactions alone; the class counts must add up to the live
     // cells it states, or it refuses them by name.
+    // Lane P1 follow-up (the lock-words gate's known writer 7, the address's lock): the strip's
+    // lock is the one decision's. A lock on the default lock's code hash by data is not the default
+    // lock; the registry's name for that code hash is the default lock's and is not written for it,
+    // and its link opens that lock (its code hash by data), not the default lock's page.
+    it('names a lock on the default lock’s code hash by data by its code hash, not the default’s name', () => {
+      const args = `0x${'ab'.repeat(20)}`;
+      const byData = {
+        ...addressFixture,
+        address: ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args }),
+        lockScript: { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'data', args },
+        lockScriptInfo: {
+          codeHash: DEFAULT_LOCK_CODE_HASH,
+          name: 'SECP256K1/blake160',
+          scriptKind: 'lock',
+          deprecated: false,
+        },
+      };
+      render(<StatusStrip label="Address status" facts={addressStripFacts(byData, undefined)} />);
+      const strip = screen.getByRole('group', { name: 'Address status' });
+      expect(factsOf(strip)[0]).toEqual(['lock', '0x9bd7e06f…a3cce8 · data · 20-byte args']);
+      expect(within(strip).getByRole('link', { name: '0x9bd7e06f…a3cce8' })).toHaveAttribute(
+        'href',
+        `/mainnet/script/${DEFAULT_LOCK_CODE_HASH}?hashType=data&kind=lock`
+      );
+      expect(strip).not.toHaveTextContent('SECP256K1/blake160');
+    });
+
     it('states what it knows before the holdings answer, and refuses class counts that do not add up', () => {
       const { unmount } = render(
         <StatusStrip label="Address status" facts={addressStripFacts(addressFixture, undefined)} />
