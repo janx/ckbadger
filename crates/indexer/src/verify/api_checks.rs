@@ -1783,6 +1783,67 @@ fn genesis_type_id_binaries(block: &serde_json::Value) -> anyhow::Result<Vec<Gen
     Ok(binaries)
 }
 
+/// F10 (lane rd/api-lock-names, fix round M1): the store the API serves was
+/// built with this build's layout (`ckbadger_store::STORE_LAYOUT`, the domain
+/// store's `store_layout` stamp, read through `/statistics/network`
+/// `storeLayout`). A store an older build wrote has no stamp, and an API from
+/// before the stamp states none: either way the re-sync this layout needs was
+/// skipped, and the check says so.
+pub struct StoreLayoutMatchesBuild;
+
+/// What the API states of its store's layout, against this build's.
+fn store_layout_finding(stats: &serde_json::Value) -> anyhow::Result<Option<Finding>> {
+    let expected = ckbadger_store::STORE_LAYOUT;
+    let problem = match stats.get("storeLayout") {
+        None => "the API states no storeLayout: it is a build from before store layouts were \
+                 stamped"
+            .to_string(),
+        Some(serde_json::Value::Null) => "the store carries no layout stamp: it was built before \
+                                          store layouts were stamped"
+            .to_string(),
+        Some(value) => {
+            let found = value.as_u64().ok_or_else(|| {
+                anyhow::anyhow!("/statistics/network storeLayout is not a number: {value}")
+            })?;
+            if found == u64::from(expected) {
+                return Ok(None);
+            }
+            format!("the store was built with layout {found}")
+        }
+    };
+    Ok(Some(Finding {
+        entity: "store layout".to_string(),
+        details: vec![format!(
+            "{problem}; this build reads layout {expected} ({}): delete RocksDB and re-sync from \
+             genesis",
+            ckbadger_store::STORE_LAYOUT_CHANGE
+        )],
+    }))
+}
+
+impl Check for StoreLayoutMatchesBuild {
+    fn name(&self) -> &'static str {
+        "store_layout_matches_build"
+    }
+    fn description(&self) -> &'static str {
+        "The store the API serves was built with this build's store layout (a skipped re-sync \
+         fails here)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Fast
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let stats: serde_json::Value = api_get(ctx, "statistics/network")?;
+        Ok(match store_layout_finding(&stats)? {
+            None => CheckResult::pass_with_detail(
+                1,
+                format!("store layout {}", ckbadger_store::STORE_LAYOUT),
+            ),
+            Some(finding) => CheckResult::fail(1, vec![finding]),
+        })
+    }
+}
+
 /// F9 (lane rd/api-lock-names): a script is named by its pair (code hash, hash
 /// type), never by its code hash alone. Each genesis binary deployed under
 /// Type ID gives four pairs no script can be: its Type ID hash by `data`,
@@ -7540,6 +7601,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(GenesisBaselineBurntInvariant),
         Box::new(DataHashIndexFilesOnlyCodeCells),
         Box::new(ScriptNamesByPair),
+        Box::new(StoreLayoutMatchesBuild),
         // Sampling
         Box::new(BlockHashRoundtrip),
         Box::new(BlockParentChain),
@@ -7776,7 +7838,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 46);
+        assert_eq!(checks.len(), 47);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -7784,6 +7846,7 @@ mod tests {
         assert!(names.contains(&"genesis_baseline_burnt_invariant"));
         assert!(names.contains(&"data_hash_index_only_code_cells"));
         assert!(names.contains(&"script_names_by_pair"));
+        assert!(names.contains(&"store_layout_matches_build"));
         assert!(names.contains(&"script_reference_live_cells_consistency"));
         assert!(names.contains(&"chart_block_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_distribution_sane"));
@@ -7890,9 +7953,9 @@ mod tests {
             .iter()
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
-        // lane rd/api-lock-names: script_names_by_pair (fast) and
-        // script_reference_live_cells_consistency (sampling)
-        assert_eq!(fast_count, 9);
+        // lane rd/api-lock-names: script_names_by_pair and store_layout_matches_build
+        // (fast), script_reference_live_cells_consistency (sampling)
+        assert_eq!(fast_count, 10);
         assert_eq!(sampling_count, 37);
     }
 
@@ -12061,5 +12124,58 @@ mod tests {
         let check = ScriptReferenceLiveCellsConsistency;
         assert_eq!(check.tier(), CheckTier::Sampling);
         assert!(!check.requires_rpc());
+    }
+
+    // ---- store_layout_matches_build (lane rd/api-lock-names, fix round M1) ----
+
+    #[test]
+    fn store_layout_check_passes_only_on_the_builds_layout() {
+        let expected = ckbadger_store::STORE_LAYOUT;
+        assert!(store_layout_finding(&json!({ "storeLayout": expected }))
+            .unwrap()
+            .is_none());
+        for (stats, words) in [
+            (json!({}), "the API states no storeLayout"),
+            (
+                json!({ "storeLayout": null }),
+                "the store carries no layout stamp",
+            ),
+            (
+                json!({ "storeLayout": expected + 1 }),
+                "the store was built with layout",
+            ),
+        ] {
+            let finding = store_layout_finding(&stats).unwrap().expect("a finding");
+            let details = finding.details.join("; ");
+            assert!(
+                details.contains(words)
+                    && details.contains("delete RocksDB and re-sync from genesis"),
+                "{details}"
+            );
+        }
+        assert!(store_layout_finding(&json!({ "storeLayout": "one" })).is_err());
+    }
+
+    /// A skipped re-sync fails `verify --depth fast`: an API serving an
+    /// unstamped store.
+    #[test]
+    fn store_layout_check_fails_on_an_api_serving_an_unstamped_store() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/statistics/network"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({ "storeLayout": null })),
+                )
+                .mount(&server)
+                .await;
+        });
+        let result = StoreLayoutMatchesBuild
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+        assert!(!result.passed());
+        assert_eq!(StoreLayoutMatchesBuild.tier(), CheckTier::Fast);
+        assert!(!StoreLayoutMatchesBuild.requires_rpc());
     }
 }

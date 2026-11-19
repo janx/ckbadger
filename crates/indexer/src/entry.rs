@@ -192,10 +192,15 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
         "Startup sync decision"
     );
 
-    // This is the first domain-store mutation on startup, and it happens on the
-    // FINAL handle (the probe handle only reads). Existing tagged DBs must
-    // match; old untagged DBs must prove their chain through persisted block 0
-    // before the canonical identity is written.
+    // Before the first write: the store's layout must be this build's (a fresh
+    // store is stamped with it). Any other store is refused here, nothing
+    // written, with both layouts named (`store_layout`).
+    crate::store_layout::ensure_store_layout(&store)
+        .map_err(|error| annotate_rebuild_required(error, &store_location))?;
+    // This is the first domain-store mutation on startup after the layout
+    // stamp, and it happens on the FINAL handle (the probe handle only reads).
+    // Existing tagged DBs must match; old untagged DBs must prove their chain
+    // through persisted block 0 before the canonical identity is written.
     establish_db_network_identity(&store, &config.network, &node_genesis)?;
     store.log_config();
 
@@ -997,6 +1002,18 @@ pub async fn run_label_import(config: LabelImportServiceConfig) -> Result<()> {
         &config.domain_data_path,
         config.store_runtime_config,
     )?);
+    // Before the import writes a label: the store's layout must be this
+    // build's (`store_layout`), a fresh store stamped with it.
+    crate::store_layout::ensure_store_layout(core_store.as_ref()).map_err(|error| {
+        annotate_rebuild_required(
+            error,
+            &StoreLocation::new(
+                config.network.as_str(),
+                config.domain_data_path.as_str(),
+                config.append_only_data_path.as_str(),
+            ),
+        )
+    })?;
 
     let label_config = LabelImportConfig {
         metadata_path: config.metadata_path,
@@ -2305,5 +2322,56 @@ mod tests {
 
         assert!(is_rebuild_required(&err), "{err:#}");
         assert!(err.to_string().contains("incomplete bulk build session"));
+    }
+
+    fn label_import_config(dir: &std::path::Path) -> LabelImportServiceConfig {
+        LabelImportServiceConfig {
+            domain_data_path: dir.join("domain").to_string_lossy().into_owned(),
+            append_only_data_path: dir.join("append-only").to_string_lossy().into_owned(),
+            metadata_path: None,
+            network: "mainnet".to_string(),
+            store_runtime_config: StoreRuntimeConfig::default(),
+        }
+    }
+
+    /// `ckbadger label-import` writes the label CF: on a store an older
+    /// build wrote (no layout stamp) it is refused before it writes a label,
+    /// the store left as it was (lane rd/api-lock-names, fix round M1).
+    #[tokio::test]
+    async fn label_import_refuses_a_store_from_before_layouts_writing_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let domain = dir.path().join("domain");
+        let before = {
+            let store = CkbadgerStore::open_domain(&domain).unwrap();
+            crate::store_layout::tests::seed_pre_layout_store(&store);
+            crate::store_layout::tests::domain_rows(&store)
+        };
+
+        let error = run_label_import(label_import_config(dir.path()))
+            .await
+            .unwrap_err();
+        assert!(is_rebuild_required(&error), "{error:#}");
+        assert!(
+            error.to_string().contains("no store layout stamp"),
+            "{error:#}"
+        );
+
+        let store = CkbadgerStore::open_domain(&domain).unwrap();
+        assert_eq!(crate::store_layout::tests::domain_rows(&store), before);
+    }
+
+    /// On a fresh store the import stamps the layout first, then writes.
+    #[tokio::test]
+    async fn label_import_stamps_a_fresh_store_then_imports() {
+        let dir = tempfile::tempdir().unwrap();
+        run_label_import(label_import_config(dir.path()))
+            .await
+            .unwrap();
+        let store = CkbadgerStore::open_domain(dir.path().join("domain")).unwrap();
+        assert_eq!(
+            store.get_store_layout().unwrap(),
+            Some(ckbadger_store::STORE_LAYOUT)
+        );
+        assert!(store.get_script_family("default-lock").unwrap().is_some());
     }
 }

@@ -3067,8 +3067,13 @@ pub fn script_count_key(code_hash: &[u8], hash_type: i16) -> anyhow::Result<Stri
 /// The pair a [`script_count_key`] names: the code hash and its hash type
 /// byte. Any other key is a corrupt row, named.
 pub fn decode_script_count_key(key: &str) -> anyhow::Result<(Vec<u8>, u8)> {
+    // A bare `<code hash>` key is the layout before store layout 1, written
+    // by an older build: the reader says the way out.
     let (code_hash, label) = key.split_once(':').ok_or_else(|| {
-        anyhow::anyhow!("script count key {key:?} is not <code hash>:<hash type>")
+        anyhow::anyhow!(
+            "script count key {key:?} is not <code hash>:<hash type>; a row of another store \
+             layout: delete RocksDB and re-sync from genesis"
+        )
     })?;
     let code_hash = hex::decode(code_hash)
         .ok()

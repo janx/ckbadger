@@ -157,6 +157,11 @@ pub struct NetworkStats {
     pub dao_locked: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_background_tasks: Option<Vec<BackgroundTaskEntry>>,
+    /// The layout the domain store was built with (`sync_meta` `store_layout`,
+    /// stamped by the indexer); `null` on a store not stamped yet. The verify
+    /// check `store_layout_matches_build` holds it to the build's layout, so a
+    /// skipped re-sync is seen (lane rd/api-lock-names, fix round M1).
+    pub store_layout: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3271,6 +3276,10 @@ async fn fetch_network_stats_from_db(
         circulating_supply,
         dao_locked,
         api_background_tasks: None,
+        store_layout: state
+            .store
+            .get_store_layout()
+            .map_err(|e| ApiError::internal(format!("store layout: {e:#}")))?,
     })
 }
 

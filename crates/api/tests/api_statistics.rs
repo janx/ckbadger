@@ -93,6 +93,33 @@ async fn network_transaction_window_uses_effective_time_when_raw_tip_moves_backw
     assert_eq!(json["transactionsPerDay"], "320");
 }
 
+/// Lane rd/api-lock-names, fix round M1: `/statistics/network` states the
+/// layout the domain store was built with (`storeLayout`), so the verify
+/// check `store_layout_matches_build` sees a skipped re-sync: the stamp's
+/// value on a stamped store, `null` on one not stamped.
+#[tokio::test]
+async fn network_stats_state_the_store_layout() {
+    for stamped in [true, false] {
+        let store = test_store();
+        seed_block_headers_at(&store, &[(0, 1_700_337_600_000)]);
+        if stamped {
+            store
+                .set_store_layout(ckbadger_store::STORE_LAYOUT)
+                .unwrap();
+        }
+        let mut config = test_config(store);
+        let _rpc = mock_indexed_node_tip(&mut config).await;
+        let app = create_router(config).await;
+        let (status, json) = get_json(&app, "/statistics/network").await;
+        assert_eq!(status, StatusCode::OK, "{json}");
+        if stamped {
+            assert_eq!(json["storeLayout"], ckbadger_store::STORE_LAYOUT, "{json}");
+        } else {
+            assert!(json["storeLayout"].is_null(), "{json}");
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_network_stats_reports_initializing_before_genesis() {
     let store = test_store();

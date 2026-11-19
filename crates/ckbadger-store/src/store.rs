@@ -919,6 +919,13 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
     ),
     outside(
         CF_SYNC_META,
+        keys::sync_meta_keys::STORE_LAYOUT,
+        "store layout guard (stamps a fresh store)",
+        "the layout the store is built with; constant",
+        NEVER,
+    ),
+    outside(
+        CF_SYNC_META,
         keys::sync_meta_keys::GENESIS_BASELINE,
         "indexer at block 0",
         "derived from the genesis block; constant per network",

@@ -234,10 +234,13 @@ pub fn encode_script_info_key(code_hash: &[u8], hash_type: u8) -> [u8; SCRIPT_IN
 /// The pair a `script_info` key names; a key of another length or hash type
 /// is a corrupt row, named.
 pub fn decode_script_info_key(key: &[u8]) -> anyhow::Result<(Vec<u8>, u8)> {
+    // A 32-byte key is the layout before store layout 1 (a label row by the
+    // code hash alone), written by an older build: the store-layout stamp
+    // cannot refuse a build from before it, so the reader says the way out.
     anyhow::ensure!(
         key.len() == SCRIPT_INFO_KEY_SIZE,
         "script_info key is {} bytes, not {SCRIPT_INFO_KEY_SIZE} (code hash + hash type): \
-         key=0x{}",
+         key=0x{}; a row of another store layout: delete RocksDB and re-sync from genesis",
         key.len(),
         hex::encode(key)
     );
@@ -2287,6 +2290,9 @@ pub mod sync_meta_keys {
     pub const BACKGROUND_TASKS: &[u8] = b"background_tasks";
     /// Chain-network tag ("mainnet"/"testnet") the DB was first synced for.
     pub const NETWORK_IDENTITY: &[u8] = b"network_identity";
+    /// The layout the domain store was built with (LE u32,
+    /// `layout_ops::STORE_LAYOUT`): stamped by the indexer on a fresh store.
+    pub const STORE_LAYOUT: &[u8] = b"store_layout";
     /// Genesis economic baseline (bincode `GenesisBaseline`), derived at block 0.
     pub const GENESIS_BASELINE: &[u8] = b"genesis_baseline";
     /// Consensus secondary issuance per epoch in shannons (LE u64), fetched

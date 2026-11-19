@@ -1,0 +1,240 @@
+//! The layout of the domain store: the one stamp that tells a build whether
+//! it may read and write a store (lane rd/api-lock-names, the fix round's M1).
+//!
+//! A store states the layout it was built with (`sync_meta` `store_layout`,
+//! a little-endian u32); a build states the layout it writes and reads
+//! ([`STORE_LAYOUT`]). The indexer owns the stamp: it stamps a fresh store
+//! before its first write and refuses any other store before writing
+//! anything (`ckbadger_indexer::store_layout`); the API reads the same check
+//! when it opens the store. A mismatch is never repaired: delete RocksDB and
+//! re-sync from genesis.
+
+use crate::keys::sync_meta_keys;
+use crate::store::{CkbadgerStore, DOMAIN_CFS};
+
+/// The layout of the domain store this build writes and reads.
+///
+/// One number for every layout change that needs a re-sync, raised by the
+/// change that needs it:
+///
+/// - 1: a script is its pair (code hash, hash type). `script_info` is keyed
+///   `code_hash ‖ hash_type` and holds labels only, no usage;
+///   `DailyActivityStats.script_counts` is keyed
+///   `"<code hash hex>:<hash type label>"`. A store from before carries no
+///   stamp: its `script_info` rows are keyed by the code hash alone and sum
+///   every hash type's usage.
+pub const STORE_LAYOUT: u32 = 1;
+
+/// What [`STORE_LAYOUT`] changed last, for the refusal's words.
+pub const STORE_LAYOUT_CHANGE: &str =
+    "scripts named and counted by their pair (code hash, hash type)";
+
+/// A store this build may use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreLayoutState {
+    /// No row in any domain column family: nothing to misread. The indexer
+    /// stamps it before its first write.
+    Fresh,
+    /// Stamped with [`STORE_LAYOUT`].
+    Current,
+}
+
+/// A store this build must not use: built with another layout, or before
+/// layouts were stamped (`found: None`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreLayoutMismatch {
+    pub found: Option<u32>,
+}
+
+impl StoreLayoutMismatch {
+    /// What is wrong, both layouts named, without the remedy (the indexer's
+    /// `RebuildRequiredError` adds it with the network's store paths).
+    pub fn diagnosis(&self) -> String {
+        let built = match self.found {
+            Some(layout) => format!("store layout {layout}"),
+            None => {
+                "no store layout stamp (a build from before store layouts were stamped)".to_string()
+            }
+        };
+        format!(
+            "the domain store was built with {built}; this build reads and writes store layout \
+             {STORE_LAYOUT} ({STORE_LAYOUT_CHANGE})"
+        )
+    }
+}
+
+impl std::fmt::Display for StoreLayoutMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: delete RocksDB and re-sync from genesis",
+            self.diagnosis()
+        )
+    }
+}
+
+impl std::error::Error for StoreLayoutMismatch {}
+
+impl CkbadgerStore {
+    /// The layout stamp, if the store carries one. A value that is not four
+    /// bytes is an error, named: it is no layout of any build.
+    pub fn get_store_layout(&self) -> anyhow::Result<Option<u32>> {
+        match self.get_cf(self.cf_sync_meta(), sync_meta_keys::STORE_LAYOUT)? {
+            None => Ok(None),
+            Some(bytes) => {
+                let bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                    anyhow::anyhow!(
+                        "store_layout record is {} bytes, not 4: delete RocksDB and re-sync from \
+                         genesis",
+                        bytes.len()
+                    )
+                })?;
+                Ok(Some(u32::from_le_bytes(bytes)))
+            }
+        }
+    }
+
+    /// Stamp the store with `layout`. The indexer stamps a fresh store, and
+    /// only a fresh one ([`Self::check_store_layout`]).
+    pub fn set_store_layout(&self, layout: u32) -> anyhow::Result<()> {
+        self.put_cf(
+            self.cf_sync_meta(),
+            sync_meta_keys::STORE_LAYOUT,
+            &layout.to_le_bytes(),
+        )
+    }
+
+    /// Whether no domain column family holds a row: a store no build has
+    /// written yet.
+    pub fn holds_no_domain_rows(&self) -> anyhow::Result<bool> {
+        for name in DOMAIN_CFS {
+            if !self.cf_handle_exists(name) {
+                continue;
+            }
+            if let Some(row) = self
+                .iterator_cf(self.cf(name), rocksdb::IteratorMode::Start)
+                .next()
+            {
+                row.map_err(|e| anyhow::anyhow!("read the first row of {name}: {e}"))?;
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// THE layout check, read by the indexer before its first write and by
+    /// the API when it opens the store: the store's stamp against
+    /// [`STORE_LAYOUT`]. A store without a stamp is fresh only when it holds
+    /// no row at all; any other store without one was built before layouts
+    /// were stamped. The outer error is a read failure; the inner one is a
+    /// store this build must not use.
+    pub fn check_store_layout(
+        &self,
+    ) -> anyhow::Result<Result<StoreLayoutState, StoreLayoutMismatch>> {
+        match self.get_store_layout()? {
+            Some(layout) if layout == STORE_LAYOUT => Ok(Ok(StoreLayoutState::Current)),
+            Some(layout) => Ok(Err(StoreLayoutMismatch {
+                found: Some(layout),
+            })),
+            None if self.holds_no_domain_rows()? => Ok(Ok(StoreLayoutState::Fresh)),
+            None => Ok(Err(StoreLayoutMismatch { found: None })),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::ScriptInfo;
+
+    fn store() -> (tempfile::TempDir, CkbadgerStore) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        (dir, store)
+    }
+
+    #[test]
+    fn a_store_with_no_row_is_fresh() {
+        let (_dir, store) = store();
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Ok(StoreLayoutState::Fresh)
+        );
+    }
+
+    #[test]
+    fn a_stamped_store_is_current() {
+        let (_dir, store) = store();
+        store.set_store_layout(STORE_LAYOUT).unwrap();
+        assert_eq!(store.get_store_layout().unwrap(), Some(STORE_LAYOUT));
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Ok(StoreLayoutState::Current)
+        );
+    }
+
+    /// A store from before the stamp: rows and no stamp. The words say what
+    /// to do.
+    #[test]
+    fn a_store_with_rows_and_no_stamp_is_refused_with_the_way_out() {
+        let (_dir, store) = store();
+        store.set_network_identity("mainnet").unwrap();
+        let mismatch = store.check_store_layout().unwrap().unwrap_err();
+        assert_eq!(mismatch, StoreLayoutMismatch { found: None });
+        let words = mismatch.to_string();
+        assert!(
+            words.contains("no store layout stamp")
+                && words.contains(&format!("store layout {STORE_LAYOUT}"))
+                && words.contains("delete RocksDB and re-sync from genesis"),
+            "{words}"
+        );
+    }
+
+    #[test]
+    fn a_store_of_another_layout_is_refused_naming_both() {
+        let (_dir, store) = store();
+        store.set_store_layout(STORE_LAYOUT + 1).unwrap();
+        let mismatch = store.check_store_layout().unwrap().unwrap_err();
+        assert_eq!(
+            mismatch,
+            StoreLayoutMismatch {
+                found: Some(STORE_LAYOUT + 1)
+            }
+        );
+        let words = mismatch.to_string();
+        assert!(
+            words.contains(&format!("store layout {}", STORE_LAYOUT + 1))
+                && words.contains(&format!("store layout {STORE_LAYOUT}")),
+            "{words}"
+        );
+    }
+
+    /// A row in any domain column family makes a store not fresh: the old
+    /// layout's 32-byte label row alone is enough.
+    #[test]
+    fn any_domain_row_makes_a_store_not_fresh() {
+        let (_dir, store) = store();
+        let value = bincode::serialize(&ScriptInfo {
+            name: "Default Lock".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        store
+            .put_cf(store.cf_script_info(), &[0x9b; 32], &value)
+            .unwrap();
+        assert_eq!(
+            store.check_store_layout().unwrap(),
+            Err(StoreLayoutMismatch { found: None })
+        );
+    }
+
+    #[test]
+    fn a_stamp_that_is_not_four_bytes_is_an_error() {
+        let (_dir, store) = store();
+        store
+            .put_cf(store.cf_sync_meta(), sync_meta_keys::STORE_LAYOUT, &[1, 0])
+            .unwrap();
+        let err = store.get_store_layout().unwrap_err().to_string();
+        assert!(err.contains("store_layout record is 2 bytes"), "{err}");
+    }
+}

@@ -15,6 +15,7 @@ pub mod parser;
 pub mod pool_labels;
 pub mod rpc;
 pub mod runtime_diag;
+pub mod store_layout;
 pub mod sync;
 pub mod sys_info;
 pub mod verify;

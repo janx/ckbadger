@@ -412,6 +412,14 @@ namespace includes:
   persisted. (The legacy whole-state blobs `hodl_tracker` / `cell_dist_tracker` and their
   one-time conversion are gone: every store is re-synced from genesis.)
 - chain identity: `network_identity`, persisted at first sync and validated on later starts
+- store layout: `store_layout` (LE u32, `ckbadger_store::STORE_LAYOUT`), the layout the domain
+  store was built with. The indexer owns it (`ckbadger_indexer::store_layout`): every process
+  that writes the chain stores (the indexer, `ckbadger label-import`) checks it before its
+  first write, stamps a store with no row in any domain CF, and refuses any other store with
+  no stamp or another layout (`RebuildRequiredError`, both layouts named, nothing written); the
+  API reads the same check at open (`check_store_layout`) and serves no other layout, and
+  `/statistics/network` states it (`storeLayout`) for the verify check
+  `store_layout_matches_build`. A layout change that needs a re-sync raises `STORE_LAYOUT`.
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths
 - exact live-cell inventory: `live_cell_summary:initialized` (presence marker) and

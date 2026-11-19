@@ -1950,7 +1950,9 @@ mod tests {
         let err = store.list_script_infos().unwrap_err();
         let text = format!("{err:#}");
         assert!(
-            text.contains("is 32 bytes, not 33") && text.contains(&"9b".repeat(32)),
+            text.contains("is 32 bytes, not 33")
+                && text.contains(&"9b".repeat(32))
+                && text.contains("delete RocksDB and re-sync from genesis"),
             "{text}"
         );
     }
@@ -2425,7 +2427,8 @@ mod daily_activity_stats_tests {
         );
         let refused = decode_script_count_key(hex).unwrap_err().to_string();
         assert!(
-            refused.contains("is not <code hash>:<hash type>"),
+            refused.contains("is not <code hash>:<hash type>")
+                && refused.contains("delete RocksDB and re-sync from genesis"),
             "{refused}"
         );
         assert!(script_count_key(&secp, 3).is_err());
