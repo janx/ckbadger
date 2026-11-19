@@ -10,7 +10,7 @@ import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
-import { HexCode } from '@/components/ui/hex-code';
+import { HeadId } from '@/components/ui/head-id';
 import { Dotted } from '@/components/ui/phone-row';
 import { shortenHash } from '@/lib/shorten';
 import { unitNode } from '@/components/ui/units';
@@ -330,15 +330,17 @@ export function BlockPosition({
             className="border-row-rule text-small min-w-0 space-y-2 border-t border-dashed pt-3"
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
-            {/* U-16: a full hash is one token, whole on its line or scrolled in its own box */}
+            {/* a full hash is set as the head's id is (HeadId; lane P1 follow-up): one line where
+                its measured line holds it, else two halves, never a box that scrolls (U-16 had
+                it scroll in its own box) */}
             <Link look="inline" href={`/blocks/${uncle.parentHash}`} className="block">
-              Parent <HexCode value={uncle.parentHash} truncate={false} variant="inherit" />
+              Parent <HeadId value={uncle.parentHash} kind="hash" />
             </Link>
             <Link look="inline" href={getUncleDetailHref(block.number, index)} className="block">
               <Dotted
                 parts={[
                   `Uncle ${formatBlockNumber(uncle.number)}`,
-                  <HexCode key="hash" value={uncle.hash} truncate={false} variant="inherit" />,
+                  <HeadId key="hash" value={uncle.hash} kind="hash" />,
                 ]}
               />
             </Link>
