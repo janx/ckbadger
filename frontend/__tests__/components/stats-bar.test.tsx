@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { act, createTestQueryClient, render, screen, waitFor } from '../utils/test-utils';
+import { act, createTestQueryClient, render, screen, waitFor, within } from '../utils/test-utils';
 import { api, type NetworkStats } from '@/lib/api';
 import { VitalsStrip } from '@/components/stats-bar';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
@@ -311,6 +311,19 @@ describe('VitalsStrip', () => {
     vi.mocked(api.getNetworkStats).mockRejectedValue(new Error('HTTP 502'));
     render(<VitalsStrip />);
     expect(await screen.findByTestId('vitals-error')).toHaveClass('col-span-3', 'sm:col-span-4');
+  });
+
+  // Lane P1 (the plan's P1 paragraph; review chain-a block-busy: the strip's "Epoch 15,315 …
+  // Difficulty 635.21 P" stood over a block page's own "Epoch 15,292", "Difficulty 647.18 P"): the
+  // strip's first label says its figures are the tip's, so a page's own block is not read against
+  // them.
+  it('names its block the tip, so a block page’s own epoch and difficulty are not read against it (P1)', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    const tip = await within(strip).findByRole('link', { name: /^Tip #20,819,143/ });
+    expect(strip.firstElementChild).toBe(tip);
+    expect(within(strip).queryByText(/^Block$/)).toBeNull();
   });
 
   it('places the loading labels where the figures will be', () => {
