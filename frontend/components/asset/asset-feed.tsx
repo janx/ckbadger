@@ -729,17 +729,19 @@ function FullAssetFeed({
   }, [activityCursor, onActivityCursorChange]);
   const acts = useQuery({
     queryKey: ['asset-feed', queryKey, 'activities', activityCursor, pageSize],
-    queryFn: () => loadActivities({ limit: pageSize, cursor: activityCursor }),
+    queryFn: actsPages.ask((cursor) =>
+      loadActivities({ limit: pageSize, cursor: cursor ?? initialActivityCursor })
+    ),
     enabled: tab === 'activities',
   });
   const txs = useQuery({
     queryKey: ['asset-feed', queryKey, 'transactions', txPages.cursor, pageSize],
-    queryFn: () => loadTransactions({ limit: pageSize, cursor: txPages.cursor }),
+    queryFn: txPages.ask((cursor) => loadTransactions({ limit: pageSize, cursor })),
     enabled: tab === 'transactions',
   });
   const current = tab === 'activities' ? acts : txs,
     pages = tab === 'activities' ? actsPages : txPages;
-  const at = current.data ? timePageAt(tab, pages.page, current.data) : null;
+  const at = current.data ? timePageAt(tab, current.data, pages) : null;
   // A page counts from where its cursor started: an activity page opened at a cursor from the
   // URL (an identity page's link) is not counted from the newest end, so it names no page.
   const fromNewest = tab === 'transactions' || initialActivityCursor === undefined;
@@ -790,12 +792,8 @@ function FullAssetFeed({
                   order="newest first"
                   page={fromNewest ? at.page : undefined}
                   pages={fromNewest ? at.pages : undefined}
-                  onNewer={pages.hasPrevious ? pages.goToPrevious : undefined}
-                  onOlder={
-                    current.data.hasMore
-                      ? () => pages.goToNext(current.data!.nextCursor)
-                      : undefined
-                  }
+                  onNewer={at.onNewer}
+                  onOlder={at.onOlder}
                 />
               </div>
             )}

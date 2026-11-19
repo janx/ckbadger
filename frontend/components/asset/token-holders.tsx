@@ -329,7 +329,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   const pagination = useCursorPagination(limit);
   const holders = useQuery({
     queryKey: ['token-holders', typeHash, all, pagination.cursor, limit],
-    queryFn: () => api.getTokenHolders(typeHash, { limit, cursor: pagination.cursor }),
+    queryFn: pagination.ask((cursor) => api.getTokenHolders(typeHash, { limit, cursor })),
   });
   /**
    * A holder's share of the same response's supply, exact to 0.01 %: its text, and the same
@@ -472,8 +472,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   const rank = (h: TokenHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(h) + 1;
   // "All holders" pages through the list; the top ten are one page
-  const holdersAt =
-    all && holders.data ? rankedPageAt('holders', pagination.page, holders.data) : null;
+  const holdersAt = all && holders.data ? rankedPageAt('holders', holders.data, pagination) : null;
   const holderTable = (
     <div className="min-w-0">
       {holders.data ? (
@@ -543,13 +542,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           {holdersAt && (
             // the controls board's pager: a ranked list in pages, every figure the response's
             <div className="mt-3">
-              <Pager
-                mode="pages"
-                label="holders"
-                {...holdersAt}
-                onPrevious={pagination.goToPrevious}
-                onNext={() => pagination.goToNext(holders.data.nextCursor)}
-              />
+              <Pager mode="pages" label="holders" {...holdersAt} />
             </div>
           )}
         </>

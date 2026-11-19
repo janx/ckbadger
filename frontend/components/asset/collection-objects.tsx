@@ -328,13 +328,13 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   };
   const gallery = useQuery({
     queryKey: ['collection-gallery', id, traits, pages.cursor],
-    queryFn: () => api.getCollectionGallery(id, { limit: NEWEST, cursor: pages.cursor, traits }),
+    queryFn: pages.ask((cursor) => api.getCollectionGallery(id, { limit: NEWEST, cursor, traits })),
   });
   const items = gallery.data?.data ?? [];
   const shown = gallery.data?.total;
   if (gallery.data && shown === undefined)
     throw new Error(`${title}: the gallery page states no total`);
-  const objectsAt = gallery.data ? timePageAt('objects', pages.page, gallery.data) : null;
+  const objectsAt = gallery.data ? timePageAt('objects', gallery.data, pages) : null;
   const overlays = lanes
     ? items.map((item) => ({
         key: item.sporeId,
@@ -643,18 +643,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
               {objectsAt && (
                 // the controls board's pager: a list in time, newest first
                 <div className="pt-2">
-                  <Pager
-                    mode="time"
-                    label="objects"
-                    order="newest first"
-                    {...objectsAt}
-                    onNewer={pages.hasPrevious ? pages.goToPrevious : undefined}
-                    onOlder={
-                      gallery.data.hasMore
-                        ? () => pages.goToNext(gallery.data!.nextCursor)
-                        : undefined
-                    }
-                  />
+                  <Pager mode="time" label="objects" order="newest first" {...objectsAt} />
                 </div>
               )}
             </>

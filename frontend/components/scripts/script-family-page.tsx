@@ -4,7 +4,7 @@ import Link from '@/components/ui/link';
 import { CellBar } from '@/components/ui/cell-bar';
 import { RangeSelect } from '@/components/ui/range-select';
 import { Pager } from '@/components/ui/pager';
-import { rankedPageAt } from '@/lib/pagination';
+import { rankedPageAt, type Asked, type CursorPageRead, type CursorWalk } from '@/lib/pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { CELL_GAP_PX, ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -87,18 +87,14 @@ export interface ScriptFamilyPageProps {
   /** Lane S: the newest live cells, from `/cells/by-script?order=desc` (one index). */
   newest: NewestCellsState;
   /**
-   * The family's cells, a page of them, merged from its references' pages: the pager counts them
-   * of the family's live cells (`family.liveCellsCount`) from the page the walk is on, the page
-   * size and the rows shown (lib/pagination.ts rankedPageAt).
+   * The family's cells, a page of them, merged from its references' pages, as the walk asked for
+   * it: the pager's figures and ways are lib/pagination.ts rankedPageAt's, from the page alone.
    */
   cells: {
-    pageSize: number;
-    rows: readonly Cell[];
+    /** The merged page as its walk asked for it (lane cd-fixes-controls, item 1); none yet. */
+    read: Asked<CursorPageRead & { data: readonly Cell[] }> | null;
+    walk: CursorWalk;
     loading: boolean;
-    page: number;
-    hasMore: boolean;
-    onNext: () => void;
-    onPrevious: () => void;
   };
 }
 
@@ -563,11 +559,8 @@ export function ScriptFamilyPage({
   // past the end its place and a way back. Its pages merge its references' reads, which count no
   // rows of their own: no count (the family's live cells is another read, at another tip, and its
   // head states it: lane c2-finish, 1c).
-  const cellsAt = rankedPageAt('cells', cells.page, {
-    data: cells.rows,
-    limit: cells.pageSize,
-    hasMore: cells.hasMore,
-  });
+  const cellsAt = cells.read && rankedPageAt('cells', cells.read, cells.walk);
+  const cellRows = cells.read?.data ?? [];
   const numbers = versionNumbers(family);
   const lineage = typeLineage(history);
   const holders = lineage ? codeHolders(lineage, history, numbers) : [];
@@ -1207,7 +1200,7 @@ export function ScriptFamilyPage({
               ) : (
                 <ListTable
                   label="Its cells"
-                  rows={cells.rows}
+                  rows={cellRows}
                   rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
                   empty={`No live cells use ${family.name}`}
                   // T5: body ink for the row, the cell alone bright.
@@ -1317,21 +1310,13 @@ export function ScriptFamilyPage({
                   mobileRow={(cell) => <ScriptCellPhoneRow cell={cell} />}
                 />
               )}
-              {cells.rows.length > 0 && (
+              {cellRows.length > 0 && (
                 <p className="text-text-dim text-small max-w-measure mt-2">
-                  Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
+                  Oldest first, as the cell index keeps them · {cellRows.length} of{' '}
                   {family.liveCellsCount.toLocaleString('en-US')}
                 </p>
               )}
-              {cellsAt && (
-                <Pager
-                  mode="pages"
-                  label="cells"
-                  {...cellsAt}
-                  onPrevious={cells.onPrevious}
-                  onNext={cells.onNext}
-                />
-              )}
+              {cellsAt && <Pager mode="pages" label="cells" {...cellsAt} />}
             </section>
           </div>
           <div id="evidence" className="scroll-mt-4">

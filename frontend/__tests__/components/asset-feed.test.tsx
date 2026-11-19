@@ -6,6 +6,7 @@ import {
   tokenMoved,
 } from '@/components/asset/asset-feed';
 import type { Transaction, GlobalActivity, ItemActivity } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 // re-pinned (lane c2-assets): the feed's tab row is the controls library's Tabs, a command line
 // whose names are lowercase ('activities', 'transactions'; were 'Activities', 'Transactions'), and
 // its pager is the board's, a list in time ('older →', '← newer'; were 'Next', 'Previous')
@@ -349,13 +350,15 @@ describe('Shared asset feeds', () => {
     );
   });
   it('hydrates an activity cursor and returns to that exact starting page without affecting transactions', async () => {
-    const loadActivities = vi.fn().mockResolvedValue({
-      data: [activity],
-      total: 100,
-      limit: 20,
-      hasMore: true,
-      nextCursor: 'older',
-    });
+    // re-pinned (lane cd-fixes-controls, item 1): the pages agree with themselves (pagedRead), a
+    // page of one activity with an older one after it, then that older and last one (it served
+    // the same page at every cursor, whose next cursor repeated the one it was asked with: an API
+    // fault the pager now refuses; and 1 row on a page of 20 with more after it)
+    const loadActivities = vi.fn(async ({ cursor }: { cursor?: string }) =>
+      cursor === 'older'
+        ? pagedRead({ data: [activity], total: 2, limit: 1, hasMore: false, nextCursor: null }, 1)
+        : pagedRead({ data: [activity], total: 2, limit: 1, hasMore: true, nextCursor: 'older' })
+    );
     const loadTransactions = vi
       .fn()
       .mockResolvedValue({ data: [], total: 0, limit: 20, hasMore: false, nextCursor: null });

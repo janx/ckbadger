@@ -144,7 +144,7 @@ function ScopedCollectionHolders({
   const pagination = useCursorPagination(limit);
   const holders = useQuery({
     queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
-    queryFn: () => load({ limit, cursor: pagination.cursor }),
+    queryFn: pagination.ask((cursor) => load({ limit, cursor })),
   });
   // The distribution's totals, read while its column is drawn: a distribution that breaks its
   // invariants fails its own column in place (D7), the holders' table and the heading standing.
@@ -196,8 +196,7 @@ function ScopedCollectionHolders({
     ].join(' · ');
   const listed = holders.data?.data ?? [];
   // "All holders" pages through the list; the top ten are one page
-  const holdersAt =
-    all && holders.data ? rankedPageAt('holders', pagination.page, holders.data) : null;
+  const holdersAt = all && holders.data ? rankedPageAt('holders', holders.data, pagination) : null;
   // the holders' columns, built while their table is drawn (inside its part)
   const columnsOf = (): ListColumn<CollectionHolder>[] => [
     {
@@ -362,13 +361,7 @@ function ScopedCollectionHolders({
               {holdersAt && (
                 // the controls board's pager: a ranked list in pages, every figure the response's
                 <div className="mt-3">
-                  <Pager
-                    mode="pages"
-                    label="holders"
-                    {...holdersAt}
-                    onPrevious={pagination.goToPrevious}
-                    onNext={() => pagination.goToNext(holders.data.nextCursor)}
-                  />
+                  <Pager mode="pages" label="holders" {...holdersAt} />
                 </div>
               )}
             </>

@@ -36,7 +36,7 @@ import {
   getCapacityRangeParams,
   CapacityRangeKey,
 } from '@/lib/capacity-range';
-import { ENTITY_PAGE_SIZE, rankedPageAt } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE, mergeAsked, rankedPageAt } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import {
   encodeCellsByScriptCursor,
@@ -882,14 +882,17 @@ export default function ScriptDetailPage({
         versionCellsCursorState[reference.key] ?? null,
         cellsPageSize,
       ],
-      queryFn: () =>
+      // asked by the walk (lane cd-fixes-controls, item 1): each reference's page carries the
+      // walk's page it was read for, and the merged page is asked where all of them were
+      queryFn: cellsPagination.ask(() =>
         api.getCellsByScriptRef({
           codeHash: reference.referenceHash,
           hashType: reference.hashType,
           scriptKind: cellsKind,
           limit: cellsPageSize,
           cursor: versionCellsCursorState[reference.key],
-        }),
+        })
+      ),
       enabled: isCodeHashMode ? Boolean(selectedVersion) : Boolean(namedScriptDetail),
       placeholderData: keepPreviousData,
     })),
@@ -1030,15 +1033,18 @@ export default function ScriptDetailPage({
       mergedEntries.length > cellsPageSize ||
       selectedVersionCellsQueries.some((query) => Boolean(query.data?.hasMore));
 
-    return {
-      data: pageEntries.map((entry) => entry.cell),
-      // the page the references' pages are merged into: this many rows, counting none (the
-      // usage's live cells are another read, at another tip: lane c2-finish, 1c)
-      limit: cellsPageSize,
-      hasMore,
-      nextCursor:
-        hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
-    };
+    return mergeAsked(
+      selectedVersionCellsQueries.map((query) => query.data),
+      {
+        data: pageEntries.map((entry) => entry.cell),
+        // the page the references' pages are merged into: this many rows, counting none (the
+        // usage's live cells are another read, at another tip: lane c2-finish, 1c)
+        limit: cellsPageSize,
+        hasMore,
+        nextCursor:
+          hasMore && pageEntries.length > 0 ? encodeVersionCellsCursorState(nextCursorState) : null,
+      }
+    );
   }, [
     cellsKind,
     cellsPageSize,
@@ -1050,7 +1056,8 @@ export default function ScriptDetailPage({
   // between retries). A disabled read (the code cells of an ambiguous reference) is not awaited.
   // The version's cells, oldest first: the pager's pages mode by its rows and its "more" (its
   // merged page counts none), null for one page.
-  const versionCellsAt = rankedPageAt('cells', cellsPagination.page, selectedVersionCellsData);
+  const versionCellsAt =
+    selectedVersionCellsData && rankedPageAt('cells', selectedVersionCellsData, cellsPagination);
   const isAwaiting = isCodeHashMode
     ? isAwaited(codeHashLookupRead) || isAwaited(codeHashCodeCellsRead)
     : isAwaited(namedScriptDetailRead) || isAwaited(usageRead);
@@ -1303,13 +1310,9 @@ export default function ScriptDetailPage({
         codeCells={codeCells}
         newest={newest}
         cells={{
-          pageSize: cellsPageSize,
-          rows: selectedVersionCellsData.data,
+          read: selectedVersionCellsData,
+          walk: cellsPagination,
           loading: isVersionCellsLoading,
-          page: cellsPagination.page,
-          hasMore: selectedVersionCellsData.hasMore,
-          onNext: () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor),
-          onPrevious: cellsPagination.goToPrevious,
         }}
       />
     );
@@ -1588,7 +1591,7 @@ export default function ScriptDetailPage({
                   ) : (
                     <ListTable
                       label="Its cells"
-                      rows={selectedVersionCellsData.data}
+                      rows={selectedVersionCellsData?.data ?? []}
                       rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
                       columns={[
                         {
@@ -1713,15 +1716,7 @@ export default function ScriptDetailPage({
                   )}
                   {/* The cells oldest first, paged by their rows and their "more" (the usage
                       states their count: lane c2-finish, 1c). */}
-                  {versionCellsAt && (
-                    <Pager
-                      mode="pages"
-                      label="cells"
-                      {...versionCellsAt}
-                      onPrevious={cellsPagination.goToPrevious}
-                      onNext={() => cellsPagination.goToNext(selectedVersionCellsData.nextCursor)}
-                    />
-                  )}
+                  {versionCellsAt && <Pager mode="pages" label="cells" {...versionCellsAt} />}
                 </DetailSection>
               )}
             </>

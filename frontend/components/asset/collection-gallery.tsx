@@ -232,23 +232,24 @@ export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps)
   const pages = useCursorPagination(pageSize);
   const query = useQuery({
     queryKey: ['collection-items', kind, id, search, status, pages.cursor, pageSize],
-    queryFn: () =>
+    queryFn: pages.ask((cursor) =>
       kind === 'object'
         ? api.getObjectCollectionItems(id, {
             limit: pageSize,
-            cursor: pages.cursor,
+            cursor,
             search: search || undefined,
             status,
           })
         : api.getIdentityCollectionItems(id, {
             limit: pageSize,
-            cursor: pages.cursor,
+            cursor,
             search: search || undefined,
             status,
-          }),
+          })
+    ),
   });
   const itemsAt = query.data
-    ? rankedPageAt(kind === 'identity' ? 'identities' : 'objects', pages.page, query.data)
+    ? rankedPageAt(kind === 'identity' ? 'identities' : 'objects', query.data, pages)
     : null;
   const href = (item: CollectionItem) =>
     kind === 'identity'
@@ -345,8 +346,6 @@ export function CollectionItems({ id, kind, tier = null }: CollectionItemsProps)
               mode="pages"
               label={kind === 'identity' ? 'identities' : 'objects'}
               {...itemsAt}
-              onPrevious={pages.goToPrevious}
-              onNext={() => pages.goToNext(query.data!.nextCursor)}
             />
           )}
         </>

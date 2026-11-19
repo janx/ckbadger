@@ -72,8 +72,9 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   const supplyPages = useCursorPagination(supplyPageSize);
   const supplyEvents = useQuery({
     queryKey: ['token-supply-events', typeHash, supplyPages.cursor, supplyPageSize],
-    queryFn: () =>
-      api.getTokenSupplyEvents(typeHash, { limit: supplyPageSize, cursor: supplyPages.cursor }),
+    queryFn: supplyPages.ask((cursor) =>
+      api.getTokenSupplyEvents(typeHash, { limit: supplyPageSize, cursor })
+    ),
     // keep the open list on screen while the next page loads
     placeholderData: keepPreviousData,
   });
@@ -87,10 +88,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   });
   // where the open page of supply events stands (the route always counts them)
   const supplyAt = supplyEvents.data
-    ? timePageAt('supply changes', supplyPages.page, {
-        ...supplyEvents.data,
-        total: supplyEventsTotal(supplyEvents.data),
-      })
+    ? timePageAt(
+        'supply changes',
+        { ...supplyEvents.data, total: supplyEventsTotal(supplyEvents.data) },
+        supplyPages
+      )
     : null;
   const t = token.data;
   if (!t && isNotFoundApiError(token.error)) {
@@ -421,18 +423,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                 supplyAt && (
                   // the controls board's pager: a list in time, newest first
                   <div className="mt-3">
-                    <Pager
-                      mode="time"
-                      label="supply changes"
-                      order="newest first"
-                      {...supplyAt}
-                      onNewer={supplyPages.hasPrevious ? supplyPages.goToPrevious : undefined}
-                      onOlder={
-                        supplyEvents.data!.hasMore
-                          ? () => supplyPages.goToNext(supplyEvents.data!.nextCursor)
-                          : undefined
-                      }
-                    />
+                    <Pager mode="time" label="supply changes" order="newest first" {...supplyAt} />
                   </div>
                 )
               }
