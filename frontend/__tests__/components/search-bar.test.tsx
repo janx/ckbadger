@@ -85,6 +85,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 import { SearchBar } from '@/components/search-bar';
+import { WELL_MATERIAL } from '@/components/ui/text-field';
 
 describe('SearchBar', () => {
   afterEach(() => {
@@ -286,6 +287,20 @@ describe('SearchBar', () => {
       const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
       expect(input).toHaveClass('focus-visible:outline-none', ...own[variant]);
       expect(input).not.toHaveClass('outline-none', 'focus:outline-none');
+      unmount();
+    }
+  });
+
+  // Lane C2 (topics): the controls board's field is the header search field's well, and the text
+  // field and the select draw it from one constant; the header's field is a combobox of its own
+  // (its cursor, its list), not a TextField, so it reads the same material and keeps its own box,
+  // focus look and behaviour. The home field keeps its approved jade border and glow, no well.
+  it('stands in the well of every field: the one material, the text field’s and the select’s', () => {
+    for (const variant of ['compact', 'default'] as const) {
+      const { unmount } = render(<SearchBar variant={variant} />);
+      const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+      expect(input, variant).toHaveClass(...WELL_MATERIAL.split(' '));
+      expect(input, variant).not.toHaveClass('well');
       unmount();
     }
   });
