@@ -206,7 +206,7 @@ describe('collection items on a phone (lane D4, PB-03)', () => {
     const [live, gone] = await screen.findAllByTestId('collection-item-row-mobile');
     expect(phoneLines(live).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
       ['name', 'head', 'Non-Fungible Santa Claus #0', null],
-      ['holder', 'body', `held by ${shortenAddress(owner, 'tight')}`, 'Centralized mix'],
+      ['holder', 'body', `held by ${shortenAddress(owner, 'row')}`, 'Centralized mix'],
       ['minted', 'quiet', 'minted at #6,140,203', null],
     ]);
     // the chip holds the holder's line's right edge, whatever the holder's length
@@ -232,9 +232,7 @@ describe('collection items on a phone (lane D4, PB-03)', () => {
       ['name', item.name, null],
       [
         'holder',
-        item.ownerAddress
-          ? `held by ${shortenAddress(item.ownerAddress, 'tight')}`
-          : 'No live owner',
+        item.ownerAddress ? `held by ${shortenAddress(item.ownerAddress, 'row')}` : 'No live owner',
         null,
       ],
       ['minted', `minted at #${item.createdAtBlock.toLocaleString('en-US')}`, null],

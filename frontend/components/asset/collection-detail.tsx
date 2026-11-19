@@ -130,6 +130,14 @@ function CollectionLede({
     </p>
   );
 }
+/**
+ * The composition every live object of a collection shares, from its counts (the lede's "every
+ * object is …"); null where they do not share one or none is live: then no row can say its own.
+ */
+function sharedTier(counts: CompositionCounts | null, live: number): CompositionTier | null {
+  if (!counts || live === 0) return null;
+  return (Object.keys(counts) as CompositionTier[]).find((t) => counts[t] === live) ?? null;
+}
 /** The dim sentence after "N of M fully on-chain": how long the on-chain parts last. */
 function permanence(counts: CompositionCounts): string | null {
   if (counts.btc_ckb > 0 && counts.pure_ckb === 0)
@@ -680,7 +688,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         ) : (
           <AssetReadState label="collection insights" error={insights.error} read={insights} />
         ))}
-      {kind === 'object' && <CollectionItems id={id} kind={kind} />}
+      {kind === 'object' && (
+        <CollectionItems id={id} kind={kind} tier={sharedTier(counts, data.liveCount)} />
+      )}
       {kind === 'identity' && history}
       {kind !== 'spore' && (
         <AssetReadState
