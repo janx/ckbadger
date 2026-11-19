@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
-use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
+use super::statistics::StackedAreaChartResponse;
 use crate::response::{
     decode_cursor_single, default_limit, encode_cursor_single, ok, ApiError, ApiResult,
     ApiRouteError, CursorPaginatedResponse, ScriptCodeClassTotalResponse,
@@ -3323,20 +3323,7 @@ fn build_script_capacity_history_chart(
     from_date: Option<u32>,
     to_date: Option<u32>,
 ) -> Result<StackedAreaChartResponse, ApiRouteError> {
-    let series = vec![
-        StackedAreaSeries {
-            id: None,
-            key: "used".to_string(),
-            label: "Used".to_string(),
-            color: "#f59e0b".to_string(),
-        },
-        StackedAreaSeries {
-            id: None,
-            key: "unused".to_string(),
-            label: "Unused".to_string(),
-            color: "#00c389".to_string(),
-        },
-    ];
+    let series = super::asset_calendar::held_series();
 
     if targets.is_empty() {
         return Ok(StackedAreaChartResponse {

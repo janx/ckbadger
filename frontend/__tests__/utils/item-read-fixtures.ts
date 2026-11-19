@@ -124,15 +124,19 @@ export function mockItemReads() {
     anchor: { blockNumber: 100, blockHash: '0x' + 'aa'.repeat(32), chainTime: '1700000000000' },
     title: 'Collection capacity',
     data: [
-      { date: '2023-11-13', values: { used: '0', unused: '0', capacity: '0' } },
+      { date: '2023-11-13', values: { occupiedCapacity: '0', freeCapacity: '0', capacity: '0' } },
       {
         date: '2023-11-14',
-        values: { used: '183200000000', unused: '216800000000', capacity: '400000000000' },
+        values: {
+          occupiedCapacity: '183200000000',
+          freeCapacity: '216800000000',
+          capacity: '400000000000',
+        },
       },
     ],
     series: [
-      { key: 'used', label: 'Used', color: '#f59e0b' },
-      { key: 'unused', label: 'Unused', color: '#00c389' },
+      { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+      { key: 'freeCapacity', label: 'Free', color: '#00c389' },
     ],
   };
   vi.spyOn(api, 'getSporeClusterCapacityChart').mockResolvedValue(chart);

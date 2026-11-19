@@ -1,5 +1,5 @@
 //! Complete-day bounds for the existing asset capacity chart builders.
-use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint};
+use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::{
     response::{ApiError, ApiRouteError},
     utils::stats_bucket::ChainTime,
@@ -84,12 +84,14 @@ impl CapacityCalendar {
 }
 
 /// One day of a "CKB held" history (a collection's, a cluster's, an object's, a script's, a
-/// token's): its occupied part (`used`), its free part (`unused`) and the whole its cells hold
-/// (`capacity`), all three stated by the route so a page sums nothing. `capacity` and `used` are
-/// the route's two running sums of the day's deltas (one source each); `unused` is defined as their
-/// difference, so the only thing to check is that the occupied lies within the held:
-/// `0 ≤ used ≤ capacity`, else the day fails with its date and its operands (lane exactness, part A2, the test
-/// review's SHOULD-1: it also checked `used + unused == capacity`, true by the definition).
+/// token's): its occupied part (`occupiedCapacity`), its free part (`freeCapacity`) and the whole
+/// its cells hold (`capacity`), all three stated by the route so a page sums nothing, under the
+/// names every "CKB held" figure of the API takes (the token history's days, the cell versions;
+/// lane exactness, part B, the third read's S4: these were `used` and `unused`). `capacity` and the occupied are the route's two running
+/// sums of the day's deltas (one source each); the free part is their difference, by the one
+/// helper (`free_part`), which refuses an occupied part under zero or above the whole, the day
+/// failing with its date and its operands (lane exactness, part A2, the test review's SHOULD-1: it
+/// also checked that the parts make the whole, true by the definition).
 pub(crate) fn held_point(
     date: String,
     capacity: i128,
@@ -102,11 +104,31 @@ pub(crate) fn held_point(
     Ok(StackedAreaDataPoint {
         date,
         values: std::collections::HashMap::from([
-            ("used".to_string(), used.to_string()),
-            ("unused".to_string(), unused.to_string()),
+            ("occupiedCapacity".to_string(), used.to_string()),
+            ("freeCapacity".to_string(), unused.to_string()),
             ("capacity".to_string(), capacity.to_string()),
         ]),
     })
+}
+
+/// The two bands of a "CKB held" history, bottom first, in the page's words: the occupied part and
+/// the free part (lane exactness, part B, the third read's S4: the one series of the five histories, which named them "Used" and "Unused"
+/// in two colours).
+pub(crate) fn held_series() -> Vec<StackedAreaSeries> {
+    vec![
+        StackedAreaSeries {
+            id: None,
+            key: "occupiedCapacity".to_string(),
+            label: "Occupied".to_string(),
+            color: "#f59e0b".to_string(),
+        },
+        StackedAreaSeries {
+            id: None,
+            key: "freeCapacity".to_string(),
+            label: "Free".to_string(),
+            color: "#00c389".to_string(),
+        },
+    ]
 }
 
 #[cfg(test)]
@@ -117,8 +139,8 @@ mod tests {
     fn a_held_day_states_its_capacity_beside_its_parts() {
         let point = held_point("2024-01-15".into(), 1000, 600, "test history").unwrap();
         assert_eq!(point.date, "2024-01-15");
-        assert_eq!(point.values["used"], "600");
-        assert_eq!(point.values["unused"], "400");
+        assert_eq!(point.values["occupiedCapacity"], "600");
+        assert_eq!(point.values["freeCapacity"], "400");
         assert_eq!(point.values["capacity"], "1000");
     }
 

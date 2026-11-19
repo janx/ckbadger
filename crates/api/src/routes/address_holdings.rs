@@ -362,13 +362,15 @@ fn owner_cell(
         );
         // The occupied capacity is derived from the payload's fields (and a
         // decoded payload's data size is never negative); only the stored
-        // capacity can disagree with it.
-        ensure!(
-            info.capacity >= info.occupied_capacity(),
-            "invalid capacity/occupied capacity {}/{}",
-            info.capacity,
-            info.occupied_capacity()
-        );
+        // capacity can disagree with it. Each cell is checked here, by the one
+        // free part (`free_part`), the cell named by the context: the check the
+        // route makes of the balance's parts (lane exactness, part B, the third
+        // read's N1).
+        crate::utils::assets::free_part(
+            i128::from(info.capacity),
+            i128::from(info.occupied_capacity()),
+        )
+        .map_err(anyhow::Error::msg)?;
         let evidence = classify(&state.store, &hash, index, &info, lock_hash)?;
         Ok((hash.to_vec(), index, info, evidence))
     })()
@@ -768,29 +770,21 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
         other_occupied = other_occupied
             .checked_add(totals.occupied_capacity)
             .context("other cells' occupied overflow")?;
-        let free = totals
-            .capacity
-            .checked_sub(totals.occupied_capacity)
-            .context("other cells' free underflow")?;
-        ensure!(
-            free >= 0,
-            "address 0x{}: its {class:?} cells occupy {} of their {} shannons",
-            hex::encode(owner),
-            totals.occupied_capacity,
-            totals.capacity
-        );
+        // the class's free part, by the one helper; each of its cells was checked in the scan
+        let free = crate::utils::assets::free_part(totals.capacity, totals.occupied_capacity)
+            .map_err(|error| {
+                anyhow!(
+                    "address 0x{}: its {class:?} cells: {error}",
+                    hex::encode(owner)
+                )
+            })?;
         other_free = other_free
             .checked_add(free)
             .context("other cells' free overflow")?;
     }
-    ensure!(
-        dao_cells
-            .checked_add(other_occupied)
-            .and_then(|sum| sum.checked_add(other_free))
-            == Some(balance),
-        "address 0x{}: its Nervos DAO cells {dao_cells} + its other cells' occupied {other_occupied} + their free {other_free} do not make its balance {balance} shannons",
-        hex::encode(owner)
-    );
+    // the three parts make the balance by their definition (the balance is the classes' capacity,
+    // summed): no check of it here (the third read's N1: it could not fail); each cell's capacity
+    // is checked against its occupied bytes in the scan
     let holdings = BTreeMap::from([
         (Class::Dao, classes[&Class::Dao].cell_count),
         (Class::Token, i64::try_from(tokens.len())?),

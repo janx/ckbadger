@@ -1199,7 +1199,6 @@ export interface AddressHoldings {
   lockScriptHash: string;
   balance: string;
   occupiedCapacity: string;
-  /** Ordinary free capacity; DAO free is a disjoint partition. */
   /**
    * The balance in three parts that make it exactly (lane P1, third round): the whole capacity of
    * its Nervos DAO cells, what pays for the bytes of its other cells, and the rest of those. None
@@ -1694,6 +1693,8 @@ export interface ItemCellVersion {
   ownerAddress: string;
   capacity: string;
   occupiedCapacity: string;
+  /** The free part, capacity − occupied, the route's (`utils::assets::free_part`; lane exactness, part B5). */
+  freeCapacity: string;
   lock: Script;
   type: Script | null;
   anatomy: { capacityBytes: number; lockBytes: number; typeBytes: number; dataBytes: number };

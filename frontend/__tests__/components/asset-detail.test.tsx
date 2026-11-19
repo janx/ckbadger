@@ -18,6 +18,7 @@ const version: ItemCellVersion = {
   ownerAddress: 'ckb1owner',
   capacity: '10000000001',
   occupiedCapacity: '6100000000',
+  freeCapacity: '3900000001',
   lock: { codeHash: '0x' + '56'.repeat(32), hashType: 'data1', args: '0x' + '78'.repeat(20) },
   type: null,
   anatomy: { capacityBytes: 8, lockBytes: 53, typeBytes: 0, dataBytes: 0 },

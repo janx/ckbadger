@@ -44,6 +44,7 @@ import {
 import { unitNode, unitText } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { charPx } from '@/lib/type-metrics';
+import { assertHeldSeries, heldPoint } from '@/lib/held-point';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -472,13 +473,18 @@ export function ScriptHistoryFigure({
   onActive: (index: number | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  for (const key of ['used', 'unused'])
-    if (!chart.series.some((series) => series.key === key))
-      throw new Error(`${family.name} capacity history has no ${key} series`);
-  const data = chart.data.map((point) => ({
-    label: point.date,
-    values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
-  }));
+  // the held bands by the routes' names, an older API's used and unused refused by name (lane exactness, part B, the third read's S4)
+  assertHeldSeries(chart.series, `${family.name} capacity history`);
+  const data = chart.data.map((point) => {
+    const held = heldPoint(point.values, `${family.name} capacity history ${point.date}`);
+    return {
+      label: point.date,
+      values: {
+        occupiedCapacity: ckbDecimal(held.occupiedCapacity),
+        freeCapacity: ckbDecimal(held.freeCapacity),
+      },
+    };
+  });
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
   // The token and collection plots' name: the same stack (occupied, free above it) in the same
   // unit; the page's h1 says which script, and a script's name has no length bound (lane A5).
@@ -490,8 +496,8 @@ export function ScriptHistoryFigure({
     kind: 'stacked',
     bareTicks: true,
     series: [
-      { key: 'used', label: 'Occupied', color: DATA_COLOR },
-      { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
+      { key: 'occupiedCapacity', label: 'Occupied', color: DATA_COLOR },
+      { key: 'freeCapacity', label: 'Free', color: HELD_CAPACITY_COLOR },
     ],
   };
   const occupied: ChartValueAxisInput = {
@@ -500,7 +506,7 @@ export function ScriptHistoryFigure({
     unit: 'CKB',
     kind: 'area',
     bareTicks: true,
-    series: [{ key: 'used', label: 'Occupied', color: DATA_COLOR }],
+    series: [{ key: 'occupiedCapacity', label: 'Occupied', color: DATA_COLOR }],
   };
   // U-19: the round values sit in one gutter left of both plots, in the dim ink (inside, a spike
   // crossed them), bare, each plot's name saying CKB once; the upgrade lines and labels start
@@ -579,8 +585,9 @@ export function ScriptHistoryReading({
 }) {
   const index = active ?? chart.data.length - 1;
   const point = chart.data[index];
-  const used = point ? BigInt(point.values.used) : null;
-  const unused = point ? BigInt(point.values.unused) : null;
+  const parts = point ? heldPoint(point.values, `history ${point.date}`) : null;
+  const used = parts ? BigInt(parts.occupiedCapacity) : null;
+  const unused = parts ? BigInt(parts.freeCapacity) : null;
   // the whole the day's cells hold, as the route states it (the page sums nothing)
   const held = point
     ? exactUnsignedInteger(point.values.capacity, `history ${point.date}: capacity`)

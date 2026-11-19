@@ -28,14 +28,14 @@ function history() {
     data: Array.from({ length: 21 }, (_, i) => ({
       date: day(i),
       values: {
-        used: String(100000000 * (i + 1)),
-        unused: String(200000000 * (i + 1)),
+        occupiedCapacity: String(100000000 * (i + 1)),
+        freeCapacity: String(200000000 * (i + 1)),
         capacity: String(300000000 * (i + 1)),
       },
     })),
     series: [
-      { key: 'used', label: 'Used', color: '#f59e0b' },
-      { key: 'unused', label: 'Unused', color: '#00c389' },
+      { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+      { key: 'freeCapacity', label: 'Free', color: '#00c389' },
     ],
   };
   vi.spyOn(api, 'getIdentityCollectionCapacityChart').mockResolvedValue(chart);

@@ -14,6 +14,7 @@ import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { cn } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { versionFree } from '@/lib/held-point';
 export interface CellVersionsProps {
   history: ItemCellVersions;
   subject: string;
@@ -96,7 +97,8 @@ export function CellVersions({
       : `${i === 0 ? 'Minted cell' : `Version ${i + 1}`}${v.isLive ? ' · current' : ''}`;
   const row = (v: ItemCellVersion, i: number) => {
     const key = `${v.txHash}:${v.outputIndex}`;
-    const free = BigInt(v.capacity) - BigInt(v.occupiedCapacity);
+    // the version's free part, the route's (lane exactness, part B5: it was capacity − occupied, here)
+    const free = versionFree(v, `cell version ${key}`);
     return (
       <article
         key={key}

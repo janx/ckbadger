@@ -156,11 +156,13 @@ it('explains what changed in the cell between minting and now', () => {
   const a = v({
     capacity: '30700000000',
     occupiedCapacity: '30700000000',
+    freeCapacity: '0',
     anatomy: { capacityBytes: 8, lockBytes: 53, typeBytes: 65, dataBytes: 181 },
   });
   const b = v({
     capacity: '32000000000',
     occupiedCapacity: '32000000000',
+    freeCapacity: '0',
     anatomy: { capacityBytes: 8, lockBytes: 66, typeBytes: 65, dataBytes: 181 },
   });
   expect(cellLifeSentence([a, b], 'object')).toBe(
