@@ -515,31 +515,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason: '1 without a look; inks by hand (text-text, hover:text-jade)',
   },
   // ---- shell ----
-  'components/layout/header.tsx': {
-    lane: 'shell',
-    sites: { look: 5, ink: 4 },
-    reason: '5 without a look; inks by hand (text-jade, text-text, hover:text-jade)',
-  },
-  'components/layout/nav-menu.tsx': {
-    lane: 'shell',
-    sites: { look: 1 },
-    reason: '1 without a look',
-  },
-  'components/layout/site-footer.tsx': {
-    lane: 'shell',
-    sites: { look: 6, ink: 6 },
-    reason: '6 without a look; inks by hand (text-text, hover:text-jade)',
-  },
-  'components/layout/skip-link.tsx': {
-    lane: 'shell',
-    sites: { raw: 1 },
-    reason: 'the skip link, a raw <a> of the shell',
-  },
-  'components/layout/wordmark.tsx': {
-    lane: 'shell',
-    sites: { look: 1, ink: 1 },
-    reason: '1 without a look; inks by hand (text-text-bright)',
-  },
   'components/stats-bar.tsx': {
     lane: 'shell',
     sites: { look: 2 },
@@ -573,7 +548,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list only shrinks. */
-const TOLERATED_TOTAL = 650;
+const TOLERATED_TOTAL = 625;
 
 /** Raw anchors kept by decision, by file: their count and why. */
 const NAMED_RAW: Readonly<Record<string, { count: number; reason: string }>> = {
