@@ -36,7 +36,8 @@ describe('pct: the share of a block’s room through percentOf', () => {
     expect(pct(5, 1000)).toBe('0.50%');
     expect(pct(0, 1000)).toBe('0.00%');
     expect(pct(1, 1_000_000)).toBe('<0.01%');
-    expect(pct(999_999, 1_000_000)).toBe('>99.99%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 999,999 of 1,000,000 is 99.9999%, 99.99%, which is true of it (half up it read 100.00, bounded >99.99%)
+    expect(pct(999_999, 1_000_000)).toBe('99.99%');
     expect(pct(1000, 1000)).toBe('100.00%');
   });
 });

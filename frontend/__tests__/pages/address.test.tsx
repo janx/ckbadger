@@ -2110,7 +2110,8 @@ describe('Address · space legend (lane A follow-up)', () => {
         .map((b) => b.textContent)
       // re-pinned on purpose (lane P1, the plan: the bar says its unit; review chain-b
       // address-miner: "102 / 122" with no unit read as CKB): bytes, "3,761 B"
-    ).toEqual(['Objects3,761\u00a0B96.76%', 'Plain CKB126\u00a0B3.24%']);
+      // lane exactness, part B2: 3,761 of 3,887 B is 96.758…%, 96.75% (half up 96.76%); 126 3.2415…%, 3.24%
+    ).toEqual(['Objects3,761\u00a0B96.75%', 'Plain CKB126\u00a0B3.24%']);
     const rest = within(legend).getByText('nothing in DAO, tokens, identities or other scripts');
     expect(rest).toHaveClass('text-text-dim');
     expect(rest).toHaveAttribute(

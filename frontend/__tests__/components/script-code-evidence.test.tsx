@@ -79,7 +79,8 @@ describe('script code evidence', () => {
       />
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
-    expect(sentence).toContain('55.56% runs code no one can change');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5 of 9 shannons is 55.555…%, 55.55% (half up 55.56%)
+    expect(sentence).toContain('55.55% runs code no one can change');
     expect(sentence).toContain('44.44% runs code a single key can replace');
     expect(detailFixture.history.every((marker) => marker.indexedDay === '2024-01-02')).toBe(true);
   });

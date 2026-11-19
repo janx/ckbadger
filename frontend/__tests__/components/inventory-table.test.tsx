@@ -80,7 +80,8 @@ describe('Inventory rows', () => {
     // was the two-place "1.00"), its exact value in its own title.
     expect(row).toHaveAttribute(
       'title',
-      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · CKB held ÷ occupied ×1.6393442625'
+      // lane exactness, part B2: 61 of 100.00000001 CKB occupied is 60.9999993…%, 60.99% (half up 61.00%)
+      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (60.99%) · supply 1.000000000000000000000001 T · CKB held ÷ occupied ×1.6393442625'
     );
     expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent(/^1$/);
     expect(table).not.toHaveTextContent('xUDT');
@@ -717,7 +718,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['what', 'body', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
       // the supply and the occupied CKB with its exact share, in a phone row's summary form
       // (readability R5; each cut figure has its exact value in its title)
-      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (60.99%)', null],
     ]);
     expect(row.querySelector('.truncate')).toBeNull();
   });
@@ -731,7 +732,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', 'Token', '100 CKB'],
       ['what', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
-      ['figures', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+      ['figures', 'supply 1 T · 61 CKB occupied (60.99%)', null],
     ]);
   });
 
@@ -748,7 +749,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'Wyltek Founding Members', '100 CKB'],
       ['what', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
       // a phone row's summary form (R5: was "100.00000001")
-      ['figures', '93 minted · 61 CKB occupied (61.00%) · CKB held ÷ occupied ×1.63', null],
+      ['figures', '93 minted · 61 CKB occupied (60.99%) · CKB held ÷ occupied ×1.63', null],
     ]);
     expect(row.querySelector('[data-composition="pure_ckb"]')).not.toBeNull();
   });
@@ -777,7 +778,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', '.bit', '100 CKB'],
       ['what', '5 live · 9 ever registered · 2 holders', null],
       // a phone row's summary form (readability R5: was "100.00000001")
-      ['figures', '61 CKB occupied (61.00%)', null],
+      ['figures', '61 CKB occupied (60.99%)', null],
     ]);
   });
 });
@@ -826,7 +827,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     expect(lines(token)).toEqual([
       ['identity', 'head', 'Token', '100 CKB'],
       ['what', 'body', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
-      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (60.99%)', null],
     ]);
     expect(phoneLines(sudt)[1].left).toBe(
       'T · sUDT · 2 holders · 4 transfers · CKB held ÷ occupied ×15,019.09'
@@ -856,7 +857,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
       [
         'figures',
         'quiet',
-        '93 minted · 61 CKB occupied (61.00%) · CKB held ÷ occupied ×1.63',
+        '93 minted · 61 CKB occupied (60.99%) · CKB held ÷ occupied ×1.63',
         null,
       ],
     ]);
@@ -891,7 +892,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     expect(lines(row)).toEqual([
       ['identity', 'head', '.bit', '100 CKB'],
       ['what', 'body', '5 live · 9 ever registered · 2 holders', null],
-      ['figures', 'quiet', '61 CKB occupied (61.00%)', null],
+      ['figures', 'quiet', '61 CKB occupied (60.99%)', null],
     ]);
     expect(dottedItems(row.querySelector('[data-line="what"]')!)).toEqual([
       '5 live',

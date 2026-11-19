@@ -51,8 +51,10 @@ describe('Token distribution', () => {
     expect(screen.getByRole('table', { name: 'Holders by balance' })).toHaveTextContent(
       '1 and above'
     );
-    // the review's item I (re-pinned): a share below the whole reads >99.99%, never 100.00%
-    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder >99\.99%/);
+    // the review's item I (re-pinned): a share below the whole never reads 100.00%; re-pinned for
+    // lane exactness, part B2 (one percentage, cut): 10,000,000,000 of 10,000,000,001 is 99.9999999…%, cut 99.99%,
+    // which is true of it (half up it read 100.00, bounded >99.99%)
+    expect(screen.getByRole('img')).toHaveAccessibleName(/Largest holder 99\.99%/);
     rerender(
       <TokenDistributionView
         where="token 0xabc"
@@ -156,7 +158,8 @@ describe('Token distribution', () => {
     });
     expect(above.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(5, scale, 48) });
     expect(above).toHaveTextContent('5');
-    expect(above).toHaveTextContent('>99.99%');
+    // lane exactness, part B2: 10,000,000,000 of 10,000,000,001 cut, 99.99% (was >99.99%)
+    expect(above).toHaveTextContent('99.99%');
   });
   it('names a bucket that starts at 0 and has no upper bound "0 and above" (L2-4)', () => {
     // It used to print "Under " with no bound after it.
@@ -468,7 +471,8 @@ describe('Token holders (board L5)', () => {
     expect(second).toHaveAttribute(
       'title',
       // B4 second fix round (re-pinned on purpose): the Lock cell's words, 'not indexed'
-      `#2 · 0x${'22'.repeat(32)} · not indexed · 10,000,000 RGB++ · 41.23% of supply`
+      // lane exactness, part B2: 1,000,000,000,000,000 of 2,425,525,649,000,000 is 41.228…%, 41.22% (half up 41.23%)
+      `#2 · 0x${'22'.repeat(32)} · not indexed · 10,000,000 RGB++ · 41.22% of supply`
     );
   });
 
@@ -691,7 +695,9 @@ describe('Token holders’ shares at the extremes', () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  it('writes <0.01% for a holder above nothing and >99.99% for one below the whole', async () => {
+  // re-pinned for lane exactness, part B2: cut, a holder below the whole reads at most 99.99%, true of it (half up
+  // 999,999 of 1,000,000 read 100.00, bounded >99.99%); a holder above nothing still <0.01%
+  it('writes <0.01% for a holder above nothing and 99.99% for one below the whole', async () => {
     atContainerWidth(1248);
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue(
       pagedRead({
@@ -723,7 +729,8 @@ describe('Token holders’ shares at the extremes', () => {
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
     const [, whale, dust] = within(table).getAllByRole('row');
-    expect(whale).toHaveTextContent('>99.99%');
+    expect(whale).toHaveTextContent('99.99%');
+    expect(whale).not.toHaveTextContent('>99.99%');
     expect(whale).not.toHaveTextContent('100.00%');
     expect(dust).toHaveTextContent('<0.01%');
     expect(dust).not.toHaveTextContent('0.00%');
@@ -845,7 +852,8 @@ describe('Holders by balance phone row', () => {
     const rows = screen.getAllByTestId('holder-bucket-row-mobile');
     expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
       ['range', '1 and above', '1 holder'],
-      ['share', '', '>99.99% of supply'],
+      // lane exactness, part B2: 10,000,000,000 of 10,000,000,001 cut, 99.99% (was >99.99%)
+      ['share', '', '99.99% of supply'],
     ]);
   });
 });

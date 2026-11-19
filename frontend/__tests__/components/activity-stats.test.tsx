@@ -100,7 +100,8 @@ describe('ActivityStats', () => {
     );
     expect(labels).toEqual(['script', 'transfer', 'identity', 'dao']);
     // CH-14 (re-pinned): the one percentage of a count in the total, two decimals (was 81.4%)
-    expect(types).toHaveTextContent('Script call81.45%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5,795 script calls of 7,115 kind occurrences is 81.447…%, 81.44% (half up 81.45%)
+    expect(types).toHaveTextContent('Script call81.44%');
     expect(types).not.toHaveTextContent('Token');
     expect(within(types).getByRole('link', { name: /Script call/ })).toHaveAttribute(
       'href',
@@ -114,8 +115,10 @@ describe('ActivityStats', () => {
     expect(scripts).toHaveTextContent('By script, share of 11,300 calls');
     const rows = [...scripts.querySelectorAll('[data-rank-row]')];
     expect(rows).toHaveLength(6);
-    expect(rows[0]).toHaveTextContent('.bit Time Index State48.50%');
-    expect(rows[5]).toHaveTextContent('3 others0.10%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 5,480 of 11,300 calls is 48.495…%, 48.49% (half up 48.50%)
+    expect(rows[0]).toHaveTextContent('.bit Time Index State48.49%');
+    // and the rest's 11 calls of 11,300 0.0973…%, 0.09% (half up 0.10%)
+    expect(rows[5]).toHaveTextContent('3 others0.09%');
     expect(rows[5].querySelector('a')).toBeNull();
     expect(within(scripts).getByRole('link', { name: /Bitcoin SPV Type Lock/ })).toHaveAttribute(
       'href',

@@ -3,6 +3,7 @@
  * strings, and everything shown as an exact amount is computed in BigInt shannons.
  */
 import { MINUS } from '@/lib/chart-ticks';
+import { cutScaledInteger } from '@/lib/exact-integer';
 import { ckbAmountText } from '@/lib/amount-form';
 
 export const SHANNONS_PER_CKB = BigInt(100_000_000);
@@ -60,16 +61,14 @@ export function formatSignedCount(n: number): string {
   return n > 0 ? `+${n.toLocaleString('en-US')}` : `${MINUS}${(-n).toLocaleString('en-US')}`;
 }
 
-/** `part / total` as a percentage, exact and rounded half-up to `decimals` places (`0.30`). */
+/**
+ * `part / total` as a percentage, exact and cut at `decimals` places by the one cut function
+ * (`cutScaledInteger`), never rounded (`0.30`; lane exactness, part B2: it rounded half up, 2 of 3 read 66.67).
+ */
 export function formatPercent(part: bigint, total: bigint, decimals = 2): string {
   if (total <= BigInt(0)) throw new Error(`formatPercent: total must be positive, got ${total}`);
   if (part < BigInt(0)) throw new Error(`formatPercent: part must not be negative, got ${part}`);
-  const scale = BigInt(10) ** BigInt(decimals);
-  const scaled = (part * BigInt(100) * scale * BigInt(2) + total) / (total * BigInt(2));
-  const whole = scaled / scale;
-  if (decimals === 0) return whole.toString();
-  const frac = (scaled % scale).toString().padStart(decimals, '0');
-  return `${whole}.${frac}`;
+  return cutScaledInteger(part * BigInt(100), total, decimals);
 }
 
 /** Whole bytes (1 CKB of capacity = 1 byte) in decimal units with one decimal: `151.1 MB`. */

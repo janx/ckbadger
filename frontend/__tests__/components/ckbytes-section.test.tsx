@@ -223,7 +223,10 @@ describe('CkbytesSection', () => {
   it('draws the three served parts, which partition circulation exactly', async () => {
     render(<CkbytesSection />);
     const bar = await screen.findByRole('img', {
-      name: 'Knowledge 0.30 percent, free 83.22 percent, DAO free 16.48 percent',
+      // lane exactness, part B2: of 49,868,783,034.50933125 CKB circulating, free 41,499,405,173.07133425 is
+      // 83.2172…%, 83.21% (half up 83.22%), DAO free 8,218,243,616.437997 16.4797…%, 16.47% (half up
+      // 16.48%); knowledge 151,134,245 is 0.3030…%, 0.30% either way
+      name: 'Knowledge 0.30 percent, free 83.21 percent, DAO free 16.47 percent',
     });
     expect(bar.querySelector('[data-segment="knowledge"]')).toHaveClass('bg-jade');
     expect(bar.querySelector('[data-segment="knowledge"]')).not.toHaveClass('min-w-[3px]');
@@ -256,12 +259,12 @@ describe('CkbytesSection', () => {
     );
     expect(document.querySelector('[data-legend="Free"]')).toHaveTextContent(
       // compact, cut (readability R5, re-pinned on purpose: 41,499,405,173 CKB was 41.50B, rounded)
-      'Free41.49B CKB83.22%'
+      'Free41.49B CKB83.21%'
     );
     // The DAO part is the DAO cells' free capacity; their whole capacity is context only.
     expect(document.querySelector('[data-legend="DAO free"]')).toHaveTextContent(
       // compact, cut (R5, re-pinned on purpose: the DAO's free part was 8.22B, rounded up)
-      'DAO free8.21B CKB16.48% · 8.22B in all DAO cells'
+      'DAO free8.21B CKB16.47% · 8.22B in all DAO cells'
     );
   });
 
@@ -480,13 +483,13 @@ describe('CkbytesSection allocation highlight', () => {
     fireEvent.pointerEnter(seg('free'));
     expectHighlighted(seg, 'free');
     const free = legend(/^Free/);
-    expect(free).toHaveTextContent('Free41,499,405,173.07133425 CKB83.22%');
+    expect(free).toHaveTextContent('Free41,499,405,173.07133425 CKB83.21%');
     expect(within(free).getByText('Free')).toHaveClass('text-text-bright');
 
     fireEvent.pointerLeave(seg('free'));
     expectNoHighlight(seg);
     // compact, cut (R5, re-pinned on purpose: was 41.50B, rounded up)
-    expect(free).toHaveTextContent('Free41.49B CKB83.22%');
+    expect(free).toHaveTextContent('Free41.49B CKB83.21%');
     expect(within(free).getByText('Free')).toHaveClass('text-text');
   });
 
@@ -496,7 +499,7 @@ describe('CkbytesSection allocation highlight', () => {
     fireEvent.pointerEnter(dao);
     expectHighlighted(seg, 'dao');
     expect(dao).toHaveTextContent(
-      'DAO free8,218,243,616.43799700 CKB16.48% · 8.22B in all DAO cells'
+      'DAO free8,218,243,616.43799700 CKB16.47% · 8.22B in all DAO cells'
     );
     fireEvent.pointerLeave(dao);
     expectNoHighlight(seg);

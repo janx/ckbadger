@@ -666,7 +666,8 @@ describe('Block board · second tier', () => {
     expect((bar.querySelector('[data-segment="overhead"]') as HTMLElement).style.width).toBe(
       `${Math.round((883 / scale) * 120 * 100) / 100}px`
     );
-    expect(facts).toHaveTextContent('0.54% of 597,000 · overhead 883 · transactions 2,322');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 3,205 of 597,000 bytes is 0.5368…%, 0.53% (half up 0.54%)
+    expect(facts).toHaveTextContent('0.53% of 597,000 · overhead 883 · transactions 2,322');
     expect(facts).toHaveTextContent('Miner client');
     expect(facts).toHaveTextContent('decoded from the cellbase message');
   });

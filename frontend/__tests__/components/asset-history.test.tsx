@@ -176,7 +176,8 @@ describe('Asset history', () => {
         ['held', '200.00000001 CKB'],
         // re-pinned on purpose (lane P2's follow-up, item 5): the readout's exact form, no padding (it was
         // "61.00000000 CKB")
-        ['occupied', '61 CKB 30.50%'],
+        // re-pinned for lane exactness, part B2 (one percentage, cut): 61 of 200.00000001 CKB is 30.4999998…%, 30.49% (half up 30.50%)
+        ['occupied', '61 CKB 30.49%'],
         ['free', '139.00000001 CKB'],
         ['week', 'Latest complete week, from 2024-01-01: 3 transfers'],
         ['peak', '200.00000001 CKB on 2024-01-08'],
