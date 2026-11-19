@@ -364,7 +364,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               nameRows.length > 0 && (
                 <DetailSection title=".cell named rights">
                   <div data-testid="address-dotcell-names">
-                    <p className="text-text-dim text-small max-w-measure mb-3">
+                    {/* a statement of what the list holds: the reading ink (R3; P1 follow-up) */}
+                    <p className="text-text text-small max-w-measure mb-3">
                       Names this protocol assigns to the address. These rights do not add the name
                       cell’s capacity to this address’s physical holdings.
                     </p>
@@ -409,7 +410,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   title="Fiber channels"
                   args={fiber.data.length.toLocaleString('en-US')}
                 >
-                  <p className="text-text-dim text-small mb-3">
+                  <p className="text-text text-small mb-3">
                     Up to 100 indexed channels associated with this address.
                   </p>
                   {fiber.data.map((c) => (

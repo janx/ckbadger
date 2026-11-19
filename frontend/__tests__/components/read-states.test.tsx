@@ -75,3 +75,18 @@ describe.each(['asset', 'address'] as const)('the %s read state', (state) => {
     expect(await screen.findByText('things unavailable.')).toHaveAttribute('role', 'status');
   });
 });
+
+// Lane P1 follow-up (the ink-role gate's quiet <p> sites, R3): a failed read is a statement in the
+// reading ink; the loading and the unavailable lines stay quiet, a transient and an empty line.
+describe('the address read state’s inks', () => {
+  it('writes a failure in the reading ink', async () => {
+    renderSection(<Section state="address" kind="failure" />);
+    expect(await screen.findByRole('alert')).toHaveClass('text-text');
+    expect(screen.getByRole('alert')).not.toHaveClass('text-text-dim');
+  });
+
+  it('keeps the unavailable line quiet', async () => {
+    renderSection(<Section state="address" kind="nothing" />);
+    expect(await screen.findByRole('status')).toHaveClass('text-text-dim');
+  });
+});

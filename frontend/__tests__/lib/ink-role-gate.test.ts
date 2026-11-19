@@ -65,8 +65,11 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
   'app/address/[addr]/client-page.tsx': {
     family: 'chain',
-    sites: { prose: 4 },
-    reason: 'section sentences and an empty state in the quiet ink: explaining sentences read',
+    // prose 4 → 2 (lane P1 follow-up): the .cell names' and the Fiber channels' section sentences
+    // are statements, in the reading ink
+    sites: { prose: 2 },
+    reason:
+      "empty 2: the evidence tier's 'Script unavailable' and the history's no-activities line",
   },
   'app/blocks/[id]/client-page.tsx': {
     family: 'chain',
@@ -113,8 +116,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   'components/address/address-holdings.tsx': {
     family: 'chain',
     // prose 7 → 6 (B7): the balance's parts are labelled facts, no longer a quiet <p>
-    sites: { link: 4, prose: 6 },
-    reason: 'deposit block and cell links, empty holdings and the collection note in the quiet ink',
+    // link 4 → 0, prose 6 → 2 (lane P1 follow-up): the DAO counts, a deposit's state, block and
+    // day, an identity's expiry and holding block and a live cell's block are values in the reading
+    // ink; a read that failed says so in the reading ink; three empty lines went, each in a
+    // section drawn only when its class holds something (they could not be reached)
+    sites: { prose: 2 },
+    reason:
+      "loading 1: the load state's loading and unavailable line; note 1: the collections' hint",
   },
   'components/blocks/block-position.tsx': {
     family: 'chain',
