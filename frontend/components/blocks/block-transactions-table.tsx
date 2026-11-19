@@ -134,7 +134,7 @@ export function BlockTransactionsTable({
       <span className="text-text-dim">cellbase</span>
     ) : (
       <span className="whitespace-nowrap">
-        <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`}>
+        <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`} look="inline">
           {formatBlockNumber(tx.proposalOrigin!.blockNumber)}
         </Link>
         <span className="text-text-dim">
