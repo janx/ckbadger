@@ -707,7 +707,10 @@ describe('Block board · second tier', () => {
   it('names the uncle as a sibling with the same parent and its delay; counts committed proposals (BA-18)', async () => {
     render(<BlockDetailPage />);
     const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest('section')!;
-    expect(uncles).toHaveTextContent('1 · counted toward the NC-Max orphan rate');
+    // Re-pinned on purpose (lane P1 follow-up; review chain-a: "NC-Max orphan rate", a term the
+    // reader has to break): the site's word, the forks chart's "uncle rate", one word for one thing
+    expect(uncles).toHaveTextContent('1 · counted toward the uncle rate');
+    expect(uncles).not.toHaveTextContent(/NC-Max|orphan rate/);
     await waitFor(() =>
       expect(uncles).toHaveTextContent(/sibling of #20,827,931 0x.+, same parent #20,827,930/)
     );

@@ -545,9 +545,10 @@ export default function BlockDetailPage() {
                 <DetailSection
                   title="Uncles"
                   actions={
+                    // the site's word, the forks chart's (lane P1 follow-up; it read "the NC-Max
+                    // orphan rate", the protocol's term): one word for one thing
                     <span className="text-text-dim text-small">
-                      {block.unclesCount.toLocaleString('en-US')} · counted toward the NC-Max orphan
-                      rate
+                      {block.unclesCount.toLocaleString('en-US')} · counted toward the uncle rate
                     </span>
                   }
                 >
