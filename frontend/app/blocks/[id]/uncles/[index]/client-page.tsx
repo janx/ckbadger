@@ -155,45 +155,51 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
               delay && `${delay} its sibling`,
             ],
           },
+          // the label names the block (lane P1 follow-up; review chain-a: it wrote a number and
+          // its value was a bare hash): the canonical block at the uncle's height, its sibling
+          // where the two were mined on one parent
           {
-            label: 'canonical',
+            label: 'canonical at its height',
             value: (
               <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
                 <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
               </Link>
             ),
+            note: delay ? 'its sibling' : undefined,
           },
           { label: 'epoch', value: epoch },
         ],
       }}
       lede={
         <>
+          {/* two sentences (lane P1 follow-up; review chain-a: one paragraph of 158 characters a
+              line, the height said twice): the block at its height and the parent, then the
+              block that included it and what an uncle is; the height is the h1's */}
           <p className="text-body leading-relaxed">
-            Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
-            {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
-            chain is{' '}
-            <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
-              <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
-            </Link>
             {delay ? (
               <>
-                , its sibling: both were mined on parent{' '}
-                <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
-                  {formatBlockNumber(uncle.number - 1)} <Hash hash={uncle.parentHash} size="row" />
+                Its sibling on the canonical chain,{' '}
+                <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+                  <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
                 </Link>
-                , and this uncle came {delay} it.
+                , was mined on the same parent, {blockLink(uncle.number - 1)}, and this uncle came{' '}
+                {delay} it.
               </>
             ) : (
               <>
-                , which has another parent; this uncle was mined on parent{' '}
+                The canonical block at its height,{' '}
+                <Link look="inline" href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
+                  <Hash hash={uncle.canonicalAtHeight.hash} size="row" />
+                </Link>
+                , has another parent; this uncle was mined on{' '}
                 <Link look="inline" href={`/blocks/${uncle.parentHash}`}>
                   <Hash hash={uncle.parentHash} size="row" />
                 </Link>
                 .
               </>
             )}{' '}
-            It is not part of the canonical chain: its transactions never ran, but the proposals it
-            carried count toward the proposal window.
+            {blockLink(uncle.includedBy.number)} included it: its transactions never ran, but the
+            proposals it carried count toward the proposal window.
           </p>
           {/* why its stone has no rods, said once (lane D2b) */}
           <p className="text-body mt-2 leading-relaxed">
