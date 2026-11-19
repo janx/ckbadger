@@ -3,6 +3,7 @@ import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } fro
 import { AppLink } from '@/components/ui/app-link';
 import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { Hash } from '@/components/ui/hash';
 import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
@@ -122,7 +123,9 @@ function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
     label: 'Owner',
     size: 'body',
     value: <Address address={cell.ownerAddress} size="row" look="key" className="text-body" />,
-    note: `${cell.lockName ?? 'lock not named'}${note}`,
+    // the owner's lock by the one decision (lane B4; lane p-assets: it wrote the API's name, "lock
+    // not named" where it had none): nothing for the default lock, so the note is its words alone
+    note: [cellOwnerLockPart(cell), note],
   };
 }
 
@@ -131,9 +134,7 @@ function physicalSince(protocol: IdentityProtocol, first: string) {
     protocol.versions.map((v) => v.cell),
     (c) => c.ownerLockHash
   );
-  return run.changes === 0
-    ? ` · since ${first}`
-    : ` · since ${formatUtc8Date(run.since.timestamp)}`;
+  return run.changes === 0 ? `since ${first}` : `since ${formatUtc8Date(run.since.timestamp)}`;
 }
 
 /** `.bit` sub-accounts from the witness switch (R2b-b-17), since the version that set it. */
@@ -270,9 +271,7 @@ export function identityFacts({
       return [
         ownerFact(
           protocol,
-          sameKey
-            ? ' · owner and manager are the same key'
-            : ' · owner and manager are different keys'
+          sameKey ? 'owner and manager are the same key' : 'owner and manager are different keys'
         ),
         expiryFact(term, now),
         blockFact('Registered', Number(d.registeredAt) * 1000, createdAtBlock),

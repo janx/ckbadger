@@ -1,3 +1,5 @@
+import { ckbAddress } from '@/__tests__/utils/ckb-address';
+import { DEFAULT_LOCK_CODE_HASH } from '@/lib/lock-script';
 import { AssetMetrics } from '@/components/asset/detail-shell';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import {
@@ -52,6 +54,30 @@ const facts = () => Array.from(document.querySelectorAll('[data-role="metrics"] 
 const fact = (label: string) =>
   facts().find((f) => f.querySelector('dt')?.textContent === label) ?? null;
 const factLabels = () => facts().map((f) => f.querySelector('dt')!.textContent);
+
+// Lane p-assets (the lock-words gate's known writer 5): the Owner fact's lock is the one
+// decision's (components/ui/lock-kind.tsx): nothing beside the address for the default lock, where
+// the note wrote the API's name, or "lock not named".
+it('names an owner’s lock by the one decision: nothing for the default lock', () => {
+  const protocol = valar();
+  const last = protocol.versions.at(-1)!.cell;
+  const args = `0x${'ab'.repeat(20)}`;
+  last.lock = { codeHash: DEFAULT_LOCK_CODE_HASH, hashType: 'type', args };
+  last.lockName = 'SECP256K1/blake160';
+  last.ownerAddress = ckbAddress({ codeHash: DEFAULT_LOCK_CODE_HASH, args });
+  render(
+    <Facts
+      protocol={protocol}
+      term={identityTerm(protocol)}
+      now={NOW}
+      isLive
+      createdAtBlock={12260151}
+    />
+  );
+  expect(fact('Owner')).toHaveTextContent(/owner and manager are the same key$/);
+  expect(fact('Owner')).not.toHaveTextContent('SECP256K1');
+  expect(fact('Owner')).not.toHaveTextContent('lock not named');
+});
 
 describe('identity facts rail (ID-C6)', () => {
   it('gives .bit its domain facts: owner, expiry with the last renewal, registration, records', () => {

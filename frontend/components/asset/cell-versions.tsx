@@ -7,7 +7,7 @@ import { Hash } from '@/components/ui/hash';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { getScriptDetailHref } from '@/lib/detail-routes';
+import { cellOwnerLockPart } from '@/components/ui/lock-kind';
 import { cn } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 export interface CellVersionsProps {
@@ -162,13 +162,10 @@ export function CellVersions({
                       <Hash hash={v.ownerAddress} kind="address" size="row" className="text-meta" />
                     </AppLink>
                   </span>
-                  <AppLink
-                    look="inline"
-                    href={getScriptDetailHref({ ...v.lock, scriptKind: 'lock' })}
-                  >
-                    {v.lockName ?? 'Lock'}{' '}
-                    <Hash hash={v.lock.codeHash} size="row" className="text-meta" />
-                  </AppLink>
+                  {/* the owner's lock by the one decision (lane B4; lane p-assets: it wrote the
+                      API's name, "Lock" where it had none, and the code hash): nothing for the
+                      default lock */}
+                  {cellOwnerLockPart(v)}
                 </div>
               </div>
               <div className="text-text-bright min-w-0 sm:text-right">

@@ -232,13 +232,16 @@ const DECIDED: Reads = {
  * link) and the cellbase witness's lock.
  */
 const KNOWN: Reads = {
-  'components/asset/cell-versions.tsx': { 'api name': 1 },
+  // components/asset/cell-versions.tsx left (lane p-assets): a version's lock is cellOwnerLockPart
+  // (writer 1)
   'components/asset/item-evidence.tsx': { 'api name': 1 },
   'components/asset/mnft-detail.tsx': { 'api name': 1 },
   // 6 → 5 (lane p-assets, R8): the life sentence names the lock it sits under once, its story
   // and its lede alike
   'components/asset/object-hero.tsx': { 'api name': 5 },
-  'components/identity/identity-overview.tsx': { 'api name': 4 },
+  // 4 → 3 (lane p-assets): the Owner fact's note is cellOwnerLockPart (writer 5's first read);
+  // the .bit Cell summary's wallet and holder words stay, prose that names a default lock too
+  'components/identity/identity-overview.tsx': { 'api name': 3 },
   'components/identity/identity-evidence.tsx': { 'api name': 1 },
   'components/address/address-holdings.tsx': { 'script info name': 1 },
   'app/cell/[outpoint]/client-page.tsx': { 'api name': 1, 'registry name': 1 },
@@ -324,11 +327,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (lane p-assets; renamed, it was "… 37 reads in 21 files, … 13 files and
   // 24 reads"): the object life sentence reads the lock it sits under once (known writer 4), 24 → 23
   // known reads and 37 → 36 in all
-  it('pins the totals: 36 reads in 21 files, the known writers 13 files and 23 reads', () => {
+  // Re-pinned on purpose (lane p-assets; renamed, it was "… 36 reads in 21 files, … 13 files and
+  // 23 reads"): a version's lock (cell-versions) and an identity's Owner note read the decision,
+  // 23 → 21 known reads in 12 files, 36 → 34 in all in 20
+  it('pins the totals: 34 reads in 20 files, the known writers 12 files and 21 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(21);
-    expect(total(all)).toBe(36);
-    expect(Object.keys(KNOWN)).toHaveLength(13);
-    expect(total(KNOWN)).toBe(23);
+    expect(Object.keys(all)).toHaveLength(20);
+    expect(total(all)).toBe(34);
+    expect(Object.keys(KNOWN)).toHaveLength(12);
+    expect(total(KNOWN)).toBe(21);
   });
 });
