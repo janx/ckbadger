@@ -277,7 +277,12 @@ or not a `.cell` identity is a `500` naming the parent and the child.
 
 **Params**
 
-- `ListParams` — `limit`, `block_number`, `cursor`
+- `ListParams` — `limit`, `block_number`, `cursor`, `activity_type`: one of `user`, `ckb`,
+  `script`, `cellbase`, `dao`, `token`, `object`, `identity` (none or `all`: every transaction).
+  `user` is every committed transaction but the cellbase, newest first, read from the
+  `activities` rows (which hold no cellbase) with their `tx_index` entries; the Transactions page
+  opens on it. A filtered list states no `total`. `/transactions/pool` takes the same values;
+  there `user` names every pool transaction (none is a cellbase), a partly read one too.
 - `Path(hash): Path<String>` — tx hash (with or without `0x`)
 
 **Responses**
@@ -660,6 +665,10 @@ bands it draws and the wholes it divides by, read-only on the store:
   unknown transactions are not in it. `daoCount` is the day's three DAO
   actions (deposits, withdraw requests, completed withdraws) summed, the DAO
   band of Activity by type.
+- `GET /stats/activity-summary-24h` — the rolling window's `kindOccurrences`
+  and `daoCount`, counted as the daily rows count them (one helper each in the
+  route); the home page's activity shares divide by `kindOccurrences` and its
+  DAO share is `daoCount`.
 
 **What a page states outside the chart pages (lane exactness, part A)**
 
