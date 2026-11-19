@@ -50,7 +50,8 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { useClockText, Utc8Age, Utc8Date } from '@/components/ui/utc8-date';
 import { ShortId } from '@/components/ui/short-id';
 import { unitNode } from '@/components/ui/units';
-import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { PHONE_PART_GAP_PX, ROW_LINE_PX, fontPx, phoneHead, textPx } from '@/lib/type-metrics';
+import { WIDEST_AGE, WIDEST_BLOCK_NUMBER } from '@/lib/list-bounds';
 import { useFromSm } from '@/hooks/useFromMd';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
@@ -87,6 +88,25 @@ export function RowArticle({
 function RowDate({ timestamp, age }: { timestamp: string; age: boolean }) {
   return age ? <Utc8Age timestamp={timestamp} /> : <Utc8Date timestamp={timestamp} />;
 }
+
+/**
+ * Line 1 of an activity row on a phone (the phone-rows board's head(): 262 of 328 px there for "CKB
+ * Transfer" beside "#21,009,129 · 50s ago"), at its widest: the class mark and its 8 px (24), the
+ * headline's first 12 characters at the key's 14 px (100.8), the 12 px between the parts and the
+ * evidence at the meta step, the widest block with the oldest age a live list writes, "#99,999,999
+ * · 10y 364d ago" (26 characters, 187.2): 324 of a 360 px phone's 328 px line (16 characters of
+ * headline at 390). A longer headline wraps between its words beside the evidence, which keeps its
+ * place on the line; so the headline's longest word and the evidence must fit together, "Withdraw"
+ * (67.2) the longest of the site's own headlines' words.
+ */
+const ACTIVITY_PHONE_HEAD_PX = phoneHead(
+  'activities',
+  16 +
+    8 +
+    textPx(12, fontPx('body')) +
+    PHONE_PART_GAP_PX +
+    textPx(`${WIDEST_BLOCK_NUMBER} · ${WIDEST_AGE}`.length, fontPx('meta'))
+);
 
 /**
  * Line 1 of a row: the primary fact on the left (the Layer-3 narrative for an activity), the raw
@@ -158,6 +178,7 @@ export function ActivityRowHead({
   const head = (
     <div
       data-role="row-head"
+      data-head-px={phone ? ACTIVITY_PHONE_HEAD_PX : undefined}
       className={cn(
         'flex items-baseline justify-between',
         phone ? 'flex-nowrap gap-x-3' : 'flex-wrap gap-x-4',

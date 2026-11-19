@@ -4,6 +4,7 @@ import { atViewportWidth } from '@/__tests__/utils/viewport';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ParticipantInfo } from '@/lib/api';
+import { PHONE_LINE_PX } from '@/lib/type-metrics';
 
 // Lane D4 (the phone-rows board, its activities pane; PA-10): an activity row took three shapes on a
 // phone by the length of its strings — the block and its age dropped under the headline when the
@@ -114,6 +115,16 @@ describe('the activity row on a phone (lane D4, PA-10)', () => {
     expect(parties[0].querySelector('[data-role="ckb"]')).toHaveTextContent('−581.71 CKB');
     expect(parties[1].querySelector('[data-role="ckb"]')).toHaveTextContent('+581.66 CKB');
     expect(parties[0].querySelector('[data-role="occupied"]')).toHaveTextContent('occupied −61 B');
+  });
+
+  // The board's head(): the mark and its 8 px, 12 characters of headline at 14 px, the 12 px and the
+  // widest evidence at 12 px, "#99,999,999 · 10y 364d ago": 324 of 328 px at 360.
+  it('states its head line at 360 px, 324 of 328, the widest evidence beside 12 characters', () => {
+    atViewportWidth(360);
+    const { container } = render(<ActivityRow activity={scriptCall} age />);
+    const head = container.querySelector('[data-role="row-head"]')!;
+    expect(head).toHaveAttribute('data-head-px', '324');
+    expect(Number(head.getAttribute('data-head-px'))).toBeLessThanOrEqual(PHONE_LINE_PX[360]);
   });
 
   it('keeps the desktop row as it is from sm', () => {
