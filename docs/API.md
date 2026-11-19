@@ -163,7 +163,7 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 - `CursorPaginatedResponse<MnftItemActivityResponse>` — per-item activity entries
 - `NftCollectionDetailResponse` — counts, composition, class/issuer summary
 - `CursorPaginatedResponse<CollectionItemResponse>` — items
-- `CursorPaginatedResponse<CollectionHolderResponse>` — holders with item counts
+- `RankedPage<CollectionHolderResponse>` — holders with item counts, a cursor page with `firstRank`
 - `CursorPaginatedResponse<CollectionActivityResponse>` — collection activities
 - `StackedAreaChartResponse` — `data` + `series` (defined in `statistics.rs`). Each day's `values` carry `used` (occupied), `unused` (free) and `capacity`, the whole its cells hold, all three stated by the route (`held_point` in `asset_calendar.rs`: the parts make the whole or the day fails, named with its date and its operands), so a page sums nothing.
 
@@ -206,7 +206,7 @@ Collection detail's `activitiesCount` counts canonical collection transactions, 
 **Responses**
 
 - `IdentityCollectionDetailResponse` — collection_id, standard, name, counts, owned capacity/knowledge
-- `CollectionHolderResponse` (from assets.rs)
+- `RankedPage<CollectionHolderResponse>` (from assets.rs) — a cursor page with `firstRank`
 - `CollectionActivityResponse` (from assets.rs)
 - `CollectionItemResponse` (from assets.rs) — used for item detail and item list
 - `CursorPaginatedResponse<MnftItemActivityResponse>` — per-item activities
@@ -448,8 +448,9 @@ could trail `total` on `/transactions` and `/cells/live` by that block.)
 `GET /addresses/{addr}/holdings` streams the complete existing owner live-cell
 index in one pinned read view. It returns:
 
-- `lockScriptHash`, `balance`, `occupiedCapacity`, `freeCapacity`,
-  `daoFreeCapacity`, `liveCellsCount`.
+- `lockScriptHash`, `balance`, `occupiedCapacity` (every live cell's),
+  `daoCellsCapacity`, `otherCellsOccupiedCapacity`, `otherCellsFreeCapacity`,
+  `liveCellsCount`.
 - `classes`: fixed keys `dao`, `token`, `object`, `identity`, `script`, `plain`;
   each contains `cellCount`, `capacity`, `occupiedCapacity`.
 - `holdings`: `dao` counts live DAO cells (both phases), `token` counts distinct
@@ -464,9 +465,17 @@ index in one pinned read view. It returns:
 itemCount: number, compositionCounts: <the same six counters>}`. These are
   whole-owner totals, independent of the currently displayed item page.
 
-All capacities/compensation are exact decimal **shannon strings**. The disjoint
-partition is `balance = occupiedCapacity + freeCapacity + daoFreeCapacity`;
-`freeCapacity` excludes DAO free capacity. DAO holdings follow the current cell
+All capacities/compensation are exact decimal **shannon strings**. The balance
+is stated in three disjoint parts, each true by its name, and the route fails
+with the address and the operands if they do not make it:
+`balance = daoCellsCapacity + otherCellsOccupiedCapacity + otherCellsFreeCapacity`.
+`daoCellsCapacity` is the whole capacity of the address's Nervos DAO cells
+(deposits and withdrawal requests, the `dao` class); `otherCellsOccupiedCapacity`
+is what pays for the bytes of its other cells; `otherCellsFreeCapacity` is the
+rest of its other cells, the CKB they hold beyond what their bytes occupy. No
+part is "spendable": a lock, a `since` or a cellbase's maturity decides that,
+and the route reads none of them. (`freeCapacity` and `daoFreeCapacity`, the
+other cells' free part and the DAO cells' free part, are gone.) DAO holdings follow the current cell
 lock, including a withdrawal request received from another depositor. The older
 `/dao/deposits/{lock_hash}` and `/dao/summary/{lock_hash}` describe the original
 depositor's lifecycle history and must not stand in for current holdings.
@@ -581,7 +590,7 @@ status.
   `minerLockHash` and an optional resolvable CKB `address`
 - `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`
 - `CellSizeDistributionChartResponse` — the cell-size histogram (`ChartResponse`, flattened) and its two wholes
-- `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened) and its window: `epochs`, `intervals`, `beyondRange`
+- `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened), its window (`epochs`, `intervals`, `beyondRange`) and each bucket's count (`bucketCounts`)
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
 
 **What a chart page states (lane D1)**
@@ -616,12 +625,16 @@ bands it draws and the wholes it divides by, read-only on the store:
   partition.
 - `GET /charts/total-supply` — four bands that partition C, each point's
   `values.totalIssuance` (CKB), the total issuance in the day's DAO field:
-  `outsideDao` (the CKB circulating outside the DAO), `daoDeposited` (the DAO's
-  deposits), `unclaimedCompensation` (DAO compensation accrued and not yet
+  `circulatingNotDeposited` ("Circulating, not deposited": the protocol
+  circulation less the deposits, the CKB in withdrawal requests included),
+  `daoDeposited` ("Deposited in the Nervos DAO": the status-0 deposits, the
+  amount the DAO page calls deposited), `unclaimedCompensation` (DAO
+  compensation accrued and not yet
   claimed, inside S) and `burnt` (genesis burnt and the treasury part of S).
   They sum to C to the shannon; the route checks it per row and fails with the
   date and the four operands where it does not. `values.circulating` is the
-  protocol circulation, `C − genesis burnt − S` (`outsideDao + daoDeposited`),
+  protocol circulation, `C − genesis burnt − S`
+  (`circulatingNotDeposited + daoDeposited`),
   the amount the site calls circulating everywhere; it is not a band.
 - `GET /charts/secondary-issuance` — one whole, each point's
   `protocolTotalShannons`: the secondary issuance since genesis,
@@ -678,15 +691,36 @@ network store too), no re-sync:
   `/spore/clusters/{cluster_id}/holders` — `firstRank`: the 1-based rank of the
   page's first row in the request's read view (a token's: the holders that
   sort before the cursor in `CF_TOKEN_HOLDERS_BY_BALANCE`, counted, plus one; a
-  collection's: the cursor's position in the ranking plus one, the ranking
-  cached by the view's tip block).
+  collection's: the rows before the cursor's place in the ranking plus one, the
+  ranking cached by the view's tip block). A cursor is a place in the order
+  (count or balance descending, lock ascending), not a row: a page starts at the
+  first row after it, whether or not its holder still stands there (a holder
+  that moved or left no longer makes the next page a 400).
 - `GET /transactions/pool` — `totals.waiting`: the transactions waiting in the
   pool, pending and proposed (not `awaitingIndex`).
 - `GET /forks/overview` — `canonicalBlocksInWindow`: the window's canonical
   blocks, what its uncle rate (`unclesInWindow` of them) divides by.
-- `GET /dao/statistics` — `liveCellsCount`: the live DAO cells, deposits and
-  withdrawal requests; `secondaryIssuance` (shannons): the miners' share, the
-  depositors' compensation and the burnt share, which make it.
+- `GET /dao/statistics` — `depositCellsCount` (deposits),
+  `withdrawalRequestCellsCount` (withdrawal requests) and `liveCellsCount`
+  (their total, the live DAO cells); `secondaryIssuance` (shannons): the
+  miners' share, the depositors' compensation and the burnt share, which make
+  it. `activeDeposits` is the same live-cell total under its legacy name (a
+  withdrawal request is no active deposit); the route refuses a row where it is
+  not the deposits and the requests, and it goes when its last reader, the home
+  page, reads `liveCellsCount`.
+- `GET /charts/block-time-distribution` — `bucketCounts`: each bucket's
+  intervals, one per point of `data`, so a tie or the most common interval is
+  read from counts, not from the cut shares.
+- `GET /tokens/{type_hash}/charts/capacity-history` — each point states
+  `capacity` beside `used` and `unused`, as the other "CKB held" histories do.
+- `GET /network/map` — a located node whose GeoIP record has no country is
+  `Unknown`, as the distributions name it (it was `""`).
+- Cut at the places the pages show, never rounded half up (part A2, S5), the
+  shapes unchanged: `/inventory`'s `hMultiplier` (two places),
+  `/statistics/network`'s `avgBlockTime` (two) and `tps`,
+  `transactionsPerMinute`, `transactionsPerDay` (two, one, none),
+  `/statistics/asset-ecosystem`'s category `percentage` (two), `/dao/calculator`'s
+  realized APC (two) and `/dao/evidence`'s percentages (two and four).
 - `GET /network/distributions` — `hosting` (`organisations`, `rest`,
   `restOrganisations`): the verified nodes by hosting organisation (an
   organisation's several ASNs as one, `Unknown` without an ASN), the five
@@ -776,7 +810,7 @@ network store too), no re-sync:
 **Responses**
 
 - `CursorPaginatedResponse<TokenResponse>` / `TokenResponse` — token info + standard, supply, holders/transfers
-- `TokenHoldersResponse` — flat cursor page plus `totalSupply` and nullable `anchor`
+- `TokenHoldersResponse` — flat cursor page plus `totalSupply`, nullable `anchor` and `firstRank`
 - `CursorPaginatedResponse<TokenTransferResponse>` — tx_hash, from/to, amount, is_mint/is_burn
 - `CursorPaginatedResponse<TokenActivityResponse>` — tx + actions + `transfers: Vec<TokenTransferDetail>`
 - `StackedAreaChartResponse` — used/unused capacity series
@@ -898,7 +932,7 @@ Owner authority follows [RFC 0025](https://github.com/nervosnetwork/rfcs/blob/ma
 
 - `CursorPaginatedResponse<ClusterResponse>` / `ClusterResponse` — cluster_id, name, counts, composition (`ClusterCompositionResponse`)
 - `CursorPaginatedResponse<SporeResponse>` / `SporeResponse` — spore_id, content_type/size, owner, owned capacity, `media_profile`
-- `CursorPaginatedResponse<ClusterHolderResponse>` / `CursorPaginatedResponse<ClusterActivityResponse>`
+- `RankedPage<ClusterHolderResponse>` (a cursor page with `firstRank`) / `CursorPaginatedResponse<ClusterActivityResponse>`
 - `CursorPaginatedResponse<MnftItemActivityResponse>` for per-spore activities
 - `SporeDobDecodeResponse` — `status` (`decoded` \| `failed` \| `pending`), traits, `media: Vec<DecodedMediaResponse>`, `issues` (carries the failure reason when `failed`)
 - `axum::Response` for `serve_media` (any media MIME) and `render_spore_svg` (`image/svg+xml`) — not JSON

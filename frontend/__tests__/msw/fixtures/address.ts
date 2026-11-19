@@ -72,8 +72,11 @@ export const holdingsFixture: AddressHoldings = {
   lockScriptHash: addressHash,
   balance: addressFixture.balance,
   occupiedCapacity: '712700000000',
-  freeCapacity: '5457135338057',
-  daoFreeCapacity: '958948000000000',
+  // the balance in the route's three parts (lane P1, third round): its five DAO cells whole, the
+  // bytes of its other cells, and the rest of those
+  daoCellsCapacity: '959000000000000',
+  otherCellsOccupiedCapacity: '660700000000',
+  otherCellsFreeCapacity: '5457135338057',
   liveCellsCount: 40,
   holdings: { dao: 5, token: 9, object: 14, identity: 1 },
   classes: {

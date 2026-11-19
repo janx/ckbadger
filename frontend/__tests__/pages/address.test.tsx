@@ -107,8 +107,9 @@ const emptyHoldings: AddressHoldings = {
   ...holdingsFixture,
   balance: '0',
   occupiedCapacity: '0',
-  freeCapacity: '0',
-  daoFreeCapacity: '0',
+  daoCellsCapacity: '0',
+  otherCellsOccupiedCapacity: '0',
+  otherCellsFreeCapacity: '0',
   liveCellsCount: 0,
   depositCellsCount: 0,
   withdrawalRequestCellsCount: 0,
@@ -402,18 +403,21 @@ describe('Address v3', () => {
     // the balance figure in the summary form, exact in its title (readability R5, re-pinned on
     // purpose: was every decimal)
     expect(screen.getByLabelText('Balance')).toHaveTextContent('balance9,651,178 CKB');
-    // re-pinned on purpose (lane P1): what it can spend stands beside the balance
+    // re-pinned on purpose (lane P1, third round; the lead's ruling on review p-logic-chain MUST
+    // 3): beside the balance its unclaimed compensation alone; its free part is one of the three
+    // parts under the bar (it stood beside the balance as "spendable")
     expect(
       screen.getByLabelText('Balance').querySelector('[data-role="balance-beside"]')
-    ).toHaveTextContent('54,571.35338057');
+    ).not.toHaveTextContent('spendable');
     // the exact parts, exact form (readability R5, re-pinned on purpose: was padded); re-pinned with
     // readability R4 (lane B7): a labelled fact (was the parts line's last item after "·")
     expect(
       factsOf(
         within(screen.getByLabelText('Address capacity partition')).getByTestId('balance-parts')
       )
-      // re-pinned on purpose (lane P1): "in the DAO", with its unit (it was "DAO free")
-    ).toContainEqual(['in the DAO', '9,589,480 CKB, free part of 5 deposits']);
+      // re-pinned on purpose (lane P1, third round; SHOULD 3): its DAO cells whole (it was "in the
+      // DAO 9,589,480 CKB, free part of 5 deposits", their free part alone)
+    ).toContainEqual(['in Nervos DAO cells', '9,590,000 CKB in 5 deposits']);
     expect(container.querySelector('[data-tier="2"]')).toHaveClass(
       'mt-24',
       'border-t',
@@ -1579,11 +1583,12 @@ describe('Address board · F2 blocks', () => {
     render(<AddressDetailPage />);
     const balance = await screen.findByLabelText('Address capacity partition');
     const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
-    // re-pinned on purpose (lane P1): the parts are named occupied, spendable and in the DAO
-    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'spendable', 'in the DAO']);
+    // re-pinned on purpose (lane P1, third round; the lead's ruling on MUST 3 and SHOULD 3): the
+    // route's three parts, each true by its name (they were occupied, spendable and in the DAO)
+    expect(parts.map((p) => p.dataset.part)).toEqual(['in Nervos DAO cells', 'occupied', 'free']);
     for (const part of parts) expect(part).toHaveClass('min-w-[3px]');
     expect(parts[0].parentElement).toHaveClass('h-[18px]', 'gap-0.5');
-    expect(balance).toHaveTextContent('free part of 5 deposits');
+    expect(balance).toHaveTextContent('9,590,000 CKB in 5 deposits');
   });
 
   it('shows a token type hash only beside names that occur twice (BA-32)', async () => {
@@ -2074,8 +2079,9 @@ describe('Address · space legend (lane A follow-up)', () => {
     ...holdingsFixture,
     balance: '3844275078856',
     occupiedCapacity: '388700000000',
-    freeCapacity: '3455575078856',
-    daoFreeCapacity: '0',
+    daoCellsCapacity: '0',
+    otherCellsOccupiedCapacity: '388700000000',
+    otherCellsFreeCapacity: '3455575078856',
     liveCellsCount: 16,
     depositCellsCount: 0,
     withdrawalRequestCellsCount: 0,

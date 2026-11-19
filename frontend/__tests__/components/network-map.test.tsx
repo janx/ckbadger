@@ -6,6 +6,7 @@ import { server } from '@/__tests__/msw/server';
 import {
   countryName,
   layoutCountryClusters,
+  mapCounts,
   NetworkMapNotes,
   rankCountries,
 } from '@/app/network/network-map';
@@ -198,6 +199,23 @@ describe('NetworkMap: the countries ranked beside the map (readability P4)', () 
       </QueryClientProvider>
     );
   };
+
+  // lane exactness, part A2 (the pages review's NOTE 3): a located node whose GeoIP record names no country is
+  // "Unknown" from both routes; it is in no country, so it is not counted as one, and the line says
+  // how many there are (the map counted "Unknown", or "", as a country)
+  it('counts no country for a located node without one, and says how many there are', async () => {
+    const withNone = [...points, at('un1', 'Unknown', 1, 1), at('un2', 'Unknown', 1, 1)];
+    expect(mapCounts(mapOf(withNone))).toMatchObject({ countries: 5, noCountry: 2 });
+    server.use(http.get('/api/:network/v1/network/map', () => HttpResponse.json(mapOf(withNone))));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <NetworkMapView neverVerified={0} />
+      </QueryClientProvider>
+    );
+    const readout = await screen.findByRole('status', { name: 'Node readout' });
+    expect(readout).toHaveTextContent(/^11 verified nodes in 5 countries, 2 with no country known/);
+  });
 
   it('ranks the countries by their nodes, then by their code', () => {
     expect(rankCountries(points)).toEqual([

@@ -719,9 +719,11 @@ describe('Transaction board, the status strip (lane D2)', () => {
     const { container } = render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     // before: "… to ckb1…. The sender paid a 0.00064119 CKB fee."
+    // Re-pinned on purpose (lane P1, third round; review p-logic-chain NOTE 2: the CKB leg went
+    // unsaid when an item moved): the CKB that reached parties is said after the item
     expect(summary).toHaveTextContent(
       new RegExp(
-        `^Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}\\.$`
+        `^Nervape 3x 0x51c75a00…0096f2 moved from ${row('cjk9lz')} to ${row('shp3hr')}\\. 528 CKB moved from ${row('cjk9lz')} to ${row('shp3hr')} and ${row('204m4g')}\\.$`
       )
     );
     const comment = container.querySelector('.comment') as HTMLElement;
@@ -1021,6 +1023,217 @@ describe('Transaction variants (D4)', () => {
     );
     const moved = await screen.findByTestId('tx-what-moved');
     expect(moved.querySelector('[data-flow-side="to"]')).toHaveTextContent('Nervos DAO deposit');
+  });
+
+  // Lane P1, third round (review p-logic-chain MUST 2): the common shape of a DAO step, from the
+  // owner's own address. Its one party gives the fee and holds the DAO cell (the API tags it DAO);
+  // for a deposit and a withdrawal request its CKB delta is −fee, so the flows are the fee alone,
+  // yet the transaction took a step: the lede says the step and never "Only the fee moved", What
+  // moved is drawn with the party's step on its end, and the balance table is drawn.
+  describe('a Nervos DAO step from the owner’s own address', () => {
+    const self = (
+      action: string,
+      metadata: Record<string, string>,
+      ckbDelta: (fee: bigint) => string
+    ) => {
+      const tx = committed();
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+      vi.mocked(api.getTransactionActivity).mockResolvedValue({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [{ protocol: 'dao', protocolName: 'Nervos DAO', action, metadata }],
+        participants: [
+          {
+            ...feedSamples.daoWithdrawRequest.participants[1],
+            ckbDelta: ckbDelta(BigInt(tx.fee)),
+            tags: 8,
+          },
+        ],
+      });
+      return tx;
+    };
+    const expectStep = async (lede: string, step: string) => {
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(lede);
+      expect(summary).not.toHaveTextContent('Only the fee moved');
+      const moved = await screen.findByTestId('tx-what-moved');
+      expect(moved).toHaveTextContent(step);
+      expect(
+        screen.getByRole('heading', { name: 'Balance changes' }).closest('section')
+      ).toHaveTextContent(row('r4p74p'));
+    };
+
+    it('a deposit', async () => {
+      self('deposit', { capacity: '12200000000000' }, (fee) => `-${fee}`);
+      await expectStep(
+        `122,000 CKB went into a Nervos DAO deposit held by ${row('r4p74p')}.`,
+        'Nervos DAO deposit'
+      );
+    });
+
+    it('a withdrawal request', async () => {
+      self(
+        'withdraw_request',
+        { capacity: '2605000000000', depositBlock: '19695550' },
+        (fee) => `-${fee}`
+      );
+      await expectStep(
+        `${row('r4p74p')} asked to withdraw a Nervos DAO deposit of 26,050 CKB, made at #19,695,550.`,
+        'Nervos DAO withdrawal request'
+      );
+    });
+
+    it('a withdrawal', async () => {
+      const tx = committed();
+      tx.inputsCapacity = '2605000000000';
+      tx.inputs![0].capacity = '2605000000000';
+      tx.outputsCapacity = '2622530633229';
+      tx.outputs![0].capacity = '2622530633229';
+      tx.fee = '936';
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+      vi.mocked(api.getTransactionActivity).mockResolvedValue({
+        ...feedSamples.daoWithdrawRequest,
+        txHash: TX_HASH,
+        protocolActions: [
+          {
+            protocol: 'dao',
+            protocolName: 'Nervos DAO',
+            action: 'withdraw_complete',
+            metadata: { capacity: '2605000000000', compensation: '17530634165' },
+          },
+        ],
+        participants: [
+          { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '17530633229', tags: 8 },
+        ],
+      });
+      await expectStep(
+        `${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`,
+        'Nervos DAO withdrawal'
+      );
+    });
+  });
+
+  // Lane P1, third round (review p-logic-chain SHOULD 2): a batch in which one party deposits and
+  // another withdraws. The activity tags both DAO and its actions name no party, so the lede says
+  // each step without its party and names the parties whose cells took the steps once; the figure
+  // says "a Nervos DAO step" on each, never both kinds on both.
+  it('says the DAO steps of a batch without giving a party a step it did not take', async () => {
+    const tx = committed();
+    tx.inputsCapacity = '2605000000000';
+    tx.inputs![0].capacity = '2605000000000';
+    tx.outputsCapacity = '2622530633229';
+    tx.outputs![0].capacity = '2622530633229';
+    tx.fee = '936';
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.daoWithdrawRequest,
+      txHash: TX_HASH,
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '12200000000000' },
+        },
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'withdraw_complete',
+          metadata: { capacity: '2605000000000', compensation: '17530634165' },
+        },
+      ],
+      participants: [
+        { ...feedSamples.daoWithdrawRequest.participants[1], ckbDelta: '-12182469366771', tags: 8 },
+        { ...feedSamples.daoWithdrawRequest.participants[2], ckbDelta: '12200000000000', tags: 8 },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit. 26,050 CKB came out of the Nervos DAO, with 175.3 CKB of compensation. The parties whose cells took these steps: ${row('r4p74p')} and ${row('hxw6h7')}.`
+    );
+    const moved = await screen.findByTestId('tx-what-moved');
+    expect(moved).toHaveTextContent('a Nervos DAO step');
+    expect(moved).not.toHaveTextContent('Nervos DAO deposit');
+  });
+
+  // Lane P1, third round (review p-logic-chain SHOULD 4): a cellbase that pays no block's reward
+  // said "no block before it is final yet", which is false for block 0 (it created the chain's
+  // first cells) and for the first blocks after it (the block whose reward they would pay is the
+  // genesis block, which earns none, or comes before the chain began). The API's `pays: null`
+  // means just that; each says what is true, and the cells' note with it.
+  describe('a cellbase that pays no block’s reward', () => {
+    const cellbase = (blockNumber: number) => {
+      const tx = committed();
+      return {
+        ...tx,
+        blockNumber,
+        isCellbase: true,
+        fee: '0',
+        feeRate: null,
+        inputs: [
+          {
+            previousOutput: { txHash: `0x${'00'.repeat(32)}`, index: -1 },
+            since: '0x0',
+            capacity: null,
+            commonKnowledgeSize: null,
+            lock: null,
+            type: null,
+            address: null,
+            cellType: null,
+            display: null,
+          } as unknown as NonNullable<TransactionDetail['inputs']>[number],
+        ],
+        inputsCapacity: '0',
+        inputsCommonKnowledgeSize: '0',
+        outputsCapacity: '55961739927',
+        outputsCommonKnowledgeSize: '61',
+        outputs: [
+          {
+            ...tx.outputs![0],
+            type: undefined,
+            cellType: 'plain',
+            capacity: '55961739927',
+            commonKnowledgeSize: '61',
+          },
+        ],
+        scriptGroups: [tx.scriptGroups![2]],
+        witnessDetails: [],
+        witnesses: [],
+        cellbaseWitness: null,
+        feePaidBy: [],
+        pays: null,
+      } as TransactionDetail;
+    };
+
+    it('says the genesis cellbase created the chain’s first cells', async () => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase(0));
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(
+        /^The genesis block’s cellbase pays no block’s reward: it created the chain’s first cells, 559\.61 CKB\.$/
+      );
+      expect(summary).not.toHaveTextContent('final');
+      expect(
+        screen.getByText(
+          'The genesis cellbase consumes no cell: it creates the chain’s first cells.'
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('says block 5’s cellbase pays no reward because genesis earns none', async () => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue(cellbase(5));
+      render(<TransactionDetailPage />);
+      const summary = await screen.findByTestId('tx-summary');
+      expect(summary).toHaveTextContent(
+        /^It pays no block’s reward: the block whose reward it would pay is the genesis block, which earns none, or would come before the chain began\.$/
+      );
+      expect(
+        screen.getByText('A cellbase consumes no cell; this one pays no block’s reward.')
+      ).toBeInTheDocument();
+      expect(document.body).not.toHaveTextContent('now final');
+    });
   });
 
   it('shows a cellbase with its block reward source, decoded witness and no proposal (TX-23, TX-35)', async () => {
@@ -1554,11 +1767,97 @@ describe('Transaction board, R2b-a fields', () => {
     });
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
-    // 36,583.46853885 Seal, cut to whole tokens from 1,000 up
+    // 36,583.46853885 Seal, cut to whole tokens from 1,000 up; re-pinned (lane P1, third round,
+    // NOTE 2): the CKB the receiver's new cell holds is said after the token
     expect(summary).toHaveTextContent(
-      new RegExp(`^36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\.$`)
+      new RegExp(
+        `^36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\. 215 CKB moved from ${row('j3pkeh')} to ${row('3fzxu7')}\\.$`
+      )
     );
     expect(within(summary).getByRole('link', { name: 'Seal' })).toBeInTheDocument();
+  });
+
+  // Lane P1, third round (review p-logic-chain SHOULD 5 and NOTE 2): a token minted and given in
+  // one transaction read "100 Seal moved from A to B" while 50 left A and 50 were minted, which the
+  // figure drew apart; a burn read "36,583 Seal left A" with no word that it was burnt. The lede
+  // says what the figure draws: what left the givers, what was minted or burnt, what reached the
+  // receivers.
+  describe('a token minted or burnt beside its parties', () => {
+    const seal = (delta: string) => ({
+      kind: 'token' as const,
+      typeScriptHash: '0xseal',
+      delta,
+      symbol: 'Seal',
+      decimals: 8,
+    });
+    const tokenTx = (giver: string, receiver: string | null): GlobalActivity => {
+      const [to, from] = feedSamples.tokenTransfer.participants;
+      return {
+        ...feedSamples.tokenTransfer,
+        txHash: TX_HASH,
+        participants: [
+          { ...from, ckbDelta: '-8888', itemDeltas: [seal(giver)] },
+          ...(receiver === null ? [] : [{ ...to, ckbDelta: '0', itemDeltas: [seal(receiver)] }]),
+        ],
+      };
+    };
+    const lede = async (activity: GlobalActivity) => {
+      vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
+      vi.mocked(api.getTransactionActivity).mockResolvedValue(activity);
+      render(<TransactionDetailPage />);
+      return screen.findByTestId('tx-summary');
+    };
+
+    it('says what was minted beside what left the giver', async () => {
+      const summary = await lede(tokenTx('-5000000000', '10000000000'));
+      expect(summary).toHaveTextContent(
+        new RegExp(
+          `^100 Seal reached ${row('3fzxu7')}: 50 from ${row('j3pkeh')}, and 50 minted here\\.$`
+        )
+      );
+    });
+
+    it('says what was burnt beside what reached the receiver', async () => {
+      const summary = await lede(tokenTx('-10000000000', '6000000000'));
+      expect(summary).toHaveTextContent(
+        new RegExp(`^100 Seal left ${row('j3pkeh')}: 60 to ${row('3fzxu7')}, and 40 burnt\\.$`)
+      );
+    });
+
+    it('says a burn is a burn', async () => {
+      const summary = await lede(tokenTx('-10000000000', null));
+      expect(summary).toHaveTextContent(
+        new RegExp(`^100 Seal left ${row('j3pkeh')} and was burnt\\.$`)
+      );
+    });
+  });
+
+  // Lane P1, third round (review p-logic-chain NOTE 2): the DAO sentences were skipped when an item
+  // moved (an iCKB deposit said only its iCKB); they are said beside the item.
+  it('says a Nervos DAO step beside an item that moved', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({ ...committed(), fee: '8888' });
+    const [to, from] = feedSamples.tokenTransfer.participants;
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.tokenTransfer,
+      txHash: TX_HASH,
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'deposit',
+          metadata: { capacity: '12200000000000' },
+        },
+      ],
+      participants: [{ ...to, tags: 1 | 8 }, { ...from }],
+    });
+    render(<TransactionDetailPage />);
+    const summary = await screen.findByTestId('tx-summary');
+    expect(summary).toHaveTextContent(
+      `36,583 Seal moved from ${row('j3pkeh')} to ${row('3fzxu7')}.`
+    );
+    expect(summary).toHaveTextContent(
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('3fzxu7')}.`
+    );
   });
 
   // Lane P1 (the plan: "a transaction that moves only its fee says so in one line"; review chain-b
