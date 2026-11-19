@@ -132,6 +132,48 @@ describe('a whole a chart page states is the API’s figure (item 2)', () => {
     expect(model.rankedRows![0].share).toBe('13.63%');
   });
 
+  // lane D1's third round, M2: the five drawn ranks' total and the card's "Others" are the route's
+  // figures (drawnTotal, rest), never a sum in the page; a figure that differs from the sum shows
+  // which one the page states
+  it('states the five largest by the route’s drawn total', () => {
+    const payload = fixture<{ usedShare: StackedFixture; capacityShare: StackedFixture }>(
+      'getMostUtilizedScriptsChart'
+    );
+    payload.usedShare.data.at(-1)!.values.drawnTotal = '100000000000';
+    const slug = definition('most-utilized-scripts');
+    // 1,000 of the day's 2,200 CKB
+    expect(chartHead(slug, chartModel(slug, payload as never)).sentence).toBe(
+      'The five largest scripts hold 45.45% of occupied CKB.'
+    );
+  });
+
+  it('writes the card’s "Others" as the route’s rest', () => {
+    const payload = fixture<{ usedShare: StackedFixture; capacityShare: StackedFixture }>(
+      'getMostUtilizedScriptsChart'
+    );
+    payload.usedShare.data.at(-1)!.values.rest = '77700000000';
+    const model = chartModel(definition('most-utilized-scripts'), payload as never);
+    // 777 of 2,200 CKB
+    expect(model.rankedPreview!.rows.at(-1)).toMatchObject({ title: 'Others', share: '35.31%' });
+  });
+
+  // lane D1's third round, N12: a tie at ranks 5 and 6 is the route's to break; the page keeps
+  // its order (it sorted ties by label)
+  it('keeps the route’s order of a ranking, ties too', () => {
+    const payload = fixture<{
+      usedShare: StackedFixture & { series: { key: string; label: string }[] };
+      capacityShare: StackedFixture;
+    }>('getMostUtilizedScriptsChart');
+    const last = payload.usedShare.data.at(-1)!.values;
+    // ranks 5 and 6 tie at 200 CKB; the route put "Type ID" (top4) before "Always success" (top5)
+    last.top5 = last.top4;
+    payload.usedShare.series[4].label = 'Zeta';
+    payload.usedShare.series[5].label = 'Alpha';
+    const model = chartModel(definition('most-utilized-scripts'), payload as never);
+    const labels = model.rankedRows!.map((row) => row.label);
+    expect(labels.indexOf('Zeta')).toBeLessThan(labels.indexOf('Alpha'));
+  });
+
   it('divides cell size by the live cells and the occupied CKB the route counts', () => {
     const payload = fixture<{ liveCells: string; occupiedCapacity: string }>(
       'getCellSizeDistributionChart'

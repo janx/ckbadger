@@ -274,6 +274,7 @@ export const dailyActivities: DailyActivityStats[] = isoDays(29).map((iso, i) =>
     totalCkbMoved: '0',
     scriptCounts: [],
     kindOccurrences: total,
+    daoCount: 0,
   };
 });
 

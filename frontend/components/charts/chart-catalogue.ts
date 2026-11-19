@@ -18,6 +18,15 @@ export type ChartPayload =
  * 'activities a day', subtitle 'Activities per day', note none (drop both charts' `countNote`), and
  * Activities' head eyebrow may read 'recorded in a day' again (chart-head.ts; 'counted' stays true).
  */
+/**
+ * The one stack that draws six bands under the board's rule of five (rule 5; the lead's ruling,
+ * lane D1's third round, T's MUST-1): Activity by type's six activity kinds are the site's own
+ * closed set, each with its class colour and its filter chip, and none of them is "others"; five
+ * and "others" would hide one named kind behind a word. An exception to a rule the owner passed:
+ * the owner's to confirm at the gate. Every other stack, classed or not, draws at most five.
+ */
+export const SIX_KINDS_SLUG = 'activity-type-breakdown';
+
 export const ACTIVITY_COUNT_WORDS = {
   noun: 'kind counts',
   perDay: 'kind counts a day',

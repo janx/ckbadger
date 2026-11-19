@@ -1467,6 +1467,8 @@ interface DailyActivityStats {
    * D1): kinds overlap, so it is not a count of distinct activities.
    */
   kindOccurrences: number;
+  /** The day's Nervos DAO actions, the route's sum of its three DAO counts (lane D1). */
+  daoCount: number;
 }
 
 interface ActivitySummary24h {
