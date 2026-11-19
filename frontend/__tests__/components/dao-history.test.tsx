@@ -493,6 +493,48 @@ describe('DaoHistory at phone width (DAO-22)', () => {
 
 // Responsive fix plan 2026-11-01 (A3, report A#14): at 390 the reading broke the week's date
 // ("2026-/10-25") and split an amount.
+// Readability plan 2026-11-18, P4 (the DAO page): "labels its readout 'yesterday's close'" (the
+// review: the reading opened on the last complete day, beside the hero's figure of now, and read
+// as a contradiction: 8,180,424,335.96 beside 8,184,071,455), and the ruling of 2026-11-19 (the
+// notes, P4): a chart's readout is exact on every page; the DAO "History reading" wrote the
+// summary form.
+describe('DaoHistory reading: yesterday’s close, exact (P4)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('names the last complete day “yesterday’s close” while it is yesterday, and reads every amount exactly', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 10:00 UTC+8 on the day after the series' last day (date(154))
+    vi.setSystemTime(new Date(START + 155 * DAY + 2 * 3_600_000));
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const last = deposited.data.length - 1;
+    deposited.data[last] = { ...deposited.data[last], value: '101190.25' };
+    deposited.peak = { date: date(last), value: '101190.25' };
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(factsOf(reading).slice(0, 2)).toEqual([
+      ['yesterday’s close', date(154)],
+      ['deposited', '101,190.25'],
+    ]);
+    expect(factsOf(reading)).toContainEqual(['week from', `${date(148)} +10.25`]);
+    expect(factsOf(reading)).toContainEqual(['peak', `101,190.25 on ${date(154)}`]);
+  });
+
+  it('names an older last day “last close”, never “yesterday’s”', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(START + 160 * DAY + 2 * 3_600_000));
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(factsOf(reading)[0]).toEqual(['last close', date(154)]);
+  });
+});
+
 describe('DaoHistory reading units', () => {
   afterEach(() => {
     vi.restoreAllMocks();

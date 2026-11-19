@@ -1970,3 +1970,109 @@ describe('DaoBoard section commands (phase 5, B2–B5)', () => {
     expect(who.parentElement!.parentElement).toHaveClass('mb-[18px]');
   });
 });
+
+// Readability plan 2026-11-18, P4 (the DAO page): "keys its three rates in one line each", "a
+// split bar names every segment in place", "a chart that shows amounts carries values"; the
+// review (dao): three rates side by side with nothing in tier 1 saying which is the reader's, the
+// icicle's narrow parts named only in a quiet line of 8-decimal amounts, the cycle bars without a
+// scale, the year bars without their years, and tier 1's amounts padded to 8 decimals.
+describe('DaoBoard: what the page says first (readability P4)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  /**
+   * Mainnet's proportions (the review's capture): to miners 970,167,146.58847454 CKB, for
+   * depositors 1,610,598,455.84026618 (paid out 767,289,103.21, still owed the rest), burnt
+   * 6,818,467,127.67608232; S = still owed + burnt.
+   */
+  const mainnet = {
+    ...stats,
+    miningReward: '97016714658847454',
+    depositCompensation: '161059845584026618',
+    totalCompensationPaid: '76728910321000000',
+    unclaimedCompensation: '84330935263026618',
+    burnt: '681846712767608232',
+    tipSecondaryPool: '766177648030634850',
+  };
+
+  it('keys its two headline rates in tier 1, one line each at 1280', () => {
+    stubChartWidth(1232);
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const keys = within(tier1).getByRole('list', { name: 'What the rates are' });
+    const items = within(keys).getAllByRole('listitem');
+    expect(items.map((i) => i.textContent!.split(':')[0])).toEqual([
+      'Estimated APC',
+      'Compensation, last 365 days',
+    ]);
+    // one line of the 1232 px column at 13 px: 1232 / 7.8 = 157 characters
+    for (const item of items) expect(item.textContent!.length).toBeLessThanOrEqual(157);
+    expect(keys).not.toHaveTextContent(/interest|earn/i);
+  });
+
+  it('names every part of the issuance in place: a part too narrow for its words is named under the icicle, at its box', () => {
+    stubChartWidth(1232);
+    render(<DaoBoard statistics={mainnet} evidence={evidence} />);
+    const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
+    const svg = within(issuance).getByRole('img', { name: /split three ways/ });
+    const under = [...svg.querySelectorAll('[data-under-label]')];
+    expect(under.map((g) => [g.getAttribute('data-under-label'), g.textContent])).toEqual([
+      ['miners', 'miners 10.32%'],
+      ['paid', 'paid out 47.64%'],
+      ['owed', 'still owed 52.36%'],
+    ]);
+    for (const g of under) {
+      const key = g.getAttribute('data-under-label')!;
+      const box = svg.querySelector(`[data-node="${key}"]`)!;
+      // its swatch stands at its box's left edge, and the box holds no words of its own
+      expect(g.querySelector('rect')!.getAttribute('x')).toBe(box.getAttribute('x'));
+      expect(svg.querySelector(`[data-label="${key}"]`)).toBeNull();
+    }
+  });
+
+  it('writes the issuance amounts under the icicle in the summary form, whole CKB, each titled exactly', () => {
+    stubChartWidth(1232);
+    render(<DaoBoard statistics={mainnet} evidence={evidence} />);
+    const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
+    const line = within(issuance).getByText((_, el) => el?.getAttribute('data-role') === 'amounts');
+    expect(line).toHaveTextContent(
+      'to miners 970,167,146 · for depositors 1,610,598,455 (paid out 767,289,103 · still owed 843,309,352 to 22,379 live cells) · burnt 6,818,467,127 CKB'
+    );
+    expect(line.querySelector('[title="970,167,146.58847454 CKB"]')).not.toBeNull();
+  });
+
+  it('carries values on its amount charts: the cycle bars’ scale, and each year’s bar its year', async () => {
+    stubChartWidth(1232);
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const windows = screen.getByRole('region', { name: 'When deposits can leave' });
+    // the tallest bar's amount is written at the plot's top: its scale
+    expect(
+      within(windows).getByText((_, el) => el?.getAttribute('data-role') === 'window-scale')
+    ).toHaveTextContent(/^\d[\d,]* CKB$/);
+    const grows = screen.getByRole('region', { name: 'How a deposit grows' });
+    const years = within(grows).getByRole('img', {
+      name: 'Compensation on free capacity in each year since launch',
+    });
+    const bars = [...years.querySelectorAll('[data-year]')];
+    expect(bars.length).toBeGreaterThan(0);
+    for (const bar of bars) expect(bar.querySelector('[data-role="year"]')).not.toBeNull();
+  });
+
+  it('writes the depositors’ CKB in the summary form, its column budgeted for it', () => {
+    stubChartWidth(1232);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const table = screen.getByRole('table', { name: 'Largest depositors' });
+    const amounts = [...table.querySelectorAll('[data-ckb-amount]')];
+    expect(amounts.length).toBeGreaterThan(0);
+    for (const amount of amounts) expect(amount.textContent).not.toMatch(/\.\d{8}$/);
+  });
+});
