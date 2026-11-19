@@ -4,6 +4,7 @@ import { render } from '../utils/test-utils';
 import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import ScriptByCodeHashPage from '@/app/script/[codeHash]/client-page';
 import { api } from '@/lib/api';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -423,24 +424,42 @@ describe('ScriptByCodeHashPage', () => {
       const found = await lookup(hashes);
       return { ...found, [mockCodeHash]: { ...found[mockCodeHash], liveCellsCount: 45 } };
     });
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
-      ...emptyCells,
-      total: 45,
-      hasMore: true,
-      nextCursor: 'next',
-      data: [
-        {
-          txHash: mockDeploymentTxHash,
-          outputIndex: 1,
-          capacity: '16100000000',
-          commonKnowledgeSize: '6100000000',
-          lockScriptHash: '0x01',
-          dataSize: 0,
-          createdAtBlock: 123456,
-          status: 'live',
-        },
-      ],
+    // re-pinned (lane cd-fixes-controls, item 1): two pages that agree with themselves
+    // (pagedRead), one cell with an older one after it, then that one and last (it served the same
+    // page at every cursor, so page 2's next cursor repeated the one it was asked with: an API
+    // fault the pager now refuses; and one cell on a page of 20 with more after it)
+    const cell = (n: number) => ({
+      txHash: mockDeploymentTxHash,
+      outputIndex: n,
+      capacity: '16100000000',
+      commonKnowledgeSize: '6100000000',
+      lockScriptHash: '0x01',
+      dataSize: 0,
+      createdAtBlock: 123455 + n,
+      status: 'live' as const,
     });
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(async (p) =>
+      p.cursor
+        ? pagedRead(
+            {
+              ...emptyCells,
+              total: 2,
+              limit: 1,
+              hasMore: false,
+              nextCursor: null,
+              data: [cell(2)],
+            },
+            1
+          )
+        : pagedRead({
+            ...emptyCells,
+            total: 2,
+            limit: 1,
+            hasMore: true,
+            nextCursor: 'next',
+            data: [cell(1)],
+          })
+    );
     stubLayoutWidths({ chart: 900, list: 1232 });
     try {
       render(<ScriptByCodeHashPage codeHash={mockCodeHash} />);

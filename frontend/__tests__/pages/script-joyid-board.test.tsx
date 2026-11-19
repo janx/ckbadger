@@ -15,6 +15,7 @@ import { fullText } from '@/__tests__/utils/full-text';
 import { factsOf } from '@/__tests__/utils/facts';
 import { getCapacityRangeParams } from '@/lib/capacity-range';
 import { linkLookClass } from '@/components/ui/link';
+import { pagedRead } from '@/__tests__/utils/paged-read';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -308,6 +309,33 @@ describe('JoyID script page against the ScriptJoyid board', () => {
   // was counted of the family's live cells (161,049 at five a page: "page 1 of 32,210"), a figure
   // of another read at another tip; the merged page counts no rows, so it is "page 1", "page 2".
   it('pages its cells forward from a cursor and back to the first page', async () => {
+    // re-pinned (lane cd-fixes-controls, item 1): two pages that agree with themselves
+    // (pagedRead), the fixture's three cells with more after them, then three newer and last
+    // (it served the same page at every cursor, so page 2's next cursor repeated the one it was
+    // asked with: an API fault the pager now refuses)
+    const first = fixture.cells.data;
+    const later = first.map((cell) => ({
+      ...cell,
+      outputIndex: cell.outputIndex + 100,
+      createdAtBlock: cell.createdAtBlock + 1_000_000,
+    }));
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(
+      byScript((p) =>
+        p.cursor
+          ? (pagedRead(
+              {
+                ...fixture.cells,
+                data: later,
+                limit: 3,
+                total: 6,
+                hasMore: false,
+                nextCursor: null,
+              },
+              3
+            ) as never)
+          : (pagedRead({ ...fixture.cells, limit: 3, total: 6 }) as never)
+      )
+    );
     await renderJoyid();
     const cells = document.getElementById('its-cells')!;
     expect(within(cells).getByText(/^page 1$/i)).toBeInTheDocument();

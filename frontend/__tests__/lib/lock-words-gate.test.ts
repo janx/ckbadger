@@ -19,13 +19,21 @@
 // whole or by a computed key, `registeredName` passed as a value or called without its code hash.
 // The old gate (a regex for `.lockKind` / `.lockName`) found 21 reads in 12 files, 14 of them in
 // six known files; this one finds what the tables below pin.
+//
+// Lane cd-fixes-controls (review-cd-tests SHOULD-1): the API's names for a lock are three, the
+// registry's name for a party's or a cell row's lock (`lockScriptName`, lib/api.ts) besides
+// `lockKind` and `lockName`; `hooks/` is read with `app/`, `components/` and `lib/`; a
+// `registeredName` imported under another name is read as itself; and a lookup by a code hash
+// through a Map (`names.get(codeHash)?.name`, a destructured `{ name }` of one) is a registry name.
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = join(__dirname, '..', '..');
-const API_NAMES = new Set(['lockKind', 'lockName']);
+const API_NAMES = new Set(['lockKind', 'lockName', 'lockScriptName']);
+/** The directories the gate reads: those every source gate reads (lane cd-fixes-controls: hooks/). */
+const READ_DIRS = ['app', 'components', 'hooks', 'lib'];
 
 type Kind = 'api name' | 'script info name' | 'registry name';
 type Reads = Record<string, Partial<Record<Kind, number>>>;
@@ -54,9 +62,19 @@ function terminalName(e: ts.Expression): string | null {
   return null;
 }
 
-/** A registry lookup by a code hash: `lookup?.[codeHash]`, `lookup.data?.[g.script.codeHash]`. */
+/**
+ * A registry lookup by a code hash: `lookup?.[codeHash]`, `lookup.data?.[g.script.codeHash]`, and
+ * (lane cd-fixes-controls) a Map's `names.get(codeHash)`.
+ */
 function isLookupByCodeHash(e: ts.Expression, source: ts.SourceFile): boolean {
   e = strip(e);
+  if (
+    ts.isCallExpression(e) &&
+    ts.isPropertyAccessExpression(e.expression) &&
+    e.expression.name.text === 'get' &&
+    e.arguments.length === 1
+  )
+    return /codeHash/i.test(e.arguments[0].getText(source));
   if (!ts.isElementAccessExpression(e)) return false;
   const key = e.argumentExpression;
   if (ts.isStringLiteralLike(key) || ts.isNumericLiteral(key)) return false;
@@ -107,6 +125,19 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
   );
   const out: Partial<Record<Kind, number>> = {};
   const count = (kind: Kind) => (out[kind] = (out[kind] ?? 0) + 1);
+  // registeredName and the names it is imported under (`import { registeredName as rn }`)
+  const registered = new Set(['registeredName']);
+  const aliases = (node: ts.Node) => {
+    if (
+      ts.isImportSpecifier(node) &&
+      node.propertyName &&
+      ts.isIdentifier(node.propertyName) &&
+      node.propertyName.text === 'registeredName'
+    )
+      registered.add(node.name.text);
+    ts.forEachChild(node, aliases);
+  };
+  aliases(source);
   const refuse = (node: ts.Node, why: string): never => {
     const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
     throw new Error(`${fileName}:${line + 1}: ${why}: ${node.getText(source)}`);
@@ -149,7 +180,7 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
           else if (isLookupByCodeHash(holder.initializer, source)) count('registry name');
         }
       }
-    } else if (ts.isIdentifier(node) && node.text === 'registeredName') {
+    } else if (ts.isIdentifier(node) && registered.has(node.text)) {
       const parent = node.parent;
       if (ts.isCallExpression(parent) && parent.expression === node) {
         const codeHash = parent.arguments[1];
@@ -172,7 +203,7 @@ export function lockNameReads(text: string, fileName: string): Partial<Record<Ki
 /** Each file's reads of a lock's name, by kind. */
 function reads(): Reads {
   const out: Reads = {};
-  for (const dir of ['app', 'components', 'lib'])
+  for (const dir of READ_DIRS)
     for (const path of files(join(ROOT, dir))) {
       const rel = relative(ROOT, path);
       if (rel === 'components/ui/lock-kind.tsx') continue;
@@ -261,6 +292,10 @@ const KNOWN: Reads = {
   // known writer 12 moved, not a new writer (lane D3): the transaction page's script groups, the
   // rows the cell page now draws too, their two reads (a group's name, its link) made one
   'components/transaction/script-group-rows.tsx': { 'registry name': 1 },
+  // 13, found when the gate learned `lockScriptName` (lane cd-fixes-controls), for the topic page
+  // lane (p-topics): the Fiber graph's party row writes the registry's name of its lock before
+  // "lock hash", outside lockWords
+  'components/fiber/fiber-network-graph.tsx': { 'api name': 2 },
 };
 
 describe('the gate reads the syntax, every form (lane B4 third round)', () => {
@@ -293,6 +328,34 @@ describe('the gate reads the syntax, every form (lane B4 third round)', () => {
         'x.ts'
       )
     ).toEqual({ 'registry name': 5 });
+  });
+
+  // Lane cd-fixes-controls (T SHOULD-1): the API's registry name for a party's or a cell row's
+  // lock (lib/api.ts `lockScriptName`), an aliased registeredName and a Map lookup by a code hash
+  // walked past
+  it('counts the API’s lockScriptName by property, bracket and destructuring', () => {
+    expect(
+      lockNameReads(
+        `party.lockScriptName; row['lockScriptName']; const { lockScriptName: n } = cell;`,
+        'x.ts'
+      )
+    ).toEqual({ 'api name': 3 });
+  });
+
+  it('counts an aliased registeredName and a Map lookup by a code hash', () => {
+    expect(
+      lockNameReads(
+        `import { registeredName as rn } from '@/lib/script-names';
+         rn(lookup, cell.lock.codeHash); rn(lookup, cell.type.codeHash);
+         names.get(codeHash)?.name; byHash.get(out.lock.codeHash)!.name;
+         const { name } = names.get(g.codeHash)!; m.get(id)?.name;`,
+        'x.ts'
+      )
+    ).toEqual({ 'registry name': 4 });
+  });
+
+  it('reads every directory the source gates read, hooks/ among them', () => {
+    expect(READ_DIRS).toEqual(['app', 'components', 'hooks', 'lib']);
   });
 
   it('refuses what it cannot place', () => {
@@ -333,15 +396,18 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (lane p-assets; renamed, it was "… 36 reads in 21 files, … 13 files and
   // 23 reads"): a version's lock (cell-versions) and an identity's Owner note read the decision,
   // 23 → 21 known reads in 12 files, 36 → 34 in all in 20
-  // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 34 reads in 20 files, … 12 files
-  // and 21 reads"): the cell page decides its lock once, its registry read feeds the decision and
-  // the three `lockName`s are the decision's name; 21 → 16 known reads in 9 files, 34 → 30 in all
-  // in 18
-  it('pins the totals: 30 reads in 18 files, the known writers 9 files and 16 reads', () => {
+  // Re-pinned on purpose (lane cd-fixes-controls, renamed, it was "… 34 reads in 20 files, … 12
+  // files and 21 reads"): the gate learned `lockScriptName`, and the Fiber graph's two reads of it
+  // (known writer 13, p-topics) came to light: 21 → 23 known reads in 13 files, 34 → 36 in 21
+  // Re-pinned on purpose (lane P1 follow-up; renamed, it was "… 36 reads in 21 files, … 13 files
+  // and 23 reads"): the cell page decides its lock once, its registry read feeds the decision and
+  // the three `lockName`s are the decision's name; 23 → 18 known reads in 10 files, 36 → 32 in all
+  // in 19
+  it('pins the totals: 32 reads in 19 files, the known writers 10 files and 18 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
-    expect(Object.keys(all)).toHaveLength(18);
-    expect(total(all)).toBe(30);
-    expect(Object.keys(KNOWN)).toHaveLength(9);
-    expect(total(KNOWN)).toBe(16);
+    expect(Object.keys(all)).toHaveLength(19);
+    expect(total(all)).toBe(32);
+    expect(Object.keys(KNOWN)).toHaveLength(10);
+    expect(total(KNOWN)).toBe(18);
   });
 });

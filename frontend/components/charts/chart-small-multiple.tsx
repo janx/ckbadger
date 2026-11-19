@@ -1,5 +1,6 @@
 'use client';
 
+import { RetryAction } from '@/components/ui/retry-action';
 import { useQuery } from '@tanstack/react-query';
 import { isAwaited } from '@/lib/query-state';
 import Link from '@/components/ui/link';
@@ -175,9 +176,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
       {error && (
         <div role="alert" className="text-negative text-small break-words">
           {definition.title}: {error.message}
-          <button type="button" onClick={() => void refetch()} className="text-jade ml-2 underline">
-            Retry
-          </button>
+          <RetryAction words="Retry" onRetry={() => void refetch()} className="ml-2" />
         </div>
       )}
       {modelError && (

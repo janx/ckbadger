@@ -339,7 +339,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   };
   const holders = useQuery({
     queryKey: ['token-holders', typeHash, all, pagination.cursor, limit],
-    queryFn: () => api.getTokenHolders(typeHash, { limit, cursor: pagination.cursor }),
+    queryFn: pagination.ask((cursor) => api.getTokenHolders(typeHash, { limit, cursor })),
   });
   /**
    * A holder's share of the same response's supply: the stated share is its text (`percentOf`);
@@ -485,8 +485,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
   const rank = (h: TokenHolder) =>
     (pagination.page - 1) * limit + holders.data!.data.indexOf(h) + 1;
   // "All holders" pages through the list; the top ten are one page
-  const holdersAt =
-    all && holders.data ? rankedPageAt('holders', pagination.page, holders.data) : null;
+  const holdersAt = all && holders.data ? rankedPageAt('holders', holders.data, pagination) : null;
   const holderTable = (
     <div className="min-w-0">
       {holders.data ? (
@@ -557,13 +556,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             <div className="mt-3 space-y-1">
               {holdersAt && (
                 // the controls board's pager: a ranked list in pages, every figure the response's
-                <Pager
-                  mode="pages"
-                  label="holders"
-                  {...holdersAt}
-                  onPrevious={pagination.goToPrevious}
-                  onNext={() => pagination.goToNext(holders.data.nextCursor)}
-                />
+                <Pager mode="pages" label="holders" {...holdersAt} />
               )}
               <FoldBack onFold={() => showAll(false)} />
             </div>

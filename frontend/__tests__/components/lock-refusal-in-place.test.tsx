@@ -138,7 +138,19 @@ describe('a refused lock fails its part, in its place', () => {
       totalSupply: '100',
       anchor: null,
     });
-    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    // the distribution is read as the API gives it (lane cd-fixes-controls, SHOULD-3): it was
+    // rejected, which the scenario never needed and which drew an alert of its own
+    vi.spyOn(api, 'getTokenDistribution').mockResolvedValue({
+      holdersCount: 11,
+      totalSupply: '100',
+      largestHolderBalance: '100',
+      nextNineBalance: '0',
+      remainingBalance: '0',
+      unit: 'token',
+      decimals: 0,
+      // one bucket holds every holder and the whole supply: the buckets equal the totals
+      buckets: [{ lowerBound: '0', upperBound: null, holdersCount: 11, balance: '100' }],
+    });
     render(
       <main>
         <h1>The token page</h1>
@@ -173,7 +185,14 @@ describe('a refused lock fails its part, in its place', () => {
     // re-pinned on purpose (lane p-assets): the short list's form, "all N holders ↓"
     fireEvent.click(screen.getByRole('button', { name: /^all .*holders ↓$/ }));
     expect(await screen.findByRole('table', { name: 'All holders' })).toBeInTheDocument();
+    // Lane cd-fixes-controls (review-cd-tests SHOULD-3): the refusal's own alert is gone, and no
+    // other alert stands. The test-first commit asserted no alert at all, which could not pass
+    // while the fixture also rejected the token's distribution (its part draws an alert of its
+    // own, before and after the fix); the fix commit loosened it to the refusal's words without
+    // saying why. The fixture now rejects only what the scenario needs (the holders' lock), so the
+    // assertion can say what the fix does: the part drew again, and the page holds no alert.
     expect(screen.queryByText(/^Could not draw the holders/)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('the collection holders: the section says it cannot read its holders', async () => {

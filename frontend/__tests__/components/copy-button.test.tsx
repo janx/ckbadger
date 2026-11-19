@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { CopyButton } from '@/components/ui/copy-button';
-import { COPIED_MS } from '@/hooks/useCopy';
+import { ANNOUNCE_GAP_MS, COPIED_MS } from '@/hooks/useCopy';
 import { inkOf, QUIET } from '@/__tests__/utils/ink-role';
 import { boxPx, contentPx, inFlowAt, targetHeightPx } from '@/__tests__/utils/tailwind-box';
 import { roundedRects } from '@/__tests__/utils/square-corners';
@@ -127,6 +127,23 @@ describe('CopyButton', () => {
  * runs past the line's end and never covers the id before the box), on the elevated ground in the
  * frame line so the words under it do not show through; it takes no width and no height.
  */
+// Lane cd-fixes-controls (L1 NOTE 13): a second copy within 1.5 s is heard: the live region's
+// words go and come back (they stood "copied", unchanged, and a screen reader said nothing).
+describe('CopyButton: a second copy is announced again', () => {
+  it('empties its answer and writes it again', async () => {
+    setClipboard({ writeText: vi.fn().mockResolvedValue(undefined) });
+    render(<CopyButton value={HASH} label="copy transaction hash" />);
+    const status = screen.getByRole('status');
+    await click();
+    expect(status).toHaveTextContent(/^copied$/);
+    act(() => vi.advanceTimersByTime(500));
+    await click();
+    expect(status).toBeEmptyDOMElement();
+    act(() => vi.advanceTimersByTime(ANNOUNCE_GAP_MS));
+    expect(status).toHaveTextContent(/^copied$/);
+  });
+});
+
 describe('CopyButton: its answer moves no line', () => {
   const ANSWER_GROUND = ['bg-base-elevated', 'border', 'border-base-border'];
 

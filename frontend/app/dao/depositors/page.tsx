@@ -192,13 +192,13 @@ export default function DaoDepositorsPage() {
   const cursor = walk.cursor;
   const query = useQuery({
     queryKey: ['dao-depositors', cursor, pageSize],
-    queryFn: () => api.getDaoDepositors({ limit: pageSize, cursor }),
+    queryFn: walk.ask((cursor) => api.getDaoDepositors({ limit: pageSize, cursor })),
     retry: retryTransientOnly,
   });
   const page = query.data;
   // a page past the end of the ranking holds no row to count from: its place and a way back
   // (lane c2-finish, 1b)
-  const depositorsAt = page ? rankedPageAt('depositors', walk.page, page) : null;
+  const depositorsAt = page ? rankedPageAt('depositors', page, walk) : null;
   const client = useQueryClient();
   const first = client.getQueryData<RankedPage>(['dao-depositors', undefined, pageSize]);
   const moved =
@@ -284,19 +284,7 @@ export default function DaoDepositorsPage() {
                   twenty on a phone), the page the reader's step through the cursors. */}
               {depositorsAt && (
                 <div className="pt-4">
-                  <Pager
-                    mode="pages"
-                    label="depositors"
-                    {...depositorsAt}
-                    onNext={() => {
-                      if (page.nextCursor === null)
-                        throw new Error(
-                          'DAO depositors: a page with more ranks has no next cursor'
-                        );
-                      walk.goToNext(page.nextCursor);
-                    }}
-                    onPrevious={walk.goToPrevious}
-                  />
+                  <Pager mode="pages" label="depositors" {...depositorsAt} />
                 </div>
               )}
             </>

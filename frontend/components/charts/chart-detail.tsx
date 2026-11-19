@@ -1,5 +1,6 @@
 'use client';
 
+import { RetryAction } from '@/components/ui/retry-action';
 import { useMemo, useState, type ReactNode } from 'react';
 import { BlocksOfDay } from '@/components/charts/blocks-of-day';
 import { useQuery } from '@tanstack/react-query';
@@ -662,13 +663,7 @@ export function ChartDetail({ slug }: { slug: string }) {
           <DetailLayout title={definition.title} documentTitle={[definition.title, 'chart']}>
             <div role="alert" className="text-negative break-words">
               Failed to load {definition.title}: {data.error.message}
-              <button
-                type="button"
-                onClick={() => void data.refetch()}
-                className="text-jade ml-2 underline"
-              >
-                Retry
-              </button>
+              <RetryAction words="Retry" onRetry={() => void data.refetch()} className="ml-2" />
             </div>
           </DetailLayout>
         )}
@@ -683,13 +678,7 @@ export function ChartDetail({ slug }: { slug: string }) {
           <p role="alert" className="text-negative text-small max-w-measure mb-5 break-words">
             Could not refresh {definition.title}: {data.error.message}. Showing previously loaded
             data.
-            <button
-              type="button"
-              onClick={() => void data.refetch()}
-              className="text-jade ml-2 underline"
-            >
-              Retry
-            </button>
+            <RetryAction words="Retry" onRetry={() => void data.refetch()} className="ml-2" />
           </p>
         )}
         {model && head && (
