@@ -166,6 +166,8 @@ it('names the ring successor and links it by its id (ID-DC6)', async () => {
     `/mainnet/identities/dotcell/${next}`
   );
 });
+// re-pinned (lane c2-assets): the way on to more sub-names is the controls board's "next 20 ↓"
+// (was the boxed "Show more sub-names"), in this test and the failure's below
 it('appends every sub-name page and only reports the full child count after completion', async () => {
   const item = dotcellItem();
   item.children = [{ identityId: '0x' + '81'.repeat(20), name: 'one.alice.cell', label: 'one' }];
@@ -182,19 +184,21 @@ it('appends every sub-name page and only reports the full child count after comp
       emptyPage([{ identityId: '0x' + '83'.repeat(20), name: 'three.alice.cell', label: 'three' }])
     );
   render(<Page identityId="alice" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Show more sub-names' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'next 20 ↓' }));
   await screen.findByRole('link', { name: 'two.alice.cell' });
-  fireEvent.click(screen.getByRole('button', { name: 'Show more sub-names' }));
+  fireEvent.click(screen.getByRole('button', { name: 'next 20 ↓' }));
   await screen.findByRole('link', { name: 'three.alice.cell' });
   expect(api.getDotCellItemChildren).toHaveBeenLastCalledWith(item.identityId, {
     limit: 20,
     cursor: 'second',
   });
   expect(screen.getByText('Sub-names · 3')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: 'Show more sub-names' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'next 20 ↓' })).not.toBeInTheDocument();
 });
 // Pinned before the controls lane (C2) replaced the boxed button: a load of sub-names in flight
-// cannot be asked for a second time (the button was disabled while it loaded).
+// cannot be asked for a second time (the button was disabled while it loaded). Re-pinned (lane
+// c2-assets): the way on is the controls board's short-list form, "next 20 ↓" (was the boxed
+// "Show more sub-names"), drawn only while no load is in flight.
 it('asks for the next sub-names once while they load', async () => {
   const item = dotcellItem();
   item.children = [{ identityId: '0x' + '81'.repeat(20), name: 'one.alice.cell', label: 'one' }];
@@ -203,9 +207,9 @@ it('asks for the next sub-names once while they load', async () => {
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
   vi.mocked(api.getDotCellItemChildren).mockReturnValue(new Promise(() => {}));
   render(<Page identityId="alice" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Show more sub-names' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'next 20 ↓' }));
   await waitFor(() => expect(api.getDotCellItemChildren).toHaveBeenCalledTimes(1));
-  const again = screen.queryByRole('button', { name: 'Show more sub-names' });
+  const again = screen.queryByRole('button', { name: 'next 20 ↓' });
   if (again) fireEvent.click(again);
   expect(api.getDotCellItemChildren).toHaveBeenCalledTimes(1);
 });
@@ -224,7 +228,7 @@ it('retains loaded child names when a later page fails and exposes the error', a
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(item);
   vi.mocked(api.getDotCellItemChildren).mockRejectedValue(new Error('secondary failed'));
   render(<Page identityId="alice" />);
-  fireEvent.click(await screen.findByRole('button', { name: 'Show more sub-names' }));
+  fireEvent.click(await screen.findByRole('button', { name: 'next 20 ↓' }));
   expect(await screen.findByText('Failed to load more sub-names')).toBeInTheDocument();
   expect(screen.getByRole('link', { name: 'one.alice.cell' })).toBeInTheDocument();
 });
