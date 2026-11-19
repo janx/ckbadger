@@ -199,12 +199,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     reason:
       'the code cell’s “Type ID lineage of these bytes”, an inner disclosure with no rule (a form the component lacks)',
   },
-  'components/asset/item-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason:
-      'a script of the item at 12 px, its summary in the reading ink: an inner disclosure (a form the component lacks)',
-  },
   'components/asset/mnft-detail.tsx': {
     lane: 'p-assets',
     sites: { fold: 1 },
@@ -263,7 +257,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // → 19 (the description and the issuer info as stored are SectionDisclosure's inner form)
 // → 17 (the DNA as hex and every gene one row each are SectionDisclosure's inner form)
 // → 14 (the decoded fields, all the bytes as hex and a reading's bytes are SectionDisclosure's inner form)
-const TOLERATED_TOTAL = 14;
+// → 13 (an item's lock and type scripts are SectionDisclosure's inner form)
+const TOLERATED_TOTAL = 13;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

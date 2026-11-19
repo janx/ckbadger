@@ -5,6 +5,7 @@ import type { ItemProtocol, ItemFeedContext, ProtocolVersion, Transaction } from
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { withFieldMeanings } from '@/lib/protocol-field-meanings';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { AppLink } from '@/components/ui/app-link';
 import { CkbAmount } from '@/components/ui/ckb-amount';
 import { getScriptDetailHref } from '@/lib/detail-routes';
@@ -79,12 +80,19 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
       ].map(
         ({ kind, script, name }) =>
           script && (
-            <details key={kind} className="text-meta min-w-0">
-              <summary className="cursor-pointer">
-                {kind} script · {name ?? 'Unregistered'}
-              </summary>
+            // the library's inner disclosure (lane cd-fixes-controls, the disclosure sweep); its
+            // content keeps the 12 px it took from the disclosure
+            <SectionDisclosure
+              key={kind}
+              form="inner"
+              summary={
+                <>
+                  {kind} script · {name ?? 'Unregistered'}
+                </>
+              }
+            >
               {/* Lane E (C6): the script as its occupied bytes, one row per part. */}
-              <div className="mt-3">
+              <div className="text-meta">
                 <ScriptByteMap
                   kind={kind}
                   script={script}
@@ -96,7 +104,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
                   })}
                 />
               </div>
-            </details>
+            </SectionDisclosure>
           )
       )}
       <ProtocolEvidence
