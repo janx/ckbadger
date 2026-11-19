@@ -333,13 +333,18 @@ function AllocationReady({ view }: { view: AllocationView }) {
           flare
         )}
       >
-        {/* The figure and its unit, one unbreakable unit (PA-19; the scripts pages' rule): below
-            640 the decimals are body, so the integer (14 characters at 26 px, 214.8 px with the
-            tracking), the decimals (69.0) and " CKB" at 13 px (30.7) take 314.5 px of the 328 at
-            360; at the integer's size they took 355.2 px and the unit went to the next line. */}
-        <span className="whitespace-nowrap">
-          {total.integer}
-          <span className="text-text-dim max-sm:text-body">.{total.decimal}</span>
+        {/* The figure, one unbreakable run exact to the shannon (PA-19; the scripts pages' rule),
+            and its unit, which goes under it where they cannot share the line, as a chart head's
+            does on a phone (the lead's final round, item 5: at 320 the pair ran 14 px past the
+            window). Below 640 the decimals are body, so the integer (14 characters at 26 px, 214.8
+            px with the tracking) and the decimals (69.0) are 283.8 px, within a 320 px window's
+            288; with " CKB" at 13 px (30.7), 314.5, within a 360 px window's 328, where they share
+            it. The pair's one break is the space before the unit. */}
+        <span>
+          <span className="whitespace-nowrap">
+            {total.integer}
+            <span className="text-text-dim max-sm:text-body">.{total.decimal}</span>
+          </span>
           <span className="text-text-dim text-[0.5em]"> CKB</span>
         </span>
         {/* what the figure is, now the heading says `supply` (the board's label); the block it
