@@ -78,13 +78,15 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   // lists 36 → 35 (lane P2's third round, item 10, at its merge with the base that pinned the
   // figures): components/scripts/script-hero.tsx's companion line reads in the reading ink, its one
   // prose site gone with its entry
-  lists: 23,
+  // lists 23 → 15 (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink)
+  lists: 15,
   topics: 14,
   shared: 9,
 };
 // 58 → 57 (lane P2's third round, item 10): components/scripts/script-hero.tsx left the list;
 // 57 → 51 (the third read's T NOTE-3): the six files whose sites are decided went to DECIDED
-const TOLERATED_FILES = 51;
+// 51 → 49 (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink)
+const TOLERATED_FILES = 49;
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- chain ----
@@ -322,16 +324,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   },
   // 'app/scripts/page.tsx' left the list (lane P3: prose 1 → 0; the code-class bar is named by
   // the summary sentence, in the reading ink, no quiet label over it)
-  'components/asset/inventory-summary.tsx': {
-    family: 'lists',
-    sites: { link: 1, prose: 2 },
-    reason: "the inventory's totals sentences and the anchor block link in the quiet ink",
-  },
-  'components/asset/inventory-table.tsx': {
-    family: 'lists',
-    sites: { td: 5 },
-    reason: 'supply, H-multiplier, occupied and unavailable values quiet in table cells',
-  },
+  // 'components/asset/inventory-summary.tsx' left the list (BRIEF-ink-size-roles items 1 and 3:
+  // link 1, prose 2 → 0): the totals line and the identities' line are sentences, the reading ink
+  // at 13 px, the anchor's block link in their ink
+  // 'components/asset/inventory-table.tsx' left the list (BRIEF-ink-size-roles item 1: td 5 → 0):
+  // the supply, the H-multiplier and the occupied CKB are figures in cells, and "Unavailable" a
+  // cell's content, the reading ink; the minted " / N" reads at the cell's 13 px, its slash quiet
   // components/scripts/script-code-evidence.tsx left the list (lane P2's follow-up, item 4): the unspendable note reads in the reading ink
   // components/scripts/script-family-board.tsx left the list (lane P2's follow-up, item 4): the handover line reads in the reading ink
   'components/scripts/script-family-page.tsx': {
@@ -1226,11 +1224,12 @@ describe('the ink of a word’s role (R3): links, amounts, table cells and parag
     expect(Object.values(QUIET_SITES).reduce((total, entry) => total + entry.count, 0)).toBe(3);
   });
 
+  // Re-pinned on purpose (BRIEF-ink-size-roles item 1, the inventory: its figures, states and sentences in the reading ink; renamed, it was "107 sites in 51 files").
   // Re-pinned on purpose (lane P2's third round, item 10, at its merge; renamed, it was "… 123 sites
   // in 58 files …" on the base): the script hero's companion line left the list. Re-pinned on
   // purpose (the third read's T NOTE-3; renamed, it was "122 sites in 57 files"): the decided
   // sites left the work list for DECIDED, 15 in 6 files
-  it('tolerates 107 sites in 51 files: the pinned totals by family, which only fall', () => {
+  it('tolerates 99 sites in 49 files: the pinned totals by family, which only fall', () => {
     const byFamily: Partial<Record<Family, number>> = {};
     for (const entry of Object.values(TOLERATED))
       byFamily[entry.family] =

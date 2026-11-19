@@ -48,8 +48,8 @@ const COUNT_PX = columnPx(Math.max(cell(WIDEST_ROW_COUNT), cell(UNAVAILABLE)) + 
 const H_MULT_PX = columnPx(cell(UNAVAILABLE));
 
 export function AssetCount({ value }: { value: number | string | null | undefined }) {
-  if (value === null || value === undefined)
-    return <span className="text-text-dim">Unavailable</span>;
+  // a cell's content, the reading ink (BRIEF-ink-size-roles item 1: it was quiet)
+  if (value === null || value === undefined) return <span>Unavailable</span>;
   if (typeof value === 'number' && (!Number.isSafeInteger(value) || value < 0))
     throw new Error(`Invalid asset count ${value}`);
   return <>{exactUnsignedInteger(String(value), 'asset count').toLocaleString('en-US')}</>;
@@ -224,7 +224,8 @@ function InventoryPhoneRow({ asset: a }: { asset: Asset }) {
     const composition = a.compositionTier ? (
       <CompositionBadge tier={a.compositionTier} size="sm" />
     ) : (
-      <span className="text-text-dim">Composition unavailable</span>
+      // the row's composition, its state where unread: the row's ink (BRIEF-ink-size-roles item 1)
+      <span>Composition unavailable</span>
     );
     return (
       <PhoneRow
@@ -374,7 +375,7 @@ export const HELD_COLUMN: ListColumn<Asset> = {
   numeric: true,
   render: (a) => {
     const { held } = heldAndOccupied(a);
-    if (held === null) return <span className="text-text-dim">Unavailable</span>;
+    if (held === null) return <span>Unavailable</span>;
     return <CkbAmount form="summary" shannons={held} signed={false} tone="inherit" unit={false} />;
   },
 };
@@ -453,8 +454,8 @@ function tokenColumns(): ListColumn<Asset>[] {
       // 13 px), and the gap; a wider one ends in the one ellipsis, its exact value in its title.
       minWidth: columnPx(cell('100,000,000,000,000') + CELL_GAP_PX),
       numeric: true,
-      className: 'text-text-dim',
       // One line; a supply too long for the column ends in an ellipsis, every digit in its hover.
+      // A figure in a cell, the reading ink (BRIEF-ink-size-roles item 1: the column was quiet).
       render: (a) =>
         a.totalSupply === null ? (
           <span>Unavailable</span>
@@ -470,7 +471,7 @@ function tokenColumns(): ListColumn<Asset>[] {
       label: 'CKB held ÷ occupied',
       minWidth: H_MULT_PX,
       numeric: true,
-      className: 'text-text-dim',
+      // a figure in a cell, the reading ink (BRIEF-ink-size-roles item 1: the column was quiet)
       render: (a) => <HMultiplier value={a.hMultiplier} />,
     },
   ];
@@ -540,9 +541,11 @@ function LiveOfMinted({ asset: a }: { asset: Asset }) {
   return (
     <span>
       <AssetCount value={a.liveCount} />
+      {/* the minted figure, a figure in a cell: the reading ink at the cell's 13 px, the slash
+          between the two quiet (BRIEF-ink-size-roles items 1 and 2: " / N" was quiet at 12 px) */}
       {differs && (
-        <span className="text-text-dim text-meta">
-          {' / '}
+        <span data-role="minted">
+          <span className="text-text-dim"> / </span>
           <AssetCount value={a.totalSupply} />
         </span>
       )}
@@ -582,9 +585,11 @@ function objectColumns(): ListColumn<Asset>[] {
     {
       key: 'live',
       label: 'Live items',
-      // Six digits live and the quiet " / 999,999" minted beside them (the largest collections
-      // hold thousands), and the gap: 142.6.
-      minWidth: columnPx(cell('999,999') + meta(' / 999,999') + CELL_GAP_PX),
+      // Six digits live and " / 999,999" minted beside them (the largest collections hold
+      // thousands), both at the cell's 13 px, and the gap: 54.6 + 78 + 16 = 148.6. It was 142.6,
+      // the minted figure at the meta step (BRIEF-ink-size-roles item 2); the table's sum, 973, is
+      // within a 1024 px window's 976.
+      minWidth: columnPx(cell('999,999') + cell(' / 999,999') + CELL_GAP_PX),
       numeric: true,
       render: (a) => <LiveOfMinted asset={a} />,
     },
@@ -610,7 +615,7 @@ function objectColumns(): ListColumn<Asset>[] {
       label: 'CKB held ÷ occupied',
       minWidth: H_MULT_PX,
       numeric: true,
-      className: 'text-text-dim',
+      // a figure in a cell, the reading ink (BRIEF-ink-size-roles item 1: the column was quiet)
       render: (a) => <HMultiplier value={a.hMultiplier} />,
     },
   ];
@@ -664,7 +669,7 @@ function identityColumns(): ListColumn<Asset>[] {
       // column, no gap after it. It was 130.
       minWidth: columnPx(Math.max(cell(WIDEST_CKB_HELD), cell(UNAVAILABLE))),
       numeric: true,
-      className: 'text-text-dim',
+      // a figure in a cell, the reading ink (BRIEF-ink-size-roles item 1: the column was quiet)
       render: (a) => {
         const { occupied } = heldAndOccupied(a);
         return (

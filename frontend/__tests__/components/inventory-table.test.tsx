@@ -151,9 +151,14 @@ describe('Inventory rows', () => {
       />
     );
     const table = screen.getByRole('table', { name: 'Object collections' });
-    // Table-rows L2-2: minted ≠ live shows as a dim "/ 7" beside the live count (R4, re-pinned
-    // on purpose: a count is never the ghost); the words are the row's title.
-    expect(within(table).getByText('/ 7', { exact: false })).toHaveClass('text-text-dim');
+    // Table-rows L2-2: minted ≠ live shows as "/ 7" beside the live count; the words are the
+    // row's title. Re-pinned on purpose (the ink and size roles, BRIEF-ink-size-roles item 1: a
+    // figure in a cell is the reading ink at 13 px): the minted figure reads in the cell's ink at
+    // its size, only the slash between the two quiet; it was the whole " / 7" quiet at 12 px.
+    const minted = table.querySelector('[data-role="minted"]') as HTMLElement;
+    expect(minted).toHaveTextContent(/^\/ 7$/);
+    expect(minted.className).not.toMatch(/text-text-dim|text-meta/);
+    expect(within(minted).getByText('/')).toHaveClass('text-text-dim');
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
       '3 live of 7 minted'
     );
@@ -256,11 +261,15 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
 
   // readability R5, re-pinned on purpose (and renamed: "prints supply dim to 2 dp, exact in its
   // hover"): a list column is the
-  // summary form, whole from 1,000 up, cut, never rounded up (site precedent, lane D3).
-  it('prints supply dim in its summary form, exact in its hover', () => {
+  // summary form, whole from 1,000 up, cut, never rounded up (site precedent, lane D3). Re-pinned
+  // on purpose and renamed (BRIEF-ink-size-roles item 1, "prints supply dim in its summary form"):
+  // a figure in a cell is the reading ink; the supply, the H-multiplier and the occupied CKB were
+  // quiet columns.
+  it('prints supply in the reading ink in its summary form, exact in its hover', () => {
     const table = mount();
     const supply = cellUnder(table, 2, 'Supply');
-    expect(supply).toHaveClass('text-text-dim');
+    expect(supply).not.toHaveClass('text-text-dim');
+    expect(cellUnder(table, 2, 'CKB held ÷ occupied')).not.toHaveClass('text-text-dim');
     expect(supply).toHaveTextContent(/^16,063,603$/);
     expect(within(supply).getByTitle('16,063,603.56572848')).toHaveTextContent(/^16,063,603$/);
   });
@@ -554,15 +563,16 @@ describe('inventory columns budgeted from what they hold (readability F3-e)', ()
             tag('Composition unavailable') +
             16
         ),
-        // live items and the quiet " / minted" beside them, six digits each
-        ceil(at('999,999', 13) + at(' / 999,999', 12) + 16),
+        // live items and " / minted" beside them, six digits each, both at the cell's 13 px
+        // (BRIEF-ink-size-roles item 2: the minted figure was the meta step, 142.6 → 148.6)
+        ceil(at('999,999', 13) + at(' / 999,999', 13) + 16),
         count,
         // an activity count (never "Unavailable": a count not derived says nothing)
         ceil(at('99,999,999', 13) + 16),
         held,
         ceil(at('Unavailable', 13)),
       ],
-      [374, 143, 102, 94, 168, 86],
+      [374, 149, 102, 94, 168, 86],
     ],
     [
       'identity',

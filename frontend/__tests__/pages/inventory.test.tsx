@@ -921,9 +921,12 @@ describe('Inventory approved board regressions', () => {
     render(<ObjectsPage />);
     const table = await screen.findByRole('table', { name: 'Object collections' });
     expect(within(table).getByText('41')).toBeInTheDocument();
-    // Table-rows L2-2: minted ≠ live is a dim "/ 50" (R4, re-pinned on purpose); the words are in
-    // the row's title.
-    expect(within(table).getByText('/ 50', { exact: false })).toHaveClass('text-text-dim');
+    // Table-rows L2-2: minted ≠ live is "/ 50"; the words are in the row's title. Re-pinned on
+    // purpose (BRIEF-ink-size-roles item 1): the minted figure reads in the cell's ink at 13 px,
+    // the slash quiet.
+    const minted = table.querySelector('[data-role="minted"]') as HTMLElement;
+    expect(minted).toHaveTextContent(/^\/ 50$/);
+    expect(minted.className).not.toMatch(/text-text-dim|text-meta/);
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
       '41 live of 50 minted'
     );
