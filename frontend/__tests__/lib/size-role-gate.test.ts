@@ -344,16 +344,15 @@ const TOLERATED_BY_FAMILY: Readonly<Record<Family, number>> = {
   lists: 6,
   // topics 2 → 0 (lane cd-fixes-controls): the DAO board's two notes at 13 px
   topics: 0,
-  charts: 1,
+  // charts 1 → 0 (the ink and size round): the index card's ranking writes its rows at 13 px
+  charts: 0,
   // shared 3 → 2 (lane cd-fixes-controls): the chart's markers' legend at 13 px; 2 → 1: the lock
-  // words' code-hash link at 13 px
-  // 1 → 0: the vitals strip
+  // words' code-hash link at 13 px; 1 → 0: the vitals strip
   shared: 0,
 };
-// 18 → 17 (lane cd-fixes-controls): components/ui/chart.tsx left the list; 17 → 15: the DAO board
-// and the lock words
-// 15 → 14: the vitals strip
-const TOLERATED_FILES = 14;
+// 18 → 13: components/ui/chart.tsx, the DAO board, the lock words and the vitals strip (lane
+// cd-fixes-controls), and components/charts/chart-small-multiple.tsx (the chart lane)
+const TOLERATED_FILES = 13;
 
 const WORK = 'the ink and size round’s work: 13 px (text-small, or the size of the line around it)';
 
@@ -430,11 +429,8 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // 'components/dao/dao-board.tsx' left the list (lane cd-fixes-controls): the capacity-use caption
   // and the 365-day anchor line read at 13 px, their block links with them
   // ---- charts ----
-  'components/charts/chart-small-multiple.tsx': {
-    family: 'charts',
-    sites: { link: 1 },
-    reason: `a small multiple's chart link at 12 px; ${WORK}`,
-  },
+  // 'components/charts/chart-small-multiple.tsx' left the list (the chart lane, the ink and size
+  // round): the index card's ranking writes its rows at 13 px
   // ---- shared ----
   // 'components/stats-bar.tsx' left the list (lane cd-fixes-controls): a vital's value alone is its
   // link, the label a label beside it; the epoch's position and time left are values at 13 px

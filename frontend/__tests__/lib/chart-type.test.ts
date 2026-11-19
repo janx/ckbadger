@@ -23,6 +23,8 @@ describe('SVG text by role', () => {
       label: 12,
       value: 12.5,
       head: 13,
+      // the ink and size roles, finished: a sentence in a plot is prose, 13 px
+      sentence: 13,
       title: 13.5,
       reading: 14,
     });
