@@ -4,6 +4,7 @@
  * group identity, resolved cell deps, the proposal ruler, the capacity equation, header deps,
  * the cellbase and DAO-withdrawal variants and the pending wording.
  */
+import { JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { addressScript } from '@/lib/lock-script';
 import { ckbAddress } from '@/__tests__/utils/ckb-address';
 import { seededAddress } from '@/__tests__/utils/ckb-address';
@@ -1026,6 +1027,29 @@ describe('Transaction board, R2b-a fields', () => {
     const fact = screen.getByTestId('tx-fact-output-lock-0');
     expect(fact).toHaveTextContent(/^Lock of output 0lock 0x9bd7e06f…a3cce8 by data, /);
     expect(fact).not.toHaveTextContent('Default Lock');
+  });
+
+  // Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+  // lock decision's refusals placed above their parts fail the part they are in, said in its place,
+  // never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+  it('fails the Cells section and the output’s lock fact in place, the page drawn', async () => {
+    const base = committed();
+    const joy = seededAddress('joyout', JOYID_CODE_HASH);
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...base,
+      outputs: [
+        { ...base.outputs![0], address: joy, lockArgsDecoded: null, lockArgsDecodeError: 'odd' },
+      ],
+    } as TransactionDetail);
+    render(<TransactionDetailPage />);
+    const cells = await screen.findByRole('heading', { name: /^Cells/ });
+    expect(cells.closest('section')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    );
+    expect(screen.getByTestId('tx-fact-output-lock-0')).toHaveTextContent(
+      new RegExp(`address ${joy} spells the lock`)
+    );
+    expect(screen.getByRole('heading', { name: 'Balance changes' })).toBeInTheDocument();
   });
 
   it('reads a Shadow Lock and a JoyID lock by their registry layouts (R-8, TX-20)', async () => {

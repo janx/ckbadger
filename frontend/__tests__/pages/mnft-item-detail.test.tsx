@@ -1,3 +1,4 @@
+import { JOYID_CODE_HASH, seededAddress } from '@/__tests__/utils/ckb-address';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -147,6 +148,28 @@ describe('MnftItemDetailPage', () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
     expectHeadId(id);
+  });
+
+  // Lane B4 third round (review-rules-fixes2 SHOULD 1, the coordinator's item 3, ruling D7): the
+  // lock decision's refusals placed above their parts fail the part they are in, said in its place,
+  // never the page: here a cell whose owner address spells another lock (JoyID) than its own.
+  it('fails the owner note in place when its lock is refused, the page drawn', async () => {
+    const joy = seededAddress('joymn', JOYID_CODE_HASH);
+    vi.mocked(api.getItemProtocol).mockResolvedValue({
+      ...mnftProtocolProducer,
+      versions: mnftProtocolProducer.versions.map((v) => ({
+        ...v,
+        cell: { ...v.cell, ownerAddress: joy },
+      })),
+    } as never);
+    render(<MnftItemDetailPage objectId={id} />);
+    expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    await waitFor(() =>
+      expect(within(metrics).getByRole('alert')).toHaveTextContent(
+        new RegExp(`address ${joy} spells the lock`)
+      )
+    );
   });
 
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
