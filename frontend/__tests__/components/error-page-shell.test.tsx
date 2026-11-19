@@ -263,9 +263,16 @@ describe('ErrorPageShell', () => {
       screen.queryByText(/nothing is wrong with the chain|reloading will not mend/i)
     ).toBeNull();
     expect(screen.getByRole('button', { name: '↻ try again' })).toBeInTheDocument();
+    // re-pinned on purpose (lane c2-chain): the copy is the library's CopyButton, the board's one
+    // icon at the end of the facts it copies, named for a screen reader (it was a word in the
+    // actions' line, "→ copy details for a bug report")
+    const copy = screen.getByRole('button', { name: 'copy details for a bug report' });
+    expect(copy).toHaveTextContent(/^$/);
     expect(
-      screen.getByRole('button', { name: '→ copy details for a bug report' })
-    ).toBeInTheDocument();
+      screen.getByText(
+        'the chain was not checked in this view — this says nothing about what it holds'
+      ).parentElement
+    ).toContainElement(copy);
     expect(screen.getByRole('link', { name: '← Fiber channels' })).toHaveAttribute(
       'href',
       '/mainnet/fiber/channels'
@@ -348,9 +355,11 @@ describe('ErrorPageShell', () => {
           <CrashPage message="block 12: invalid DAO field" />
         </MemoryRouter>
       );
-      fireEvent.click(screen.getByRole('button', { name: '→ copy details for a bug report' }));
+      // re-pinned (lane c2-chain): the library's CopyButton, its answer `copied` beside it (was a
+      // word action whose status said "error details copied.")
+      fireEvent.click(screen.getByRole('button', { name: 'copy details for a bug report' }));
       await waitFor(() =>
-        expect(within(screen.getByRole('main')).getByRole('status')).toHaveTextContent('copied')
+        expect(within(screen.getByRole('main')).getByRole('status')).toHaveTextContent(/^copied$/)
       );
       expect(writeText).toHaveBeenCalledWith(
         expect.stringContaining('Error: block 12: invalid DAO field')

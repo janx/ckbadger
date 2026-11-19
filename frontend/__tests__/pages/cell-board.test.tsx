@@ -71,7 +71,10 @@ describe('Cell page against the Cell board', () => {
 
   // A4 review 3: the out point's copy button copies through the one copy path (hooks/useCopy):
   // where there is no clipboard (plain HTTP on a LAN address) it claims no copy and rejects
-  // nothing; a copy that worked says "copied".
+  // nothing; a copy that worked says "copied". Re-pinned on purpose (lane c2-chain): the copy is
+  // the library's CopyButton, the board's one icon (it was a boxed word, "copy"), which answers in
+  // words beside it, heard as a status: `copied`, or `not copied` where the clipboard refused (the
+  // word button stayed "copy" and said nothing).
   it('copies the out point through the one copy path, claiming nothing without a clipboard', async () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown) => rejections.push(reason);
@@ -79,20 +82,23 @@ describe('Cell page against the Cell board', () => {
     try {
       Object.assign(navigator, { clipboard: undefined });
       const { unmount } = view();
-      const button = await screen.findByRole('button', { name: 'Copy out point' });
+      const button = await screen.findByRole('button', { name: 'copy out point' });
       await act(async () => {
         fireEvent.click(button);
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
-      expect(button).toHaveTextContent(/^copy$/);
+      expect(button).toHaveTextContent(/^$/);
+      expect(within(button.parentElement!).getByRole('status')).toHaveTextContent(/^not copied$/);
       expect(rejections).toEqual([]);
       unmount();
       const writeText = vi.fn().mockResolvedValue(undefined);
       Object.assign(navigator, { clipboard: { writeText } });
       view();
-      const again = await screen.findByRole('button', { name: 'Copy out point' });
+      const again = await screen.findByRole('button', { name: 'copy out point' });
       fireEvent.click(again);
-      await waitFor(() => expect(again).toHaveTextContent(/^copied$/));
+      await waitFor(() =>
+        expect(within(again.parentElement!).getByRole('status')).toHaveTextContent(/^copied$/)
+      );
       expect(writeText).toHaveBeenCalledWith(`${cell.txHash}:${cell.outputIndex}`);
     } finally {
       process.off('unhandledRejection', onRejection);
@@ -144,7 +150,7 @@ describe('Cell page against the Cell board', () => {
     expect(holder.firstElementChild!.firstElementChild).toBe(line);
     expect(plate).not.toContainElement(line);
     // after the full out point and its copy, in the plate
-    const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
+    const outpointLine = screen.getByRole('button', { name: 'copy out point' }).closest('div')!;
     expect(plate).toContainElement(outpointLine);
     expectBefore(outpointLine, line);
   });
@@ -167,8 +173,9 @@ describe('Cell page against the Cell board', () => {
     expect(title).toHaveClass('text-entity', 'max-md:text-index');
     expect(nameBox.children).toHaveLength(2);
     const idLine = nameBox.lastElementChild as HTMLElement;
-    expect(idLine).toHaveTextContent(new RegExp(`^${cell.txHash}:1copy$`));
-    expect(idLine).toContainElement(screen.getByRole('button', { name: 'Copy out point' }));
+    // re-pinned (lane c2-chain): the copy is the library's icon, no word ("copy" was its text)
+    expect(idLine).toHaveTextContent(new RegExp(`^${cell.txHash}:1$`));
+    expect(idLine).toContainElement(screen.getByRole('button', { name: 'copy out point' }));
     // C10 round 2: the id line in the plate's one voice, set by the plate: the full out
     // point (it was text-body in the bright ink, competing with the h1 above it) takes it, its
     // colon in the same ink; the copy button keeps its own classes
@@ -178,10 +185,13 @@ describe('Cell page against the Cell board', () => {
     const full = within(idLine).getByText(`${cell.txHash}:1`);
     expect(full.className).toBe('min-w-0');
     expect(full.children).toHaveLength(0);
-    expect(screen.getByRole('button', { name: 'Copy out point' })).toHaveClass(
+    // re-pinned on purpose (lane c2-chain): the library's CopyButton, the board's icon in the
+    // quiet ink in a 32 px box below 640 and 24 px from it (was a 26 px box with the word "copy")
+    expect(screen.getByRole('button', { name: 'copy out point' })).toHaveClass(
       'text-text-dim',
-      'text-meta',
-      'h-[26px]'
+      'hover:text-jade',
+      'h-8',
+      'sm:h-6'
     );
     // re-pinned with readability R4 (lane B7): the lede in its measured holder under the plate
     const lede = below!.querySelector('[data-detail-lede] > div')!;
@@ -202,7 +212,7 @@ describe('Cell page against the Cell board', () => {
     // output 1" breadcrumb; the transaction and the index are one line under the full out point.
     expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
     expect(screen.queryByText(/^Transaction 0x/)).toBeNull();
-    expect(screen.getByRole('button', { name: 'Copy out point' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'copy out point' })).toBeInTheDocument();
     // Consistency round C13 + U3, the name plate (C10): the h1 is the bright short out point; the
     // kind line before it says "Cell".
     const h1 = screen.getByRole('heading', { level: 1 });
@@ -224,7 +234,7 @@ describe('Cell page against the Cell board', () => {
       '/mainnet/blocks/20801533'
     );
     // the origin line sits under the full out point, before the "only name" sentence
-    const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
+    const outpointLine = screen.getByRole('button', { name: 'copy out point' }).closest('div')!;
     expect(outpointLine.compareDocumentPosition(origin)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     const onlyName = screen.getByText(/The out point is the cell's only name/);
     expect(onlyName).toHaveTextContent(
