@@ -187,7 +187,8 @@ describe.each(['dark', 'light'] as const)('in-bar words in the %s theme (DY-03)'
     // own line under the bar, so on this crawl only the leader's words stand on a fill (it was
     // `words.length >= 5`: the shares alone, "6.41%", in segments of 78 px). The fills of the other
     // steps keep their words in the case below, where every segment holds them.
-    expect(words.map((w) => w.text)).toEqual(['Amazon.com, Inc. 61.54% · 48 nodes']);
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 48 of 78 nodes is 61.538…%, 61.53% (half up 61.54%)
+    expect(words.map((w) => w.text)).toEqual(['Amazon.com, Inc. 61.53% · 48 nodes']);
     expect(words.filter((w) => w.ratio < 4.5)).toEqual([]);
   });
 

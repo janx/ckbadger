@@ -955,7 +955,12 @@ describe('Transaction variants (D4)', () => {
             protocol: 'dao',
             protocolName: 'Nervos DAO',
             action: 'withdraw_complete',
-            metadata: { capacity: '2605000000000', compensation: '17530634165' },
+            // each DAO action names its cell's owner (lane exactness, part B6): the withdrawn deposit's
+            metadata: {
+              capacity: '2605000000000',
+              compensation: '17530634165',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
           },
         ],
         participants: [
@@ -1014,7 +1019,11 @@ describe('Transaction variants (D4)', () => {
             protocol: 'dao',
             protocolName: 'Nervos DAO',
             action: 'deposit',
-            metadata: { capacity: '12200000000000' },
+            // the deposit's owner (lane exactness, part B6)
+            metadata: {
+              capacity: '12200000000000',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
           },
         ],
         participants: [
@@ -1060,7 +1069,18 @@ describe('Transaction variants (D4)', () => {
         activityRead({
           ...feedSamples.daoWithdrawRequest,
           txHash: TX_HASH,
-          protocolActions: [{ protocol: 'dao', protocolName: 'Nervos DAO', action, metadata }],
+          // the step's owner, the one party (lane exactness, part B6)
+          protocolActions: [
+            {
+              protocol: 'dao',
+              protocolName: 'Nervos DAO',
+              action,
+              metadata: {
+                ...metadata,
+                lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+              },
+            },
+          ],
           participants: [
             {
               ...feedSamples.daoWithdrawRequest.participants[1],
@@ -1123,7 +1143,11 @@ describe('Transaction variants (D4)', () => {
               protocol: 'dao',
               protocolName: 'Nervos DAO',
               action: 'withdraw_complete',
-              metadata: { capacity: '2605000000000', compensation: '17530634165' },
+              metadata: {
+                capacity: '2605000000000',
+                compensation: '17530634165',
+                lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+              },
             },
           ],
           participants: [
@@ -1139,10 +1163,10 @@ describe('Transaction variants (D4)', () => {
   });
 
   // Lane P1, third round (review p-logic-chain SHOULD 2): a batch in which one party deposits and
-  // another withdraws. The activity tags both DAO and its actions name no party, so the lede says
-  // each step without its party and names the parties whose cells took the steps once; the figure
-  // says "a Nervos DAO step" on each, never both kinds on both.
-  it('says the DAO steps of a batch without giving a party a step it did not take', async () => {
+  // another withdraws. Re-pinned for lane exactness, part B6: each DAO action names its cell's owner (it was read as
+  // naming none, so the lede said each step without its party and the figure "a Nervos DAO step" on
+  // each); the lede says whose each step is, and the figure draws each party's own step
+  it('says whose each DAO step of a batch is, the deposit and the withdrawal apart', async () => {
     const tx = committed();
     tx.inputsCapacity = '2605000000000';
     tx.inputs![0].capacity = '2605000000000';
@@ -1159,13 +1183,20 @@ describe('Transaction variants (D4)', () => {
             protocol: 'dao',
             protocolName: 'Nervos DAO',
             action: 'deposit',
-            metadata: { capacity: '12200000000000' },
+            metadata: {
+              capacity: '12200000000000',
+              lockHash: feedSamples.daoWithdrawRequest.participants[2].lockHash!.slice(2),
+            },
           },
           {
             protocol: 'dao',
             protocolName: 'Nervos DAO',
             action: 'withdraw_complete',
-            metadata: { capacity: '2605000000000', compensation: '17530634165' },
+            metadata: {
+              capacity: '2605000000000',
+              compensation: '17530634165',
+              lockHash: feedSamples.daoWithdrawRequest.participants[1].lockHash!.slice(2),
+            },
           },
         ],
         participants: [
@@ -1185,11 +1216,15 @@ describe('Transaction variants (D4)', () => {
     render(<TransactionDetailPage />);
     const summary = await screen.findByTestId('tx-summary');
     expect(summary).toHaveTextContent(
-      `122,000 CKB went into a Nervos DAO deposit. 26,050 CKB came out of the Nervos DAO, with 175.3 CKB of compensation. The parties whose cells took these steps: ${row('r4p74p')} and ${row('hxw6h7')}.`
+      `122,000 CKB went into a Nervos DAO deposit held by ${row('hxw6h7')}. ${row('r4p74p')} withdrew 26,050 CKB from the Nervos DAO, with 175.3 CKB of compensation.`
     );
     const moved = await screen.findByTestId('tx-what-moved');
-    expect(moved).toHaveTextContent('a Nervos DAO step');
-    expect(moved).not.toHaveTextContent('Nervos DAO deposit');
+    expect(moved).not.toHaveTextContent('a Nervos DAO step');
+    const steps = [...moved.querySelectorAll('[data-dao-step]')].map((s) => s.textContent);
+    expect(steps.sort()).toEqual([
+      'Nervos DAO deposit 122,000 CKB',
+      'Nervos DAO withdrawal 26,050 CKB',
+    ]);
   });
 
   // Lane P1, third round (review p-logic-chain SHOULD 4): a cellbase that pays no block's reward
@@ -1880,14 +1915,14 @@ describe('Transaction board, R2b-a fields', () => {
     vi.mocked(api.getTransactionActivity).mockResolvedValue(
       activityRead({
         ...feedSamples.tokenTransfer,
-        itemTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
         txHash: TX_HASH,
+        itemTypes: [ITEM_TYPE.xudt, ITEM_TYPE.dao],
         protocolActions: [
           {
             protocol: 'dao',
             protocolName: 'Nervos DAO',
             action: 'deposit',
-            metadata: { capacity: '12200000000000' },
+            metadata: { capacity: '12200000000000', lockHash: to.lockHash!.slice(2) },
           },
         ],
         participants: [{ ...to, tags: 1 | 8 }, { ...from }],

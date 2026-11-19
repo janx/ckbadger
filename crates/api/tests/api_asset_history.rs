@@ -133,6 +133,22 @@ async fn cell_versions_exact_same_block_order_capacity_and_current_owner() {
         json["data"][1]["anatomy"],
         serde_json::json!({"capacityBytes":8,"lockBytes":53,"typeBytes":53,"dataBytes":0})
     );
+    // lane exactness, part B5: each version states its free part beside the whole and the occupied, so a page
+    // subtracts nothing (the pages wrote capacity − occupied)
+    for version in json["data"].as_array().unwrap() {
+        let int = |key: &str| -> i128 {
+            version[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("no {key}: {version}"))
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(
+            int("freeCapacity"),
+            int("capacity") - int("occupiedCapacity"),
+            "{version}"
+        );
+    }
 }
 
 /// Lane B carry-over 4(b): a cell's data hash is the one a script references
@@ -2551,8 +2567,8 @@ fn assert_held_points_follow_the_seed(json: &serde_json::Value, expected: &[(i12
                 .unwrap()
         };
         assert_eq!(int("capacity"), *capacity, "{point}");
-        assert_eq!(int("used"), *used, "{point}");
-        assert_eq!(int("unused"), capacity - used, "{point}");
+        assert_eq!(int("occupiedCapacity"), *used, "{point}");
+        assert_eq!(int("freeCapacity"), capacity - used, "{point}");
     }
 }
 
@@ -2669,7 +2685,7 @@ async fn capacity_charts_exclude_incomplete_day_using_indexed_chain_clock() {
         // its parts (it sent used and unused, and a page summed them)
         assert_eq!(
             json["data"][1]["values"],
-            serde_json::json!({"used":"60","unused":"60","capacity":"120"})
+            serde_json::json!({"occupiedCapacity":"60","freeCapacity":"60","capacity":"120"})
         );
         // the seed's running sums: 100 and 50 CKB on the 25th, 120 and 60 on the 26th
         assert_held_points_follow_the_seed(&json, &[(100, 50), (120, 60)]);

@@ -2999,8 +2999,8 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
                 serde_json::json!([
                     // re-pinned on purpose (lane p-assets): each day states the whole its cells
                     // hold, `capacity`, beside its parts, so a page sums nothing
-                    {"date": "2024-01-15", "values": {"used": "600", "unused": "400", "capacity": "1000"}},
-                    {"date": "2024-01-16", "values": {"used": "500", "unused": "300", "capacity": "800"}},
+                    {"date": "2024-01-15", "values": {"occupiedCapacity": "600", "freeCapacity": "400", "capacity": "1000"}},
+                    {"date": "2024-01-16", "values": {"occupiedCapacity": "500", "freeCapacity": "300", "capacity": "800"}},
                 ])
             );
         }
@@ -3134,8 +3134,8 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
         chart["data"],
         serde_json::json!([
             // re-pinned on purpose (lane p-assets): `capacity` beside the parts
-            {"date": "2024-01-15", "values": {"used": "600", "unused": "400", "capacity": "1000"}},
-            {"date": "2024-01-16", "values": {"used": "500", "unused": "300", "capacity": "800"}},
+            {"date": "2024-01-15", "values": {"occupiedCapacity": "600", "freeCapacity": "400", "capacity": "1000"}},
+            {"date": "2024-01-16", "values": {"occupiedCapacity": "500", "freeCapacity": "300", "capacity": "800"}},
         ])
     );
     for suffix in ["", "&hash_type=type"] {
@@ -3608,14 +3608,14 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     assert_eq!(json["title"], "SECP256K1_BLAKE160 Capacity History");
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "90");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "90");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["used"], "90");
-    assert_eq!(data[1]["values"]["unused"], "60");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "90");
+    assert_eq!(data[1]["values"]["freeCapacity"], "60");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["used"], "85");
-    assert_eq!(data[2]["values"]["unused"], "55");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "85");
+    assert_eq!(data[2]["values"]["freeCapacity"], "55");
     // SC-S8: the peak of total CKB held (used + unused), the first greatest day.
     assert_eq!(
         json["totalPeak"],
@@ -3633,8 +3633,8 @@ async fn test_script_capacity_chart_aggregates_deployments() {
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
     assert_eq!(data[0]["date"], "2024-01-16");
-    assert_eq!(data[0]["values"]["used"], "90");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "90");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
 }
 
 #[tokio::test]
@@ -3721,8 +3721,8 @@ async fn test_script_capacity_history_chart_aggregates_family_member_references(
     let last = data.last().unwrap();
     // Family counters: owned 300 / knowledge 180 -> used 180, unused 120.
     // The chart end state must equal the family/usage counters exactly.
-    assert_eq!(last["values"]["used"], "180");
-    assert_eq!(last["values"]["unused"], "120");
+    assert_eq!(last["values"]["occupiedCapacity"], "180");
+    assert_eq!(last["values"]["freeCapacity"], "120");
 
     // Same-source lock: the usage endpoint totals must match the chart end state.
     let request = Request::builder()
@@ -3807,8 +3807,8 @@ async fn test_script_capacity_chart_by_code_hash_with_kind_filter() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 1);
-    assert_eq!(data[0]["values"]["used"], "40");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
 }
 
 #[tokio::test]
@@ -3871,14 +3871,14 @@ async fn test_script_capacity_chart_by_code_hash_extends_to_latest_complete_ckb_
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
     assert_eq!(data[0]["date"], "2024-01-15");
-    assert_eq!(data[0]["values"]["used"], "40");
-    assert_eq!(data[0]["values"]["unused"], "60");
+    assert_eq!(data[0]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[0]["values"]["freeCapacity"], "60");
     assert_eq!(data[1]["date"], "2024-01-16");
-    assert_eq!(data[1]["values"]["used"], "40");
-    assert_eq!(data[1]["values"]["unused"], "60");
+    assert_eq!(data[1]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[1]["values"]["freeCapacity"], "60");
     assert_eq!(data[2]["date"], "2024-01-17");
-    assert_eq!(data[2]["values"]["used"], "40");
-    assert_eq!(data[2]["values"]["unused"], "60");
+    assert_eq!(data[2]["values"]["occupiedCapacity"], "40");
+    assert_eq!(data[2]["values"]["freeCapacity"], "60");
 }
 
 #[tokio::test]
@@ -4611,7 +4611,7 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
                         // re-pinned on purpose (lane p-assets): `capacity` beside the parts
                         assert_eq!(
                             json["data"][0]["values"],
-                            serde_json::json!({"used":"500","unused":"300","capacity":"800"})
+                            serde_json::json!({"occupiedCapacity":"500","freeCapacity":"300","capacity":"800"})
                         );
                     } else {
                         assert_eq!(json["data"], serde_json::json!([]));

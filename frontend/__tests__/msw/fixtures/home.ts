@@ -173,7 +173,6 @@ export const daoStatistics: DaoStatistics = {
   totalDeposited: '812889561643799700',
   totalDepositedCkb: '8128895616.437997',
   totalDepositors: 16673,
-  activeDeposits: 22379,
   depositCellsCount: 20689,
   withdrawalRequestCellsCount: 1690,
   // the route's: the live DAO cells, 20,689 + 1,690 (lane exactness, part A, A5 ii)
@@ -390,7 +389,12 @@ function party(
 ): GlobalActivity['participants'][number] {
   return {
     address: seededAddress(tail),
-    lockHash: `0x${tail.padStart(64, '0')}`,
+    // 32 bytes of hex, as the API sends a lock hash (lane exactness, part B6: a DAO action's owner
+    // is read as one): the tail's characters as hex, padded
+    lockHash: `0x${[...tail]
+      .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
+      .join('')
+      .padStart(64, '0')}`,
     lockHashPrefix: null,
     roles: [],
     ckbDelta,

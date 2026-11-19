@@ -778,10 +778,10 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "Test NFT Collection Capacity History");
     assert_eq!(json["data"].as_array().unwrap().len(), 3);
-    assert_eq!(json["data"][1]["values"]["used"], "60");
-    assert_eq!(json["data"][1]["values"]["unused"], "40");
-    assert_eq!(json["data"][2]["values"]["used"], "50");
-    assert_eq!(json["data"][2]["values"]["unused"], "30");
+    assert_eq!(json["data"][1]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][1]["values"]["freeCapacity"], "40");
+    assert_eq!(json["data"][2]["values"]["occupiedCapacity"], "50");
+    assert_eq!(json["data"][2]["values"]["freeCapacity"], "30");
 
     let request = Request::builder()
         .uri(format!(
@@ -796,8 +796,8 @@ async fn test_assets_nft_collection_capacity_chart_and_capacity_fields() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["date"], "2024-01-16");
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "40");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri(format!("/api/v1/assets/objects/{}", collection_id_hex))
@@ -856,8 +856,8 @@ async fn test_assets_nft_collection_accepts_dotbit_alias() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], ".bit Capacity History");
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "40");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "40");
 
     let request = Request::builder()
         .uri("/api/v1/assets/objects/dotbit")
@@ -1098,8 +1098,8 @@ async fn test_spore_collection_detail_reads_cluster_daily_history() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(json["data"][0]["values"]["used"], "60");
-    assert_eq!(json["data"][0]["values"]["unused"], "90");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "60");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "90");
 }
 
 #[tokio::test]
@@ -1386,8 +1386,8 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     let body = response.into_body().collect().await.unwrap().to_bytes();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["title"], "did:ckb Capacity History");
-    assert_eq!(json["data"][0]["values"]["used"], "70");
-    assert_eq!(json["data"][0]["values"]["unused"], "50");
+    assert_eq!(json["data"][0]["values"]["occupiedCapacity"], "70");
+    assert_eq!(json["data"][0]["values"]["freeCapacity"], "50");
 }
 
 fn seed_did_live_cell(batch: &mut StoreBatch<'_>, id: &[u8], hash: &[u8], block: i64) {
@@ -2817,6 +2817,9 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
     batch.commit().unwrap();
 
     let owner_new = vec![0x99u8; 32];
+    // the tests reader's NOTE-8: a holder with the cursor's count and a lock below the cursor's
+    // arrives before the cursor's place (count 2, lock 0x05 < 0x11): the page starts after it too
+    let owner_low = vec![0x05u8; 32];
     let mut tip = 1i64;
     seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
     let app = create_router(test_config(store.clone())).await;
@@ -2831,6 +2834,7 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
 
         let mut batch = StoreBatch::new(&store);
         batch.put_identity_owner_count(&collection_id, &owner_new, 5);
+        batch.put_identity_owner_count(&collection_id, &owner_low, 2);
         batch.commit().unwrap();
         tip += 1;
         seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
@@ -2841,10 +2845,13 @@ async fn collection_holders_read_each_tip_s_ranking_and_start_after_the_cursor_s
             format!("0x{}", hex::encode(&owner_b)),
             "{path}: {second}"
         );
-        assert_eq!(second["firstRank"], 3, "{path}: {second}");
+        // owner_new (5), owner_low (2, 0x05), owner_a (2, 0x11, the cursor's place), owner_b:
+        // the page starts at owner_b, fourth (it was third before owner_low arrived)
+        assert_eq!(second["firstRank"], 4, "{path}: {second}");
 
         let mut batch = StoreBatch::new(&store);
         batch.put_identity_owner_count(&collection_id, &owner_a, 0);
+        batch.put_identity_owner_count(&collection_id, &owner_low, 0);
         batch.commit().unwrap();
         tip += 1;
         seed_block_headers_at(&store, &[(tip, 1_700_000_000_000 + tip * 1000)]);
@@ -5227,8 +5234,14 @@ async fn dotcell_capacity_history_chart_resolves_the_alias() {
         assert_eq!(status, StatusCode::OK, "{alias}: {body}");
         assert_eq!(body["title"], ".cell Capacity History", "{alias}");
         assert_eq!(body["data"][0]["date"], "2024-01-15", "{alias}");
-        assert_eq!(body["data"][0]["values"]["used"], "20000000000", "{alias}");
-        assert_eq!(body["data"][0]["values"]["unused"], "4000000000", "{alias}");
+        assert_eq!(
+            body["data"][0]["values"]["occupiedCapacity"], "20000000000",
+            "{alias}"
+        );
+        assert_eq!(
+            body["data"][0]["values"]["freeCapacity"], "4000000000",
+            "{alias}"
+        );
     }
 }
 

@@ -14,6 +14,7 @@ import {
   type FlowEnd,
 } from '@/lib/tx-flows';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
+import live from '@/__tests__/fixtures/activities-live-mainnet.json';
 
 const HASH = `0x${'91'.repeat(32)}`;
 const ICKB = `0x${'1c'.repeat(32)}`;
@@ -394,58 +395,88 @@ describe('ribbonWeight', () => {
 // says it is the party's one step of the kind, so the figure says the step's amount apart from
 // what flowed (a self-deposit's end read "0.00001124 CKB · Nervos DAO deposit", the fee beside it).
 describe('daoStepsOf', () => {
+  // lane exactness, part B6: each DAO action names the owner of the cell that took it (metadata.lockHash, the
+  // indexer's, sent without 0x); a party's steps are the actions it owns, each with its own amount
+  const A = '0x' + 'a1'.repeat(32);
+  const B = '0x' + 'b2'.repeat(32);
   const META: Record<string, Record<string, string>> = {
     deposit: { capacity: '5000000000000' },
     withdraw_request: { capacity: '2605000000000', depositBlock: '19695550' },
     withdraw_complete: { capacity: '2605000000000', compensation: '17530634165' },
     merge: {},
   };
-  const dao = (...actions: string[]) => ({
-    txHash: '0xdao',
-    participants: [{ tags: 8 }],
-    protocolActions: actions.map((action) => ({
-      protocol: 'dao',
-      protocolName: 'Nervos DAO',
-      action,
-      metadata: META[action],
-    })),
+  const step = (action: string, owner: string) => ({
+    protocol: 'dao',
+    protocolName: 'Nervos DAO',
+    action,
+    metadata: { ...META[action], lockHash: owner.slice(2) },
   });
-  it('names the steps of a party the activity tags DAO, with each step’s own amount', () => {
-    expect(daoStepsOf(dao('deposit'), { tags: 8 })).toEqual([
+  const tx = (...steps: ReturnType<typeof step>[]) => ({
+    txHash: '0xdao',
+    participants: [{ lockHash: A }, { lockHash: B }],
+    protocolActions: steps,
+  });
+  it('names the steps a party owns, each with its own amount', () => {
+    expect(daoStepsOf(tx(step('deposit', A)), { lockHash: A })).toEqual([
       { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
     ]);
-    expect(daoStepsOf(dao('deposit'), { tags: 0 })).toBeNull();
-    expect(daoStepsOf(dao(), { tags: 8 })).toBeNull();
-    expect(daoStepsOf(dao('withdraw_request'), { tags: 8 | 1 })).toEqual([
-      { words: 'Nervos DAO withdrawal request', capacity: BigInt('2605000000000') },
-    ]);
-    expect(daoStepsOf(dao('withdraw_complete', 'deposit'), { tags: 8 })).toEqual([
+    expect(daoStepsOf(tx(step('deposit', A)), { lockHash: B })).toBeNull();
+    expect(daoStepsOf(tx(), { lockHash: A })).toBeNull();
+    expect(
+      daoStepsOf(tx(step('withdraw_complete', A), step('deposit', A)), { lockHash: A })
+    ).toEqual([
       { words: 'Nervos DAO withdrawal', capacity: BigInt('2605000000000') },
       { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
     ]);
     // several steps of a kind: their count, and no total (the API states none, the page sums none)
-    expect(daoStepsOf(dao('deposit', 'deposit'), { tags: 8 })).toEqual([
+    expect(daoStepsOf(tx(step('deposit', A), step('deposit', A)), { lockHash: A })).toEqual([
       { words: '2 Nervos DAO deposits', capacity: null },
     ]);
   });
-  // Lane P1, third round (review p-logic-chain SHOULD 2): a protocol action names no party, and the
-  // DAO tag says only that a party's cells took one of the steps. Where several parties are tagged
-  // and the steps are of more than one kind (A deposits, B withdraws), whose step is which is not
-  // in the activity: each tagged party is said to take "a Nervos DAO step", never both kinds. Where
-  // the steps are all of one kind, every tagged party took that kind of step, its amount unsaid.
-  it('names no step a party did not take where the activity does not say whose each is', () => {
-    const batch = (...actions: string[]) => ({
-      ...dao(...actions),
-      participants: [{ tags: 8 }, { tags: 8 }],
-    });
-    expect(daoStepsOf(batch('deposit', 'withdraw_complete'), { tags: 8 })).toEqual([
-      { words: 'a Nervos DAO step', capacity: null },
+  // the mixed transaction (red before part B6: each party read "a Nervos DAO step")
+  it('gives each party its own step in a transaction where one deposits and another withdraws', () => {
+    const mixed = tx(step('deposit', A), step('withdraw_complete', B));
+    expect(daoStepsOf(mixed, { lockHash: A })).toEqual([
+      { words: 'Nervos DAO deposit', capacity: BigInt('5000000000000') },
     ]);
-    expect(daoStepsOf(batch('deposit', 'deposit'), { tags: 8 })).toEqual([
-      { words: 'Nervos DAO deposit', capacity: null },
+    expect(daoStepsOf(mixed, { lockHash: B })).toEqual([
+      { words: 'Nervos DAO withdrawal', capacity: BigInt('2605000000000') },
     ]);
   });
+  it('reads the owner on the live feed: a withdrawal by the second of two parties', () => {
+    const row = live.feeds.dao.find((r) => r.txHash.startsWith('0x86bae6863c29'))!;
+    const [first, second] = row.participants;
+    expect(daoStepsOf(row as never, first)).toBeNull();
+    expect(daoStepsOf(row as never, second)).toEqual([
+      {
+        words: 'Nervos DAO withdrawal',
+        capacity: BigInt(row.protocolActions.find((a) => a.protocol === 'dao')!.metadata.capacity!),
+      },
+    ]);
+  });
+  it('refuses a step whose owner is missing, malformed or no participant, naming the transaction', () => {
+    const stranger = '0x' + 'cc'.repeat(32);
+    expect(() => daoStepsOf(tx(step('deposit', stranger)), { lockHash: A })).toThrow(
+      `0xdao: a Nervos DAO deposit names the owner ${stranger}, no participant of the transaction`
+    );
+    const ownerless = {
+      ...tx(),
+      protocolActions: [{ ...step('deposit', A), metadata: META.deposit }],
+    };
+    expect(() => daoStepsOf(ownerless, { lockHash: A })).toThrow(
+      '0xdao: a Nervos DAO deposit names no owner'
+    );
+    const malformed = {
+      ...tx(),
+      protocolActions: [{ ...step('deposit', A), metadata: { ...META.deposit, lockHash: '24' } }],
+    };
+    expect(() => daoStepsOf(malformed, { lockHash: A })).toThrow(
+      'dao:deposit metadata.lockHash "24" is not a lock hash'
+    );
+  });
   it('refuses a DAO step it has no words for', () => {
-    expect(() => daoStepsOf(dao('merge'), { tags: 8 })).toThrow('0xdao: a Nervos DAO step "merge"');
+    expect(() => daoStepsOf(tx(step('merge', A)), { lockHash: A })).toThrow(
+      '0xdao: a Nervos DAO step "merge"'
+    );
   });
 });

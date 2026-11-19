@@ -9,7 +9,7 @@ import {
   SparkChart,
   type Bar,
 } from '@/components/home/mini-chart';
-import { MINUS } from '@/lib/chart-ticks';
+import { MINUS, formatCompactSigned } from '@/lib/chart-ticks';
 import { expectInside, textLines, viewBox } from '@/__tests__/utils/svg-text-boxes';
 
 const texts = (root: Element, axis: 'x' | 'y') =>
@@ -26,13 +26,22 @@ describe('mini charts', () => {
     vi.restoreAllMocks();
   });
 
+  // each point with its exact display, the figure the route sent (lane exactness, part B3: a line's
+  // one path; the chart wrote a value through formatValue where a point had none)
   const blockTimes = [9.1, 8.6, 8.8, 10.9, 9.57].map((value, i) => ({
     label: `10/${19 + i}`,
     value,
+    display: `${value} s`,
   }));
 
+  it('writes each point of a line from its exact display, and refuses a point without one', () => {
+    expect(() =>
+      render(<LineChart points={[{ label: 'd0', value: 1 } as never]} ariaLabel="Block time" />)
+    ).toThrow('LineChart: the point d0 has no exact display');
+  });
+
   it('draws a line with round ticks, first/middle/last date labels anchored inside the plot', () => {
-    render(<LineChart points={blockTimes} ariaLabel="Block time" formatValue={(v) => `${v} s`} />);
+    render(<LineChart points={blockTimes} ariaLabel="Block time" />);
     const svg = screen.getByRole('img', { name: 'Block time' });
     // re-pinned (readability R4): the axis text is the 12 px tick (was 10), so the chart ends 3 px
     // lower, under the x labels' descent (104 → 107)
@@ -50,10 +59,12 @@ describe('mini charts', () => {
   });
 
   it('puts a reference value on a tick, emphasised, with a dashed line', () => {
-    const rates = [2.42, 2.84, 2.64].map((value, i) => ({ label: `d${i}`, value }));
-    render(
-      <LineChart points={rates} ariaLabel="Uncle rate" reference={2.5} formatValue={String} />
-    );
+    const rates = [2.42, 2.84, 2.64].map((value, i) => ({
+      label: `d${i}`,
+      value,
+      display: String(value),
+    }));
+    render(<LineChart points={rates} ariaLabel="Uncle rate" reference={2.5} />);
     const svg = screen.getByRole('img', { name: 'Uncle rate' });
     expect(texts(svg, 'y').map((t) => t.text)).toEqual(['2.3', '2.5', '2.7', '2.9']);
     const emphasised = [...svg.querySelectorAll('[data-axis="y"] text')].find(
@@ -154,6 +165,8 @@ describe('mini charts', () => {
       label: `10/${18 + i}`,
       value,
       readout: { value: `${value} CKB`, text: `${value} CKB` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
     render(<SignedBarChart points={changes} ariaLabel="Knowledge size change" />);
     const svg = screen.getByRole('img', {
@@ -193,11 +206,13 @@ describe('mini charts', () => {
       label: `10/${18 + i}`,
       value,
       readout: { value: `${value} CKB`, text: `${value} CKB` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
     const { container } = render(
       <>
         <SignedBarChart points={changes} ariaLabel="Signed" />
-        <LineChart points={blockTimes} ariaLabel="Line" reference={9} formatValue={String} />
+        <LineChart points={blockTimes} ariaLabel="Line" reference={9} />
         <BarChart
           bars={[{ label: '09:00', value: 610, state: 'highlight' }]}
           ariaLabel="Bars"
@@ -404,6 +419,7 @@ describe('mini chart hover', () => {
     const points = [9.1, 8.6, 8.8, 10.9, 9.57].map((value, i) => ({
       label: `10/${19 + i}`,
       value,
+      display: value.toFixed(2),
     }));
     render(
       <ChartFigure
@@ -413,9 +429,7 @@ describe('mini chart hover', () => {
         headline="9.57"
         body={{
           state: 'ready',
-          chart: (
-            <LineChart points={points} formatValue={(v) => v.toFixed(2)} ariaLabel="Block time" />
-          ),
+          chart: <LineChart points={points} ariaLabel="Block time" />,
         }}
       />
     );
@@ -435,6 +449,8 @@ describe('mini chart hover', () => {
       label: `10/${18 + i}`,
       value,
       readout: { value: `${value} exact`, text: `${value} exact` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
     render(
       <ChartFigure
@@ -478,8 +494,11 @@ describe('mini chart y ticks inside the svg (readability F3)', () => {
       label: day(i),
       value,
       readout: { value: `${value} CKB`, text: `${value} CKB` },
+      // the day's change in exact shannons, cut (lane exactness, part B3)
+      compact: formatCompactSigned(BigInt(Math.round(value * 1e8))),
     }));
-  const line = (values: number[]) => values.map((value, i) => ({ label: day(i), value }));
+  const line = (values: number[]) =>
+    values.map((value, i) => ({ label: day(i), value, display: String(value) }));
   const charts = [
     [
       'the signed axis of ±1.5M',
@@ -501,12 +520,7 @@ describe('mini chart y ticks inside the svg (readability F3)', () => {
     ],
     [
       'a line of three-digit values',
-      <LineChart
-        key="l"
-        points={line([152.4, 180.25, 210.5, 199.75, 236.1])}
-        formatValue={(v) => `${v}`}
-        ariaLabel="chart"
-      />,
+      <LineChart key="l" points={line([152.4, 180.25, 210.5, 199.75, 236.1])} ariaLabel="chart" />,
       '250',
     ],
     [
@@ -515,7 +529,6 @@ describe('mini chart y ticks inside the svg (readability F3)', () => {
         key="p"
         points={line([2.13, 2.41, 3.08, 2.66, 1.97])}
         reference={2.5}
-        formatValue={(v) => `${v}%`}
         ariaLabel="chart"
       />,
       '3.5',

@@ -465,9 +465,11 @@ async fn test_block_fee_stats_uses_serialized_size_in_block_denominator() {
     // disagree with the summed per-tx `txSize` and made every client-side
     // `fee / size` disagree with the served fee rate.
     assert_eq!(json["totalSize"], 226);
+    // re-pinned for lane exactness, part B4: 1,234 shannons × 1,000 over 226 bytes is
+    // 5,460.176…, cut at two places 5460.17 (it was half up, 5460.18)
     for field in ["avgFeeRate", "minFeeRate", "maxFeeRate"] {
         assert_eq!(
-            json[field], "5460.18",
+            json[field], "5460.17",
             "{field} must use serialized_size_in_block"
         );
     }

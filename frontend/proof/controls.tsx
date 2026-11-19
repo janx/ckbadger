@@ -14,6 +14,7 @@ import { StrictMode, useState, type CSSProperties, type ReactNode } from 'react'
 import ReactDOM from 'react-dom/client';
 import { BlockLink } from '@/components/ui/block-link';
 import { CopyButton } from '@/components/ui/copy-button';
+import { DetailTierContext } from '@/components/ui/detail-tier';
 import { ExternalLink } from '@/components/ui/external-link';
 import { FilterChips, type FilterValue } from '@/components/ui/filter-chips';
 import { FoldToggle } from '@/components/ui/fold-toggle';
@@ -379,8 +380,10 @@ function CopyAndHelp() {
 }
 
 /**
- * A section of the evidence tier a reader opens (lane cd-fixes-controls, the lead's ruling on
- * review-fix-tests SHOULD-4): the one place a `<details>` is written. Shut, and drawn open.
+ * A disclosure a reader opens (lane cd-fixes-controls, the lead's ruling on review-fix-tests
+ * SHOULD-4): the one place a `<details>` is written. The section form in tier 2, where "Raw data"
+ * stands, shut and drawn open; the inner form in tier 1 and in tier 2 (the disclosure sweep): its
+ * words 13 px in both, the reading ink in tier 1 and the quiet ink in tier 2.
  */
 function Disclosures() {
   const raw = JSON.stringify(
@@ -390,21 +393,65 @@ function Disclosures() {
   );
   return (
     <Item name="disclosure">
-      <SectionDisclosure summary="Raw data">
-        <pre className="whitespace-pre">{raw}</pre>
+      <DetailTierContext.Provider value={2}>
+        <SectionDisclosure summary="Raw data">
+          <pre className="whitespace-pre">{raw}</pre>
+        </SectionDisclosure>
+        <Note>
+          the section form, shut: the browser’s own disclosure under the tier’s rule, its words 13
+          px in the tier’s ink (tier 2: quiet, the reading ink under the pointer); a click or Enter
+          on its words opens it
+        </Note>
+        <SectionDisclosure summary="Raw data" open>
+          <div className="overflow-x-auto">
+            <pre className="whitespace-pre">{raw}</pre>
+          </div>
+        </SectionDisclosure>
+        <Note>
+          drawn open where its page opens it (the block page’s raw data): its content 13 px, 16 px
+          under its words; the raw data scrolls sideways where it is wider than its line
+        </Note>
+        <p className="text-body text-text max-w-measure">
+          A cell’s data, as a protocol reads it: 2 fields.
+        </p>
+        <SectionDisclosure form="inner" summary="Decoded fields">
+          <pre className="text-small text-text whitespace-pre-wrap break-all">{raw}</pre>
+        </SectionDisclosure>
+        <Note>
+          the inner form in tier 2: no rule of its own, inside a section; its words as the section
+          form’s (13 px, quiet), its content its caller’s, 8 px under them
+        </Note>
+      </DetailTierContext.Provider>
+      <SectionDisclosure form="inner" summary="Media dependencies · 2 sources">
+        <ul className="text-meta space-y-3">
+          <li>ipfs · on chain · content</li>
+          <li>btcfs · Bitcoin · content</li>
+        </ul>
       </SectionDisclosure>
       <Note>
-        shut: the browser’s own disclosure under the tier’s rule, its words quiet at 13 px, the
-        reading ink under the pointer; a click or Enter on its words opens it
+        the inner form in tier 1: its words 13 px in the reading ink, bright under the pointer
       </Note>
-      <SectionDisclosure summary="Raw data" open>
-        <pre className="whitespace-pre">{raw}</pre>
-      </SectionDisclosure>
-      <Note>
-        drawn open where its page opens it (the block page’s raw data): its content 13 px under it,
-        scrolling sideways where it is wider than its line
-      </Note>
+      <HeldDisclosure />
     </Item>
+  );
+}
+
+/** A disclosure whose state its page holds (`open` + `onToggle`): the Cell graph's form. */
+function HeldDisclosure() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <SectionDisclosure form="inner" summary="Cell graph" open={open} onToggle={setOpen}>
+        <p className="text-small text-text">the graph, read only while this is open</p>
+      </SectionDisclosure>
+      <Note>
+        a state its page holds: the page is told when the reader opens it ({open ? 'open' : 'shut'}
+        now) and draws its own state; the page can fold it too{' '}
+        <button type="button" className="text-jade" onClick={() => setOpen(false)}>
+          fold
+        </button>
+      </Note>
+    </>
   );
 }
 

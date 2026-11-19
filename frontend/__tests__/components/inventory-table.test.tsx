@@ -36,7 +36,9 @@ const asset: Asset = {
   clusterName: null,
   ownedCapacity: '10000000001',
   ownedKnowledge: '6100000000',
-  hMultiplier: '1.6393442625',
+  // the route's figure, 10,000,000,001 ÷ 6,100,000,000 = 1.639344262… cut at two places (lane
+  // exactness, part B5: the fixture sent the ratio to ten places, which no route sends)
+  hMultiplier: '1.63',
   compositionTier: null,
   onchainRatio: null,
   onchainCount: null,
@@ -60,16 +62,27 @@ function expectWordHeads(table: HTMLElement) {
 }
 
 describe('Inventory rows', () => {
-  // Re-pinned on purpose (lane D4 follow-up, the house rule): the H-multiplier is cut at 2 dp, never
-  // rounded — 1.6393442625 reads ×1.63 (it read ×1.64, rounded half-up)
-  it('cuts a long H-multiplier to 2 dp on its one line and keeps it exact in the hover (L2-1)', () => {
+  // Re-pinned on purpose (lane exactness, part B5): the H-multiplier is the route's figure, cut at
+  // two places by the route (docs/API.md, part A2's S5), written as it is, "×" and its whole part
+  // grouped, in the row and its hover alike; the page cut it a second time from its ratio (lane D4
+  // follow-up: 1.6393442625 read ×1.63, the hover the ten places, a value no route sends)
+  it('writes the route’s H-multiplier on its one line and in the hover (L2-1)', () => {
     render(<InventoryRows assetType="token" rows={[asset]} />);
     const table = screen.getByRole('table', { name: 'Tokens' });
     const value = within(table).getByText('×1.63');
     expect(value.closest('td')).not.toHaveClass('!whitespace-normal');
     expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
-      'CKB held ÷ occupied ×1.6393442625'
+      'CKB held ÷ occupied ×1.63'
     );
+  });
+  it('refuses an H-multiplier that is not the route’s figure, cut at two places', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const hMultiplier of ['1.6393442625', '1.6', '2', '-1.00', '1,000.00'])
+      expect(() =>
+        render(<InventoryRows assetType="token" rows={[{ ...asset, hMultiplier }]} />)
+      ).toThrow(
+        `H-multiplier ${JSON.stringify(hMultiplier)} is not the route’s figure, cut at two places`
+      );
   });
   it('keeps every token digit in the row title and uses the canonical standard name there', () => {
     render(<InventoryRows assetType="token" rows={[asset]} />);
@@ -80,7 +93,8 @@ describe('Inventory rows', () => {
     // was the two-place "1.00"), its exact value in its own title.
     expect(row).toHaveAttribute(
       'title',
-      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.00%) · supply 1.000000000000000000000001 T · CKB held ÷ occupied ×1.6393442625'
+      // lane exactness, part B2: 61 of 100.00000001 CKB occupied is 60.9999993…%, 60.99% (half up 61.00%)
+      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (60.99%) · supply 1.000000000000000000000001 T · CKB held ÷ occupied ×1.63'
     );
     expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent(/^1$/);
     expect(table).not.toHaveTextContent('xUDT');
@@ -717,7 +731,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['what', 'body', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
       // the supply and the occupied CKB with its exact share, in a phone row's summary form
       // (readability R5; each cut figure has its exact value in its title)
-      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (60.99%)', null],
     ]);
     expect(row.querySelector('.truncate')).toBeNull();
   });
@@ -731,7 +745,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', 'Token', '100 CKB'],
       ['what', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
-      ['figures', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+      ['figures', 'supply 1 T · 61 CKB occupied (60.99%)', null],
     ]);
   });
 
@@ -748,7 +762,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', 'Wyltek Founding Members', '100 CKB'],
       ['what', 'Spore · 93 objects · 32 holders · 95 activities', 'Pure CKB'],
       // a phone row's summary form (R5: was "100.00000001")
-      ['figures', '93 minted · 61 CKB occupied (61.00%) · CKB held ÷ occupied ×1.63', null],
+      ['figures', '93 minted · 61 CKB occupied (60.99%) · CKB held ÷ occupied ×1.63', null],
     ]);
     expect(row.querySelector('[data-composition="pure_ckb"]')).not.toBeNull();
   });
@@ -777,7 +791,7 @@ describe('Inventory phone rows (boards L3, L4)', () => {
       ['identity', '.bit', '100 CKB'],
       ['what', '5 live · 9 ever registered · 2 holders', null],
       // a phone row's summary form (readability R5: was "100.00000001")
-      ['figures', '61 CKB occupied (61.00%)', null],
+      ['figures', '61 CKB occupied (60.99%)', null],
     ]);
   });
 });
@@ -818,7 +832,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
         assetType="token"
         rows={[
           asset,
-          { ...asset, id: '0x' + 'ef'.repeat(32), standard: 'sudt', hMultiplier: '15019.0912' },
+          { ...asset, id: '0x' + 'ef'.repeat(32), standard: 'sudt', hMultiplier: '15019.09' },
         ]}
       />
     );
@@ -826,7 +840,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     expect(lines(token)).toEqual([
       ['identity', 'head', 'Token', '100 CKB'],
       ['what', 'body', 'T · 2 holders · 4 transfers · CKB held ÷ occupied ×1.63', null],
-      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (61.00%)', null],
+      ['figures', 'quiet', 'supply 1 T · 61 CKB occupied (60.99%)', null],
     ]);
     expect(phoneLines(sudt)[1].left).toBe(
       'T · sUDT · 2 holders · 4 transfers · CKB held ÷ occupied ×15,019.09'
@@ -856,7 +870,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
       [
         'figures',
         'quiet',
-        '93 minted · 61 CKB occupied (61.00%) · CKB held ÷ occupied ×1.63',
+        '93 minted · 61 CKB occupied (60.99%) · CKB held ÷ occupied ×1.63',
         null,
       ],
     ]);
@@ -891,7 +905,7 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
     expect(lines(row)).toEqual([
       ['identity', 'head', '.bit', '100 CKB'],
       ['what', 'body', '5 live · 9 ever registered · 2 holders', null],
-      ['figures', 'quiet', '61 CKB occupied (61.00%)', null],
+      ['figures', 'quiet', '61 CKB occupied (60.99%)', null],
     ]);
     expect(dottedItems(row.querySelector('[data-line="what"]')!)).toEqual([
       '5 live',
@@ -929,14 +943,19 @@ describe('the inventory phone rows on the phone-rows board (lane D4)', () => {
 // Lane D4 follow-up (the coordinator's item 3): the inventory's H-multiplier, in the table's cell
 // and on the phone row, is cut at two decimals, never rounded: the API's 1.0059 reads ×1.00 (it read
 // ×1.01) and 15019.0999 reads ×15,019.09 (×15,019.10).
-describe('the inventory’s H-multiplier is cut, never rounded', () => {
+// Re-pinned on purpose (lane exactness, part B5): the cut is the route's (warmup.rs
+// `to_asset_response`, format_ratio_cut at two places; its test
+// cached_asset_h_multiplier_keeps_integer_precision), and the page writes the route's figure as it
+// is, its whole part grouped. These rows sent four places (1.0059, 15019.0999), which no route
+// sends, for the page to cut a second time; a value not at two places is refused (above).
+describe('the inventory writes the route’s H-multiplier, cut by the route, never rounded', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
   const rows = [
-    { ...asset, id: '0x' + 'a1'.repeat(32), hMultiplier: '1.0059' },
-    { ...asset, id: '0x' + 'a2'.repeat(32), hMultiplier: '15019.0999' },
+    { ...asset, id: '0x' + 'a1'.repeat(32), hMultiplier: '1.00' },
+    { ...asset, id: '0x' + 'a2'.repeat(32), hMultiplier: '15019.09' },
   ];
 
   it('in the table', () => {

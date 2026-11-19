@@ -15,10 +15,16 @@ import { ckbAddress, JOYID_CODE_HASH } from '@/__tests__/utils/ckb-address';
 import { sporeCellVersionsProducer } from '@/__tests__/msw/fixtures/item-producer';
 import type { ItemCellVersion } from '@/lib/api';
 
-const v = (over: Partial<ItemCellVersion>): ItemCellVersion => ({
-  ...sporeCellVersionsProducer.data[0],
-  ...over,
-});
+// a version as the route states it: its free part the capacity less the occupied part, unless the
+// test states one (lane exactness, part B5: the route sends freeCapacity beside the two)
+const v = (over: Partial<ItemCellVersion>): ItemCellVersion => {
+  const version = { ...sporeCellVersionsProducer.data[0], ...over };
+  return {
+    ...version,
+    freeCapacity:
+      over.freeCapacity ?? (BigInt(version.capacity) - BigInt(version.occupiedCapacity)).toString(),
+  };
+};
 
 it('spells durations and lock phrases for prose', () => {
   expect(spelledDuration(30_000)).toBe('30\u00a0seconds');

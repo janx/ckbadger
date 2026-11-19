@@ -1,5 +1,4 @@
 'use client';
-import { sentField } from '@/lib/api-fields';
 import { transactionAtCellHref } from '@/lib/tx-cell-link';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
@@ -22,7 +21,7 @@ import type {
   ScriptHistoryMarkerApi,
   StackedAreaChartResponse,
 } from '@/lib/api';
-import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
+import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -45,6 +44,7 @@ import {
 import { unitNode, unitText } from '@/components/ui/units';
 import { useTightBelowSm } from '@/hooks/useTightBelowSm';
 import { charPx } from '@/lib/type-metrics';
+import { assertHeldSeries, heldPoint } from '@/lib/held-point';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -473,13 +473,22 @@ export function ScriptHistoryFigure({
   onActive: (index: number | null) => void;
 }) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  for (const key of ['used', 'unused'])
-    if (!chart.series.some((series) => series.key === key))
-      throw new Error(`${family.name} capacity history has no ${key} series`);
-  const data = chart.data.map((point) => ({
-    label: point.date,
-    values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
-  }));
+  // the held bands by the routes' names, an older API's used and unused refused by name (lane exactness, part B, the third read's S4)
+  assertHeldSeries(chart.series, `${family.name} capacity history`);
+  // each day's three figures, read once (the route states the whole beside its parts)
+  const helds = chart.data.map((point) =>
+    heldPoint(point.values, `${family.name} capacity history ${point.date}`)
+  );
+  const data = chart.data.map((point, i) => {
+    const held = helds[i];
+    return {
+      label: point.date,
+      values: {
+        occupiedCapacity: ckbDecimal(held.occupiedCapacity),
+        freeCapacity: ckbDecimal(held.freeCapacity),
+      },
+    };
+  });
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
   // The token and collection plots' name: the same stack (occupied, free above it) in the same
   // unit; the page's h1 says which script, and a script's name has no length bound (lane A5).
@@ -491,8 +500,8 @@ export function ScriptHistoryFigure({
     kind: 'stacked',
     bareTicks: true,
     series: [
-      { key: 'used', label: 'Occupied', color: DATA_COLOR },
-      { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
+      { key: 'occupiedCapacity', label: 'Occupied', color: DATA_COLOR },
+      { key: 'freeCapacity', label: 'Free', color: HELD_CAPACITY_COLOR },
     ],
   };
   const occupied: ChartValueAxisInput = {
@@ -501,7 +510,7 @@ export function ScriptHistoryFigure({
     unit: 'CKB',
     kind: 'area',
     bareTicks: true,
-    series: [{ key: 'used', label: 'Occupied', color: DATA_COLOR }],
+    series: [{ key: 'occupiedCapacity', label: 'Occupied', color: DATA_COLOR }],
   };
   // U-19: the round values sit in one gutter left of both plots, in the dim ink (inside, a spike
   // crossed them), bare, each plot's name saying CKB once; the upgrade lines and labels start
@@ -516,12 +525,9 @@ export function ScriptHistoryFigure({
   } as const;
   // R7: the sentence over the plots, from the series' own points: CKB held is each day's
   // `capacity`, which the route states beside its parts (the page sums nothing)
-  const days = chart.data.map((point) => ({
+  const days = chart.data.map((point, i) => ({
     date: point.date,
-    held: exactUnsignedInteger(
-      sentField(point.values.capacity, `${family.name} ${point.date}`, 'capacity'),
-      `${family.name} ${point.date}: capacity`
-    ),
+    held: BigInt(helds[i].capacity),
   }));
   return (
     <div className="min-w-0">
@@ -583,15 +589,11 @@ export function ScriptHistoryReading({
 }) {
   const index = active ?? chart.data.length - 1;
   const point = chart.data[index];
-  const used = point ? BigInt(point.values.used) : null;
-  const unused = point ? BigInt(point.values.unused) : null;
+  const parts = point ? heldPoint(point.values, `history ${point.date}`) : null;
+  const used = parts ? BigInt(parts.occupiedCapacity) : null;
+  const unused = parts ? BigInt(parts.freeCapacity) : null;
   // the whole the day's cells hold, as the route states it (the page sums nothing)
-  const held = point
-    ? exactUnsignedInteger(
-        sentField(point.values.capacity, `history ${point.date}`, 'capacity'),
-        `history ${point.date}: capacity`
-      )
-    : null;
+  const held = parts ? BigInt(parts.capacity) : null;
   const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
   const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
   // whether some day of the range has a code fact (hover never moves layout: ReadoutRow)

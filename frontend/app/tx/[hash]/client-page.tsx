@@ -12,6 +12,7 @@ import {
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { SectionDisclosure } from '@/components/ui/section-disclosure';
 import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { HeadId } from '@/components/ui/head-id';
 import { SealedHead } from '@/components/ui/page-seal';
@@ -31,7 +32,7 @@ import {
 } from '@/components/activity-event-row';
 import { CkbAmount, TokenAmount } from '@/components/ui/ckb-amount';
 import {
-  daoStepsAttributed,
+  daoStepOwners,
   flowKey,
   onlyFeeMoved,
   txFlows,
@@ -80,7 +81,6 @@ import {
   type CellDep,
   type ItemDelta,
   type ParticipantInfo,
-  TAG_DAO,
 } from '@/lib/api';
 import { BlockLink } from '@/components/ui/block-link';
 import { isBadRequestApiError } from '@/lib/api-errors';
@@ -292,87 +292,66 @@ function listWords(words: readonly string[]): string {
  * would restate the fee alone, are not drawn (`onlyFeeMoved`).
  */
 /**
- * A transaction's Nervos DAO steps in the lede, from the activity's own kind (lane P1 follow-up;
- * review chain-b tx-dao-deposit: the page drew a deposit as a payment): each kind of step once, with
- * its amount where the transaction takes one such step and its count where it takes several (the
- * API states no total, and the page sums none), and the parties the activity tags DAO, whose cells
- * hold the step. Compensation is the DAO's word, never interest.
+ * A transaction's Nervos DAO steps in the lede (lane P1 follow-up; review chain-b tx-dao-deposit:
+ * the page drew a deposit as a payment), each said with its owner, the party whose cell took it
+ * (lane exactness, part B6: each DAO action names its owner, `daoStepOwners`; where several
+ * parties took steps of more than one kind it said each step without its party and named the
+ * parties after them): for each
+ * owner, each kind of step once, with its amount where the owner takes one such step and its count
+ * where it takes several (the API states no total, and the page sums none). Compensation is the
+ * DAO's word, never interest.
  */
 function DaoSentences({ activity }: { activity: GlobalActivity }) {
-  const steps = activity.protocolActions.filter((pa) => pa.protocol === 'dao');
+  const steps = daoStepOwners(activity);
   if (steps.length === 0) return null;
-  const holders = activity.participants.filter((p) => (p.tags & TAG_DAO) !== 0);
-  if (holders.length === 0)
-    throw new Error(`${activity.txHash}: a Nervos DAO step and no party the activity tags DAO`);
-  // whose each step is, where the activity says it (lane P1, third round; review p-logic-chain
-  // SHOULD 2): one party tagged DAO, or steps of one kind. Otherwise each step is said without a
-  // party, and the parties whose cells took them are named once after them.
-  const attributed = daoStepsAttributed(activity);
-  const who = <Parties parties={holders} />;
   const amount = (shannons: bigint) => (
     <CkbAmount form="summary" shannons={shannons} signed={false} tone="plain" />
   );
-  const kinds = [...new Set(steps.map((pa) => pa.action))];
+  // each owner's steps by kind, in the order the transaction states them
+  const groups: { owner: ParticipantInfo; kind: string; of: GlobalActivity['protocolActions'] }[] =
+    [];
+  for (const { action, owner } of steps) {
+    const group = groups.find((g) => g.owner === owner && g.kind === action.action);
+    if (group) group.of.push(action);
+    else groups.push({ owner, kind: action.action, of: [action] });
+  }
   return (
     <>
-      {kinds.map((kind) => {
-        const of = steps.filter((pa) => pa.action === kind);
+      {groups.map(({ owner, kind, of }, i) => {
+        const who = <Parties parties={[owner]} />;
         const one = of.length === 1 ? protocolActionMeta(of[0]) : null;
         const count = of.length.toLocaleString('en-US');
+        const key = `${i}:${kind}`;
         switch (kind) {
           case 'deposit':
             return one ? (
-              <Fragment key={kind}>
-                {amount(one.capacity!)} went into a Nervos DAO deposit
-                {attributed && <> held by {who}</>}.{' '}
+              <Fragment key={key}>
+                {amount(one.capacity!)} went into a Nervos DAO deposit held by {who}.{' '}
               </Fragment>
             ) : (
-              <Fragment key={kind}>
-                {count} Nervos DAO deposits were made{attributed && <>, held by {who}</>}.{' '}
+              <Fragment key={key}>
+                {count} Nervos DAO deposits were made, held by {who}.{' '}
               </Fragment>
             );
           case 'withdraw_request':
-            if (!attributed)
-              return one ? (
-                <Fragment key={kind}>
-                  A Nervos DAO deposit of {amount(one.capacity!)}, made at{' '}
-                  <BlockLink look="inline" number={one.depositBlock!} />, was asked to be
-                  withdrawn.{' '}
-                </Fragment>
-              ) : (
-                <Fragment key={kind}>
-                  {count} Nervos DAO deposits were asked to be withdrawn.{' '}
-                </Fragment>
-              );
             return one ? (
-              <Fragment key={kind}>
+              <Fragment key={key}>
                 {who} asked to withdraw a Nervos DAO deposit of {amount(one.capacity!)}, made at{' '}
                 <BlockLink look="inline" number={one.depositBlock!} />.{' '}
               </Fragment>
             ) : (
-              <Fragment key={kind}>
+              <Fragment key={key}>
                 {who} asked to withdraw {count} Nervos DAO deposits.{' '}
               </Fragment>
             );
           case 'withdraw_complete':
-            if (!attributed)
-              return one ? (
-                <Fragment key={kind}>
-                  {amount(one.capacity!)} came out of the Nervos DAO, with{' '}
-                  {amount(one.compensation!)} of compensation.{' '}
-                </Fragment>
-              ) : (
-                <Fragment key={kind}>
-                  {count} Nervos DAO deposits were withdrawn, each with its compensation.{' '}
-                </Fragment>
-              );
             return one ? (
-              <Fragment key={kind}>
+              <Fragment key={key}>
                 {who} withdrew {amount(one.capacity!)} from the Nervos DAO, with{' '}
                 {amount(one.compensation!)} of compensation.{' '}
               </Fragment>
             ) : (
-              <Fragment key={kind}>
+              <Fragment key={key}>
                 {who} withdrew {count} Nervos DAO deposits, each with its compensation.{' '}
               </Fragment>
             );
@@ -380,7 +359,6 @@ function DaoSentences({ activity }: { activity: GlobalActivity }) {
             throw new Error(`${activity.txHash}: a Nervos DAO step "${kind}" has no sentence`);
         }
       })}
-      {!attributed && <>The parties whose cells took these steps: {who}. </>}
     </>
   );
 }
@@ -1462,15 +1440,15 @@ export default function TransactionDetailPage() {
           Markdown
         </Link>
       </p>
-      <details>
-        <summary className="text-text-dim cursor-pointer">Cells</summary>
-        <pre className="mt-3 whitespace-pre-wrap break-all">
+      {/* the library's disclosures (lane cd-fixes-controls, the disclosure sweep): the inner form
+          inside the raw section; the Cell graph's state its page's */}
+      <SectionDisclosure form="inner" summary="Cells">
+        <pre className="whitespace-pre-wrap break-all">
           {JSON.stringify({ inputs: tx.inputs, outputs: tx.outputs }, null, 2)}
         </pre>
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">Scripts</summary>
-        <div className="mt-3 space-y-3">
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary="Scripts">
+        <div className="space-y-3">
           {groups.map((g) => (
             <div key={groupKey(g)}>
               <Link look="inline" href={groupHref(g, lookup)}>
@@ -1482,12 +1460,12 @@ export default function TransactionDetailPage() {
             </div>
           ))}
         </div>
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">
-          Witness bytes · {tx.witnessesAvailable ? tx.witnesses.length : 'unavailable'}
-        </summary>
-        <div className="mt-3 space-y-2">
+      </SectionDisclosure>
+      <SectionDisclosure
+        form="inner"
+        summary={<>Witness bytes · {tx.witnessesAvailable ? tx.witnesses.length : 'unavailable'}</>}
+      >
+        <div className="space-y-2">
           {tx.witnesses.map((w, i) => (
             <p key={i} className="break-all">
               <span className="text-text-dim">#{i} </span>
@@ -1495,21 +1473,17 @@ export default function TransactionDetailPage() {
             </p>
           ))}
         </div>
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">
-          Header deps · {headerDeps.length}
-        </summary>
-        <div className="mt-3 space-y-2">
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary={<>Header deps · {headerDeps.length}</>}>
+        <div className="space-y-2">
           {headerDeps.map((h) => (
             <p key={h.blockHash} className="break-all">
               {h.blockHash}
             </p>
           ))}
         </div>
-      </details>
-      <details open={graphOpen} onToggle={(e) => setGraphOpen(e.currentTarget.open)}>
-        <summary className="text-text-dim cursor-pointer">Cell graph</summary>
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary="Cell graph" open={graphOpen} onToggle={setGraphOpen}>
         {isProvisional ? (
           <PendingValue />
         ) : graphError ? (
@@ -1535,11 +1509,10 @@ export default function TransactionDetailPage() {
         ) : (
           <p className="text-text-dim py-4">Loading graph…</p>
         )}
-      </details>
-      <details>
-        <summary className="text-text-dim cursor-pointer">JSON</summary>
-        <pre className="mt-3 whitespace-pre-wrap break-all">{JSON.stringify(tx, null, 2)}</pre>
-      </details>
+      </SectionDisclosure>
+      <SectionDisclosure form="inner" summary="JSON">
+        <pre className="whitespace-pre-wrap break-all">{JSON.stringify(tx, null, 2)}</pre>
+      </SectionDisclosure>
     </div>
   );
 
@@ -2053,12 +2026,11 @@ export default function TransactionDetailPage() {
           </div>
         </dl>
 
-        <details open={graphOpen} className="border-row-rule border-t pt-4">
-          <summary className="text-text-dim hover:text-text text-small cursor-pointer">
-            Raw data
-          </summary>
-          <div className="text-small mt-4 min-w-0 overflow-x-auto">{raw}</div>
-        </details>
+        {/* the library's section disclosure, drawn open by the Cell graph's state as before (a
+            `?tab=graph` link opens both); its raw content scrolls sideways itself */}
+        <SectionDisclosure summary="Raw data" open={graphOpen}>
+          <div className="overflow-x-auto">{raw}</div>
+        </SectionDisclosure>
       </DetailTier2>
     </div>
   );

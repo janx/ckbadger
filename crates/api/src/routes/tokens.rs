@@ -10,7 +10,7 @@ use std::sync::Arc;
 use ckbadger_common::TokenBalance;
 use ckbadger_store::CkbadgerStore;
 
-use super::statistics::{StackedAreaChartResponse, StackedAreaSeries};
+use super::statistics::StackedAreaChartResponse;
 use crate::response::{
     default_limit, hash_type_to_str, ok, ApiError, ApiResult, ApiRouteError,
     CursorPaginatedResponse,
@@ -1146,20 +1146,7 @@ async fn get_token_capacity_chart(
 
     ok(StackedAreaChartResponse {
         data,
-        series: vec![
-            StackedAreaSeries {
-                id: None,
-                key: "used".to_string(),
-                label: "Used".to_string(),
-                color: "#f59e0b".to_string(),
-            },
-            StackedAreaSeries {
-                id: None,
-                key: "unused".to_string(),
-                label: "Unused".to_string(),
-                color: "#00c389".to_string(),
-            },
-        ],
+        series: super::asset_calendar::held_series(),
         title: format!("{title} Capacity History"),
         bands: None,
     })

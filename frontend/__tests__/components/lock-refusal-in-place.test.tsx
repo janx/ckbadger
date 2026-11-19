@@ -161,6 +161,7 @@ describe('a refused lock fails its part, in its place', () => {
         nextCursor: 'more',
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
     // the distribution is read as the API gives it (lane cd-fixes-controls, SHOULD-3): it was
@@ -202,6 +203,7 @@ describe('a refused lock fails its part, in its place', () => {
         nextCursor: null,
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
     // and the distribution as the route reads it at that tip (lane cd-fixes-controls,
@@ -247,6 +249,7 @@ describe('a refused lock fails its part, in its place', () => {
         total: 1,
         hasMore: false,
         nextCursor: null,
+        firstRank: 1,
       })
     );
     render(

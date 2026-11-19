@@ -789,14 +789,17 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     // R12: inside each box only the name and the share (1 + 3 + 3 CKB; 1 of 3 paid out).
     const label = (key: string) => svg.querySelector(`[data-label="${key}"]`)!.textContent;
     expect(label('total')).toBe('secondary issuance since genesis 7 CKB');
-    expect(label('miners')).toBe('miners 14.29%');
-    expect(label('compensation')).toBe('depositors 42.86%');
-    expect(label('burnt')).toBe('burnt 42.86% · no cell can ever claim it');
+    // lane exactness, part B2: of 7 CKB, the miners' 1 is 14.285…%, 14.28% (half up 14.28%), the depositors' and the
+    // burnt 3 each 42.857…%, 42.85% (half up 42.85%); of the depositors' 3, 2 unclaimed 66.66%
+    // (half up 66.66%), 1 claimed 33.33%
+    expect(label('miners')).toBe('miners 14.28%');
+    expect(label('compensation')).toBe('depositors 42.85%');
+    expect(label('burnt')).toBe('burnt 42.85% · no cell can ever claim it');
     // CH-14 (re-pinned): the depositors' two parts take the one percentage, two decimals (was one)
     // re-pinned for lane exactness, part A (A7): the compensation not yet claimed is "unclaimed", as the Supply
     // and secondary-issuance charts call it, and the rest "claimed" (were "paid out", "still owed")
     expect(label('paid')).toBe('claimed 33.33%');
-    expect(label('owed')).toBe('unclaimed 66.67%');
+    expect(label('owed')).toBe('unclaimed 66.66%');
     // No exact amount and no word under the boxes.
     expect(svg.textContent).not.toMatch(/\.\d{8}/);
     expect(svg.querySelector('[data-placeholder]')).toBeNull();
@@ -920,7 +923,7 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     // Re-pinned with PB-25 (UI review 2026-11-14): a block wide enough for its share writes it
     // inside at phone width too (the whole, depositors, burnt, still owed here); the narrow ones
     // stay blank and the list below names every part.
-    // (miners' 50 px cannot hold "14.29%" at 13 px and 12 px padding, 72). CH-14 (re-pinned, a fit
+    // (miners' 50 px cannot hold "14.28%" at 13 px and 12 px padding, 72). CH-14 (re-pinned, a fit
     // lost on purpose and said in the hand-back): paid out is 49 px, and its share at two decimals,
     // "33.33%" at 11 px (7 px a glyph) and 6 px padding, needs 54 (one decimal, "33.3%", needed 47),
     // so at 358 it stays blank like miners and the list below names it with its share
@@ -933,13 +936,13 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     ).toEqual(['total', 'burnt']);
     // re-pinned for lane exactness, part A (A7): each under-line one glyph shorter, so it stands where the old one
     // stood: at 12 px a glyph is 7.2 px, "claimed 33.33%" 9 + 6 + 14 × 7.2 = 115.8 px (was
-    // 123.0), "unclaimed 66.67%" 9 + 6 + 16 × 7.2 = 130.2 px (was 137.4), each from its box's
+    // 123.0), "unclaimed 66.66%" 9 + 6 + 16 × 7.2 = 130.2 px (was 137.4), each from its box's
     // left edge where it runs on to the drawing's end, else ending at its box's right edge
     expect([...svg.querySelectorAll('[data-under-label]')].map((g) => g.textContent)).toEqual([
-      'miners 14.29%',
-      'depositors 42.86%',
+      'miners 14.28%',
+      'depositors 42.85%',
       'claimed 33.33%',
-      'unclaimed 66.67%',
+      'unclaimed 66.66%',
     ]);
     expect(within(issuance()).queryByRole('list', { name: 'Secondary issuance parts' })).toBeNull();
     expect(
@@ -994,20 +997,20 @@ describe('DaoBoard secondary issuance on a phone (PB-25)', () => {
       name: /Secondary issuance since genesis, split three ways/,
     });
     const label = (key: string) => svg.querySelector(`[data-label="${key}"]`)?.textContent ?? null;
-    // 7 CKB in all: miners 14.29 % (50 px, too narrow for "14.29%"), depositors and burnt
-    // 42.86 % each (151 px), paid out and still owed a third and two thirds of the depositors'.
-    // Re-pinned (lane P4; depositors and still owed wrote their shares alone, '42.86%' and
-    // '66.67%'): a box writes its name and share or nothing, and a part that cannot hold both is
+    // 7 CKB in all: miners 14.28 % (50 px, too narrow for "14.28%"), depositors and burnt
+    // 42.85 % each (151 px), paid out and still owed a third and two thirds of the depositors'.
+    // Re-pinned (lane P4; depositors and still owed wrote their shares alone, '42.85%' and
+    // '66.66%'): a box writes its name and share or nothing, and a part that cannot hold both is
     // named under the icicle
     expect(label('total')).toBe('secondary issuance since genesis 7 CKB');
     expect(label('miners')).toBeNull();
     expect(label('compensation')).toBeNull();
-    expect(label('burnt')).toBe('burnt 42.86%');
+    expect(label('burnt')).toBe('burnt 42.85%');
     expect(label('owed')).toBeNull();
     const under = (key: string) =>
       svg.querySelector(`[data-under-label="${key}"]`)?.textContent ?? null;
-    expect(under('compensation')).toBe('depositors 42.86%');
-    expect(under('owed')).toBe('unclaimed 66.67%');
+    expect(under('compensation')).toBe('depositors 42.85%');
+    expect(under('owed')).toBe('unclaimed 66.66%');
   });
 });
 
@@ -2100,8 +2103,9 @@ describe('DaoBoard: what the page says first (readability P4)', () => {
       ['miners', 'miners 10.32%'],
       // re-pinned for lane exactness, part A (A7): claimed / unclaimed (were "paid out", "still
       // owed"); each a glyph shorter, still too wide for its box (at 12 px with 6 px of padding,
-      // "claimed 47.64%" needs 112.8 px and "unclaimed 52.36%" 127.2 px), so still named under it
-      ['paid', 'claimed 47.64%'],
+      // "claimed 47.63%" needs 112.8 px and "unclaimed 52.36%" 127.2 px), so still named under it
+      // lane exactness, part B2: claimed 76,728,910.321 of 161,059,845.58402661 CKB is 47.6399…%, 47.63% (half up 47.64%)
+      ['paid', 'claimed 47.63%'],
       ['owed', 'unclaimed 52.36%'],
     ]);
     for (const g of under) {

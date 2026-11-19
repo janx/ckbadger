@@ -146,6 +146,7 @@ describe('Token board (F2 objects)', () => {
       total: 0,
       totalSupply: '0',
       anchor: null,
+      firstRank: 1,
     });
     vi.mocked(api.getTokenDistribution).mockResolvedValue({
       holdersCount: 0,

@@ -116,15 +116,16 @@ describe('Address v3 components', () => {
       // whole capacity), "occupied" (the bytes of its other cells) and "free" (the rest of those);
       // none is "spendable", and a DAO part is drawn where it holds DAO cells
       expect(bar).toHaveAccessibleName(
-        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.84%)'
+        // lane exactness, part B2: free 28,256.66879443 of 319,742.66879443 CKB is 8.8373…%, 8.83% (half up 8.83%)
+        'Balance partition: occupied 291,486.00000000 CKB (91.16%), free 28,256.66879443 CKB (8.83%)'
       );
       expect(bar).toHaveClass('h-[18px]');
       const parts = [...bar.querySelectorAll('[data-part]')];
       expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
-      // re-pinned (lane P1, third round): "free 8.84%" (10 glyphs, 72 px and 16 of padding) fits
-      // its 8.84 % of the 1,246 px bar (110 px), where "spendable 8.84%" (124 px) did not
-      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.84%']);
-      expect(parts[1]).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
+      // re-pinned (lane P1, third round): "free 8.83%" (10 glyphs, 72 px and 16 of padding) fits
+      // its 8.84 % of the 1,246 px bar (110 px), where "spendable 8.83%" (124 px) did not
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16%', 'free 8.83%']);
+      expect(parts[1]).toHaveAttribute('title', 'free 8.83% · 28,256.66879443 CKB');
       // the exact parts in their exact form (R5, re-pinned on purpose: was padded to 8 decimals);
       // re-pinned with readability R4 (lane B7): labelled facts, each named as its part of the bar
       // (was one line joined by "·")
@@ -156,7 +157,7 @@ describe('Address v3 components', () => {
         .querySelector('[data-part="free"]')!;
       expect(free).toHaveTextContent(/^$/);
       // re-pinned on purpose (lane P1, third round): the part is "free" (it was "spendable")
-      expect(free).toHaveAttribute('title', 'free 8.84% · 28,256.66879443 CKB');
+      expect(free).toHaveAttribute('title', 'free 8.83% · 28,256.66879443 CKB');
     });
 
     it('adds the DAO part only when the address has CKB in the Nervos DAO', () => {

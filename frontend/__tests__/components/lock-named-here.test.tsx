@@ -123,6 +123,7 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
         nextCursor: null,
         totalSupply: '300',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
@@ -190,6 +191,7 @@ describe('a "Lock" column reads the lock off the holder’s address, and is neve
         total: 3,
         hasMore: false,
         nextCursor: null,
+        firstRank: 1,
       })
     );
     render(<CollectionHolders assetClass="objects" load={load} queryKey="not-indexed" />);
@@ -233,6 +235,7 @@ describe('a place that may name no lock leaves the part out', () => {
         nextCursor: null,
         totalSupply: '100',
         anchor: null,
+        firstRank: 1,
       })
     );
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));

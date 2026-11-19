@@ -129,6 +129,7 @@ describe('TokenDetailPage', () => {
       total: 0,
       totalSupply: '0',
       anchor: null,
+      firstRank: 1,
     });
     vi.mocked(api.getTokenDistribution).mockResolvedValue({
       holdersCount: 0,
@@ -546,6 +547,8 @@ describe('TokenDetailPage', () => {
         total: 21,
         totalSupply: '21',
         anchor: null,
+        // page two's first row is the 21st (lane exactness, part B5: the route ranks the page)
+        firstRank: p?.cursor ? 21 : 1,
         hasMore: !p?.cursor,
         nextCursor: p?.cursor ? null : 'page2',
       })

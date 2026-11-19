@@ -380,6 +380,7 @@ export const tokenProducer = {
       blockHash: '0x0303030303030303030303030303030303030303030303030303030303030303',
       blockNumber: 3,
     },
+    firstRank: 1,
     data: [
       {
         address: null,
@@ -394,7 +395,6 @@ export const tokenProducer = {
     nextCursor: null,
     total: 1,
     totalSupply: '90',
-    firstRank: 1,
   }),
   token: {
     cellsCount: 1,

@@ -187,70 +187,6 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // is the library's one): recorded for the page lanes in these files, converted in one sweep
   // after their rounds merge. Each says whether it is the section disclosure as it stands or needs
   // a form the component lacks (an inner disclosure, no rule of its own; a state its page holds) ----
-  'app/tx/[hash]/client-page.tsx': {
-    lane: 'p-chain',
-    sites: { fold: 7 },
-    reason:
-      'the raw section’s Cells, Scripts, Witness bytes, Header deps and JSON, inner disclosures with no rule (a form the component lacks); its Cell graph, whose state the page holds (onToggle: a form it lacks); and the page’s own Raw data, the section disclosure as it stands',
-  },
-  'components/cell/code-cell-board.tsx': {
-    lane: 'p-chain',
-    sites: { fold: 1 },
-    reason:
-      'the code cell’s “Type ID lineage of these bytes”, an inner disclosure with no rule (a form the component lacks)',
-  },
-  'components/asset/asset-history.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason:
-      '“Every change to the supply (N)” under the history, under its own rule: the section disclosure as it stands',
-  },
-  'components/asset/collection-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 2 },
-    reason:
-      'the description and the issuer info as stored, inner disclosures of the evidence with no rule (a form the component lacks)',
-  },
-  'components/asset/genetics.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 2 },
-    reason:
-      'the DNA as hex and every gene one row each, inner disclosures with no rule (a form the component lacks)',
-  },
-  'components/asset/item-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason:
-      'a script of the item at 12 px, its summary in the reading ink: an inner disclosure (a form the component lacks)',
-  },
-  'components/asset/mnft-detail.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason: 'the raw issuer metadata at 12 px, an inner disclosure (a form the component lacks)',
-  },
-  'components/asset/object-media.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason: 'the media dependencies at 12 px, an inner disclosure (a form the component lacks)',
-  },
-  'components/asset/protocol-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 3 },
-    reason:
-      'the decoded fields, all the bytes as hex, and a reading’s bytes at 12 px: inner disclosures with no rule (a form the component lacks)',
-  },
-  'components/scripts/script-code-evidence.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason:
-      'the committed key hashes of a custody, an inner disclosure at the body step (a form the component lacks)',
-  },
-  'components/scripts/script-family-page.tsx': {
-    lane: 'p-assets',
-    sites: { fold: 1 },
-    reason:
-      '“Each reference in full”, an inner disclosure at the body step (a form the component lacks)',
-  },
   // ---- shell ----
   'components/crash-page.tsx': {
     lane: 'shell',
@@ -283,7 +219,18 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 // disclosure, and 21 came to light for the page lanes: the transaction page 7 and the code cell 1
 // for p-chain; the asset components 11 and the script pages 2 for p-assets. Detail-layout's "Raw
 // data" became SectionDisclosure, the one place a `<details>` is written)
-const TOLERATED_TOTAL = 22;
+// → 21 (the disclosure sweep: asset-history's supply changes are SectionDisclosure's section form)
+// → 19 (the description and the issuer info as stored are SectionDisclosure's inner form)
+// → 17 (the DNA as hex and every gene one row each are SectionDisclosure's inner form)
+// → 14 (the decoded fields, all the bytes as hex and a reading's bytes are SectionDisclosure's inner form)
+// → 13 (an item's lock and type scripts are SectionDisclosure's inner form)
+// → 12 (an m-NFT issuer's raw metadata is SectionDisclosure's inner form)
+// → 11 (an object's media dependencies are SectionDisclosure's inner form)
+// → 10 (a custody's committed key hashes are SectionDisclosure's inner form)
+// → 9 (a family's every reference in full is SectionDisclosure's inner form; the p-assets sites are all the library's, the p-chain ones wait for the exactness lane)
+// → 8 (the disclosure sweep, second part: the code cell's Type ID lineage is SectionDisclosure's inner form)
+// → 1 (the transaction page's raw evidence is SectionDisclosure's: Raw data the section form, Cells, Scripts, Witness bytes, Header deps and JSON the inner form, the Cell graph the inner form with its state held by its page; the crash page's reload is the list's last site)
+const TOLERATED_TOTAL = 1;
 
 /**
  * The sites kept by decision (lane c2-finish, item 5): parts of a figure, a fold or a preference

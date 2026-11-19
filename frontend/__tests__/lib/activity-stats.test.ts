@@ -127,7 +127,8 @@ describe('formatShare', () => {
     expect(formatShare(814, 1000)).toBe('81.40%');
     expect(formatShare(14, 10000)).toBe('0.14%');
     expect(formatShare(2, 100000)).toBe('<0.01%');
-    expect(formatShare(999_999, 1_000_000)).toBe('>99.99%');
+    // re-pinned for lane exactness, part B2 (one percentage, cut): 999,999 of 1,000,000 is 99.9999%, 99.99% (half up 100.00, bounded >99.99%)
+    expect(formatShare(999_999, 1_000_000)).toBe('99.99%');
     expect(formatShare(0, 10)).toBe('0.00%');
     expect(formatShare(10, 10)).toBe('100.00%');
   });

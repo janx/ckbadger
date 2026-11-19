@@ -216,7 +216,6 @@ pub struct DaoStatisticsResponse {
     pub total_deposited: String,
     pub total_deposited_ckb: String,
     pub total_depositors: i32,
-    pub active_deposits: i32,
     pub deposit_cells_count: i32,
     pub withdrawal_request_cells_count: i32,
     /// The live DAO cells, deposits and withdrawal requests (lane exactness, part A, A5 ii; the page summed them).
@@ -691,7 +690,8 @@ fn dao_latest_to_response(
     let live_cells_count =
         i64::from(latest.deposit_cells_count) + i64::from(latest.withdrawal_request_cells_count);
     // the singleton's legacy `active_deposits` counts the same cells under an untrue name (a
-    // withdrawal request is no active deposit): it is their sum, or the row is wrong (lane exactness, part A2, S2)
+    // withdrawal request is no active deposit): it is their sum, or the row is wrong (lane exactness, part A2, S2);
+    // the route no longer sends it (lane exactness, part B5)
     anyhow::ensure!(
         i64::from(latest.active_deposits) == live_cells_count,
         "dao_latest_stats at block {block}: active_deposits {} is not {} deposits + {} withdrawal requests",
@@ -726,7 +726,6 @@ fn dao_latest_to_response(
         total_deposited: total_deposited.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited),
         total_depositors: latest.total_depositors,
-        active_deposits: latest.active_deposits,
         deposit_cells_count: latest.deposit_cells_count,
         withdrawal_request_cells_count: latest.withdrawal_request_cells_count,
         live_cells_count,

@@ -91,15 +91,15 @@ beforeEach(() => {
     },
     title: 'Collection capacity',
     data: [
-      { date: '2026-10-21', values: { used: '0', unused: '0', capacity: '0' } },
+      { date: '2026-10-21', values: { occupiedCapacity: '0', freeCapacity: '0', capacity: '0' } },
       {
         date: '2026-10-22',
-        values: { used: '2892000000000', unused: '0', capacity: '2892000000000' },
+        values: { occupiedCapacity: '2892000000000', freeCapacity: '0', capacity: '2892000000000' },
       },
     ],
     series: [
-      { key: 'used', label: 'Used', color: '#f59e0b' },
-      { key: 'unused', label: 'Unused', color: '#00c389' },
+      { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+      { key: 'freeCapacity', label: 'Free', color: '#00c389' },
     ],
   });
   vi.spyOn(api, 'getCollectionGallery').mockResolvedValue(

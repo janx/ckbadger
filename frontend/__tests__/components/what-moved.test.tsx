@@ -40,7 +40,12 @@ function party(
   return {
     // B4 fix round: a real address on the lock the fixture names (JoyID, else the unnamed lock)
     address: seededAddress(tail, lockKind === null ? UNNAMED_LOCK : JOYID),
-    lockHash: `0x${tail.padStart(64, '0')}`,
+    // 32 bytes of hex, as the API sends a lock hash (lane exactness, part B6: a DAO action's owner
+    // is read as one): the tail's characters as hex, padded
+    lockHash: `0x${[...tail]
+      .map((c) => c.charCodeAt(0).toString(16).padStart(2, '0'))
+      .join('')
+      .padStart(64, '0')}`,
     lockHashPrefix: null,
     roles: [],
     lockKind,
@@ -326,7 +331,11 @@ describe('WhatMoved, a Nervos DAO step', () => {
           protocol: 'dao',
           protocolName: 'Nervos DAO',
           action: 'deposit',
-          metadata: { capacity: '12200000000000' },
+          // the deposit cell's owner (lane exactness, part B6)
+          metadata: {
+            capacity: '12200000000000',
+            lockHash: party('vwd5rt', '0').lockHash!.slice(2),
+          },
         },
       ],
     });
@@ -370,7 +379,10 @@ describe('WhatMoved, a Nervos DAO step', () => {
           protocol: 'dao',
           protocolName: 'Nervos DAO',
           action: 'deposit',
-          metadata: { capacity: '5000000000000' },
+          metadata: {
+            capacity: '5000000000000',
+            lockHash: party('vwd5rt', '0').lockHash!.slice(2),
+          },
         },
       ],
     });
@@ -385,6 +397,37 @@ describe('WhatMoved, a Nervos DAO step', () => {
     expect(flowed).not.toContainElement(step as HTMLElement);
     expect(frame.querySelector('[data-flow-end="miner"]')).toHaveTextContent(
       'the miner fee0.00001124 CKB'
+    );
+  });
+
+  // lane exactness, part B6 with the pages reader's NOTE 3: a withdrawal request whose fee another party paid leaves
+  // its owner's CKB unchanged, so the owner is no end of the CKB flow; its step is drawn for it all
+  // the same, its owner named (it drew only "the fee to the miner" and no step)
+  it('draws the step of an owner whose CKB did not change', () => {
+    stubChartWidth(1000);
+    const request: GlobalActivity = activityRead({
+      ...activity([party('ylvfrs', '-1124'), { ...party('vwd5rt', '0'), tags: TAG_DAO_BIT }]),
+      itemTypes: [ITEM_TYPE.dao],
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'withdraw_request',
+          metadata: {
+            capacity: '2605000000000',
+            depositBlock: '19695550',
+            lockHash: party('vwd5rt', '0').lockHash!.slice(2),
+          },
+        },
+      ],
+    });
+    render(<WhatMoved hash={HASH} activity={request} fee="1124" compensation={null} />);
+    const frame = screen.getByTestId('tx-what-moved');
+    const unmoved = frame.querySelector('[data-dao-steps-unmoved]') as HTMLElement;
+    expect(unmoved).not.toBeNull();
+    expect(unmoved).toHaveTextContent(seededAddress('vwd5rt', JOYID).slice(-6));
+    expect(unmoved.querySelector('[data-dao-step]')).toHaveTextContent(
+      /^Nervos DAO withdrawal request 26,050 CKB$/
     );
   });
 });

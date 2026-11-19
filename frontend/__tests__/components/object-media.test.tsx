@@ -250,6 +250,12 @@ it('shows the first reference and the action under the title, the rest in the di
   // they are in the disclosure that follows it, whole: URI and reading
   const details = screen.getByText(fullText('Media dependencies · 3 sources')).closest('details')!;
   expect(follows(box, details)).toBe(true);
+  // the library's inner disclosure in tier 1 (lane cd-fixes-controls, the disclosure sweep): its
+  // words at the control step, 13 px, and the reading ink (they were 12 px in the page's bright
+  // ink); the references keep their 12 px
+  const words = details.querySelector('summary')!;
+  expect(words).toHaveClass('text-small', 'text-text');
+  expect(within(details).getByText(later).closest('ul')!.parentElement).toHaveClass('text-meta');
   expect(within(details).getByText(later)).toBeInTheDocument();
   expect(
     within(details).getByRole('link', { name: 'Bitcoin tx ababababab…ababab · inscription i3 ↗' })

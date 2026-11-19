@@ -132,13 +132,17 @@ describe('ScriptByCodeHashPage', () => {
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue({
       title: 'Capacity History',
       series: [
-        { key: 'used', label: 'Used', color: '#f59e0b' },
-        { key: 'unused', label: 'Unused', color: '#00c389' },
+        { key: 'occupiedCapacity', label: 'Occupied', color: '#f59e0b' },
+        { key: 'freeCapacity', label: 'Free', color: '#00c389' },
       ],
       data: [
         {
           date: '2024-01-15',
-          values: { used: '1000000000', unused: '1500000000', capacity: '2500000000' },
+          values: {
+            occupiedCapacity: '1000000000',
+            freeCapacity: '1500000000',
+            capacity: '2500000000',
+          },
         },
       ],
     });
