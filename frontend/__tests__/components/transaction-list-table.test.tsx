@@ -10,7 +10,14 @@ import {
 } from '@/components/transaction/transaction-list-table';
 import { TRANSACTIONS_FORM_PX } from '@/app/transactions/page';
 import type { Transaction } from '@/lib/api';
-import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import {
+  atContainerWidth,
+  dottedItems,
+  phoneHeadPx,
+  phoneLines,
+  statedHeadPx,
+} from '@/__tests__/utils/phone-row';
+import { inkOf } from '@/__tests__/utils/ink-role';
 import {
   expectBefore,
   expectOneRowSeal,
@@ -19,7 +26,7 @@ import {
   sealHash,
 } from '@/__tests__/utils/seals';
 import { ROW_SEAL } from '@/components/ui/row-seal';
-import { ROW_LINE_PX } from '@/lib/type-metrics';
+import { PHONE_LINE_PX, ROW_LINE_PX } from '@/lib/type-metrics';
 import { drawSeal, type SealId } from '@/lib/seal/stones';
 import { cellFaults, faultLines } from '@/__tests__/utils/list-table-cells';
 import { CLOCK_BEHIND } from '@/lib/format-age';
@@ -1104,5 +1111,90 @@ describe('TransactionListTable phone row (board L2)', () => {
         '3 → 3\u00a0cells · 903 B · 1,704,957 cycles',
       ],
     ]);
+  });
+});
+
+// Lane D4 (the phone-rows board the owner passed at gate D0′, its transactions pane): one row,
+// three parts. Line 1 the hash in its tight form and the block with its age; line 2 what it did, in
+// the reading ink, wrapping between its parts; line 3 quiet, what every reader uses — the cells,
+// the value and the fee, each figure with its name (PA-09: the bare "0 CKB" lost its column's name).
+// Bytes and cycles leave the phone row: they are on the transaction's page, in the table from its
+// bound and in the cards from 560 px. A cellbase writes what it pays on line 2 and its reward,
+// named, on line 3.
+describe('the transactions phone row on the phone-rows board (lane D4)', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is three parts at 358 px: hash and block · age, what it did, then cells · value · fee', () => {
+    atContainerWidth(358);
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    const [call, sent, base] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(call).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['identity', 'head', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · \d+[smhdy] ago$/)],
+      ['what', 'body', 'Script call · .bit Time Index State · .bit Time Info', null],
+      ['figures', 'quiet', '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB', null],
+    ]);
+    const figures = call.querySelector('[data-line="figures"]')!;
+    expect(dottedItems(figures)).toEqual(['3 → 3\u00a0cells', 'value 0 CKB', 'fee 0.0003 CKB']);
+    // no value without its name: every amount on the row stands after its label, in the quiet ink
+    for (const row of [call, sent, base])
+      for (const amount of row.querySelectorAll('[data-ckb-amount]')) {
+        const item = amount.closest('[data-dotted-item]')!;
+        const label = item.querySelector('[data-role="figure-label"]');
+        expect(label, `${item.textContent}: an amount without its name`).not.toBeNull();
+        expect(inkOf(label!)).toMatch(/text-text-dim|quiet/);
+      }
+    // bytes and cycles are not on the phone row
+    expect(call.textContent).not.toMatch(/903 B|cycles/);
+    // line 2 is what it did, in the reading ink: the key on line 1 is the row's one bright thing
+    const what = call.querySelector('[data-line="what"]')!;
+    expect(what.querySelector('.text-text-bright')).toBeNull();
+    expect(phoneLines(sent)[2].left).toBe('3 → 3\u00a0cells · value 767.29 CKB · fee 0.0003 CKB');
+    expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0xc89d…2cd7', expect.stringMatching(/^#20,829,775 · /)],
+      ['what', 'Cellbase · pays #20,829,764', null],
+      // a cellbase pays no fee: its row names the reward it pays and nothing else
+      ['figures', '0 → 1\u00a0cell · reward 559.61 CKB', null],
+    ]);
+  });
+
+  it('keeps the bytes and the cycles in the cards from 560 px, where no table stands yet', () => {
+    atContainerWidth(608);
+    render(<TransactionListTable transactions={[scriptCall]} />);
+    const [call] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(call).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0x00de…cbbc', expect.stringMatching(/^#20,829,775 · /)],
+      ['what', 'Script call · .bit Time Index State · .bit Time Info', null],
+      [
+        'figures',
+        '3 → 3\u00a0cells · value 0 CKB · fee 0.0003 CKB · 903 B · 1,704,957 cycles',
+        null,
+      ],
+    ]);
+  });
+
+  // The board's head(): the 16 px stone (32.3 wide) and its gap, the tight hash at 14 px, the 12 px
+  // between the parts, and the block with its age at 13 px. At its widest under a year,
+  // "#99,999,999 · 364d ago" (22 characters, 171.6), it is 316.3 of a 360 px phone's 328 px line.
+  // An age of a year or more ("10y 364d ago", 202.8) makes it 347.5: it fits 390's 358 and drops
+  // the block and its age under the hash at 360, whole (the finding the lane hands back).
+  it('states its first line, 316.3 of 328 px, and draws its widest row under a year in it', async () => {
+    atContainerWidth(PHONE_LINE_PX[360]);
+    const T = Date.parse('2027-10-25T00:00:00.000Z');
+    vi.useFakeTimers({ toFake: ['Date'], now: T });
+    const widest: Transaction = {
+      ...scriptCall,
+      blockNumber: 99_999_999,
+      // 364 days and an hour before now: the widest age under a year
+      timestamp: new Date(T - (364 * 86_400 + 3_600) * 1000).toISOString(),
+    };
+    render(<TransactionListTable transactions={[widest]} />);
+    const [row] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(row)[0].right).toBe('#99,999,999 · 364d ago');
+    expect(statedHeadPx(row)).toBe(316.3);
+    expect(phoneHeadPx(row, 360)).toBe(statedHeadPx(row));
   });
 });

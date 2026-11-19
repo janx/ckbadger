@@ -44,6 +44,18 @@ export function statedHeadPx(row: Element): number {
   return Number(stated);
 }
 
+/**
+ * The items of the separated lists inside an element (`Dotted`), each as its words without the
+ * separator hung before it: what a line holds, item by item, as a reader meets them.
+ */
+export function dottedItems(el: Element): string[] {
+  return Array.from(el.querySelectorAll('[data-dotted-item]')).map((item) => {
+    const copy = item.cloneNode(true) as Element;
+    copy.querySelectorAll('[data-dotted-separator]').forEach((sep) => sep.remove());
+    return (copy.textContent ?? '').trim();
+  });
+}
+
 /** A phone row's lines as text: key, voice, and the left and right parts (see PhoneRow). */
 export function phoneLines(row: Element): PhoneLineText[] {
   return Array.from(row.querySelectorAll(':scope > [data-line]')).map((line) => ({
