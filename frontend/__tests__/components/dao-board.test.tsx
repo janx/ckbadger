@@ -1568,12 +1568,13 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     expect(cols[2].width).toBe('auto');
     expect(Number.parseFloat(table.style.minWidth)).toBe(sum);
     unmount();
-    // re-pinned (lane P4): the table changes form at its new sum, 611 (it was 686 / 685), and is
-    // a table at 640's 608 now
+    // re-pinned (lane P4): the table changes form at its new sum, 611 (it was 686 / 685); at
+    // 640's 608 it is still its phone rows, 3 px short
     for (const [width, form] of [
       [1232, 'table'],
       [611, 'table'],
       [610, 'rows'],
+      [608, 'rows'],
       [358, 'rows'],
     ] as const) {
       vi.unstubAllGlobals();
