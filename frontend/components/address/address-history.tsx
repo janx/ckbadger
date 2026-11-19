@@ -121,10 +121,17 @@ function addressRow(activity: Activity, address: Address) {
   const classification = classifyActivity(row);
   const primary = classification.primaryItemDelta;
   const itemClass = classification.displayType;
+  // on an address's own page what was done is received or sent: a token's, an identity's and a CKB
+  // row's headline says its direction for this address, so a feed folds received with received
+  // (the page-phase review's SHOULD 1); a CKB row that left this address's balance as it was keeps
+  // the headline every feed gives it
+  const ckb = BigInt(activity.ckbDelta);
   const words =
     (itemClass === 'token' || itemClass === 'identity') && primary
       ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${BigInt(primary.delta) > BigInt(0) ? 'received' : BigInt(primary.delta) < BigInt(0) ? 'sent' : 'changed'}`
-      : activityHeadline(row);
+      : itemClass === 'ckbTransfer' && !activity.isCellbase && ckb !== BigInt(0)
+        ? `CKB ${ckb > BigInt(0) ? 'received' : 'sent'}`
+        : activityHeadline(row);
   const headline =
     itemClass === 'object'
       ? objectHeadline(participant, activity.txHash)
