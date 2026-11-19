@@ -610,7 +610,9 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(json["totalDeposited"], "12300000000");
     assert_eq!(json["totalDepositors"], 7);
-    assert_eq!(json["activeDeposits"], 13);
+    // lane exactness, part B5: the live DAO cells are stated once, liveCellsCount, with their two parts; the legacy
+    // activeDeposits, the same count under an untrue name, is gone
+    assert!(json.get("activeDeposits").is_none(), "{json}");
     assert_eq!(json["depositCellsCount"], 9);
     assert_eq!(json["withdrawalRequestCellsCount"], 4);
     // lane exactness, part A, A5 (ii): the live DAO cells, deposits and withdrawal requests, the route's count

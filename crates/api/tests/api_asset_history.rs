@@ -133,6 +133,22 @@ async fn cell_versions_exact_same_block_order_capacity_and_current_owner() {
         json["data"][1]["anatomy"],
         serde_json::json!({"capacityBytes":8,"lockBytes":53,"typeBytes":53,"dataBytes":0})
     );
+    // lane exactness, part B5: each version states its free part beside the whole and the occupied, so a page
+    // subtracts nothing (the pages wrote capacity − occupied)
+    for version in json["data"].as_array().unwrap() {
+        let int = |key: &str| -> i128 {
+            version[key]
+                .as_str()
+                .unwrap_or_else(|| panic!("no {key}: {version}"))
+                .parse()
+                .unwrap()
+        };
+        assert_eq!(
+            int("freeCapacity"),
+            int("capacity") - int("occupiedCapacity"),
+            "{version}"
+        );
+    }
 }
 
 /// Lane B carry-over 4(b): a cell's data hash is the one a script references

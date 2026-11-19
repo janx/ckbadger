@@ -134,8 +134,18 @@ mod tests {
     #[test]
     fn mean_is_arithmetic_mean_of_each_exact_rate() {
         let rates = [FeeRate::new(1, 3).unwrap(), FeeRate::new(1, 2).unwrap()];
-        assert_eq!(mean_rate(&rates, 1000), Some("416.67".to_string()));
-        assert_eq!(median_rate(&rates, 1), Some("0.42".to_string()));
+        // re-pinned for lane exactness, part B4: cut at two places, never rounded: (1/3 + 1/2) / 2 × 1000 =
+        // 416.666…, 416.66 (was 416.67); the median of the two, 0.41666…, 0.41 (was 0.42)
+        assert_eq!(mean_rate(&rates, 1000), Some("416.66".to_string()));
+        assert_eq!(median_rate(&rates, 1), Some("0.41".to_string()));
+    }
+
+    /// lane exactness, part B4: a fee rate is cut at the two places a page shows, never rounded: 2 shannons over 3
+    /// bytes is 0.666…, "0.66" (half up "0.67"); 5 over 1,000 bytes a KB is "5.00".
+    #[test]
+    fn a_fee_rate_is_cut_at_two_places() {
+        assert_eq!(FeeRate::new(2, 3).unwrap().format(1), "0.66");
+        assert_eq!(FeeRate::new(5, 1_000).unwrap().format(1_000), "5.00");
     }
 
     #[test]
@@ -145,6 +155,7 @@ mod tests {
             FeeRate::new(20, 2).unwrap(),
             FeeRate::new(1, 3).unwrap(),
         ];
+        // (5 + 10 + 1/3) / 3 = 5.111…, 5.11 cut as it was half up
         assert_eq!(mean_rate(&rates, 1), Some("5.11".to_string()));
     }
 
