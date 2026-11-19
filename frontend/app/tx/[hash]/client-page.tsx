@@ -539,7 +539,8 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
         ?.filter((name) => name.outputIndex === witness.index)
         .map((name) => (
           <div key={name.identityId} data-testid="tx-witness-dotcell-records">
-            <p className="text-text-dim text-small max-w-measure mb-3">
+            {/* which name's records these are: a statement, the reading ink (R3; P1 follow-up) */}
+            <p className="text-text text-small max-w-measure mb-3">
               records payload of{' '}
               <Link look="inline" href={getIdentityItemDetailHref('dotcell', name.label)}>
                 {name.name}
@@ -632,7 +633,8 @@ function DepRow({
           {dep.resolvedCells.map((cell) => {
             const memberServes = names([...cell.scriptHashes, ...cell.outputLockScriptHashes]);
             return (
-              <span key={`${cell.txHash}:${cell.index}`} className="text-text-dim block">
+              // a member of the group, its cell and what it serves: values, the reading ink
+              <span key={`${cell.txHash}:${cell.index}`} className="text-text block">
                 <Link look="inline" href={`/cell/${cell.txHash}-${cell.index}`}>
                   ↳ <ShortId value={cell.txHash} kind="hash" size="row" />
                   <OutpointIndex index={cell.index} />
@@ -1041,7 +1043,7 @@ export default function TransactionDetailPage() {
         ? activityHeadline(activity)
         : 'Transaction';
   const summary = isProvisional ? (
-    <p className="text-text-dim text-small max-w-measure">
+    <p className="text-text text-small max-w-measure">
       Activity and canonical cell structure are available once this transaction is committed and
       indexed.
     </p>
@@ -1454,7 +1456,8 @@ export default function TransactionDetailPage() {
                 )
               }
             >
-              <p className="text-text-dim text-small max-w-measure -mt-2 mb-4">
+              {/* an explaining sentence: the reading ink (R3; lane P1 follow-up) */}
+              <p className="text-text text-small max-w-measure -mt-2 mb-4">
                 {tx.isCellbase
                   ? 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
                   : compensation
@@ -1569,7 +1572,7 @@ export default function TransactionDetailPage() {
                   {selectedGroup && (
                     <p
                       data-testid="tx-witness-focused-group"
-                      className="text-text-dim max-w-measure mt-3 [overflow-wrap:anywhere]"
+                      className="text-text max-w-measure mt-3 [overflow-wrap:anywhere]"
                     >
                       Focused script group: {selectedGroup}{' '}
                       <button

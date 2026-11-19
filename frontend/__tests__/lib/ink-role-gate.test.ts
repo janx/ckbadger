@@ -106,9 +106,12 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     family: 'chain',
     // link 6 → 3 (lane D3): the script groups' code links moved to
     // components/transaction/script-group-rows.tsx, in the reading ink
-    sites: { link: 3, prose: 12 },
+    // link 3 → 0, prose 12 → 8 (lane P1 follow-up): a .cell witness's "records payload of <name>
+    // (output #N)", a dep group's member rows, the provisional transaction's summary, the cells'
+    // explaining sentence and the focused script group are statements, in the reading ink
+    sites: { prose: 8 },
     reason:
-      'cell and dep links, the waiting and empty lines, the witness and dep notes in the quiet ink',
+      "loading 5: the graph section, the node's waiting line and its message, the graph, the cell deps; empty 3: no witness bytes, no witness chosen, no cell deps",
   },
   'components/address/address-history.tsx': {
     family: 'chain',
@@ -183,16 +186,13 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
     sites: { link: 1 },
     reason: "the ranked list's title link in the quiet ink",
   },
-  'components/transaction/script-group-matrix.tsx': {
-    family: 'chain',
-    // link 1 → 0 (lane P1): a group only attached names its script in the reading ink
-    sites: { prose: 1 },
-    reason: 'the runs line in the quiet ink',
-  },
+  // 'components/transaction/script-group-matrix.tsx' left the list (lane P1 follow-up): a group's
+  // runs line ("guards out 1 for the next spend · …") is a statement, in the reading ink, a group
+  // only attached as one that ran (link 1 → 0 in lane P1: its script's name reads)
   'components/transaction/tx-structure.tsx': {
     family: 'chain',
     sites: { prose: 1 },
-    reason: "the structure's legend line (a note under a figure: P1 decides)",
+    reason: "note 1: the structure's legend line, a note under the figure (lane P1 follow-up)",
   },
   // ---- assets ----
   'app/tokens/[typeHash]/client-page.tsx': {
