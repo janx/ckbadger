@@ -274,6 +274,9 @@ const FEEDS: Reads = {
   // words and name its link takes (the lead's final round, item 7; it was known, 2 reads, the
   // link's name the API's as read)
   'components/activity/activity-row.tsx': { 'api name': 1 },
+  // the AI view's primary lock call: its `scriptName` handed with its code hash and hash type to
+  // the decision, the words the page's row writes (the lead's final round, item 7; it was known)
+  'lib/ai/markdown-renderer.ts': { 'api name': 1 },
 };
 /** The decision's words already written: a tile's `lockKind` (`lockWordsText` of the decision). */
 const DECIDED: Reads = {
@@ -338,9 +341,8 @@ const KNOWN: Reads = {
   // identity overview (4), the roles (1), the records (2 → 1, which feeds it), the party chip (2,
   // its badge gone), the named party (2) and the AI view's owner and manager rows (2). Left: the
   // AI view's primary lock call (an activity's called lock, its hash type not sent) and the lists
-  // lane's activity row, not this lane's to edit; the activity row's left (the lead's final round,
-  // item 7: its called lock's name feeds the decision, its link's name the decision's)
-  'lib/ai/markdown-renderer.ts': { 'api name': 1 },
+  // lane's activity row, not this lane's to edit; both left (the lead's final round, item 7: a
+  // called lock's name feeds the decision, in the row, its link and the AI view alike)
 };
 
 describe('the gate reads the syntax, every form (lane B4 third round)', () => {
@@ -498,11 +500,14 @@ describe('a lock’s words have one writer (lane B4)', () => {
   // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "… 23 reads in 16
   // files, … 3 files and 5 reads"): the activity row's called lock feeds the decision, one read
   // where there were two: 22 reads in 16 files, the known writers 2 files and 3 reads
-  it('pins the totals: 22 reads in 16 files, the known writers 2 files and 3 reads', () => {
+  // Re-pinned on purpose (the lead's final round, item 7; renamed, it was "… the known writers 2
+  // files and 3 reads"): the AI view's called lock feeds the decision: the known writers 1 file,
+  // the Fiber graph's, and 2 reads; 22 reads in 16 files in all
+  it('pins the totals: 22 reads in 16 files, the known writers 1 file and 2 reads', () => {
     const all = merged(FEEDS, DECIDED, KNOWN);
     expect(Object.keys(all)).toHaveLength(16);
     expect(total(all)).toBe(22);
-    expect(Object.keys(KNOWN)).toHaveLength(2);
-    expect(total(KNOWN)).toBe(3);
+    expect(Object.keys(KNOWN)).toHaveLength(1);
+    expect(total(KNOWN)).toBe(2);
   });
 });
