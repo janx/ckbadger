@@ -89,6 +89,13 @@ const ALLOWLIST: Record<string, { why: string; anchor?: { file: string; text: st
     why: 'a test seam, by its name: the theme store keeps module state (the snapshot, its listeners, the window watchers) that each test must drop; the app never resets it',
     anchor: { file: 'lib/theme.ts', text: 'Test seam:' },
   },
+  // The controls library (UI review 2026-11-14, phase C, lane C1), built before any page uses it:
+  // the C2 lanes place each component, from the controls gate's work list; an entry goes when a
+  // page first draws its component (this test then fails until it does).
+  'components/ui/tabs.tsx#Tabs': {
+    why: 'the controls library’s tab row (lane C1): placed by the C2 lanes; mounted meanwhile by the dev proof page proof/controls.tsx',
+    anchor: { file: '__tests__/lib/controls-gate.test.ts', text: "'components/ui/tabs.tsx'" },
+  },
 };
 
 const isSource = (path: string) => /\.tsx?$/.test(path) && !path.endsWith('.d.ts');
