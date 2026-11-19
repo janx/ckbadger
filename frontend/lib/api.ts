@@ -1200,8 +1200,14 @@ export interface AddressHoldings {
   balance: string;
   occupiedCapacity: string;
   /** Ordinary free capacity; DAO free is a disjoint partition. */
-  freeCapacity: string;
-  daoFreeCapacity: string;
+  /**
+   * The balance in three parts that make it exactly (lane P1, third round): the whole capacity of
+   * its Nervos DAO cells, what pays for the bytes of its other cells, and the rest of those. None
+   * is "spendable": a lock, a since or a cellbase's maturity decides that.
+   */
+  daoCellsCapacity: string;
+  otherCellsOccupiedCapacity: string;
+  otherCellsFreeCapacity: string;
   liveCellsCount: number;
   holdings: { dao: number; token: number; object: number; identity: number };
   classes: Record<AddressCellClass, AddressClassTotals>;
