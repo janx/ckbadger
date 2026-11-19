@@ -421,11 +421,7 @@ const TIGHT_ALLOWLIST: AnchoredAllowlist = {
     tileLabel('value={step.decoderReference.hash}'),
     tileLabel('value={step.decoderBinaryHash}'),
   ],
-  'components/asset/inventory-table.tsx': [
-    phoneRow('hash={a.id}'),
-    phoneRow('hash={a.id}'),
-    phoneRow('hash={a.id}'),
-  ],
+  'components/asset/inventory-table.tsx': [phoneRow('hash={a.id}')],
   // the uncles' labels in the 178 px tiles of "Position in the chain"
   'components/blocks/block-position.tsx': [
     svgLabel("shortenHash(uncle.hash, 'tight')"),

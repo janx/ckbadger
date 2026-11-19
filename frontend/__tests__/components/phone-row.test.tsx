@@ -136,6 +136,37 @@ describe('PhoneRow (boards L1–L8)', () => {
     expect(phoneHeadPx(row, 360)).toBe(237.6);
   });
 
+  // Lane D4 (PB-09): a line that holds its right part keeps it at the line's right edge, so where a
+  // chip lands does not depend on how long the left part is; the left wraps beside it, between the
+  // items of its separated list.
+  it('holds a right part at its line’s edge where the line says so, and wraps the rest otherwise', () => {
+    render(
+      <PhoneRow
+        testId="row"
+        lines={[
+          { key: 'identity', tone: 'head', left: 'Wyltek Founding Members', right: '100 CKB' },
+          {
+            key: 'what',
+            tone: 'body',
+            hold: true,
+            left: <Dotted parts={['Spore', '93 objects', '32 holders']} />,
+            right: 'Pure CKB',
+          },
+        ]}
+      />
+    );
+    const row = screen.getByTestId('row');
+    const [head, what] = Array.from(row.querySelectorAll(':scope > [data-line]'));
+    expect(head).toHaveClass('flex-wrap');
+    expect(head).not.toHaveClass('flex-nowrap');
+    expect(what).toHaveClass('flex-nowrap');
+    expect(what).not.toHaveClass('flex-wrap');
+    // its left part shrinks and its list wraps between items; its right part does not shrink
+    expect(what.querySelector(':scope > [data-part="left"]')).toHaveClass('min-w-0');
+    expect(what.querySelector('[data-dotted]')).toHaveClass('flex-wrap');
+    expect(what.querySelector(':scope > [data-part="right"]')).toHaveClass('shrink-0');
+  });
+
   it('refuses a row without a line', () => {
     expect(() => render(<PhoneRow lines={[false, null]} />)).toThrow('at least one line');
   });

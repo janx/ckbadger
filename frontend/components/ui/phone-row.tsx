@@ -24,6 +24,13 @@ export interface PhoneLine {
   right?: ReactNode;
   /** The left part takes the free width (a bar). */
   grow?: boolean;
+  /**
+   * The right part holds the line's right edge: the left part wraps beside it (a separated list
+   * between its items, words between words) and the right part never drops under it, so where it
+   * lands does not depend on how long the left part is (PB-09: a holder's chip, a collection's
+   * composition). The right part and the widest item of the left must fit the line together.
+   */
+  hold?: boolean;
 }
 
 const TONE: Record<PhoneLineTone, string> = {
@@ -93,7 +100,8 @@ export function PhoneRow({
           // gap-x-3: PHONE_PART_GAP_PX, the 12 px a list's stated first line counts between its
           // parts (lib/type-metrics.ts; phone-row.test reads the class against it)
           className={cn(
-            'flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5',
+            'flex items-baseline justify-between gap-x-3 gap-y-0.5',
+            line.hold ? 'flex-nowrap' : 'flex-wrap',
             mark && 'col-start-2',
             TONE[line.tone]
           )}
