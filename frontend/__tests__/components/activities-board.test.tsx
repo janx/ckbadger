@@ -69,30 +69,36 @@ afterEach(() => {
 });
 
 describe('Activities board (TX-30, TX-32, TX-29)', () => {
+  // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, in
+  // the board's order and its lowercase words, each kind's 7 px mark in its colour (celadon and the
+  // slate swatches as before; the DAO, tokens, objects and identities a square of their class
+  // colour where they drew the class glyph; "all" and the protocols none). It was the aria-pressed
+  // group "Filter by kind" with the words in title case.
   it('uses the board chip names and order, with swatches for CKB transfers and script calls', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue(page([]));
     render(<ActivitiesStreamExplorer />);
-    const group = screen.getByRole('group', { name: 'Filter by kind' });
-    expect(
-      within(group)
-        .getAllByRole('button')
-        .map((b) => b.getAttribute('aria-label'))
-    ).toEqual([
-      'All',
-      'CKB transfers',
-      'Script calls',
-      'Nervos DAO',
-      'Tokens',
-      'Objects',
-      'Identities',
-      'Protocols',
+    const group = screen.getByRole('radiogroup', { name: 'kind' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.map((b) => b.textContent)).toEqual([
+      'all',
+      'ckb transfers',
+      'script calls',
+      'nervos dao',
+      'tokens',
+      'objects',
+      'identities',
+      'protocols',
     ]);
-    expect(
-      within(group).getByRole('button', { name: 'CKB transfers' }).querySelector('[data-swatch]')
-    ).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
-    expect(
-      within(group).getByRole('button', { name: 'Script calls' }).querySelector('[data-swatch]')
-    ).toHaveStyle({ backgroundColor: 'var(--c-slate-ckb)' });
+    const mark = (name: string) =>
+      within(group).getByRole('radio', { name }).querySelector('[data-mark]');
+    expect(mark('ckb transfers')).toHaveStyle({ backgroundColor: 'var(--c-jade)' });
+    expect(mark('script calls')).toHaveStyle({ backgroundColor: 'var(--c-slate-ckb)' });
+    expect(mark('nervos dao')).toHaveStyle({ backgroundColor: 'var(--c-gold)' });
+    expect(mark('tokens')).toHaveStyle({ backgroundColor: 'var(--c-token)' });
+    expect(mark('objects')).toHaveStyle({ backgroundColor: 'var(--c-object)' });
+    expect(mark('identities')).toHaveStyle({ backgroundColor: 'var(--c-identity)' });
+    expect(mark('all')).toBeNull();
+    expect(mark('protocols')).toBeNull();
     expect(screen.queryByText(/loaded$/)).not.toBeInTheDocument();
   });
 

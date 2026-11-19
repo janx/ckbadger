@@ -157,11 +157,14 @@ describe('ActivitiesStreamExplorer', () => {
         }}
       />
     );
-    expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All100');
-    expect(screen.getByRole('button', { name: 'Tokens' })).toHaveTextContent('Tokens0');
-    expect(screen.getByRole('button', { name: 'Nervos DAO' })).toHaveTextContent('Nervos DAO6');
+    // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, a
+    // radio per kind named by its lowercase words and its count (they were the aria-pressed
+    // buttons "All", "Tokens", "Nervos DAO", "Protocols", named by their words alone).
+    expect(screen.getByRole('radio', { name: 'all 100' })).toHaveTextContent('all 100');
+    expect(screen.getByRole('radio', { name: 'tokens 0' })).toHaveTextContent('tokens 0');
+    expect(screen.getByRole('radio', { name: 'nervos dao 6' })).toHaveTextContent('nervos dao 6');
     expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Protocols' })).toHaveTextContent(/^Protocols$/);
+    expect(screen.getByRole('radio', { name: 'protocols' })).toHaveTextContent(/^protocols$/);
     expect(
       await screen.findByText('Nothing of this kind in the latest activities.')
     ).toBeInTheDocument();
@@ -293,7 +296,8 @@ describe('ActivitiesStreamExplorer', () => {
     });
     expect(await screen.findByText(exactAmount('+2 CKB'))).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
+    // the kind filter's radio (controls lane C2; it was the button "Tokens")
+    fireEvent.click(screen.getByRole('radio', { name: /^tokens/ }));
 
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenCalledWith(
@@ -302,6 +306,39 @@ describe('ActivitiesStreamExplorer', () => {
     });
     // Token symbol shown inline on participant line
     expect(await screen.findByText(/TKN/)).toBeInTheDocument();
+  });
+
+  // The controls lane (C2, c2-lists), written before the button under the stream became the
+  // controls board's short-list form: it asks for the page after the cursor the stream served, as
+  // the intersection does, and goes when the stream has no more.
+  it('loads the next page from the button under the stream, and draws none at its end', async () => {
+    const page = (txHash: string, ckb: string, blockNumber: number, more: boolean) => ({
+      data: [
+        makeActivity({
+          txHash,
+          participants: [
+            makeParticipant({ address: seededAddress(`${txHash}111111111111111`), ckbDelta: ckb }),
+          ],
+          blockNumber,
+        }),
+      ],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: more,
+      nextCursor: more ? '500:0:0' : null,
+    });
+    vi.mocked(api.getGlobalActivities).mockImplementation(async (params) =>
+      params?.cursor === '500:0:0'
+        ? page('0xolder', '200000000', 499, false)
+        : page('0xhead', '100000000', 500, true)
+    );
+    render(<ActivitiesStreamExplorer />);
+    expect(await screen.findByText(exactAmount('+1 CKB'))).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /^(older|next \d+ ↓)$/i }));
+    expect(await screen.findByText(exactAmount('+2 CKB'))).toBeInTheDocument();
+    expect(api.getGlobalActivities).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: '500:0:0', filter: 'all' })
+    );
+    expect(screen.queryByRole('button', { name: /^(older|next \d+ ↓)$/i })).toBeNull();
   });
 
   it('renders an empty state when the selected filter has no activities', async () => {
@@ -913,13 +950,17 @@ describe('ActivitiesStreamExplorer filter in the URL (D11)', () => {
     render(<RouterProvider router={router} />);
     return router;
   }
+  // Re-pinned on purpose (controls lane C2): the kind filter is the controls board's chips, a
+  // radio group named "kind", a radio per kind named by its lowercase words, the chosen one
+  // aria-checked (it was the aria-pressed group "Filter by kind": "Nervos DAO", "All", "Tokens",
+  // "Objects").
   const chip = (name: string) =>
-    within(screen.getByRole('group', { name: 'Filter by kind' })).getByRole('button', { name });
+    within(screen.getByRole('radiogroup', { name: 'kind' })).getByRole('radio', { name });
 
   it('starts on the filter its URL names and asks the API for it (?filter=dao)', async () => {
     renderAt('/mainnet/activities?filter=dao');
-    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
-    expect(chip('All')).toHaveAttribute('aria-pressed', 'false');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'true');
+    expect(chip('all')).toHaveAttribute('aria-checked', 'false');
     await waitFor(() =>
       expect(api.getGlobalActivities).toHaveBeenCalledWith(
         expect.objectContaining({ filter: 'dao', limit: DEFAULT_PAGE_SIZE })
@@ -934,7 +975,7 @@ describe('ActivitiesStreamExplorer filter in the URL (D11)', () => {
     'starts on All when the URL names an unknown filter or none (%s)',
     async (search) => {
       renderAt(`/mainnet/activities${search}`);
-      expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+      expect(chip('all')).toHaveAttribute('aria-checked', 'true');
       await waitFor(() =>
         expect(api.getGlobalActivities).toHaveBeenCalledWith(
           expect.objectContaining({ filter: 'all' })
@@ -945,22 +986,22 @@ describe('ActivitiesStreamExplorer filter in the URL (D11)', () => {
 
   it('writes a chosen filter back to the URL by replace, and All drops it', async () => {
     const router = renderAt('/mainnet/activities?filter=dao');
-    fireEvent.click(chip('Tokens'));
+    fireEvent.click(chip('tokens'));
     await waitFor(() => expect(router.state.location.search).toBe('?filter=token'));
     expect(router.state.location.pathname).toBe('/mainnet/activities');
     expect(router.state.historyAction).toBe('REPLACE');
-    expect(chip('Tokens')).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(chip('All'));
+    expect(chip('tokens')).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(chip('all'));
     await waitFor(() => expect(router.state.location.search).toBe(''));
-    expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('all')).toHaveAttribute('aria-checked', 'true');
   });
 
   it('follows the URL when it changes under the mounted stream', async () => {
     const router = renderAt('/mainnet/activities?filter=dao');
-    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('nervos dao')).toHaveAttribute('aria-checked', 'true');
     await act(async () => {
       await router.navigate('/mainnet/activities');
     });
-    expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('all')).toHaveAttribute('aria-checked', 'true');
   });
 });

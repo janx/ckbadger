@@ -78,37 +78,6 @@ const CONTROL_FILES = [
 
 const TOLERATED: Readonly<Record<string, Tolerated>> = {
   // ---- c2-lists: activities, transactions, blocks, inventory, scripts, depositors ----
-  'app/blocks/page.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the blocks list’s cursor pager (newer / older)',
-  },
-  'app/dao/depositors/page.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the depositors list’s cursor pager',
-  },
-  'app/inventory/inventory-page-client.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 2, 'text-input': 1, tab: 1, pager: 1 },
-    reason:
-      'the standard filter’s phone select and the sort select, the name search, the class tabs (links), the pager',
-  },
-  'app/scripts/page.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 1, 'text-input': 1, tab: 1, pager: 1 },
-    reason: 'the sort select, the name search, the role tabs, the pager',
-  },
-  'app/transactions/page.tsx': {
-    lane: 'c2-lists',
-    sites: { select: 1, tab: 1, pager: 2 },
-    reason: 'the kind select, the committed / pool tabs, the two lists’ pagers',
-  },
-  'components/activities-stream-explorer.tsx': {
-    lane: 'c2-lists',
-    sites: { pager: 1 },
-    reason: 'the activities stream’s boxed “Older” button',
-  },
   // ---- c2-chain: block, transaction, cell, address, script pages ----
   'app/address/[addr]/client-page.tsx': {
     lane: 'c2-chain',
@@ -188,7 +157,7 @@ const TOLERATED: Readonly<Record<string, Tolerated>> = {
 };
 
 /** The pinned total of TOLERATED's sites: the list may only shrink. */
-const TOLERATED_TOTAL = 39;
+const TOLERATED_TOTAL = 23;
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib'] as const;
 

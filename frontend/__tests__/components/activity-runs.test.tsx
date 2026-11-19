@@ -372,17 +372,19 @@ describe('a filter change starts the runs anew (B4 second fix round)', () => {
     );
     render(<ActivitiesStreamExplorer />);
     await screen.findAllByRole('article');
+    // the kind filter's radios (controls lane C2, re-pinned on purpose: they were the
+    // aria-pressed buttons of the group "Filter by kind", "Script calls" and "All")
     const chip = (name: RegExp) =>
-      within(screen.getByRole('group', { name: 'Filter by kind' })).getByRole('button', { name });
+      within(screen.getByRole('radiogroup', { name: 'kind' })).getByRole('radio', { name });
     const runShown = () =>
       waitFor(() => expect(document.querySelector('[data-role="activity-run"]')).not.toBeNull());
     // Script calls (read), All (read before: from the cache), Script calls again (from the cache)
-    await user.click(chip(/^Script calls/));
+    await user.click(chip(/^script calls/));
     await runShown();
-    await user.click(chip(/^All/));
+    await user.click(chip(/^all/));
     await waitFor(() => expect(document.querySelector('[data-role="activity-run"]')).toBeNull());
     expect(document.querySelectorAll('article[data-feed-row]')).toHaveLength(3);
-    await user.click(chip(/^Script calls/));
+    await user.click(chip(/^script calls/));
     await runShown();
     const folded = document.querySelector('[data-role="activity-run"]') as HTMLElement;
     expect(within(folded).getByRole('button')).toHaveAttribute('aria-expanded', 'false');
@@ -413,7 +415,7 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     await screen.findAllByRole('article');
     expect(document.querySelector('[data-role="activity-run"]')).toBeNull();
     const drawn = document.querySelector(`article[data-feed-row="${last.txHash}"]`)!;
-    await user.click(screen.getByRole('button', { name: 'Older' }));
+    await user.click(screen.getByRole('button', { name: 'next 50 ↓' }));
     await waitFor(() => expect(feedRows()).toContain(transfer.txHash));
     await waitFor(() =>
       expect(document.querySelector('[data-role="activity-run"]')).toHaveAttribute(
@@ -434,7 +436,7 @@ describe('an older page that continues the last run (B4 fix round)', () => {
     pages(first, [oracle(6, 'q3q7ue', '0x00', 300)]);
     render(<ActivitiesStreamExplorer />);
     const toggle = await screen.findByRole('button', { name: '2 transactions ↓' });
-    await user.click(screen.getByRole('button', { name: 'Older' }));
+    await user.click(screen.getByRole('button', { name: 'next 50 ↓' }));
     await waitFor(() => expect(toggle).toHaveTextContent('3 transactions ↓'));
     expect(toggle.isConnected).toBe(true);
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
