@@ -80,7 +80,7 @@ export function RewardBreakdown({
             {block.rewardFinalizesAt === null ? (
               'a later block'
             ) : (
-              <Link href={`/blocks/${block.rewardFinalizesAt}`}>
+              <Link look="inline" href={`/blocks/${block.rewardFinalizesAt}`}>
                 {formatBlockNumber(block.rewardFinalizesAt)}
               </Link>
             )}
@@ -198,13 +198,13 @@ export function RewardPaidBy({ block }: { block: RewardBlock }) {
   return (
     <span className="text-text-dim text-small">
       paid by the cellbase of{' '}
-      <Link href={`/blocks/${block.rewardPaidAtBlock}`}>
+      <Link look="inline" href={`/blocks/${block.rewardPaidAtBlock}`}>
         {formatBlockNumber(block.rewardPaidAtBlock)}
       </Link>
       {block.miningRewardTxHash && (
         <>
           {' · '}
-          <Link href={`/tx/${block.miningRewardTxHash}`}>
+          <Link look="inline" href={`/tx/${block.miningRewardTxHash}`}>
             <Hash hash={block.miningRewardTxHash} size="row" className="text-small" />
           </Link>
         </>

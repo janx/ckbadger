@@ -39,6 +39,20 @@ export function occupiedBytesDelta(bytes: bigint): string {
 }
 
 /**
+ * Occupied capacity as the API sends it (shannons: an address's or a class's
+ * `occupiedCapacity`) as bytes with their unit ("102 B"), the unit a bar of on-chain space is
+ * drawn in (lane P1, the address page). A figure that is not a whole number of bytes is not one
+ * the chain holds, and is refused with its value and where it stands.
+ */
+export function occupiedCapacityText(shannons: bigint, where: string): string {
+  if (shannons % SHANNONS_PER_CKB !== BigInt(0))
+    throw new Error(
+      `${where}: occupied capacity ${shannons} shannons is not a whole number of bytes (10^8 shannons each)`
+    );
+  return occupiedBytesText(shannons / SHANNONS_PER_CKB, where);
+}
+
+/**
  * A change in occupied capacity as the API sends it (shannons, `usedDelta`) as bytes with their
  * unit ("−61 B"). A change that is not a whole number of bytes is not one the chain can make, and
  * is refused with its value and where it stands.

@@ -65,7 +65,8 @@ function named(label: string, shannons: string, field: string, tx: Transaction) 
 function cells(tx: Transaction) {
   return (
     <span className="whitespace-nowrap">
-      {tx.isCellbase ? 0 : tx.inputsCount} → {formatCount(tx.outputsCount, 'cell')}
+      {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')} →{' '}
+      {formatCount(tx.outputsCount, 'cell')}
     </span>
   );
 }
@@ -160,7 +161,7 @@ export function BlockTransactionsTable({
       // so not the tight size. It was 140.
       minWidth: columnPx(textPx(shortChars(SHORT_FORMS.row.hash), fontPx('small')) + CELL_GAP_PX),
       render: (tx) => (
-        <Link href={`/tx/${tx.hash}`} className="hover:underline">
+        <Link look="inline" href={`/tx/${tx.hash}`}>
           <Hash hash={tx.hash} size="row" className="text-small" />
         </Link>
       ),
@@ -186,7 +187,7 @@ export function BlockTransactionsTable({
       render: (tx) => (
         <span className="whitespace-nowrap">
           <span className={tx.isCellbase ? 'text-text-dim' : undefined}>
-            {tx.isCellbase ? 0 : tx.inputsCount}
+            {tx.isCellbase ? 0 : tx.inputsCount.toLocaleString('en-US')}
           </span>
           <span aria-hidden="true" className="text-text-dim mx-1.5">
             →

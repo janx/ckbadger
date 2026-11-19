@@ -546,10 +546,10 @@ status.
 | GET    | `/api/v1/charts/address-cohort-retention`     | `get_address_cohort_retention_chart`     | Address cohort retention chart                                                                             |
 | GET    | `/api/v1/charts/most-utilized-scripts`        | `get_most_utilized_scripts_chart`        | Top scripts share charts (used + capacity)                                                                 |
 | GET    | `/api/v1/charts/most-utilized-assets`         | `get_most_utilized_assets_chart`         | Top assets share charts (used + capacity)                                                                  |
-| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs)                                                         |
+| GET    | `/api/v1/charts/block-time-distribution`      | `get_block_time_distribution_chart`      | Block time distribution histogram (last 42 epochs or fewer) + its window                                   |
 | GET    | `/api/v1/charts/epoch-time-distribution`      | `get_epoch_time_distribution_chart`      | Epoch duration histogram                                                                                   |
-| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (hours) + blocks                                                                          |
-| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time                                                                                   |
+| GET    | `/api/v1/charts/epoch-time-length`            | `get_epoch_time_length_chart`            | Per-epoch length (whole ms) + blocks                                                                       |
+| GET    | `/api/v1/charts/average-block-time`           | `get_average_block_time_chart`           | Daily average block time (whole ms)                                                                        |
 | GET    | `/api/v1/charts/hash-rate`                    | `get_hash_rate_chart`                    | Daily hash-rate chart                                                                                      |
 | GET    | `/api/v1/charts/difficulty`                   | `get_difficulty_chart`                   | Daily difficulty chart                                                                                     |
 | GET    | `/api/v1/charts/uncle-rate`                   | `get_uncle_rate_chart`                   | Daily uncle-rate chart                                                                                     |
@@ -558,7 +558,7 @@ status.
 | GET    | `/api/v1/charts/nominal-apc`                  | `get_nominal_apc_chart`                  | Synthesized nominal APC curve (no DB read)                                                                 |
 | GET    | `/api/v1/charts/secondary-issuance`           | `get_secondary_issuance_chart`           | Secondary issuance breakdown plus exact protocol-total and frozen phase-1 shannon metadata                 |
 | GET    | `/api/v1/charts/inflation-rate`               | `get_inflation_rate_chart`               | Exact trailing-365-day nominal & real inflation from DAO snapshots                                         |
-| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (24h…>3y) + holder_count                                                                   |
+| GET    | `/api/v1/charts/hodl-wave`                    | `get_hodl_wave_chart`                    | HODL-wave bands (under 1 day … 3 years or more) + holder_count                                             |
 | GET    | `/api/v1/stats/daily-activities`              | `get_daily_activity_stats`               | Per-day activity breakdown by tx-type and script (param: `days`, default 30)                               |
 | GET    | `/api/v1/stats/activity-summary-24h`          | `get_activity_summary_24h`               | Rolling 24h activity summary aggregated from hourly buckets                                                |
 | GET    | `/api/v1/statistics/asset-ecosystem`          | `get_asset_ecosystem`                    | Top tokens + capacity-category breakdown (tokens/objects/DAO/other, shares of total live capacity `C - S`) |
@@ -581,6 +581,7 @@ status.
   `minerLockHash` and an optional resolvable CKB `address`
 - `Vec<DailyActivityStatsResponse>` / `ActivitySummary24hResponse` — per-day or 24h activity counts + `script_counts: Vec<ScriptCountEntry>`
 - `CellSizeDistributionChartResponse` — the cell-size histogram (`ChartResponse`, flattened) and its two wholes
+- `BlockTimeDistributionChartResponse` — the block-interval histogram (`ChartResponse`, flattened) and its window: `epochs`, `intervals`, `beyondRange`
 - `AssetEcosystemResponse` — `top_tokens: Vec<TopTokenEntry>` + `capacity_breakdown: Vec<CapacityCategory>`
 
 **What a chart page states (lane D1)**
@@ -595,14 +596,21 @@ bands it draws and the wholes it divides by, read-only on the store:
   carries the merged `1m6m` and `lt1m` beside the eight bands, each computed
   from the bands' exact capacities. Every percentage of this route, the eight
   and the two merged, is cut at two decimals, never rounded
-  (`format_ratio_cut`): two of three CKB is `"66.66"`.
+  (`format_ratio_cut`): two of three CKB is `"66.66"`. The eight `series` are
+  named in the bands' words: `3 years or more`, `1 to 3 years`,
+  `6 to 12 months`, `3 to 6 months`, `1 to 3 months`, `1 week to 1 month`,
+  `1 day to 1 week`, `under 1 day` (they were `> 3y` … `24h`).
 - `GET /charts/most-utilized-scripts` and `/charts/most-utilized-assets` — each
   of `usedShare` and `capacityShare` has `bands`: the five largest ranks, then
   `rest` (label `Others`, members every rank after the fifth and `others`) when
   there are more than five. Each point's `values.rest` (shannons, present with
-  that band) is the day's total less the five drawn; `values.total` (shannons)
-  is the day's total, every rank and `others`, the whole the page's shares
-  divide by.
+  that band) is the day's total less the five drawn; `values.drawnTotal`
+  (shannons) is the ranks drawn as their own bands summed, the five largest or
+  every named rank where there are fewer (what "the five largest hold" states;
+  `values.others` is then the rest); `values.total` (shannons) is the day's
+  total, every rank and `others`, the whole the page's shares divide by. The
+  series come in the route's order, largest first, a tie broken by the other
+  metric and then the key; the page keeps it.
 - `GET /charts/common-knowledge-composition` — each point's
   `values.knowledgeSize` (CKB): the day's knowledge size, which the five kinds
   partition.
@@ -615,9 +623,15 @@ bands it draws and the wholes it divides by, read-only on the store:
   date and the four operands where it does not. `values.circulating` is the
   protocol circulation, `C − genesis burnt − S` (`outsideDao + daoDeposited`),
   the amount the site calls circulating everywhere; it is not a band.
-- `GET /charts/secondary-issuance` — each point's `componentsTotalShannons`:
-  compensation, mining and burnt summed, in shannons. It differs from
-  `protocolTotalShannons` by the frozen phase-1 overlap.
+- `GET /charts/secondary-issuance` — one whole, each point's
+  `protocolTotalShannons`: the secondary issuance since genesis,
+  `miner + S + claimed`, in shannons. Its three destinations make it: `compensation` (DAO
+  compensation accrued, claimed or not), `mining` and `burnt` (the treasury).
+  The route checks the partition per day and fails with the date and the
+  operands where it does not hold. `phase1CompensationShannons` is the frozen
+  phase-1 compensation, a part of the unclaimed compensation, for developers.
+  (`componentsTotalShannons` is gone: by the DAO partition it was the same
+  figure.)
 - `GET /charts/cell-size-distribution` — `liveCells` (the cells of every
   bucket) and `occupiedCapacity` (the CKB they occupy), counted from the same
   snapshot as the buckets.
@@ -625,12 +639,27 @@ bands it draws and the wholes it divides by, read-only on the store:
   the minute in hours at two decimals, cut (181 minutes is `"3.01"`); no two
   minutes share a label. `GET /charts/block-time-distribution` — each bucket's
   `date` is its exact 0.1 s edge and its `value`, the share of blocks, is cut
-  at three decimals.
+  at three decimals. A share is of every interval of the window: `intervals`
+  counts them all, `beyondRange` the ones more than 50 s after their parent,
+  counted in `intervals` and drawn in no bucket, and `epochs` is the complete
+  epochs the window holds (42, or fewer on a younger chain).
+- `GET /charts/epoch-time-length` — each epoch's `value` is its duration in
+  whole ms (an epoch of 14,418,000 ms read `"4.01"` h when it was hours rounded
+  at two decimals); `target.hours` is cut. `GET /charts/average-block-time` —
+  each day's `value` is the day's average in whole ms, as the store keeps it
+  (`DailyStats::avg_block_time_ms`). The page cuts both for display and counts
+  "over the target" in integers.
+- `GET /charts/uncle-rate` (a fraction, six decimals), `/charts/capacity-turnover-ratio`
+  (a percentage, six decimals), `/charts/address-cohort-retention` (a
+  percentage, six decimals) and `/dao/charts/circulation-ratio` (a percentage,
+  four decimals) cut their shares at their precision, never round.
 - `GET /stats/daily-activities` — each day's `kindOccurrences`: the eight kinds
   the charts read (transfers, the three DAO actions, tokens, objects,
   identities, script calls) summed. Kinds overlap, an action counting in each
   kind it is, so this is not a count of distinct activities; coinbase and
-  unknown transactions are not in it.
+  unknown transactions are not in it. `daoCount` is the day's three DAO
+  actions (deposits, withdraw requests, completed withdraws) summed, the DAO
+  band of Activity by type.
 
 ---
 

@@ -14,12 +14,16 @@ import {
   TransactionEvidence,
 } from '@/components/cell/cell-transactions';
 import type { Cell } from '@/lib/api';
+import { ErrorBoundary } from '@/components/error-boundary';
 import liveFixture from '@/__tests__/fixtures/d5/cell-live.json';
 import { LONG_TX_HASH, LONG_TX_PREV, LONG_TX_SENDER, longDeposit } from '@/__tests__/utils/long-tx';
 
 const getTransactionDetail = vi.fn();
 const getTransactionCellDeps = vi.fn();
-vi.mock('@/lib/api', () => ({
+// the module's own exports kept (a part's read error names an ApiRequestError's status), its reads
+// mocked
+vi.mock('@/lib/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api')>()),
   api: {
     getTransactionDetail: (...args: unknown[]) => getTransactionDetail(...args),
     getTransactionCellDeps: (...args: unknown[]) => getTransactionCellDeps(...args),
@@ -66,9 +70,9 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
     const structure = await screen.findByLabelText(`Transaction ${LONG_TX_HASH} structure`);
     const consumed = sheet(structure, 'consumed');
     expect(consumed.tiles).toEqual([]);
-    expect(consumed.words).toMatch(
-      new RegExp(`^158\\scells from ${SHORT_SENDER}, none of them this cell$`)
-    );
+    // re-pinned on purpose (lane P1, lane D3's note: ", none of them this cell" says nothing on the
+    // sheet a cell page draws, where this cell cannot stand): the count and its owner alone
+    expect(consumed.words).toMatch(new RegExp(`^158\\scells from ${SHORT_SENDER}$`));
     expect(consumed.controls).toBe(0);
     const created = sheet(structure, 'created');
     expect(created.tiles).toEqual(['out:0']);
@@ -100,7 +104,7 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
         hash={LONG_TX_HASH}
         label="Spent"
         focus="in:57"
-        anchor={`${LONG_TX_PREV}-57`}
+        cell={{ txHash: LONG_TX_PREV, index: 57 }}
       />
     );
     const structure = await screen.findByLabelText(`Transaction ${LONG_TX_HASH} structure`);
@@ -109,7 +113,8 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
       new RegExp(`^157\\smore cells from ${SHORT_SENDER}$`)
     );
     expect(sheet(structure, 'created').tiles).toEqual([]);
-    expect(sheet(structure, 'created').words).toMatch(/^2\scells created, none of them this cell$/);
+    // re-pinned on purpose (lane P1, lane D3's note): "2 cells created" is enough there
+    expect(sheet(structure, 'created').words).toMatch(/^2\scells created$/);
     const line = screen.getByTestId('cell-transaction-line');
     expect(line).toHaveTextContent(/^one of 158\scells consumed by /);
     expect(within(line).getByRole('link')).toHaveAttribute(
@@ -129,5 +134,42 @@ describe('the cell page embeds its own tile, not the transaction (lane D3)', () 
     expect(section.querySelectorAll('button')).toHaveLength(0);
     expect(section).toHaveTextContent('attached, runs when spent');
     expect(section).not.toHaveTextContent(/not executed|executed/);
+  });
+});
+
+// Review of phases C and D, SHOULD 7 (lane P1): the embed fails as the same tiles do on the
+// transaction page. It waited for, and failed on, the cell-dep read that only the developer tier's
+// script groups use; and it built its tiles outside the part read, so a cell the lock decision
+// refuses, which fails only the Cells section on /tx/<hash>, crashed the whole cell page.
+describe('the embed fails as the transaction page’s tiles do (P1)', () => {
+  it('draws the cell’s tile without the cell-dep read, which only the script groups need', async () => {
+    getTransactionCellDeps.mockRejectedValue(new Error('503 the node is busy'));
+    view(<CellTransactions cell={deposit} />);
+    const structure = await screen.findByLabelText(`Transaction ${LONG_TX_HASH} structure`);
+    expect(sheet(structure, 'created').tiles).toEqual(['out:0']);
+    expect(screen.queryByText(/evidence unavailable/)).toBeNull();
+  });
+
+  it('says in its place that a refused cell fails the tiles, and the page stands', async () => {
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const tx = longDeposit();
+      // input 3's address spells another lock than its own: the lock decision refuses it
+      tx.inputs![3] = { ...tx.inputs![3], address: tx.outputs![0].address };
+      getTransactionDetail.mockResolvedValue(tx);
+      view(
+        <ErrorBoundary fallbackRender={(error) => <p>crashed: {error.message}</p>}>
+          <CellTransactions cell={deposit} />
+        </ErrorBoundary>
+      );
+      const error = await screen.findByText(/^Could not draw the cells \(transaction /);
+      expect(error).toHaveAttribute('role', 'alert');
+      expect(screen.queryByText(/^crashed:/)).toBeNull();
+      expect(screen.queryByLabelText(`Transaction ${LONG_TX_HASH} structure`)).toBeNull();
+      // the line and its link to the transaction stand above the failed part
+      expect(screen.getByTestId('cell-transaction-line')).toBeInTheDocument();
+    } finally {
+      quiet.mockRestore();
+    }
   });
 });

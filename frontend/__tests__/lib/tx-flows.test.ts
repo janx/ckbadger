@@ -4,7 +4,14 @@
  * giver, mint and burn terminals; the fold beyond six parties; ribbon weights.
  */
 import { describe, expect, it } from 'vitest';
-import { flowKey, foldEnds, ribbonWeight, txFlows, type FlowEnd } from '@/lib/tx-flows';
+import {
+  flowKey,
+  foldEnds,
+  onlyFeeMoved,
+  ribbonWeight,
+  txFlows,
+  type FlowEnd,
+} from '@/lib/tx-flows';
 import type { GlobalActivity, ItemDelta, ParticipantInfo } from '@/lib/api';
 
 const HASH = `0x${'91'.repeat(32)}`;
@@ -199,6 +206,95 @@ describe('txFlows', () => {
         compensation: null,
       })
     ).toThrow(`${HASH}: participant ckbDelta "1.5"`);
+  });
+
+  // Lane P1 (the plan's P1 paragraph: the summary states the amount from the totals the figure's
+  // flows already carry): what reached the receiving parties and what left the giving parties, each
+  // a flow's party ends alone — the miner's fee, a burn, a mint and Nervos DAO compensation are
+  // terminals, not parties.
+  it('counts what reached the receiving parties and what left the giving parties', () => {
+    const swap = txFlows({
+      hash: HASH,
+      activity: activity([
+        party('rvxmvg', '-3070091791503', [token('2544240236569')]),
+        party('0q3akl', '3070091760805', [token('-2544240236569')], 'UDT Limit Order'),
+      ]),
+      fee: '30698',
+      compensation: null,
+    });
+    // CKB: 0q3akl received 3,070,091,760,805 shannons; the miner's 30,698 are not a party's
+    expect([swap[1].sent, swap[1].received]).toEqual([
+      BigInt('3070091791503'),
+      BigInt('3070091760805'),
+    ]);
+    expect([swap[0].sent, swap[0].received]).toEqual([
+      BigInt('2544240236569'),
+      BigInt('2544240236569'),
+    ]);
+    const burn = txFlows({
+      hash: HASH,
+      activity: activity([party('aaaaaa', '-5', [token('-700')])]),
+      fee: '5',
+      compensation: null,
+    });
+    expect([burn[0].sent, burn[0].received]).toEqual([BigInt(700), BigInt(0)]);
+    const mint = txFlows({
+      hash: HASH,
+      activity: activity([
+        party('aaaaaa', '-5', [token('-100')]),
+        party('bbbbbb', '0', [token('900')]),
+      ]),
+      fee: '5',
+      compensation: null,
+    });
+    expect([mint[0].sent, mint[0].received]).toEqual([BigInt(100), BigInt(900)]);
+    const dao = txFlows({
+      hash: HASH,
+      activity: activity([party('aaaaaa', '-2605000000000'), party('bbbbbb', '2622530633229')]),
+      fee: '936',
+      compensation: BigInt('17530634165'),
+    });
+    expect([dao[0].sent, dao[0].received]).toEqual([
+      BigInt('2605000000000'),
+      BigInt('2622530633229'),
+    ]);
+  });
+
+  // Lane P1 (the plan: "a transaction that moves only its fee says so in one line"): its flows are
+  // the CKB flow alone, from parties to the miner and to no party, with no compensation entering.
+  it('tells a transaction that moved only its fee', () => {
+    const flows = (participants: ParticipantInfo[], fee: string, compensation: bigint | null) =>
+      txFlows({ hash: HASH, activity: activity(participants), fee, compensation });
+    expect(onlyFeeMoved(flows([party('aaaaaa', '-64119')], '64119', null))).toBe(true);
+    expect(
+      onlyFeeMoved(flows([party('aaaaaa', '-60000'), party('bbbbbb', '-4119')], '64119', null))
+    ).toBe(true);
+    // a party received CKB
+    expect(onlyFeeMoved(flows([party('aaaaaa', '-100'), party('bbbbbb', '90')], '10', null))).toBe(
+      false
+    );
+    // an item moved
+    expect(
+      onlyFeeMoved(
+        flows(
+          [party('aaaaaa', '-5', [token('-700')]), party('bbbbbb', '0', [token('700')])],
+          '5',
+          null
+        )
+      )
+    ).toBe(false);
+    // compensation entered
+    expect(
+      onlyFeeMoved(
+        flows(
+          [party('aaaaaa', '-2605000000000'), party('bbbbbb', '2622530633229')],
+          '936',
+          BigInt('17530634165')
+        )
+      )
+    ).toBe(false);
+    // nothing moved at all: no fee either, so not "only the fee"
+    expect(onlyFeeMoved(flows([party('aaaaaa', '0')], '0', null))).toBe(false);
   });
 
   it('keys objects and identities by what they are', () => {

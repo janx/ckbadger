@@ -20,7 +20,7 @@ import { percentOf } from '@/lib/format-unit';
 export type ActivityCounts = Pick<
   ActivitySummary24h,
   | 'transferCount'
-  | 'daoActionCount'
+  | 'daoCount'
   | 'tokenCount'
   | 'objectCount'
   | 'identityCount'
@@ -46,7 +46,7 @@ export function activityTypeShares(c: ActivityCounts): ShareRow[] {
     { key: 'token', label: 'Token', count: c.tokenCount },
     { key: 'object', label: 'Object', count: c.objectCount },
     { key: 'identity', label: 'Identity', count: c.identityCount },
-    { key: 'dao', label: 'DAO', count: c.daoActionCount },
+    { key: 'dao', label: 'DAO', count: c.daoCount },
   ]
     .filter((row) => row.count > 0)
     .map((row) => ({ ...row, share: row.count / total }))
@@ -150,7 +150,7 @@ export function activityFilterCounts(
     token: summary.tokenCount,
     object: summary.objectCount,
     identity: summary.identityCount,
-    dao: summary.daoActionCount,
+    dao: summary.daoCount,
     script: summary.scriptCallCount,
   };
 }

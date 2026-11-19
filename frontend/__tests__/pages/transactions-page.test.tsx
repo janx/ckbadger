@@ -920,7 +920,7 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
       daoWithdrawRequestCount: 1,
       daoWithdrawCompleteCount: 0,
       // the API's count of the DAO actions (lists lane P3: the page sums none)
-      daoActionCount: 3,
+      daoCount: 3,
     },
   ]);
   vi.mocked(api.getTxStats).mockResolvedValue({

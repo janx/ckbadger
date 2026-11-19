@@ -40,7 +40,13 @@ const share = (label: string) => ({
   // the day's whole, the route's (the D1 hand-back, item 2)
   data: dates.map((date) => ({
     date,
-    values: { top0: '5900000000000000', others: '100000000', total: '5900000100000000' },
+    // the route's whole and its one drawn rank's total (lane D1's third round, M2)
+    values: {
+      top0: '5900000000000000',
+      others: '100000000',
+      total: '5900000100000000',
+      drawnTotal: '5900000000000000',
+    },
   })),
   // lane D1: the API names the bands a history is drawn in; one named rank, its own band
   bands: [

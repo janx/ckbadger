@@ -6,7 +6,8 @@ export type ChartPayload =
   | Awaited<ReturnType<typeof api.getMostUtilizedScriptsChart>>
   | Awaited<ReturnType<typeof api.getMinerAddressDistributionChart>>
   | Awaited<ReturnType<typeof api.getUncleRateChart>>
-  | Awaited<ReturnType<typeof api.getCellSizeDistributionChart>>;
+  | Awaited<ReturnType<typeof api.getCellSizeDistributionChart>>
+  | Awaited<ReturnType<typeof api.getBlockTimeDistributionChart>>;
 
 /**
  * What the daily activity charts count (lane D1, second follow-up, item 2), in one place. The route
@@ -18,6 +19,15 @@ export type ChartPayload =
  * 'activities a day', subtitle 'Activities per day', note none (drop both charts' `countNote`), and
  * Activities' head eyebrow may read 'recorded in a day' again (chart-head.ts; 'counted' stays true).
  */
+/**
+ * The one stack that draws six bands under the board's rule of five (rule 5; the lead's ruling,
+ * lane D1's third round, T's MUST-1): Activity by type's six activity kinds are the site's own
+ * closed set, each with its class colour and its filter chip, and none of them is "others"; five
+ * and "others" would hide one named kind behind a word. An exception to a rule the owner passed:
+ * the owner's to confirm at the gate. Every other stack, classed or not, draws at most five.
+ */
+export const SIX_KINDS_SLUG = 'activity-type-breakdown';
+
 export const ACTIVITY_COUNT_WORDS = {
   noun: 'kind counts',
   perDay: 'kind counts a day',
@@ -26,7 +36,15 @@ export const ACTIVITY_COUNT_WORDS = {
 } as const;
 
 export type ChartVisual = 'line' | 'bars' | 'stacked' | 'ranked';
-export type ChartScale = 'raw' | 'shannons' | 'hash-rate' | 'difficulty' | 'fraction-percent';
+export type ChartScale =
+  | 'raw'
+  | 'shannons'
+  | 'hash-rate'
+  | 'difficulty'
+  | 'fraction-percent'
+  // a duration in whole ms, shown in seconds or hours (lane D1's third round, M1)
+  | 'ms-seconds'
+  | 'ms-hours';
 export type ChartSource =
   | 'blocks'
   | 'cells'
@@ -612,7 +630,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     section: section.blocks,
     visual: 'line',
     unit: 's',
-    scale: 'raw',
+    scale: 'ms-seconds',
     source: 'blocks',
     evidenceHref: '/blocks',
     evidenceLabel: 'Blocks',
@@ -629,7 +647,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     section: section.blocks,
     visual: 'line',
     unit: 'h',
-    scale: 'raw',
+    scale: 'ms-hours',
     source: 'blocks',
     evidenceHref: '/blocks',
     evidenceLabel: 'Blocks',
@@ -646,7 +664,8 @@ export const CHARTS: readonly ChartDefinition[] = [
   {
     slug: 'block-time-distribution',
     title: 'Block intervals',
-    subtitle: 'Share of blocks by seconds since their parent, last 42 complete epochs',
+    // the route clamps the window to the complete epochs there are; the head names how many (S4)
+    subtitle: 'Share of blocks by seconds since their parent, up to the last 42 complete epochs',
     cardSubtitle: 'most common interval',
     plotUnit: '% of blocks, by seconds since their parent',
     section: section.blocks,

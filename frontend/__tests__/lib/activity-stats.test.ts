@@ -14,11 +14,11 @@ import {
 } from '@/lib/activity-stats';
 
 // Re-pinned on purpose (lists lane P3: a page sums no count): the DAO kind's count and the kind
-// occurrences are the API's figures (`daoActionCount`, `kindOccurrences`); totalActivities, the
+// occurrences are the API's figures (`daoCount`, `kindOccurrences`); totalActivities, the
 // page's sum of the eight kinds, went with the three DAO steps' sum.
 const counts: ActivityCounts = {
   transferCount: 1302,
-  daoActionCount: 8,
+  daoCount: 8,
   tokenCount: 0,
   objectCount: 0,
   identityCount: 10,
@@ -43,7 +43,7 @@ describe('activityTypeShares', () => {
       activityTypeShares({
         ...counts,
         transferCount: 0,
-        daoActionCount: 0,
+        daoCount: 0,
         identityCount: 0,
         scriptCallCount: 0,
         kindOccurrences: 0,
@@ -155,7 +155,7 @@ describe('exact completed day counts', () => {
     expect(activityFilterCounts(counts, 10).all).toBe(10);
     expect(activityFilterCounts(counts).all).toBeUndefined();
     // the DAO chip states the API's count of the day's DAO actions, summed nowhere in the page
-    expect(activityFilterCounts({ ...counts, daoActionCount: 13 }).dao).toBe(13);
+    expect(activityFilterCounts({ ...counts, daoCount: 13 }).dao).toBe(13);
     expect(nonCellbaseCount(25, 10, '2026-10-25')).toBe(15);
     expect(() => nonCellbaseCount(9, 10, '2026-10-25')).toThrow(
       'Invalid transaction/cellbase counts'

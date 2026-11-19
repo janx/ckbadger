@@ -280,7 +280,12 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         JSON
                       </a>
                       {' · '}
-                      <Link href={`/address/${addr}.md`} target="_blank" rel="noreferrer">
+                      <Link
+                        look="inline"
+                        href={`/address/${addr}.md`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
                         Markdown
                       </Link>
                     </span>
@@ -329,7 +334,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                 {BigInt(a.pendingSummary.capacityDelta) !== BigInt(0) && (
                   <span>
                     <CkbAmount
-                      form="column"
+                      form="summary"
                       shannons={BigInt(a.pendingSummary.capacityDelta)}
                       wrap
                     />{' '}
@@ -355,10 +360,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         key={n.identityId}
                         className="border-row-rule text-small flex flex-wrap justify-between gap-2 border-b py-2"
                       >
-                        <Link
-                          href={getIdentityItemDetailHref('dotcell', n.identityId)}
-                          className="text-text-bright"
-                        >
+                        <Link look="key" href={getIdentityItemDetailHref('dotcell', n.identityId)}>
                           {n.name}
                         </Link>
                         <span className="text-text-dim">
@@ -402,13 +404,13 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       key={c.channelId}
                       className="border-row-rule text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
-                      <Link href={`/fiber/channels/${c.channelId}`}>
+                      <Link look="inline" href={`/fiber/channels/${c.channelId}`}>
                         <Hash hash={c.channelId} size="row" className="text-small" />
                       </Link>
                       <span>{c.state}</span>
                       <span className="flex flex-wrap gap-2">
                         {c.participants.map((p) => (
-                          <Link href={`/address/${p}`} key={p}>
+                          <Link look="inline" href={`/address/${p}`} key={p}>
                             <Hash hash={p} size="row" className="text-small" />
                           </Link>
                         ))}
@@ -477,9 +479,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     className="mt-3.5"
                   />
                 )}
-                {/* The classes are counted by the holdings read, so they are offered once it has
-                    answered, and a class's cells are counted of it. */}
-                {tab === 'cells' && holdings.data && (
+                {/* The classes are offered from the first draw, so the list under them never moves
+                    (lane P1: they appeared once the holdings answered and pushed it down); each
+                    class's cells are counted of the holdings read, added in place when it has
+                    answered. */}
+                {tab === 'cells' && (
                   <FilterChips
                     label="class"
                     values={[
@@ -487,7 +491,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       ...ADDRESS_CLASSES.map((c) => ({
                         key: c.key,
                         label: c.label.toLowerCase(),
-                        count: holdings.data.classes[c.key].cellCount,
+                        count: holdings.data?.classes[c.key].cellCount,
                         mark: CLASS_KEYS[c.mark],
                       })),
                     ]}

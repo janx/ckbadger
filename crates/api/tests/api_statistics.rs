@@ -1095,6 +1095,38 @@ async fn test_epoch_time_distribution_labels_cut_never_round() {
     );
 }
 
+/// An epoch's duration is sent as the whole ms it held, never rounded to hours (lane D1's third
+/// round, M1): 14,418,000 ms is 4.005 h, which half up at two decimals read "4.01"; the target is
+/// stated cut.
+#[tokio::test]
+async fn epoch_time_length_sends_each_duration_in_whole_ms() {
+    let store = test_store();
+    let start = chrono::DateTime::parse_from_rfc3339("2024-01-01T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    store
+        .put_epoch_stats(
+            1,
+            &EpochStats {
+                epoch_number: 1,
+                start_block: 1,
+                end_block: Some(1800),
+                blocks_count: 1800,
+                length: 1800,
+                start_timestamp: start,
+                end_timestamp: Some(start + chrono::Duration::milliseconds(14_418_000)),
+                transactions_count: 0,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/charts/epoch-time-length").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["value"], "14418000", "{json}");
+    assert_eq!(json["target"]["seconds"], 14_400, "{json}");
+    assert_eq!(json["target"]["hours"], "4.00", "{json}");
+}
+
 #[tokio::test]
 async fn test_epoch_time_charts_read_from_derived_store() {
     let core_store = test_store();
@@ -2359,8 +2391,27 @@ async fn test_hodl_wave_chart_draws_five_bands_merged_from_exact_capacities() {
     assert_eq!(values["1m6m"], "25.00");
     assert_eq!(values["lt1m"], "16.66");
     assert_eq!(values["24h"], "2.77");
-    // the eight bands stay, for the table under the chart
-    assert_eq!(json["series"].as_array().unwrap().len(), 8);
+    // the eight bands stay, for the table under the chart, named in the drawn bands' words (lane
+    // D1's third round, N5: one band, one spelling on the page)
+    let labels: Vec<&str> = json["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|series| series["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "3 years or more",
+            "1 to 3 years",
+            "6 to 12 months",
+            "3 to 6 months",
+            "1 to 3 months",
+            "1 week to 1 month",
+            "1 day to 1 week",
+            "under 1 day",
+        ]
+    );
 }
 
 /// A chart page states a percentage as the exact value cut, never rounded (the D1 hand-back,
@@ -2442,8 +2493,8 @@ async fn test_daily_activities_state_their_kind_occurrences() {
     let (status, json) = get_json(&app, "/stats/daily-activities?days=0").await;
     assert_eq!(status, StatusCode::OK, "{json}");
     assert_eq!(json[0]["kindOccurrences"], 52, "{json}");
-    // the DAO kind's count, the three actions (lists lane P3: the page sums nothing)
-    assert_eq!(json[0]["daoActionCount"], 4, "{json}");
+    // the merged DAO band, the route's (lane D1's third round, M2): 2 + 1 + 1
+    assert_eq!(json[0]["daoCount"], 4, "{json}");
 }
 
 /// Cell size states its wholes (the D1 hand-back, item 2): the page's "of live cells" and "of it"
@@ -2875,7 +2926,7 @@ async fn test_activity_summary_24h_uses_exact_chain_window_and_deduplicates_addr
     assert_eq!(json["hoursCovered"], 2);
     // the window's kinds and its DAO actions, counted by the route (lists lane P3)
     assert_eq!(json["kindOccurrences"], 522);
-    assert_eq!(json["daoActionCount"], 0);
+    assert_eq!(json["daoCount"], 0);
 
     // A shallow reorg can replace the same-number tip before the TTL expires.
     // Its new hash must force a fresh window scan and address set.

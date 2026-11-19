@@ -58,11 +58,12 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
     expect(await card('hash-rate', line(['2026-11-13'], ['845690000000000000']))).toBe(
       '845.69 PH/s'
     );
-    expect(await card('average-block-time', line(['2026-11-13'], ['10.43']))).toBe('10.43 s');
+    // each duration in the whole ms the route sends (lane D1's third round, M1)
+    expect(await card('average-block-time', line(['2026-11-13'], ['10430']))).toBe('10.43 s');
     // the API's consensus target travels with the epoch lengths (the page's sentence reads it)
     expect(
       await card('epoch-time-length', {
-        ...line(['15204'], ['3.95']),
+        ...line(['15204'], ['14220000']),
         target: { seconds: 14400, hours: '4.00' },
       })
     ).toBe('3.95 h');
@@ -80,8 +81,9 @@ describe('one form per quantity in the chart pages and cards (CH-14)', () => {
   it('writes the SI symbols s and h, never the words', async () => {
     expect(CHART_BY_SLUG.get('average-block-time')!.unit).toBe('s');
     expect(CHART_BY_SLUG.get('epoch-time-length')!.unit).toBe('h');
+    // each day's average in the whole ms the route sends (lane D1's third round, M1)
     vi.mocked(api.getAverageBlockTimeChart).mockResolvedValue(
-      line(['2026-11-12', '2026-11-13'], ['10.1', '10.43'])
+      line(['2026-11-12', '2026-11-13'], ['10100', '10430'])
     );
     render(<ChartDetail slug="average-block-time" />);
     // re-pinned for lane D1: the head's one figure (was the readings group)

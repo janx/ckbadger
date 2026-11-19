@@ -215,7 +215,7 @@ describe('renderMarkdownPage', () => {
       scriptCounts: [],
       hoursCovered: 24,
       kindOccurrences: 29,
-      daoActionCount: 5,
+      daoCount: 5,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -288,7 +288,7 @@ describe('renderMarkdownPage', () => {
       scriptCounts: [],
       hoursCovered: 24,
       kindOccurrences: 1,
-      daoActionCount: 1,
+      daoCount: 1,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -355,7 +355,7 @@ describe('renderMarkdownPage', () => {
       scriptCounts: [],
       hoursCovered: 24,
       kindOccurrences: 1,
-      daoActionCount: 0,
+      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
@@ -414,7 +414,7 @@ describe('renderMarkdownPage', () => {
       scriptCounts: [],
       hoursCovered: 24,
       kindOccurrences: 1,
-      daoActionCount: 0,
+      daoCount: 0,
     });
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
